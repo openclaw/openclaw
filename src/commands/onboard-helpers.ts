@@ -7,18 +7,19 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
-  decorativeEmoji,
-  supportsDecorativeEmoji,
-} from "../../packages/terminal-core/src/decorative-emoji.js";
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
   resolveWorkspaceAttestationPaths,
   shouldRemoveWorkspaceAttestation,
 } from "../agents/workspace.js";
+import { printClawBanner } from "../cli/claw-banner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
@@ -30,7 +31,7 @@ import {
   resolveLocalControlUiProbeLinks,
 } from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { probeGateway } from "../gateway/probe.js";
+import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
 import {
   detectBrowserOpenSupport,
   openUrl,
@@ -41,7 +42,7 @@ import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
 export { detectBinary };
@@ -164,23 +165,9 @@ export function validateGatewayPasswordInput(value: unknown): string | undefined
   return undefined;
 }
 
-/** Prints the onboarding banner. */
-export function printWizardHeader(runtime: RuntimeEnv) {
-  const bannerWidth = 54;
-  const icon = decorativeEmoji("🦞");
-  const title = supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
-  const pad = Math.max(0, bannerWidth - visibleWidth(title));
-  const titleLine = `${" ".repeat(Math.floor(pad / 2))}${title}${" ".repeat(Math.ceil(pad / 2))}`;
-  const header = [
-    "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-    "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
-    "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
-    "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
-    "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-    titleLine,
-    " ",
-  ].join("\n");
-  runtime.log(header);
+/** Prints the onboarding banner: pixel mascot beside the OPENCLAW wordmark. */
+export async function printWizardHeader(runtime: RuntimeEnv): Promise<void> {
+  await printClawBanner(runtime);
 }
 
 /** Records wizard provenance metadata on config writes. */
@@ -260,18 +247,6 @@ export async function ensureWorkspaceAndSessions(
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
 }
 
-/** Returns package manager choices offered by onboarding. */
-export function resolveNodeManagerOptions(): Array<{
-  value: NodeManagerChoice;
-  label: string;
-}> {
-  return [
-    { value: "npm", label: "npm" },
-    { value: "pnpm", label: "pnpm" },
-    { value: "bun", label: "bun" },
-  ];
-}
-
 /** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
 export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<void> {
   if (!pathname) {
@@ -333,28 +308,116 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
   }
 }
 
-/** Runs a single lightweight gateway probe for onboarding readiness checks. */
-export async function probeGatewayReachable(params: {
+type OnboardingGatewayProbeParams = {
   url: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
+  preauthHandshakeTimeoutMs?: number;
   timeoutMs?: number;
-}): Promise<{ ok: boolean; detail?: string }> {
+};
+
+function runOnboardingGatewayProbe(
+  params: OnboardingGatewayProbeParams,
+  detailLevel: "none" | "config",
+): Promise<GatewayProbeResult> {
   const url = params.url.trim();
-  const timeoutMs = params.timeoutMs ?? 1500;
+  const timeoutMs = params.timeoutMs ?? Math.max(1500, params.preauthHandshakeTimeoutMs ?? 0);
+  return probeGateway({
+    url,
+    timeoutMs,
+    auth: {
+      token: params.token,
+      password: params.password,
+    },
+    ...(params.tlsFingerprint ? { tlsFingerprint: params.tlsFingerprint } : {}),
+    ...(params.preauthHandshakeTimeoutMs
+      ? { preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs }
+      : {}),
+    detailLevel,
+  });
+}
+
+/** Runs a single lightweight gateway probe for onboarding readiness checks. */
+export async function probeGatewayReachable(
+  params: OnboardingGatewayProbeParams,
+): Promise<{ ok: boolean; detail?: string }> {
   try {
-    const probe = await probeGateway({
-      url,
-      timeoutMs,
-      auth: {
-        token: params.token,
-        password: params.password,
-      },
-      detailLevel: "none",
-    });
-    return probe.ok ? { ok: true } : { ok: false, detail: probe.error ?? undefined };
+    const probe = await runOnboardingGatewayProbe(params, "none");
+    if (!probe.ok) {
+      return { ok: false, detail: probe.error ?? undefined };
+    }
+    return { ok: true };
   } catch (err) {
     return { ok: false, detail: summarizeError(err) };
+  }
+}
+
+export type GatewayConfiguredModelProbeResult =
+  | { kind: "configured" }
+  | { kind: "missing-configured-model"; detail: string }
+  | { kind: "reachable-unverified"; detail?: string }
+  | { kind: "unreachable"; detail?: string };
+
+const RECOGNIZED_GATEWAY_CONNECT_ERROR_CODES: ReadonlySet<string> = new Set(
+  Object.values(ConnectErrorDetailCodes),
+);
+
+function didProbeReachGateway(probe: GatewayProbeResult): boolean {
+  const connectErrorCode = readConnectErrorDetailCode(probe.connectErrorDetails);
+  const recognizedConnectError =
+    connectErrorCode !== null && RECOGNIZED_GATEWAY_CONNECT_ERROR_CODES.has(connectErrorCode);
+  const serverVersion = probe.server?.version?.trim();
+  const serverConnectionId = probe.server?.connId?.trim();
+  // Opening a WebSocket proves only that something is listening. A Gateway is
+  // established by a hello-ok server identity or its typed connect rejection.
+  return recognizedConnectError || Boolean(serverVersion && serverConnectionId);
+}
+
+/** Reads only Gateway config and classifies whether its default agent has inference. */
+export async function probeGatewayConfiguredModel(
+  params: OnboardingGatewayProbeParams,
+): Promise<GatewayConfiguredModelProbeResult> {
+  let probe: GatewayProbeResult;
+  try {
+    probe = await runOnboardingGatewayProbe(params, "config");
+  } catch (err) {
+    return { kind: "unreachable", detail: summarizeError(err) };
+  }
+  const detail = probe.error ?? undefined;
+  if (!didProbeReachGateway(probe)) {
+    return { kind: "unreachable", ...(detail ? { detail } : {}) };
+  }
+  if (!probe.ok) {
+    return { kind: "reachable-unverified", detail };
+  }
+  const snapshot = probe.configSnapshot as {
+    valid?: unknown;
+    runtimeConfig?: unknown;
+    config?: unknown;
+  } | null;
+  const configCandidate =
+    snapshot?.valid === true ? (snapshot.runtimeConfig ?? snapshot.config) : null;
+  if (!configCandidate || typeof configCandidate !== "object" || Array.isArray(configCandidate)) {
+    return {
+      kind: "reachable-unverified",
+      detail: "Gateway returned an invalid config snapshot",
+    };
+  }
+  try {
+    const config = configCandidate as OpenClawConfig;
+    const model = resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config));
+    return model
+      ? { kind: "configured" }
+      : {
+          kind: "missing-configured-model",
+          detail: "Gateway default agent has no configured model",
+        };
+  } catch {
+    return {
+      kind: "reachable-unverified",
+      detail: "Gateway returned an invalid config snapshot",
+    };
   }
 }
 

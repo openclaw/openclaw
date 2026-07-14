@@ -19,6 +19,7 @@ import {
   formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatInboundFromLabel,
+  logInboundDrop,
   matchesMentionPatterns,
   resolveInboundMentionDecision,
   resolveEnvelopeFormatOptions,
@@ -26,7 +27,6 @@ import {
   runChannelInboundEvent,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveChannelGroupPolicy,
@@ -76,6 +76,7 @@ import {
 } from "../identity.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
+import { registerSignalReplyContext } from "../reply-authors.js";
 import {
   removeReactionSignal,
   sendReactionSignal,
@@ -90,11 +91,10 @@ import type {
   SignalReceivePayload,
 } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
-import { renderSignalMentions } from "./mentions.js";
+import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
 
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 const RETRYABLE_FLUSH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
-
 function isSignalReplySessionInitConflictError(error: unknown): boolean {
   return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
     (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
@@ -107,7 +107,6 @@ function formatAttachmentKindCount(kind: string, count: number): string {
   }
   return `${count} ${kind}${count > 1 ? "s" : ""}`;
 }
-
 function formatAttachmentSummaryPlaceholder(contentTypes: Array<string | undefined>): string {
   const kindCounts = new Map<string, number>();
   for (const contentType of contentTypes) {
@@ -236,6 +235,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     replyToSender?: string;
     replyToIsQuote?: boolean;
   };
+  const activeEnqueueEntries = new WeakSet<SignalInboundEntry>();
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
     const fromLabel = formatInboundFromLabel({
@@ -304,12 +304,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             limit: deps.historyLimit,
           })
         : undefined;
+    const replyToMode = resolveSignalReplyToMode({
+      cfg: deps.cfg,
+      accountId: deps.accountId,
+      chatType: entry.isGroup ? "group" : "direct",
+    });
     const replyThreading = resolveBatchedReplyThreadingPolicy(
-      resolveSignalReplyToMode({
-        cfg: deps.cfg,
-        accountId: deps.accountId,
-        chatType: entry.isGroup ? "group" : "direct",
-      }),
+      replyToMode,
       entry.isBatched === true,
     );
     const media =
@@ -511,6 +512,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToId: ctxPayload.ReplyToId,
       author: entry.senderRecipient,
       body: entry.nativeReplyBody ?? entry.bodyText,
+      allowImplicitCurrentMessage:
+        replyToMode !== "off" && replyThreading?.implicitCurrentMessage !== "deny",
       state: { hasReplied: false },
     };
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
@@ -756,17 +759,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     },
     onFlush: async (entries) => {
-      if (deps.abortSignal?.aborted) {
+      // enqueue() awaits inline and overflow flushes, but not timer-backed work.
+      // Drain tracked inline work on shutdown; stop delayed work with no owner.
+      const hasActiveEnqueue = entries.some((entry) => activeEnqueueEntries.has(entry));
+      if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
         return;
       }
       try {
         await flushSignalInboundEntries(entries);
       } catch (err) {
-        if (deps.abortSignal?.aborted) {
-          return;
-        }
         if (!isSignalReplySessionInitConflictError(err)) {
           throw err;
+        }
+        if (deps.abortSignal?.aborted) {
+          return;
         }
         // Keep the current keyed debounce task reserved through backoff so a
         // newer same-conversation flush cannot overtake this failed batch.
@@ -1048,8 +1054,27 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupId,
       senderPeerId,
     });
+    const inboundTimestamp =
+      typeof envelope.timestamp === "number"
+        ? envelope.timestamp
+        : typeof dataMessage.timestamp === "number"
+          ? dataMessage.timestamp
+          : undefined;
+    const nativeReplyTargetTimestamp =
+      typeof envelope.editMessage?.targetSentTimestamp === "number"
+        ? envelope.editMessage.targetSentTimestamp
+        : inboundTimestamp;
+    const messageId = typeof inboundTimestamp === "number" ? String(inboundTimestamp) : undefined;
+    const replyToId =
+      typeof nativeReplyTargetTimestamp === "number"
+        ? String(nativeReplyTargetTimestamp)
+        : undefined;
+    const signalToRaw = isGroup ? `group:${groupId}` : `signal:${senderRecipient}`;
+    const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
     const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
-    const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const textWasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const nativeMentionFacts = resolveSignalMentionFacts(deps, rawMessage, dataMessage?.mentions);
+    const wasMentioned = isGroup && (textWasMentioned || nativeMentionFacts.mentionsBot);
     const requireMention =
       isGroup &&
       resolveChannelGroupRequireMention({
@@ -1059,12 +1084,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         accountId: deps.accountId,
         configuredGroupDefaultsToNoMention: true,
       });
-    const canDetectMention = mentionRegexes.length > 0;
+    const canDetectMention = mentionRegexes.length > 0 || nativeMentionFacts.canDetectBotMention;
     const mentionDecision = resolveInboundMentionDecision({
       facts: {
         canDetectMention,
         wasMentioned,
-        hasAnyMention: false,
+        hasAnyMention: nativeMentionFacts.hasAnyMention,
         implicitMentionKinds: [],
       },
       policy: {
@@ -1114,6 +1139,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           messageId:
             typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
         },
+      });
+      await registerSignalReplyContext({
+        accountId: deps.accountId,
+        to: signalTo,
+        replyToId,
+        author: senderRecipient,
+        body: pendingBodyText,
+        sourceTimestamp: inboundTimestamp,
       });
       const signalGroupPolicy = resolveChannelGroupPolicy({
         cfg: deps.cfg,
@@ -1223,16 +1256,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    const inboundTimestamp =
-      typeof envelope.timestamp === "number"
-        ? envelope.timestamp
-        : typeof dataMessage.timestamp === "number"
-          ? dataMessage.timestamp
-          : undefined;
-    const nativeReplyTargetTimestamp =
-      typeof envelope.editMessage?.targetSentTimestamp === "number"
-        ? envelope.editMessage.targetSentTimestamp
-        : inboundTimestamp;
     if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && inboundTimestamp) {
       try {
         await sendReadReceiptSignal(`signal:${senderRecipient}`, inboundTimestamp, {
@@ -1254,12 +1277,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const senderName = envelope.sourceName ?? senderDisplay;
-    const messageId = typeof inboundTimestamp === "number" ? String(inboundTimestamp) : undefined;
-    const replyToId =
-      typeof nativeReplyTargetTimestamp === "number"
-        ? String(nativeReplyTargetTimestamp)
-        : undefined;
-    await debouncer.enqueue({
+    await registerSignalReplyContext({
+      accountId: deps.accountId,
+      to: signalTo,
+      replyToId,
+      author: senderRecipient,
+      body: bodyText,
+      sourceTimestamp: inboundTimestamp,
+    });
+    const entry: SignalInboundEntry = {
       senderName,
       senderDisplay,
       senderRecipient,
@@ -1283,6 +1309,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
-    });
+    };
+    activeEnqueueEntries.add(entry);
+    try {
+      await debouncer.enqueue(entry);
+    } finally {
+      activeEnqueueEntries.delete(entry);
+    }
   };
 }

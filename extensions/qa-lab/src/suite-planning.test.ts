@@ -12,7 +12,9 @@ import {
   collectQaSuiteTransportPolicy,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  normalizeQaSuiteScenarioChannel,
   resolveQaSuiteScenarioChannel,
+  resolveQaSuiteScenarioChannels,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
@@ -33,6 +35,17 @@ function makePlaywrightQaSuiteTestScenario(id: string): ReturnType<typeof makeQa
 }
 
 describe("qa suite planning helpers", () => {
+  it("normalizes blank scenario channels as unpinned", () => {
+    expect(
+      normalizeQaSuiteScenarioChannel(makeQaSuiteTestScenario("blank-channel", { channel: "   " })),
+    ).toBeUndefined();
+    expect(
+      normalizeQaSuiteScenarioChannel(
+        makeQaSuiteTestScenario("matrix-channel", { channel: " Matrix " }),
+      ),
+    ).toBe("matrix");
+  });
+
   it("normalizes suite concurrency to a bounded integer", () => {
     const previous = process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
     delete process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
@@ -249,7 +262,7 @@ describe("qa suite planning helpers", () => {
         scenarios,
         scenarioIds: ["anthropic-only"],
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.5",
+        primaryModel: "openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["anthropic-only"]);
   });
@@ -266,7 +279,7 @@ describe("qa suite planning helpers", () => {
         scenarios,
         scenarioIds: ["third", "first"],
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.5",
+        primaryModel: "openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["third", "first"]);
   });
@@ -310,6 +323,16 @@ describe("qa suite planning helpers", () => {
         ],
       }),
     ).toThrow("Selected QA scenarios require multiple channels");
+    expect(
+      resolveQaSuiteScenarioChannels({
+        defaultChannel: "telegram",
+        scenarios: [
+          makeQaSuiteTestScenario("plain"),
+          makeQaSuiteTestScenario("matrix-flow", { channel: "matrix" }),
+          makeQaSuiteTestScenario("slack-flow", { channel: "slack" }),
+        ],
+      }),
+    ).toEqual(["telegram", "matrix", "slack"]);
   });
 
   it("isolates flow scenarios with explicit suite isolation metadata", () => {
@@ -522,7 +545,7 @@ describe("qa suite planning helpers", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
       makeQaSuiteTestScenario("openai-only", {
-        config: { requiredProvider: "openai", requiredModel: "gpt-5.5" },
+        config: { requiredProvider: "openai", requiredModel: "gpt-5.6-luna" },
       }),
       makeQaSuiteTestScenario("anthropic-only", {
         config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-8" },
@@ -536,7 +559,7 @@ describe("qa suite planning helpers", () => {
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.5",
+        primaryModel: "openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "openai-only"]);
 
@@ -560,7 +583,7 @@ describe("qa suite planning helpers", () => {
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["flow"]);
   });
@@ -576,7 +599,7 @@ describe("qa suite planning helpers", () => {
         scenarios,
         scenarioIds: ["playwright"],
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
       }),
     ).toThrow(
       "flow execution requires execution.kind: flow; unsupported scenario(s): playwright (playwright)",
@@ -598,7 +621,7 @@ describe("qa suite planning helpers", () => {
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "mock-only"]);
 
@@ -606,7 +629,7 @@ describe("qa suite planning helpers", () => {
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.5",
+        primaryModel: "openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "live-only"]);
   });
@@ -626,7 +649,7 @@ describe("qa suite planning helpers", () => {
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "qa-channel-only"]);
 
@@ -634,7 +657,7 @@ describe("qa suite planning helpers", () => {
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
         channelDriver: "crabline",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "crabline-only"]);
@@ -653,7 +676,7 @@ describe("qa suite planning helpers", () => {
         scenarios,
         scenarioIds: ["qa-channel-only"],
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
         channelDriver: "crabline",
       }),
     ).toThrow(
@@ -665,7 +688,7 @@ describe("qa suite planning helpers", () => {
         scenarios,
         scenarioIds: ["qa-channel-only"],
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["qa-channel-only"]);
   });
@@ -682,7 +705,7 @@ describe("qa suite planning helpers", () => {
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic"]);
 
@@ -691,7 +714,7 @@ describe("qa suite planning helpers", () => {
         scenarios,
         scenarioIds: ["live-runtime"],
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["live-runtime"]);
   });

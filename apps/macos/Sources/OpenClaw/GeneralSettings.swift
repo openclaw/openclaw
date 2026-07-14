@@ -1,7 +1,6 @@
 import AppKit
 import Observation
 import OpenClawDiscovery
-import OpenClawIPC
 import OpenClawKit
 import SwiftUI
 
@@ -60,6 +59,10 @@ struct GeneralSettings: View {
                 CanvasManager.shared.hideAll()
             }
         }
+        .onChange(of: self.computerControlEnabled) { _, _ in
+            // Turning Computer Control on/off must start or stop the gated PeekabooBridge host.
+            self.state.applyPeekabooBridgeHostState()
+        }
         .onDisappear { self.gatewayDiscovery.stop() }
     }
 
@@ -74,8 +77,11 @@ struct GeneralSettings: View {
             SettingsCardGroup("App") {
                 SettingsCardToggleRow(
                     title: "Launch at login",
-                    subtitle: "Automatically start OpenClaw after you sign in.",
+                    subtitle: self.state.bundleLocationAllowsPersistentIntegration
+                        ? "Automatically start OpenClaw after you sign in."
+                        : "Move OpenClaw to Applications before enabling launch at login.",
                     binding: self.$state.launchAtLogin)
+                    .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state.launchAtLogin)
 
                 SettingsCardToggleRow(
                     title: "Show Dock icon",
@@ -112,9 +118,41 @@ struct GeneralSettings: View {
 
                 SettingsCardToggleRow(
                     title: "Enable Peekaboo Bridge",
-                    subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-                    binding: self.$state.peekabooBridgeEnabled,
+                    subtitle: """
+                    Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. \
+                    Requires Computer Control; otherwise run Peekaboo's own Mac app.
+                    """,
+                    binding: self.peekabooBridgeBinding,
                     showsDivider: false)
+                    .disabled(!self.computerControlEnabled)
+            }
+
+            SettingsCardGroup("Browser") {
+                SettingsCardRow(
+                    title: "Browser login",
+                    subtitle: "Copy cookies from a Chrome-family profile into an isolated managed profile.",
+                    showsDivider: false)
+                {
+                    Button("Import…") {
+                        Task { @MainActor in
+                            switch await BrowserProfileImportModel.shared.refresh(force: true) {
+                            case .offering:
+                                // The banner lives in the dashboard window; force
+                                // offers must surface it even if that window is closed.
+                                AppNavigationActions.openDashboard()
+                            case let .unavailable(title, message):
+                                let alert = NSAlert()
+                                alert.messageText = title
+                                alert.informativeText = message
+                                alert.addButton(withTitle: "OK")
+                                alert.runModal()
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(self.state.connectionMode != .local)
+                }
             }
 
             SettingsCardGroup("Developer") {
@@ -215,6 +253,14 @@ struct GeneralSettings: View {
         Binding(
             get: { !self.state.isPaused },
             set: { self.state.isPaused = !$0 })
+    }
+
+    /// Reflects the effective bridge state: off (and disabled) whenever Computer Control is off,
+    /// so the row matches the host that actually runs instead of a standalone toggle.
+    private var peekabooBridgeBinding: Binding<Bool> {
+        Binding(
+            get: { self.computerControlEnabled && self.state.peekabooBridgeEnabled },
+            set: { self.state.peekabooBridgeEnabled = $0 })
     }
 
     private func updateActiveWork(active: Bool) {
@@ -770,8 +816,8 @@ extension GeneralSettings {
     }
 
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
         GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
+        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: self.state)
     }
 }
 

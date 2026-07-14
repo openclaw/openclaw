@@ -45,6 +45,7 @@ export type MockGatewayRequest = {
 export type ControlUiMockGatewayScenario = {
   assistantAgentId?: string;
   assistantName?: string;
+  basePath?: string;
   controlUiTabs?: Array<{
     group?: string;
     icon?: string;
@@ -54,6 +55,8 @@ export type ControlUiMockGatewayScenario = {
   }>;
   defaultAgentId?: string;
   deferredMethods?: string[];
+  /** Non-release gateway checkout branch surfaced in the sidebar footer. */
+  devGitBranch?: string;
   deviceToken?: string;
   featureMethods?: string[];
   historyMessages?: unknown[];
@@ -65,6 +68,8 @@ export type ControlUiMockGatewayScenario = {
     available?: boolean;
   }>;
   sessionKey?: string;
+  /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
+  sessionGroups?: string[];
   terminalEnabled?: boolean;
   workspaceGit?: boolean;
 };
@@ -90,7 +95,9 @@ export type MockGatewayControls = {
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
   ) => Promise<void>;
   resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
+  setOnline: (online: boolean) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
+  setMethodResponse: (method: string, payload: unknown) => Promise<void>;
   waitForRequest: (method: string) => Promise<MockGatewayRequest>;
 };
 
@@ -218,18 +225,31 @@ function normalizeScenario(
 ): NormalizedControlUiMockGatewayScenario {
   const defaultAgentId = scenario.defaultAgentId?.trim() || "main";
   const sessionKey = scenario.sessionKey?.trim() || "main";
+  const basePathValue = scenario.basePath?.trim() ?? "";
+  const basePathWithSlash = basePathValue
+    ? basePathValue.startsWith("/")
+      ? basePathValue
+      : `/${basePathValue}`
+    : "";
+  const basePath =
+    basePathWithSlash.length > 1 && basePathWithSlash.endsWith("/")
+      ? basePathWithSlash.slice(0, -1)
+      : basePathWithSlash;
   return {
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
+    basePath,
     controlUiTabs: scenario.controlUiTabs ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
+    devGitBranch: scenario.devGitBranch?.trim() || "",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     sessionKey,
+    sessionGroups: scenario.sessionGroups ?? [],
     terminalEnabled: scenario.terminalEnabled ?? false,
     workspaceGit: scenario.workspaceGit ?? false,
   };
@@ -242,7 +262,8 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     assistantAgentId: normalizedScenario.assistantAgentId,
     assistantAvatar: "",
     assistantName: normalizedScenario.assistantName,
-    basePath: "/",
+    basePath: normalizedScenario.basePath,
+    devGitBranch: normalizedScenario.devGitBranch || undefined,
     embedSandbox: "scripts",
     localMediaPreviewRoots: [],
     serverVersion: "e2e",
@@ -297,22 +318,90 @@ function installControlUiMockGateway(input: {
     ) => void;
     requests: BrowserRequest[];
     resolveDeferred: (method: string, payload?: unknown) => void;
+    setOnline: (online: boolean) => void;
     setHistoryMessages: (messages: unknown[]) => void;
+    setMethodResponse: (method: string, payload: unknown) => void;
     socketCount: () => number;
     socketUrls: () => string[];
   };
   type WindowWithGateway = Window & {
+    __OPENCLAW_CONTROL_UI_BASE_PATH__?: string;
     openclawControlUiE2eGateway?: ExposedGateway;
   };
 
   const scenario: BrowserScenario = input.scenario;
+  (window as unknown as WindowWithGateway)["__OPENCLAW_CONTROL_UI_BASE_PATH__"] = scenario.basePath;
   const protocolVersion = input.protocolVersion;
+  const methodResponseOverridesStorageKey = "openclaw.control-ui-e2e.method-responses.v1";
+  const methodResponseOverrides: Record<string, unknown> = {};
+  try {
+    const storedOverrides = window.sessionStorage.getItem(methodResponseOverridesStorageKey);
+    const parsedOverrides = storedOverrides ? (JSON.parse(storedOverrides) as unknown) : null;
+    if (isRecord(parsedOverrides)) {
+      Object.assign(methodResponseOverrides, parsedOverrides);
+      Object.assign(scenario.methodResponses, parsedOverrides);
+    }
+  } catch {
+    // Opaque initial documents may not expose storage; the target page will.
+  }
   const deferredMethods: string[] = [...scenario.deferredMethods];
   const deferredResponses: DeferredResponse[] = [];
   const requests: BrowserRequest[] = [];
   const sessionPatches = new Map<string, Record<string, unknown>>();
   const sockets: Array<{ readonly url: string }> = [];
+  const offlineStateKey = "openclaw.control-ui-e2e.gatewayOffline";
+  // Gateway-owned custom group catalog (sessions.groups.*). Persisted in
+  // sessionStorage so a page reload keeps the catalog the way the real
+  // gateway's SQLite store does; renames replay onto static sessions.list
+  // fixtures because the real gateway rewrites member categories server-side.
+  const groupsStateKey = "openclaw.control-ui-e2e.sessionGroups";
+  let groupsState: { names: string[]; renames: Array<{ from: string; to: string | null }> } = {
+    names: [...input.scenario.sessionGroups],
+    renames: [],
+  };
+  let online = true;
+  try {
+    online = window.sessionStorage.getItem(offlineStateKey) !== "1";
+  } catch {
+    // Storage-disabled browser contexts still get the in-memory mock default.
+  }
+  try {
+    const rawGroups = window.sessionStorage.getItem(groupsStateKey);
+    if (rawGroups) {
+      groupsState = JSON.parse(rawGroups) as typeof groupsState;
+    }
+  } catch {
+    // Storage-disabled browser contexts still get the scenario catalog.
+  }
   let seq = 0;
+
+  function persistGroupsState(): void {
+    try {
+      window.sessionStorage.setItem(groupsStateKey, JSON.stringify(groupsState));
+    } catch {
+      // In-memory catalog still serves the current page.
+    }
+  }
+
+  function groupsPayload(): { groups: Array<{ name: string; position: number }> } {
+    return { groups: groupsState.names.map((name, position) => ({ name, position })) };
+  }
+
+  function normalizedGroupNames(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const raw of value) {
+      const name = typeof raw === "string" ? raw.trim() : "";
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        names.push(name);
+      }
+    }
+    return names;
+  }
 
   function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -403,7 +492,21 @@ function installControlUiMockGateway(input: {
           return row;
         }
         const patch = sessionPatches.get(row.key);
-        return patch ? { ...row, ...patch } : row;
+        const next = patch ? { ...row, ...patch } : { ...row };
+        // Replay group renames/deletes over static fixtures: the real gateway
+        // rewrites member categories server-side before the next sessions.list.
+        let category = typeof next.category === "string" ? next.category : undefined;
+        for (const rename of groupsState.renames) {
+          if (category === rename.from) {
+            category = rename.to ?? undefined;
+          }
+        }
+        if (category === undefined) {
+          delete next.category;
+        } else {
+          next.category = category;
+        }
+        return next;
       }),
     };
   }
@@ -578,6 +681,38 @@ function installControlUiMockGateway(input: {
           sessions: [sessionRow()],
           ts: Date.now(),
         });
+      case "sessions.groups.list":
+        return groupsPayload();
+      case "sessions.groups.put": {
+        groupsState.names = normalizedGroupNames(isRecord(params) ? params.names : undefined);
+        persistGroupsState();
+        return { ok: true, ...groupsPayload() };
+      }
+      case "sessions.groups.rename": {
+        const from = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
+        const to = isRecord(params) && typeof params.to === "string" ? params.to.trim() : "";
+        if (from && to && from !== to) {
+          const sourceIndex = groupsState.names.indexOf(from);
+          const names = groupsState.names.filter((name) => name !== from);
+          if (!names.includes(to)) {
+            // Renames keep the source position, like the real catalog.
+            names.splice(sourceIndex < 0 ? names.length : sourceIndex, 0, to);
+          }
+          groupsState.names = names;
+          groupsState.renames.push({ from, to });
+          persistGroupsState();
+        }
+        return { ok: true, updatedSessions: 0, ...groupsPayload() };
+      }
+      case "sessions.groups.delete": {
+        const name = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
+        if (name) {
+          groupsState.names = groupsState.names.filter((existing) => existing !== name);
+          groupsState.renames.push({ from: name, to: null });
+          persistGroupsState();
+        }
+        return { ok: true, updatedSessions: 0, ...groupsPayload() };
+      }
       case "sessions.subscribe":
         return { ok: true };
       default:
@@ -630,17 +765,21 @@ function installControlUiMockGateway(input: {
       MockWebSocket.latest = this;
       sockets.push(this);
       window.setTimeout(() => {
-        if (this.readyState !== MockWebSocket.CONNECTING) {
-          return;
-        }
-        this.readyState = MockWebSocket.OPEN;
-        this.dispatchEvent(new Event("open"));
-        this.deliver({
-          event: "connect.challenge",
-          payload: { nonce: "control-ui-e2e-nonce" },
-          type: "event",
-        });
+        this.openConnection();
       }, 0);
+    }
+
+    openConnection(): void {
+      if (!online || this.readyState !== MockWebSocket.CONNECTING) {
+        return;
+      }
+      this.readyState = MockWebSocket.OPEN;
+      this.dispatchEvent(new Event("open"));
+      this.deliver({
+        event: "connect.challenge",
+        payload: { nonce: "control-ui-e2e-nonce" },
+        type: "event",
+      });
     }
 
     override dispatchEvent(event: Event): boolean {
@@ -742,6 +881,9 @@ function installControlUiMockGateway(input: {
         throw new Error(`No deferred mock Gateway response for ${method}`);
       }
       const [response] = deferredResponses.splice(index, 1);
+      if (!response) {
+        throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
+      }
       response.socket.deliver({
         error: {
           code: error?.code ?? "INVALID_REQUEST",
@@ -761,6 +903,9 @@ function installControlUiMockGateway(input: {
         throw new Error(`No deferred mock Gateway response for ${method}`);
       }
       const [response] = deferredResponses.splice(index, 1);
+      if (!response) {
+        throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
+      }
       response.socket.deliver({
         id: response.id,
         ok: true,
@@ -768,8 +913,41 @@ function installControlUiMockGateway(input: {
         type: "res",
       });
     },
+    setOnline(nextOnline) {
+      online = nextOnline;
+      try {
+        if (online) {
+          window.sessionStorage.removeItem(offlineStateKey);
+        } else {
+          window.sessionStorage.setItem(offlineStateKey, "1");
+        }
+      } catch {
+        // The current document can still toggle the in-memory mock.
+      }
+      if (!online) {
+        MockWebSocket.latest?.close(1006, "mock offline");
+        return;
+      }
+      MockWebSocket.latest?.openConnection();
+    },
+    setMethodResponse(method, payload) {
+      scenario.methodResponses[method] = payload;
+      methodResponseOverrides[method] = payload;
+      try {
+        window.sessionStorage.setItem(
+          methodResponseOverridesStorageKey,
+          JSON.stringify(methodResponseOverrides),
+        );
+      } catch {
+        // Current-document responses still work if browser storage is unavailable.
+      }
+    },
     setHistoryMessages(messages) {
       scenario.historyMessages = Array.isArray(messages) ? messages : [];
+      const configuredHistory = scenario.methodResponses["chat.history"];
+      if (isRecord(configuredHistory) && !responseCases(configuredHistory)) {
+        configuredHistory.messages = scenario.historyMessages;
+      }
     },
     socketCount() {
       return sockets.length;
@@ -779,7 +957,7 @@ function installControlUiMockGateway(input: {
     },
   };
 
-  (window as WindowWithGateway).openclawControlUiE2eGateway = exposed;
+  (window as unknown as WindowWithGateway).openclawControlUiE2eGateway = exposed;
   window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 }
 
@@ -964,6 +1142,21 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
         { targetMethod: method, responsePayload: payload },
       );
     },
+    async setOnline(online) {
+      await page.evaluate((nextOnline) => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              setOnline: (online: boolean) => void;
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setOnline(nextOnline);
+      }, online);
+    },
     async setHistoryMessages(messages) {
       await page.evaluate((nextMessages) => {
         const gateway = (
@@ -978,6 +1171,24 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
         }
         gateway.setHistoryMessages(nextMessages);
       }, messages);
+    },
+    async setMethodResponse(method, payload) {
+      await page.evaluate(
+        ({ targetMethod, responsePayload }) => {
+          const gateway = (
+            window as Window & {
+              openclawControlUiE2eGateway?: {
+                setMethodResponse: (method: string, payload: unknown) => void;
+              };
+            }
+          ).openclawControlUiE2eGateway;
+          if (!gateway) {
+            throw new Error("Mock Gateway is not installed");
+          }
+          gateway.setMethodResponse(targetMethod, responsePayload);
+        },
+        { targetMethod: method, responsePayload: payload },
+      );
     },
     async waitForRequest(method) {
       await page.waitForFunction(

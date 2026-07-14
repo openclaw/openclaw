@@ -9,9 +9,19 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@awesome.me/webawesome": "3.10.0",
+    "@codemirror/commands": "6.10.4",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/language-data": "6.5.2",
+    "@codemirror/state": "6.7.1",
+    "@codemirror/view": "6.43.6",
     "@create-markdown/preview": "2.0.3",
+    "@lezer/highlight": "1.2.3",
     "@lit/context": "1.1.6",
+    "@modelcontextprotocol/ext-apps": "1.7.4",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@noble/ed25519": "3.1.0",
+    "@openclaw/gateway-client": "workspace:*",
     "@openclaw/libterminal": "0.3.1",
     "@openclaw/media-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",
@@ -23,7 +33,8 @@
     "lit": "3.3.3",
     "markdown-it": "14.3.0",
     "markdown-it-task-lists": "2.1.1",
-    "marked": "18.0.5"
+    "marked": "18.0.5",
+    "remend": "1.3.0"
   },
   "devDependencies": {
     "@types/markdown-it": "14.1.2",

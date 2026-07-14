@@ -451,14 +451,17 @@ These auth-related config keys can be set via environment variables instead of `
 
 ## Member info action
 
-OpenClaw exposes a Graph-backed `member-info` message action for Microsoft Teams so agents and automations can resolve channel member details (display name, email, job title, UPN, office location) directly from Microsoft Graph.
+OpenClaw exposes a Graph-backed `member-info` action for Microsoft Teams so agents and automations can resolve verified roster details for a configured conversation.
 
 Requirements:
 
-- `Member.Read.Group` RSC permission (already in the recommended manifest).
-- For cross-team lookups: `User.Read.All` Graph Application permission with admin consent.
+- `ChannelSettings.Read.Group` and `TeamMember.Read.Group` RSC permissions (already in the recommended manifest).
 
-The action runs whenever Graph credentials are configured; it fails with a Graph auth error when they are not. There is no separate `channels.msteams.actions.memberInfo` toggle.
+The action is available whenever Graph credentials are configured; there is no separate `channels.msteams.actions.memberInfo` toggle.
+Standard-channel lookups return the matching team-roster identity, display name, email, and roles.
+In the current DM or group chat, the action can return the trusted sender's stable user ID.
+Private/shared-channel and non-current chat member lookups require additional roster permissions
+and are rejected by the default permission baseline.
 
 ## History context
 
@@ -725,7 +728,7 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.allowFrom`: DM allowlist (AAD object IDs recommended). The wizard resolves names to IDs during setup when Graph access is available.
 - `channels.msteams.dangerouslyAllowNameMatching`: break-glass toggle to re-enable mutable UPN/display-name matching and direct team/channel name routing.
 - `channels.msteams.textChunkLimit`: outbound text chunk size in characters (default `4000`, and hard-capped at `4000` regardless of a higher configured value).
-- `channels.msteams.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
+- `channels.msteams.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains: Graph, SharePoint/OneDrive, Teams CDN, Bot Framework, Azure Media Services).
 - `channels.msteams.mediaAuthAllowHosts`: allowlist for attaching Authorization headers on media retries (defaults to Graph + Bot Framework hosts).
 - `channels.msteams.graphMediaFallback`: opt into Graph message lookups when channel/group HTML omits file markers (default `false`; see [Channel/group file recovery](#channelgroup-file-recovery-graphmediafallback)).

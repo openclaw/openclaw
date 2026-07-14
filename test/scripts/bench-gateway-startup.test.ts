@@ -1,15 +1,16 @@
 // Bench Gateway Startup tests cover bench gateway startup script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type RequestListener } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
+import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
 import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
-async function listenOnLoopback(handler: Parameters<typeof createServer>[0]) {
+async function listenOnLoopback(handler: RequestListener) {
   const server = createServer(handler);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -381,6 +382,15 @@ describe("gateway startup benchmark script", () => {
 
     expect(startupTrace["sidecars.acp.runtime-ready.ready"]).toBeUndefined();
     expect(startupTrace["sidecars.acp.runtime-ready.readyCount"]).toBe(1);
+  });
+
+  it("keeps counts and memory metrics out of the slow-duration ranking", () => {
+    expect(isStartupTraceDuration("plugins.runtime-post-bind")).toBe(true);
+    expect(isStartupTraceDuration("plugins.gateway-load.loadMs")).toBe(true);
+    expect(isStartupTraceDuration("ready.eventLoopMax")).toBe(true);
+    expect(isStartupTraceDuration("plugins.runtime-post-bind.gatewayMethodCount")).toBe(false);
+    expect(isStartupTraceDuration("memory.ready.rssMb")).toBe(false);
+    expect(isStartupTraceDuration("ready.total")).toBe(false);
   });
 
   it("records probe state transitions, first error kind, and first recovery", async () => {

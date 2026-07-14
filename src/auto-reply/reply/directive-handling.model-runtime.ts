@@ -3,13 +3,15 @@ import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
 } from "../../agents/agent-runtime-id.js";
-import { resolveCliRuntimeModelBackendBinding } from "../../agents/cli-backends.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import {
+  resolveCompatibleAgentRuntimeForProvider,
+  resolveSessionRuntimeOverrideForProvider,
+} from "../../agents/session-runtime-compat.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-export type ModelRuntimeDirectiveResolution =
+type ModelRuntimeDirectiveResolution =
   | { kind: "unchanged" }
   | { kind: "clear" }
   | { kind: "set"; runtime: string }
@@ -42,21 +44,15 @@ export function resolveModelRuntimeDirective(params: {
   if (isDefaultAgentRuntimeId(runtime)) {
     return { kind: "clear" };
   }
-  if (runtime === "openclaw") {
-    return { kind: "set", runtime };
-  }
 
   const provider = normalizeProviderId(params.provider);
-  if (provider === "openai" && runtime === "codex") {
-    return { kind: "set", runtime };
-  }
-  const backend = resolveCliRuntimeModelBackendBinding({
-    config: params.cfg,
+  const compatibleRuntime = resolveCompatibleAgentRuntimeForProvider({
     provider,
     runtime,
+    cfg: params.cfg,
   });
-  if (backend) {
-    return { kind: "set", runtime: backend.runtime };
+  if (compatibleRuntime) {
+    return { kind: "set", runtime: compatibleRuntime };
   }
 
   return {

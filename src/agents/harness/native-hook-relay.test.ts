@@ -6,12 +6,13 @@ import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -2331,12 +2332,10 @@ describe("native hook relay registry", () => {
     ];
     setActivePluginRegistry(registry);
     try {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:session-1"] = {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        } as SessionEntry;
-      });
+      await replaceSessionEntry({ sessionKey: "agent:main:session-1", storePath }, {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+      } as SessionEntry);
       const patchResult = await patchPluginSessionExtension({
         cfg: config as never,
         sessionKey: "agent:main:session-1",
@@ -3432,6 +3431,40 @@ describe("native hook relay registry", () => {
         ),
       }),
     ).toContain("(1 omitted)");
+  });
+
+  it("strips ESC and C1 CSI equivalently across PermissionRequest preview fields", () => {
+    const formatPreview = (csi: string) =>
+      testing.formatPermissionApprovalDescriptionForTests({
+        provider: "codex",
+        sessionId: "session-1",
+        runId: "run-1",
+        toolName: `ex${csi}ec`,
+        cwd: `/repo${csi}/red`,
+        model: `gpt-${csi}5.4`,
+        toolInput: {
+          command: `printf${csi} 'ok'`,
+        },
+      });
+    const formatKeyPreview = (csi: string) =>
+      testing.formatPermissionApprovalDescriptionForTests({
+        provider: "codex",
+        sessionId: "session-1",
+        runId: "run-1",
+        toolName: "exec",
+        toolInput: {
+          [`key${csi}-0`]: 0,
+        },
+      });
+    const escCsi = "\u001b[@";
+    const c1Csi = "\u009b@";
+
+    expect(formatPreview(c1Csi)).toBe(formatPreview(escCsi));
+    expect(formatPreview(c1Csi)).toBe(
+      "Tool: exec\nCwd: /repo/red\nModel: gpt-5.4\nCommand: printf 'ok'",
+    );
+    expect(formatKeyPreview(c1Csi)).toBe(formatKeyPreview(escCsi));
+    expect(formatKeyPreview(c1Csi)).toBe("Tool: exec\nInput keys: key-0");
   });
 
   it("truncates PermissionRequest approval previews without splitting surrogate pairs", () => {

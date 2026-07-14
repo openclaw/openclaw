@@ -46,8 +46,6 @@ final class InstancesStore {
     private let interval: TimeInterval = 30
     private var eventTask: Task<Void, Never>?
     private var startCount = 0
-    private var lastPresenceById: [String: InstanceInfo] = [:]
-    private var lastLoginNotifiedAtMs: [String: Double] = [:]
 
     private struct PresenceEventPayload: Codable {
         let presence: [PresenceEntry]
@@ -97,9 +95,7 @@ final class InstancesStore {
     }
 
     func refresh() async {
-        if self.isLoading {
-            return
-        }
+        if self.isLoading { return }
         self.statusMessage = nil
         self.isLoading = true
         defer { self.isLoading = false }
@@ -171,9 +167,7 @@ final class InstancesStore {
 
     private func snippet(_ data: Data?, limit: Int = 256) -> String {
         guard let data else { return "<none>" }
-        if data.isEmpty {
-            return "<empty>"
-        }
+        if data.isEmpty { return "<empty>" }
         let prefix = data.prefix(limit)
         if let asString = String(data: prefix, encoding: .utf8) {
             return asString.replacingOccurrences(of: "\n", with: " ")
@@ -186,14 +180,10 @@ final class InstancesStore {
             let data = try await ControlChannel.shared.health(timeout: 8)
             guard let snap = decodeHealthSnapshot(from: data) else { return }
             let linkId = snap.channelOrder?.first(where: {
-                if let summary = snap.channels[$0] {
-                    return summary.linked != nil
-                }
+                if let summary = snap.channels[$0] { return summary.linked != nil }
                 return false
             }) ?? snap.channels.keys.first(where: {
-                if let summary = snap.channels[$0] {
-                    return summary.linked != nil
-                }
+                if let summary = snap.channels[$0] { return summary.linked != nil }
                 return false
             })
             let linked = linkId.flatMap { snap.channels[$0]?.linked } ?? false
@@ -260,42 +250,9 @@ final class InstancesStore {
 
     private func applyPresence(_ entries: [PresenceEntry]) {
         let withIDs = self.normalizePresence(entries)
-        self.notifyOnNodeLogin(withIDs)
-        self.lastPresenceById = Dictionary(uniqueKeysWithValues: withIDs.map { ($0.id, $0) })
         self.instances = withIDs
         self.statusMessage = nil
         self.lastError = nil
-    }
-
-    private func notifyOnNodeLogin(_ instances: [InstanceInfo]) {
-        for inst in instances {
-            guard let reason = inst.reason?.trimmingCharacters(in: .whitespacesAndNewlines) else { continue }
-            guard reason == "node-connected" else { continue }
-            if let mode = inst.mode?.lowercased(), mode == "local" {
-                continue
-            }
-
-            let previous = self.lastPresenceById[inst.id]
-            if previous?.reason == "node-connected", previous?.ts == inst.ts {
-                continue
-            }
-
-            let lastNotified = self.lastLoginNotifiedAtMs[inst.id] ?? 0
-            if inst.ts <= lastNotified {
-                continue
-            }
-            self.lastLoginNotifiedAtMs[inst.id] = inst.ts
-
-            let name = inst.host?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let device = name?.isEmpty == false ? name! : inst.id
-            Task { @MainActor in
-                _ = await NotificationManager().send(
-                    title: "Node connected",
-                    body: device,
-                    sound: nil,
-                    priority: .active)
-            }
-        }
     }
 }
 

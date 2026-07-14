@@ -2,6 +2,11 @@
  * Gateway runtime service lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
@@ -12,7 +17,11 @@ const hoisted = vi.hoisted(() => {
   return {
     heartbeatRunner,
     startHeartbeatRunner: vi.fn(() => heartbeatRunner),
-    startChannelHealthMonitor: vi.fn(() => ({ stop: vi.fn() })),
+    startChannelHealthMonitor: vi.fn(() => ({
+      stop: vi.fn(),
+      shutdown: vi.fn(),
+      waitForIdle: vi.fn(async () => {}),
+    })),
     stopModelPricingRefresh,
     startGatewayModelPricingRefresh: vi.fn(() => stopModelPricingRefresh),
     loadModelPricingCacheModule: vi.fn(),
@@ -59,6 +68,7 @@ vi.mock("./model-pricing-cache.js", () => ({
 const {
   activateGatewayScheduledServices,
   runGatewayPostReadyMaintenance,
+  scheduleGatewayIdleTask,
   scheduleGatewayPostReadyMaintenance,
   startGatewayCronWithLogging,
   startGatewayRuntimeServices,
@@ -67,6 +77,7 @@ const {
 describe("server-runtime-services", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    resetGatewayWorkAdmission();
     hoisted.heartbeatRunner.stop.mockClear();
     hoisted.heartbeatRunner.updateConfig.mockClear();
     hoisted.startHeartbeatRunner.mockClear();
@@ -82,6 +93,7 @@ describe("server-runtime-services", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetGatewayWorkAdmission();
   });
 
   it("skips model pricing bootstrap import when pricing is disabled", async () => {
@@ -90,7 +102,8 @@ describe("server-runtime-services", () => {
       cfgAtStart: { models: { pricing: { enabled: false } } } as never,
       deps: {} as never,
       sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cron: { start: vi.fn(async () => undefined) },
+      cronState: createTestCronState(),
+      cronReconciliation: createTestCronReconciliation(),
       logCron: { error: vi.fn() },
       log: createLog(),
     });
@@ -128,12 +141,12 @@ describe("server-runtime-services", () => {
       index: { plugins: [] },
       manifestRegistry: { plugins: [], diagnostics: [] },
     };
-    const { cron, services } = activateScheduledServicesForTest({
+    const { cronStart, services } = activateScheduledServicesForTest({
       pluginLookUpTable: pluginLookUpTable as never,
     });
 
     expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
-    expect(cron.start).toHaveBeenCalledTimes(1);
+    expect(cronStart).toHaveBeenCalledTimes(1);
     await vi.dynamicImportSettled();
     expect(hoisted.startGatewayModelPricingRefresh).toHaveBeenCalledWith({
       config: {},
@@ -143,7 +156,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.stopModelPricingRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it("runs cron afterStart after startup succeeds", async () => {
+  it("runs cron start, watcher reconciliation, and hook completion in order", async () => {
     const order: string[] = [];
     const cron = {
       start: vi.fn(async () => {
@@ -153,12 +166,106 @@ describe("server-runtime-services", () => {
     const afterStart = vi.fn(async () => {
       order.push("after-start");
     });
+    const cronReconciliation = createTestCronReconciliation(async () => {
+      order.push("hook");
+    });
+    const cronState = createTestCronState(cron);
+    const config = { cron: { enabled: true } } as never;
     const logCron = { error: vi.fn() };
 
-    startGatewayCronWithLogging({ cron, afterStart, logCron });
+    startGatewayCronWithLogging({
+      cronState,
+      cronReconciliation,
+      reason: "startup",
+      config,
+      afterStart,
+      logCron,
+    });
 
-    await vi.waitFor(() => expect(order).toEqual(["start", "after-start"]));
+    await vi.waitFor(() => expect(order).toEqual(["start", "after-start", "hook"]));
+    expect(cronReconciliation.arm).toHaveBeenCalledWith({
+      reason: "startup",
+      config,
+      cronState,
+    });
     expect(logCron.error).not.toHaveBeenCalled();
+  });
+
+  it("does not complete cron reconciliation when scheduler startup rejects", async () => {
+    const cron = {
+      start: vi.fn(async () => {
+        throw new Error("store unavailable");
+      }),
+    };
+    const cronReconciliation = createTestCronReconciliation();
+    const logCron = { error: vi.fn() };
+    const onStartError = vi.fn(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    });
+
+    startGatewayCronWithLogging({
+      cronState: createTestCronState(cron),
+      cronReconciliation,
+      reason: "startup",
+      config: {} as never,
+      onStartError,
+      logCron,
+    });
+
+    await vi.waitFor(() =>
+      expect(logCron.error).toHaveBeenCalledWith("failed to start: Error: store unavailable"),
+    );
+    expect(onStartError).toHaveBeenCalledOnce();
+    expect(cronReconciliation.complete).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("does not complete cron reconciliation when exit-watcher reconciliation rejects", async () => {
+    const cronReconciliation = createTestCronReconciliation();
+    const logCron = { error: vi.fn() };
+
+    startGatewayCronWithLogging({
+      cronState: createTestCronState(),
+      cronReconciliation,
+      reason: "reload",
+      config: {} as never,
+      afterStart: async () => {
+        throw new Error("watcher unavailable");
+      },
+      logCron,
+    });
+
+    await vi.waitFor(() =>
+      expect(logCron.error).toHaveBeenCalledWith("failed to start: Error: watcher unavailable"),
+    );
+    expect(cronReconciliation.complete).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("keeps one independent root admitted until the reconciliation hook settles", async () => {
+    let releaseHook: (() => void) | undefined;
+    const cronReconciliation = createTestCronReconciliation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseHook = resolve;
+        }),
+    );
+
+    startGatewayCronWithLogging({
+      cronState: createTestCronState(),
+      cronReconciliation,
+      reason: "startup",
+      config: {} as never,
+      logCron: { error: vi.fn() },
+    });
+
+    await vi.waitFor(() => expect(cronReconciliation.complete).toHaveBeenCalledTimes(1));
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    if (!releaseHook) {
+      throw new Error("Expected cron reconciliation hook to be pending");
+    }
+    releaseHook();
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("does not start model pricing refresh after scheduled services stop before import settles", async () => {
@@ -174,10 +281,10 @@ describe("server-runtime-services", () => {
   it("activates heartbeat, cron, and delivery recovery after sidecars are ready", async () => {
     vi.useFakeTimers();
     const log = createLog();
-    const { cron, services } = activateScheduledServicesForTest({ log });
+    const { cronStart, services } = activateScheduledServicesForTest({ log });
 
     expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
-    expect(cron.start).toHaveBeenCalledTimes(1);
+    expect(cronStart).toHaveBeenCalledTimes(1);
     expect(services.heartbeatRunner).toBe(hoisted.heartbeatRunner);
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
@@ -210,7 +317,8 @@ describe("server-runtime-services", () => {
       cfgAtStart: {} as never,
       deps: {} as never,
       sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cron,
+      cronState: createTestCronState(cron),
+      cronReconciliation: createTestCronReconciliation(),
       startCron: false,
       logCron: { error: vi.fn() },
       log,
@@ -235,7 +343,9 @@ describe("server-runtime-services", () => {
       applyMaintenance: vi.fn(),
       shouldStartCron: () => true,
       markCronStartHandled: vi.fn(),
-      cron,
+      cronState: createTestCronState(cron),
+      cronReconciliation: createTestCronReconciliation(),
+      cronConfig: {} as never,
       logCron: { error: vi.fn() },
       log,
       recordPostReadyMemory,
@@ -267,6 +377,75 @@ describe("server-runtime-services", () => {
     expect(startMaintenance).not.toHaveBeenCalled();
   });
 
+  it("runs a scheduled idle task in an independent admitted root", async () => {
+    vi.useFakeTimers();
+    const activeRootCounts: number[] = [];
+    const run = vi.fn(async () => {
+      activeRootCounts.push(getActiveGatewayRootWorkCount());
+    });
+
+    scheduleGatewayIdleTask({
+      delayMs: 25,
+      retryDelayMs: 50,
+      isClosing: () => false,
+      isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+      run,
+      log: createLog(),
+      errorMessage: "idle task failed",
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    expect(activeRootCounts).toEqual([1]);
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("retries a scheduled idle task while request work is active", async () => {
+    vi.useFakeTimers();
+    const admission = tryBeginGatewayRootWorkAdmission();
+    if (!admission) {
+      throw new Error("Expected request work admission");
+    }
+    const run = vi.fn(async () => undefined);
+
+    scheduleGatewayIdleTask({
+      delayMs: 25,
+      retryDelayMs: 50,
+      isClosing: () => false,
+      isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+      run,
+      log: createLog(),
+      errorMessage: "idle task failed",
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(run).not.toHaveBeenCalled();
+    admission.release();
+    await vi.advanceTimersByTimeAsync(49);
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+  });
+
+  it("cancels a scheduled idle task before its delay elapses", async () => {
+    vi.useFakeTimers();
+    const run = vi.fn(async () => undefined);
+    const handle = scheduleGatewayIdleTask({
+      delayMs: 25,
+      retryDelayMs: 50,
+      isClosing: () => false,
+      isBusy: () => false,
+      run,
+      log: createLog(),
+      errorMessage: "idle task failed",
+    });
+
+    handle.stop();
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("clears delayed maintenance handles when close starts during maintenance startup", async () => {
     vi.useFakeTimers();
     let closing = false;
@@ -290,7 +469,7 @@ describe("server-runtime-services", () => {
         isClosing: () => closing,
         startMaintenance,
         applyMaintenance,
-        cron,
+        cronState: createTestCronState(cron),
         recordPostReadyMemory,
       }),
     );
@@ -325,7 +504,8 @@ describe("server-runtime-services", () => {
       cfgAtStart: {} as never,
       deps: {} as never,
       sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cron,
+      cronState: createTestCronState(cron),
+      cronReconciliation: createTestCronReconciliation(),
       logCron: { error: vi.fn() },
       log: createLog(),
     });
@@ -353,25 +533,51 @@ function createLog() {
 }
 
 function createTestCron() {
-  return { start: vi.fn(async () => undefined) };
+  return { start: vi.fn<() => Promise<void>>(async () => {}) };
+}
+
+function createTestCronState(
+  cron: { start: () => Promise<void> } = createTestCron(),
+  cronEnabled = true,
+) {
+  return {
+    cron,
+    storePath: "/tmp/cron.json",
+    cronEnabled,
+  } as never;
+}
+
+function createTestCronReconciliation(complete: () => Promise<void> = async () => {}) {
+  const completeMock = vi.fn<() => Promise<void>>(complete);
+  return {
+    arm: vi.fn<() => { complete: () => Promise<void> }>(() => ({ complete: completeMock })),
+    complete: completeMock,
+    invalidate: vi.fn(),
+  };
 }
 
 function activateScheduledServicesForTest(
-  overrides: Partial<Parameters<typeof activateGatewayScheduledServices>[0]> = {},
+  overrides: Omit<
+    Partial<Parameters<typeof activateGatewayScheduledServices>[0]>,
+    "cronState"
+  > = {},
 ) {
-  const cron = overrides.cron ?? createTestCron();
+  const cron = createTestCron();
+  const cronState = createTestCronState(cron);
+  const cronStart = cron.start;
   const log = overrides.log ?? createLog();
   const services = activateGatewayScheduledServices({
     minimalTestGateway: false,
     cfgAtStart: {} as never,
     deps: {} as never,
     sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+    cronReconciliation: createTestCronReconciliation(),
     logCron: { error: vi.fn() },
     ...overrides,
-    cron,
+    cronState,
     log,
   });
-  return { cron, log, services };
+  return { cron, cronStart, log, services };
 }
 
 function createPostReadyMaintenanceScheduleParams(
@@ -384,7 +590,9 @@ function createPostReadyMaintenanceScheduleParams(
     applyMaintenance: vi.fn(),
     shouldStartCron: () => true,
     markCronStartHandled: vi.fn(),
-    cron: { start: vi.fn(async () => undefined) },
+    cronState: createTestCronState(),
+    cronReconciliation: createTestCronReconciliation(),
+    cronConfig: {} as never,
     logCron: { error: vi.fn() },
     log: createLog(),
     recordPostReadyMemory: vi.fn(),

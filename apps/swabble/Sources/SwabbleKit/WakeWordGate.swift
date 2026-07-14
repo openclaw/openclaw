@@ -58,8 +58,6 @@ public enum WakeWordGate {
         let normalized: String
         let start: TimeInterval
         let end: TimeInterval
-        let range: Range<String.Index>?
-        let text: String
     }
 
     private struct TriggerTokens {
@@ -112,9 +110,7 @@ public enum WakeWordGate {
         commandWords.reserveCapacity(segments.count)
         for segment in segments where segment.start >= threshold {
             let normalized = normalizeToken(segment.text)
-            if normalized.isEmpty {
-                continue
-            }
+            if normalized.isEmpty { continue }
             commandWords.append(segment.text)
         }
         return commandWords.joined(separator: " ").trimmingCharacters(in: Self.whitespaceAndPunctuation)
@@ -125,12 +121,8 @@ public enum WakeWordGate {
         let normalized = text.lowercased()
         for trigger in triggers {
             let token = trigger.trimmingCharacters(in: self.whitespaceAndPunctuation).lowercased()
-            if token.isEmpty {
-                continue
-            }
-            if normalized.contains(token) {
-                return true
-            }
+            if token.isEmpty { continue }
+            if normalized.contains(token) { return true }
         }
         return false
     }
@@ -152,9 +144,7 @@ public enum WakeWordGate {
                 .split(whereSeparator: { $0.isWhitespace })
                 .map { self.normalizeToken(String($0)) }
                 .filter { !$0.isEmpty }
-            if tokens.isEmpty {
-                continue
-            }
+            if tokens.isEmpty { continue }
             output.append(TriggerTokens(source: tokens.joined(separator: " "), tokens: tokens))
         }
         return output
@@ -220,9 +210,7 @@ public enum WakeWordGate {
             return Token(
                 normalized: normalized,
                 start: segment.start,
-                end: segment.end,
-                range: segment.range,
-                text: segment.text)
+                end: segment.end)
         }
     }
 

@@ -16,6 +16,7 @@ import type {
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
+const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "assemble-before-prompt",
@@ -35,6 +36,15 @@ type CodexAppServerAgentHarness = AgentHarness & {
   ): Promise<AgentHarnessCompactResult | undefined>;
 };
 
+async function disposeSharedCodexAppServerClients(): Promise<void> {
+  const dispose = (
+    globalThis as typeof globalThis & {
+      [SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER]?: () => Promise<void>;
+    }
+  )[SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER];
+  await dispose?.();
+}
+
 /**
  * Creates the Codex app-server harness used for attempts, side questions,
  * compaction, reset, and disposal.
@@ -48,28 +58,91 @@ export function createCodexAppServerAgentHarness(options: {
   resolveConfig?: () => OpenClawConfig | undefined;
   bindingStore: CodexAppServerBindingStore;
 }): AgentHarness {
+  const harnessRuntimeId = options?.id ?? "codex";
+  const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
   const providerIds = new Set(
     [...(options?.providerIds ?? DEFAULT_CODEX_HARNESS_PROVIDER_IDS)].map((id) =>
       id.trim().toLowerCase(),
     ),
   );
   const harness: CodexAppServerAgentHarness = {
-    id: options?.id ?? "codex",
+    id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
+    delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     deliveryDefaults: {
       sourceVisibleReplies: "message_tool",
     },
     authBootstrap: "harness",
+    authBinding: {
+      fingerprint: async (params) => {
+        const { fingerprintCodexAppServerAuthBinding } =
+          await import("./src/app-server/auth-binding.js");
+        return fingerprintCodexAppServerAuthBinding(params);
+      },
+    },
+    runtimeArtifact: {
+      validate: async (binding) => {
+        const { validateCodexAppServerRuntimeArtifact } =
+          await import("./src/app-server/runtime-artifact.js");
+        return validateCodexAppServerRuntimeArtifact(binding);
+      },
+    },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
-      if (providerIds.has(provider)) {
-        return { supported: true, priority: 100 };
+      if (!providerIds.has(provider)) {
+        return {
+          supported: false,
+          reason: `provider is not one of: ${[...providerIds].toSorted().join(", ")}`,
+        };
       }
-      return {
-        supported: false,
-        reason: `provider is not one of: ${[...providerIds].toSorted().join(", ")}`,
-      };
+      if (ctx.modelProvider?.requestTransportOverrides === "present") {
+        return {
+          supported: false,
+          reason: "Codex cannot reproduce authored request transport overrides",
+        };
+      }
+      const preparedAuth = ctx.modelProvider?.preparedAuth;
+      const runtimePolicy = ctx.modelProvider?.runtimePolicy;
+      if (runtimePolicy) {
+        const compatible = runtimePolicy.compatibleIds.some(
+          (id) => id.trim().toLowerCase() === normalizedHarnessRuntimeId,
+        );
+        if (!compatible) {
+          return {
+            supported: false,
+            reason: "Codex cannot reproduce the prepared provider route",
+          };
+        }
+      } else if (ctx.modelProvider && provider !== "codex") {
+        return {
+          supported: false,
+          reason: "provider route compatibility with Codex is not declared",
+        };
+      }
+      if (preparedAuth?.requirement === "subscription") {
+        const reproducibleSubscription =
+          preparedAuth.source === "profile" &&
+          (preparedAuth.mode === "oauth" || preparedAuth.mode === "token");
+        if (!reproducibleSubscription) {
+          return {
+            supported: false,
+            reason: "Codex subscription auth requires a prepared OAuth or token profile",
+          };
+        }
+      } else if (preparedAuth?.requirement === "api-key") {
+        const reproducibleApiKey =
+          preparedAuth.source !== "none" &&
+          preparedAuth.source !== "harness" &&
+          (preparedAuth.mode === "api-key" || preparedAuth.mode === "api_key");
+        if (!reproducibleApiKey) {
+          return {
+            supported: false,
+            reason: "Codex Platform auth requires a prepared API key",
+          };
+        }
+      }
+      return { supported: true, priority: 100 };
     },
     runAttempt: async (params) => {
       // Keep app-server runtime code behind lazy imports so plugin discovery and
@@ -131,11 +204,7 @@ export function createCodexAppServerAgentHarness(options: {
         }
       }
     },
-    dispose: async () => {
-      const { clearSharedCodexAppServerClientAndWait } =
-        await import("./src/app-server/shared-client.js");
-      await clearSharedCodexAppServerClientAndWait();
-    },
+    dispose: disposeSharedCodexAppServerClients,
   };
   return harness;
 }

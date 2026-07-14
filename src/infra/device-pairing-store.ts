@@ -27,24 +27,31 @@ import type {
 } from "./device-pairing.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
-export type DevicePairingStoreState = {
+type DevicePairingStoreState = {
   pendingById: Record<string, DevicePairingPendingRecord>;
   pairedByDeviceId: Record<string, PairedDevice>;
 };
 
-export type DevicePairingStoreTarget = "pending" | "paired" | "both";
+type DevicePairingStoreTarget = "pending" | "paired" | "both";
 
 /** Route an explicit pairing base dir (tests, alternate state roots) to that dir's DB. */
-export function resolveDevicePairingStateDbOptions(baseDir?: string): OpenClawStateDatabaseOptions {
+function resolveDevicePairingStateDbOptions(baseDir?: string): OpenClawStateDatabaseOptions {
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
 }
 
-const APPROVAL_KINDS: readonly PairedDeviceApprovalKind[] = [
-  "owner",
-  "silent",
-  "trusted-cidr",
-  "bootstrap",
-];
+// Read-back allowlist for the approved_via column. The Record type forces
+// every PairedDeviceApprovalKind to appear here at compile time: omit one and
+// this object is a type error, instead of the stored provenance silently
+// dropping to undefined on load (which mergeApprovalKind treats as a legacy
+// record). Keep this in sync when adding an approval kind.
+const APPROVAL_KIND_MEMBERS = {
+  owner: true,
+  silent: true,
+  "trusted-cidr": true,
+  "ssh-verified": true,
+  bootstrap: true,
+} satisfies Record<PairedDeviceApprovalKind, true>;
+const APPROVAL_KINDS = new Set(Object.keys(APPROVAL_KIND_MEMBERS));
 
 function toJsonColumn(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
@@ -134,9 +141,7 @@ function toPairedRow(device: PairedDevice): DevicePairingPaired {
 }
 
 function fromApprovedViaColumn(value: string | null): PairedDeviceApprovalKind | null {
-  return (APPROVAL_KINDS as readonly string[]).includes(value ?? "")
-    ? (value as PairedDeviceApprovalKind)
-    : null;
+  return value !== null && APPROVAL_KINDS.has(value) ? (value as PairedDeviceApprovalKind) : null;
 }
 
 function fromPairedRow(row: DevicePairingPaired): PairedDevice {

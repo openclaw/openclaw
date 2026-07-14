@@ -1,17 +1,20 @@
 // Generates short utility-model narration of an in-progress agent turn.
 // Channels opt in via GetReplyOptions.onNarrationUpdate; the narrator tees
 // tool lifecycle events and emits 1-2 plain sentences describing the work.
-import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
 } from "../../agents/simple-completion-runtime.js";
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
+import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { isChannelProgressDraftWorkToolName, isCommandToolName } from "../../channels/streaming.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { TextContent } from "../../llm/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
+
+const narratorLog = createSubsystemLogger("auto-reply/progress-narrator");
 
 const MIN_EVENTS_PER_NARRATION = 4;
 const MIN_INTERVAL_MS = 12_000;
@@ -36,13 +39,13 @@ const NARRATION_SYSTEM_PROMPT = [
   "Reply with the status text only.",
 ].join(" ");
 
-export type ProgressNarrationInput = {
+type ProgressNarrationInput = {
   userMessage: string;
   activityNotes: readonly string[];
   previousText: string;
 };
 
-export type ProgressNarrator = {
+type ProgressNarrator = {
   noteToolStart: (payload: {
     name?: string;
     phase?: string;
@@ -57,18 +60,6 @@ export type ProgressNarrator = {
   }) => void;
   noteItemEvent: (payload: { name?: string; title?: string; status?: string }) => void;
 };
-
-/** Explicit utility model ref for the agent, or undefined when not configured. */
-export function resolveConfiguredUtilityModelRef(
-  cfg: OpenClawConfig,
-  agentId: string,
-): string | undefined {
-  return (
-    resolveAgentConfig(cfg, agentId)?.utilityModel?.trim() ||
-    cfg.agents?.defaults?.utilityModel?.trim() ||
-    undefined
-  );
-}
 
 function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
@@ -121,7 +112,7 @@ async function generateNarrationWithUtilityModel(params: {
   prepared: NonNullable<Awaited<ReturnType<typeof prepareNarrationModel>>>;
   input: ProgressNarrationInput;
   abortSignal?: AbortSignal;
-}): Promise<string | null> {
+}): Promise<{ text: string | null; error?: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), NARRATION_TIMEOUT_MS);
   const onOuterAbort = () => controller.abort();
@@ -148,20 +139,19 @@ async function generateNarrationWithUtilityModel(params: {
       },
     });
     if (result.stopReason === "error") {
-      logVerbose(
-        `progress-narrator: completion failed: ${result.errorMessage?.trim() || "unknown error"}`,
-      );
-      return null;
+      const error = result.errorMessage?.trim() || "unknown error";
+      logVerbose(`progress-narrator: completion failed: ${error}`);
+      return { text: null, error };
     }
     const text = result.content
       .filter(isTextContentBlock)
       .map((block) => block.text)
       .join("")
       .trim();
-    return text || null;
+    return { text: text || null };
   } catch (err) {
     logVerbose(`progress-narrator: completion failed: ${String(err)}`);
-    return null;
+    return { text: null, error: String(err) };
   } finally {
     clearTimeout(timeout);
     params.abortSignal?.removeEventListener("abort", onOuterAbort);
@@ -211,6 +201,8 @@ export function createProgressNarrator(params: {
   let consecutiveFailures = 0;
   let lastText = "";
   let preparedPromise: ReturnType<typeof prepareNarrationModel> | undefined;
+  let lastFailure: string | undefined;
+  let utilityModelLabel: string | undefined;
 
   const generate =
     params.generate ??
@@ -221,13 +213,17 @@ export function createProgressNarrator(params: {
         disabled = true;
         return null;
       }
-      return await generateNarrationWithUtilityModel({
+      const { provider, modelId, profileId } = prepared.selection;
+      utilityModelLabel = `${provider}/${modelId}${profileId ? ` via ${profileId}` : ""}`;
+      const outcome = await generateNarrationWithUtilityModel({
         cfg: params.cfg,
         agentId: params.agentId,
         prepared,
         input,
         abortSignal: params.abortSignal,
       });
+      lastFailure = outcome.error;
+      return outcome.text;
     });
 
   // Stopping mid-turn must clear any rendered narration so the channel draft
@@ -302,6 +298,14 @@ export function createProgressNarrator(params: {
         if (!text) {
           consecutiveFailures += 1;
           if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            // A dead utility-model credential otherwise degrades silently to raw
+            // tool lines; per-attempt detail is verbose-only, so emit one warn
+            // per turn naming the model/profile operators must repair.
+            narratorLog.warn(
+              `narration disabled after ${consecutiveFailures} consecutive failures` +
+                (utilityModelLabel ? ` (${utilityModelLabel})` : "") +
+                (lastFailure ? `: ${lastFailure}` : ""),
+            );
             disableNarration();
           }
           return;
@@ -364,7 +368,8 @@ export function createProgressNarrator(params: {
 
 /**
  * Wraps reply options with a progress narrator when the channel opted in via
- * onNarrationUpdate and the agent has an explicit utilityModel configured.
+ * onNarrationUpdate and a utility model resolves (explicit config or the
+ * primary provider's declared default; utilityModel: "" disables).
  * Returns the options unchanged otherwise.
  */
 export function attachProgressNarratorToReplyOptions(params: {
@@ -372,13 +377,17 @@ export function attachProgressNarratorToReplyOptions(params: {
   agentId: string;
   userMessage?: string;
   opts?: GetReplyOptions;
+  /** Model-locked native sessions must never invoke the utility model. */
+  disabled?: boolean;
 }): GetReplyOptions | undefined {
   const opts = params.opts;
   const onNarrationUpdate = opts?.onNarrationUpdate;
-  if (!opts || !onNarrationUpdate) {
+  if (!opts || !onNarrationUpdate || params.disabled === true) {
     return opts;
   }
-  if (!resolveConfiguredUtilityModelRef(params.cfg, params.agentId)) {
+  // Explicit config or a provider-declared default both enable narration;
+  // utilityModel: "" and providers without a default keep it off.
+  if (!resolveUtilityModelRefForAgent({ cfg: params.cfg, agentId: params.agentId })) {
     return opts;
   }
   const narrator = createProgressNarrator({

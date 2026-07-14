@@ -1,5 +1,7 @@
 // Node invoke wake tests cover APNs wake attempts, reconnect waits, nudge
 // throttling, command policy, and foreground-restricted command handling.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
@@ -344,7 +346,10 @@ async function invokeNode(params: {
     info: vi.fn(),
     warn: vi.fn(),
   };
-  await nodeHandlers["node.invoke"]({
+  await expectDefined(
+    nodeHandlers["node.invoke"],
+    'nodeHandlers["node.invoke"] test invariant',
+  )({
     params: makeNodeInvokeParams(params.requestParams),
     respond: respond as never,
     context: {
@@ -425,7 +430,10 @@ function createMissingNodeRegistry() {
 
 async function pullPending(nodeId: string, commands?: string[]) {
   const respond = vi.fn();
-  await nodeHandlers["node.pending.pull"]({
+  await expectDefined(
+    nodeHandlers["node.pending.pull"],
+    'nodeHandlers["node.pending.pull"] test invariant',
+  )({
     params: {},
     respond: respond as never,
     context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
@@ -438,7 +446,10 @@ async function pullPending(nodeId: string, commands?: string[]) {
 
 async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   const respond = vi.fn();
-  await nodeHandlers["node.pending.ack"]({
+  await expectDefined(
+    nodeHandlers["node.pending.ack"],
+    'nodeHandlers["node.pending.ack"] test invariant',
+  )({
     params: { ids },
     respond: respond as never,
     context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
@@ -466,7 +477,10 @@ describe("node plugin surface refresh", () => {
       },
     };
 
-    await nodeHandlers["node.pluginSurface.refresh"]({
+    await expectDefined(
+      nodeHandlers["node.pluginSurface.refresh"],
+      'nodeHandlers["node.pluginSurface.refresh"] test invariant',
+    )({
       req: { type: "req", id: "r1", method: "node.pluginSurface.refresh", params: {} },
       params: { surface: "canvas" },
       client: client as never,
@@ -552,6 +566,43 @@ describe("node.invoke APNs wake path", () => {
     expect(call[0]).toBe(false);
     expect(call[2]?.message).toContain("missing scope: operator.admin");
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("allows an armed computer.act command for write-scoped operators", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      gateway: { nodes: { allowCommands: ["computer.act"] } },
+    });
+    mocks.resolveNodeCommandAllowlist.mockReturnValue(new Set(["computer.act"]));
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "computer-node",
+        commands: ["computer.act"],
+        platform: "macOS 26.0.0",
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: true,
+        payloadJSON: '{"ok":true}',
+      }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      client: createOperatorClient({ scopes: ["operator.write"] }),
+      requestParams: {
+        nodeId: "computer-node",
+        command: "computer.act",
+        params: { action: "type", text: "hello" },
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockArg(nodeRegistry.invoke, 0, 0), "node invoke payload", {
+      nodeId: "computer-node",
+      command: "computer.act",
+      params: { action: "type", text: "hello" },
+    });
   });
 
   it("explains the explicit opt-in required for dangerous commands", async () => {
@@ -922,7 +973,10 @@ describe("node.invoke APNs wake path", () => {
       }),
     };
 
-    await nodeHandlers["node.invoke"]({
+    await expectDefined(
+      nodeHandlers["node.invoke"],
+      'nodeHandlers["node.invoke"] test invariant',
+    )({
       params: {
         nodeId: "android-talk-node",
         command: "talk.ptt.start",

@@ -1,7 +1,7 @@
 // Qa Lab tests cover scenario catalog plugin behavior.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { QA_AGENTIC_PARITY_SCENARIO_IDS } from "./agentic-parity.js";
+import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import {
   listQaScenarioYamlPaths,
   readQaBootstrapScenarioCatalog,
@@ -128,7 +128,9 @@ describe("qa scenario catalog", () => {
     const scenarioIds = catalog.scenarios.map((scenario) => scenario.id);
     expect(scenarioIds).toContain("subagent-fanout-synthesis");
     expect(
-      QA_AGENTIC_PARITY_SCENARIO_IDS.filter((scenarioId) => !scenarioIds.includes(scenarioId)),
+      resolveQaParityPackScenarioIds({ parityPack: "agentic" }).filter(
+        (scenarioId) => !scenarioIds.includes(scenarioId),
+      ),
     ).toStrictEqual([]);
   });
 
@@ -197,7 +199,6 @@ describe("qa scenario catalog", () => {
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
       "kitchen-sink-live-openai",
       "matrix-post-restart-room-continue",
-      "matrix-restart-replay-dedupe",
       "matrix-restart-resume",
       "slack-restart-resume",
       "subagent-stale-child-links",
@@ -209,6 +210,15 @@ describe("qa scenario catalog", () => {
         .filter((scenario) => scenario.execution.suiteIsolation !== "isolated")
         .map((scenario) => scenario.id),
     ).toEqual([]);
+  });
+
+  it("uses only graceful gateway restart for Matrix replay dedupe", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("matrix-restart-replay-dedupe"));
+
+    expect(flowContainsCall(scenario.execution.flow, "env.gateway.restart")).toBe(true);
+    expect(flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation")).toBe(
+      false,
+    );
   });
 
   it("loads scenario-declared gateway runtime options from YAML", () => {
@@ -229,6 +239,9 @@ describe("qa scenario catalog", () => {
       throw new Error(`expected Playwright scenario, got ${scenario.execution.kind}`);
     }
     expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.e2e.test.ts");
+    expect(scenario.execution.testNamePattern).toBe(
+      "sends a chat turn through the GUI and renders the final Gateway event",
+    );
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).toContain("ui.control");
     expect(uxMatrix.execution.kind).toBe("script");
@@ -257,11 +270,9 @@ describe("qa scenario catalog", () => {
       "gateway.openai-compatible-apis",
       "runtime.hosted-tool-use",
     ]);
-    expect(readQaScenarioById("openai-web-search-minimal").coverage?.secondary).toContain(
-      "runtime.reasoning-and-cache-controls",
-    );
-    expect(readQaScenarioById("openai-web-search-native-assertions").coverage?.secondary).toEqual(
+    expect(readQaScenarioById("openai-web-search-minimal").coverage?.secondary).toEqual(
       expect.arrayContaining([
+        "runtime.reasoning-and-cache-controls",
         "web-search.openai-native-web-search",
         "plugins.web-search-and-fetch",
       ]),
@@ -275,7 +286,6 @@ describe("qa scenario catalog", () => {
     const scenarioLanes = [
       ["openai-compatible-chat-tools", "openai-chat-tools"],
       ["openai-web-search-minimal", "openai-web-search-minimal"],
-      ["openai-web-search-native-assertions", "openai-web-search-minimal"],
       ["openwebui-openai-compatible", "openwebui"],
       ["plugin-lifecycle-probe", "plugin-lifecycle-matrix"],
       ["packaged-bundled-plugin-install-uninstall", "bundled-plugin-install-uninstall"],
@@ -431,6 +441,7 @@ describe("qa scenario catalog", () => {
       "webchat-direct-reply-routing",
       "long-context-progress-watchdog",
       "gateway-restart-inflight-run",
+      "gateway-restart-multi-live",
       "streaming-final-integrity",
     ];
 
@@ -447,19 +458,35 @@ describe("qa scenario catalog", () => {
       "qa/scenarios/runtime/long-context-progress-watchdog.yaml",
     );
     const gatewayRestartFlow = readQaScenarioById("gateway-restart-inflight-run").execution.flow;
-    const interruptedStatusAssertion = gatewayRestartFlow?.steps
-      .flatMap((step) => step.actions)
-      .find((action) =>
-        JSON.stringify(action).includes("interrupted agent run ended with unexpected status"),
-      );
-    expect(interruptedStatusAssertion).toBeDefined();
-    const interruptedStatusContract = JSON.stringify(interruptedStatusAssertion);
-    expect(interruptedStatusContract).toContain("waited.stopReason === 'restart'");
-    expect(interruptedStatusContract).toContain("waited.stopReason === 'aborted'");
-    expect(interruptedStatusContract).toContain("EmbeddedAttemptSessionTakeoverError");
-    expect(interruptedStatusContract).toContain("AbortError");
-    expect(interruptedStatusContract).toContain("This operation was aborted");
-    expect(JSON.stringify(gatewayRestartFlow)).toContain("liveTurnTimeoutMs(env, 180000)");
+    const gatewayRestartContract = JSON.stringify(gatewayRestartFlow);
+    expect(
+      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").gatewayConfigPatch),
+    ).toContain('"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]');
+    expect(gatewayRestartContract).toContain("plannedToolName === 'wait'");
+    expect(gatewayRestartContract).toContain("lastAssistantToolNames?.includes('wait')");
+    expect(gatewayRestartContract).toContain('"taskTracking":false');
+    expect(gatewayRestartContract).toContain('"restartGatewayWithConfigPatch"');
+    expect(gatewayRestartContract).toContain("interruptedMatches.length === 1");
+    expect(gatewayRestartContract).toContain("restartNotices.length === 0");
+    expect(gatewayRestartContract).toContain("dispatching restart-safe recovery");
+    expect(gatewayRestartContract).toContain("[OpenClaw heartbeat poll]");
+    expect(gatewayRestartContract).toContain("liveTurnTimeoutMs(env, 180000)");
+    expect(gatewayRestartContract).toContain("dmScope: 'per-channel-peer'");
+    const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
+    const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
+    expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
+      '"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]',
+    );
+    expect(liveMultiRestartContract).toContain("assistantToolCallCounts.exec");
+    expect(liveMultiRestartContract).toContain("checkpoint");
+    expect(liveMultiRestartContract).toContain("restarts=3");
+    expect(liveMultiRestartContract).toContain("dmScope: 'per-channel-peer'");
+    expect(liveMultiRestartContract).toContain("dispatching restart-safe recovery");
+    expect(readQaScenarioExecutionConfig("gateway-restart-multi-live")).toMatchObject({
+      requiredProviderMode: "live-frontier",
+      requiredProvider: "openai",
+      requiredModel: "gpt-5.4",
+    });
     const longContextFlow = JSON.stringify(
       readQaScenarioById("long-context-progress-watchdog").execution.flow,
     );
@@ -577,9 +604,9 @@ describe("qa scenario catalog", () => {
     );
   });
 
-  it("includes the GPT-5.5 thinking visibility switch scenario", () => {
-    const scenario = readQaScenarioById("gpt55-thinking-visibility-switch");
-    const config = readQaScenarioExecutionConfig("gpt55-thinking-visibility-switch") as
+  it("includes the GPT-5.6 Luna thinking visibility switch scenario", () => {
+    const scenario = readQaScenarioById("luna-thinking-visibility-switch");
+    const config = readQaScenarioExecutionConfig("luna-thinking-visibility-switch") as
       | {
           requiredProvider?: string;
           requiredModel?: string;
@@ -589,9 +616,9 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt55-thinking-visibility-switch.yaml");
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/luna-thinking-visibility-switch.yaml");
     expect(config?.requiredProvider).toBe("openai");
-    expect(config?.requiredModel).toBe("gpt-5.5");
+    expect(config?.requiredModel).toBe("gpt-5.6-luna");
     expect(config?.offDirective).toBe("/think off");
     expect(config?.maxDirective).toBe("/think medium");
     expect(config?.reasoningDirective).toBe("/reasoning on");
@@ -622,10 +649,10 @@ describe("qa scenario catalog", () => {
       },
     });
     expect(config?.requiredProvider).toBe("openai");
-    expect(config?.requiredModel).toBe("gpt-5.5");
+    expect(config?.requiredModel).toBe("gpt-5.6-luna");
     expect(config?.expectedMarker).toBe("WEB-SEARCH-OK");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
-      "confirms live OpenAI GPT-5.5 web search auto mode",
+      "confirms live OpenAI GPT-5.6 Luna web search auto mode",
       "searches official OpenAI News through the live model",
     ]);
   });
@@ -900,10 +927,12 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("isolates channel baseline silence assertions from shared transport state", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+  it("isolates scenarios that own asynchronous transport state", () => {
+    const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+    const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
 
-    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(channelBaseline.execution.suiteIsolation).toBe("isolated");
+    expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

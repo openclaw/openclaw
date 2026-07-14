@@ -16,10 +16,6 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
     private var currentToken = UUID()
     private var watchdog: Task<Void, Never>?
 
-    public var isSpeaking: Bool {
-        self.synth.isSpeaking
-    }
-
     override private init() {
         super.init()
         self.synth.delegate = self
@@ -60,9 +56,7 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         self.watchdog = Task { @MainActor [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(watchdogTimeout * 1_000_000_000))
-            if Task.isCancelled {
-                return
-            }
+            if Task.isCancelled { return }
             guard self.currentToken == token else { return }
             if self.synth.isSpeaking {
                 self.synth.stopSpeaking(at: .immediate)

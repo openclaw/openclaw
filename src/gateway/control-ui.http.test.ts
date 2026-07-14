@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { brotliCompressSync, brotliDecompressSync, gzipSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { normalizeAssistantIdentity } from "../../ui/src/lib/assistant-identity.ts";
@@ -17,10 +18,12 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { AVATAR_MAX_BYTES, AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-policy.js";
+import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
+import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
+import { resolveOpenedControlUiRepresentation } from "./control-ui-static.js";
 import {
   handleControlUiAssistantMediaRequest,
   handleControlUiAvatarRequest,
@@ -28,6 +31,13 @@ import {
 } from "./control-ui.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
+
+// Keeps bootstrap payload tests deterministic: the real resolver reports the
+// git branch of this checkout, which varies across CI and dev machines.
+const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
+vi.mock("../infra/dev-install-branch.js", () => ({
+  resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
+}));
 
 const REAL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -77,6 +87,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
       assistantAvatarReason?: string | null;
       assistantAgentId: string;
+      devGitBranch?: string;
       localMediaPreviewRoots?: string[];
       chatMessageMaxWidth?: string;
       seamColor?: string;
@@ -113,17 +124,18 @@ describe("handleControlUiHttpRequest", () => {
     rootPath: string;
     basePath?: string;
     rootKind?: "resolved" | "bundled";
+    headers?: IncomingMessage["headers"];
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiHttpRequest(
-      { url: params.url, method: params.method } as IncomingMessage,
+      { url: params.url, method: params.method, headers: params.headers ?? {} } as IncomingMessage,
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
         root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   async function runBootstrapConfigRequest(params: {
@@ -389,12 +401,17 @@ describe("handleControlUiHttpRequest", () => {
         )?.[1];
         expect(typeof csp).toBe("string");
         expect(String(csp)).toContain("frame-ancestors 'none'");
+        expect(String(csp)).toContain("frame-src 'self'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).toContain(
           "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",
         );
         expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
+        expect(setHeader).toHaveBeenCalledWith(
+          "Permissions-Policy",
+          "camera=*, microphone=*, geolocation=*, clipboard-write=*",
+        );
         expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
       },
     });
@@ -676,6 +693,15 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(media.handled).toBe(true);
         expect(media.res.statusCode).toBe(200);
+
+        const shortenedTicket = payload.mediaTicket?.slice(0, -1) ?? "";
+        const rejected = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&mediaTicket=${encodeURIComponent(shortenedTicket)}`,
+          method: "GET",
+          auth: { mode: "token", token: "test-auth-token", allowTailscale: false },
+        });
+        expect(rejected.handled).toBe(true);
+        expect(rejected.res.statusCode).toBe(401);
       },
     });
   });
@@ -995,9 +1021,30 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.timeFormat).toBe("24");
         expect(parsed.terminalEnabled).toBe(false);
+        expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
+  });
+
+  it("includes the dev checkout branch in bootstrap config", async () => {
+    devInstallBranchMock.branch = "feat/dev-branch-badge";
+    try {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            res,
+            { root: { kind: "resolved", path: tmp }, config: {} },
+          );
+          expect(handled).toBe(true);
+          expect(parseBootstrapPayload(end).devGitBranch).toBe("feat/dev-branch-badge");
+        },
+      });
+    } finally {
+      devInstallBranchMock.branch = null;
+    }
   });
 
   it("inlines a workspace-local assistant avatar in bootstrap config (#97602)", async () => {
@@ -1795,6 +1842,267 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("compresses bundled assets and caches them immutably", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('compressed');\n".repeat(200);
+        const { filePath } = await writeAssetFile(tmp, "app-AbCd1234.js", source);
+        await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+        await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+        const closeSync = vi.spyOn(fsSync, "closeSync");
+
+        try {
+          const { res, end, setHeader, handled } = await runControlUiRequest({
+            url: "/assets/app-AbCd1234.js",
+            method: "GET",
+            rootPath: tmp,
+            rootKind: "bundled",
+            headers: { "accept-encoding": "gzip;q=0.5, br, identity;q=0.1" },
+          });
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          expect(setHeader).toHaveBeenCalledWith(
+            "Cache-Control",
+            "public, max-age=31536000, immutable",
+          );
+          expect(setHeader).toHaveBeenCalledWith("Vary", "Accept-Encoding");
+          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "br");
+          const compressed = end.mock.calls[0]?.[0];
+          expect(Buffer.isBuffer(compressed)).toBe(true);
+          expect(brotliDecompressSync(compressed as Buffer).toString()).toBe(source);
+          expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
+            end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+          );
+        } finally {
+          closeSync.mockRestore();
+        }
+      },
+    });
+  });
+
+  it("serves build-time gzip variants when they are preferred", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('gzip');\n".repeat(200);
+        const { filePath } = await writeAssetFile(tmp, "app-EfGh5678.js", source);
+        await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+        await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+
+        const { end, setHeader } = await runControlUiRequest({
+          url: "/assets/app-EfGh5678.js",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+          headers: { "accept-encoding": "br;q=0.5, gzip, identity;q=0.1" },
+        });
+
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+      },
+    });
+  });
+
+  it("falls through to an acceptable sidecar when the preferred variant is missing", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('partial-build');\n".repeat(200);
+        const { filePath } = await writeAssetFile(tmp, "app-IjKl9012.js", source);
+        await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+
+        const { end, setHeader } = await runControlUiRequest({
+          url: "/assets/app-IjKl9012.js",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+          headers: { "accept-encoding": "br, gzip;q=0.5, identity;q=0" },
+        });
+
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+      },
+    });
+  });
+
+  it("closes the source descriptor when opening a sidecar fails", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { filePath } = await writeAssetFile(tmp, "app-MnOp3456.js", "source\n");
+        const fd = fsSync.openSync(filePath, "r");
+        const openError = Object.assign(new Error("descriptor limit"), { code: "EMFILE" });
+        const closeSync = vi.spyOn(fsSync, "closeSync");
+
+        try {
+          expect(() =>
+            resolveOpenedControlUiRepresentation({
+              req: {
+                headers: { "accept-encoding": "br, identity;q=0" },
+              } as IncomingMessage,
+              sourceFile: { path: filePath, fd },
+              precompressed: true,
+              openPrecompressedFile: () => {
+                throw openError;
+              },
+            }),
+          ).toThrow(openError);
+          expect(closeSync).toHaveBeenCalledWith(fd);
+        } finally {
+          const sourceWasClosed = closeSync.mock.calls.some(([closedFd]) => closedFd === fd);
+          closeSync.mockRestore();
+          if (!sourceWasClosed) {
+            fsSync.closeSync(fd);
+          }
+        }
+      },
+    });
+  });
+
+  it("keeps configured-root assets identity encoded and revalidated", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('configured');\n".repeat(100);
+        await writeAssetFile(tmp, "app-settings.js", source);
+
+        const { end, setHeader } = await runControlUiRequest({
+          url: "/assets/app-settings.js",
+          method: "GET",
+          rootPath: tmp,
+          headers: { "accept-encoding": "br;q=0, gzip;q=0.8" },
+        });
+
+        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(setHeader).not.toHaveBeenCalledWith("Content-Encoding", expect.anything());
+        expect(responseBody(end)).toBe(source);
+      },
+    });
+  });
+
+  it("returns 406 when no available asset representation is acceptable", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "app-settings.js", "console.log('configured');\n");
+
+        const { res, end } = await runControlUiRequest({
+          url: "/assets/app-settings.js",
+          method: "GET",
+          rootPath: tmp,
+          headers: { "accept-encoding": "br;q=0, gzip;q=0, identity;q=0" },
+        });
+
+        expect(res.statusCode).toBe(406);
+        expect(responseBody(end)).toBe("Not Acceptable");
+      },
+    });
+  });
+
+  it("varies identity-only assets on Accept-Encoding", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "logo.png", "png-bytes");
+
+        const { setHeader } = await runControlUiRequest({
+          url: "/assets/logo.png",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expect(setHeader).toHaveBeenCalledWith("Vary", "Accept-Encoding");
+      },
+    });
+  });
+
+  it("does not expose precompressed sidecars as independent assets", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { filePath } = await writeAssetFile(tmp, "app-AbCd1234.js", "source\n");
+        await fs.writeFile(`${filePath}.br`, brotliCompressSync("source\n"));
+
+        const { res, end, handled } = await runControlUiRequest({
+          url: "/assets/app-AbCd1234.js.br",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expectNotFoundResponse({ handled, res, end });
+      },
+    });
+  });
+
+  it("preserves standalone compressed files in configured roots", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "data.gz", "configured-compressed-artifact\n");
+
+        const { end, handled } = await runControlUiRequest({
+          url: "/assets/data.gz",
+          method: "GET",
+          rootPath: tmp,
+        });
+
+        expect(handled).toBe(true);
+        expect(responseBody(end)).toBe("configured-compressed-artifact\n");
+      },
+    });
+  });
+
+  it.each([
+    ["index", "/"],
+    ["SPA fallback", "/chat"],
+  ])("compresses %s HTML after closing its descriptor", async (_name, url) => {
+    const html = `<html><body>${"hello ".repeat(200)}</body></html>\n`;
+    await withControlUiRoot({
+      indexHtml: html,
+      fn: async (tmp) => {
+        const { res, end, setHeader } = makeMockHttpResponse();
+        const closeSync = vi.spyOn(fsSync, "closeSync");
+        try {
+          await handleControlUiHttpRequest(
+            {
+              url,
+              method: "GET",
+              headers: { "accept-encoding": "gzip" },
+            } as IncomingMessage,
+            res,
+            { root: { kind: "resolved", path: tmp } },
+          );
+
+          expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+          expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
+            '<html data-openclaw-terminal-enabled="false">',
+          );
+          expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
+            end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+          );
+        } finally {
+          closeSync.mockRestore();
+        }
+      },
+    });
+  });
+
+  it("returns 406 when every HTML representation is explicitly rejected", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        await handleControlUiHttpRequest(
+          {
+            url: "/",
+            method: "GET",
+            headers: { "accept-encoding": "*;q=0" },
+          } as IncomingMessage,
+          res,
+          { root: { kind: "resolved", path: tmp } },
+        );
+
+        expect(res.statusCode).toBe(406);
+        expect(responseBody(end)).toBe("Not Acceptable");
+      },
+    });
+  });
+
   it("serves HEAD for in-root assets without writing a body", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -1809,6 +2117,89 @@ describe("handleControlUiHttpRequest", () => {
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
         expect(firstEndCallLength(end)).toBe(0);
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "root-mounted",
+      basePath: undefined,
+      url: "/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
+    },
+    {
+      name: "configured-base-path",
+      basePath: "/openclaw",
+      url: "/openclaw/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
+    },
+    {
+      name: "asset-like-id",
+      basePath: undefined,
+      url: "/approve/plugin%3Arequest.json",
+    },
+    {
+      name: "configured-base-asset-like-id",
+      basePath: "/openclaw",
+      url: "/openclaw/approve/plugin%3Arequest.js",
+    },
+  ])("serves $name approval deep links through the SPA fallback", async ({ basePath, url }) => {
+    await withControlUiRoot({
+      indexHtml: "<html><body>approval-spa</body></html>\n",
+      fn: async (tmp) => {
+        for (const method of ["GET", "HEAD"] as const) {
+          const { res, end, handled } = await runControlUiRequest({
+            url,
+            method,
+            rootPath: tmp,
+            basePath,
+          });
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          if (method === "HEAD") {
+            expect(firstEndCallLength(end)).toBe(0);
+          } else {
+            expect(responseBody(end)).toContain("approval-spa");
+            if (basePath) {
+              expect(responseBody(end)).toContain('data-openclaw-control-ui-base-path="/openclaw"');
+            }
+          }
+        }
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "root-mounted",
+      basePath: undefined,
+      url: "/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
+    },
+    {
+      name: "configured-base-path",
+      basePath: "/openclaw",
+      url: "/openclaw/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
+    },
+    {
+      name: "asset-like-id",
+      basePath: undefined,
+      url: "/approve/plugin%3Arequest.json",
+    },
+  ])("declines POST to $name approval deep links at the UI module", async ({ basePath, url }) => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { handled, end } = await runControlUiRequest({
+          url,
+          method: "POST",
+          rootPath: tmp,
+          basePath,
+        });
+
+        // The UI module only serves reads; the gateway's approval-document
+        // stage (server-http.ts) owns the terminal 404 for write methods, so
+        // these requests never reach plugin HTTP handlers in production.
+        expect(handled).toBe(false);
+        expect(end).not.toHaveBeenCalled();
       },
     });
   });

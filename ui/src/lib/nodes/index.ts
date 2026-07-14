@@ -56,7 +56,7 @@ export type PairedDevice = {
   scopes?: string[];
   remoteIp?: string;
   tokens?: DeviceTokenSummary[];
-  approvedVia?: "owner" | "silent" | "trusted-cidr" | "bootstrap";
+  approvedVia?: "owner" | "silent" | "trusted-cidr" | "ssh-verified" | "bootstrap";
   /** Server-computed: the device currently holds a live gateway connection. */
   connected?: boolean;
   createdAtMs?: number;
@@ -69,7 +69,7 @@ export type DevicePairingList = {
   paired: PairedDevice[];
 };
 
-export type ExecApprovalsDefaults = {
+type ExecApprovalsDefaults = {
   security?: string;
   ask?: string;
   askFallback?: string;
@@ -98,14 +98,14 @@ export type ExecApprovalsFile = {
   agents?: Record<string, ExecApprovalsAgent>;
 };
 
-export type FileExecApprovalsSnapshot = {
+type FileExecApprovalsSnapshot = {
   path: string;
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
 };
 
-export type NativeExecApprovalRule = {
+type NativeExecApprovalRule = {
   pattern: string;
   action: "allow" | "deny" | "prompt";
   shells?: string[];
@@ -149,7 +149,7 @@ type DevicesState = NodesRequestState & {
   devicesList: DevicePairingList | null;
 };
 
-export type ExecApprovalsState = NodesRequestState & {
+type ExecApprovalsState = NodesRequestState & {
   execApprovalsLoading: boolean;
   execApprovalsSaving: boolean;
   execApprovalsDirty: boolean;
@@ -170,7 +170,7 @@ type StoredIdentity = {
   createdAtMs: number;
 };
 
-export type DeviceIdentity = {
+type DeviceIdentity = {
   deviceId: string;
   publicKey: string;
   privateKey: string;

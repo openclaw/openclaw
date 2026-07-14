@@ -99,6 +99,8 @@ export type GetReplyOptions = {
   onTurnAdopted?: () => void | Promise<void>;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Current user turn is already durable; replay it without appending another copy. */
+  suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
@@ -190,7 +192,8 @@ export type GetReplyOptions = {
   /**
    * Called when the utility-model narration of the in-progress turn changes.
    * Providing this callback opts the channel into progress narration; core
-   * only generates narration when an explicit utilityModel is configured.
+   * only generates narration when a utility model resolves (explicit
+   * config or the provider-declared default; utilityModel: "" disables).
    * An empty text means narration stopped: fall back to raw tool progress.
    */
   onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;

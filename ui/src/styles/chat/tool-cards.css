@@ -15,6 +15,16 @@
   margin-top: 0;
 }
 
+/* Flat top-level tool rows align their content with the assistant text edge:
+   the row's 8px inline inset bleeds left into the avatar gutter (never right,
+   which could overflow the thread on narrow panes) so the hover pill keeps
+   its inset without indenting the icon/label. Child combinator keeps shells
+   nested in .chat-activity-group__body on the boxed 12px inset. */
+.chat-group-messages > .chat-bubble--tool-shell .chat-tool-msg-summary {
+  width: calc(100% + 8px);
+  margin-left: -8px;
+}
+
 .chat-tool-msg-summary {
   display: flex;
   align-items: center;
@@ -116,6 +126,385 @@
   color: var(--destructive, var(--danger, #c0392b));
 }
 
+/* ── Kind-aware tool rows ── */
+.chat-tool-row__prompt {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  font-weight: 600;
+  color: color-mix(in srgb, var(--ok) 70%, var(--muted) 30%);
+}
+
+.chat-tool-row__title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.chat-tool-row__cmd {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  color: var(--text);
+}
+
+.chat-tool-row__cmd--secondary {
+  flex: 0 100000 auto;
+  color: color-mix(in srgb, var(--muted) 85%, var(--text) 15%);
+}
+
+.chat-tool-row__verb {
+  flex-shrink: 0;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.chat-tool-row__target {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.chat-tool-row__detail {
+  flex: 0 100000 auto;
+  min-width: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  color: color-mix(in srgb, var(--muted) 88%, var(--text) 12%);
+}
+
+.chat-tool-row--running .chat-tool-msg-summary__icon {
+  color: var(--accent-2, #14b8a6);
+}
+
+/* Active-task text wave: a subtle left-to-right color sweep across the
+   running row's primary text (same shimmer language as the skeleton/usage
+   loaders, clipped to glyphs). The band fades text toward --bg so it stays
+   correct in both themes. Scoped to no-preference so reduced-motion users
+   keep plain static text and syntax colors. */
+@media (prefers-reduced-motion: no-preference) {
+  .chat-tool-row--running
+    :is(
+      .chat-tool-msg-summary__label,
+      .chat-tool-row__title,
+      .chat-tool-row__verb,
+      .chat-tool-row__target,
+      .chat-tool-row__cmd:not(.chat-tool-row__cmd--secondary)
+    ) {
+    background-image: linear-gradient(
+      90deg,
+      var(--text) 0%,
+      var(--text) 35%,
+      color-mix(in srgb, var(--text) 42%, var(--bg) 58%) 50%,
+      var(--text) 65%,
+      var(--text) 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: chatToolRowTextWave 2.2s ease-in-out infinite;
+  }
+
+  /* Syntax-highlight tokens go transparent while running so the parent's
+     clipped gradient paints their glyphs; token colors return on completion. */
+  .chat-tool-row--running .chat-tool-row__cmd:not(.chat-tool-row__cmd--secondary) > span {
+    color: transparent;
+  }
+}
+
+/* Gradient is 2x element width with identical end stops, so one full period
+   per cycle wraps seamlessly and the band sweeps left to right. */
+@keyframes chatToolRowTextWave {
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.chat-tool-row__spinner {
+  flex-shrink: 0;
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full, 999px);
+  background: var(--accent-2, #14b8a6);
+  animation: chatToolRowPulse 1.1s ease-in-out infinite;
+}
+
+@keyframes chatToolRowPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-tool-row__spinner {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+.chat-tool-row__badge {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: var(--radius-full, 999px);
+  background: color-mix(in srgb, var(--destructive, #ef4444) 14%, transparent);
+  color: var(--destructive, #ef4444);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+/* ── Diffstat chips (+N -M) ── */
+.chat-diffstat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  font-weight: 600;
+}
+
+.chat-diffstat__add {
+  color: var(--ok, #22c55e);
+}
+
+.chat-diffstat__del {
+  color: var(--destructive, #ef4444);
+}
+
+/* ── Inline diff ── */
+.chat-diff {
+  margin-top: 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) 55%, transparent);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: min(480px, 55vh);
+}
+
+.chat-diff__row {
+  display: flex;
+  align-items: baseline;
+  min-width: max-content;
+  padding-right: 12px;
+}
+
+.chat-diff__row--add {
+  background: color-mix(in srgb, var(--ok, #22c55e) 13%, transparent);
+}
+
+.chat-diff__row--add .chat-diff__sign {
+  color: var(--ok, #22c55e);
+}
+
+.chat-diff__row--del {
+  background: color-mix(in srgb, var(--destructive, #ef4444) 12%, transparent);
+}
+
+.chat-diff__row--del .chat-diff__sign {
+  color: var(--destructive, #ef4444);
+}
+
+.chat-diff__row--file {
+  padding-block: 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--secondary) 85%, var(--bg) 15%);
+}
+
+.chat-diff__row--file:first-child {
+  border-top: 0;
+}
+
+.chat-diff__row--file .chat-diff__text {
+  color: color-mix(in srgb, var(--text) 82%, var(--muted) 18%);
+  font-weight: 600;
+}
+
+.chat-diff__row--skip {
+  color: var(--muted);
+  user-select: none;
+}
+
+.chat-diff__gutter {
+  flex-shrink: 0;
+  width: 42px;
+  padding-right: 8px;
+  text-align: right;
+  color: color-mix(in srgb, var(--muted) 75%, transparent);
+  user-select: none;
+}
+
+.chat-diff__sign {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-weight: 600;
+  color: transparent;
+  user-select: none;
+}
+
+.chat-diff__text {
+  white-space: pre;
+  tab-size: 4;
+  color: var(--text);
+}
+
+.chat-diff__row--del .chat-diff__text {
+  color: color-mix(in srgb, var(--text) 72%, var(--muted) 28%);
+}
+
+/* ── Terminal-style command block ── */
+.chat-tool-term {
+  margin-top: 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) 82%, transparent);
+  overflow: hidden;
+}
+
+.chat-tool-term__cmd {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.chat-tool-term__cmd code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+}
+
+.chat-tool-term__prompt {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--ok) 70%, var(--muted) 30%);
+  user-select: none;
+}
+
+.chat-tool-term__out {
+  margin: 0;
+  padding: 6px 12px 10px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--text) 82%, var(--muted) 18%);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  max-height: min(420px, 55vh);
+}
+
+.chat-tool-term__cmd:last-child {
+  padding-bottom: 10px;
+}
+
+.chat-tool-term--error .chat-tool-term__out {
+  color: color-mix(in srgb, var(--destructive, #ef4444) 70%, var(--text) 30%);
+}
+
+/* Command/diff text reuses <code> for semantics only; kill the markdown pill. */
+.chat-tool-row__cmd,
+.chat-tool-row__cmd code,
+.chat-tool-term__cmd code,
+.chat-tool-term__out code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* ── Command token colors (display-only highlighting) ── */
+.chat-cmd--name {
+  color: var(--accent-2, #14b8a6);
+  font-weight: 600;
+}
+
+.chat-cmd--str {
+  color: color-mix(in srgb, var(--ok, #22c55e) 78%, var(--text) 22%);
+}
+
+.chat-cmd--num {
+  color: color-mix(in srgb, var(--accent, #ff5c5c) 82%, var(--text) 18%);
+}
+
+.chat-cmd--flag {
+  color: color-mix(in srgb, var(--muted) 70%, var(--text) 30%);
+}
+
+.chat-cmd--op {
+  color: color-mix(in srgb, var(--accent-2, #14b8a6) 60%, var(--muted) 40%);
+}
+
+/* ── Key-value args (generic tools) ── */
+.chat-tool-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.6;
+}
+
+.chat-tool-kv__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-tool-kv__key {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  color: color-mix(in srgb, var(--muted) 90%, var(--text) 10%);
+}
+
+.chat-tool-kv__value {
+  min-width: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ── Expanded tool row body ── */
 .chat-tool-msg-body {
   box-sizing: border-box;
@@ -153,6 +542,32 @@
   align-items: flex-start;
   gap: 10px;
   min-width: 0;
+}
+
+/* Cards whose body is a single block (terminal, diff) skip the header row and
+   float the side-panel action over the block instead. */
+.chat-tool-card--flush {
+  position: relative;
+}
+
+.chat-tool-card--flush > .chat-tool-card__actions {
+  position: absolute;
+  top: 8px;
+  right: 6px;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.chat-tool-card--flush:hover > .chat-tool-card__actions,
+.chat-tool-card--flush:focus-within > .chat-tool-card__actions {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .chat-tool-card--flush > .chat-tool-card__actions {
+    opacity: 1;
+  }
 }
 
 .chat-tool-card__actions {
@@ -207,6 +622,23 @@
   min-width: 0;
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
+}
+
+.chat-tool-card__detail-link {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-tool-card__detail-link:hover,
+.chat-tool-card__detail-link:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .chat-tool-card__block {
@@ -527,77 +959,348 @@
 }
 
 .chat-activity-group__label {
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Left rule groups the rows without wrapping them in another card. */
+.chat-activity-group__summary .collapse-chevron {
+  flex-shrink: 0;
+}
+
+/* Rows live in one bordered card with hairline separators. */
 .chat-activity-group__body {
   display: flex;
   flex-direction: column;
   gap: 0;
-  margin: 2px 0 0 14px;
-  padding-left: 8px;
-  border-left: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  margin: 4px 0 0 2px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md, 10px);
+  background: color-mix(in srgb, var(--card, var(--bg)) 55%, transparent);
+  overflow: hidden;
 }
 
-/* Reading Indicator: bubble chrome and sizing come from .chat-bubble and
-   .chat-bubble.chat-reading-indicator (components.css). */
+.chat-activity-group__body > .chat-bubble {
+  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.chat-activity-group__body > .chat-bubble:first-child {
+  border-top: 0;
+}
+
+.chat-activity-group__body .chat-tool-msg-summary {
+  padding: 7px 12px;
+  border-radius: 0;
+}
+
+.chat-activity-group__body .chat-tool-msg-body {
+  padding: 0 12px 10px 12px;
+}
+
+/* Completed-turn work rollup: slim "Worked for X" disclosure standing in for
+   the turn's intermediate tool/commentary groups. Sits snug above the final
+   reply, aligned with the message column via a gutter matching the avatar. */
+.chat-group--work {
+  padding-bottom: 8px;
+}
+
+.chat-work-group__gutter {
+  flex: 0 0 36px;
+}
+
+.chat-thread--direct .chat-work-group__gutter {
+  display: none;
+}
+
+.chat-work-group .chat-activity-group__label {
+  color: var(--muted);
+}
+
+.chat-work-group .chat-activity-group__summary--error .chat-activity-group__label {
+  color: inherit;
+}
+
+/* Reading indicator = working claw: the brand pincer shadowboxes where the
+   reply will materialize while the agent works with nothing visibly
+   streaming. Bubble chrome and sizing come from
+   .chat-bubble.chat-reading-indicator (components.css). Filled silhouette;
+   18px because the claw is denser than a star glyph. No opacity fade: the
+   claw stays solid and the motion carries the "working" signal. One cycle =
+   jab, jab, cross; the jaw snaps shut on every impact and a pow star pops on
+   the cross. --claw-cycle drives all three animations so stance variants
+   only retune the tempo. */
 .chat-reading-indicator {
-  display: inline-flex;
-}
+  --claw-cycle: 2.4s;
 
-.chat-reading-indicator__dots {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 12px;
+  color: var(--accent);
 }
 
-.chat-reading-indicator__dots span {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--muted);
-  opacity: 0.6;
-  transform: translateY(0);
-  animation: chatReadingDot 1.2s ease-in-out infinite;
-  will-change: transform, opacity;
+.chat-working-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 22px;
+  min-height: 28px;
 }
 
-.chat-reading-indicator__dots span:nth-child(1) {
-  animation-delay: 0s;
+.chat-working-indicator__status {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
 }
 
-.chat-reading-indicator__dots span:nth-child(2) {
-  animation-delay: 0.15s;
+.chat-working-indicator__elapsed {
+  color: var(--muted);
 }
 
-.chat-reading-indicator__dots span:nth-child(3) {
-  animation-delay: 0.3s;
+.chat-reading-indicator svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  stroke: none;
+  animation: chatWorkingClawCombo var(--claw-cycle) ease-out infinite;
+  will-change: transform;
 }
 
-@keyframes chatReadingDot {
+/* The upper jaw hinges at the palm joint. Rest is slightly open — the open
+   notch is what reads "claw" at 18px — and the jaw snaps shut exactly on the
+   combo's impact frames (keyframe percentages must stay in lockstep with
+   chatWorkingClawCombo). */
+.chat-reading-indicator svg .claw-icon__jaw {
+  transform-box: view-box;
+  transform-origin: 8.6px 11px;
+  transform: rotate(-10deg);
+  animation: chatWorkingClawJaw var(--claw-cycle) ease-out infinite;
+  will-change: transform;
+}
+
+/* Pow star: pops at the cross impact (46-58% of the combo cycle). */
+.chat-reading-indicator::after {
+  content: "✦";
+  position: absolute;
+  right: -14px;
+  top: -2px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--accent);
+  opacity: 0;
+  animation: chatWorkingClawPow var(--claw-cycle) ease-out infinite;
+  pointer-events: none;
+}
+
+/* Jab 1 at 12-16%, jab 2 at 26-30%, big wind-up, cross at 46-52%. */
+@keyframes chatWorkingClawCombo {
   0%,
-  80%,
-  100% {
-    opacity: 0.4;
-    transform: translateY(0);
+  8% {
+    transform: translateX(0);
   }
 
-  40% {
+  12% {
+    transform: translateX(-2px);
+  }
+
+  16% {
+    transform: translateX(5px);
+  }
+
+  22%,
+  26% {
+    transform: translateX(-2px);
+  }
+
+  30% {
+    transform: translateX(5px);
+  }
+
+  38% {
+    transform: translateX(0);
+  }
+
+  46% {
+    transform: translateX(-3px) rotate(-6deg);
+  }
+
+  52% {
+    transform: translateX(8px) rotate(4deg);
+  }
+
+  62%,
+  100% {
+    transform: translateX(0);
+  }
+}
+
+@keyframes chatWorkingClawJaw {
+  0%,
+  8% {
+    transform: rotate(-10deg);
+  }
+
+  12% {
+    transform: rotate(-16deg);
+  }
+
+  16% {
+    transform: rotate(4deg);
+  }
+
+  22%,
+  26% {
+    transform: rotate(-16deg);
+  }
+
+  30% {
+    transform: rotate(4deg);
+  }
+
+  38% {
+    transform: rotate(-10deg);
+  }
+
+  46% {
+    transform: rotate(-18deg);
+  }
+
+  52% {
+    transform: rotate(6deg);
+  }
+
+  62%,
+  100% {
+    transform: rotate(-10deg);
+  }
+}
+
+@keyframes chatWorkingClawPow {
+  0%,
+  46% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+
+  52% {
     opacity: 1;
-    transform: translateY(-3px);
+    transform: scale(1.2);
+  }
+
+  58%,
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+/* Seeded stance variants (see punchStanceClass in chat-message.ts): the
+   southpaw fights mirrored, the flurry fighter runs the combo double-time,
+   the rare haymaker is a slow heavyweight with a bigger pow. */
+.chat-reading-indicator--southpaw {
+  transform: scaleX(-1);
+}
+
+.chat-reading-indicator--flurry {
+  --claw-cycle: 1.3s;
+}
+
+.chat-reading-indicator--haymaker {
+  --claw-cycle: 3.8s;
+}
+
+.chat-reading-indicator--haymaker::after {
+  font-size: 15px;
+  right: -17px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-reading-indicator svg,
+  .chat-reading-indicator svg .claw-icon__jaw {
+    animation: none;
+  }
+
+  .chat-reading-indicator::after {
+    content: none;
+  }
+}
+
+/* Post-turn running-tasks status row: once the turn settles while background
+   tasks keep running, the claw stays visible next to a free composer — but
+   parked, not shadowboxing. It rests nose-down (the combo's cross pose) with
+   only a slow opacity breath; tabular digits keep the ticking elapsed label
+   from nudging the row sideways. */
+.chat-tasks-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-tasks-status__claw {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  animation: chatTasksStatusBreath 2.8s ease-in-out infinite;
+}
+
+.chat-tasks-status__claw svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  stroke: none;
+  transform: rotate(8deg);
+}
+
+/* Static jaw pose between the working rest (-10deg) and shut (+6deg): held
+   work, not active pinching. transform-origin mirrors the working claw. */
+.chat-tasks-status__claw svg .claw-icon__jaw {
+  transform-box: view-box;
+  transform-origin: 8.6px 11px;
+  transform: rotate(-4deg);
+}
+
+.chat-tasks-status__link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.chat-tasks-status__link:hover,
+.chat-tasks-status__link:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+@keyframes chatTasksStatusBreath {
+  0%,
+  100% {
+    opacity: 0.65;
+  }
+
+  50% {
+    opacity: 1;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-reading-indicator__dots span {
+  .chat-tasks-status__claw {
     animation: none;
-    opacity: 0.6;
   }
 }
 

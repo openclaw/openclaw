@@ -1,14 +1,7 @@
 // Bonjour tests cover advertiser plugin behavior.
-import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-
-const nodeRequire = createRequire(import.meta.url);
-const childProcessModule = nodeRequire("node:child_process") as {
-  exec: typeof import("node:child_process").exec;
-};
 
 const mocks = vi.hoisted(() => ({
   createService: vi.fn(),
@@ -301,44 +294,6 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
-  it("hides ciao Windows ARP probe shell while advertiser is active", async () => {
-    enableAdvertiserUnitMode();
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const originalExec = childProcessModule.exec;
-    const execMock = vi.fn((command: string, options?: unknown, callback?: unknown) => {
-      const cb = typeof options === "function" ? options : callback;
-      if (typeof cb === "function") {
-        cb(null, "", "");
-      }
-      return { kill: vi.fn() } as unknown as ChildProcess;
-    });
-    childProcessModule.exec = execMock as unknown as typeof childProcessModule.exec;
-
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
-
-    try {
-      const started = await startAdvertiser({ gatewayPort: 18789 });
-      childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
-
-      const execCall = mockCall(execMock);
-      expect(execCall?.[0]).toBe('arp -a | findstr /C:"---"');
-      expect(execCall?.[1]).toEqual({ windowsHide: true });
-      expect(execCall?.[2]).toBeTypeOf("function");
-
-      await started.stop();
-      childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
-      const afterStopCallback = execMock.mock.calls.at(-1)?.[1];
-      if (typeof afterStopCallback !== "function") {
-        throw new Error("expected restored exec callback overload");
-      }
-      afterStopCallback(null, "", "");
-    } finally {
-      childProcessModule.exec = originalExec;
-    }
-  });
-
   it("attaches conflict listeners for services", async () => {
     enableAdvertiserUnitMode();
 
@@ -444,12 +399,6 @@ describe("gateway bonjour advertiser", () => {
 
     expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
     expectWarnContaining("suppressing ciao cancellation");
-
-    logger.warn.mockClear();
-    expect(
-      handler?.(new Error("Reached illegal state! IPV4 address change from defined to undefined!")),
-    ).toBe(true);
-    expectWarnContaining("suppressing ciao interface assertion");
 
     logger.warn.mockClear();
     expect(

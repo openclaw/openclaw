@@ -57,7 +57,7 @@ import {
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { attachCodexMirrorIdentity, buildCodexUserPromptMessage } from "./transcript-mirror.js";
 
-export type CodexAppServerToolTelemetry = {
+type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTexts: string[];
@@ -70,7 +70,7 @@ export type CodexAppServerToolTelemetry = {
   successfulCronAdds?: number;
 };
 
-export type CodexAppServerEventProjectorOptions = {
+type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
   readRecentRateLimits?: () => JsonValue | undefined;
@@ -784,7 +784,8 @@ export class CodexAppServerEventProjector {
       assistantTexts.some((text) => text.trim().length > 0);
     this.synthesizeMissingToolResults({
       synthesize: legacyFailClosed,
-      recordPromptError: legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn,
+      recordPromptError:
+        legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn && !this.aborted,
     });
     const lastAssistant =
       assistantTexts.length > 0
@@ -1444,7 +1445,7 @@ export class CodexAppServerEventProjector {
       });
       return;
     }
-    const chunk = delta.length > remainingChars ? delta.slice(0, remainingChars) : delta;
+    const chunk = delta.length > remainingChars ? truncateUtf16Safe(delta, remainingChars) : delta;
     state.chars += chunk.length;
     state.messages += 1;
     const reachedLimit =
@@ -3018,7 +3019,7 @@ function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | undefine
   }
   if (item.type === "fileChange") {
     return sanitizeCodexAgentEventRecord({
-      changes: itemFileChanges(item),
+      changes: itemFileChangesForTranscript(item),
     });
   }
   if (item.type === "webSearch") {
@@ -3105,10 +3106,116 @@ function webSearchToolResult(item: CodexThreadItem): Record<string, unknown> {
   });
 }
 
-function itemFileChanges(item: CodexThreadItem): Array<{ path: string; kind: string }> {
-  return Array.isArray(item.changes)
-    ? item.changes.map((change) => ({ path: change.path, kind: change.kind }))
-    : [];
+type CodexFileChangeSummary = {
+  path: string;
+  kind: unknown;
+};
+
+type CodexTranscriptFileChange = CodexFileChangeSummary & {
+  diff?: string;
+  diffTruncated?: true;
+  stat?: { added: number; removed: number };
+};
+
+function itemFileChangeRecords(item: CodexThreadItem): JsonObject[] {
+  const changes = (item as Record<string, unknown>).changes;
+  return Array.isArray(changes) ? changes.filter(isJsonObject) : [];
+}
+
+function itemFileChanges(item: CodexThreadItem): CodexFileChangeSummary[] {
+  return itemFileChangeRecords(item).flatMap((change) => {
+    const path = normalizeNonEmptyString(change.path);
+    if (!path || change.kind === undefined) {
+      return [];
+    }
+    return [{ path, kind: change.kind }];
+  });
+}
+
+function fileChangeKindType(kind: unknown): string | undefined {
+  if (typeof kind === "string") {
+    return kind;
+  }
+  return isJsonObject(kind) ? normalizeNonEmptyString(kind.type) : undefined;
+}
+
+function countFileContentLines(content: string): number {
+  if (!content) {
+    return 0;
+  }
+  const lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  if (lines.length > 1 && lines.at(-1) === "") {
+    lines.pop();
+  }
+  return lines.length;
+}
+
+function fileChangeDiffStat(diff: string, kind: unknown): { added: number; removed: number } {
+  const kindType = fileChangeKindType(kind);
+  if (kindType === "add") {
+    return { added: countFileContentLines(diff), removed: 0 };
+  }
+  if (kindType === "delete") {
+    return { added: 0, removed: countFileContentLines(diff) };
+  }
+  let added = 0;
+  let removed = 0;
+  let inHunk = false;
+  for (const line of diff.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n")) {
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      added += 1;
+    } else if (line.startsWith("-")) {
+      removed += 1;
+    }
+  }
+  return { added, removed };
+}
+
+function truncateFileChangeDiffAtLineBoundary(
+  diff: string,
+  maxChars: number,
+): { diff?: string; diffTruncated?: true } {
+  if (diff.length <= maxChars) {
+    return { diff };
+  }
+  if (maxChars <= 0) {
+    return { diffTruncated: true };
+  }
+  const boundary = diff.lastIndexOf("\n", maxChars - 1);
+  return boundary >= 0
+    ? { diff: diff.slice(0, boundary + 1), diffTruncated: true }
+    : { diffTruncated: true };
+}
+
+function itemFileChangesForTranscript(item: CodexThreadItem): CodexTranscriptFileChange[] {
+  let remainingDiffChars = TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS;
+  return itemFileChangeRecords(item).flatMap((change) => {
+    const path = normalizeNonEmptyString(change.path);
+    if (!path || change.kind === undefined) {
+      return [];
+    }
+    const result: CodexTranscriptFileChange = { path, kind: change.kind };
+    if (typeof change.diff !== "string") {
+      return [result];
+    }
+    result.stat = fileChangeDiffStat(change.diff, change.kind);
+    const bounded = truncateFileChangeDiffAtLineBoundary(change.diff, remainingDiffChars);
+    if (bounded.diff !== undefined) {
+      result.diff = bounded.diff;
+      remainingDiffChars -= bounded.diff.length;
+    }
+    if (bounded.diffTruncated) {
+      result.diffTruncated = true;
+    }
+    return [result];
+  });
 }
 
 function itemToolError(

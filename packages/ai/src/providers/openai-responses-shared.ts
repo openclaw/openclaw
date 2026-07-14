@@ -46,6 +46,7 @@ import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-bou
 import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
+  supportsOpenAITemperature,
 } from "./openai-reasoning-effort.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
@@ -56,7 +57,7 @@ import {
   isResponsesTextContentPartType,
   resolveResponsesMessageSnapshotCollapse,
 } from "./openai-responses-stream-compat.js";
-import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
+import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -66,13 +67,22 @@ import { transformMessages } from "./transform-messages.js";
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 
+// itemId is undefined when the id has no separator so replay paths keep
+// omitting the optional item id instead of serializing an empty string.
+function splitResponsesToolCallId(id: string): [callId: string, itemId: string | undefined] {
+  const separatorIndex = id.indexOf("|");
+  return separatorIndex === -1
+    ? [id, undefined]
+    : [id.slice(0, separatorIndex), id.slice(separatorIndex + 1)];
+}
+
 function resolveResponsesToolCallId(
   item: { call_id?: unknown; id?: unknown },
   fallbackId?: string,
 ): string {
   const callId = typeof item.call_id === "string" ? item.call_id.trim() : "";
   const itemId = typeof item.id === "string" ? item.id.trim() : "";
-  const [fallbackCallId = "", fallbackItemId = ""] = (fallbackId ?? "").split("|");
+  const [fallbackCallId, fallbackItemId = ""] = splitResponsesToolCallId(fallbackId ?? "");
   const resolvedCallId = callId || fallbackCallId;
   const resolvedItemId = itemId || fallbackItemId;
   if (resolvedCallId) {
@@ -114,7 +124,7 @@ type AzureResponsesOutputItemDoneEvent = Omit<ResponsesOutputItemDoneEvent, "ite
   item: ResponsesStreamOutputMessage;
 };
 
-export type OpenAIResponsesStreamEvent =
+type OpenAIResponsesStreamEvent =
   | ResponseStreamEvent
   | AzureResponsesContentPartAddedEvent
   | AzureResponsesOutputItemDoneEvent
@@ -200,8 +210,7 @@ interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
 }
-export { convertResponsesToolPayload, convertResponsesTools };
-export type { ConvertResponsesToolsOptions } from "./openai-responses-tools.js";
+export { convertResponsesToolPayload };
 
 type ResponsesRequestOptions = {
   signal?: AbortSignal;
@@ -291,7 +300,8 @@ export function convertResponsesMessages<TApi extends Api>(
     if (!id.includes("|")) {
       return normalizeIdPart(id);
     }
-    const [callId, itemId] = id.split("|");
+    // The includes("|") guard above guarantees the item id component exists.
+    const [callId, itemId = ""] = splitResponsesToolCallId(id);
     const normalizedCallId = normalizeIdPart(callId);
     const isForeignToolCall = source.provider !== model.provider || source.api !== model.api;
     let normalizedItemId = isForeignToolCall
@@ -404,7 +414,7 @@ export function convertResponsesMessages<TApi extends Api>(
           previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
           const toolCall = block;
-          const [callId, itemIdRaw] = toolCall.id.split("|");
+          const [callId, itemIdRaw] = splitResponsesToolCallId(toolCall.id);
           let itemId: string | undefined = shouldReplayResponsesItemIds ? itemIdRaw : undefined;
 
           // For different-model messages, set id to undefined to avoid pairing validation.
@@ -434,7 +444,7 @@ export function convertResponsesMessages<TApi extends Api>(
       const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasText = sanitizedTextResult.trim().length > 0;
-      const [callId] = msg.toolCallId.split("|");
+      const [callId] = splitResponsesToolCallId(msg.toolCallId);
 
       let output: string | ResponseFunctionCallOutputItemList;
       if (hasImages && model.input.includes("image")) {
@@ -539,7 +549,7 @@ export function applyCommonResponsesParams<TApi extends Api>(
     params.max_output_tokens = options.maxTokens;
   }
 
-  if (options?.temperature !== undefined) {
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
   }
 
@@ -751,18 +761,21 @@ export async function processResponsesStream<TApi extends Api>(
   ): StreamingToolCallState | undefined => {
     const uniqueCandidates = [...new Set(candidates)];
     if (!identity.itemId && !identity.callId) {
-      return uniqueCandidates.length === 1 ? uniqueCandidates[0] : undefined;
+      return uniqueCandidates.length === 1 ? uniqueCandidates.at(0) : undefined;
     }
     const compatible = uniqueCandidates.filter((state) => !identitiesConflict(state, identity));
     const matches = compatible.filter((state) => sharesIdentity(state, identity));
-    if (matches.length === 1) {
-      return adoptToolCallIdentity(matches[0], identity);
+    const matched = matches.length === 1 ? matches.at(0) : undefined;
+    if (matched) {
+      return adoptToolCallIdentity(matched, identity);
     }
     // Only a sole active call may adopt an identity it did not already know.
     // Parallel calls require a positive match so missing indices stay fail-closed.
-    return uniqueCandidates.length === 1 && compatible.length === 1 && matches.length === 0
-      ? adoptToolCallIdentity(compatible[0], identity)
-      : undefined;
+    const soleCompatible =
+      uniqueCandidates.length === 1 && compatible.length === 1 && matches.length === 0
+        ? compatible.at(0)
+        : undefined;
+    return soleCompatible ? adoptToolCallIdentity(soleCompatible, identity) : undefined;
   };
   const resolveStreamingToolCall = (
     event: { output_index?: unknown; item_id?: unknown },

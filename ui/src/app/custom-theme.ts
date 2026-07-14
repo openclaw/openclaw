@@ -173,13 +173,17 @@ function requireThemeId(value: string) {
 
 function normalizeThemeIdFromPath(pathname: string): string | null {
   const segments = pathname.split("/").filter(Boolean);
+  const themeId = segments.at(-1);
+  if (!themeId) {
+    return null;
+  }
   if (segments.length === 2 && segments[0] === "themes") {
-    requireThemeId(segments[1]);
-    return segments[1];
+    requireThemeId(themeId);
+    return themeId;
   }
   if (segments.length === 3 && segments[0] === "r" && segments[1] === "themes") {
-    requireThemeId(segments[2]);
-    return segments[2];
+    requireThemeId(themeId);
+    return themeId;
   }
   return null;
 }
@@ -437,7 +441,7 @@ function describeThemeLabel(value: string | undefined) {
   return truncateUtf16Safe(normalized, 80);
 }
 
-export function normalizeTweakcnThemeUrl(input: string): TweakcnThemeResolution {
+function normalizeTweakcnThemeUrl(input: string): TweakcnThemeResolution {
   const normalized = normalizePastedThemeInput(input);
   let parsed: URL;
   try {
@@ -481,7 +485,7 @@ export function parseImportedCustomTheme(value: unknown): ImportedCustomTheme | 
   }
 }
 
-export function normalizeImportedCustomTheme(
+function normalizeImportedCustomTheme(
   payload: unknown,
   resolution: Pick<TweakcnThemeResolution, "sourceUrl" | "themeId">,
 ): ImportedCustomTheme {
@@ -597,7 +601,7 @@ export async function importCustomThemeFromUrl(
   }
 }
 
-export function buildCustomThemeStyles(theme: ImportedCustomTheme) {
+function buildCustomThemeStyles(theme: ImportedCustomTheme) {
   const light = normalizeStoredTokenMap(theme.light);
   const dark = normalizeStoredTokenMap(theme.dark);
   if (!light || !dark) {

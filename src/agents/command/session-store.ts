@@ -65,6 +65,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
    */
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
+  /** Clear the durable replay-safe recovery guard after this recovery run terminates. */
+  clearRestartRecoveryForceSafeTools?: boolean;
 }) {
   const {
     cfg,
@@ -112,6 +114,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
+  const hadPreExistingEntry = sessionStore[sessionKey] !== undefined;
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
     updatedAt: now,
@@ -196,6 +199,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     }
     next.abortedLastRun = result.meta.aborted ?? false;
+    if (params.clearRestartRecoveryForceSafeTools && result.meta.aborted !== true) {
+      next.restartRecoveryForceSafeTools = undefined;
+    }
     if (result.meta.systemPromptReport) {
       next.systemPromptReport = result.meta.systemPromptReport;
     }
@@ -293,13 +299,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
     },
     (currentEntry, context) => {
       if (
+        (!context.existingEntry && hadPreExistingEntry) ||
         (!preserveUserFacingRunState &&
           context.existingEntry &&
-          context.existingEntry.sessionId !== entry.sessionId) ||
-        (!context.existingEntry && sessionStore[sessionKey])
+          context.existingEntry.sessionId !== entry.sessionId)
       ) {
-        // A normal run may rotate its session id, so compare to the pre-run entry.
-        // Do not merge stale finalizer metadata after a delete or a competing reset.
+        // Normal runs may rotate session ids, but stale finalizers must not
+        // recreate rows that were reset/deleted while the run was active.
         return null;
       }
       return preserveUserFacingRunState
@@ -346,6 +352,126 @@ export async function clearCliSessionInStore(params: {
       ) {
         return null;
       }
+      return next;
+    },
+    { fallbackEntry: entry },
+  );
+  if (persisted) {
+    sessionStore[sessionKey] = persisted;
+  }
+  return persisted ?? undefined;
+}
+
+/** Clears the one-shot fork marker before the resumed CLI process starts. */
+export async function consumeCliSessionForkInStore(params: {
+  provider: string;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  expectedCliSessionId: string;
+}): Promise<SessionEntry | undefined> {
+  const { provider, sessionKey, sessionStore, storePath, expectedCliSessionId } = params;
+  const entry = sessionStore[sessionKey];
+  const binding = entry?.cliSessionBindings?.[provider];
+  if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume !== true) {
+    return undefined;
+  }
+  const persisted = await patchSessionEntry(
+    { storePath, sessionKey },
+    (currentEntry) => {
+      const currentBinding = currentEntry.cliSessionBindings?.[provider];
+      if (
+        currentBinding?.sessionId !== expectedCliSessionId ||
+        currentBinding.forkNextResume !== true
+      ) {
+        return null;
+      }
+      const next = { ...currentEntry };
+      const { forkNextResume: _forkNextResume, ...consumedBinding } = currentBinding;
+      setCliSessionBinding(next, provider, consumedBinding);
+      return next;
+    },
+    { fallbackEntry: entry },
+  );
+  if (persisted) {
+    sessionStore[sessionKey] = persisted;
+  }
+  return persisted ?? undefined;
+}
+
+/** Re-arms a claimed fork marker after a failed CLI turn. */
+export async function restoreCliSessionForkInStore(params: {
+  provider: string;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  expectedCliSessionId: string;
+}): Promise<SessionEntry | undefined> {
+  const { provider, sessionKey, sessionStore, storePath, expectedCliSessionId } = params;
+  const entry = sessionStore[sessionKey];
+  const binding = entry?.cliSessionBindings?.[provider];
+  if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume === true) {
+    return undefined;
+  }
+  const persisted = await patchSessionEntry(
+    { storePath, sessionKey },
+    (currentEntry) => {
+      const currentBinding = currentEntry.cliSessionBindings?.[provider];
+      if (
+        currentBinding?.sessionId !== expectedCliSessionId ||
+        currentBinding.forkNextResume === true
+      ) {
+        return null;
+      }
+      const next = { ...currentEntry };
+      setCliSessionBinding(next, provider, { ...currentBinding, forkNextResume: true });
+      return next;
+    },
+    { fallbackEntry: entry },
+  );
+  if (persisted) {
+    sessionStore[sessionKey] = persisted;
+  }
+  return persisted ?? undefined;
+}
+
+/** Rebinds a claimed fork to its successor before the rest of the CLI turn can fail. */
+export async function persistCliSessionForkSuccessorInStore(params: {
+  provider: string;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  expectedCliSessionId: string;
+  successorCliSessionId: string;
+}): Promise<SessionEntry | undefined> {
+  const {
+    provider,
+    sessionKey,
+    sessionStore,
+    storePath,
+    expectedCliSessionId,
+    successorCliSessionId,
+  } = params;
+  const entry = sessionStore[sessionKey];
+  if (!entry || successorCliSessionId === expectedCliSessionId) {
+    return undefined;
+  }
+  const persisted = await patchSessionEntry(
+    { storePath, sessionKey },
+    (currentEntry) => {
+      const currentBinding = currentEntry.cliSessionBindings?.[provider];
+      if (
+        currentBinding?.sessionId !== expectedCliSessionId ||
+        currentBinding.forkNextResume === true
+      ) {
+        return null;
+      }
+      const next = { ...currentEntry };
+      setCliSessionBinding(next, provider, {
+        ...currentBinding,
+        sessionId: successorCliSessionId,
+        forceReuse: true,
+      });
       return next;
     },
     { fallbackEntry: entry },

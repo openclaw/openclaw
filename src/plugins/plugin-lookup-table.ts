@@ -12,8 +12,9 @@ import {
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import { normalizeWorkerProviderIds } from "./worker-provider-registry.js";
 
-export type PluginLookUpTableMetrics = PluginMetadataSnapshot["metrics"] & {
+type PluginLookUpTableMetrics = PluginMetadataSnapshot["metrics"] & {
   startupPlanMs: number;
   startupPluginCount: number;
   deferredChannelPluginCount: number;
@@ -21,35 +22,34 @@ export type PluginLookUpTableMetrics = PluginMetadataSnapshot["metrics"] & {
 
 export type PluginLookUpTable = PluginMetadataSnapshot & {
   startup: GatewayStartupPluginPlan;
+  workerProviderIds: readonly string[];
   metrics: PluginLookUpTableMetrics;
 };
 
-export type LoadPluginLookUpTableParams = {
+type LoadPluginLookUpTableParams = {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   index?: PluginRegistrySnapshot;
   metadataSnapshot?: PluginMetadataSnapshot;
+  workerProviderIds?: readonly string[];
 };
 
-let lookupTableMemoBySnapshot = new WeakMap<
+const lookupTableMemoBySnapshot = new WeakMap<
   PluginMetadataSnapshot,
   Map<string, PluginLookUpTable>
 >();
-
-export function clearPluginLookUpTableMemoForTest(): void {
-  lookupTableMemoBySnapshot = new WeakMap<PluginMetadataSnapshot, Map<string, PluginLookUpTable>>();
-}
-
 export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): PluginLookUpTable {
   const requestedSnapshotConfig = params.activationSourceConfig ?? params.config;
+  const workerProviderIds = normalizeWorkerProviderIds(params.workerProviderIds ?? []);
   const pluginIdScope = createGatewayStartupMetadataPluginIdScope({
     config: params.config,
     ...(params.activationSourceConfig !== undefined
       ? { activationSourceConfig: params.activationSourceConfig }
       : {}),
     env: params.env,
+    workerProviderIds,
   });
   const metadataSnapshot =
     params.metadataSnapshot &&
@@ -89,12 +89,14 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
     env: params.env,
     index,
     manifestRegistry,
+    workerProviderIds,
   });
   const startupPlanMs = performance.now() - startupPlanStartedAt;
 
   const table: PluginLookUpTable = {
     ...metadataSnapshot,
     startup,
+    workerProviderIds,
     metrics: {
       ...metadataSnapshot.metrics,
       startupPlanMs,

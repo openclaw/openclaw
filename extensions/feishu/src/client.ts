@@ -6,25 +6,16 @@ import {
   readPluginPackageVersion,
   resolveAmbientNodeProxyAgent,
 } from "openclaw/plugin-sdk/extension-shared";
-import {
-  FEISHU_HTTP_TIMEOUT_ENV_VAR,
-  FEISHU_HTTP_TIMEOUT_MAX_MS,
-  FEISHU_HTTP_TIMEOUT_MS,
-  resolveConfiguredHttpTimeoutMs,
-} from "./client-timeout.js";
+import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const pluginVersion = readPluginPackageVersion({ require });
 
-export { pluginVersion };
-
 const FEISHU_USER_AGENT = `openclaw-feishu-builtin/${pluginVersion}/${process.platform}`;
-export { FEISHU_USER_AGENT };
 
 const FEISHU_WS_CONFIG = {
-  PingInterval: 30,
-  PingTimeout: 3,
+  pingTimeout: 3,
 } as const;
 
 /** User-Agent header value for all Feishu API requests. */
@@ -43,7 +34,7 @@ type FeishuClientSdk = Pick<
   | "WSClient"
 >;
 
-const defaultFeishuClientSdk: FeishuClientSdk = {
+const feishuClientSdk: FeishuClientSdk = {
   AppType: Lark.AppType,
   Client: Lark.Client,
   defaultHttpInstance: Lark.defaultHttpInstance,
@@ -52,8 +43,6 @@ const defaultFeishuClientSdk: FeishuClientSdk = {
   LoggerLevel: Lark.LoggerLevel,
   WSClient: Lark.WSClient,
 };
-
-let feishuClientSdk: FeishuClientSdk = defaultFeishuClientSdk;
 
 type RequestInterceptorApi = {
   use: (fn: (req: unknown) => unknown) => unknown;
@@ -90,8 +79,6 @@ function setRequestUserAgent(req: unknown) {
   const inst = Lark.defaultHttpInstance as FeishuDefaultHttpInstanceWithInterceptors;
   inst.interceptors?.request?.use(setRequestUserAgent);
 }
-
-export { FEISHU_HTTP_TIMEOUT_ENV_VAR, FEISHU_HTTP_TIMEOUT_MAX_MS, FEISHU_HTTP_TIMEOUT_MS };
 
 type FeishuHttpInstanceLike = Pick<
   typeof feishuClientSdk.defaultHttpInstance,
@@ -228,8 +215,6 @@ export async function createFeishuWSClient(
     loggerLevel: feishuClientSdk.LoggerLevel.info,
     wsConfig: FEISHU_WS_CONFIG,
     ...(agent ? { agent } : {}),
-  } as ConstructorParameters<typeof feishuClientSdk.WSClient>[0] & {
-    wsConfig: typeof FEISHU_WS_CONFIG;
   });
 }
 
@@ -241,24 +226,4 @@ export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.Even
     encryptKey: account.encryptKey,
     verificationToken: account.verificationToken,
   });
-}
-
-/**
- * Clear client cache for a specific account or all accounts.
- */
-export function clearClientCache(accountId?: string): void {
-  if (accountId) {
-    clientCache.delete(accountId);
-  } else {
-    clientCache.clear();
-  }
-}
-
-export function setFeishuClientRuntimeForTest(overrides?: {
-  sdk?: Partial<FeishuClientSdk>;
-}): void {
-  feishuClientSdk = overrides?.sdk
-    ? { ...defaultFeishuClientSdk, ...overrides.sdk }
-    : defaultFeishuClientSdk;
-  clearClientCache();
 }

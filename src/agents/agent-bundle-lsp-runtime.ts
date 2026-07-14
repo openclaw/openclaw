@@ -2,12 +2,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { logDebug, logWarn } from "../logger.js";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { loadEmbeddedAgentLspConfig } from "./embedded-agent-lsp.js";
@@ -39,6 +41,7 @@ type PendingLspRequest = {
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
+  dispose: () => void;
 };
 
 type LspServerCapabilities = {
@@ -114,13 +117,22 @@ function rememberLspFailure(session: LspSession, error: Error): void {
   session.failure ??= error;
 }
 
+function takePendingLspRequest(session: LspSession, id: number): PendingLspRequest | undefined {
+  const pending = session.pendingRequests.get(id);
+  if (!pending) {
+    return undefined;
+  }
+  session.pendingRequests.delete(id);
+  clearTimeout(pending.timeout);
+  pending.dispose();
+  return pending;
+}
+
 function failLspSession(session: LspSession, error: Error): void {
   rememberLspFailure(session, error);
-  for (const pending of session.pendingRequests.values()) {
-    clearTimeout(pending.timeout);
-    pending.reject(session.failure ?? error);
+  for (const [id] of session.pendingRequests) {
+    takePendingLspRequest(session, id)?.reject(session.failure ?? error);
   }
-  session.pendingRequests.clear();
 }
 
 function lspProcessExitError(
@@ -167,58 +179,140 @@ function encodeLspMessage(body: unknown): string {
   return `Content-Length: ${Buffer.byteLength(json, "utf-8")}\r\n\r\n${json}`;
 }
 
-function parseLspMessages(buffer: Buffer): { messages: unknown[]; remaining: Buffer } {
+const LSP_HEADER_SEPARATOR = Buffer.from("\r\n\r\n", "ascii");
+const MAX_LSP_HEADER_BYTES = 8 * 1024;
+const MAX_LSP_BODY_BYTES = 64 * 1024 * 1024;
+
+class LspFramingError extends Error {
+  override readonly name = "LspFramingError";
+}
+
+type LspParseResult =
+  | { readonly ok: true; readonly messages: unknown[]; readonly remaining: Buffer }
+  | { readonly ok: false; readonly messages: unknown[]; readonly error: LspFramingError };
+
+function framingError(messages: unknown[], detail: string): LspParseResult {
+  return {
+    ok: false,
+    messages,
+    error: new LspFramingError(`LSP framing error: ${detail}`),
+  };
+}
+
+function parseContentLength(header: string): number | LspFramingError {
+  const values: string[] = [];
+  for (const line of header.split("\r\n")) {
+    const separator = line.indexOf(":");
+    if (separator === -1) {
+      return new LspFramingError("LSP framing error: header line must contain a colon");
+    }
+    if (line.slice(0, separator).trim().toLowerCase() === "content-length") {
+      values.push(line.slice(separator + 1).trim());
+    }
+  }
+  if (values.length !== 1) {
+    return new LspFramingError(
+      `LSP framing error: expected exactly one Content-Length header, received ${values.length}`,
+    );
+  }
+  const value = values[0];
+  if (value === undefined || !/^[0-9]+$/.test(value)) {
+    return new LspFramingError("LSP framing error: Content-Length must be decimal digits");
+  }
+  const length = Number(value);
+  if (!Number.isSafeInteger(length) || length <= 0) {
+    return new LspFramingError("LSP framing error: Content-Length must be a positive safe integer");
+  }
+  if (length > MAX_LSP_BODY_BYTES) {
+    return new LspFramingError(
+      `LSP framing error: Content-Length exceeds ${MAX_LSP_BODY_BYTES} bytes`,
+    );
+  }
+  return length;
+}
+
+function parseLspMessages(buffer: Buffer): LspParseResult {
   const messages: unknown[] = [];
   let remaining = buffer;
-  const headerSeparator = Buffer.from("\r\n\r\n", "ascii");
 
   while (true) {
-    const headerEnd = remaining.indexOf(headerSeparator);
+    const headerEnd = remaining.indexOf(LSP_HEADER_SEPARATOR);
     if (headerEnd === -1) {
-      break;
+      const maxIncompleteHeaderBytes = MAX_LSP_HEADER_BYTES + LSP_HEADER_SEPARATOR.length - 1;
+      return remaining.length > maxIncompleteHeaderBytes
+        ? framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`)
+        : { ok: true, messages, remaining };
+    }
+    if (headerEnd > MAX_LSP_HEADER_BYTES) {
+      return framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`);
     }
 
-    const header = remaining.subarray(0, headerEnd).toString("ascii");
-    const match = header.match(/Content-Length:\s*(\d+)/i);
-    if (!match) {
-      remaining = remaining.subarray(headerEnd + headerSeparator.length);
-      continue;
+    const contentLength = parseContentLength(remaining.subarray(0, headerEnd).toString("ascii"));
+    if (contentLength instanceof LspFramingError) {
+      return { ok: false, messages, error: contentLength };
     }
-
-    const contentLength = Number.parseInt(match[1], 10);
-    const bodyStart = headerEnd + headerSeparator.length;
+    const bodyStart = headerEnd + LSP_HEADER_SEPARATOR.length;
     const bodyEnd = bodyStart + contentLength;
-
     if (remaining.length < bodyEnd) {
-      break;
+      return { ok: true, messages, remaining };
     }
 
+    const body = remaining.subarray(bodyStart, bodyEnd).toString("utf8");
     try {
-      const body = remaining.subarray(bodyStart, bodyEnd).toString("utf8");
       messages.push(JSON.parse(body));
-    } catch {
-      // skip malformed
+    } catch (error) {
+      return framingError(
+        messages,
+        `body is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     remaining = remaining.subarray(bodyEnd);
   }
-
-  return { messages, remaining };
 }
 
-function sendRequest(session: LspSession, method: string, params?: unknown): Promise<unknown> {
+function lspAbortError(signal?: AbortSignal): Error {
+  return signal?.reason instanceof Error
+    ? signal.reason
+    : createAbortError("LSP request aborted", { cause: signal?.reason });
+}
+
+function sendRequest(
+  session: LspSession,
+  method: string,
+  params?: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
   if (session.failure) {
     return Promise.reject(session.failure);
+  }
+  if (signal?.aborted) {
+    return Promise.reject(lspAbortError(signal));
   }
   const id = ++session.requestId;
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      if (session.pendingRequests.has(id)) {
-        session.pendingRequests.delete(id);
-        reject(new Error(`LSP request ${method} timed out`));
-      }
+      takePendingLspRequest(session, id)?.reject(new Error(`LSP request ${method} timed out`));
     }, 10_000);
     timeout.unref?.();
-    session.pendingRequests.set(id, { resolve, reject, timeout });
+    const onAbort = () => {
+      const pending = takePendingLspRequest(session, id);
+      if (!pending) {
+        return;
+      }
+      // Bundle tools share the server process, so cancel only this request.
+      try {
+        session.process.stdin?.write(
+          encodeLspMessage({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } }),
+          "utf-8",
+        );
+      } catch {
+        // Best-effort notification; the local tool promise must still settle.
+      }
+      pending.reject(lspAbortError(signal));
+    };
+    const dispose = () => signal?.removeEventListener("abort", onAbort);
+    session.pendingRequests.set(id, { resolve, reject, timeout, dispose });
+    signal?.addEventListener("abort", onAbort, { once: true });
     const message = { jsonrpc: "2.0", id, method, params };
     const encoded = encodeLspMessage(message);
     session.process.stdin?.write(encoded, "utf-8");
@@ -230,20 +324,22 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
     session.buffer,
     typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk,
   ]);
-  const { messages, remaining } = parseLspMessages(session.buffer);
-  session.buffer = remaining.length === 0 ? Buffer.alloc(0) : Buffer.from(remaining);
+  const parsed = parseLspMessages(session.buffer);
+  session.buffer = parsed.ok
+    ? parsed.remaining.length === 0
+      ? Buffer.alloc(0)
+      : Buffer.from(parsed.remaining)
+    : Buffer.alloc(0);
 
-  for (const msg of messages) {
+  for (const msg of parsed.messages) {
     if (typeof msg !== "object" || msg === null) {
       continue;
     }
     const record = msg as Record<string, unknown>;
 
     if ("id" in record && typeof record.id === "number") {
-      const pending = session.pendingRequests.get(record.id);
+      const pending = takePendingLspRequest(session, record.id);
       if (pending) {
-        session.pendingRequests.delete(record.id);
-        clearTimeout(pending.timeout);
         if ("error" in record) {
           pending.reject(new Error(JSON.stringify(record.error)));
         } else {
@@ -255,6 +351,10 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
     if ("method" in record && !("id" in record)) {
       logDebug(`bundle-lsp:${session.serverName}: notification ${String(record.method)}`);
     }
+  }
+  if (!parsed.ok) {
+    failLspSession(session, parsed.error);
+    terminateLspProcessTree(session);
   }
 }
 
@@ -316,11 +416,9 @@ async function disposeSession(session: LspSession) {
       // best-effort
     }
   }
-  for (const [, pending] of session.pendingRequests) {
-    clearTimeout(pending.timeout);
-    pending.reject(new Error("LSP session disposed"));
+  for (const [id] of session.pendingRequests) {
+    takePendingLspRequest(session, id)?.reject(new Error("LSP session disposed"));
   }
-  session.pendingRequests.clear();
   terminateLspProcessTree(session);
 }
 
@@ -349,12 +447,17 @@ function createLspPositionTool(params: {
       },
       required: ["uri", "line", "character"],
     },
-    execute: async (_toolCallId, input) => {
+    execute: async (_toolCallId, input, signal) => {
       const position = input as LspPositionParams;
-      const result = await sendRequest(params.session, params.method, {
-        textDocument: { uri: position.uri },
-        position: { line: position.line, character: position.character },
-      });
+      const result = await sendRequest(
+        params.session,
+        params.method,
+        {
+          textDocument: { uri: position.uri },
+          position: { line: position.line, character: position.character },
+        },
+        signal,
+      );
       return formatLspResult(params.session.serverName, params.resultLabel, result);
     },
   };
@@ -409,18 +512,23 @@ function buildLspTools(session: LspSession): AnyAgentTool[] {
         },
         required: ["uri", "line", "character"],
       },
-      execute: async (_toolCallId, input) => {
+      execute: async (_toolCallId, input, signal) => {
         const params = input as {
           uri: string;
           line: number;
           character: number;
           includeDeclaration?: boolean;
         };
-        const result = await sendRequest(session, "textDocument/references", {
-          textDocument: { uri: params.uri },
-          position: { line: params.line, character: params.character },
-          context: { includeDeclaration: params.includeDeclaration ?? true },
-        });
+        const result = await sendRequest(
+          session,
+          "textDocument/references",
+          {
+            textDocument: { uri: params.uri },
+            position: { line: params.line, character: params.character },
+            context: { includeDeclaration: params.includeDeclaration ?? true },
+          },
+          signal,
+        );
         return formatLspResult(serverLabel, "references", result);
       },
     });
@@ -448,10 +556,12 @@ export async function createBundleLspToolRuntime(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
   reservedToolNames?: Iterable<string>;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): Promise<BundleLspToolRuntime> {
   const loaded = loadEmbeddedAgentLspConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    manifestRegistry: params.manifestRegistry,
   });
   for (const diagnostic of loaded.diagnostics) {
     logWarn(`bundle-lsp: ${diagnostic.pluginId}: ${diagnostic.message}`);

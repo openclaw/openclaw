@@ -99,7 +99,65 @@ describe("mattermost monitor resources", () => {
       filePathHint: "file-1",
       maxBytes: 1024,
       ssrfPolicy: { allowedHostnames: ["chat.example.com"] },
+      responseHeaderTimeoutMs: 120_000,
+      readIdleTimeoutMs: 30_000,
     });
+  });
+
+  it("times out inbound media downloads when response headers never arrive", async () => {
+    const { createServer } = await import("node:http");
+    const { saveRemoteMedia } = await import("openclaw/plugin-sdk/media-runtime");
+    const server = createServer((_req, _res) => {
+      // Accept the connection but never write status/headers.
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback TCP address");
+      }
+      const fileId = "file-stall";
+      const headerTimeoutMs = 250;
+      const saveRemoteMediaWithHeaderTimeout: typeof saveRemoteMedia = (params) =>
+        saveRemoteMedia({
+          ...params,
+          responseHeaderTimeoutMs: headerTimeoutMs,
+          readIdleTimeoutMs: 30_000,
+          ssrfPolicy: { ...params.ssrfPolicy, dangerouslyAllowPrivateNetwork: true },
+        });
+
+      const resources = createMattermostMonitorResources({
+        accountId: "default",
+        callbackUrl: "https://openclaw.test/callback",
+        client: {
+          apiBaseUrl: `http://127.0.0.1:${address.port}/api/v4`,
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          token: "bot-token",
+        } as never,
+        logger: {},
+        mediaMaxBytes: 1024,
+        saveRemoteMedia: saveRemoteMediaWithHeaderTimeout,
+        mediaKindFromMime: () => "image",
+      });
+
+      const started = Date.now();
+      await expect(resources.resolveMattermostMedia([fileId])).resolves.toEqual([]);
+      const elapsedMs = Date.now() - started;
+      expect(elapsedMs).toBeGreaterThanOrEqual(headerTimeoutMs - 50);
+      expect(elapsedMs).toBeLessThan(headerTimeoutMs + 2_000);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
+    }
   });
 
   it("caches channel and user lookups and falls back to empty picker props", async () => {

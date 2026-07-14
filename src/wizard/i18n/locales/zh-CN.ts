@@ -70,14 +70,14 @@ export const zh_CN = {
       bindAuto: "自动（Loopback -> LAN）",
       bindAutoHint: "先尝试 loopback",
       bindCustom: "自定义 IP",
-      bindCustomHint: "绑定到一个本机地址",
+      bindCustomHint: "指定 IPv4 也会绑定 127.0.0.1",
       bindCustomIp: "自定义 IP 地址",
       bindLan: "LAN (0.0.0.0)",
       bindLanHint: "局域网可访问",
       bindLoopback: "Loopback (127.0.0.1)",
       bindLoopbackHint: "仅本机可访问",
       bindTailnet: "Tailnet（Tailscale IP）",
-      bindTailnetHint: "通过 Tailscale 访问",
+      bindTailnetHint: "可通过 Tailscale 和本机环回地址访问",
       existingPasswordConfirm: "使用已有 Gateway 密码（{password}）？",
       existingTokenConfirm: "使用已有 Gateway 令牌（{token}）？",
       passwordPrompt: "Gateway 密码",
@@ -233,8 +233,9 @@ export const zh_CN = {
     guided: {
       aiAccessTitle: "AI 访问",
       apiKeyPrompt: "{label} 的 API key 或 token",
-      appliedTitle: "设置已应用",
+      appliedTitle: "推理已就绪",
       complete: "OpenClaw 已准备就绪。",
+      completeWithoutAi: "OpenClaw 设置已保存。连接 AI 后再打开聊天。",
       detected: "AI 检测完成。",
       detectedCandidate: "{label} — {detail}{recommended}",
       detectedTitle: "找到的 AI",
@@ -242,8 +243,7 @@ export const zh_CN = {
       enterApiKey: "输入 API key — {label}",
       existingModelKept:
         "已配置的默认模型保持不变。请在下方选择如何继续——重试、连接其他提供商，或退出。此检查在工作区之外运行，因此工作区插件提供的模型可能在这里失败，但在 agent 中仍可正常工作。",
-      escapeHatches:
-        "如需完整的分步向导，请运行 `openclaw onboard --classic`。你也可以随时运行 `openclaw crestodian`，用自然语言获得设置帮助。",
+      escapeHatches: "如需完整的分步向导，请运行 `openclaw onboard --classic`。",
       failureAuth: "认证失败。请重新登录或检查 key。",
       failureBilling: "此模型或账号尚未启用计费。",
       failureFormat: "模型没有返回可用的回复。",
@@ -253,20 +253,22 @@ export const zh_CN = {
       failureUnknown: "Completion 因未知原因失败。",
       foundNothing: "未在此机器上检测到现有 AI 访问方式。",
       intro: "连接你的 AI",
-      invalidConfigCrestodian:
-        "OpenClaw 配置无效。正在打开 Crestodian，以便在 onboarding 写入任何内容前检查并修复配置。",
+      invalidConfigDetails: "OpenClaw 配置 {path} 无效：\n{issues}",
+      invalidConfigRepair:
+        "未进行任何更改。请运行 {fixCommand} 修复，再运行 {inspectCommand} 检查，然后重试 onboarding。",
+      invalidConfigUnknown: "- 无法解析配置。",
       manualChoice: "你想如何连接 AI？",
       nextSteps:
         "工作区：{workspace}\n添加频道：`openclaw channels add`\n更喜欢聊天？运行 `openclaw crestodian`，然后说 `connect telegram`（或 `connect slack`）。\n打开 dashboard：`openclaw dashboard`\n稍后聊天：`openclaw`",
+      nextStepsWithoutAi:
+        "工作区：{workspace}\n稍后添加 AI：重新运行 `openclaw onboard`\n连接 AI 后添加频道：`openclaw channels add`\n打开 dashboard：`openclaw dashboard`",
       nextStepsTitle: "下一步",
+      noInferenceOptions:
+        "尚无可用的推理选项。请先登录 Claude Code 或 Codex，或配置 API 密钥提供商，然后重新运行引导。",
       openChatNow: "现在打开聊天？",
-      openCrestodian: "打开 Crestodian 聊天（用自然语言获得帮助）",
       recommendedSuffix: " — 推荐",
       repliedIn: "AI 检查：在 {seconds} 秒内回复",
       retryCandidate: "重试 {label}（{detail}）",
-      skipAi: "暂时跳过 AI 设置",
-      skipAiLater:
-        "稍后添加 AI：设置 OPENAI_API_KEY 或 ANTHROPIC_API_KEY，或者安装并登录 codex、claude 或 gemini。然后重新运行 `openclaw onboard`。",
       testFailed: "AI 检查失败。",
       testFailure: "✗ {label}：{reason}\n{detail}",
       testPassed: "AI 检查通过。",
@@ -275,9 +277,7 @@ export const zh_CN = {
       tryCandidate: "尝试 {label}（{detail}）",
       ttyRequired:
         "Onboarding 需要交互式 TTY。自动化请使用 `openclaw onboard --non-interactive --accept-risk ...`。",
-      useClassic: "使用经典分步向导",
       welcomeTitle: "设置选项",
-      workspace: "工作区目录",
     },
     setup: {
       authChoiceFailedRetry: "请选择其他提供商或认证方式，或选择暂时跳过。",
@@ -968,7 +968,7 @@ export const zh_CN = {
       dashboardWhenReady: "准备好后运行：{command}",
       daemonRuntime: "Gateway 服务运行时",
       daemonRuntimeNode: "Node（推荐）",
-      daemonRuntimeNodeHint: "WhatsApp + Telegram 需要使用。Bun 重新连接时可能造成内存损坏。",
+      daemonRuntimeNodeHint: "OpenClaw 状态使用 node:sqlite，因此必须使用 Node；Bun 无法运行网关。",
       editBootstrap: "之后可编辑 BOOTSTRAP.md 来修改 agent 的自我介绍方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次终端聊天会发送："醒醒，我的朋友！"',
