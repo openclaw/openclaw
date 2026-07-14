@@ -1,4 +1,4 @@
-export type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
+type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
 
 /** Classifies prompt submissions that have no visible current-turn content. */
 export function resolvePromptSubmissionSkipReason(params: {
