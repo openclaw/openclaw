@@ -781,6 +781,7 @@ export function createSessionsSendTool(opts?: {
               sessionKey: displayKey,
             });
           }
+          const deferToAcpTaskCompletion = acpRoute.deferToTaskCompletion;
 
           // Capture the pre-run assistant snapshot before starting the nested run.
           // Fast in-process test doubles and short-circuit agent paths can finish
@@ -789,8 +790,9 @@ export function createSessionsSendTool(opts?: {
           // Fire-and-forget same-session sends still need this baseline because the
           // A2A follow-up may deliver directly to the source channel. Isolated cron
           // requesters also need it to avoid attributing a stale target reply.
-          const baselineReply =
-            timeoutSeconds !== 0
+          const baselineReply = deferToAcpTaskCompletion
+            ? undefined
+            : timeoutSeconds !== 0
               ? await readLatestAssistantReplySnapshot({
                   sessionKey: resolvedKey,
                   limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
@@ -944,6 +946,15 @@ export function createSessionsSendTool(opts?: {
           }
           runId = start.runId;
           const watchField = registerWatchIfRequested(resolvedKey);
+          if (deferToAcpTaskCompletion) {
+            return jsonResult({
+              runId,
+              status: "accepted",
+              sessionKey: displayKey,
+              delivery,
+              ...watchField,
+            });
+          }
           const result = await waitForAgentRunAndReadUpdatedAssistantReply({
             runId,
             sessionKey: resolvedKey,

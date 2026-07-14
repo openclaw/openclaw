@@ -14,6 +14,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { toAcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import {
+  discardPersistedManagerRuntimeState,
+  isMissingManagerResumeTargetError,
+} from "./manager.runtime-resume-state.js";
 import type {
   AcpSessionManagerDeps,
   SessionAcpMeta,
@@ -93,7 +97,9 @@ export async function ensureManagerRuntimeHandle(params: {
   const previousIdentity = resolveSessionIdentityFromMeta(previousMeta);
   let identityForEnsure = previousIdentity;
   const persistedResumeSessionId =
-    mode === "persistent" || previousIdentity?.sessionResumeSupported === true
+    mode === "persistent" ||
+    (previousIdentity?.sessionResumeSupported === true &&
+      previousIdentity.sessionResumeReady === true)
       ? resolveRuntimeResumeSessionId(previousIdentity)
       : undefined;
   if (
@@ -105,6 +111,7 @@ export async function ensureManagerRuntimeHandle(params: {
       acpxRecordId: _staleAcpxRecordId,
       acpxSessionId: _staleAcpxSessionId,
       agentSessionId: _staleAgentSessionId,
+      sessionResumeReady: _staleSessionResumeReady,
       ...freshIdentity
     } = identityForEnsure!;
     identityForEnsure = { ...freshIdentity, state: "pending" };
@@ -143,7 +150,17 @@ export async function ensureManagerRuntimeHandle(params: {
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not initialize ACP session runtime.",
       });
-      if (acpError.code !== "ACP_SESSION_INIT_FAILED" || mode === "oneshot") {
+      if (mode === "oneshot") {
+        if (isMissingManagerResumeTargetError(acpError)) {
+          await discardPersistedManagerRuntimeState({
+            cfg: params.cfg,
+            sessionKey: params.sessionKey,
+            writeSessionMeta: params.writeSessionMeta,
+          });
+        }
+        throw acpError;
+      }
+      if (acpError.code !== "ACP_SESSION_INIT_FAILED") {
         throw acpError;
       }
       logVerbose(
@@ -153,6 +170,7 @@ export async function ensureManagerRuntimeHandle(params: {
         const {
           acpxSessionId: _staleAcpxSessionId,
           agentSessionId: _staleAgentSessionId,
+          sessionResumeReady: _staleSessionResumeReady,
           ...retryIdentity
         } = identityForEnsure;
         // The persisted resume identifiers already failed, so do not merge them back into the
