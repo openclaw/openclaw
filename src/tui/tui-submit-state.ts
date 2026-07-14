@@ -1,5 +1,4 @@
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
-import type { TuiStateAccess } from "./tui-types.js";
 
 export type TuiPendingSubmit =
   | { phase: "sending"; runId: string; draftText: string }
@@ -7,7 +6,7 @@ export type TuiPendingSubmit =
 
 export type TuiChatSubmitAdmission = "allowed" | "disconnected" | "pending";
 
-type PendingSubmitState = Pick<TuiStateAccess, "pendingSubmit">;
+type PendingSubmitState = { pendingSubmit: TuiPendingSubmit | null };
 
 export function beginPendingSubmit(state: PendingSubmitState, runId: string, text: string): void {
   state.pendingSubmit = { phase: "sending", runId, draftText: text };
