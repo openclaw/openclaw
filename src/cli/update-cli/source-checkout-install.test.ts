@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 const sharedMocks = vi.hoisted(() => ({
   runCommand: vi.fn(),
@@ -16,6 +16,7 @@ vi.mock("./shared.js", () => ({
 }));
 
 const { runSourceCheckoutGlobalInstall } = await import("./source-checkout-install.js");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("runSourceCheckoutGlobalInstall", () => {
   let sourceRoot: string;
@@ -24,7 +25,7 @@ describe("runSourceCheckoutGlobalInstall", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    sourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-source-install-"));
+    sourceRoot = tempDirs.make("openclaw-source-install-");
     await fs.writeFile(
       path.join(sourceRoot, "package.json"),
       JSON.stringify({ name: "openclaw", engines: { node: ">=24.15.0 <25" } }),
@@ -49,10 +50,6 @@ describe("runSourceCheckoutGlobalInstall", () => {
       stdoutTail: "",
       stderrTail: "",
     }));
-  });
-
-  afterEach(async () => {
-    await fs.rm(sourceRoot, { recursive: true, force: true });
   });
 
   it("guards pnpm source activation with the managed service Node", async () => {

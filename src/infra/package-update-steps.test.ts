@@ -289,7 +289,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
         if (name === "global update") {
           expect(argv).toContain("--ignore-scripts");
-          expect(argv.some((arg) => arg.startsWith("--allow-scripts="))).toBe(false);
+          expect(argv.some((arg: string) => arg.startsWith("--allow-scripts="))).toBe(false);
           const stagePrefix = argv[argv.indexOf("--prefix") + 1];
           if (!stagePrefix) {
             throw new Error("missing staged prefix");

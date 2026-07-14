@@ -867,9 +867,13 @@ describe("update-cli", () => {
     expect(runGatewayUpdate).not.toHaveBeenCalled();
     const packCalls = packagePackCommandCalls();
     const isGitSource = isNpmGitPackageSpec(spec);
-    const packedSpec = isGitSource
+    const pinnedSpec = isGitSource
       ? pinGitPackageInstallSpec("openclaw", spec, TEST_GIT_COMMIT)
-      : spec;
+      : null;
+    if (isGitSource && !pinnedSpec) {
+      throw new Error(`Expected pinnable Git package spec: ${spec}`);
+    }
+    const packedSpec = pinnedSpec ?? spec;
     const packedVersion = exactVersionFromPackageSpec(packedSpec) ?? "9999.0.0";
     const metadataCall = packageSourceMetadataCommandCall();
     if (isGitSource) {
