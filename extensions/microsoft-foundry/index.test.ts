@@ -254,7 +254,9 @@ function buildFoundryRuntimeAuthContext(
 function mockAzureCliToken(params: { accessToken: string; expiresInMs: number; delayMs?: number }) {
   execFileMock.mockImplementationOnce(async () => {
     if (params.delayMs) {
-      await new Promise((resolve) => setTimeout(resolve, params.delayMs));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, params.delayMs);
+      });
     }
     return {
       stdout: JSON.stringify({
@@ -273,7 +275,9 @@ function mockAzureCliTokenRaw(stdout: string) {
 function mockAzureCliLoginFailure(delayMs?: number) {
   execFileMock.mockImplementationOnce(async () => {
     if (delayMs) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
     }
     throw Object.assign(new Error("az failed"), { stderr: defaultAzureCliLoginError, stdout: "" });
   });
