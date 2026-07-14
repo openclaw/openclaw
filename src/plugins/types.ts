@@ -2436,11 +2436,22 @@ export type OpenClawGatewayDiscoveryService = {
 };
 
 /** Context passed to long-lived plugin services. */
+export type OpenClawPluginGatewayEventScope = "operator.read" | "operator.write" | "operator.admin";
+
+export type OpenClawPluginGatewayEvents = {
+  emit: (
+    event: string,
+    payload: PluginJsonValue,
+    opts: { scope: OpenClawPluginGatewayEventScope },
+  ) => void;
+};
+
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  gatewayEvents?: OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;

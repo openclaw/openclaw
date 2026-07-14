@@ -234,7 +234,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
           ...latest,
           metadata: metadataIsEmpty(metadata) ? undefined : metadata,
         });
-        await this.store.register(next.id, { version: 1, card: next });
+        await this.registerCard(next.id, { version: 1, card: next });
         if (diagnostics.length > 0) {
           rows.push({ card: next, diagnostics });
         }
@@ -288,6 +288,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       boards: stores.boards,
       subscriptions: stores.subscriptions,
       attachments: stores.attachments,
+      dataVersion: stores.dataVersion,
     });
   }
 }

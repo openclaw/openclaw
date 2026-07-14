@@ -14,7 +14,6 @@ import "../../styles/workboard.css";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
-  configureWorkboardPolling,
   deleteWorkboardCard,
   dispatchWorkboard,
   filterWorkboardCardsForPreset,
@@ -32,7 +31,6 @@ import {
   workboardHasActiveWrites,
   workboardMutationsReady,
   WORKBOARD_PRIORITIES,
-  type WorkboardAutoRefreshIntervalMs,
   type WorkboardDependencyState,
   type WorkboardExecutionEngine,
   type WorkboardExecutionMode,
@@ -1823,14 +1821,6 @@ function renderWorkboardEmptyState() {
   `;
 }
 
-const autoRefreshOptions: Array<{ value: WorkboardAutoRefreshIntervalMs; labelKey: string }> = [
-  { value: 0, labelKey: "workboard.autoRefreshOff" },
-  { value: 5000, labelKey: "workboard.autoRefresh5s" },
-  { value: 15000, labelKey: "workboard.autoRefresh15s" },
-  { value: 30000, labelKey: "workboard.autoRefresh30s" },
-  { value: 60000, labelKey: "workboard.autoRefresh60s" },
-];
-
 const viewPresetOptions: Array<{ value: WorkboardUiState["viewPreset"]; labelKey: string }> = [
   { value: "all", labelKey: "workboard.viewAll" },
   { value: "default_agent", labelKey: "workboard.viewDefaultAgent" },
@@ -2116,7 +2106,6 @@ export function renderWorkboard(props: WorkboardProps) {
     state.agentFilter !== "all" ||
     archivedCardsHidden;
   const showEmptyState = filtered.length === 0 && activeFiltering;
-  const autoRefreshEnabled = state.autoRefreshIntervalMs > 0;
   const viewOptions: Array<WorkboardSelectOption<WorkboardUiState["viewPreset"]>> =
     viewPresetOptions.map((option) => {
       const count = cardsForPreset(option.value).length;
@@ -2261,55 +2250,21 @@ export function renderWorkboard(props: WorkboardProps) {
             </label>
           </div>
           <div class="workboard-toolbar__actions">
-            ${autoRefreshEnabled
-              ? nothing
-              : html`
-                  <button
-                    class="btn"
-                    type="button"
-                    ?disabled=${state.loading ||
-                    state.dispatching ||
-                    workboardHasActiveWrites(state)}
-                    @click=${() =>
-                      refreshWorkboard({
-                        host: props.host,
-                        client: props.client,
-                        requestUpdate: props.onRequestUpdate,
-                        source: "manual",
-                        refreshDiagnostics: canWrite(props),
-                      })}
-                  >
-                    ${state.loading ? t("common.refreshing") : t("common.refresh")}
-                  </button>
-                `}
-            <label class="workboard-auto-refresh">
-              <span>${t("workboard.autoRefresh")}</span>
-              <select
-                class="input"
-                title=${t("workboard.autoRefresh")}
-                .value=${String(state.autoRefreshIntervalMs)}
-                @change=${(event: Event) => {
-                  state.autoRefreshIntervalMs = Number(
-                    (event.currentTarget as HTMLSelectElement).value,
-                  ) as WorkboardAutoRefreshIntervalMs;
-                  configureWorkboardPolling({
-                    host: props.host,
-                    client: props.client,
-                    enabled:
-                      props.connected &&
-                      props.pluginEnabled === true &&
-                      state.autoRefreshIntervalMs > 0,
-                    requestUpdate: props.onRequestUpdate,
-                  });
-                  props.onRequestUpdate?.();
-                }}
-              >
-                ${autoRefreshOptions.map(
-                  (option) =>
-                    html`<option value=${String(option.value)}>${t(option.labelKey)}</option>`,
-                )}
-              </select>
-            </label>
+            <button
+              class="btn"
+              type="button"
+              ?disabled=${state.loading || state.dispatching || workboardHasActiveWrites(state)}
+              @click=${() =>
+                refreshWorkboard({
+                  host: props.host,
+                  client: props.client,
+                  requestUpdate: props.onRequestUpdate,
+                  source: "manual",
+                  refreshDiagnostics: canWrite(props),
+                })}
+            >
+              ${state.loading ? t("common.refreshing") : t("common.refresh")}
+            </button>
             ${writable
               ? html`
                   <button

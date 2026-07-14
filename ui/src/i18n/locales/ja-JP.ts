@@ -2482,12 +2482,6 @@ export const ja_JP: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
-    autoRefresh: "自動更新",
-    autoRefreshOff: "オフ",
-    autoRefresh5s: "5秒",
-    autoRefresh15s: "15秒",
-    autoRefresh30s: "30秒",
-    autoRefresh60s: "60秒",
     lastRefreshed: "更新済み {time}",
     refreshError: "更新に失敗しました",
     healthLabel: "ワークボードの状態",

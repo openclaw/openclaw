@@ -2479,12 +2479,6 @@ export const pt_BR: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
-    autoRefresh: "Atualização automática",
-    autoRefreshOff: "Desativada",
-    autoRefresh5s: "5s",
-    autoRefresh15s: "15s",
-    autoRefresh30s: "30s",
-    autoRefresh60s: "60s",
     lastRefreshed: "Atualizado {time}",
     refreshError: "Falha na atualização",
     healthLabel: "Integridade do workboard",

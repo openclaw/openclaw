@@ -2492,12 +2492,6 @@ export const pl: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
-    autoRefresh: "Automatyczne odświeżanie",
-    autoRefreshOff: "Wyłączone",
-    autoRefresh5s: "5 s",
-    autoRefresh15s: "15 s",
-    autoRefresh30s: "30 s",
-    autoRefresh60s: "60 s",
     lastRefreshed: "Zaktualizowano {time}",
     refreshError: "Odświeżanie nie powiodło się",
     healthLabel: "Kondycja tablicy",

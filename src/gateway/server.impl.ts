@@ -1132,6 +1132,7 @@ export async function startGatewayServer(
     clients,
     broadcast,
     broadcastToConnIds,
+    broadcastPluginEvent,
     getBufferedAmount,
     agentRunSeq,
     dedupe,
@@ -1801,6 +1802,7 @@ export async function startGatewayServer(
         registry: loaded.pluginRegistry,
         config: params.nextConfig,
         workspaceDir: defaultWorkspaceDir,
+        broadcastPluginEvent,
       });
       const afterChannelTargets = listAttachedChannelConfigTargets();
       const afterChannelIds = new Set(afterChannelTargets.keys());
@@ -2049,6 +2051,7 @@ export async function startGatewayServer(
             isNixMode,
             startupStartedAt: opts.startupStartedAt,
             broadcast,
+            broadcastPluginEvent,
             tailscaleMode,
             resetOnExit: tailscaleConfig.resetOnExit ?? false,
             serviceName: tailscaleConfig.serviceName,

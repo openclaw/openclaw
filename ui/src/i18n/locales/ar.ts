@@ -2451,12 +2451,6 @@ export const ar: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
-    autoRefresh: "تحديث تلقائي",
-    autoRefreshOff: "إيقاف",
-    autoRefresh5s: "5 ث",
-    autoRefresh15s: "15 ث",
-    autoRefresh30s: "30 ث",
-    autoRefresh60s: "60 ث",
     lastRefreshed: "تم التحديث {time}",
     refreshError: "فشل التحديث",
     healthLabel: "حالة لوحة العمل",

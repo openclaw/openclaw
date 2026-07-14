@@ -49,6 +49,8 @@ export type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
+  OpenClawPluginGatewayEventScope,
+  OpenClawPluginGatewayEvents,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginCommandContext,

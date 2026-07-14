@@ -2489,12 +2489,6 @@ export const tr: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
-    autoRefresh: "Otomatik yenileme",
-    autoRefreshOff: "Kapalı",
-    autoRefresh5s: "5sn",
-    autoRefresh15s: "15sn",
-    autoRefresh30s: "30sn",
-    autoRefresh60s: "60sn",
     lastRefreshed: "Güncellendi {time}",
     refreshError: "Yenileme başarısız",
     healthLabel: "Çalışma panosu durumu",

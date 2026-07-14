@@ -2467,12 +2467,6 @@ export const fa: TranslationMap = {
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
     dispatchSummaryEmpty: "Dispatch complete: no ready work changed.",
-    autoRefresh: "تازه‌سازی خودکار",
-    autoRefreshOff: "خاموش",
-    autoRefresh5s: "۵ث",
-    autoRefresh15s: "۱۵ث",
-    autoRefresh30s: "۳۰ث",
-    autoRefresh60s: "۶۰ث",
     lastRefreshed: "به‌روزرسانی‌شده {time}",
     refreshError: "به‌روزرسانی ناموفق بود",
     healthLabel: "سلامت Workboard",
