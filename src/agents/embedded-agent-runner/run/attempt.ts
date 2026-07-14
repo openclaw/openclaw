@@ -13,25 +13,13 @@ import {
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "../../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
-import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
-import {
-  createChildDiagnosticTraceContext,
-  freezeDiagnosticTraceContext,
-} from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../../plugins/hook-agent-context.js";
-import { toTrajectoryToolDefinitions } from "../../../trajectory/runtime.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
-import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
-import { isSignalTimeoutReason } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -48,25 +36,25 @@ import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
-import {
-  clearActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-  markActiveEmbeddedRunAbandoned,
-} from "../runs.js";
+import { clearActiveEmbeddedRun, type EmbeddedAgentQueueHandle } from "../runs.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
-import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
+import {
+  createEmbeddedAttemptExternalAbortController,
+  createEmbeddedAttemptRunAbort,
+  type EmbeddedAttemptAbortStatePort,
+} from "./attempt-abort.js";
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { installEmbeddedAttemptContextGuards } from "./attempt-context-guards.js";
-import { summarizeSessionContext } from "./attempt-context-summary.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-assembly.js";
 import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
+import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-observability.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
   prepareEmbeddedAttemptPromptPreflight,
@@ -94,11 +82,7 @@ import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
-import {
-  cloneHookMessages,
-  removeTrailingMidTurnPrecheckAssistantError,
-} from "./attempt-transcript-helpers.js";
-import { resolvePromptSubmissionSkipReason } from "./attempt.prompt-helpers.js";
+import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import { resolveEmbeddedAttemptSessionWriteLockOptions } from "./attempt.run-decisions.js";
 import {
   acquireEmbeddedAttemptSessionFileOwner,
@@ -114,7 +98,6 @@ import {
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
 } from "./attempt.sessions-yield.js";
-import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import { PREEMPTIVE_OVERFLOW_ERROR_TEXT } from "./preemptive-compaction.js";
@@ -163,26 +146,6 @@ export async function runEmbeddedAttempt(
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
   const sessionCleanupOwnsEmbeddedResources = false;
-  let abortActiveSessionForExternalSignal: (() => Promise<void>) | undefined;
-  let abortRunForExternalSignal: ((isTimeout?: boolean, reason?: unknown) => void) | undefined;
-  let isCompactionPendingForExternalSignal: (() => boolean) | undefined;
-  let isCompactionInFlightForExternalSignal: (() => boolean) | undefined;
-  let removeExternalAbortSignalListener: (() => void) | undefined;
-  const createAttemptAbortError = (signal: AbortSignal): Error => {
-    if (signal.reason instanceof Error) {
-      return signal.reason;
-    }
-    const err = new Error("request aborted", { cause: signal.reason });
-    err.name = "AbortError";
-    return err;
-  };
-  const getAbortReason = (signal: AbortSignal): unknown =>
-    "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
-  const makeTimeoutAbortReason = (): Error => {
-    const err = new Error("request timed out");
-    err.name = "TimeoutError";
-    return err;
-  };
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {
     if (toolSearchCatalogApplied) {
       clearToolSearchCatalog({
@@ -209,65 +172,34 @@ export async function runEmbeddedAttempt(
       bundleLspRuntime = undefined;
     }
   };
-  const onExternalAbortSignal = () => {
-    const signal = params.abortSignal;
-    if (!signal) {
-      return;
-    }
-    externalAbort = true;
-    const reason = getAbortReason(signal);
-    const timeout = reason ? isSignalTimeoutReason(reason) : false;
-    if (
-      shouldFlagCompactionTimeout({
-        isTimeout: timeout,
-        isCompactionPendingOrRetrying: isCompactionPendingForExternalSignal?.() ?? false,
-        isCompactionInFlight: isCompactionInFlightForExternalSignal?.() ?? false,
-      })
-    ) {
-      timedOutDuringCompaction = true;
-    }
-    if (abortRunForExternalSignal) {
-      abortRunForExternalSignal(timeout, reason);
-      return;
-    }
-    aborted = true;
-    if (timeout) {
-      timedOut = true;
-      if (!timedOutDuringCompaction && countActiveToolExecutions(params.runId) > 0) {
-        timedOutDuringToolExecution = true;
-      }
-    }
-    promptError = createAttemptAbortError(signal);
-    if (!runAbortController.signal.aborted) {
-      runAbortController.abort(timeout ? (reason ?? makeTimeoutAbortReason()) : reason);
-    }
-    void abortActiveSessionForExternalSignal?.();
-  };
-  const armExternalAbortSignal = () => {
-    const signal = params.abortSignal;
-    if (!signal || removeExternalAbortSignalListener) {
-      return;
-    }
-    if (signal.aborted) {
-      onExternalAbortSignal();
-      return;
-    }
-    signal.addEventListener("abort", onExternalAbortSignal, { once: true });
-    removeExternalAbortSignalListener = () => {
-      signal.removeEventListener("abort", onExternalAbortSignal);
-      removeExternalAbortSignalListener = undefined;
-    };
-  };
-  const throwIfAttemptAbortSignalFiredAfterPrepCleanup = async () => {
-    if (params.abortSignal?.aborted === true) {
-      const abortError = createAttemptAbortError(params.abortSignal);
+  const abortState: EmbeddedAttemptAbortStatePort = {
+    markAborted: () => {
       aborted = true;
+    },
+    markExternalAbort: () => {
       externalAbort = true;
-      promptError = abortError;
-      await cleanupEmbeddedPrepResourcesAfterEarlyExit();
-      throw abortError;
-    }
+    },
+    markTimedOut: () => {
+      timedOut = true;
+    },
+    markTimedOutDuringCompaction: () => {
+      timedOutDuringCompaction = true;
+    },
+    markTimedOutDuringToolExecution: () => {
+      timedOutDuringToolExecution = true;
+    },
+    readTimedOutDuringCompaction: () => timedOutDuringCompaction,
+    setPromptError: (error) => {
+      promptError = error;
+    },
   };
+  const externalAbortController = createEmbeddedAttemptExternalAbortController({
+    abortSignal: params.abortSignal,
+    cleanupAfterEarlyAbort: cleanupEmbeddedPrepResourcesAfterEarlyExit,
+    runAbortController,
+    runId: params.runId,
+    state: abortState,
+  });
   try {
     const preparedSkills = prepareEmbeddedAttemptSkills({
       attempt: params,
@@ -438,7 +370,7 @@ export async function runEmbeddedAttempt(
       config: params.config,
       compactionTimeoutMs,
     });
-    await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
+    await externalAbortController.throwIfFiredAfterPrepCleanup();
     retainedSessionFileOwner = await acquireEmbeddedAttemptSessionFileOwner({
       sessionFile: params.sessionFile,
       timeoutMs: sessionWriteLockOptions.maxHoldMs,
@@ -482,10 +414,10 @@ export async function runEmbeddedAttempt(
       withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
         sessionLockController.withSessionWriteLock(operation),
       );
-    armExternalAbortSignal();
+    externalAbortController.arm();
     // The signal can fire while the eager session lock is being acquired.
     // Recheck after arming so a stopped run never reaches session creation or provider prompt.
-    await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
+    await externalAbortController.throwIfFiredAfterPrepCleanup();
 
     let session: AgentSession | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
@@ -579,7 +511,7 @@ export async function runEmbeddedAttempt(
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
       const sessionSettleTracker = createEmbeddedAttemptSessionSettleTracker(activeSession);
       const { abortActiveSession, trackPromptSettlePromise } = sessionSettleTracker;
-      abortActiveSessionForExternalSignal = abortActiveSession;
+      externalAbortController.setActiveSessionAbort(abortActiveSession);
       buildAbortSettlePromise = sessionSettleTracker.buildAbortSettlePromise;
       abortSessionForYield = () => {
         yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
@@ -728,54 +660,19 @@ export async function runEmbeddedAttempt(
 
       let yieldAborted = false;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-      const abortCompaction = () => {
-        if (!activeSession.isCompacting) {
-          return;
-        }
-        try {
-          activeSession.abortCompaction();
-        } catch (err) {
-          if (!isProbeSession) {
-            log.warn(
-              `embedded run abortCompaction failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
-            );
-          }
-        }
-      };
-      const abortRun = (isTimeout = false, reason?: unknown) => {
-        aborted = true;
-        if (isTimeout) {
-          timedOut = true;
-          if (!timedOutDuringCompaction && countActiveToolExecutions(params.runId) > 0) {
-            timedOutDuringToolExecution = true;
-          }
-        }
-        if (isTimeout) {
-          const timeoutReason = reason instanceof Error ? reason : makeTimeoutAbortReason();
-          params.onAttemptTimeout?.(timeoutReason);
-          runAbortController.abort(timeoutReason);
-        } else {
-          runAbortController.abort(reason);
-        }
-        abortCompaction();
-        void abortActiveSession();
-        if (isTimeout && queueHandleForAbandonment) {
-          markActiveEmbeddedRunAbandoned({
-            sessionId: params.sessionId,
-            handle: queueHandleForAbandonment,
-            sessionKey: params.sessionKey,
-            sessionFile: params.sessionFile,
-            reason: "timeout",
-          });
-        }
-        releaseEmbeddedAttemptSessionLockForAbort({
-          sessionLockController,
-          log,
-          runId: params.runId,
-          abortKind: isTimeout ? "timeout abort" : "abort",
-        });
-      };
-      abortRunForExternalSignal = abortRun;
+      const queueHandleRef: { current?: EmbeddedAgentQueueHandle } = {};
+      const abortRun = createEmbeddedAttemptRunAbort({
+        abortActiveSession,
+        activeSession,
+        attempt: params,
+        getQueueHandle: () => queueHandleRef.current,
+        isProbeSession,
+        log,
+        runAbortController,
+        sessionLockController,
+        state: abortState,
+      });
+      externalAbortController.setRunAbort(abortRun);
       const idleTimeoutTrigger: ((error: Error) => void) | undefined = (error) => {
         idleTimedOut = true;
         abortRun(true, error);
@@ -834,8 +731,10 @@ export async function runEmbeddedAttempt(
       } = preparedStream;
       const { unsubscribe, waitForPendingEvents } = subscription;
       toolSearchCatalogExecutor = preparedStream.toolSearchCatalogExecutor;
-      isCompactionPendingForExternalSignal = subscription.isCompacting;
-      isCompactionInFlightForExternalSignal = () => activeSession.isCompacting;
+      externalAbortController.setCompactionState({
+        isPendingOrRetrying: subscription.isCompacting,
+        isInFlight: () => activeSession.isCompacting,
+      });
       let lastAssistant: AssistantMessage | undefined;
       let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
       let attemptUsage: NormalizedUsage | undefined;
@@ -844,7 +743,7 @@ export async function runEmbeddedAttempt(
       let contextBudgetStatus: EmbeddedRunAttemptResult["contextBudgetStatus"];
       let compactionOccurredThisAttempt = false;
       let finalPromptText: string | undefined;
-      const queueHandleForAbandonment: EmbeddedAgentQueueHandle | undefined = queueHandle;
+      queueHandleRef.current = queueHandle;
 
       const attemptTimeout = prepareEmbeddedAttemptTimeout({
         attempt: params,
@@ -1083,142 +982,36 @@ export async function runEmbeddedAttempt(
                     : undefined,
               });
 
-          if (!skipPromptSubmission) {
-            cacheTrace?.recordStage("prompt:before", {
-              prompt: promptForModel,
-              messages: activeSession.messages,
-            });
-            cacheTrace?.recordStage("prompt:images", {
-              prompt: promptForModel,
-              messages: activeSession.messages,
-              note: `images: prompt=${imageResult.images.length}`,
-            });
-            const trajectoryProviderVisibleTools = toTrajectoryToolDefinitions(effectiveTools);
-            trajectoryRecorder?.recordEvent("context.compiled", {
-              systemPrompt: systemPromptForHook,
-              prompt: promptForModel,
-              messages: activeSession.messages,
-              tools: toTrajectoryToolDefinitions(
-                toolSearch.compacted ? uncompactedEffectiveTools : effectiveTools,
-              ),
-              ...(toolSearch.compacted
-                ? { providerVisibleTools: trajectoryProviderVisibleTools }
-                : {}),
-              imagesCount: imageResult.images.length,
-              streamStrategy,
-              transport: effectiveAgentTransport,
-              transcriptLeafId,
-            });
-          }
-
-          const promptSkipReason = skipPromptSubmission
-            ? null
-            : resolvePromptSubmissionSkipReason({
-                prompt: promptForModel,
-                messages: activeSession.messages,
-                runtimeOnly: promptSubmission.runtimeOnly,
-                imageCount: imageResult.images.length,
-              });
-          if (promptSkipReason) {
-            skipPromptSubmission = true;
-            const skipContext =
-              `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger} ` +
-              `provider=${params.provider}/${params.modelId}`;
-            if (promptSkipReason === "blank_user_prompt") {
-              log.warn(`embedded run prompt skipped: blank user prompt ${skipContext}`);
-            } else {
-              log.info(`embedded run prompt skipped: empty prompt/history/images ${skipContext}`);
-            }
-            trajectoryRecorder?.recordEvent("prompt.skipped", {
-              reason: promptSkipReason,
-              prompt: promptForModel,
-              messages: activeSession.messages,
-              imagesCount: imageResult.images.length,
-            });
-          }
-
-          const msgCount = activeSession.messages.length;
-          const systemLen = systemPromptText?.length ?? 0;
-          const promptLen = effectivePrompt.length;
-          const sessionSummary = summarizeSessionContext(activeSession.messages);
           const reserveTokens = settingsManager.getCompactionReserveTokens();
-          emitTrustedDiagnosticEvent({
-            type: "context.assembled",
-            runId: params.runId,
-            ...(params.sessionKey && { sessionKey: params.sessionKey }),
-            ...(params.sessionId && { sessionId: params.sessionId }),
-            provider: params.provider,
-            model: params.modelId,
-            ...((params.messageChannel ?? params.messageProvider)
-              ? { channel: params.messageChannel ?? params.messageProvider }
-              : {}),
-            trigger: params.trigger,
-            messageCount: msgCount,
-            historyTextChars: sessionSummary.totalTextChars,
-            historyImageBlocks: sessionSummary.totalImageBlocks,
-            maxMessageTextChars: sessionSummary.maxMessageTextChars,
-            systemPromptChars: systemLen,
-            promptChars: promptLen,
-            promptImages: imageResult.images.length,
+          skipPromptSubmission = observeEmbeddedAttemptPrompt({
+            attempt: params,
+            cacheTrace,
             contextTokenBudget,
+            diagnosticTrace,
+            effectivePrompt,
+            effectiveTools,
+            hookAgentId,
+            hookMessagesForCurrentPrompt,
+            hookRunner,
+            imageCount: imageResult.images.length,
+            isRawModelRun,
+            llmBoundaryPromptForPrecheck,
+            promptForModel,
+            promptSubmissionRuntimeOnly: promptSubmission.runtimeOnly,
             reserveTokens,
-            trace: freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(runTrace)),
-          });
-          params.onExecutionPhase?.({
-            phase: "context_assembled",
-            provider: params.provider,
-            model: params.modelId,
-          });
-
-          // Diagnostic: log context sizes before prompt to help debug early overflow errors.
-          if (log.isEnabled("debug")) {
-            log.debug(
-              `[context-diag] pre-prompt: sessionKey=${params.sessionKey ?? params.sessionId} ` +
-                `messages=${msgCount} roleCounts=${sessionSummary.roleCounts} ` +
-                `historyTextChars=${sessionSummary.totalTextChars} ` +
-                `maxMessageTextChars=${sessionSummary.maxMessageTextChars} ` +
-                `historyImageBlocks=${sessionSummary.totalImageBlocks} ` +
-                `systemPromptChars=${systemLen} promptChars=${promptLen} ` +
-                `promptImages=${imageResult.images.length} ` +
-                `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
-            );
-          }
-
-          if (!skipPromptSubmission && !isRawModelRun && hookRunner?.hasHooks("llm_input")) {
-            hookRunner
-              .runLlmInput(
-                {
-                  runId: params.runId,
-                  sessionId: params.sessionId,
-                  provider: params.provider,
-                  model: params.modelId,
-                  systemPrompt: systemPromptForHook,
-                  prompt: llmBoundaryPromptForPrecheck,
-                  historyMessages: cloneHookMessages(hookMessagesForCurrentPrompt),
-                  imagesCount: imageResult.images.length,
-                  tools,
-                },
-                {
-                  runId: params.runId,
-                  trace: freezeDiagnosticTraceContext(diagnosticTrace),
-                  agentId: hookAgentId,
-                  sessionKey: params.sessionKey,
-                  sessionId: params.sessionId,
-                  workspaceDir: params.workspaceDir,
-                  trigger: params.trigger,
-                  ...buildAgentHookContextChannelFields(params),
-                  ...buildAgentHookContextIdentityFields({
-                    trigger: params.trigger,
-                    senderId: params.senderId,
-                    chatId: params.chatId,
-                    channelContext: params.channelContext,
-                  }),
-                },
-              )
-              .catch((err: unknown) => {
-                log.warn(`llm_input hook failed: ${String(err)}`);
-              });
-          }
+            runTrace,
+            sessionMessages: activeSession.messages,
+            skipPromptSubmission,
+            streamStrategy,
+            systemPromptForHook,
+            systemPromptText,
+            toolSearchCompacted: toolSearch.compacted,
+            tools,
+            trajectoryRecorder,
+            transcriptLeafId,
+            transport: effectiveAgentTransport,
+            uncompactedEffectiveTools,
+          }).skipPromptSubmission;
 
           const promptPreflight = await prepareEmbeddedAttemptPromptPreflight({
             attempt: params,
@@ -1557,7 +1350,7 @@ export async function runEmbeddedAttempt(
       });
     }
   } finally {
-    removeExternalAbortSignalListener?.();
+    externalAbortController.dispose();
     clearToolActivityRun(params.runId);
     if (!sessionCleanupOwnsEmbeddedResources) {
       try {
