@@ -419,6 +419,14 @@ export async function noteMemorySearchHealth(
   const provider =
     resolved.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : resolved.provider;
 
+  // Provider "none" is a documented, intentional FTS-only configuration:
+  // memory search runs on builtin lexical FTS with no embedding provider.
+  // Do not emit an embedding-provider warning (which would falsely suggest
+  // setting a bogus NONE_API_KEY or disabling memory search entirely).
+  if (provider === "none") {
+    return;
+  }
+
   // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
   // separate embedding provider is needed. Skip the provider check entirely.
   const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });

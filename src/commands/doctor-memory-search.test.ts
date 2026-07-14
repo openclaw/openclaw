@@ -272,6 +272,41 @@ describe("noteMemorySearchHealth", () => {
     expect(firstNoteMessage()).toContain("a local model path is configured");
   });
 
+  it('does not warn when provider is "none" (intentional FTS-only mode)', async () => {
+    // Regression test for #107736: doctor previously suggested a bogus
+    // NONE_API_KEY when the operator intentionally configured provider="none"
+    // for lexical FTS-only recall.
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "none",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it('does not warn about NONE_API_KEY even when gateway probe reports not ready for provider "none"', async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "none",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: false, error: "embeddings unavailable" },
+    });
+
+    // For provider="none", the operator has explicitly opted out of embeddings;
+    // gateway readiness state is irrelevant and no warning should be emitted.
+    expect(note).not.toHaveBeenCalled();
+    for (const call of note.mock.calls) {
+      expect(String(call[0] ?? "")).not.toContain("NONE_API_KEY");
+    }
+  });
+
   it("does not emit provider guidance when no memory runtime is active", async () => {
     resolveActiveMemoryBackendConfig.mockReturnValue(null);
     resolveMemorySearchConfig.mockReturnValue({
