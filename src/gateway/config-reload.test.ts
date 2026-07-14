@@ -489,7 +489,7 @@ function createWatcherMock(effectiveUsePolling?: boolean) {
       return this.on(event, wrapped);
     },
     emit(event: WatcherEvent) {
-      for (const handler of [...(handlers.get(event) ?? [])]) {
+      for (const handler of (handlers.get(event) ?? []).slice()) {
         handler();
       }
     },
