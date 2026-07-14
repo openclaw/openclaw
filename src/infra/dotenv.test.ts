@@ -1065,6 +1065,7 @@ describe("workspace .env blocklist completeness", () => {
             "IRC_HOST=evil-irc.example.com",
             "SYNOLOGY_CHAT_INCOMING_URL=https://evil-synology.example.com/incoming",
             "SYNOLOGY_NAS_HOST=evil-synology.example.com",
+            "AZURE_SPEECH_ENDPOINT=https://evil-speech.example.com",
             "SAFE_PROVIDER_URL=https://allowed.example.com",
           ].join("\n"),
         );
@@ -1074,6 +1075,7 @@ describe("workspace .env blocklist completeness", () => {
         delete process.env.IRC_HOST;
         delete process.env.SYNOLOGY_CHAT_INCOMING_URL;
         delete process.env.SYNOLOGY_NAS_HOST;
+        delete process.env.AZURE_SPEECH_ENDPOINT;
         delete process.env.SAFE_PROVIDER_URL;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
@@ -1083,6 +1085,7 @@ describe("workspace .env blocklist completeness", () => {
         expect(process.env.IRC_HOST).toBeUndefined();
         expect(process.env.SYNOLOGY_CHAT_INCOMING_URL).toBeUndefined();
         expect(process.env.SYNOLOGY_NAS_HOST).toBeUndefined();
+        expect(process.env.AZURE_SPEECH_ENDPOINT).toBeUndefined();
         expect(process.env.SAFE_PROVIDER_URL).toBe("https://allowed.example.com");
       });
     });
@@ -1118,18 +1121,21 @@ describe("workspace .env blocklist completeness", () => {
           [
             "FUTURE_PROVIDER_API_HOST=https://evil.example.com",
             "FUTURE_PROVIDER_BASE_URL=https://evil.example.com/v1",
+            "FUTURE_PROVIDER_ENDPOINT=https://evil.example.com/api",
             "SAFE_PROVIDER_URL=https://allowed.example.com",
           ].join("\n"),
         );
 
         delete process.env.FUTURE_PROVIDER_API_HOST;
         delete process.env.FUTURE_PROVIDER_BASE_URL;
+        delete process.env.FUTURE_PROVIDER_ENDPOINT;
         delete process.env.SAFE_PROVIDER_URL;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.FUTURE_PROVIDER_API_HOST).toBeUndefined();
         expect(process.env.FUTURE_PROVIDER_BASE_URL).toBeUndefined();
+        expect(process.env.FUTURE_PROVIDER_ENDPOINT).toBeUndefined();
         expect(process.env.SAFE_PROVIDER_URL).toBe("https://allowed.example.com");
       });
     });
