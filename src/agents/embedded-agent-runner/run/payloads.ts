@@ -221,6 +221,7 @@ function formatToolErrorWarningText(params: {
   includeDetails: boolean;
   useMarkdown: boolean;
 }): string {
+  const failureLabel = params.lastToolError.blocked ? "blocked" : "failed";
   if (isExecLikeToolName(params.lastToolError.toolName)) {
     const toolLabel = formatToolAggregate(params.lastToolError.toolName, undefined, {
       markdown: params.useMarkdown,
@@ -229,11 +230,12 @@ function formatToolErrorWarningText(params: {
     const conciseExitSuffix = params.includeDetails
       ? ""
       : formatConciseExecExitSuffix(params.lastToolError.error);
+    const blockedSuffix = params.lastToolError.blocked ? "" : conciseExitSuffix;
     const errorSuffix =
       params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
     return subject
-      ? `⚠️ ${toolLabel} failed: ${subject}${conciseExitSuffix}${errorSuffix}`
-      : `⚠️ ${toolLabel} failed${conciseExitSuffix}${errorSuffix}`;
+      ? `⚠️ ${toolLabel} ${failureLabel}: ${subject}${blockedSuffix}${errorSuffix}`
+      : `⚠️ ${toolLabel} ${failureLabel}${blockedSuffix}${errorSuffix}`;
   }
 
   const toolSummary = formatToolAggregate(
@@ -243,7 +245,7 @@ function formatToolErrorWarningText(params: {
   );
   const errorSuffix =
     params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
-  return `⚠️ ${toolSummary} failed${errorSuffix}`;
+  return `⚠️ ${toolSummary} ${failureLabel}${errorSuffix}`;
 }
 
 function formatExecLikeFailureSubject(meta: string | undefined, markdown: boolean): string {

@@ -13,6 +13,7 @@ export type ToolErrorSummary = {
   error?: string;
   validationErrorSummary?: string;
   timedOut?: boolean;
+  blocked?: boolean;
   middlewareError?: boolean;
   mutatingAction?: boolean;
   actionFingerprint?: string;

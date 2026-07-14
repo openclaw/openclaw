@@ -90,6 +90,7 @@ export function isToolResultError(result: unknown): boolean {
     normalized === "timeout" ||
     normalized === "timed_out" ||
     normalized === "blocked" ||
+    normalized === "declined" ||
     normalized === "denied" ||
     normalized === "forbidden" ||
     normalized === "unavailable" ||
@@ -140,6 +141,7 @@ export function resolveToolResultFailureKind(result: unknown): ToolResultFailure
   const status = readToolResultStatus(result);
   if (
     status === "blocked" ||
+    status === "declined" ||
     status === "denied" ||
     status === "forbidden" ||
     status === "disabled" ||

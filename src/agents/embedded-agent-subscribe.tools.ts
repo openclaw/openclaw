@@ -112,7 +112,9 @@ function isErrorLikeStatus(status: string): boolean {
   ) {
     return false;
   }
-  return /error|fail|timeout|timed[_\s-]?out|denied|cancel|invalid|forbidden/.test(normalized);
+  return /error|fail|timeout|timed[_\s-]?out|declined|denied|cancel|invalid|forbidden/.test(
+    normalized,
+  );
 }
 
 function readErrorCandidate(value: unknown): string | undefined {

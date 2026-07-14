@@ -2671,6 +2671,77 @@ describe("handleToolExecutionEnd derived tool events", () => {
     });
   });
 
+  it("emits declined exec results as blocked instead of failed command output", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-declined",
+        args: { command: "sed -n '1,20p' docs/internal/bugs.md" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-declined",
+        isError: false,
+        result: {
+          details: {
+            status: "declined",
+            exitCode: null,
+            durationMs: null,
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      blocked: true,
+      error: "declined",
+    });
+
+    const commandItemEvent = requireRecord(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find((event) => {
+          const candidate = event as {
+            stream?: string;
+            data?: { itemId?: string; phase?: string; status?: string };
+          };
+          return (
+            candidate.stream === "item" &&
+            candidate.data?.phase === "end" &&
+            candidate.data?.itemId === "command:tool-exec-declined"
+          );
+        }),
+      "declined command item event",
+    );
+    expectRecordFields(commandItemEvent.data, "declined command item event data", {
+      status: "blocked",
+    });
+
+    const commandOutputEvent = requireRecord(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find((event) => (event as { stream?: string })?.stream === "command_output"),
+      "declined command output event",
+    );
+    expectRecordFields(commandOutputEvent.data, "declined command output event data", {
+      itemId: "command:tool-exec-declined",
+      phase: "end",
+      status: "blocked",
+      exitCode: null,
+    });
+    expect(commandOutputEvent.data).not.toHaveProperty("durationMs");
+  });
+
   it("emits patch summary events for apply_patch results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 

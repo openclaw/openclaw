@@ -32,6 +32,10 @@ describe("resolveToolExecutionErrorKind", () => {
 });
 
 describe("resolveToolResultFailureKind", () => {
+  it("classifies declined tool results as blocked", () => {
+    expect(resolveToolResultFailureKind({ details: { status: "declined" } })).toBe("blocked");
+  });
+
   it("contains hostile structured result fields", () => {
     const hostileDetails = new Proxy(
       {},

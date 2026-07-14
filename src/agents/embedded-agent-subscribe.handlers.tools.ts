@@ -93,7 +93,7 @@ import {
 } from "./tool-error-summary.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
-import { readToolResultDetails } from "./tool-result-error.js";
+import { readToolResultDetails, resolveToolResultFailureKind } from "./tool-result-error.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -1242,6 +1242,7 @@ export async function handleToolExecutionEnd(
   const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
   const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  const toolResultFailureKind = resolveToolResultFailureKind(sanitizedResult);
   const approvalUnavailable =
     isExecToolName(toolName) &&
     readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
@@ -1319,6 +1320,7 @@ export async function handleToolExecutionEnd(
       error: errorMessage,
       ...(validationErrorSummary ? { validationErrorSummary } : {}),
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
+      blocked: toolResultFailureKind === "blocked" || undefined,
       middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
       mutatingAction: attemptedMutatingAction,
       actionFingerprint: attemptedMutatingAction ? callSummary.actionFingerprint : undefined,
@@ -1472,12 +1474,14 @@ export async function handleToolExecutionEnd(
   });
   const endedAt = Date.now();
   const itemId = buildToolItemId(toolCallId);
+  const itemStatus =
+    toolResultFailureKind === "blocked" ? "blocked" : isToolError ? "failed" : "completed";
   const itemData: AgentItemEventData = {
     itemId,
     phase: "end",
     kind: "tool",
     title: buildToolItemTitle(toolName, meta),
-    status: isToolError ? "failed" : "completed",
+    status: itemStatus,
     name: toolName,
     meta,
     toolCallId,
@@ -1566,7 +1570,11 @@ export async function handleToolExecutionEnd(
       const output = extractLiveExecOutput(eventResult);
       const rawOutput = extractExecOutput(sanitizedResult);
       const commandStatus =
-        execDetails?.status === "failed" || isToolError ? "failed" : "completed";
+        toolResultFailureKind === "blocked"
+          ? "blocked"
+          : execDetails?.status === "failed" || isToolError
+            ? "failed"
+            : "completed";
       emitTrackedItemEvent(ctx, {
         itemId: commandItemId,
         phase: "end",
@@ -1592,7 +1600,7 @@ export async function handleToolExecutionEnd(
         ...(output ? { output } : {}),
         status: commandStatus,
         ...(execDetails && "exitCode" in execDetails ? { exitCode: execDetails.exitCode } : {}),
-        ...(execDetails && "durationMs" in execDetails
+        ...(execDetails && "durationMs" in execDetails && typeof execDetails.durationMs === "number"
           ? { durationMs: execDetails.durationMs }
           : {}),
         ...(execDetails && "cwd" in execDetails && typeof execDetails.cwd === "string"
