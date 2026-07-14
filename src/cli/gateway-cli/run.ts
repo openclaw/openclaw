@@ -1216,11 +1216,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
 
   const { detectRespawnSupervisor } = await import("../../infra/supervisor-markers.js");
   const supervisor = detectRespawnSupervisor(process.env);
-  const restoreConfigWrites = configLayersReadOnly
-    ? (await import("../../config/nix-mode-write-guard.js")).blockConfigWritesForRuntime(
-        "configuration writes are unavailable while --config-layer is active",
-      )
-    : undefined;
   try {
     await runGatewayLoopWithSupervisedLockRecovery({
       startLoop,
@@ -1260,8 +1255,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       `Gateway failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for diagnostics.`,
     );
     defaultRuntime.exit(resolveGatewayStartupFailureExitCode(err));
-  } finally {
-    restoreConfigWrites?.();
   }
 }
 

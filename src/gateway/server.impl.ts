@@ -1697,6 +1697,7 @@ export async function startGatewayServer(
     })(optsValue);
   };
   let clearFallbackGatewayContextForServer = () => {};
+  let restoreConfigWritesForServer = () => {};
   const closeOnStartupFailure = async () => {
     try {
       await beginClosePrelude();
@@ -1706,8 +1707,14 @@ export async function startGatewayServer(
       await createCloseHandler()({ reason: "gateway startup failed" });
     } finally {
       clearFallbackGatewayContextForServer();
+      restoreConfigWritesForServer();
     }
   };
+  if (opts.configLayersReadOnly) {
+    restoreConfigWritesForServer = blockConfigWritesForRuntime(
+      "configuration writes are unavailable while --config-layer is active",
+    );
+  }
   try {
     const earlyRuntime = await startupTrace.measure("runtime.early", () =>
       loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
@@ -2669,6 +2676,7 @@ export async function startGatewayServer(
         await close(optsLocal);
       } finally {
         clearFallbackGatewayContextForServer();
+        restoreConfigWritesForServer();
       }
     },
   };
