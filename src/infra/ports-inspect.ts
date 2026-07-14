@@ -1,12 +1,13 @@
 // Inspects gateway port listeners and connection state.
 import os from "node:os";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { isErrno } from "./errors.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { buildPortHints } from "./ports-format.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
-import { tryListenOnPort } from "./ports-probe.js";
+import { parseTcpEndpoint, parseWindowsNetstatListeners } from "./ports-netstat.js";
+import { probePortUsage } from "./ports-probe.js";
 import type {
   PortConnection,
   PortConnectionDirection,
@@ -52,8 +53,8 @@ function parseLsofFieldOutput(output: string): PortListener[] {
   let processFields: Pick<PortListener, "pid" | "command"> = {};
   for (const line of lines) {
     if (line.startsWith("p")) {
-      const pid = Number.parseInt(line.slice(1), 10);
-      processFields = Number.isFinite(pid) ? { pid } : {};
+      const pid = parseStrictPositiveInteger(line.slice(1));
+      processFields = pid !== undefined ? { pid } : {};
     } else if (line.startsWith("c")) {
       processFields.command = line.slice(1);
     } else if (line.startsWith("n")) {
@@ -75,37 +76,6 @@ function dedupePortListeners(listeners: PortListener[]): PortListener[] {
     seen.add(key);
     return true;
   });
-}
-
-function normalizeTcpHost(host: string): string {
-  const normalized = host.toLowerCase();
-  return normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
-}
-
-function parseTcpPort(raw: string | undefined): number | null {
-  if (!raw || !/^\d+$/.test(raw)) {
-    return null;
-  }
-  const port = Number(raw);
-  return Number.isSafeInteger(port) && port >= 0 && port <= 65_535 ? port : null;
-}
-
-function parseTcpEndpoint(raw: string): { host: string; port: number } | null {
-  const endpoint = raw.trim();
-  const bracketMatch = endpoint.match(/^\[([^\]]+)\]:(\d+)$/);
-  if (bracketMatch) {
-    const port = parseTcpPort(bracketMatch[2]);
-    return port === null ? null : { host: normalizeTcpHost(bracketMatch[1]), port };
-  }
-  const lastColon = endpoint.lastIndexOf(":");
-  if (lastColon <= 0 || lastColon >= endpoint.length - 1) {
-    return null;
-  }
-  const port = parseTcpPort(endpoint.slice(lastColon + 1));
-  if (port === null) {
-    return null;
-  }
-  return { host: normalizeTcpHost(endpoint.slice(0, lastColon)), port };
 }
 
 function parseLsofTcpConnectionAddress(
@@ -213,7 +183,7 @@ function parseSsConnections(output: string, port: number): PortConnection[] {
     };
     const pidMatch = line.match(/pid=(\d+)/);
     if (pidMatch) {
-      const pid = Number.parseInt(pidMatch[1], 10);
+      const pid = Number.parseInt(expectDefined(pidMatch[1], "pid match capture group 1"), 10);
       if (Number.isFinite(pid)) {
         connection.pid = pid;
       }
@@ -352,7 +322,7 @@ function parseSsListeners(output: string, port: number): PortListener[] {
       continue;
     }
     const parts = line.split(/\s+/);
-    const localAddress = parts.find((part) => part.includes(`:${port}`));
+    const localAddress = parts.find((part) => parseTcpEndpoint(part)?.port === port);
     if (!localAddress) {
       continue;
     }
@@ -361,7 +331,7 @@ function parseSsListeners(output: string, port: number): PortListener[] {
     };
     const pidMatch = line.match(/pid=(\d+)/);
     if (pidMatch) {
-      const pid = Number.parseInt(pidMatch[1], 10);
+      const pid = Number.parseInt(expectDefined(pidMatch[1], "pid match capture group 1"), 10);
       if (Number.isFinite(pid)) {
         listener.pid = pid;
       }
@@ -435,33 +405,7 @@ async function readUnixListeners(
 }
 
 function parseNetstatListeners(output: string, port: number): PortListener[] {
-  const listeners: PortListener[] = [];
-  for (const rawLine of output.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-    if (!normalizeLowercaseStringOrEmpty(line).includes("listen")) {
-      continue;
-    }
-    const parts = line.split(/\s+/);
-    if (parts.length < 4) {
-      continue;
-    }
-    const localAddr = parts[1];
-    if (!localAddr || parseTcpEndpoint(localAddr)?.port !== port) {
-      continue;
-    }
-    const pidRaw = parts.at(-1);
-    const pid = parseStrictPositiveInteger(pidRaw);
-    const listener: PortListener = {};
-    if (pid !== undefined) {
-      listener.pid = pid;
-    }
-    listener.address = localAddr;
-    listeners.push(listener);
-  }
-  return listeners;
+  return parseWindowsNetstatListeners(output, port);
 }
 
 function parseNetstatConnections(output: string, port: number): PortConnection[] {
@@ -563,7 +507,7 @@ async function readWindowsNetstatEntries<T extends PortListener>(
   parse: (output: string, port: number) => T[],
 ): Promise<{ entries: T[]; detail?: string; errors: string[] }> {
   const errors: string[] = [];
-  const res = await runCommandSafe([getWindowsSystem32ExePath("netstat.exe"), "-ano", "-p", "tcp"]);
+  const res = await runCommandSafe([getWindowsSystem32ExePath("netstat.exe"), "-ano"]);
   if (res.code !== 0) {
     if (res.error) {
       errors.push(res.error);
@@ -610,36 +554,6 @@ async function readWindowsEstablishedConnections(
   return { connections: result.entries, detail: result.detail, errors: result.errors };
 }
 
-async function tryListenOnHost(port: number, host: string): Promise<PortUsageStatus | "skip"> {
-  try {
-    await tryListenOnPort({ port, host, exclusive: true });
-    return "free";
-  } catch (err) {
-    if (isErrno(err) && err.code === "EADDRINUSE") {
-      return "busy";
-    }
-    if (isErrno(err) && (err.code === "EADDRNOTAVAIL" || err.code === "EAFNOSUPPORT")) {
-      return "skip";
-    }
-    return "unknown";
-  }
-}
-
-async function checkPortInUse(port: number): Promise<PortUsageStatus> {
-  const hosts = ["127.0.0.1", "0.0.0.0", "::1", "::"];
-  let sawUnknown = false;
-  for (const host of hosts) {
-    const result = await tryListenOnHost(port, host);
-    if (result === "busy") {
-      return "busy";
-    }
-    if (result === "unknown") {
-      sawUnknown = true;
-    }
-  }
-  return sawUnknown ? "unknown" : "free";
-}
-
 export async function inspectPortUsage(port: number): Promise<PortUsage> {
   const errors: string[] = [];
   const result =
@@ -648,7 +562,7 @@ export async function inspectPortUsage(port: number): Promise<PortUsage> {
   let listeners = result.listeners;
   let status: PortUsageStatus = listeners.length > 0 ? "busy" : "unknown";
   if (listeners.length === 0) {
-    status = await checkPortInUse(port);
+    status = await probePortUsage(port);
   }
   if (status !== "busy") {
     listeners = [];

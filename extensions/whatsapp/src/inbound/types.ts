@@ -30,6 +30,7 @@ export type ActiveWebSendOptions = {
 };
 
 export type ActiveWebListener = {
+  assertSendReady?: (to: string) => Promise<void>;
   sendMessage: (
     to: string,
     text: string,
@@ -58,7 +59,7 @@ export type WhatsAppStructuredContactContext = {
   }>;
 };
 
-export type WhatsAppInboundEvent = {
+type WhatsAppInboundEvent = {
   id?: string;
   timestamp?: number;
   isBatched?: boolean;
@@ -84,8 +85,9 @@ export type WhatsAppInboundGroupContext = {
   };
 };
 
-export type WhatsAppInboundPayload = {
+type WhatsAppInboundPayload = {
   body: string;
+  commandBody?: string;
   media?: {
     path?: string;
     type?: string;
@@ -101,7 +103,7 @@ export type WhatsAppInboundPayload = {
   }>;
 };
 
-export type WhatsAppInboundPlatform = {
+type WhatsAppInboundPlatform = {
   chatJid: string;
   recipientJid: string;
   sender?: WhatsAppIdentity;
@@ -207,6 +209,10 @@ type WebInboundCallbackMessageCommon = {
   quote?: WhatsAppInboundQuote;
   group?: WhatsAppInboundGroupContext;
   wasMentioned?: boolean;
+  groupMention?: {
+    wasMentioned: boolean;
+    requireMention: boolean;
+  };
 };
 
 type WebInboundCallbackAdmissionFields =

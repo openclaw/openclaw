@@ -46,7 +46,9 @@ import {
   resolveGeneratedImagePath,
   runAgentPrompt,
   runQaCli,
+  seedQaSessionTranscript,
   startAgentRun,
+  waitForAgentHistoryReply,
   waitForAgentRun,
   writeWorkspaceSkill,
 } from "./suite-runtime-agent.js";
@@ -55,6 +57,7 @@ import {
   fetchJson,
   patchConfig,
   readConfigSnapshot,
+  restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
   waitForGatewayHealthy,
   waitForQaChannelReady,
@@ -185,7 +188,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     browserSnapshot: qaBrowserSnapshot,
     browserAct: qaBrowserAct,
     webOpenPage: async (webParams: Parameters<typeof qaWebOpenPage>[0]) => {
-      const opened = await qaWebOpenPage(webParams);
+      const opened = await qaWebOpenPage({ ...webParams, repoRoot: params.env.repoRoot });
       params.env.webSessionIds.add(opened.pageId);
       return opened;
     },
@@ -197,10 +200,12 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     patchConfig,
     applyConfig,
     readConfigSnapshot,
+    restartGatewayWithConfigPatch,
     createSession,
     readEffectiveTools,
     readSkillStatus,
     readRawQaSessionStore,
+    seedQaSessionTranscript,
     readGatewayLogs: () => params.env.gateway.logs?.() ?? "",
     markGatewayLogCursor: () => (params.env.gateway.logs?.() ?? "").length,
     scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) =>
@@ -213,6 +218,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     resolveGeneratedImagePath,
     startAgentRun,
     waitForAgentRun,
+    waitForAgentHistoryReply,
     listCronJobs,
     findManagedDreamingCronJob,
     waitForCronRunCompletion,

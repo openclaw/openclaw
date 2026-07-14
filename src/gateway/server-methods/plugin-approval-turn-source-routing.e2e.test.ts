@@ -14,7 +14,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { APPROVALS_SCOPE } from "../method-scopes.js";
 import { startGatewayServer } from "../server.js";
 import {
@@ -41,29 +41,29 @@ describe("plugin.approval.request turn-source routing (real gateway)", () => {
 
   beforeAll(async () => {
     envSnapshot = captureEnv(TEST_ENV_KEYS);
-    delete process.env.OPENCLAW_CONFIG_PATH;
-    delete process.env.OPENCLAW_GATEWAY_URL;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
 
     tempHome = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-plugin-approval-turn-source-e2e-"),
     );
     const stateDir = path.join(tempHome, ".openclaw");
     await fs.mkdir(stateDir, { recursive: true });
-    process.env.HOME = tempHome;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    setTestEnvValue("HOME", tempHome);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
     const port = await getFreeGatewayPort();
     const token = "plugin-approval-turn-source-e2e-token";
     const url = `ws://127.0.0.1:${port}`;
-    process.env.OPENCLAW_GATEWAY_PORT = String(port);
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
 
     server = await startGatewayServer(port, {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,
-      deferStartupSidecars: true,
+      sidecarStartup: "defer",
     });
 
     // No operator approval client; only a requester with APPROVALS_SCOPE.

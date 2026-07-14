@@ -1,12 +1,14 @@
 // Shared schedule option resolver for cron create/edit commands.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronSchedule } from "../../cron/types.js";
-import { parseAt, parseCronStaggerMs, parseDurationMs } from "./shared.js";
+import { parseAt, parseCronStaggerMs, parsePositiveCronDurationMs } from "./shared.js";
 
 type ScheduleOptionInput = {
   at?: unknown;
   cron?: unknown;
   every?: unknown;
+  onExit?: unknown;
+  onExitCwd?: unknown;
   exact?: unknown;
   stagger?: unknown;
   tz?: unknown;
@@ -20,26 +22,31 @@ type NormalizedScheduleOptions = {
   at: string;
   cronExpr: string;
   every: string;
+  onExitCommand: string;
+  onExitCwd: string | undefined;
   requestedStaggerMs: number | undefined;
   tz: string | undefined;
 };
 
 /** Normalized schedule edit request, including patch-only updates for cron metadata. */
-export type CronEditScheduleRequest =
+type CronEditScheduleRequest =
   | { kind: "direct"; schedule: CronSchedule }
   | { kind: "patch-existing-cron"; staggerMs: number | undefined; tz: string | undefined }
   | { kind: "none" };
 
 /** Resolve explicit `--at`, `--every`, or `--cron` options for cron creation. */
-export function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSchedule {
+function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSchedule {
   const normalized = normalizeScheduleOptions(options);
+  if (normalized.onExitCwd && !normalized.onExitCommand) {
+    throw new Error("--on-exit-cwd requires --on-exit.");
+  }
   const chosen = countChosenSchedules(normalized);
   if (chosen !== 1) {
-    throw new Error("Choose exactly one schedule: --at, --every, or --cron");
+    throw new Error("Choose exactly one schedule: --at, --every, --cron, or --on-exit");
   }
   const schedule = resolveDirectSchedule(normalized);
   if (!schedule) {
-    throw new Error("Choose exactly one schedule: --at, --every, or --cron");
+    throw new Error("Choose exactly one schedule: --at, --every, --cron, or --on-exit");
   }
   return schedule;
 }
@@ -54,7 +61,7 @@ export function resolveCronCreateScheduleFromArgs(
   }
   const normalized = normalizeScheduleOptions(options);
   if (countChosenSchedules(normalized) > 0) {
-    throw new Error("Choose a positional schedule or one of --at, --every, or --cron.");
+    throw new Error("Choose a positional schedule or one of --at, --every, --cron, or --on-exit.");
   }
   const every = parseEverySchedule(positionalSchedule);
   return resolveCronCreateSchedule({
@@ -118,14 +125,20 @@ function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedSched
     at: normalizeOptionalString(options.at) ?? "",
     every: normalizeOptionalString(options.every) ?? "",
     cronExpr: normalizeOptionalString(options.cron) ?? "",
+    onExitCommand: normalizeOptionalString(options.onExit) ?? "",
+    onExitCwd: normalizeOptionalString(options.onExitCwd),
     tz: normalizeOptionalString(options.tz),
     requestedStaggerMs: parseCronStaggerMs({ staggerRaw, useExact }),
   };
 }
 
 function countChosenSchedules(options: NormalizedScheduleOptions): number {
-  return [Boolean(options.at), Boolean(options.every), Boolean(options.cronExpr)].filter(Boolean)
-    .length;
+  return [
+    Boolean(options.at),
+    Boolean(options.every),
+    Boolean(options.cronExpr),
+    Boolean(options.onExitCommand),
+  ].filter(Boolean).length;
 }
 
 function parseEverySchedule(value: string): string | undefined {
@@ -139,6 +152,9 @@ function looksLikeCronExpression(value: string): boolean {
 }
 
 function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule | undefined {
+  if (options.onExitCwd && !options.onExitCommand) {
+    throw new Error("--on-exit-cwd requires --on-exit.");
+  }
   if (options.tz && options.every) {
     throw new Error("--tz is only valid with --cron or offset-less --at");
   }
@@ -153,7 +169,7 @@ function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule
     return { kind: "at", at: atIso };
   }
   if (options.every) {
-    const everyMs = parseDurationMs(options.every);
+    const everyMs = parsePositiveCronDurationMs(options.every);
     if (!everyMs) {
       throw new Error("Invalid --every. Use a duration like 10m, 1h, or 1d.");
     }
@@ -165,6 +181,16 @@ function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule
       expr: options.cronExpr,
       tz: options.tz,
       staggerMs: options.requestedStaggerMs,
+    };
+  }
+  if (options.onExitCommand) {
+    if (options.tz || options.requestedStaggerMs !== undefined) {
+      throw new Error("--tz/--stagger/--exact are not valid with --on-exit");
+    }
+    return {
+      kind: "on-exit",
+      command: options.onExitCommand,
+      ...(options.onExitCwd ? { cwd: options.onExitCwd } : {}),
     };
   }
   return undefined;

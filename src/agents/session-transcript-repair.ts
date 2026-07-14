@@ -269,6 +269,9 @@ function normalizeLegacyToolResultId(
     return message;
   }
   const [toolCall] = toolCalls;
+  if (!toolCall) {
+    return message;
+  }
   const toolResultName = normalizeOptionalString((message as { toolName?: unknown }).toolName);
   const toolCallName = normalizeOptionalString(toolCall.name);
   if (toolResultName && toolCallName && toolResultName !== toolCallName) {
@@ -365,10 +368,9 @@ function repairToolCallInputs(
   const preservedThinkingToolCallIds = new Set<string>();
   const priorToolCallIds = new Set<string>();
 
-  for (let index = 0; index < messages.length; index += 1) {
-    const msg = messages[index];
+  for (const [index, msg] of messages.entries()) {
     if (!msg || typeof msg !== "object") {
-      out.push(msg);
+      changed = true;
       continue;
     }
 
@@ -554,14 +556,15 @@ function assistantHasToolCalls(message: AgentMessage): boolean {
   return extractToolCallsFromAssistant(message).length > 0;
 }
 
-function findLaterMatchingToolResult(params: {
+function collectLaterMatchingToolResults(params: {
   messages: AgentMessage[];
   startIndex: number;
-  toolCallId: string;
-  toolName?: string;
   toolCalls: Array<{ id: string; name?: string }>;
+  toolNamesById: Map<string, string>;
   seenToolResultIds: Set<string>;
-}): Extract<AgentMessage, { role: "toolResult" }> | undefined {
+}): Map<string, Extract<AgentMessage, { role: "toolResult" }>> {
+  const resultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
+  const toolCallIds = new Set(params.toolCalls.map((toolCall) => toolCall.id));
   for (let index = params.startIndex; index < params.messages.length; index += 1) {
     const candidate = params.messages[index];
     if (!candidate || typeof candidate !== "object" || candidate.role !== "toolResult") {
@@ -569,12 +572,15 @@ function findLaterMatchingToolResult(params: {
     }
     const normalizedLegacyResult = normalizeLegacyToolResultId(candidate, params.toolCalls);
     const id = extractToolResultId(normalizedLegacyResult);
-    if (!id || id !== params.toolCallId || params.seenToolResultIds.has(id)) {
+    if (!id || !toolCallIds.has(id) || params.seenToolResultIds.has(id) || resultsById.has(id)) {
       continue;
     }
-    return normalizeToolResultName(normalizedLegacyResult, params.toolName);
+    resultsById.set(
+      id,
+      normalizeToolResultName(normalizedLegacyResult, params.toolNamesById.get(id)),
+    );
   }
-  return undefined;
+  return resultsById;
 }
 
 export function repairToolUseResultPairing(
@@ -629,9 +635,9 @@ export function repairToolUseResultPairing(
   };
 
   for (let i = 0; i < messages.length; i += 1) {
-    const msg = messages[i];
+    const msg = messages.at(i);
     if (!msg || typeof msg !== "object") {
-      out.push(msg);
+      changed = true;
       continue;
     }
 
@@ -671,9 +677,9 @@ export function repairToolUseResultPairing(
 
     let j = i + 1;
     for (; j < messages.length; j += 1) {
-      const next = messages[j];
+      const next = messages.at(j);
       if (!next || typeof next !== "object") {
-        remainder.push(next);
+        changed = true;
         continue;
       }
 
@@ -769,20 +775,21 @@ export function repairToolUseResultPairing(
       changed = true;
     }
 
+    const laterResultsById = collectLaterMatchingToolResults({
+      messages,
+      startIndex: j,
+      toolCalls,
+      toolNamesById: toolCallNamesById,
+      seenToolResultIds,
+    });
     for (const call of toolCalls) {
       const existing = spanResultsById.get(call.id);
       if (existing) {
         pushToolResult(existing);
       } else {
-        const laterResult = findLaterMatchingToolResult({
-          messages,
-          startIndex: j,
-          toolCallId: call.id,
-          toolName: call.name,
-          toolCalls,
-          seenToolResultIds,
-        });
+        const laterResult = laterResultsById.get(call.id);
         if (laterResult) {
+          laterResultsById.delete(call.id);
           moved = true;
           changed = true;
           pushToolResult(laterResult);
@@ -818,3 +825,4 @@ export function repairToolUseResultPairing(
     moved: changedOrMoved,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

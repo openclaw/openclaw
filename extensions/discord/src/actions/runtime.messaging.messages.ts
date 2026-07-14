@@ -126,6 +126,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       const content = readStringParam(ctx.params, "content", {
         required: true,
       });
+      await ctx.assertReadTargetAllowed({ channelId });
       const message = await discordMessagingActionRuntime.editMessageDiscord(
         channelId,
         messageId,
@@ -142,6 +143,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       const messageId = readStringParam(ctx.params, "messageId", {
         required: true,
       });
+      await ctx.assertReadTargetAllowed({ channelId });
       await discordMessagingActionRuntime.deleteMessageDiscord(
         channelId,
         messageId,
@@ -157,6 +159,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       const messageId = readStringParam(ctx.params, "messageId", {
         required: true,
       });
+      await ctx.assertReadTargetAllowed({ channelId });
       await discordMessagingActionRuntime.pinMessageDiscord(channelId, messageId, ctx.withOpts());
       return jsonResult({ ok: true });
     }
@@ -168,6 +171,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       const messageId = readStringParam(ctx.params, "messageId", {
         required: true,
       });
+      await ctx.assertReadTargetAllowed({ channelId });
       await discordMessagingActionRuntime.unpinMessageDiscord(channelId, messageId, ctx.withOpts());
       return jsonResult({ ok: true });
     }
@@ -250,8 +254,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       if (!results || typeof results !== "object") {
         return jsonResult({ ok: true, results });
       }
-      const resultsRecord = results as Record<string, unknown>;
-      const messages = resultsRecord.messages;
+      const messages = results.messages;
       const normalizedMessages = Array.isArray(messages)
         ? messages.map((group) =>
             Array.isArray(group) ? group.map((msg) => ctx.normalizeMessage(msg)) : group,
@@ -260,7 +263,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       return jsonResult({
         ok: true,
         results: {
-          ...resultsRecord,
+          ...results,
           messages: normalizedMessages,
         },
       });

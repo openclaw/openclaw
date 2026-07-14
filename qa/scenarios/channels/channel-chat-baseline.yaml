@@ -22,6 +22,7 @@ scenario:
     - extensions/qa-lab/src/bus-state.ts
   execution:
     kind: flow
+    suiteIsolation: isolated
     summary: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
     config:
       expectedMarker: QA-CHANNEL-BASELINE-OK
@@ -40,18 +41,24 @@ flow:
             - ref: env
             - 60000
         - call: reset
-        - call: state.addInboundMessage
+        - call: sleep
           args:
-            - conversation:
-                id: qa-room
-                kind: channel
-                title: QA Room
-              senderId: alice
-              senderName: Alice
-              text: hello team, no bot ping here
-        - call: waitForNoOutbound
-          args:
-            - ref: state
+            - 1200
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id: qa-room
+              kind: channel
+              title: QA Room
+            senderId: alice
+            senderName: Alice
+            text: hello team, no bot ping here
+        - waitForNoOutbound:
+            quietMs: 1200
+            sinceIndex:
+              ref: outboundStartIndex
     - name: replies when mentioned in channel
       actions:
         - call: waitForGatewayHealthy
@@ -62,16 +69,15 @@ flow:
           args:
             - ref: env
             - 60000
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id: qa-room
-                kind: channel
-                title: QA Room
-              senderId: alice
-              senderName: Alice
-              text:
-                expr: config.mentionPrompt
+        - sendInbound:
+            conversation:
+              id: qa-room
+              kind: channel
+              title: QA Room
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.mentionPrompt
         - call: waitForOutboundMessage
           saveAs: message
           args:

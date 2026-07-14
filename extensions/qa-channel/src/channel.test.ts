@@ -115,7 +115,9 @@ function createMockQaRuntime(params?: {
           replyOptions,
         }: {
           ctx: { BodyForAgent?: string; Body?: string };
-          dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
+          dispatcherOptions: {
+            deliver: (payload: { text: string }, info: { kind: string }) => Promise<void>;
+          };
           replyOptions?: {
             onToolStart?: (payload: {
               name?: string;
@@ -128,9 +130,12 @@ function createMockQaRuntime(params?: {
             await replyOptions?.onToolStart?.(toolStart);
           }
           params?.onDispatch?.(ctx as Record<string, unknown>);
-          await dispatcherOptions.deliver({
-            text: `qa-echo: ${ctx.BodyForAgent ?? ctx.Body ?? ""}`,
-          });
+          await dispatcherOptions.deliver(
+            {
+              text: `qa-echo: ${ctx.BodyForAgent ?? ctx.Body ?? ""}`,
+            },
+            { kind: "final" },
+          );
         },
       },
       inbound: {

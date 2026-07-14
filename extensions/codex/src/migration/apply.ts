@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/migration";
 import {
   archiveMigrationItem,
+  copyMemoryMigrationFileItem,
   copyMigrationFileItem,
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
@@ -22,6 +23,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import {
@@ -35,18 +37,15 @@ import {
   resolveCodexAppServerRuntimeOptions,
   type ResolvedCodexPluginPolicy,
 } from "../app-server/config.js";
-import {
-  ensureCodexPluginActivation,
-  type CodexPluginActivationResult,
-} from "../app-server/plugin-activation.js";
+import { ensureCodexPluginActivation } from "../app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
-import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndWait,
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
+import { codexPluginActivationReportState, sanitizeAppsNeedingAuth } from "./apply-report.js";
 import { applyCodexAuthItem, buildCodexAuthConfigPatchItems } from "./auth.js";
 import { buildCodexMigrationPlan } from "./plan.js";
 import {
@@ -69,7 +68,7 @@ const TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 30_000;
 const TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV =
   "OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS";
 
-export type CodexMigrationTargetAppServerPreparation = {
+type CodexMigrationTargetAppServerPreparation = {
   dispose: () => Promise<void>;
 };
 
@@ -134,6 +133,7 @@ export async function applyCodexMigrationPlan(params: {
     codexHome,
     authPath: path.join(codexHome, "auth.json"),
     modelsCachePath: path.join(codexHome, "models_cache.json"),
+    memoryFiles: [],
     skills: [],
     plugins: [],
     archivePaths: [],
@@ -171,6 +171,13 @@ export async function applyCodexMigrationPlan(params: {
       items.push(applyMigrationManualItem(item));
     } else if (item.action === "archive") {
       items.push(await archiveMigrationItem(item, reportDir));
+    } else if (item.kind === "memory") {
+      items.push(
+        await copyMemoryMigrationFileItem(item, reportDir, {
+          workspaceDir: targets.workspaceDir,
+          overwrite: params.ctx.overwrite,
+        }),
+      );
     } else {
       items.push(await copyMigrationFileItem(item, reportDir, { overwrite: params.ctx.overwrite }));
     }
@@ -364,9 +371,7 @@ function hasOpenAiCuratedMarketplace(response: unknown): boolean {
   );
 }
 
-export function targetCodexMarketplaceDiscoveryTimeoutMs(
-  env: NodeJS.ProcessEnv = process.env,
-): number {
+function targetCodexMarketplaceDiscoveryTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   const configured = parseStrictNonNegativeInteger(
     env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV],
   );
@@ -383,12 +388,6 @@ function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
     item.status === "warning" &&
     item.details?.warningReason === CODEX_PLUGIN_LOAD_WARNING
   );
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {
@@ -510,37 +509,4 @@ function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy |
     allowDestructiveActions: true,
     destructiveApprovalMode: "allow",
   };
-}
-
-function codexPluginActivationReportState(result: CodexPluginActivationResult): {
-  installed?: boolean;
-  enabled?: boolean;
-} {
-  switch (result.reason) {
-    case "already_active":
-    case "installed":
-      return { installed: true, enabled: true };
-    case "auth_required":
-      return { installed: true, enabled: false };
-    case "disabled":
-    case "marketplace_missing":
-    case "plugin_missing":
-      return { installed: false, enabled: false };
-    case "refresh_failed":
-      return { installed: true, enabled: false };
-  }
-  const exhaustiveReason: never = result.reason;
-  return exhaustiveReason;
-}
-
-function sanitizeAppsNeedingAuth(apps: readonly v2.AppSummary[]): Array<{
-  id: string;
-  name: string;
-  needsAuth: boolean;
-}> {
-  return apps.map((app) => ({
-    id: app.id,
-    name: app.name,
-    needsAuth: app.needsAuth,
-  }));
 }

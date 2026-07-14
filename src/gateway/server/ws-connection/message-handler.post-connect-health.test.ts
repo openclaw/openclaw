@@ -9,6 +9,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../../infra/diagnostic-events.js";
+import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
@@ -211,6 +212,7 @@ function attachGatewayHarness(options: {
     mode: "none",
     allowTailscale: false,
   };
+  const advanceHandshakePhase = vi.fn();
   attachGatewayWsMessageHandler({
     socket,
     upgradeReq: {
@@ -243,6 +245,7 @@ function attachGatewayHarness(options: {
       return true;
     },
     setHandshakeState: vi.fn(),
+    advanceHandshakePhase,
     setCloseCause: options.setCloseCause ?? createSetCloseCauseMock(),
     setLastFrameMeta: vi.fn(),
     originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
@@ -255,6 +258,7 @@ function attachGatewayHarness(options: {
   }
   const sendMessage = onMessage;
   return {
+    advanceHandshakePhase,
     socketSend,
     sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
       sendMessage(
@@ -583,6 +587,47 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(JSON.stringify(captured.events)).not.toContain("gateway-token");
   });
 
+  it("records credential and hello preparation phases during connect", async () => {
+    const harness = attachGatewayHarness({
+      connId: "conn-phases",
+      connectNonce: "nonce-phases",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+    });
+
+    harness.sendConnect("connect-phases", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: [],
+      caps: [],
+      auth: {
+        token: "gateway-token",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    expect(harness.advanceHandshakePhase.mock.calls.map(([phase]) => phase)).toEqual([
+      "auth_credentials_received",
+      "auth_validated",
+      "session_attached",
+      "hello_payload_prepared",
+      "ready",
+    ]);
+    expect(upsertPresenceMock).not.toHaveBeenCalled();
+  });
+
   it("does not mark local backend self-pairing clients as approval runtimes", async () => {
     const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
       createHealthSummary(),
@@ -697,6 +742,134 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     } | null;
     expect(connectedClient?.internal?.approvalRuntime).not.toBe(true);
   });
+
+  it("marks local backend clients with a valid agent runtime identity token", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const harness = attachGatewayHarness({
+      connId: "conn-agent-runtime-token",
+      connectNonce: "nonce-agent-runtime-token",
+      refreshHealthSnapshot,
+    });
+
+    harness.sendConnect("connect-agent-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.write"],
+      caps: [],
+      auth: {
+        agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
+          agentId: "ops",
+          sessionKey: "agent:ops:telegram:direct:alice",
+        }),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = harness.client as {
+      internal?: {
+        agentRuntimeIdentity?: { agentId?: string; sessionKey?: string };
+      };
+    } | null;
+    expect(connectedClient?.internal?.agentRuntimeIdentity).toMatchObject({
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:direct:alice",
+    });
+  });
+
+  it("rejects agent runtime identity tokens from remote clients", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-remote-agent-runtime-token",
+      connectNonce: "nonce-remote-agent-runtime-token",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+      refreshHealthSnapshot,
+      close,
+    });
+
+    harness.sendConnect("connect-remote-agent-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.write"],
+      caps: [],
+      auth: {
+        token: "gateway-token",
+        agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
+          agentId: "ops",
+          sessionKey: "agent:ops:telegram:direct:alice",
+        }),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(
+        1008,
+        "agent runtime identity token is only accepted from local backend gateway clients",
+      );
+    });
+    expect(harness.client).toBeNull();
+  });
+
+  it("rejects invalid local agent runtime identity tokens", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-invalid-agent-runtime-token",
+      connectNonce: "nonce-invalid-agent-runtime-token",
+      refreshHealthSnapshot,
+      close,
+    });
+
+    harness.sendConnect("connect-invalid-agent-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.write"],
+      caps: [],
+      auth: {
+        agentRuntimeIdentityToken: "not-a-valid-token",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(1008, "invalid agent runtime identity token");
+    });
+    expect(harness.client).toBeNull();
+  });
 });
 
 describe("resolvePinnedClientMetadata", () => {
@@ -753,6 +926,8 @@ describe("resolvePinnedClientMetadata", () => {
     ["openclaw-ios", "iPadOS 26.5.0", "iPadOS 26.4.2", "iPad"],
     ["openclaw-ios", "iPadOS 26.5.0", "iOS 26.4.2", "iPad"],
     ["openclaw-android", "Android 16", "Android 15", "Android"],
+    ["openclaw-macos", "macOS 26.5.1", "macOS 26.5.0", "Mac"],
+    ["openclaw-macos", "macOS 27.0.0", "macOS 26.5.1", "Mac"],
   ])(
     "allows %s platform version refresh without metadata-upgrade approval",
     (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
@@ -775,6 +950,62 @@ describe("resolvePinnedClientMetadata", () => {
     },
   );
 
+  it.each(["node", "ui"])("allows a macOS platform version refresh in %s mode", (clientMode) => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "openclaw-macos",
+        clientMode,
+        claimedPlatform: "macOS 26.5.2",
+        claimedDeviceFamily: "Mac",
+        pairedPlatform: "macOS 26.5.1",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+      refreshPairedPlatform: "macOS 26.5.2",
+    });
+  });
+
+  it("accepts a node-host macOS alias against the shared Mac app platform pin", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "node-host",
+        clientMode: "node",
+        claimedPlatform: "macos",
+        claimedDeviceFamily: "Mac",
+        pairedPlatform: "macOS 26.5.2",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+    });
+  });
+
+  it("refreshes a shared node-host macOS pin from the native Mac app", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "openclaw-macos",
+        clientMode: "ui",
+        claimedPlatform: "macOS 26.5.2",
+        claimedDeviceFamily: "Mac",
+        pairedPlatform: "macos",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+      refreshPairedPlatform: "macOS 26.5.2",
+    });
+  });
+
   it("still requires approval when an iOS device family changes", () => {
     expect(
       testing.resolvePinnedClientMetadata({
@@ -794,7 +1025,50 @@ describe("resolvePinnedClientMetadata", () => {
     });
   });
 
-  it("keeps non-mobile platform version changes approval-bound", () => {
+  it("still requires approval when a macOS device family changes", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "openclaw-macos",
+        clientMode: "node",
+        claimedPlatform: "macOS 26.5.2",
+        claimedDeviceFamily: "VirtualMac",
+        pairedPlatform: "macOS 26.5.1",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: true,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+      refreshPairedPlatform: "macOS 26.5.2",
+    });
+  });
+
+  it.each([
+    ["node-host", "macOS 26.5.2", "macOS 26.5.1"],
+    ["openclaw-macos", "macOS anything", "macOS previous"],
+    ["openclaw-macos", "macOS", "macOS 26.5.1"],
+  ])(
+    "keeps non-version macOS platform changes approval-bound for %s",
+    (clientId, claimed, paired) => {
+      expect(
+        testing.resolvePinnedClientMetadata({
+          clientId,
+          clientMode: "node",
+          claimedPlatform: claimed,
+          claimedDeviceFamily: "Mac",
+          pairedPlatform: paired,
+          pairedDeviceFamily: "Mac",
+        }),
+      ).toMatchObject({
+        platformMismatch: true,
+        deviceFamilyMismatch: false,
+        pinnedPlatform: undefined,
+      });
+    },
+  );
+
+  it("keeps non-native-app platform version changes approval-bound", () => {
     expect(
       testing.resolvePinnedClientMetadata({
         clientId: "node-host",
@@ -812,3 +1086,4 @@ describe("resolvePinnedClientMetadata", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -18,9 +18,17 @@ import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
-import { installPluginFromClawHub } from "../plugins/clawhub.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../plugins/git-install.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
+import {
+  persistPluginInstall,
+  resolveInstallConfigMutationPreflights,
+  selectInstallMutationWriteOptions,
+  supportsInstallConfigSingleTopLevelIncludeShape,
+  type ConfigMutationPreflight,
+  type ConfigSnapshotForInstallPersist,
+} from "../plugins/install-persistence.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
@@ -43,7 +51,9 @@ import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trac
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { formatCliCommand } from "./command-format.js";
+import { persistHookPackInstall } from "./hook-install-persistence.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
@@ -64,21 +74,20 @@ import {
   parseNpmPackPrefixPath,
   parseNpmPrefixSpec,
 } from "./plugins-command-helpers.js";
-import {
-  persistHookPackInstall,
-  persistPluginInstall,
-  resolveInstallConfigMutationPreflights,
-  selectInstallMutationWriteOptions,
-  supportsInstallConfigSingleTopLevelIncludeShape,
-  type ConfigMutationPreflight,
-  type ConfigSnapshotForInstallPersist,
-} from "./plugins-install-persist.js";
 import { listPersistedBundledPluginRecoveryLocations } from "./plugins-location-bridges.js";
 
 type ConfigSnapshotForInstallExecution = ConfigSnapshotForInstallPersist & {
   hookMutation: ConfigMutationPreflight;
   pluginMutation: ConfigMutationPreflight;
 };
+
+function isClawHubBlockedCliFailure(result: { code?: string; warning?: string }): boolean {
+  return (
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED &&
+    typeof result.warning === "string" &&
+    result.warning.trim().length > 0
+  );
+}
 
 function resolveInstallMode(force?: boolean): "install" | "update" {
   return force ? "update" : "install";
@@ -257,7 +266,7 @@ async function tryInstallHookPackFromLocalPath(params: {
   link?: boolean;
   expectedPackageKind?: "hook-only";
   runtime?: RuntimeEnv;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true } | Extract<InstallHooksResult, { ok: false }>> {
   if (params.snapshot.hookMutation.mode === "blocked") {
     return { ok: false, error: params.snapshot.hookMutation.reason };
   }
@@ -349,7 +358,7 @@ async function tryInstallHookPackFromNpmSpec(params: {
   expectedIntegrity?: string;
   expectedPackageKind?: "hook-only";
   runtime?: RuntimeEnv;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true } | Extract<InstallHooksResult, { ok: false }>> {
   if (params.snapshot.hookMutation.mode === "blocked") {
     return { ok: false, error: params.snapshot.hookMutation.reason };
   }
@@ -488,7 +497,7 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
       return { ok: true };
     }
     (params.runtime ?? defaultRuntime).error(
-      formatPluginInstallWithHookFallbackError(result.error, hookFallback.error),
+      formatPluginInstallWithHookFallbackError(result.error, hookFallback),
     );
     return { ok: false };
   }
@@ -854,6 +863,7 @@ export async function loadConfigForInstall(
 export async function runPluginInstallCommand(params: {
   raw: string;
   opts: InstallSafetyOverrides & {
+    acknowledgeClawHubRisk?: boolean;
     force?: boolean;
     link?: boolean;
     pin?: boolean;
@@ -994,7 +1004,9 @@ export async function runPluginInstallCommand(params: {
       logger: createPluginInstallLogger(runtime),
     });
     if (!result.ok) {
-      runtime.error(result.error);
+      if (!isClawHubBlockedCliFailure(result)) {
+        runtime.error(result.error);
+      }
       return runtime.exit(1);
     }
 
@@ -1081,7 +1093,7 @@ export async function runPluginInstallCommand(params: {
         if (hookFallback.ok) {
           return;
         }
-        runtime.error(formatPluginInstallWithHookFallbackError(probe.error, hookFallback.error));
+        runtime.error(formatPluginInstallWithHookFallbackError(probe.error, hookFallback));
         return runtime.exit(1);
       }
 
@@ -1135,7 +1147,7 @@ export async function runPluginInstallCommand(params: {
       if (hookFallback.ok) {
         return;
       }
-      runtime.error(formatPluginInstallWithHookFallbackError(result.error, hookFallback.error));
+      runtime.error(formatPluginInstallWithHookFallbackError(result.error, hookFallback));
       return runtime.exit(1);
     }
 
@@ -1301,13 +1313,19 @@ export async function runPluginInstallCommand(params: {
   if (clawhubSpec) {
     const result = await installPluginFromClawHub({
       ...safetyOverrides,
+      ...resolveClawHubRiskAcknowledgementCliOptions({
+        acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
+        action: "installing",
+      }),
       mode: installMode,
       spec: raw,
       extensionsDir,
       logger: createPluginInstallLogger(runtime),
     });
     if (!result.ok) {
-      runtime.error(result.error);
+      if (!isClawHubBlockedCliFailure(result)) {
+        runtime.error(result.error);
+      }
       return runtime.exit(1);
     }
 
@@ -1353,3 +1371,4 @@ export async function runPluginInstallCommand(params: {
     return runtime.exit(1);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,7 +2,11 @@
 // session/channel context used when the gateway resumes an interrupted run.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { RestartSentinel, RestartSentinelPayload } from "../infra/restart-sentinel.js";
+import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
+
+type RestartSentinel = NonNullable<
+  Awaited<ReturnType<typeof import("../infra/restart-sentinel.js").readRestartSentinel>>
+>;
 
 type LoadedSessionEntry = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
 type RecordInboundSessionAndDispatchReplyParams = Parameters<
@@ -62,6 +66,7 @@ const mocks = vi.hoisted(() => {
         store: {},
         storePath: "/tmp/sessions.json",
         canonicalKey: "agent:main:main",
+        storeKeys: ["agent:main:main"],
         legacyKey: undefined,
       }),
     ),
@@ -157,6 +162,7 @@ const mocks = vi.hoisted(() => {
     recordInboundSessionAndDispatchReply: vi.fn(
       async (_params: RecordInboundSessionAndDispatchReplyParams) => {},
     ),
+    logDebug: vi.fn(),
     logInfo: vi.fn(),
     logWarn: vi.fn(),
     logError: vi.fn(),
@@ -196,6 +202,7 @@ vi.mock("../infra/session-delivery-queue.js", () => ({
 
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: mocks.resolveMainSessionKeyFromConfig,
+  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
 }));
 
 vi.mock("../config/sessions/thread-info.js", () => ({
@@ -282,6 +289,7 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
 
 vi.mock("../logging/subsystem.js", () => {
   const logger = {
+    debug: mocks.logDebug,
     info: mocks.logInfo,
     warn: mocks.logWarn,
     error: mocks.logError,
@@ -304,6 +312,7 @@ const {
   refreshLatestUpdateRestartSentinel,
   scheduleRestartSentinelWake,
 } = await import("./server-restart-sentinel.js");
+const { resetGatewayWorkAdmission } = await import("../process/gateway-work-admission.js");
 
 function expectRecordFields(
   record: unknown,
@@ -370,12 +379,15 @@ function expectContinuationDispatchFields(
 
 describe("scheduleRestartSentinelWake", () => {
   afterEach(() => {
+    resetGatewayWorkAdmission();
     vi.useRealTimers();
   });
 
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     vi.useRealTimers();
     mocks.queuedSessionDelivery = null;
+    mocks.readRestartSentinel.mockReset();
     mocks.readRestartSentinel.mockResolvedValue({
       version: 1,
       payload: {
@@ -402,6 +414,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     });
     mocks.deliveryContextFromSession.mockReset();
@@ -627,6 +640,7 @@ describe("scheduleRestartSentinelWake", () => {
         CommandBody: "",
         CommandAuthorized: true,
         GatewayClientScopes: ["operator.admin"],
+        GatewayClientCaps: [],
         InputProvenance: {
           kind: "internal_system",
           sourceChannel: "whatsapp",
@@ -678,6 +692,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     });
 
@@ -718,6 +733,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     };
     const replacementEntry: LoadedSessionEntry = {
@@ -731,6 +747,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     };
     mocks.readRestartSentinel.mockResolvedValue({
@@ -806,6 +823,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     });
 
@@ -853,6 +871,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:group",
+      storeKeys: ["agent:main:group"],
       legacyKey: undefined,
     });
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "telegram:-1001" });
@@ -897,6 +916,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:telegram:group:-1003826723328:topic:13757",
+      storeKeys: ["agent:main:telegram:group:-1003826723328:topic:13757"],
       legacyKey: undefined,
     });
     mocks.deliveryContextFromSession.mockReturnValue({
@@ -923,6 +943,7 @@ describe("scheduleRestartSentinelWake", () => {
         Body: "continue in topic",
         CommandAuthorized: true,
         GatewayClientScopes: ["operator.admin"],
+        GatewayClientCaps: [],
         InputProvenance: {
           kind: "internal_system",
           sourceChannel: "telegram",
@@ -1512,6 +1533,7 @@ describe("scheduleRestartSentinelWake", () => {
         store: {},
         storePath: "/tmp/sessions.json",
         canonicalKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
+        storeKeys: ["agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event"],
         legacyKey: undefined,
       })
       .mockReturnValueOnce({
@@ -1525,6 +1547,7 @@ describe("scheduleRestartSentinelWake", () => {
         store: {},
         storePath: "/tmp/sessions.json",
         canonicalKey: "agent:main:matrix:channel:!lowercased:example.org",
+        storeKeys: ["agent:main:matrix:channel:!lowercased:example.org"],
         legacyKey: undefined,
       });
     mocks.deliveryContextFromSession
@@ -1554,3 +1577,4 @@ describe("scheduleRestartSentinelWake", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

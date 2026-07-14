@@ -1,4 +1,6 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 type EndpointCall = {
   url: string;
@@ -77,6 +79,32 @@ function headerOf(call: EndpointCall, name: string): string | undefined {
   return (call.init.headers as Record<string, string>)[name];
 }
 
+function requireEndpointCall(index: number): EndpointCall {
+  return expectDefined(endpointMockState.calls[index], `Parallel MCP endpoint call ${index}`);
+}
+
+function boundaryJsonPayload(base: Record<string, unknown>): {
+  payload: Record<string, unknown>;
+  truncatedJson: string;
+} {
+  const empty = { ...base, detail: "" };
+  const jsonPrefix = JSON.stringify(empty).slice(0, -2);
+  const detailPrefix = "x".repeat(499 - jsonPrefix.length);
+  return {
+    payload: { ...base, detail: `${detailPrefix}😀tail` },
+    truncatedJson: `${jsonPrefix}${detailPrefix}`,
+  };
+}
+
+function thrownMessage(run: () => unknown): string {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("Expected call to throw.");
+}
+
 describe("iterMcpMessages", () => {
   it("parses a single JSON object body", () => {
     expect(iterMcpMessages('{"id":"a","result":{}}')).toEqual([{ id: "a", result: {} }]);
@@ -148,20 +176,26 @@ describe("extractMcpToolPayload", () => {
   });
 
   it("throws on a JSON-RPC error", () => {
-    expect(() => extractMcpToolPayload({ error: { code: -1, message: "boom" } })).toThrow(
-      /Parallel MCP error/,
+    const { payload, truncatedJson } = boundaryJsonPayload({ code: -1, message: "boom" });
+
+    expect(thrownMessage(() => extractMcpToolPayload({ error: payload }))).toBe(
+      `Parallel MCP error: ${truncatedJson}`,
     );
   });
 
   it("throws on a tool-level isError", () => {
-    expect(() =>
-      extractMcpToolPayload({ result: { isError: true, content: [{ type: "text", text: "{}" }] } }),
-    ).toThrow(/Parallel MCP tool error/);
+    const { payload, truncatedJson } = boundaryJsonPayload({ isError: true });
+
+    expect(thrownMessage(() => extractMcpToolPayload({ result: payload }))).toBe(
+      `Parallel MCP tool error: ${truncatedJson}`,
+    );
   });
 
   it("throws when there is no parseable content", () => {
-    expect(() => extractMcpToolPayload({ result: { content: [] } })).toThrow(
-      /no parseable content/,
+    const { payload, truncatedJson } = boundaryJsonPayload({ content: [] });
+
+    expect(thrownMessage(() => extractMcpToolPayload({ result: payload }))).toBe(
+      `Parallel MCP returned no parseable content: ${truncatedJson}`,
     );
   });
 });
@@ -218,17 +252,17 @@ describe("runParallelMcpSearch", () => {
       "tools/call",
     ]);
     // Server session id + a negotiated protocol version are echoed post-init.
-    expect(headerOf(endpointMockState.calls[1], "Mcp-Session-Id")).toBe("server-session-1");
-    expect(headerOf(endpointMockState.calls[2], "Mcp-Session-Id")).toBe("server-session-1");
-    expect(headerOf(endpointMockState.calls[2], "MCP-Protocol-Version")).toBe("2025-06-18");
+    expect(headerOf(requireEndpointCall(1), "Mcp-Session-Id")).toBe("server-session-1");
+    expect(headerOf(requireEndpointCall(2), "Mcp-Session-Id")).toBe("server-session-1");
+    expect(headerOf(requireEndpointCall(2), "MCP-Protocol-Version")).toBe("2025-06-18");
     // No bearer token on the anonymous free path.
-    expect(headerOf(endpointMockState.calls[0], "Authorization")).toBeUndefined();
+    expect(headerOf(requireEndpointCall(0), "Authorization")).toBeUndefined();
     // Every call identifies OpenClaw at the HTTP layer (not just node).
     for (const call of endpointMockState.calls) {
       expect(headerOf(call, "User-Agent")).toMatch(/^openclaw-parallel\//);
     }
     // tools/call carries the documented web_search args.
-    const callArgs = (readBody(endpointMockState.calls[2]).params as Record<string, unknown>)
+    const callArgs = (readBody(requireEndpointCall(2)).params as Record<string, unknown>)
       .arguments as Record<string, unknown>;
     expect(callArgs).toMatchObject({
       objective: "find examples",
@@ -256,7 +290,7 @@ describe("runParallelMcpSearch", () => {
 
     await runParallelMcpSearch({ searchQueries: ["alpha", "beta"], maxResults: 5 });
 
-    const callArgs = (readBody(endpointMockState.calls[2]).params as Record<string, unknown>)
+    const callArgs = (readBody(requireEndpointCall(2)).params as Record<string, unknown>)
       .arguments as Record<string, unknown>;
     expect(callArgs.objective).toBe("alpha beta");
   });
@@ -280,7 +314,7 @@ describe("runParallelMcpSearch", () => {
       maxResults: 5,
       sessionId: callerSessionId,
     });
-    const callArgs = (readBody(endpointMockState.calls[2]).params as Record<string, unknown>)
+    const callArgs = (readBody(requireEndpointCall(2)).params as Record<string, unknown>)
       .arguments as Record<string, unknown>;
     expect(callArgs.session_id).toBe(callerSessionId);
     expect(response.session_id).toBe(callerSessionId);
@@ -291,6 +325,27 @@ describe("runParallelMcpSearch", () => {
     await expect(runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 })).rejects.toThrow(
       /initialize failed \(500\)/,
     );
+  });
+
+  it("throws when the initialized acknowledgement fails", async () => {
+    endpointMockState.responses.push(
+      jsonResponse(
+        { jsonrpc: "2.0", id: "i", result: { protocolVersion: "2025-06-18" } },
+        { "mcp-session-id": "server-session-1" },
+      ),
+      new Response("ack nope", { status: 500 }),
+    );
+
+    await expect(runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 })).rejects.toThrow(
+      /notifications\/initialized failed \(500\): ack nope/,
+    );
+
+    expect(endpointMockState.calls.map((c) => readBody(c).method)).toEqual([
+      "initialize",
+      "notifications/initialized",
+    ]);
+    expect(headerOf(requireEndpointCall(1), "Mcp-Session-Id")).toBe("server-session-1");
+    expect(headerOf(requireEndpointCall(1), "MCP-Protocol-Version")).toBe("2025-06-18");
   });
 
   it("bounds initialize error bodies without using response.text()", async () => {
@@ -309,6 +364,29 @@ describe("runParallelMcpSearch", () => {
     expect((error as Error).message).toMatch(/initialize failed \(503\): parallel mcp unavailable/);
     expect((error as Error).message).not.toContain("tail");
     expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("bounds successful MCP bodies without using response.text()", async () => {
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "Content-Type": "application/json" },
+    });
+    const textSpy = vi.spyOn(streamed.response, "text").mockRejectedValue(new Error("unbounded"));
+    endpointMockState.responses.push(streamed.response);
+
+    const error = await runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 }).catch(
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      "Parallel MCP: text response exceeds 16777216 bytes",
+    );
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
   });
 });

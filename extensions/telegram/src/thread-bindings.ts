@@ -16,6 +16,7 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -435,21 +436,14 @@ function enqueuePersistBindings(params: {
   if (!params.persist) {
     return Promise.resolve();
   }
-  const previous =
-    getThreadBindingsState().persistQueueByAccountId.get(params.accountId) ?? Promise.resolve();
-  const next = previous
-    .catch(() => undefined)
-    .then(async () => {
+  const state = getThreadBindingsState();
+  return enqueueKeyedTask({
+    tails: state.persistQueueByAccountId,
+    key: params.accountId,
+    task: async () => {
       await persistBindingsToStore(params);
-    });
-  getThreadBindingsState().persistQueueByAccountId.set(params.accountId, next);
-  const cleanup = () => {
-    if (getThreadBindingsState().persistQueueByAccountId.get(params.accountId) === next) {
-      getThreadBindingsState().persistQueueByAccountId.delete(params.accountId);
-    }
-  };
-  next.then(cleanup, cleanup);
-  return next;
+    },
+  });
 }
 
 function persistBindingsSafely(params: {
@@ -1037,3 +1031,4 @@ export const testing = {
   resolveStoredBindingKey,
 };
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

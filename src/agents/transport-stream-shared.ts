@@ -3,15 +3,18 @@
  *
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
+import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { truncateErrorDetail } from "./provider-http-errors.js";
+import type { ContextUsage } from "./usage.js";
 
 type TransportUsage = {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  contextUsage?: ContextUsage;
   totalTokens: number;
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 };
@@ -30,14 +33,23 @@ type TransportOutputShape = {
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+/**
+ * Encodes an assistant text-block phase signature (v1). Channels and the
+ * embedded handler read this to route commentary/narration out of the final
+ * reply. Shared so every provider transport tags phases identically.
+ */
+export function encodeAssistantTextSignatureV1(
+  id: string,
+  phase?: "commentary" | "final_answer",
+): string {
+  return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
+}
+
 export function sanitizeTransportPayloadText(text: string): string {
   if (typeof text !== "string") {
     return "";
   }
-  return text.replace(
-    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
-    "",
-  );
+  return sanitizeSurrogates(text);
 }
 
 export function sanitizeNonEmptyTransportPayloadText(
@@ -178,6 +190,21 @@ function stringifyErrorBody(value: unknown): string | undefined {
   }
 }
 
+function stringifyTransportErrorMessage(value: unknown): string | undefined {
+  if (value instanceof Error) {
+    return value.message;
+  }
+  const encoded = stringifyErrorBody(value);
+  if (encoded !== undefined) {
+    return encoded;
+  }
+  try {
+    return String(value);
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeTransportErrorBody(value: unknown): string | undefined {
   const text = stringifyErrorBody(value);
   if (!text?.trim()) {
@@ -216,7 +243,7 @@ export function assignTransportErrorDetails(
   signal?: AbortSignal,
 ): void {
   output.stopReason = signal?.aborted ? "aborted" : "error";
-  output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+  output.errorMessage = stringifyTransportErrorMessage(error);
   Object.assign(output, extractTransportErrorDetails(error));
 }
 

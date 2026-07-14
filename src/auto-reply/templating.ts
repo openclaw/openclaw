@@ -1,9 +1,11 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { ReplyToMode } from "../config/types.base.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
+import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
@@ -134,8 +136,16 @@ export type MsgContext = {
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
+  AmbientTranscriptWatermarkKey?: string;
+  AmbientTranscriptBody?: string;
+  AmbientTranscriptMessageId?: string;
+  AmbientTranscriptTimestampMs?: number;
+  AmbientTranscriptPreviousMessageId?: string;
+  AmbientTranscriptPreviousTimestampMs?: number;
   /** Per-turn reply-threading overrides. */
   ReplyThreading?: ReplyThreadingPolicy;
+  /** Effective channel reply mode prepared for this turn. */
+  ReplyToMode?: ReplyToMode;
   ReplyToId?: string;
   /**
    * Root message id for thread reconstruction (used by Feishu for root_id).
@@ -250,6 +260,7 @@ export type MsgContext = {
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
+  SenderIsBot?: boolean;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;
@@ -266,6 +277,8 @@ export type MsgContext = {
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  /** Effective channel-owned mention policy before any plugin-binding bypass. */
+  GroupRequireMention?: boolean;
   /** True when this turn explicitly mentioned the current bot target. */
   ExplicitlyMentionedBot?: boolean;
   /** Provider-native explicit user mention ids present on this turn. */
@@ -287,6 +300,8 @@ export type MsgContext = {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
+  /** Gateway client capabilities when the message originates from the gateway. */
+  GatewayClientCaps?: string[];
   /** Gateway device id allowed to review approvals initiated by this turn. */
   ApprovalReviewerDeviceId?: string;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
@@ -295,6 +310,10 @@ export type MsgContext = {
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
+  ChannelContext?: PluginHookChannelContext;
+  /** Provider-native chat/conversation id used by channel plugins that expose `chat_id`. */
+  ChatId?: string;
   /** Stable provider-native direct-peer id when a DM room/user mapping must survive later writes. */
   NativeDirectUserId?: string;
   /** Telegram forum supergroup marker. */

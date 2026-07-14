@@ -105,6 +105,12 @@ function cleanupExpired(
   }
 }
 
+function cleanupExpiredSentMessages(store: SentMessageStore, now: number): void {
+  for (const [scopeKey, entry] of store) {
+    cleanupExpired(store, scopeKey, entry, now);
+  }
+}
+
 function readLegacySentMessages(filePath: string): SentMessageStore {
   try {
     const raw = fs.readFileSync(filePath, "utf-8");
@@ -173,23 +179,17 @@ function getSentMessages(cfg?: Pick<OpenClawConfig, "session">): SentMessageStor
   return getSentMessageBucket(cfg).store;
 }
 
-function persistSentMessages(bucket: SentMessageBucket): void {
-  const { store, scopeKey } = bucket;
-  const now = Date.now();
-  for (const [chatId, entry] of store) {
-    cleanupExpired(store, chatId, entry, now);
-    for (const [messageId, timestamp] of entry) {
-      const ttlMs = TTL_MS - Math.max(0, now - timestamp);
-      if (ttlMs <= 0) {
-        continue;
-      }
-      openSentMessageStore().register(
-        sentMessageEntryKey(scopeKey, chatId, messageId),
-        { scopeKey, chatId, messageId, timestamp },
-        { ttlMs },
-      );
-    }
-  }
+function persistSentMessage(
+  bucket: SentMessageBucket,
+  chatId: string,
+  messageId: string,
+  timestamp: number,
+): void {
+  openSentMessageStore().register(
+    sentMessageEntryKey(bucket.scopeKey, chatId, messageId),
+    { scopeKey: bucket.scopeKey, chatId, messageId, timestamp },
+    { ttlMs: TTL_MS },
+  );
 }
 
 export function recordSentMessage(
@@ -208,11 +208,9 @@ export function recordSentMessage(
     store.set(scopeKey, entry);
   }
   entry.set(idKey, now);
-  if (entry.size > 100) {
-    cleanupExpired(store, scopeKey, entry, now);
-  }
+  cleanupExpiredSentMessages(store, now);
   try {
-    persistSentMessages(bucket);
+    persistSentMessage(bucket, scopeKey, idKey, now);
   } catch (error) {
     logVerbose(`telegram: failed to persist sent-message cache: ${String(error)}`);
   }

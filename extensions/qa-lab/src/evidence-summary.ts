@@ -1,5 +1,6 @@
 // Qa Lab plugin module implements QA evidence summary behavior.
 import { z } from "zod";
+import { resolveQaEvidenceEnvironment } from "./evidence-environment.js";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 import {
@@ -116,15 +117,18 @@ const qaEvidenceScorecardCountSchema = z
   })
   .strict();
 
+const qaEvidenceScorecardCoverageCountSchema = qaEvidenceScorecardCountSchema.extend({
+  secondaryOnly: z.number().int().nonnegative(),
+});
+
 const qaEvidenceScorecardCategorySchema = z
   .object({
     id: nonEmptyStringSchema,
     surfaceId: nonEmptyStringSchema,
     name: nonEmptyStringSchema,
     status: z.enum(["fulfilled", "partial", "missing"]),
-    features: qaEvidenceScorecardCountSchema.extend({
-      secondaryOnly: z.number().int().nonnegative(),
-    }),
+    features: qaEvidenceScorecardCountSchema,
+    coverageIds: qaEvidenceScorecardCoverageCountSchema,
     missingCoverageIds: z.array(nonEmptyStringSchema),
   })
   .strict();
@@ -144,6 +148,7 @@ const qaEvidenceScorecardSchema = z
       .strict(),
     categories: qaEvidenceScorecardCountSchema,
     features: qaEvidenceScorecardCountSchema,
+    coverageIds: qaEvidenceScorecardCountSchema,
     categoryReports: z.array(qaEvidenceScorecardCategorySchema),
   })
   .strict();
@@ -175,10 +180,13 @@ const qaEvidenceResultSchema = z
   })
   .strict();
 
-export const qaEvidenceSummaryEntrySchema = z
+const qaEvidencePostureSchema = z.enum(["direct-gateway", "native-approval", "user-path"]);
+
+const qaEvidenceSummaryEntrySchema = z
   .object({
     test: qaEvidenceTestSchema,
     coverage: z.array(qaEvidenceCoverageSchema),
+    posture: qaEvidencePostureSchema.optional(),
     refs: z.array(qaEvidenceRefSchema).optional(),
     runtimeParityTier: nonEmptyStringSchema.optional(),
     execution: qaEvidenceExecutionSchema.optional(),
@@ -186,7 +194,7 @@ export const qaEvidenceSummaryEntrySchema = z
   })
   .strict();
 
-export const qaEvidenceSummarySchema = z
+const qaEvidenceSummarySchema = z
   .object({
     kind: z.literal(QA_EVIDENCE_SUMMARY_KIND),
     schemaVersion: z.literal(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION),
@@ -198,7 +206,7 @@ export const qaEvidenceSummarySchema = z
   })
   .strict();
 
-export type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
+type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
 export type QaEvidenceTiming = z.infer<typeof qaEvidenceTimingSchema>;
 export type QaEvidencePackageSource = z.infer<typeof qaEvidencePackageSourceSchema>;
@@ -240,6 +248,7 @@ type QaEvidenceLiveTransportCheckInput = {
   title: string;
   status: QaEvidenceStatusInput;
   details: string;
+  posture?: z.infer<typeof qaEvidencePostureSchema>;
   timing?: QaEvidenceTiming;
   rttMs?: number;
   rttMeasurement?: {
@@ -288,6 +297,7 @@ type QaEvidenceBuildBase = {
   channelDriver?: string;
   packageSource?: QaEvidencePackageSource;
   profile?: QaEvidenceProfile;
+  repoRoot?: string;
   runner?: string;
 };
 
@@ -386,14 +396,6 @@ function resolveQaEvidenceChannelDriver(params: { env?: NodeJS.ProcessEnv; fallb
     params.env?.OPENCLAW_QA_CHANNEL_DRIVER?.trim() ||
     params.env?.OPENCLAW_E2E_CHANNEL_DRIVER?.trim();
   return id ? { id } : undefined;
-}
-
-function resolveQaEvidenceEnvironment(env: NodeJS.ProcessEnv | undefined) {
-  return {
-    ref: env?.OPENCLAW_QA_REF?.trim() || env?.GITHUB_SHA?.trim() || null,
-    os: process.platform,
-    nodeVersion: process.version,
-  };
 }
 
 function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {
@@ -550,7 +552,10 @@ export function buildQaSuiteEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment(params.env);
+  const environment = resolveQaEvidenceEnvironment({
+    env: params.env,
+    repoRoot: params.repoRoot,
+  });
   const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const profile = resolveQaEvidenceProfile({
@@ -622,7 +627,10 @@ function buildTestRunnerEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment(params.env);
+  const environment = resolveQaEvidenceEnvironment({
+    env: params.env,
+    repoRoot: params.repoRoot,
+  });
   const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({
     env: params.env,
@@ -726,7 +734,10 @@ export function buildLiveTransportEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment(params.env);
+  const environment = resolveQaEvidenceEnvironment({
+    env: params.env,
+    repoRoot: params.repoRoot,
+  });
   const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const profile = resolveQaEvidenceProfile({
@@ -760,6 +771,7 @@ export function buildLiveTransportEvidenceSummary(
         title: check.title,
       },
       coverage,
+      posture: check.posture,
       execution: {
         runner,
         environment,
@@ -788,3 +800,4 @@ export function buildLiveTransportEvidenceSummary(
     profile,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

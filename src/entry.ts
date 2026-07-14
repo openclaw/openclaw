@@ -3,8 +3,12 @@
 // CLI process entrypoint for OpenClaw command execution.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { getCommandPathWithRootOptions, hasFlag, isRootHelpInvocation } from "./cli/argv.js";
+import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
+import {
+  tryOutputPrecomputedCommandHelp,
+  type PrecomputedCommandHelpDeps,
+} from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { createGatewayStartupTrace } from "./cli/startup-trace.js";
@@ -16,7 +20,6 @@ import {
 } from "./entry.compile-cache.js";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
-import { consumeRootOptionToken } from "./infra/cli-root-options.js";
 import { normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
@@ -26,19 +29,6 @@ const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
   { wrapperBasename: "openclaw.js", entryBasename: "entry.js" },
 ] as const;
-
-type PrecomputedCommandHelpName = "browser" | "secrets" | "nodes";
-type PrecomputedSubcommandHelpName =
-  | "doctor"
-  | "gateway"
-  | "models"
-  | "plugins"
-  | "sessions"
-  | "tasks";
-type OutputPrecomputedHelpText = () => boolean;
-
-const HELP_FLAGS = new Set(["-h", "--help"]);
-const VERSION_FLAGS = new Set(["-V", "--version"]);
 
 const loadRootHelpLiveConfigModule = async () => await import("./cli/root-help-live-config.js");
 const loadRootHelpMetadataModule = async () => await import("./cli/root-help-metadata.js");
@@ -79,6 +69,8 @@ if (
     ensureOpenClawExecMarkerOnProcess();
     installProcessWarningFilter();
     normalizeEnv();
+    const { assertSupportedRuntime } = await import("./infra/runtime-guard.js");
+    assertSupportedRuntime();
 
     enableOpenClawCompileCache({
       installRoot,
@@ -166,7 +158,7 @@ export async function tryHandleRootHelpFastPath(
         "[openclaw] Failed to display help:",
         error instanceof Error ? (error.stack ?? error.message) : error,
       );
-      process.exitCode = 1;
+      process.exit(1);
     });
   try {
     const loadRootHelpRenderOptionsForConfigSensitivePlugins =
@@ -191,135 +183,17 @@ export async function tryHandleRootHelpFastPath(
   }
 }
 
-function resolvePrecomputedCommandHelpName(argv: string[]): PrecomputedCommandHelpName | null {
-  if (!hasFlag(argv, "--help") && !hasFlag(argv, "-h")) {
-    return null;
-  }
-  const commandPath = getCommandPathWithRootOptions(argv, 2);
-  if (commandPath.length !== 1) {
-    return null;
-  }
-  const [commandName] = commandPath;
-  if (commandName === "browser" || commandName === "secrets" || commandName === "nodes") {
-    return commandName;
-  }
-  return null;
-}
-
-function resolvePrecomputedSubcommandHelpName(
-  argv: string[],
-): PrecomputedSubcommandHelpName | null {
-  const args = argv.slice(2);
-  let commandName: PrecomputedSubcommandHelpName | null = null;
-  let sawHelp = false;
-
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (!arg || arg === "--") {
-      return null;
-    }
-    if (VERSION_FLAGS.has(arg)) {
-      return null;
-    }
-    if (!commandName) {
-      const consumed = consumeRootOptionToken(args, index);
-      if (consumed > 0) {
-        index += consumed - 1;
-        continue;
-      }
-      if (arg.startsWith("-")) {
-        return null;
-      }
-      commandName = resolvePrecomputedSubcommandName(arg);
-      if (!commandName) {
-        return null;
-      }
-      continue;
-    }
-    if (HELP_FLAGS.has(arg)) {
-      sawHelp = true;
-      continue;
-    }
-    return null;
-  }
-
-  return commandName && sawHelp ? commandName : null;
-}
-
-function resolvePrecomputedSubcommandName(
-  commandName: string,
-): PrecomputedSubcommandHelpName | null {
-  if (
-    commandName === "doctor" ||
-    commandName === "gateway" ||
-    commandName === "models" ||
-    commandName === "plugins" ||
-    commandName === "sessions" ||
-    commandName === "tasks"
-  ) {
-    return commandName;
-  }
-  return null;
-}
-
 export async function tryHandlePrecomputedCommandHelpFastPath(
   argv: string[],
-  deps: {
-    outputPrecomputedBrowserHelpText?: OutputPrecomputedHelpText;
-    outputPrecomputedSecretsHelpText?: OutputPrecomputedHelpText;
-    outputPrecomputedNodesHelpText?: OutputPrecomputedHelpText;
-    outputPrecomputedSubcommandHelpText?: (commandName: string) => boolean;
-    loadRootHelpRenderOptionsForConfigSensitivePlugins?: (
-      env?: NodeJS.ProcessEnv,
-    ) => Promise<RootHelpRenderOptions | null>;
-    env?: NodeJS.ProcessEnv;
-  } = {},
+  deps: PrecomputedCommandHelpDeps = {},
 ): Promise<boolean> {
   const env = deps.env ?? process.env;
-  if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
-    return false;
-  }
   if (resolveCliContainerTarget(argv, env)) {
-    return false;
-  }
-  const commandName = resolvePrecomputedCommandHelpName(argv);
-  const subcommandName = commandName ? null : resolvePrecomputedSubcommandHelpName(argv);
-  if (!commandName && !subcommandName) {
     return false;
   }
 
   try {
-    if (subcommandName) {
-      const outputPrecomputedSubcommandHelpText =
-        deps.outputPrecomputedSubcommandHelpText ??
-        (await loadRootHelpMetadataModule()).outputPrecomputedSubcommandHelpText;
-      return outputPrecomputedSubcommandHelpText(subcommandName);
-    }
-    if (commandName === "nodes") {
-      const loadRootHelpRenderOptionsForConfigSensitivePlugins =
-        deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ??
-        (await loadRootHelpLiveConfigModule()).loadRootHelpRenderOptionsForConfigSensitivePlugins;
-      const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(env);
-      if (liveRootHelpOptions) {
-        return false;
-      }
-    }
-    if (commandName === "browser") {
-      const outputPrecomputedBrowserHelpText =
-        deps.outputPrecomputedBrowserHelpText ??
-        (await loadRootHelpMetadataModule()).outputPrecomputedBrowserHelpText;
-      return outputPrecomputedBrowserHelpText();
-    }
-    if (commandName === "secrets") {
-      const outputPrecomputedSecretsHelpText =
-        deps.outputPrecomputedSecretsHelpText ??
-        (await loadRootHelpMetadataModule()).outputPrecomputedSecretsHelpText;
-      return outputPrecomputedSecretsHelpText();
-    }
-    const outputPrecomputedNodesHelpText =
-      deps.outputPrecomputedNodesHelpText ??
-      (await loadRootHelpMetadataModule()).outputPrecomputedNodesHelpText;
-    return outputPrecomputedNodesHelpText();
+    return await tryOutputPrecomputedCommandHelp(argv, { ...deps, env });
   } catch {
     return false;
   }

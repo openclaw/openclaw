@@ -3,8 +3,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   maybeWrapCommandWithShellSnapshot,
   resetShellSnapshotCacheForTests,
@@ -40,9 +41,9 @@ function setSnapshotStateForTest(
   options: { home?: string; zdotdir?: string } = {},
 ): void {
   // Snapshot tests mutate trusted process env, not per-command untrusted env.
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   if (options.home) {
-    process.env.HOME = options.home;
+    setTestEnvValue("HOME", options.home);
   }
   if (options.zdotdir) {
     process.env.ZDOTDIR = options.zdotdir;
@@ -91,7 +92,7 @@ describe("exec shell snapshots", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-disabled-home-"));
     tempDirs.push(stateDir, home);
     setSnapshotStateForTest(stateDir, { home });
-    process.env[EXEC_SHELL_SNAPSHOT_ENV] = "0";
+    setTestEnvValue(EXEC_SHELL_SNAPSHOT_ENV, "0");
     const command = "echo unchanged";
     const wrapped = await maybeWrapCommandWithShellSnapshot({
       command,
@@ -208,7 +209,10 @@ describe("exec shell snapshots", () => {
       .filter((entry) => entry.endsWith(".sh"));
     expect(snapshotFiles).toHaveLength(1);
     const snapshot = fs.readFileSync(
-      path.join(resolveShellSnapshotDir(env), snapshotFiles[0]),
+      path.join(
+        resolveShellSnapshotDir(env),
+        expectDefined(snapshotFiles[0], "snapshotFiles[0] test invariant"),
+      ),
       "utf8",
     );
     expect(snapshot).toContain("oc_snap_fn");
@@ -396,7 +400,10 @@ describe("exec shell snapshots", () => {
       .filter((entry) => entry.endsWith(".sh"));
     expect(snapshotFiles).toHaveLength(1);
     const snapshot = fs.readFileSync(
-      path.join(resolveShellSnapshotDir(env), snapshotFiles[0]),
+      path.join(
+        resolveShellSnapshotDir(env),
+        expectDefined(snapshotFiles[0], "snapshotFiles[0] test invariant"),
+      ),
       "utf8",
     );
     expect(snapshot).not.toContain("virtual");
@@ -447,7 +454,11 @@ describe("exec shell snapshots", () => {
     const snapshotFiles = fs.readdirSync(snapshotDir).filter((entry) => entry.endsWith(".sh"));
     expect(snapshotFiles).toHaveLength(1);
     const staleTime = new Date(Date.now() - 10 * 60 * 1000);
-    fs.utimesSync(path.join(snapshotDir, snapshotFiles[0]), staleTime, staleTime);
+    fs.utimesSync(
+      path.join(snapshotDir, expectDefined(snapshotFiles[0], "snapshotFiles[0] test invariant")),
+      staleTime,
+      staleTime,
+    );
     resetShellSnapshotCacheForTests();
 
     await expect(runAlias()).resolves.toBe("new");
@@ -486,7 +497,10 @@ describe("exec shell snapshots", () => {
     const snapshotDir = resolveShellSnapshotDir(env);
     const snapshotFiles = fs.readdirSync(snapshotDir).filter((entry) => entry.endsWith(".sh"));
     expect(snapshotFiles).toHaveLength(1);
-    const snapshotPath = path.join(snapshotDir, snapshotFiles[0]);
+    const snapshotPath = path.join(
+      snapshotDir,
+      expectDefined(snapshotFiles[0], "snapshotFiles[0] test invariant"),
+    );
     fs.writeFileSync(
       snapshotPath,
       [

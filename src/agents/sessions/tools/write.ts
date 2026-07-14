@@ -15,6 +15,7 @@ import { Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { textResult } from "../../tools/common.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -28,11 +29,11 @@ import {
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const writeSchema = Type.Object({
-  path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
-  content: Type.String({ description: "Content to write to the file" }),
+  path: Type.String({
+    description: "File path; relative/absolute.",
+  }),
+  content: Type.String({ description: "File content." }),
 });
-export type { WriteToolInput } from "./tool-contracts.js";
-
 /**
  * Pluggable operations for the write tool.
  * Override these to delegate file writing to remote systems (for example SSH).
@@ -180,14 +181,19 @@ function updateWriteHighlightCacheIncremental(
 
   const segments = deltaNormalized.split("\n");
   const lastIndex = cache.normalizedLines.length - 1;
-  cache.normalizedLines[lastIndex] += segments[0];
+  const firstSegment = segments.at(0);
+  const currentLastLine = cache.normalizedLines.at(lastIndex);
+  if (firstSegment === undefined || currentLastLine === undefined) {
+    return rebuildWriteHighlightCacheFull(rawPath, fileContent);
+  }
+  cache.normalizedLines[lastIndex] = currentLastLine + firstSegment;
   cache.highlightedLines[lastIndex] = highlightSingleLine(
     cache.normalizedLines[lastIndex],
     cache.lang,
   );
-  for (let i = 1; i < segments.length; i++) {
-    cache.normalizedLines.push(segments[i]);
-    cache.highlightedLines.push(highlightSingleLine(segments[i], cache.lang));
+  for (const segment of segments.slice(1)) {
+    cache.normalizedLines.push(segment);
+    cache.highlightedLines.push(highlightSingleLine(segment, cache.lang));
   }
   refreshWriteHighlightPrefix(cache);
   return cache;
@@ -237,7 +243,12 @@ function formatWriteCall(
 
 function formatWriteResult(
   result: {
-    content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+    content: Array<{
+      type: string;
+      text?: string;
+      data?: string;
+      mimeType?: string;
+    }>;
     isError?: boolean;
   },
   theme: typeof import("../../modes/interactive/theme/theme.js").theme,
@@ -297,7 +308,10 @@ async function readOriginalWriteState(
     const originalText = Buffer.isBuffer(originalContent)
       ? originalContent.toString("utf8")
       : originalContent;
-    return { state: originalText === content ? "same" : "different", beforeStat: stat };
+    return {
+      state: originalText === content ? "same" : "different",
+      beforeStat: stat,
+    };
   } catch {
     return { state: "unknown", beforeStat: stat };
   }
@@ -334,6 +348,13 @@ function isWriteRecoveryCandidate(error: unknown, signal: AbortSignal | undefine
   );
 }
 
+function successfulWriteResult(path: string, content: string) {
+  return textResult(
+    `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${path}`,
+    undefined,
+  );
+}
+
 async function recoverSuccessfulWrite(params: {
   absolutePath: string;
   content: string;
@@ -355,15 +376,7 @@ async function recoverSuccessfulWrite(params: {
   if (currentContent !== params.content || !changed) {
     return null;
   }
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: `Successfully wrote ${params.content.length} bytes to ${params.path}`,
-      },
-    ],
-    details: undefined,
-  };
+  return successfulWriteResult(params.path, params.content);
 }
 
 export function createWriteToolDefinition(
@@ -374,10 +387,9 @@ export function createWriteToolDefinition(
   return {
     name: "write",
     label: "write",
-    description:
-      "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
-    promptSnippet: "Create or overwrite files",
-    promptGuidelines: ["Use write only for new files or complete rewrites."],
+    description: "Write/overwrite file; creates parent directories.",
+    promptSnippet: "Create/overwrite files",
+    promptGuidelines: ["Use only new files/complete rewrites."],
     parameters: writeSchema,
     async execute(
       toolCallId,
@@ -393,10 +405,20 @@ export function createWriteToolDefinition(
       const dir = dirname(absolutePath);
       return withFileMutationQueue(absolutePath, async () => {
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
+        if (signal?.aborted) {
+          throw new Error("Operation aborted");
+        }
+        // Terminal no-op: file already has identical content.
+        if (precheck.state === "same") {
+          return {
+            ...textResult(
+              `No changes made to ${path}. The file already has identical content.`,
+              undefined,
+            ),
+            terminate: true,
+          };
+        }
         try {
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
           await ops.mkdir(dir);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
@@ -405,15 +427,7 @@ export function createWriteToolDefinition(
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Successfully wrote ${content.length} bytes to ${path}`,
-              },
-            ],
-            details: undefined,
-          };
+          return successfulWriteResult(path, content);
         } catch (error: unknown) {
           const recovered = await recoverSuccessfulWrite({
             absolutePath,

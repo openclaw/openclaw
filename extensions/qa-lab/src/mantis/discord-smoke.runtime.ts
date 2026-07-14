@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
@@ -23,7 +24,7 @@ export type MantisDiscordSmokeOptions = {
   tokenFileEnv?: string;
 };
 
-export type MantisDiscordSmokeResult = {
+type MantisDiscordSmokeResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
@@ -100,6 +101,7 @@ const DEFAULT_MANTIS_TOKEN_FILE_ENV = "OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN_FILE
 const DEFAULT_GUILD_ID_ENV = "OPENCLAW_QA_DISCORD_GUILD_ID";
 const DEFAULT_CHANNEL_ID_ENV = "OPENCLAW_QA_DISCORD_CHANNEL_ID";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
+const DISCORD_API_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 function assertDiscordSnowflake(value: string, label: string) {
   if (!/^\d{17,20}$/u.test(value)) {
@@ -201,7 +203,11 @@ async function callDiscordApi<T>(params: {
     auditContext: "qa-lab-mantis-discord-smoke",
   });
   try {
-    const text = await response.text();
+    const buffer = await readResponseWithLimit(response, DISCORD_API_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`Discord API ${params.path} response exceeds ${maxBytes} bytes`),
+    });
+    const text = buffer.toString("utf8");
     const payload = text.trim() ? (JSON.parse(text) as unknown) : undefined;
     params.apiCalls.push({
       label: params.label,

@@ -3,36 +3,26 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildGatewayInstallEntrypointCandidates as resolveGatewayInstallEntrypointCandidates,
-  resolveGatewayInstallEntrypoint,
-} from "../../daemon/gateway-entrypoint.js";
+import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
+import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
+  resolvePostSyncPluginUpdateSkipIds,
+  updatePluginsAfterCoreUpdate,
+} from "./update-command-plugins.js";
+import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
+import {
   formatPostUpdateGatewayRecoveryInstructions,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
-  resolvePostCoreUpdateChildStdio,
-  resolvePostUpdateServiceStateReadEnv,
   resolvePostInstallDoctorEnv,
-  shouldPrepareUpdatedInstallRestart,
+  resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
+  shouldPrepareUpdatedInstallRestart,
   shouldUseLegacyProcessRestartAfterUpdate,
-  updatePluginsAfterCoreUpdate,
-} from "./update-command.js";
-
-describe("resolveGatewayInstallEntrypointCandidates", () => {
-  it("prefers index.js before legacy entry.js", () => {
-    expect(resolveGatewayInstallEntrypointCandidates("/tmp/openclaw-root")).toEqual([
-      path.join("/tmp/openclaw-root", "dist", "index.js"),
-      path.join("/tmp/openclaw-root", "dist", "index.mjs"),
-      path.join("/tmp/openclaw-root", "dist", "entry.js"),
-      path.join("/tmp/openclaw-root", "dist", "entry.mjs"),
-    ]);
-  });
-});
+} from "./update-command-service.js";
 
 describe("resolveGatewayInstallEntrypoint", () => {
   it("prefers dist/index.js over dist/entry.js when both exist", async () => {
@@ -75,6 +65,17 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
         updateMode: "npm",
         serviceInstalled: false,
         serviceLoaded: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not prepare package restart for a service owned by another root", () => {
+    expect(
+      shouldPrepareUpdatedInstallRestart({
+        updateMode: "npm",
+        serviceInstalled: true,
+        serviceLoaded: true,
+        serviceMatchesMutationRoot: false,
       }),
     ).toBe(false);
   });
@@ -205,6 +206,7 @@ describe("resolvePostInstallDoctorEnv", () => {
 
     expect(env.PATH).toBe("/bin");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(env[DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.OPENCLAW_CONFIG_PATH).toBe(
       path.join("/srv/openclaw", "daemon-state", "openclaw.json"),
@@ -223,6 +225,7 @@ describe("resolvePostInstallDoctorEnv", () => {
 
     expect(env.PATH).toBe("/bin");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(env[DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe("/caller/state");
     expect(env.OPENCLAW_PROFILE).toBe("caller");
   });
@@ -289,6 +292,126 @@ describe("collectMissingPluginInstallPayloads", () => {
         {
           pluginId: "no-package-json",
           installPath: noPackageJsonDir,
+          reason: "missing-package-json",
+        },
+      ]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts tracked bundle records validated by the shared bundle loader", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const bundleDir = path.join(tmpDir, "state", "clawhub", "cursor-bundle");
+    try {
+      await fs.mkdir(path.join(bundleDir, ".cursor-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(bundleDir, ".cursor-plugin", "plugin.json"),
+        JSON.stringify({ name: "cursor-bundle" }),
+        "utf8",
+      );
+      await expect(
+        collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          records: {
+            "cursor-bundle": {
+              source: "clawhub",
+              clawhubFamily: "bundle-plugin",
+              installPath: bundleDir,
+            },
+          },
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts persisted marketplace bundle records without transient format metadata", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const bundleDir = path.join(tmpDir, "state", "marketplace", "cursor-bundle");
+    try {
+      await fs.mkdir(path.join(bundleDir, ".cursor-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(bundleDir, ".cursor-plugin", "plugin.json"),
+        JSON.stringify({ name: "cursor-bundle" }),
+        "utf8",
+      );
+      await expect(
+        collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          records: {
+            "cursor-bundle": {
+              source: "marketplace",
+              installPath: bundleDir,
+              marketplaceName: "Local",
+              marketplaceSource: "local/repo",
+              marketplacePlugin: "cursor-bundle",
+            },
+          },
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps dual-format bundle records on the native package payload path", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const bundleDir = path.join(tmpDir, "state", "clawhub", "dual-format-bundle");
+    try {
+      await fs.mkdir(path.join(bundleDir, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(bundleDir, ".codex-plugin", "plugin.json"),
+        JSON.stringify({ name: "dual-format-bundle" }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(bundleDir, "package.json"),
+        JSON.stringify({
+          name: "dual-format-bundle",
+          openclaw: { extensions: ["./missing-extension.js"] },
+        }),
+        "utf8",
+      );
+      await expect(
+        collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          records: {
+            "dual-format-bundle": {
+              source: "clawhub",
+              clawhubFamily: "bundle-plugin",
+              installPath: bundleDir,
+            },
+          },
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps corrupt tracked bundle records eligible for payload repair", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const bundleDir = path.join(tmpDir, "state", "clawhub", "bad-bundle");
+    try {
+      await fs.mkdir(path.join(bundleDir, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(path.join(bundleDir, ".codex-plugin", "plugin.json"), "[]", "utf8");
+      await expect(
+        collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          records: {
+            "bad-bundle": {
+              source: "clawhub",
+              clawhubFamily: "bundle-plugin",
+              installPath: bundleDir,
+            },
+          },
+        }),
+      ).resolves.toEqual([
+        {
+          pluginId: "bad-bundle",
+          installPath: bundleDir,
           reason: "missing-package-json",
         },
       ]);
@@ -404,6 +527,18 @@ describe("collectMissingPluginInstallPayloads", () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolvePostSyncPluginUpdateSkipIds", () => {
+  it("skips plugins already switched through ClawHub or npm and repaired payloads", () => {
+    expect(
+      resolvePostSyncPluginUpdateSkipIds({
+        switchedToClawHub: ["whatsapp"],
+        switchedToNpm: ["voice-call"],
+        repairedMissingPayloadIds: new Set(["telegram"]),
+      }),
+    ).toStrictEqual(new Set(["whatsapp", "voice-call", "telegram"]));
   });
 });
 

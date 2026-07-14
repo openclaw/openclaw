@@ -9,7 +9,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
-  onSessionTranscriptUpdate,
+  onInternalSessionTranscriptUpdate,
   resolveAgentDir,
   resolveSessionTranscriptsDirForAgent,
   resolveUserPath,
@@ -20,10 +20,15 @@ import {
   buildSessionEntry,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
-  listSessionFilesForAgent,
+  listSessionTranscriptCorpusEntriesForAgent,
   parseCanonicalSessionSyncTargetFromPath,
+  parseSqliteSessionFileMarker,
+  parseUsageCountedSessionIdFromFileName,
   resolveSessionFileForSyncTarget,
   sessionPathForFile,
+  sessionPathForSessionIdentity,
+  statSessionEntrySync,
+  type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildFileEntry,
@@ -45,6 +50,7 @@ import {
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterId,
@@ -91,7 +97,7 @@ import {
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
 import {
-  markMemoryTargetSessionFilesDirty,
+  markMemoryTargetArchiveFilesDirty,
   runMemoryTargetedSessionSync,
 } from "./manager-targeted-sync.js";
 import {
@@ -114,7 +120,7 @@ type MemorySyncProgressState = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
-export type MemoryIndexEntry = {
+type MemoryIndexEntry = {
   path: string;
   absPath: string;
   mtimeMs: number;
@@ -148,6 +154,25 @@ type MemoryReindexRetryState = {
   sessionDeltas: Map<string, MemorySessionDeltaState>;
 };
 
+function sessionPathForCorpusEntry(entry: SessionTranscriptCorpusEntry): string {
+  return entry.transcriptSource === "sqlite"
+    ? sessionPathForSessionIdentity(entry.agentId, entry.sessionId)
+    : sessionPathForFile(entry.sessionFile);
+}
+
+function legacyExtensionlessSessionPathForIdentity(agentId: string, sessionId: string): string {
+  return path.join("sessions", normalizeAgentId(agentId), sessionId).replace(/\\/g, "/");
+}
+
+function buildSessionEntryOptions(entry: SessionTranscriptCorpusEntry) {
+  return {
+    generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
+    generatedByCronRun: entry.generatedByCronRun === true,
+    ...(entry.sessionKey ? { sessionKey: entry.sessionKey } : {}),
+    ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
+  };
+}
+
 const META_KEY = "memory_index_meta_v1";
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const LEGACY_VECTOR_TABLE = "chunks_vec";
@@ -172,6 +197,17 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 const log = createSubsystemLogger("memory");
 const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
 const TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
+
+type MemorySessionTranscriptUpdate = {
+  agentId?: string;
+  sessionFile?: string;
+  sessionKey?: string;
+  target?: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+  };
+};
 
 function memoryTableExists(db: DatabaseSync, tableName: string): boolean {
   return Boolean(
@@ -241,7 +277,7 @@ function shouldIgnoreMemoryWatchPath(
   return classifyMemoryMultimodalPath(normalized, multimodalSettings) === null;
 }
 
-export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
+function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
   void sync().catch((err: unknown) => {
     log.warn(`memory sync failed (${reason}): ${String(err)}`);
   });
@@ -260,6 +296,7 @@ function createSessionSyncYield(total: number): () => Promise<void> {
 }
 
 export abstract class MemoryManagerSyncOps {
+  protected readonly acquireLocalService?: MemoryCoreAcquireLocalService;
   protected abstract readonly cfg: OpenClawConfig;
   protected abstract readonly agentId: string;
   protected abstract readonly workspaceDir: string;
@@ -462,7 +499,7 @@ export abstract class MemoryManagerSyncOps {
     shouldSyncSessions: boolean;
     needsFullReindex: boolean;
     needsFullSessionReindex?: boolean;
-    targetSessionFiles?: string[];
+    targetArchiveFiles?: string[];
     progress?: MemorySyncProgressState;
   }): Promise<void> {
     const memoryPlan = params.shouldSyncMemory
@@ -473,9 +510,9 @@ export abstract class MemoryManagerSyncOps {
         })
       : this.emptySourceSyncPlan();
     if (params.shouldSyncSessions) {
-      await this.syncSessionFiles({
+      await this.syncArchiveFiles({
         needsFullReindex: params.needsFullSessionReindex ?? params.needsFullReindex,
-        targetSessionFiles: params.targetSessionFiles,
+        targetArchiveFiles: params.targetArchiveFiles,
         progress: params.progress,
         deferIndex: true,
         prefixIndexItems: memoryPlan.indexItems,
@@ -1422,12 +1459,16 @@ export abstract class MemoryManagerSyncOps {
     if (!this.sources.has("sessions") || this.sessionUnsubscribe) {
       return;
     }
-    this.sessionUnsubscribe = onSessionTranscriptUpdate((update) => {
+    this.sessionUnsubscribe = this.subscribeSessionTranscriptUpdates((update) => {
       if (this.closed) {
         return;
       }
       const sessionFile = update.sessionFile;
-      if (!this.isSessionFileForAgent(sessionFile)) {
+      if (sessionFile && isSessionArchiveArtifactName(path.basename(sessionFile))) {
+        return;
+      }
+      if (sessionFile && this.isSessionFileForAgent(sessionFile)) {
+        this.scheduleSessionDirty(sessionFile);
         return;
       }
       const target = this.resolveSessionTranscriptUpdateSyncTarget(update);
@@ -1435,8 +1476,26 @@ export abstract class MemoryManagerSyncOps {
         this.scheduleSessionDirty(target);
         return;
       }
-      this.scheduleSessionDirty(sessionFile);
+      if (sessionFile) {
+        void this.scheduleCorpusSessionFileDirty(sessionFile).catch((err: unknown) => {
+          log.warn(`memory session corpus update failed: ${String(err)}`);
+        });
+      }
     });
+  }
+
+  protected subscribeSessionTranscriptUpdates(
+    listener: (update: MemorySessionTranscriptUpdate) => void,
+  ): () => void {
+    return onInternalSessionTranscriptUpdate(listener);
+  }
+
+  private async scheduleCorpusSessionFileDirty(sessionFile: string): Promise<void> {
+    const resolvedSessionFile = path.resolve(sessionFile);
+    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+    if (corpusEntries.some((entry) => path.resolve(entry.sessionFile) === resolvedSessionFile)) {
+      this.scheduleSessionDirty(resolvedSessionFile);
+    }
   }
 
   protected ensureSessionStartupCatchup(): void {
@@ -1452,8 +1511,8 @@ export abstract class MemoryManagerSyncOps {
     if (!this.sources.has("sessions") || this.closed) {
       return [];
     }
-    const files = await listSessionFilesForAgent(this.agentId);
-    if (files.length === 0 || this.closed) {
+    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+    if (corpusEntries.length === 0 || this.closed) {
       return [];
     }
     const existingRows = loadMemorySourceFileState({
@@ -1462,25 +1521,34 @@ export abstract class MemoryManagerSyncOps {
     }).rows;
     const fileStates = (
       await runWithConcurrency(
-        files.map((file) => async (): Promise<MemorySessionStartupFileState | null> => {
-          try {
-            const stat = await fs.stat(file);
-            if (!stat.isFile()) {
-              return null;
+        corpusEntries.map(
+          (corpusEntry) => async (): Promise<MemorySessionStartupFileState | null> => {
+            if (corpusEntry.transcriptSource === "sqlite") {
+              return statSessionEntrySync(
+                corpusEntry.sessionFile,
+                buildSessionEntryOptions(corpusEntry),
+              );
             }
-            return {
-              absPath: file,
-              path: sessionPathForFile(file),
-              mtimeMs: stat.mtimeMs,
-              size: stat.size,
-            };
-          } catch (err) {
-            if (isFileMissingError(err)) {
-              return null;
+            const file = corpusEntry.sessionFile;
+            try {
+              const stat = await fs.stat(file);
+              if (!stat.isFile()) {
+                return null;
+              }
+              return {
+                absPath: file,
+                path: sessionPathForCorpusEntry(corpusEntry),
+                mtimeMs: stat.mtimeMs,
+                size: stat.size,
+              };
+            } catch (err) {
+              if (isFileMissingError(err)) {
+                return null;
+              }
+              throw err;
             }
-            throw err;
-          }
-        }),
+          },
+        ),
         this.getIndexConcurrency(),
       )
     ).filter((file): file is MemorySessionStartupFileState => file !== null);
@@ -1531,9 +1599,15 @@ export abstract class MemoryManagerSyncOps {
     const pendingTargets = Array.from(this.sessionPendingTargets.values());
     this.sessionPendingFiles.clear();
     this.sessionPendingTargets.clear();
-    pending.push(...Array.from(this.resolveSessionFilesForSyncTargets(pendingTargets)));
+    pending.push(...Array.from(await this.resolveArchiveFilesForSyncTargets(pendingTargets)));
     let shouldSync = false;
     for (const sessionFile of pending) {
+      if (!path.isAbsolute(sessionFile)) {
+        this.sessionsDirtyFiles.add(sessionFile);
+        this.sessionsDirty = true;
+        shouldSync = true;
+        continue;
+      }
       // Usage-counted session archives (`.jsonl.reset.<iso>` and
       // `.jsonl.deleted.<iso>`) are one-shot mutation events: the file is
       // written once by the archive rotation and then never touched again.
@@ -1703,13 +1777,30 @@ export abstract class MemoryManagerSyncOps {
     return resolvedFile.startsWith(`${resolvedDir}${path.sep}`);
   }
 
-  private resolveSessionTranscriptUpdateSyncTarget(update: {
-    agentId?: string;
-    sessionFile: string;
-    sessionKey?: string;
-  }): MemorySessionSyncTarget | null {
+  private resolveSessionTranscriptUpdateSyncTarget(
+    update: MemorySessionTranscriptUpdate,
+  ): MemorySessionSyncTarget | null {
+    if (update.sessionFile && isSessionArchiveArtifactName(path.basename(update.sessionFile))) {
+      return null;
+    }
+    if (update.target) {
+      const agentId = update.target.agentId.trim();
+      const sessionId = update.target.sessionId.trim();
+      const sessionKey = update.target.sessionKey.trim();
+      if (!agentId || !sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
+        return null;
+      }
+      return {
+        agentId,
+        sessionId,
+        ...(sessionKey ? { sessionKey } : {}),
+      };
+    }
+    if (!update.sessionFile) {
+      return null;
+    }
     const parsed = parseCanonicalSessionSyncTargetFromPath(update.sessionFile);
-    if (!parsed || isSessionArchiveArtifactName(path.basename(update.sessionFile))) {
+    if (!parsed) {
       return null;
     }
     const agentId = update.agentId?.trim() || parsed.agentId;
@@ -1724,14 +1815,39 @@ export abstract class MemoryManagerSyncOps {
     };
   }
 
-  private normalizeTargetSessionFiles(sessionFiles?: string[]): Set<string> | null {
-    if (!sessionFiles || sessionFiles.length === 0) {
+  private normalizeTargetArchiveFiles(
+    archiveFiles?: string[],
+    corpusEntries: readonly SessionTranscriptCorpusEntry[] = [],
+  ): Set<string> | null {
+    if (!archiveFiles || archiveFiles.length === 0) {
       return null;
     }
     const normalized = new Set<string>();
-    for (const sessionFile of sessionFiles) {
+    const corpusMarkers = new Set(
+      corpusEntries
+        .filter((entry) => entry.transcriptSource === "sqlite")
+        .map((entry) => entry.sessionFile),
+    );
+    const corpusPaths = new Set(
+      corpusEntries
+        .filter((entry) => entry.transcriptSource !== "sqlite")
+        .map((entry) => path.resolve(entry.sessionFile)),
+    );
+    for (const sessionFile of archiveFiles) {
       const trimmed = sessionFile.trim();
       if (!trimmed) {
+        continue;
+      }
+      if (corpusMarkers.has(trimmed)) {
+        normalized.add(trimmed);
+        continue;
+      }
+      const sqliteMarker = parseSqliteSessionFileMarker(trimmed);
+      if (
+        sqliteMarker &&
+        normalizeAgentId(sqliteMarker.agentId) === normalizeAgentId(this.agentId)
+      ) {
+        normalized.add(trimmed);
         continue;
       }
       const resolved = path.resolve(trimmed);
@@ -1739,6 +1855,10 @@ export abstract class MemoryManagerSyncOps {
         this.isSessionFileForAgent(resolved) &&
         parseCanonicalSessionSyncTargetFromPath(resolved)
       ) {
+        normalized.add(resolved);
+        continue;
+      }
+      if (corpusPaths.has(resolved)) {
         normalized.add(resolved);
       }
     }
@@ -1769,11 +1889,38 @@ export abstract class MemoryManagerSyncOps {
     return normalized.size > 0 ? normalized : null;
   }
 
-  private resolveSessionFilesForSyncTargets(
+  private async resolveArchiveFilesForSyncTargets(
     sessions?: Iterable<MemorySessionSyncTarget> | null,
-  ): Set<string> {
+    knownCorpusEntries?: readonly SessionTranscriptCorpusEntry[],
+  ): Promise<Set<string>> {
     const files = new Set<string>();
-    for (const session of sessions ?? []) {
+    const targets = Array.from(sessions ?? []);
+    if (targets.length === 0) {
+      return files;
+    }
+    const corpusEntries =
+      knownCorpusEntries ?? (await listSessionTranscriptCorpusEntriesForAgent(this.agentId));
+    for (const session of targets) {
+      const sessionKey = session.sessionKey?.trim();
+      let matchedCorpusEntry = false;
+      for (const entry of corpusEntries) {
+        if (normalizeAgentId(entry.agentId) !== normalizeAgentId(this.agentId)) {
+          continue;
+        }
+        if (entry.sessionId !== session.sessionId) {
+          continue;
+        }
+        if (sessionKey && entry.sessionKey !== sessionKey) {
+          continue;
+        }
+        files.add(
+          entry.transcriptSource === "sqlite" ? entry.sessionFile : path.resolve(entry.sessionFile),
+        );
+        matchedCorpusEntry = true;
+      }
+      if (matchedCorpusEntry) {
+        continue;
+      }
       const resolved = resolveSessionFileForSyncTarget(session, this.agentId);
       if (!resolved || normalizeAgentId(resolved.agentId) !== normalizeAgentId(this.agentId)) {
         continue;
@@ -1789,16 +1936,18 @@ export abstract class MemoryManagerSyncOps {
     return files;
   }
 
-  private combineTargetSessionFiles(params: {
+  private async combineTargetArchiveFiles(params: {
     sessions?: MemorySessionSyncTarget[];
-    sessionFiles?: string[];
-  }): Set<string> | null {
+    archiveFiles?: string[];
+  }): Promise<Set<string> | null> {
     const files = new Set<string>();
-    for (const file of this.normalizeTargetSessionFiles(params.sessionFiles) ?? []) {
+    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+    for (const file of this.normalizeTargetArchiveFiles(params.archiveFiles, corpusEntries) ?? []) {
       files.add(file);
     }
-    for (const file of this.resolveSessionFilesForSyncTargets(
+    for (const file of await this.resolveArchiveFilesForSyncTargets(
       this.normalizeTargetSessions(params.sessions)?.values(),
+      corpusEntries,
     )) {
       files.add(file);
     }
@@ -1989,9 +2138,9 @@ export abstract class MemoryManagerSyncOps {
     return this.emptySourceSyncPlan();
   }
 
-  private async syncSessionFiles(params: {
+  private async syncArchiveFiles(params: {
     needsFullReindex: boolean;
-    targetSessionFiles?: string[];
+    targetArchiveFiles?: string[];
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
@@ -2013,31 +2162,44 @@ export abstract class MemoryManagerSyncOps {
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
         : null;
 
-    const targetSessionFiles = params.needsFullReindex
+    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+    const targetArchiveFiles = params.needsFullReindex
       ? null
-      : this.normalizeTargetSessionFiles(params.targetSessionFiles);
-    const files = targetSessionFiles
-      ? Array.from(targetSessionFiles)
-      : await listSessionFilesForAgent(this.agentId);
+      : this.normalizeTargetArchiveFiles(params.targetArchiveFiles, corpusEntries);
+    const corpusEntryByPath = new Map<string, SessionTranscriptCorpusEntry>(
+      corpusEntries.map((entry) => [entry.sessionFile, entry]),
+    );
+    const files = targetArchiveFiles
+      ? Array.from(targetArchiveFiles)
+      : corpusEntries.map((entry) => entry.sessionFile);
     const sessionPlan = resolveMemorySessionSyncPlan({
       needsFullReindex: params.needsFullReindex,
       files,
-      targetSessionFiles,
+      targetSessionFiles: targetArchiveFiles,
       sessionsDirtyFiles: this.sessionsDirtyFiles,
-      existingRows: targetSessionFiles
+      existingRows: targetArchiveFiles
         ? null
         : loadMemorySourceFileState({
             db: this.db,
             source: "sessions",
           }).rows,
-      sessionPathForFile,
+      sessionPathForFile: (file) => {
+        const corpusEntry = corpusEntryByPath.get(file);
+        if (corpusEntry) {
+          return sessionPathForCorpusEntry(corpusEntry);
+        }
+        const sqliteMarker = parseSqliteSessionFileMarker(file);
+        return sqliteMarker
+          ? sessionPathForSessionIdentity(sqliteMarker.agentId, sqliteMarker.sessionId)
+          : sessionPathForFile(file);
+      },
     });
     const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
     log.debug("memory sync: indexing session files", {
       files: files.length,
       indexAll,
       dirtyFiles: this.sessionsDirtyFiles.size,
-      targetedFiles: targetSessionFiles?.size ?? 0,
+      targetedFiles: targetArchiveFiles?.size ?? 0,
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
@@ -2051,6 +2213,20 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const yieldAfterSessionFile = createSessionSyncYield(files.length);
+    const deleteIndexedSessionPath = (memoryPath: string) => {
+      deleteFileByPathAndSource.run(memoryPath, "sessions");
+      if (deleteVectorRowsByPathAndSource) {
+        try {
+          deleteVectorRowsByPathAndSource.run(memoryPath, "sessions");
+        } catch {}
+      }
+      deleteChunksByPathAndSource.run(memoryPath, "sessions");
+      if (deleteFtsRowsByPathAndSource) {
+        try {
+          deleteFtsRowsByPathAndSource.run(memoryPath, "sessions");
+        } catch {}
+      }
+    };
     const deleteStaleRows = async () => {
       if (activePaths === null) {
         return;
@@ -2063,20 +2239,47 @@ export abstract class MemoryManagerSyncOps {
           if (activePaths.has(stale.path)) {
             continue;
           }
-          deleteFileByPathAndSource.run(stale.path, "sessions");
-          if (deleteVectorRowsByPathAndSource) {
-            try {
-              deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
-            } catch {}
-          }
-          deleteChunksByPathAndSource.run(stale.path, "sessions");
-          if (deleteFtsRowsByPathAndSource) {
-            try {
-              deleteFtsRowsByPathAndSource.run(stale.path, "sessions");
-            } catch {}
-          }
+          deleteIndexedSessionPath(stale.path);
         } finally {
           await yieldAfterStaleSessionRow();
+        }
+      }
+    };
+    const deleteTargetArchiveStaleLiveRows = () => {
+      if (!targetArchiveFiles) {
+        return;
+      }
+      const activeCorpusPaths = new Set(
+        corpusEntries
+          .filter((entry) => entry.artifactKind === "active-session")
+          .map((entry) => sessionPathForCorpusEntry(entry)),
+      );
+      const existingSessionPaths = new Set(
+        loadMemorySourceFileState({
+          db: this.db,
+          source: "sessions",
+        }).rows.map((row) => row.path),
+      );
+      for (const file of targetArchiveFiles) {
+        const corpusEntry = corpusEntryByPath.get(file);
+        const sqliteMarker = parseSqliteSessionFileMarker(file);
+        const sessionId =
+          corpusEntry?.sessionId ??
+          sqliteMarker?.sessionId ??
+          parseUsageCountedSessionIdFromFileName(path.basename(file));
+        if (!sessionId) {
+          continue;
+        }
+        const staleAgentId = corpusEntry?.agentId ?? sqliteMarker?.agentId ?? this.agentId;
+        const staleLivePaths = [
+          sessionPathForSessionIdentity(staleAgentId, sessionId),
+          legacyExtensionlessSessionPathForIdentity(staleAgentId, sessionId),
+        ];
+        for (const staleLivePath of staleLivePaths) {
+          if (activeCorpusPaths.has(staleLivePath) || !existingSessionPaths.has(staleLivePath)) {
+            continue;
+          }
+          deleteIndexedSessionPath(staleLivePath);
         }
       }
     };
@@ -2114,7 +2317,11 @@ export abstract class MemoryManagerSyncOps {
                   }
                   return null;
                 }
-                const entry = await buildSessionEntry(absPath);
+                const corpusEntry = corpusEntryByPath.get(absPath);
+                const entry = await buildSessionEntry(
+                  absPath,
+                  corpusEntry ? buildSessionEntryOptions(corpusEntry) : undefined,
+                );
                 if (!entry) {
                   if (params.progress) {
                     params.progress.completed += 1;
@@ -2165,6 +2372,7 @@ export abstract class MemoryManagerSyncOps {
       }
 
       await flushPendingIndexItems();
+      deleteTargetArchiveStaleLiveRows();
       await deleteStaleRows();
       return this.emptySourceSyncPlan();
     }
@@ -2184,7 +2392,11 @@ export abstract class MemoryManagerSyncOps {
           }
           return;
         }
-        const entry = await buildSessionEntry(absPath);
+        const corpusEntry = corpusEntryByPath.get(absPath);
+        const entry = await buildSessionEntry(
+          absPath,
+          corpusEntry ? buildSessionEntryOptions(corpusEntry) : undefined,
+        );
         if (!entry) {
           if (params.progress) {
             params.progress.completed += 1;
@@ -2227,6 +2439,7 @@ export abstract class MemoryManagerSyncOps {
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
+    deleteTargetArchiveStaleLiveRows();
     await deleteStaleRows();
     return this.emptySourceSyncPlan();
   }
@@ -2295,15 +2508,15 @@ export abstract class MemoryManagerSyncOps {
     }
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
-    const targetSessionFiles = this.combineTargetSessionFiles({
+    const targetArchiveFiles = await this.combineTargetArchiveFiles({
       sessions: params?.sessions,
-      sessionFiles: params?.sessionFiles,
+      archiveFiles: params?.archiveFiles,
     });
-    const hasTargetSessionFiles = targetSessionFiles !== null;
-    if (this.hasRequestedTargetSessionSync(params) && !hasTargetSessionFiles) {
+    const hasTargetArchiveFiles = targetArchiveFiles !== null;
+    if (this.hasRequestedTargetSessionSync(params) && !hasTargetArchiveFiles) {
       return;
     }
-    if (params?.reason === "cli" && !params.force && !hasTargetSessionFiles) {
+    if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
     const indexIdentity = resolveMemoryIndexIdentityState({
@@ -2350,13 +2563,13 @@ export abstract class MemoryManagerSyncOps {
       this.settings.provider === "none" ||
       hasOnlyFtsChunks;
     const needsMissingIdentityReindex =
-      indexIdentity.status === "missing" && !hasTargetSessionFiles && canRebuildMissingIdentity;
+      indexIdentity.status === "missing" && !hasTargetArchiveFiles && canRebuildMissingIdentity;
     const needsExplicitIdentityReindex =
-      params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetSessionFiles;
+      params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetArchiveFiles;
     const canRunRetryFullReindex =
       indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
     const needsFullReindex =
-      (params?.force && !hasTargetSessionFiles) ||
+      (params?.force && !hasTargetArchiveFiles) ||
       needsInitialIndex ||
       needsMissingIdentityReindex ||
       needsExplicitIdentityReindex ||
@@ -2365,9 +2578,9 @@ export abstract class MemoryManagerSyncOps {
     const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
     if (indexIdentity.status !== "valid" && !needsFullReindex) {
       this.dirty = true;
-      const sessionsDirty = markMemoryTargetSessionFilesDirty({
+      const sessionsDirty = markMemoryTargetArchiveFilesDirty({
         sessionsDirtyFiles: this.sessionsDirtyFiles,
-        targetSessionFiles,
+        targetArchiveFiles,
       });
       if (sessionsDirty) {
         this.sessionsDirty = true;
@@ -2377,13 +2590,13 @@ export abstract class MemoryManagerSyncOps {
     if (!needsFullSessionReindex) {
       const targetedSessionSync = await runMemoryTargetedSessionSync({
         hasSessionSource: this.sources.has("sessions"),
-        targetSessionFiles,
+        targetArchiveFiles,
         reason: params?.reason,
         progress: progress ?? undefined,
         sessionsFullRetryDirty: this.sessionsFullRetryDirty,
         sessionsDirtyFiles: this.sessionsDirtyFiles,
-        syncSessionFiles: async (targetedParams) => {
-          await this.syncSessionFiles(targetedParams);
+        syncArchiveFiles: async (targetedParams) => {
+          await this.syncArchiveFiles(targetedParams);
         },
         shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
         activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
@@ -2405,7 +2618,7 @@ export abstract class MemoryManagerSyncOps {
 
       const shouldSyncMemory =
         this.sources.has("memory") &&
-        ((!hasTargetSessionFiles && params?.force) || needsFullReindex || this.dirty);
+        ((!hasTargetArchiveFiles && params?.force) || needsFullReindex || this.dirty);
       const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
       if (this.shouldDeferSourceWideBatch()) {
@@ -2414,7 +2627,7 @@ export abstract class MemoryManagerSyncOps {
           shouldSyncSessions,
           needsFullReindex,
           needsFullSessionReindex,
-          targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
+          targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
           progress: progress ?? undefined,
         });
         if (shouldSyncMemory) {
@@ -2432,9 +2645,9 @@ export abstract class MemoryManagerSyncOps {
         }
 
         if (shouldSyncSessions) {
-          await this.syncSessionFiles({
+          await this.syncArchiveFiles({
             needsFullReindex: needsFullSessionReindex,
-            targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
+            targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
             progress: progress ?? undefined,
           });
           this.clearSessionRetryState();
@@ -2447,7 +2660,7 @@ export abstract class MemoryManagerSyncOps {
       const activated =
         this.shouldFallbackOnError(err) && (await this.activateFallbackProvider(reason));
       if (activated) {
-        if (needsFullReindex && !hasTargetSessionFiles) {
+        if (needsFullReindex && !hasTargetArchiveFiles) {
           await this.runInPlaceReindex({
             reason: params?.reason ?? "fallback",
             force: true,
@@ -2471,7 +2684,7 @@ export abstract class MemoryManagerSyncOps {
   private hasRequestedTargetSessionSync(params?: MemorySyncParams): boolean {
     return Boolean(
       params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
-      params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0),
+      params?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0),
     );
   }
 
@@ -2513,6 +2726,7 @@ export abstract class MemoryManagerSyncOps {
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
       agentDir: resolveAgentDir(this.cfg, this.agentId),
+      ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
       ...fallbackRequest,
     });
 
@@ -2621,7 +2835,7 @@ export abstract class MemoryManagerSyncOps {
         }
 
         if (shouldSyncSessions) {
-          await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+          await this.syncArchiveFiles({ needsFullReindex: true, progress: params.progress });
           this.clearSessionRetryState();
         } else {
           this.refreshSessionDirtyFlag();
@@ -2739,3 +2953,4 @@ export abstract class MemoryManagerSyncOps {
     this.lastMetaSerialized = value;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -756,7 +756,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("emits full preamble item progress after the previous snapshot flushed", () => {
+  it("omits already flushed preamble item progress from later prefix snapshots", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-preamble-item-after-flush",
       parentSessionKey: "agent:main:main",
@@ -790,7 +790,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
     vi.advanceTimersByTime(15);
 
-    expect(collectedTexts()).toEqual(["codex: Checking", "codex: Checking the app-server stream"]);
+    expect(collectedTexts()).toEqual(["codex: Checking", "codex: the app-server stream"]);
     relay.dispose();
   });
 
@@ -991,7 +991,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("applies legacy account streamMode opt-outs", () => {
+  it("applies account streaming mode opt-outs", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-account-stream-mode-off",
       parentSessionKey: "agent:main:main",
@@ -1008,7 +1008,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
             },
             accounts: {
               work: {
-                streamMode: "off",
+                streaming: { mode: "off" },
               },
             },
           },
@@ -1406,6 +1406,37 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it.each([
+    {
+      name: "preview cutoff",
+      delta: `${"a".repeat(218)}😀tail`,
+      expected: `${"a".repeat(218)}…`,
+    },
+    {
+      name: "retained buffer start",
+      delta: `😀${"b".repeat(3_999)}`,
+      expected: `${"b".repeat(219)}…`,
+    },
+  ])("keeps $name on UTF-16 boundaries", ({ delta, expected }) => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-utf16-safe",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:utf16-safe",
+      agentId: "codex",
+      streamFlushMs: 0,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-utf16-safe",
+      stream: "assistant",
+      data: { delta },
+    });
+
+    expect(collectedTexts()[1]).toBe(`codex: ${expected}`);
+    relay.dispose();
+  });
+
   it("resolves ACP spawn stream log path from session metadata", () => {
     readAcpSessionEntryMock.mockReturnValue({
       storePath: "/tmp/openclaw/agents/codex/sessions/sessions.json",
@@ -1436,3 +1467,4 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(options.storePath).toBe("/tmp/openclaw/agents/codex/sessions/sessions.json");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

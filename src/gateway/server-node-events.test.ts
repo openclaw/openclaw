@@ -1,8 +1,19 @@
 // Gateway node event tests protect how node clients surface inbound commands,
 // delivery metadata, pairing state, and outbound payload lifecycle events.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  prepareGatewaySuspend,
+  resumeGatewaySuspend,
+} from "../infra/gateway-suspend-coordinator.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
@@ -10,6 +21,8 @@ import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.j
 const buildSessionLookup = (
   sessionKey: string,
   entry: {
+    agentHarnessId?: string;
+    modelSelectionLocked?: boolean;
     sessionId?: string;
     model?: string;
     modelProvider?: string;
@@ -27,6 +40,8 @@ const buildSessionLookup = (
   storePath: "/tmp/sessions.json",
   store: {} as ReturnType<typeof loadSessionEntryType>["store"],
   entry: {
+    agentHarnessId: entry.agentHarnessId,
+    modelSelectionLocked: entry.modelSelectionLocked,
     sessionId: entry.sessionId ?? `sid-${sessionKey}`,
     updatedAt: entry.updatedAt ?? Date.now(),
     model: entry.model,
@@ -40,12 +55,13 @@ const buildSessionLookup = (
     parentSessionKey: entry.parentSessionKey,
   },
   canonicalKey: sessionKey,
+  storeKeys: [sessionKey],
   legacyKey: undefined,
 });
 
 const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const registerApnsRegistrationMock = vi.hoisted(() => vi.fn());
-const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
+const loadOrCreateProcessDeviceIdentityMock = vi.hoisted(() =>
   vi.fn(() => ({
     deviceId: "gateway-device-1",
     publicKeyPem: "public",
@@ -53,6 +69,7 @@ const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
   })),
 );
 const parseMessageWithAttachmentsMock = vi.hoisted(() => vi.fn());
+const persistInboundImagesForTranscriptMock = vi.hoisted(() => vi.fn());
 const normalizeChannelIdMock = vi.hoisted(() =>
   vi.fn((channel?: string | null) => channel ?? null),
 );
@@ -82,15 +99,9 @@ const runtimeMocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
-  loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
+  loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
-  migrateAndPruneGatewaySessionStoreKey: vi.fn(
-    ({ key, store }: { key: string; store: Record<string, unknown> }) => ({
-      target: { canonicalKey: key, storeKeys: [key] },
-      primaryKey: key,
-      entry: store[key],
-    }),
-  ),
+  canonicalizeSessionEntryAliases: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
@@ -121,6 +132,7 @@ const runtimeMocks = vi.hoisted(() => ({
     },
   ),
   resolveOutboundTarget: vi.fn(({ to }: { to: string }) => ({ ok: true, to })),
+  sendDurableMessageBatch: vi.fn(async () => ({ status: "sent" })),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveSessionModelRef: vi.fn(
     (_cfg: OpenClawConfig, entry?: { model?: string; modelProvider?: string }) => ({
@@ -128,6 +140,7 @@ const runtimeMocks = vi.hoisted(() => ({
       model: entry?.model ?? "default-model",
     }),
   ),
+  persistInboundImagesForTranscript: persistInboundImagesForTranscriptMock,
   sanitizeInboundSystemTags: sanitizeInboundSystemTagsMock,
   scopedHeartbeatWakeOptions: vi.fn((sessionKey?: string, opts?: { reason: string }) => {
     const wakeOptions = { reason: opts?.reason };
@@ -135,7 +148,6 @@ const runtimeMocks = vi.hoisted(() => ({
       ? { ...wakeOptions, sessionKey: sessionKey as string }
       : wakeOptions;
   }),
-  updateSessionStore: vi.fn(),
 }));
 
 vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
@@ -149,20 +161,70 @@ vi.mock("../infra/node-pairing.js", () => ({
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
-import {
-  getRecentNodePresencePersistCountForTests,
-  handleNodeEvent,
-  resetNodeEventDeduplicationForTests,
-} from "./server-node-events.js";
+import { handleNodeEvent } from "./server-node-events.js";
 
 const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
 const loadConfigMock = runtimeMocks.getRuntimeConfig;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
-const updateSessionStoreMock = runtimeMocks.updateSessionStore;
+const canonicalizeSessionEntryAliasesMock = runtimeMocks.canonicalizeSessionEntryAliases;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
+const sendDurableMessageBatchMock = runtimeMocks.sendDurableMessageBatch;
+
+beforeEach(() => {
+  resetGatewayWorkAdmission();
+});
+
+afterEach(() => {
+  resetGatewayWorkAdmission();
+});
+
+async function runAdmittedNodeEvent(
+  ctx: NodeEventContext,
+  nodeId: string,
+  event: Parameters<typeof handleNodeEvent>[2],
+): Promise<void> {
+  const admission = tryBeginGatewayRootWorkAdmission();
+  expect(admission).not.toBeNull();
+  try {
+    await admission?.run(async () => {
+      await handleNodeEvent(ctx, nodeId, event);
+    });
+  } finally {
+    admission?.release();
+  }
+}
+
+function expectSuspendBusyWithRootWork(requestId: string): void {
+  expect(
+    prepareGatewaySuspend({
+      requestId,
+      pauseScheduling: vi.fn(),
+      resumeScheduling: vi.fn(),
+    }),
+  ).toMatchObject({
+    status: "busy",
+    blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request", count: 1 })]),
+  });
+}
+
+function expectSuspendReady(requestId: string): void {
+  const result = prepareGatewaySuspend({
+    requestId,
+    pauseScheduling: vi.fn(),
+    resumeScheduling: vi.fn(),
+  });
+  expect(result).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
+  if (result.status === "ready") {
+    expect(resumeGatewaySuspend(result.suspensionId)).toMatchObject({
+      ok: true,
+      status: "running",
+      resumed: true,
+    });
+  }
+}
 
 const execEventHeartbeatOptions = (sessionKey?: string) => ({
   source: "exec-event",
@@ -266,13 +328,14 @@ function expectPresencePersistCall(
 
 describe("node exec events", () => {
   beforeEach(() => {
-    resetNodeEventDeduplicationForTests();
     enqueueSystemEventMock.mockClear();
     enqueueSystemEventMock.mockReturnValue(true);
     requestHeartbeatMock.mockClear();
     registerApnsRegistrationVi.mockClear();
-    loadOrCreateDeviceIdentityMock.mockClear();
+    loadOrCreateProcessDeviceIdentityMock.mockClear();
     normalizeChannelIdVi.mockClear();
+    persistInboundImagesForTranscriptMock.mockReset();
+    persistInboundImagesForTranscriptMock.mockResolvedValue([]);
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     sanitizeInboundSystemTagsMock.mockClear();
     updatePairedDeviceMetadataMock.mockClear();
@@ -417,7 +480,7 @@ describe("node exec events", () => {
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
-        runId: "run-2",
+        runId: "run-finished",
         exitCode: 0,
         timedOut: false,
         output: "done",
@@ -425,10 +488,10 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      "Exec finished (node=node-2 id=run-2, code 0)\ndone",
+      "Exec finished (node=node-2 id=run-finished, code 0)\ndone",
       {
         sessionKey: "node-node-2",
-        contextKey: "exec:run-2",
+        contextKey: "exec:run-finished",
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions());
@@ -555,12 +618,40 @@ describe("node exec events", () => {
       }),
     });
 
-    const [[text]] = enqueueSystemEventMock.mock.calls;
+    const [text] = expectDefined(
+      enqueueSystemEventMock.mock.calls[0],
+      "(enqueueSystemEventMock.mock.calls)[0] test invariant",
+    );
     expect(typeof text).toBe("string");
     expect(text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n")).toBe(true);
     expect(text.endsWith("…")).toBe(true);
     expect(text.length).toBeLessThan(280);
     expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions());
+  });
+
+  it("does not split surrogate pairs when truncating exec.finished output", async () => {
+    // 178 ASCII chars + emoji (🫠 = 2 UTF-16 code units at pos 178-179) = 180+ total.
+    // safe = 179 → old slice(0,179) would land on a lone high surrogate at pos 178.
+    const emoji = "🫠";
+    const padded = "A".repeat(178) + emoji + "tail";
+    const ctx = buildExecCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-surrogate",
+        exitCode: 0,
+        timedOut: false,
+        output: padded,
+      }),
+    });
+
+    const [text] = expectDefined(
+      enqueueSystemEventMock.mock.calls[0],
+      "(enqueueSystemEventMock.mock.calls)[0] test invariant",
+    );
+    // Must not contain a lone high surrogate (U+D800–U+DBFF).
+    expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(text.endsWith("…")).toBe(true);
   });
 
   it("does not enqueue or wake agent work for exec.denied events", async () => {
@@ -720,6 +811,36 @@ describe("node exec events", () => {
     });
   });
 
+  it("stores sandbox relay APNs registrations from node events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-relay-sandbox", {
+      event: "push.apns.register",
+      payloadJSON: JSON.stringify({
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
+        gatewayDeviceId: "gateway-device-1",
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        distribution: "official",
+        tokenDebugSuffix: "abcd1234",
+      }),
+    });
+
+    expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
+      nodeId: "node-relay-sandbox",
+      transport: "relay",
+      relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
+      installationId: "install-123",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      distribution: "official",
+      tokenDebugSuffix: "abcd1234",
+    });
+  });
+
   it("rejects relay registrations bound to a different gateway identity", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-relay", {
@@ -743,10 +864,13 @@ describe("node exec events", () => {
 describe("voice transcript events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
-    updateSessionStoreMock.mockClear();
+    canonicalizeSessionEntryAliasesMock.mockClear();
+    loadSessionEntryMock.mockClear();
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
-    updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
-      update({});
+    canonicalizeSessionEntryAliasesMock.mockImplementation(async ({ target, update }) => {
+      const entry = update ? await update(undefined) : undefined;
+      return { canonicalKey: target.canonicalKey, entry };
     });
   });
 
@@ -771,8 +895,73 @@ describe("voice transcript events", () => {
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(addChatRun).toHaveBeenCalledTimes(1);
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects a missing harness-owned session before touching the store", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:missing-voice";
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup(sessionKey),
+      entry: undefined,
+    });
+    const addChatRun = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+
+    await handleNodeEvent(ctx, "node-harness-voice-missing", {
+      event: "voice.transcript",
+      payloadJSON: JSON.stringify({ text: "do not create this", sessionKey }),
+    });
+    await Promise.resolve();
+
+    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+    expect(addChatRun).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("dispatches voice transcripts to an existing harness-owned session", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:existing-voice";
+    loadSessionEntryMock.mockReturnValueOnce(
+      buildSessionLookup(sessionKey, {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
+    );
+
+    await handleNodeEvent(buildCtx(), "node-harness-voice-existing", {
+      event: "voice.transcript",
+      payloadJSON: JSON.stringify({ text: "continue supervised work", sessionKey }),
+    });
+    await Promise.resolve();
+
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expectFields(mockCallArg(agentCommandMock), { sessionKey });
+  });
+
+  it.each([
+    ["wrong owner", { agentHarnessId: "other", modelSelectionLocked: true }],
+    ["missing session id", { agentHarnessId: "codex", modelSelectionLocked: true, sessionId: "" }],
+  ] as const)(
+    "rejects a harness-owned voice session with %s before side effects",
+    async (_label, entry) => {
+      const sessionKey = `agent:main:harness:codex:supervision:invalid-voice-${_label.replaceAll(" ", "-")}`;
+      loadSessionEntryMock.mockReturnValueOnce(buildSessionLookup(sessionKey, entry));
+      const addChatRun = vi.fn();
+      const ctx = buildCtx();
+      ctx.addChatRun = addChatRun;
+
+      await handleNodeEvent(ctx, "node-harness-voice-invalid", {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify({ text: "do not dispatch this", sessionKey }),
+      });
+      await Promise.resolve();
+
+      expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+      expect(addChatRun).not.toHaveBeenCalled();
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not dedupe identical text when source event IDs differ", async () => {
     const ctx = buildCtx();
@@ -795,7 +984,7 @@ describe("voice transcript events", () => {
     });
 
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(2);
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(2);
   });
 
   it("forwards transcript with voice provenance", async () => {
@@ -838,7 +1027,7 @@ describe("voice transcript events", () => {
     const warn = vi.fn();
     const ctx = buildCtx();
     ctx.logGateway = { warn };
-    updateSessionStoreMock.mockRejectedValueOnce(new Error("disk down"));
+    canonicalizeSessionEntryAliasesMock.mockRejectedValueOnce(new Error("disk down"));
 
     await handleNodeEvent(ctx, "node-v3", {
       event: "voice.transcript",
@@ -850,8 +1039,27 @@ describe("voice transcript events", () => {
     await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(String(mockCallArg(warn))).toContain("voice session-store update failed");
+  });
+
+  it("keeps an accepted detached session-store touch visible to suspension", async () => {
+    const touch = createDeferred();
+    canonicalizeSessionEntryAliasesMock.mockImplementationOnce(() => touch.promise);
+
+    await runAdmittedNodeEvent(buildCtx(), "node-v-suspend", {
+      event: "voice.transcript",
+      payloadJSON: JSON.stringify({
+        text: "persist before suspension",
+        sessionKey: "voice-suspend-session",
+      }),
+    });
+
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    expectSuspendBusyWithRootWork("voice-touch-busy");
+    touch.resolve();
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expectSuspendReady("voice-touch-ready");
   });
 
   it("preserves existing session metadata when touching the store for voice transcripts", async () => {
@@ -870,23 +1078,24 @@ describe("voice transcript events", () => {
       }),
     );
 
-    let updatedStore: Record<string, unknown> | undefined;
-    updateSessionStoreMock.mockImplementationOnce(async (_storePath, update) => {
-      const store = {
-        "voice-preserve-session": {
-          sessionId: "sess-preserve",
-          updatedAt: 10,
-          label: "existing label",
-          spawnedBy: "agent:main:parent",
-          parentSessionKey: "agent:main:parent",
-          lastChannel: "discord",
-          lastTo: "thread-1",
-          lastAccountId: "acct-1",
-          lastThreadId: 42,
-        },
+    let updatedEntry: Record<string, unknown> | undefined;
+    canonicalizeSessionEntryAliasesMock.mockImplementationOnce(async ({ target, update }) => {
+      const existing = {
+        sessionId: "sess-preserve",
+        updatedAt: 10,
+        label: "existing label",
+        spawnedBy: "agent:main:parent",
+        parentSessionKey: "agent:main:parent",
+        lastChannel: "discord",
+        lastTo: "thread-1",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
       };
-      update(store);
-      updatedStore = structuredClone(store);
+      updatedEntry = {
+        ...existing,
+        ...(update ? await update(existing) : {}),
+      };
+      return { canonicalKey: target.canonicalKey, entry: updatedEntry };
     });
 
     await handleNodeEvent(ctx, "node-v4", {
@@ -898,7 +1107,7 @@ describe("voice transcript events", () => {
     });
     await Promise.resolve();
 
-    expectFields(updatedStore?.["voice-preserve-session"], {
+    expectFields(updatedEntry, {
       sessionId: "sess-preserve",
       label: "existing label",
       spawnedBy: "agent:main:parent",
@@ -1025,6 +1234,40 @@ describe("notifications changed events", () => {
     });
   });
 
+  it("rejects missing reserved notification contexts before enqueue", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:missing-notification";
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup(sessionKey),
+      entry: undefined,
+    });
+
+    await handleNodeEvent(buildCtx(), "node-harness-missing", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({ change: "posted", key: "notif", sessionKey }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves valid durable harness notification contexts", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:existing-notification";
+    loadSessionEntryMock.mockReturnValueOnce(
+      buildSessionLookup(sessionKey, {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
+    );
+
+    await handleNodeEvent(buildCtx(), "node-harness-existing", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({ change: "posted", key: "notif", sessionKey }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledOnce();
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
+  });
+
   it("ignores notifications.changed payloads missing required fields", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-n3", {
@@ -1106,10 +1349,16 @@ describe("agent request events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
     parseMessageWithAttachmentsMock.mockReset();
-    updateSessionStoreMock.mockClear();
+    runtimeMocks.resolveSessionAgentId.mockClear();
+    runtimeMocks.resolveSessionModelRef.mockClear();
+    runtimeMocks.resolveGatewayModelSupportsImages.mockClear();
+    persistInboundImagesForTranscriptMock.mockClear();
+    canonicalizeSessionEntryAliasesMock.mockClear();
     loadSessionEntryMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
+    sendDurableMessageBatchMock.mockReset();
+    sendDurableMessageBatchMock.mockResolvedValue({ status: "sent" });
     parseMessageWithAttachmentsMock.mockResolvedValue({
       message: "parsed message",
       images: [],
@@ -1117,11 +1366,117 @@ describe("agent request events", () => {
       offloadedRefs: [],
     });
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
-    updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
-      update({});
+    canonicalizeSessionEntryAliasesMock.mockImplementation(async ({ target, update }) => {
+      const entry = update ? await update(undefined) : undefined;
+      return { canonicalKey: target.canonicalKey, entry };
     });
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
   });
+
+  it("rejects a missing harness-owned session before touching the store", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:missing-request";
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup(sessionKey),
+      entry: undefined,
+    });
+
+    await handleNodeEvent(buildCtx(), "node-harness-request-missing", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({ message: "do not create this", sessionKey }),
+    });
+
+    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("dispatches agent requests to an existing harness-owned session", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:existing-request";
+    loadSessionEntryMock.mockReturnValueOnce(
+      buildSessionLookup(sessionKey, {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
+    );
+
+    await handleNodeEvent(buildCtx(), "node-harness-request-existing", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({ message: "continue supervised work", sessionKey }),
+    });
+
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expectFields(mockCallArg(agentCommandMock), { sessionKey });
+  });
+
+  it("keeps an accepted detached agent dispatch visible to suspension", async () => {
+    const dispatch = createDeferred<never>();
+    agentCommandMock.mockImplementationOnce(() => dispatch.promise);
+
+    await runAdmittedNodeEvent(buildCtx(), "node-agent-suspend", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "finish before suspension",
+        sessionKey: "agent:main:suspend-agent",
+      }),
+    });
+
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    expectSuspendBusyWithRootWork("agent-dispatch-busy");
+    dispatch.resolve(undefined as never);
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expectSuspendReady("agent-dispatch-ready");
+  });
+
+  it("keeps an accepted detached receipt delivery visible to suspension", async () => {
+    const receipt = createDeferred<{ status: "sent" }>();
+    sendDurableMessageBatchMock.mockImplementationOnce(() => receipt.promise);
+
+    await runAdmittedNodeEvent(buildCtx(), "node-receipt-suspend", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "acknowledge before suspension",
+        sessionKey: "agent:main:suspend-receipt",
+        deliver: true,
+        receipt: true,
+        channel: "telegram",
+        to: "123",
+      }),
+    });
+
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    expectSuspendBusyWithRootWork("receipt-delivery-busy");
+    receipt.resolve({ status: "sent" });
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expectSuspendReady("receipt-delivery-ready");
+  });
+
+  it.each([
+    ["wrong owner", { agentHarnessId: "other", modelSelectionLocked: true }],
+    ["missing session id", { agentHarnessId: "codex", modelSelectionLocked: true, sessionId: "" }],
+  ] as const)(
+    "rejects a harness-owned agent request with %s before side effects",
+    async (_label, entry) => {
+      const sessionKey = `agent:main:harness:codex:supervision:invalid-request-${_label.replaceAll(" ", "-")}`;
+      loadSessionEntryMock.mockReturnValueOnce(buildSessionLookup(sessionKey, entry));
+
+      await handleNodeEvent(buildCtx(), "node-harness-request-invalid", {
+        event: "agent.request",
+        payloadJSON: JSON.stringify({
+          message: "do not dispatch this",
+          sessionKey,
+          attachments: [{ type: "image", mimeType: "image/png", content: "aGVsbG8=" }],
+        }),
+      });
+
+      expect(runtimeMocks.resolveSessionAgentId).not.toHaveBeenCalled();
+      expect(runtimeMocks.resolveSessionModelRef).not.toHaveBeenCalled();
+      expect(runtimeMocks.resolveGatewayModelSupportsImages).not.toHaveBeenCalled();
+      expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
+      expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+      expect(persistInboundImagesForTranscriptMock).not.toHaveBeenCalled();
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("disables delivery when route is unresolved instead of falling back globally", async () => {
     const warn = vi.fn();
@@ -1224,6 +1579,60 @@ describe("agent request events", () => {
     expectFields(parseCall?.[2], { supportsInlineImages: false });
   });
 
+  it("passes ordered durable media metadata to the agent transcript recorder", async () => {
+    parseMessageWithAttachmentsMock.mockResolvedValueOnce({
+      message: "describe\n[media attached: media://inbound/offloaded]",
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
+      imageOrder: ["offloaded", "inline"],
+      offloadedRefs: [
+        {
+          mediaRef: "media://inbound/offloaded",
+          id: "offloaded",
+          path: "/media/inbound/offloaded.png",
+          mimeType: "image/png",
+          label: "offloaded.png",
+          sizeBytes: 2_100_000,
+        },
+      ],
+    });
+    persistInboundImagesForTranscriptMock.mockResolvedValueOnce([
+      {
+        id: "offloaded",
+        path: "/media/inbound/offloaded.png",
+        size: 2_100_000,
+        contentType: "image/png",
+      },
+      {
+        id: "saved-inline",
+        path: "/media/inbound/saved-inline.jpg",
+        size: 5,
+        contentType: "image/jpeg",
+      },
+    ]);
+
+    await handleNodeEvent(buildCtx(), "node-media", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "describe",
+        sessionKey: "agent:main:main",
+        attachments: [{ type: "image", mimeType: "image/png", content: "AAAA" }],
+      }),
+    });
+
+    expect(persistInboundImagesForTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({ imageOrder: ["offloaded", "inline"] }),
+    );
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expectFields(mockCallArg(agentCommandMock), {
+      message: "describe\n[media attached: media://inbound/offloaded]",
+      transcriptMessage: "describe",
+      transcriptMedia: [
+        { path: "/media/inbound/offloaded.png", contentType: "image/png" },
+        { path: "/media/inbound/saved-inline.jpg", contentType: "image/jpeg" },
+      ],
+    });
+  });
+
   it("declines non-image attachments cleanly when parse throws UnsupportedAttachmentError", async () => {
     const warn = vi.fn();
     const ctx = buildCtx();
@@ -1261,7 +1670,6 @@ describe("agent request events", () => {
   });
 
   beforeEach(() => {
-    resetNodeEventDeduplicationForTests();
     updatePairedDeviceMetadataMock.mockClear();
     updatePairedDeviceMetadataMock.mockResolvedValue(true);
     updatePairedNodeMetadataMock.mockClear();
@@ -1272,15 +1680,12 @@ describe("agent request events", () => {
     const ctx = buildCtx();
     const result = await handleNodeEvent(
       ctx,
-      "ios-node",
+      "ios-presence-persist",
       {
         event: "node.presence.alive",
-        payloadJSON: JSON.stringify({
-          trigger: "bg_app_refresh",
-          sentAtMs: 123,
-        }),
+        payloadJSON: JSON.stringify({ trigger: "bg_app_refresh", sentAtMs: 123 }),
       },
-      { deviceId: "ios-node" },
+      { deviceId: "ios-presence-persist" },
     );
 
     expect(result).toEqual({
@@ -1289,14 +1694,17 @@ describe("agent request events", () => {
       handled: true,
       reason: "persisted",
     });
-    expectPresencePersistCall(updatePairedNodeMetadataMock, "ios-node", "bg_app_refresh");
-    expectPresencePersistCall(updatePairedDeviceMetadataMock, "ios-node", "bg_app_refresh");
-    expect(getRecentNodePresencePersistCountForTests()).toBe(1);
+    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
+    expectPresencePersistCall(
+      updatePairedDeviceMetadataMock,
+      "ios-presence-persist",
+      "bg_app_refresh",
+    );
   });
 
   it("rejects node presence alive events without authenticated device identity", async () => {
     const ctx = buildCtx();
-    const result = await handleNodeEvent(ctx, "ios-node", {
+    const result = await handleNodeEvent(ctx, "ios-presence-missing-identity", {
       event: "node.presence.alive",
       payloadJSON: JSON.stringify({ trigger: "silent_push" }),
     });
@@ -1309,23 +1717,6 @@ describe("agent request events", () => {
     });
     expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
     expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
-    expect(getRecentNodePresencePersistCountForTests()).toBe(0);
-  });
-
-  it("normalizes unknown node presence alive triggers before persistence", async () => {
-    const ctx = buildCtx();
-    await handleNodeEvent(
-      ctx,
-      "ios-node",
-      {
-        event: "node.presence.alive",
-        payloadJSON: JSON.stringify({ trigger: "x".repeat(4096) }),
-      },
-      { deviceId: "ios-node" },
-    );
-
-    expectPresencePersistCall(updatePairedNodeMetadataMock, "ios-node", "background");
-    expectPresencePersistCall(updatePairedDeviceMetadataMock, "ios-node", "background");
   });
 
   it("does not throttle unknown node presence alive identities", async () => {
@@ -1334,12 +1725,12 @@ describe("agent request events", () => {
     const ctx = buildCtx();
     const result = await handleNodeEvent(
       ctx,
-      "ios-node",
+      "ios-presence-unpaired",
       {
         event: "node.presence.alive",
         payloadJSON: JSON.stringify({ trigger: "silent_push" }),
       },
-      { deviceId: "ios-node" },
+      { deviceId: "ios-presence-unpaired" },
     );
 
     expect(result).toEqual({
@@ -1348,29 +1739,37 @@ describe("agent request events", () => {
       handled: false,
       reason: "unpaired",
     });
-    expect(getRecentNodePresencePersistCountForTests()).toBe(0);
+
+    updatePairedDeviceMetadataMock.mockClear();
+    updatePairedDeviceMetadataMock.mockResolvedValue(true);
+    const retry = await handleNodeEvent(
+      ctx,
+      "ios-presence-unpaired",
+      {
+        event: "node.presence.alive",
+        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
+      },
+      { deviceId: "ios-presence-unpaired" },
+    );
+    expect(retry).toEqual({
+      ok: true,
+      event: "node.presence.alive",
+      handled: true,
+      reason: "persisted",
+    });
+    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledTimes(1);
   });
 
   it("throttles repeated node presence alive persistence per device", async () => {
     const ctx = buildCtx();
-    await handleNodeEvent(
-      ctx,
-      "ios-node",
-      {
-        event: "node.presence.alive",
-        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
-      },
-      { deviceId: "ios-node" },
-    );
-    const result = await handleNodeEvent(
-      ctx,
-      "ios-node",
-      {
-        event: "node.presence.alive",
-        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
-      },
-      { deviceId: "ios-node" },
-    );
+    const event = {
+      event: "node.presence.alive" as const,
+      payloadJSON: JSON.stringify({ trigger: "silent_push" }),
+    };
+    const connection = { deviceId: "ios-presence-throttle" };
+
+    await handleNodeEvent(ctx, "ios-presence-throttle", event, connection);
+    const result = await handleNodeEvent(ctx, "ios-presence-throttle", event, connection);
 
     expect(result).toEqual({
       ok: true,
@@ -1378,8 +1777,94 @@ describe("agent request events", () => {
       handled: true,
       reason: "throttled",
     });
-    expect(updatePairedNodeMetadataMock).toHaveBeenCalledTimes(1);
+    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
     expect(updatePairedDeviceMetadataMock).toHaveBeenCalledTimes(1);
-    expect(getRecentNodePresencePersistCountForTests()).toBe(1);
+  });
+
+  it("updates authenticated accessibility-backed node activity without a system event", async () => {
+    const broadcast = vi.fn();
+    const updateNodePresenceActivity = vi.fn(() => ({
+      lastActiveAtMs: 90_000,
+      presenceUpdatedAtMs: 100_000,
+    }));
+    const ctx: NodeEventContext = {
+      ...buildCtx(),
+      broadcast,
+      updateNodePresenceActivity,
+    };
+    const result = await handleNodeEvent(
+      ctx,
+      "mac-node",
+      {
+        event: "node.presence.activity",
+        payloadJSON: JSON.stringify({ idleSeconds: 10 }),
+      },
+      { connId: "conn-1", deviceId: "mac-node", presenceAllowed: true },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.activity",
+      handled: true,
+      reason: "updated",
+    });
+    expect(updateNodePresenceActivity).toHaveBeenCalledWith({
+      nodeId: "mac-node",
+      connId: "conn-1",
+      idleSeconds: 10,
+    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "node.presence",
+      {
+        nodeId: "mac-node",
+        lastActiveAtMs: 90_000,
+        presenceUpdatedAtMs: 100_000,
+      },
+      { dropIfSlow: true },
+    );
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects node activity without the advertised accessibility permission", async () => {
+    const updateNodePresenceActivity = vi.fn();
+    const ctx: NodeEventContext = { ...buildCtx(), updateNodePresenceActivity };
+    const result = await handleNodeEvent(
+      ctx,
+      "mac-node",
+      {
+        event: "node.presence.activity",
+        payloadJSON: JSON.stringify({ idleSeconds: 0 }),
+      },
+      { connId: "conn-1", deviceId: "mac-node", presenceAllowed: false },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.activity",
+      handled: false,
+      reason: "permission_required",
+    });
+    expect(updateNodePresenceActivity).not.toHaveBeenCalled();
+  });
+
+  it("normalizes unknown node presence alive triggers before persistence", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(
+      ctx,
+      "ios-presence-normalize",
+      {
+        event: "node.presence.alive",
+        payloadJSON: JSON.stringify({ trigger: "x".repeat(4096) }),
+      },
+      { deviceId: "ios-presence-normalize" },
+    );
+
+    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
+    expectPresencePersistCall(
+      updatePairedDeviceMetadataMock,
+      "ios-presence-normalize",
+      "background",
+    );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

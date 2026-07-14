@@ -327,7 +327,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--session-key <key>", "Session key to export")
     .option("--output <path>", "Output directory name inside .openclaw/trajectory-exports")
     .option("--workspace <path>", "Workspace root for the export (default: current directory)")
-    .option("--store <path>", "Path to session store (default: resolved from session key)")
+    .option("--store <path>", "Path to session store (default: resolved from config)")
     .option("--agent <id>", "Agent id for resolving the default session store")
     .option("--request-json-base64 <payload>", "Base64url-encoded export request")
     .option("--json", "Output JSON", false)
@@ -367,7 +367,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "RPC timeout in milliseconds (summarization can be slow)", "180000")
+    .option("--timeout <ms>", "RPC timeout in milliseconds (defaults to no client deadline)")
     .option("--json", "Output JSON", false)
     .addHelpText(
       "after",
@@ -763,3 +763,4 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

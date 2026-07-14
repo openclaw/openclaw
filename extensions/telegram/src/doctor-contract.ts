@@ -4,17 +4,15 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  asObjectRecord,
-  hasLegacyAccountStreamingAliases,
-  hasLegacyStreamingAliases,
-  normalizeLegacyChannelAliases,
-} from "openclaw/plugin-sdk/runtime-doctor";
-import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
+import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
+import { asObjectRecord, defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
 
-function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
-  return hasLegacyStreamingAliases(value, { includePreviewChunk: true });
-}
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "telegram",
+  // Runtime mode resolution dropped legacy streamMode reads; the doctor
+  // resolver keeps them so migration preserves configured intent.
+  streaming: { defaultMode: "partial", includePreviewChunk: true },
+});
 
 function hasRetiredTelegramDmConfig(value: unknown): boolean {
   const entry = asObjectRecord(value);
@@ -46,12 +44,26 @@ function hasRetiredTelegramNativeDraftConfig(value: unknown): boolean {
   );
 }
 
+function hasRetiredTelegramGroupHistoryContextConfig(value: unknown): boolean {
+  return asObjectRecord(value)?.includeGroupHistoryContext !== undefined;
+}
+
 function hasRetiredTelegramAccountNativeDraftConfig(value: unknown): boolean {
   const accounts = asObjectRecord(value);
   if (!accounts) {
     return false;
   }
   return Object.values(accounts).some((account) => hasRetiredTelegramNativeDraftConfig(account));
+}
+
+function hasRetiredTelegramAccountGroupHistoryContextConfig(value: unknown): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) =>
+    hasRetiredTelegramGroupHistoryContextConfig(account),
+  );
 }
 
 function removeRetiredTelegramDmConfig(params: {
@@ -134,6 +146,38 @@ function removeRetiredTelegramNativeDraftConfig(params: {
   return { entry: updated, changed: true };
 }
 
+function removeRetiredTelegramGroupHistoryContextConfig(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+  preserveRecentHistoryLimit?: number;
+}): { entry: Record<string, unknown>; changed: boolean } {
+  if (params.entry.includeGroupHistoryContext === undefined) {
+    return { entry: params.entry, changed: false };
+  }
+  const { includeGroupHistoryContext, ...rest } = params.entry;
+  let updated = includeGroupHistoryContext === "none" ? { ...rest, historyLimit: 0 } : rest;
+  if (
+    includeGroupHistoryContext === "recent" &&
+    params.preserveRecentHistoryLimit !== undefined &&
+    updated.historyLimit === undefined
+  ) {
+    updated = { ...updated, historyLimit: params.preserveRecentHistoryLimit };
+  }
+  const historyLimitNote =
+    includeGroupHistoryContext === "none"
+      ? " and set historyLimit to 0"
+      : includeGroupHistoryContext === "recent" &&
+          params.preserveRecentHistoryLimit !== undefined &&
+          params.entry.historyLimit === undefined
+        ? ` and set historyLimit to ${params.preserveRecentHistoryLimit}`
+        : "";
+  params.changes.push(
+    `Removed ${params.pathPrefix}.includeGroupHistoryContext${historyLimitNote}; Telegram group history is always on for groups and bounded by historyLimit.`,
+  );
+  return { entry: updated, changed: true };
+}
+
 function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
   groups: Record<string, unknown>;
   entry: Record<string, unknown>;
@@ -185,15 +229,16 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "telegram"],
     message:
-      "channels.telegram.streamMode, channels.telegram.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: hasLegacyTelegramStreamingAliases,
+      'channels.telegram.includeGroupHistoryContext was removed; Telegram group history is always on for groups and bounded by historyLimit. Run "openclaw doctor --fix".',
+    match: hasRetiredTelegramGroupHistoryContextConfig,
   },
   {
     path: ["channels", "telegram", "accounts"],
     message:
-      "channels.telegram.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyTelegramStreamingAliases),
+      'channels.telegram.accounts.<id>.includeGroupHistoryContext was removed; Telegram group history is always on for groups and bounded by historyLimit. Run "openclaw doctor --fix".',
+    match: hasRetiredTelegramAccountGroupHistoryContextConfig,
   },
+  ...streamingAliasMigration.legacyConfigRules,
 ];
 
 export function normalizeCompatibilityConfig({
@@ -201,14 +246,22 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const rawEntry = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
+  const changes: string[] = [];
+  const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg, changes });
+  const rawEntry = asObjectRecord(
+    (aliases.config.channels as Record<string, unknown> | undefined)?.telegram,
+  );
   if (!rawEntry) {
     return { config: cfg, changes: [] };
   }
 
-  const changes: string[] = [];
   let updated = rawEntry;
-  let changed = false;
+  let changed = aliases.config !== cfg;
+  const rootGroupHistoryContextMode = updated.includeGroupHistoryContext;
+  const rootGroupHistoryLimitBeforeMigration =
+    typeof updated.historyLimit === "number"
+      ? updated.historyLimit
+      : (cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT);
 
   const removedThreadReplies = removeRetiredTelegramDmConfig({
     entry: updated,
@@ -225,6 +278,14 @@ export function normalizeCompatibilityConfig({
   });
   updated = removedNativeDraft.entry;
   changed = changed || removedNativeDraft.changed;
+
+  const removedGroupHistoryContext = removeRetiredTelegramGroupHistoryContextConfig({
+    entry: updated,
+    pathPrefix: "channels.telegram",
+    changes,
+  });
+  updated = removedGroupHistoryContext.entry;
+  changed = changed || removedGroupHistoryContext.changed;
 
   if (updated.groupMentionsOnly !== undefined) {
     const defaultGroupEntry = resolveCompatibleDefaultGroupEntry(updated);
@@ -251,18 +312,6 @@ export function normalizeCompatibilityConfig({
       changed = true;
     }
   }
-
-  const aliases = normalizeLegacyChannelAliases({
-    entry: updated,
-    pathPrefix: "channels.telegram",
-    changes,
-    resolveStreamingOptions: (entry) => ({
-      includePreviewChunk: true,
-      resolvedMode: resolveTelegramPreviewStreamMode(entry),
-    }),
-  });
-  updated = aliases.entry;
-  changed = changed || aliases.changed;
 
   const accounts = asObjectRecord(updated.accounts);
   if (accounts) {
@@ -291,6 +340,18 @@ export function normalizeCompatibilityConfig({
         nextAccounts[accountId] = accountRemovedNativeDraft.entry;
         accountsChanged = true;
       }
+      const accountRemovedGroupHistoryContext = removeRetiredTelegramGroupHistoryContextConfig({
+        entry: nextAccounts[accountId] as Record<string, unknown>,
+        pathPrefix: `channels.telegram.accounts.${accountId}`,
+        changes,
+        ...(rootGroupHistoryContextMode === "none"
+          ? { preserveRecentHistoryLimit: rootGroupHistoryLimitBeforeMigration }
+          : {}),
+      });
+      if (accountRemovedGroupHistoryContext.changed) {
+        nextAccounts[accountId] = accountRemovedGroupHistoryContext.entry;
+        accountsChanged = true;
+      }
     }
     if (accountsChanged) {
       updated = { ...updated, accounts: nextAccounts };
@@ -303,9 +364,9 @@ export function normalizeCompatibilityConfig({
   }
   return {
     config: {
-      ...cfg,
+      ...aliases.config,
       channels: {
-        ...cfg.channels,
+        ...aliases.config.channels,
         telegram: updated as unknown as NonNullable<OpenClawConfig["channels"]>["telegram"],
       } as OpenClawConfig["channels"],
     },

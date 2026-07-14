@@ -1,4 +1,6 @@
 // Runtime model migration tests cover doctor legacy config migrations for model runtime shape.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, it, expect } from "vitest";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS } from "./legacy-config-migrations.runtime.models.js";
 
@@ -29,9 +31,39 @@ describe("stale contextWindow migration", () => {
 
     migration!.apply(raw, changes);
 
-    expect(raw.models.providers.deepseek.models[0].contextWindow).toBe(1_000_000);
+    expect(
+      expectDefined(
+        raw.models.providers.deepseek.models[0],
+        "raw.models.providers.deepseek.models[0] test invariant",
+      ).contextWindow,
+    ).toBe(1_000_000);
     expect(changes).toHaveLength(1);
     expect(changes[0]).toContain("200000 → 1000000");
+    expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(false);
+  });
+
+  it("repairs Grok 4.20 canonical and shipped alias context windows from 2M to 1M", () => {
+    const changes: string[] = [];
+    const raw = {
+      models: {
+        providers: {
+          xai: {
+            models: [
+              { id: "grok-4.20-0309-reasoning", contextWindow: 2_000_000 },
+              { id: "grok-4.20-beta-latest-non-reasoning", contextWindow: 2_000_000 },
+            ],
+          },
+        },
+      },
+    };
+
+    expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(true);
+    migration!.apply(raw, changes);
+
+    expect(raw.models.providers.xai.models.map((model) => model.contextWindow)).toEqual([
+      1_000_000, 1_000_000,
+    ]);
+    expect(changes).toHaveLength(2);
     expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(false);
   });
 
@@ -55,7 +87,12 @@ describe("stale contextWindow migration", () => {
 
     migration!.apply(raw, changes);
 
-    expect(raw.models.providers.deepseek.models[0].contextWindow).toBe(1_000_000);
+    expect(
+      expectDefined(
+        raw.models.providers.deepseek.models[0],
+        "raw.models.providers.deepseek.models[0] test invariant",
+      ).contextWindow,
+    ).toBe(1_000_000);
     expect(changes).toHaveLength(0);
   });
 
@@ -79,7 +116,12 @@ describe("stale contextWindow migration", () => {
 
     migration!.apply(raw, changes);
 
-    expect(raw.models.providers.deepseek.models[0].contextWindow).toBe(500_000);
+    expect(
+      expectDefined(
+        raw.models.providers.deepseek.models[0],
+        "raw.models.providers.deepseek.models[0] test invariant",
+      ).contextWindow,
+    ).toBe(500_000);
     expect(changes).toHaveLength(0);
   });
 
@@ -103,7 +145,12 @@ describe("stale contextWindow migration", () => {
 
     migration!.apply(raw, changes);
 
-    expect(raw.models.providers.custom.models[0].contextWindow).toBe(200_000);
+    expect(
+      expectDefined(
+        raw.models.providers.custom.models[0],
+        "raw.models.providers.custom.models[0] test invariant",
+      ).contextWindow,
+    ).toBe(200_000);
     expect(changes).toHaveLength(0);
     expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(false);
   });
@@ -128,7 +175,12 @@ describe("stale contextWindow migration", () => {
 
     migration!.apply(raw, changes);
 
-    expect(raw.models.providers.deepseek.models[0].contextWindow).toBe(1_000_000);
+    expect(
+      expectDefined(
+        raw.models.providers.deepseek.models[0],
+        "raw.models.providers.deepseek.models[0] test invariant",
+      ).contextWindow,
+    ).toBe(1_000_000);
     expect(changes).toHaveLength(1);
   });
 
@@ -152,7 +204,12 @@ describe("stale contextWindow migration", () => {
 
     migration!.apply(raw, changes);
 
-    expect(raw.models.providers.openrouter.models[0].contextWindow).toBe(200_000);
+    expect(
+      expectDefined(
+        raw.models.providers.openrouter.models[0],
+        "raw.models.providers.openrouter.models[0] test invariant",
+      ).contextWindow,
+    ).toBe(200_000);
     expect(changes).toHaveLength(0);
     expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(false);
   });
@@ -177,7 +234,12 @@ describe("stale contextWindow migration", () => {
 
     migration!.apply(raw, changes);
 
-    expect(raw.models.providers.openai.models[0].contextWindow).toBe(128_000);
+    expect(
+      expectDefined(
+        raw.models.providers.openai.models[0],
+        "raw.models.providers.openai.models[0] test invariant",
+      ).contextWindow,
+    ).toBe(128_000);
     expect(changes).toHaveLength(0);
   });
 

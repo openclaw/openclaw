@@ -2,8 +2,8 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
-import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
-import { captureEnv } from "../test-utils/env.js";
+import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -211,6 +211,7 @@ async function createStatusServiceSummary(
     loadedText: service.loadedText,
     runtime,
     runtimeShort: runtime?.pid ? `pid ${runtime.pid}` : null,
+    wrapperPath: command?.environment?.OPENCLAW_WRAPPER?.trim() || undefined,
   };
 }
 
@@ -393,15 +394,27 @@ async function createMockStatusScanResult(params: { includePluginCompatibility?:
 }
 
 async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
+  return await withOptionalEnvVar(key, value, run);
+}
+
+async function withOptionalEnvVar<T>(
+  key: string,
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
   const prevValue = process.env[key];
-  process.env[key] = value;
+  if (value === undefined) {
+    deleteTestEnvValue(key);
+  } else {
+    setTestEnvValue(key, value);
+  }
   try {
     return await run();
   } finally {
     if (prevValue === undefined) {
-      delete process.env[key];
+      deleteTestEnvValue(key);
     } else {
-      process.env[key] = prevValue;
+      setTestEnvValue(key, prevValue);
     }
   }
 }
@@ -1321,6 +1334,47 @@ describe("statusCommand", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+  it("notes when secret diagnostics may come from a CLI process outside the service wrapper context", async () => {
+    const wrapperPath = "/usr/local/bin/openclaw-doppler";
+    const service = mocks.resolveGatewayService();
+    mocks.resolveGatewayService.mockReturnValue({
+      ...service,
+      readCommand: async () => ({
+        programArguments: [wrapperPath, "node", "dist/entry.js", "gateway"],
+        environment: { OPENCLAW_WRAPPER: wrapperPath },
+        sourcePath: "/tmp/Library/LaunchAgents/ai.openclaw.gateway.plist",
+      }),
+    });
+    mocks.loadConfig.mockReturnValue({
+      session: {},
+      gateway: {
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    });
+
+    await withOptionalEnvVar("OPENCLAW_WRAPPER", undefined, async () => {
+      const logs = await runStatusAndGetLogs();
+      expectLogsInclude(logs, "Secret diagnostics:");
+      expectLogsInclude(logs, "installed gateway service uses OPENCLAW_WRAPPER");
+      expectLogsInclude(logs, "not running with that same wrapper");
+      expectLogsInclude(logs, "current CLI process rather than the installed gateway service");
+    });
+
+    await withEnvVar("OPENCLAW_WRAPPER", wrapperPath, async () => {
+      const logs = await runStatusAndGetLogs();
+      expectLogsInclude(logs, "Secret diagnostics:");
+      expectLogsExclude(logs, "not running with that same wrapper");
+    });
+  });
+
   it("surfaces channel runtime errors from the gateway", async () => {
     mocks.loadConfig.mockReturnValue({
       session: {},
@@ -1497,3 +1551,4 @@ describe("statusCommand", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

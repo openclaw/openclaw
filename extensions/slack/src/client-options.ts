@@ -3,6 +3,8 @@ import type { Agent } from "node:http";
 import type { RetryOptions, WebClientOptions } from "@slack/web-api";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 
+export type SlackLookupClientOptions = Pick<WebClientOptions, "agent" | "slackApiUrl" | "timeout">;
+
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,
   factor: 2,
@@ -12,6 +14,12 @@ export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
 };
 
 export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
+  retries: 0,
+};
+
+const SLACK_LOOKUP_TIMEOUT_MS = 30_000;
+
+const SLACK_LOOKUP_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
 };
 
@@ -30,12 +38,11 @@ export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
  * Returns `undefined` when no proxy env var is configured or when Slack hosts
  * are excluded by `NO_PROXY`.
  */
-function resolveSlackProxyAgent(): Agent | undefined {
+function resolveSlackProxyAgent(targetUrl: string): Agent | undefined {
   try {
     return createNodeProxyAgent({
       mode: "env",
-      targetUrl: "https://slack.com/",
-      protocol: "https",
+      targetUrl,
     });
   } catch {
     // Malformed proxy URL; degrade gracefully to direct connection.
@@ -43,19 +50,44 @@ function resolveSlackProxyAgent(): Agent | undefined {
   }
 }
 
+function resolveSlackApiUrlFromEnv(): string | undefined {
+  return process.env.SLACK_API_URL?.trim() || undefined;
+}
+
+function applySlackApiUrlAndProxyOptions(options: WebClientOptions): void {
+  const slackApiUrl = options.slackApiUrl ?? resolveSlackApiUrlFromEnv();
+  const proxyTargetUrl = slackApiUrl ?? "https://slack.com/";
+  options.agent ??= resolveSlackProxyAgent(proxyTargetUrl);
+  if (slackApiUrl !== undefined) {
+    options.slackApiUrl = slackApiUrl;
+  } else {
+    delete options.slackApiUrl;
+  }
+}
+
 export function resolveSlackWebClientOptions(options: WebClientOptions = {}): WebClientOptions {
-  return {
-    ...options,
-    agent: options.agent ?? resolveSlackProxyAgent(),
-    retryConfig: options.retryConfig ?? SLACK_DEFAULT_RETRY_OPTIONS,
-  };
+  const resolved: WebClientOptions = Object.assign({}, options);
+  applySlackApiUrlAndProxyOptions(resolved);
+  resolved.retryConfig ??= SLACK_DEFAULT_RETRY_OPTIONS;
+  return resolved;
 }
 
 export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): WebClientOptions {
-  return {
-    ...options,
-    agent: options.agent ?? resolveSlackProxyAgent(),
-    retryConfig: options.retryConfig ?? SLACK_WRITE_RETRY_OPTIONS,
-    maxRequestConcurrency: options.maxRequestConcurrency ?? 1,
-  };
+  const resolved: WebClientOptions = Object.assign({}, options);
+  applySlackApiUrlAndProxyOptions(resolved);
+  resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
+  return resolved;
+}
+
+export function resolveSlackLookupClientOptions(
+  options: SlackLookupClientOptions = {},
+): WebClientOptions {
+  const resolved: WebClientOptions = Object.assign({}, options);
+  applySlackApiUrlAndProxyOptions(resolved);
+  // Slack otherwise sleeps through the full Retry-After window after receiving 429,
+  // outside the Axios request timeout.
+  resolved.rejectRateLimitedCalls = true;
+  resolved.retryConfig = SLACK_LOOKUP_RETRY_OPTIONS;
+  resolved.timeout ??= SLACK_LOOKUP_TIMEOUT_MS;
+  return resolved;
 }

@@ -46,20 +46,45 @@ export type MemorySyncParams = {
   force?: boolean;
   /** Storage-neutral session transcript targets to refresh. */
   sessions?: MemorySessionSyncTarget[];
-  /**
-   * @deprecated Use `sessions` with `{ agentId, sessionId, sessionKey? }`.
-   * During the deprecation window only canonical OpenClaw transcript paths are accepted.
-   */
-  sessionFiles?: string[];
+  /** Archive/support transcript files to refresh without treating paths as active session identity. */
+  archiveFiles?: string[];
   progress?: (update: MemorySyncProgressUpdate) => void;
 };
 
-/** Runtime backend/mode diagnostics for memory search. */
+/** @public Runtime backend/mode diagnostics for memory search. */
+export type MemorySearchRuntimeQmdCollectionValidationDebug = {
+  cacheState?: "hit" | "miss" | "write" | "bypass-force" | "error";
+  elapsedMs: number;
+  collectionCount: number;
+  listCalls?: number;
+  showCalls?: number;
+};
+
+/** @public */ export type MemorySearchRuntimeQmdMultiCollectionProbeDebug = {
+  cacheState?: "hit" | "miss" | "write" | "error";
+  elapsedMs: number;
+  supported: boolean;
+};
+
+/** @public */ export type MemorySearchRuntimeQmdSearchPlanDebug = {
+  command?: "query" | "search" | "vsearch";
+  collectionCount?: number;
+  groupCount?: number;
+  sources?: MemorySource[];
+};
+
+/** @public */ export type MemorySearchRuntimeQmdDebug = {
+  collectionValidation?: MemorySearchRuntimeQmdCollectionValidationDebug;
+  multiCollectionProbe?: MemorySearchRuntimeQmdMultiCollectionProbeDebug;
+  searchPlan?: MemorySearchRuntimeQmdSearchPlanDebug;
+};
+
 export type MemorySearchRuntimeDebug = {
   backend: "builtin" | "qmd";
   configuredMode?: string;
   effectiveMode?: string;
   fallback?: string;
+  qmd?: MemorySearchRuntimeQmdDebug;
 };
 
 /** Result of reading a memory file, optionally paginated/truncated. */

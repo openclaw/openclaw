@@ -1,11 +1,13 @@
 // Ollama tests cover provider models plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOllamaProvider,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
-  parseOllamaNumCtxParameter,
+  fetchOllamaModels,
+  queryOllamaModelShowInfo,
   resetOllamaModelShowInfoCacheForTest,
   resolveOllamaApiBase,
   type OllamaTagModel,
@@ -43,11 +45,12 @@ describe("ollama provider models", () => {
       { name: "llama3:8b", contextWindow: 65536, capabilities: undefined },
       { name: "deepseek-r1:14b", contextWindow: undefined, capabilities: undefined },
     ]);
+    const fallbackModel = expectDefined(enriched[1], "fallback Ollama model");
     expect(
       buildOllamaModelDefinition(
-        enriched[1].name,
-        enriched[1].contextWindow,
-        enriched[1].capabilities,
+        fallbackModel.name,
+        fallbackModel.contextWindow,
+        fallbackModel.capabilities,
       ).compat?.supportsTools,
     ).toBe(true);
   });
@@ -374,10 +377,72 @@ describe("ollama provider models", () => {
     expect(model.compat?.supportsUsageInStreaming).toBe(true);
   });
 
-  it("parses the last positive Modelfile num_ctx value", () => {
-    expect(parseOllamaNumCtxParameter("num_ctx 8192\nnum_ctx 32768")).toBe(32768);
-    expect(parseOllamaNumCtxParameter("temperature 0.8\nnum_ctx -1\nnum_ctx 0")).toBeUndefined();
-    expect(parseOllamaNumCtxParameter('stop "<|eot_id|>"')).toBeUndefined();
-    expect(parseOllamaNumCtxParameter({ num_ctx: 8192 })).toBeUndefined();
+  it.each([
+    { parameters: "num_ctx 8192\nnum_ctx 32768", expected: 32768 },
+    { parameters: "temperature 0.8\nnum_ctx -1\nnum_ctx 0", expected: undefined },
+    { parameters: 'stop "<|eot_id|>"', expected: undefined },
+    { parameters: { num_ctx: 8192 }, expected: undefined },
+  ])("reads Modelfile num_ctx through the model show query", async ({ parameters, expected }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ model_info: {}, parameters })),
+    );
+
+    const info = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "test-model");
+
+    expect(info.contextWindow).toBe(expected);
+  });
+
+  it("fails soft and stops reading when discovery streams exceed the JSON byte cap", async () => {
+    // Larger than the shared 16 MiB readProviderJsonResponse cap so the bounded reader cancels
+    // the stream mid-flight; if the cap were removed the reader would buffer the whole payload.
+    const ONE_MIB = 1024 * 1024;
+    const TOTAL_CHUNKS = 32; // 32 MiB advertised body, double the cap.
+    const chunk = new Uint8Array(ONE_MIB);
+
+    let bytesPulled = 0;
+    let canceled = false;
+    const makeOversizedJsonResponse = (): Response => {
+      bytesPulled = 0;
+      canceled = false;
+      let pulled = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (pulled >= TOTAL_CHUNKS) {
+            controller.close();
+            return;
+          }
+          pulled += 1;
+          bytesPulled += chunk.length;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => makeOversizedJsonResponse()),
+    );
+    const tags = await fetchOllamaModels("http://127.0.0.1:11434");
+    expect(tags).toEqual({ reachable: false, models: [] });
+    expect(canceled).toBe(true);
+    // Only the bounded prefix is pulled, never the full advertised 32 MiB stream.
+    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => makeOversizedJsonResponse()),
+    );
+    const showInfo = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "evil-model:latest");
+    expect(showInfo).toEqual({});
+    expect(canceled).toBe(true);
+    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
   });
 });

@@ -3,9 +3,13 @@ import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CopilotClient, Tool as SdkTool } from "@github/copilot-sdk";
-import type {
-  AgentHarnessAttemptParams,
-  AgentHarnessAttemptResult,
+import { expectDefined } from "@openclaw/normalization-core";
+import {
+  abortAgentHarnessRun,
+  attachModelProviderRequestTransport,
+  queueAgentHarnessMessage,
+  type AgentHarnessAttemptParams,
+  type AgentHarnessAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -81,6 +85,18 @@ type FakeSession = {
 
 type FakeSdk = ReturnType<typeof makeFakeSdk>;
 
+function requireSession(sdk: FakeSdk): FakeSession {
+  return expectDefined(sdk.sessions[0], "first Copilot SDK session");
+}
+
+function requireCreateSessionConfig(sdk: FakeSdk): Record<string, unknown> {
+  return expectDefined(sdk.createSession.mock.calls[0]?.[0], "Copilot createSession config");
+}
+
+function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {
+  return expectDefined(sdk.resumeSession.mock.calls[0]?.[1], "Copilot resumeSession config");
+}
+
 function createDeferred<T>() {
   let rejectPromise: ((reason?: unknown) => void) | undefined;
   let resolvePromise: ((value: T | PromiseLike<T>) => void) | undefined;
@@ -102,11 +118,12 @@ function createDeferred<T>() {
 function flushAsync() {
   // Pump enough microtasks for the attempt to settle past every
   // pre-createSession `await` in attempt.ts (resolvePoolAcquire,
-  // resolveCopilotWorkspaceBootstrapContext, createSession, etc.).
+  // BYOK proxy setup, resolveCopilotWorkspaceBootstrapContext,
+  // createSession, etc.).
   // Each chained `then` is one tick; tests rely on this to observe
   // `sdk.sessions[0]` being populated before they emit deltas.
   const tick = () => Promise.resolve();
-  return tick().then(tick).then(tick);
+  return tick().then(tick).then(tick).then(tick).then(tick);
 }
 
 function waitForEventLoopTurn(): Promise<void> {
@@ -267,6 +284,12 @@ function makeParams(
     runId: "run-1",
     sessionFile: "session.json",
     sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    sessionTarget: {
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      storePath: "openclaw-agent.sqlite",
+    },
     timeoutMs: 5000,
     workspaceDir: "C:\\workspace",
     ...overrides,
@@ -390,6 +413,11 @@ describe("runCopilotAttempt", () => {
   it("keeps generic compaction hooks attached through asynchronous SDK completion", async () => {
     const beforeCompaction = vi.fn();
     const afterCompaction = vi.fn();
+    let computerContextEpoch: CopilotToolBridgeInput["computerContextEpoch"];
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      computerContextEpoch = input.computerContextEpoch;
+      return { sdkTools: [], sourceTools: [] };
+    });
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         { hookName: "before_compaction", handler: beforeCompaction },
@@ -407,7 +435,10 @@ describe("runCopilotAttempt", () => {
       },
     });
 
-    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+    const attempt = runCopilotAttempt(makeParams(), {
+      createToolBridge,
+      pool: makeFakePool(sdk),
+    });
     await vi.waitFor(() => {
       expect(activeSession?.sendAndWait).toHaveBeenCalled();
     });
@@ -415,8 +446,15 @@ describe("runCopilotAttempt", () => {
     if (!activeSession) {
       throw new Error("expected Copilot session");
     }
+    expect(computerContextEpoch?.value).toBe(0);
+    if (!computerContextEpoch) {
+      throw new Error("expected computer context epoch");
+    }
+    computerContextEpoch.frameToolCallId = "shot-1";
+    computerContextEpoch.frameImageIdentity = "frame-digest";
     expect(activeSession.disconnect).not.toHaveBeenCalled();
     activeSession.emit("session.compaction_complete", { messagesRemoved: 4, success: true });
+    expect(computerContextEpoch).toEqual({ value: 1 });
 
     await attempt;
 
@@ -895,10 +933,12 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(makeParams(), { pool });
 
-    const session = sdk.sessions[0];
+    const session = requireSession(sdk);
     expect(session.on.mock.calls[0]?.[0]).toBe("assistant.message_delta");
-    expect(session.on.mock.invocationCallOrder[0]).toBeLessThan(
-      session.sendAndWait.mock.invocationCallOrder[0],
+    expect(
+      expectDefined(session.on.mock.invocationCallOrder[0], "Copilot subscribe order"),
+    ).toBeLessThan(
+      expectDefined(session.sendAndWait.mock.invocationCallOrder[0], "Copilot send order"),
     );
   });
 
@@ -929,7 +969,7 @@ describe("runCopilotAttempt", () => {
     });
     await flushAsync();
 
-    const session = sdk.sessions[0];
+    const session = requireSession(sdk);
     session.emit("assistant.message_delta", { deltaContent: "a", messageId: "msg-1" });
     session.emit("assistant.message_delta", { deltaContent: "b", messageId: "msg-1" });
     session.emit("assistant.message_delta", { deltaContent: "c", messageId: "msg-1" });
@@ -963,7 +1003,7 @@ describe("runCopilotAttempt", () => {
     const runPromise = runCopilotAttempt(makeParams(), { createToolBridge, pool });
     await flushAsync();
 
-    const session = sdk.sessions[0];
+    const session = requireSession(sdk);
     session.emit("assistant.message_delta", { deltaContent: "a", messageId: "msg-1" });
     session.emit("assistant.message_delta", { deltaContent: "b", messageId: "msg-1" });
     session.emit("assistant.message_delta", { deltaContent: "c", messageId: "msg-1" });
@@ -989,7 +1029,7 @@ describe("runCopilotAttempt", () => {
     expect(sdk.resumeSession).toHaveBeenCalledTimes(1);
     expect(sdk.resumeSession.mock.calls[0]?.[0]).toBe("resume-1");
     expect(
-      (sdk.resumeSession.mock.calls[0][1] as { continuePendingWork?: boolean }).continuePendingWork,
+      (requireResumeSessionConfig(sdk) as { continuePendingWork?: boolean }).continuePendingWork,
     ).toBe(false);
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
   });
@@ -1082,7 +1122,7 @@ describe("runCopilotAttempt", () => {
     });
   });
 
-  it("replay-shim: mutating tool side effects make the attempt replay-unsafe", async () => {
+  it("replay-shim: consolidated mutating tool metadata makes the attempt replay-unsafe", async () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
@@ -1103,10 +1143,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool });
 
-    expect(result.toolMetas).toEqual([
-      { toolName: "write" },
-      { meta: "wrote file", toolName: "write" },
-    ]);
+    expect(result.toolMetas).toEqual([{ meta: "wrote file", toolName: "write" }]);
     expect(result.replayMetadata).toEqual({
       hadPotentialSideEffects: true,
       replaySafe: false,
@@ -1164,6 +1201,36 @@ describe("runCopilotAttempt", () => {
     expect(session.sendAndWait).toHaveBeenCalledTimes(1);
 
     controller.abort();
+    const result = await runPromise;
+
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    expect(result.aborted).toBe(true);
+    expect(result.externalAbort).toBe(true);
+  });
+
+  it("active-run abort path marks the attempt as externally aborted", async () => {
+    const sendDeferred = createDeferred<SessionEventShape | undefined>();
+    const sessionCreated = createDeferred<FakeSession>();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockReturnValue(sendDeferred.promise);
+        session.abort.mockImplementationOnce(async () => {
+          sendDeferred.resolve(undefined);
+        });
+        sessionCreated.resolve(session);
+      },
+    });
+    const pool = makeFakePool(sdk);
+    const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+
+    const runPromise = runCopilotAttempt(makeParams(), {
+      createToolBridge,
+      pool,
+    });
+    const session = await sessionCreated.promise;
+    await vi.waitFor(() => expect(session.sendAndWait).toHaveBeenCalledTimes(1));
+
+    expect(abortAgentHarnessRun("session-1")).toBe(true);
     const result = await runPromise;
 
     expect(session.abort).toHaveBeenCalledTimes(1);
@@ -1234,7 +1301,7 @@ describe("runCopilotAttempt", () => {
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
         sessionId: "session-1",
-        sessionKey: undefined,
+        sessionKey: "agent:main:session-1",
         workspaceDir: "C:\\workspace",
       }),
     );
@@ -1447,18 +1514,42 @@ describe("runCopilotAttempt", () => {
     expect(result.feedback).toContain("no permission policy installed");
   });
 
-  it("does not register onUserInputRequest (ask_user hidden from the model in MVP)", async () => {
-    const sdk = makeFakeSdk();
+  it("registers ask_user and resolves it from the active OpenClaw queue", async () => {
+    const onBlockReply = vi.fn();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session, cfg) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          const handler = cfg.onUserInputRequest;
+          if (typeof handler !== "function") {
+            throw new Error("expected onUserInputRequest handler");
+          }
+          const response = await handler(
+            {
+              question: "Pick a mode",
+              choices: ["Fast", "Deep"],
+              allowFreeform: false,
+            },
+            { sessionId: session.sessionId },
+          );
+          return makeAssistantMessageEvent(`selected ${response.answer}`);
+        });
+      },
+    });
     const pool = makeFakePool(sdk);
 
-    await runCopilotAttempt(makeParams(), { pool });
+    const attempt = runCopilotAttempt(makeParams({ onBlockReply }), { pool });
 
-    const cfg = sdk.createSession.mock.calls[0]?.[0];
-    // Per the SDK contract (types.d.ts: `When provided, enables the
-    // ask_user tool allowing the agent to ask questions`), omitting the
-    // handler hides ask_user from the model entirely. The MVP keeps it
-    // hidden until a real channel/TUI prompt bridge exists.
-    expect("onUserInputRequest" in cfg).toBe(false);
+    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
+    expect(queueAgentHarnessMessage("session-1", "2")).toBe(true);
+    const result = await attempt;
+
+    const cfg = requireCreateSessionConfig(sdk);
+    expect(typeof cfg.onUserInputRequest).toBe("function");
+    expect(onBlockReply.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ text: expect.stringContaining("Pick a mode") }),
+    );
+    expect(result.assistantTexts).toEqual(["selected Deep"]);
+    expect(queueAgentHarnessMessage("session-1", "late")).toBe(false);
   });
 
   it("enableSessionTelemetry is omitted from createSession when undefined (SDK default)", async () => {
@@ -1467,7 +1558,7 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(makeParams(), { pool });
 
-    const cfg = sdk.createSession.mock.calls[0]?.[0];
+    const cfg = requireCreateSessionConfig(sdk);
     expect("enableSessionTelemetry" in cfg).toBe(false);
   });
 
@@ -1522,7 +1613,7 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(makeParams(), { pool });
 
-    const cfg = sdk.createSession.mock.calls[0]?.[0];
+    const cfg = requireCreateSessionConfig(sdk);
     expect("infiniteSessions" in cfg).toBe(false);
   });
 
@@ -1575,7 +1666,7 @@ describe("runCopilotAttempt", () => {
 
       await runCopilotAttempt(makeParams(), { pool });
 
-      const cfg = sdk.createSession.mock.calls[0]?.[0];
+      const cfg = requireCreateSessionConfig(sdk);
       // No rendered instructions => skip the systemMessage field so
       // the SDK default (foundation only) applies. Avoids polluting
       // session logs with an empty `append` and removes a no-op SDK
@@ -1601,7 +1692,7 @@ describe("runCopilotAttempt", () => {
       };
       expect(cfg.systemMessage?.mode).toBe("append");
       expect(cfg.systemMessage?.content).toBe(
-        "## Group Chat Context\nTool and file actions are disabled for this sender.",
+        "## Conversation Context\nTool and file actions are disabled for this sender.",
       );
     });
 
@@ -1617,7 +1708,7 @@ describe("runCopilotAttempt", () => {
         { pool },
       );
 
-      const cfg = sdk.createSession.mock.calls[0]?.[0];
+      const cfg = requireCreateSessionConfig(sdk);
       expect("systemMessage" in cfg).toBe(false);
     });
 
@@ -1689,7 +1780,7 @@ describe("runCopilotAttempt", () => {
         systemMessage?: { mode?: string; content?: string };
       };
       expect(cfg.systemMessage?.content).toBe(
-        `${rendered}\n\n## Group Chat Context\nOnly answer in the current group thread.`,
+        `${rendered}\n\n## Conversation Context\nOnly answer in the current group thread.`,
       );
     });
 
@@ -1854,6 +1945,7 @@ describe("runCopilotAttempt", () => {
   it("retains a timed-out session until later compaction reaches session.idle", async () => {
     const afterCompaction = vi.fn();
     const onDeferredCompaction = vi.fn();
+    const cleanupToolBridge = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
     );
@@ -1866,8 +1958,14 @@ describe("runCopilotAttempt", () => {
         );
       },
     });
+    const createToolBridge = vi.fn(async () => ({
+      cleanup: cleanupToolBridge,
+      sdkTools: [],
+      sourceTools: [],
+    }));
 
     const result = await runCopilotAttempt(makeParams(), {
+      createToolBridge,
       onDeferredCompaction,
       pool: makeFakePool(sdk),
     });
@@ -1877,6 +1975,7 @@ describe("runCopilotAttempt", () => {
     expect(onDeferredCompaction).toHaveBeenCalledWith(
       expect.objectContaining({ sdkSessionId: "sess-1" }),
     );
+    expect(cleanupToolBridge).not.toHaveBeenCalled();
     expect(activeSession?.disconnect).not.toHaveBeenCalled();
 
     activeSession?.emit("session.compaction_start", {});
@@ -1890,6 +1989,7 @@ describe("runCopilotAttempt", () => {
     await vi.waitFor(() => {
       expect(activeSession?.disconnect).toHaveBeenCalledTimes(1);
     });
+    expect(cleanupToolBridge).toHaveBeenCalledTimes(1);
   });
 
   it("does not mark a timeout after SDK compaction has completed as active compaction", async () => {
@@ -2055,7 +2155,7 @@ describe("runCopilotAttempt", () => {
       pool,
     });
     await flushAsync();
-    const session = sdk.sessions[0];
+    const session = requireSession(sdk);
     session.emit("assistant.message_delta", { deltaContent: "partial-", messageId: "msg-1" });
     await flushAsync();
     // SDK timer fires before the slow delta consumer resolves.
@@ -2163,7 +2263,7 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(makeParams(), { pool });
 
-    const session = sdk.sessions[0];
+    const session = requireSession(sdk);
     expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
     expect(session.disconnect).toHaveBeenCalledTimes(1);
     expect(pool["release"]).toHaveBeenCalledTimes(1);
@@ -2179,7 +2279,7 @@ describe("runCopilotAttempt", () => {
     const pool = makeFakePool(sdk);
 
     const result = await runCopilotAttempt(makeParams(), { pool });
-    const session = sdk.sessions[0];
+    const session = requireSession(sdk);
 
     expect(result.promptError).toBe(error);
     expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
@@ -2273,6 +2373,152 @@ describe("runCopilotAttempt", () => {
     expect(options.useLoggedInUser).toBe(false);
   });
 
+  it("pool keying: BYOK does not resolve unrelated GitHub auth", async () => {
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+
+    await runCopilotAttempt(
+      makeParams({
+        auth: { gitHubToken: "unrelated-token" } as never,
+        model: {
+          api: "openai-responses",
+          baseUrl: "https://api.example.test/v1",
+          id: "gpt-test",
+          provider: "custom-openai",
+        } as never,
+        resolvedApiKey: "byok-token",
+        authProfileId: "custom-openai:main",
+      } as never),
+      { pool },
+    );
+
+    const key = (vi.mocked(pool["acquire"]).mock.calls[0] as unknown[] | undefined)?.[0] as {
+      authMode: string;
+      authProfileId?: string;
+    };
+    const options = (vi.mocked(pool["acquire"]).mock.calls[0] as unknown[] | undefined)?.[1] as {
+      gitHubToken?: string;
+      useLoggedInUser?: boolean;
+    };
+    const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      provider?: { apiKey?: string; baseUrl?: string };
+    };
+
+    expect(key.authMode).toBe("byok");
+    expect(key.authProfileId).toBe("custom-openai:main");
+    expect(options.gitHubToken).toBeUndefined();
+    expect(options.useLoggedInUser).toBe(false);
+    expect(cfg.provider).toEqual(
+      expect.objectContaining({
+        apiKey: "byok-token",
+        baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{24}\/v1$/),
+      }),
+    );
+  });
+
+  it("forwards BYOK provider headers on the model request turn", async () => {
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+
+    await runCopilotAttempt(
+      makeParams({
+        model: {
+          api: "anthropic-messages",
+          baseUrl: "https://anthropic.example.test",
+          headers: {
+            "X-Tenant": "tenant-a",
+            "X-Trace": "trace-1",
+          },
+          id: "claude-test",
+          provider: "anthropic-proxy",
+        } as never,
+        resolvedApiKey: "byok-token",
+        authProfileId: "anthropic-proxy:main",
+      } as never),
+      { pool },
+    );
+
+    const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      provider?: { headers?: Record<string, string> };
+    };
+    const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as {
+      requestHeaders?: Record<string, string>;
+    };
+    expect(cfg.provider?.headers).toEqual({
+      "X-Tenant": "tenant-a",
+      "X-Trace": "trace-1",
+    });
+    expect(sendOptions.requestHeaders).toEqual({
+      "X-Tenant": "tenant-a",
+      "X-Trace": "trace-1",
+    });
+  });
+
+  it("preserves prepared BYOK header-auth without synthesizing SDK apiKey auth", async () => {
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+    const model = attachModelProviderRequestTransport(
+      {
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.test/v1",
+        headers: { "x-api-key": "header-secret" },
+        id: "gpt-test",
+        provider: "custom-header-proxy",
+      },
+      { auth: { mode: "header", headerName: "x-api-key", value: "header-secret" } },
+    );
+
+    await runCopilotAttempt(
+      makeParams({
+        model: model as never,
+        resolvedApiKey: "header-secret",
+        authProfileId: "custom-header-proxy:main",
+      } as never),
+      { pool },
+    );
+
+    const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      provider?: { apiKey?: string; headers?: Record<string, string> };
+    };
+    const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as {
+      requestHeaders?: Record<string, string>;
+    };
+    expect(cfg.provider).toEqual(
+      expect.objectContaining({
+        headers: { "x-api-key": "header-secret" },
+      }),
+    );
+    expect(cfg.provider).not.toHaveProperty("apiKey");
+    expect(sendOptions.requestHeaders).toEqual({ "x-api-key": "header-secret" });
+  });
+
+  it("rejects BYOK providers with request transport policy overrides before creating a SDK session", async () => {
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+    const model = attachModelProviderRequestTransport(
+      {
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.test/v1",
+        id: "gpt-test",
+        provider: "custom-header-proxy",
+      },
+      { proxy: { mode: "env-proxy" } },
+    );
+
+    const result = await runCopilotAttempt(
+      makeParams({
+        model: model as never,
+        resolvedApiKey: "header-secret",
+        authProfileId: "custom-header-proxy:main",
+      } as never),
+      { pool },
+    );
+
+    expect(getPromptErrorCode(result)).toBe("model_not_supported");
+    expect((result.promptError as Error | undefined)?.message).toContain("request proxy");
+    expect(sdk.createSession).not.toHaveBeenCalled();
+  });
+
   describe("session-level gitHubToken (independent of client-level)", () => {
     // The SDK contract (@github/copilot-sdk/dist/types.d.ts:1168-1178)
     // makes `SessionConfig.gitHubToken` independent of the client-level
@@ -2336,13 +2582,44 @@ describe("runCopilotAttempt", () => {
       expect(resumeCfg.gitHubToken).toBe("contract-token-resume");
     });
 
+    it("BYOK provider config is forwarded to resumeSession", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+
+      await runCopilotAttempt(
+        makeParams({
+          auth: { gitHubToken: "unrelated-token" } as never,
+          model: {
+            api: "openai-responses",
+            baseUrl: "https://api.example.test/v1",
+            id: "gpt-test",
+            provider: "custom-openai",
+          } as never,
+          resolvedApiKey: "byok-token",
+          authProfileId: "custom-openai:main",
+          initialReplayState: { sdkSessionId: "resume-target" } as never,
+        } as never),
+        { pool },
+      );
+
+      const resumeCfg = sdk.resumeSession.mock.calls[0]?.[1] as {
+        provider?: { apiKey?: string; baseUrl?: string };
+      };
+      expect(resumeCfg.provider).toEqual(
+        expect.objectContaining({
+          apiKey: "byok-token",
+          baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{24}\/v1$/),
+        }),
+      );
+    });
+
     it("SessionConfig.gitHubToken is omitted when useLoggedInUser is the resolved mode", async () => {
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
 
       await runCopilotAttempt(makeParams({ auth: { useLoggedInUser: true } as never }), { pool });
 
-      const cfg = sdk.createSession.mock.calls[0]?.[0];
+      const cfg = requireCreateSessionConfig(sdk);
       // Per the SDK contract, passing both useLoggedInUser and a
       // session-level gitHubToken would be contradictory. The
       // logged-in identity already determines content exclusion /
@@ -2363,7 +2640,7 @@ describe("runCopilotAttempt", () => {
       delete process.env.GITHUB_TOKEN;
       try {
         await runCopilotAttempt(makeParams({ auth: {} as never }), { pool });
-        const cfg = sdk.createSession.mock.calls[0]?.[0];
+        const cfg = requireCreateSessionConfig(sdk);
         expect("gitHubToken" in cfg).toBe(false);
       } finally {
         if (prevOpenclaw !== undefined) {
@@ -2382,7 +2659,7 @@ describe("runCopilotAttempt", () => {
       dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockResolvedValue(undefined);
     });
 
-    it("invokes dual-write mirror with sessionFile and scoped idempotencyScope when sessionFile is set", async () => {
+    it("invokes dual-write mirror with runtime identity and scoped idempotencyScope", async () => {
       dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
@@ -2391,23 +2668,36 @@ describe("runCopilotAttempt", () => {
       });
       const pool = makeFakePool(sdk);
 
-      await runCopilotAttempt(makeParams(), { pool });
+      await runCopilotAttempt(
+        makeParams({
+          sessionTarget: {
+            sessionId: "session-1",
+            sessionKey: "agent:main:session-1",
+            storePath: "sessions.json",
+          },
+        }),
+        { pool },
+      );
 
       expect(dualWriteMock.dualWriteCopilotTranscriptBestEffort).toHaveBeenCalledTimes(1);
       const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        sessionFile: string;
+        sessionId: string;
+        sessionKey: string;
+        storePath?: string;
         messages: Array<{ role: string }>;
         idempotencyScope?: string;
       };
-      expect(args.sessionFile).toBe("session.json");
-      expect(args.idempotencyScope).toMatch(/^copilot:/u);
+      expect(args.sessionId).toBe("session-1");
+      expect(args.sessionKey).toBe("agent:main:session-1");
+      expect(args.storePath).toBe("sessions.json");
+      expect(args.idempotencyScope).toBe("copilot:sess-1");
       expect(args.messages.length).toBeGreaterThan(0);
       const roles = args.messages.map((m) => m.role);
       expect(roles).toContain("user");
       expect(roles).toContain("assistant");
     });
 
-    it("does not invoke dual-write mirror when sessionFile is absent", async () => {
+    it("does not invoke dual-write mirror when runtime identity is absent", async () => {
       dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
@@ -2416,7 +2706,7 @@ describe("runCopilotAttempt", () => {
       });
       const pool = makeFakePool(sdk);
       const params = makeParams() as unknown as Record<string, unknown>;
-      delete params.sessionFile;
+      delete params.sessionTarget;
 
       await runCopilotAttempt(params as never, { pool });
 
@@ -2435,7 +2725,11 @@ describe("runCopilotAttempt", () => {
       await runCopilotAttempt(makeParams(), { pool });
 
       const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
+        messages: Array<{
+          role: string;
+          idempotencyKey?: string;
+          __openclaw?: { mirrorIdentity?: string };
+        }>;
       };
       for (const [index, message] of args.messages.entries()) {
         if (
@@ -2446,13 +2740,12 @@ describe("runCopilotAttempt", () => {
           continue;
         }
         const identity = message["__openclaw"]?.mirrorIdentity ?? "";
-        // The terminal assistant carries the turn-stable
-        // `${runId}:assistant:final` identity attached by attempt.ts
-        // (rubber-duck-validated identity scheme — survives SDK session
-        // reuse across turns). Caller-passed history without an
-        // identity falls through to the positional `${scope}:role:idx`
-        // fingerprint that the existing tagging map applies.
-        if (message.role === "assistant" && index === args.messages.length - 1) {
+        // The current user and terminal assistant carry turn-stable identities.
+        // Caller-passed history without an identity falls through to
+        // the positional `${scope}:role:idx`.
+        if (message.role === "user" && message.idempotencyKey === "run-1:user") {
+          expect(identity).toBe("run-1:prompt");
+        } else if (message.role === "assistant" && index === args.messages.length - 1) {
           expect(identity).toMatch(/:assistant:final$/u);
           expect(identity).toContain("run-1");
         } else {
@@ -2508,12 +2801,14 @@ describe("runCopilotAttempt", () => {
         messages: Array<{
           role: string;
           content: unknown;
+          idempotencyKey?: string;
           __openclaw?: { mirrorIdentity?: string };
         }>;
       };
       expect(args.messages.length).toBe(2);
       expect(args.messages[0]?.role).toBe("user");
       expect(args.messages[0]?.content).toBe("what's my name?");
+      expect(args.messages[0]?.idempotencyKey).toBe("run-A:user");
       expect(args.messages[0]?.["__openclaw"]?.mirrorIdentity).toBe("run-A:prompt");
       expect(args.messages[1]?.role).toBe("assistant");
       expect(args.messages[1]?.["__openclaw"]?.mirrorIdentity).toBe("run-A:assistant:final");
@@ -2533,10 +2828,13 @@ describe("runCopilotAttempt", () => {
       await runCopilotAttempt(makeParams(), { pool });
 
       const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        messages: Array<{ role: string }>;
+        messages: Array<{ role: string; idempotencyKey?: string }>;
       };
       const userCount = args.messages.filter((m) => m.role === "user").length;
       expect(userCount).toBe(1);
+      expect(args.messages.find((message) => message.role === "user")?.idempotencyKey).toBe(
+        "run-1:user",
+      );
     });
 
     it("prefers transcriptPrompt over prompt for the synthetic user body", async () => {
@@ -2642,13 +2940,15 @@ describe("runCopilotAttempt", () => {
       );
 
       const calls = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls;
+      const firstCall = expectDefined(calls[0], "first Copilot transcript mirror call");
+      const secondCall = expectDefined(calls[1], "second Copilot transcript mirror call");
       const id1 = (
-        calls[0][0] as {
+        firstCall[0] as {
           messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
         }
       ).messages.find((m) => m.role === "user")?.["__openclaw"]?.mirrorIdentity;
       const id2 = (
-        calls[1][0] as {
+        secondCall[0] as {
           messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
         }
       ).messages.find((m) => m.role === "user")?.["__openclaw"]?.mirrorIdentity;
@@ -3066,7 +3366,8 @@ describe("runCopilotAttempt", () => {
   // permission policy and pollute the catalog under the default reject
   // policy. `createSessionConfig` derives `availableTools` from the
   // post-filter `sdkTools` so create- and resume-session always carry
-  // exactly the names of the tools the bridge actually exposed.
+  // exactly the names of the tools the bridge actually exposed plus the
+  // built-in `ask_user` tool owned by the registered user-input handler.
   describe("availableTools surface restriction (PR #86155 [P1] round-8)", () => {
     function makeFakeSdkTool(name: string): SdkTool {
       return {
@@ -3090,7 +3391,26 @@ describe("runCopilotAttempt", () => {
 
       await runCopilotAttempt(makeParams(), { createToolBridge, pool });
 
-      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual(["read", "edit"]);
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual([
+        "read",
+        "edit",
+        "builtin:ask_user",
+      ]);
+    });
+
+    it("keeps a host-scoped Crestodian create-session surface ring-zero", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("crestodian")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(makeParams({ toolsAllow: ["crestodian"] }), {
+        createToolBridge,
+        isHostScopedToolActive: (toolName) => toolName === "crestodian",
+        pool,
+      });
+
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual(["crestodian"]);
     });
 
     it("forwards `[]` to the SDK when the bridge returns no tools (disable / raw / fully filtered)", async () => {
@@ -3100,12 +3420,13 @@ describe("runCopilotAttempt", () => {
       // (`modelRun: true` or `promptMode: "none"`), an empty
       // `toolsAllow: []`, and an unsupported provider to `sdkTools: []`.
       // Whatever the upstream reason, `availableTools` must be the same
-      // empty list so the SDK cannot fall back to its native catalog.
+      // ask_user-only list so the SDK cannot fall back to its native
+      // catalog while the registered user-input handler remains usable.
       const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
 
       await runCopilotAttempt(makeParams(), { createToolBridge, pool });
 
-      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual([]);
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual(["builtin:ask_user"]);
     });
 
     it("forwards the full bridged set when the run is unrestricted (no toolsAllow)", async () => {
@@ -3131,6 +3452,7 @@ describe("runCopilotAttempt", () => {
         "edit",
         "exec",
         "message",
+        "builtin:ask_user",
       ]);
     });
 
@@ -3156,7 +3478,34 @@ describe("runCopilotAttempt", () => {
 
       const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
       const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
-      expect(resumeCfg?.availableTools).toEqual(["read"]);
+      expect(resumeCfg?.availableTools).toEqual(["read", "builtin:ask_user"]);
+    });
+
+    it("keeps a host-scoped Crestodian resume-session surface ring-zero", async () => {
+      const sdk = makeFakeSdk({
+        onResumeSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("resumed"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("crestodian")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(
+        makeParams({
+          initialReplayState: { sdkSessionId: "sess-crestodian" },
+          toolsAllow: ["crestodian"],
+        } as never),
+        {
+          createToolBridge,
+          isHostScopedToolActive: (toolName) => toolName === "crestodian",
+          pool,
+        },
+      );
+
+      const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
+      const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
+      expect(resumeCfg?.availableTools).toEqual(["crestodian"]);
     });
 
     it("forwards `[]` to resumeSession when the bridge returns no tools", async () => {
@@ -3175,7 +3524,7 @@ describe("runCopilotAttempt", () => {
 
       const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
       const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
-      expect(resumeCfg?.availableTools).toEqual([]);
+      expect(resumeCfg?.availableTools).toEqual(["builtin:ask_user"]);
     });
   });
 
@@ -3279,3 +3628,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

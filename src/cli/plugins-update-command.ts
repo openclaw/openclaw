@@ -12,25 +12,28 @@ import { extractShippedPluginInstallConfigRecords } from "../config/plugin-insta
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
+import { normalizeUpdateChannel } from "../infra/update-channels.js";
+import {
+  containsConfigIncludeDirective,
+  resolveCombinedPluginAndHookConfigMutationPreflight,
+  resolveInstallConfigMutationPreflights,
+  selectInstallMutationWriteOptions,
+} from "../plugins/install-persistence.js";
+import { commitPluginInstallRecordsWithConfig } from "../plugins/install-record-commit.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
   isPluginInstallRecordUpdateSource,
   pluginInstallRecordMayMigrateConfigId,
   updateNpmInstalledPlugins,
 } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  containsConfigIncludeDirective,
-  resolveCombinedPluginAndHookConfigMutationPreflight,
-  resolveInstallConfigMutationPreflights,
-  selectInstallMutationWriteOptions,
-} from "./plugins-install-persist.js";
-import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
-import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
+import { VERSION } from "../version.js";
+import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
   resolveHookPackUpdateSelection,
@@ -100,7 +103,12 @@ function projectUpdaterResultOntoSourceConfig(params: {
 /** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
 export async function runPluginUpdateCommand(params: {
   id?: string;
-  opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
+  opts: {
+    all?: boolean;
+    acknowledgeClawHubRisk?: boolean;
+    dryRun?: boolean;
+    dangerouslyForceUnsafeInstall?: boolean;
+  };
 }) {
   assertConfigWriteAllowedInCurrentMode();
 
@@ -142,7 +150,7 @@ export async function runPluginUpdateCommand(params: {
   );
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
-    warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
+    warn: (msg: string) => defaultRuntime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
   };
   if (params.opts.dangerouslyForceUnsafeInstall) {
     defaultRuntime.log(theme.warn(DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING));
@@ -260,7 +268,17 @@ export async function runPluginUpdateCommand(params: {
           pluginIds: pluginSelection.pluginIds,
           specOverrides: pluginSelection.specOverrides,
           dryRun: params.opts.dryRun,
+          officialPluginUpdateChannel: params.opts.all
+            ? (normalizeUpdateChannel(cfg.update?.channel) ?? undefined)
+            : undefined,
+          syncOfficialPluginInstalls: params.opts.all ? true : undefined,
+          coreVersion: VERSION,
           dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
+          ...resolveClawHubRiskAcknowledgementCliOptions({
+            acknowledgeClawHubRisk: params.opts.acknowledgeClawHubRisk,
+            action: "updating",
+            allowPrompt: !params.opts.dryRun,
+          }),
           logger,
           onIntegrityDrift: async (drift) => {
             const specLabel = drift.resolvedSpec ?? drift.spec;

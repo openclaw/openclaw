@@ -135,6 +135,12 @@ const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES = 60;
 const MAX_REMOTE_BATCH_TIMEOUT_MINUTES = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
 
+type ConfiguredMemoryEmbeddingProvider = {
+  defaultModel?: string;
+  transport?: "local" | "remote";
+  supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;
+};
+
 function resolveRemoteBatchPollIntervalMs(
   overrideValue: number | undefined,
   defaultValue: number | undefined,
@@ -178,10 +184,19 @@ function normalizeSources(
 function getConfiguredMemoryEmbeddingProvider(
   providerId: string,
   cfg: OpenClawConfig,
-): ReturnType<typeof getMemoryEmbeddingProvider> {
+): ConfiguredMemoryEmbeddingProvider | undefined {
+  // `none` is the built-in FTS-only sentinel, never a plugin capability.
+  // Avoid cold plugin discovery when semantic memory is intentionally disabled.
+  if (normalizeProviderId(providerId) === "none") {
+    return undefined;
+  }
   const directAdapter = getMemoryEmbeddingProvider(providerId);
   if (directAdapter) {
     return directAdapter;
+  }
+  const genericAdapter = getEmbeddingProvider(providerId, cfg);
+  if (genericAdapter) {
+    return genericAdapter;
   }
   const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
   const ownerApi = providerConfig?.api?.trim();
@@ -215,7 +230,7 @@ function mergeConfig(
   const overrideRemote = overrides?.remote;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
   const fallbackAdapter =
-    fallback && fallback !== "none"
+    normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
       ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)
       : undefined;
   const hasRemoteConfig = Boolean(
@@ -466,11 +481,15 @@ export function resolveMemorySearchConfig(
   if (!resolved.enabled) {
     return null;
   }
+  const isFtsOnly = normalizeProviderId(resolved.provider) === "none";
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
-  const multimodalProvider = getConfiguredMemoryEmbeddingProvider(resolved.provider, cfg);
+  const multimodalProvider = isFtsOnly
+    ? undefined
+    : getConfiguredMemoryEmbeddingProvider(resolved.provider, cfg);
   // Custom provider ids can map to a memory adapter through models.providers.<id>.api.
   // Keep multimodal validation on that config-aware adapter, not the raw id.
   if (
+    !isFtsOnly &&
     multimodalActive &&
     ((multimodalProvider &&
       !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)) ||

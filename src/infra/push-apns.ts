@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, toErrorObject } from "./errors.js";
@@ -45,7 +46,7 @@ type RelayApnsRegistration = {
   sendGrant: string;
   installationId: string;
   topic: string;
-  environment: "production";
+  environment: ApnsEnvironment;
   distribution: "official";
   updatedAtMs: number;
   relayOrigin?: string;
@@ -65,7 +66,7 @@ export type ApnsAuthConfig = {
 type ApnsAuthConfigResolution = { ok: true; value: ApnsAuthConfig } | { ok: false; error: string };
 
 /** Normalized APNs push result returned to gateway push/nodes methods. */
-export type ApnsPushResult = {
+type ApnsPushResult = {
   ok: boolean;
   status: number;
   apnsId?: string;
@@ -211,9 +212,9 @@ function parseReason(body: string): string | undefined {
     const parsed = JSON.parse(trimmed) as { reason?: unknown };
     return typeof parsed.reason === "string" && parsed.reason.trim().length > 0
       ? parsed.reason.trim()
-      : trimmed.slice(0, 200);
+      : truncateUtf16Safe(trimmed, 200);
   } catch {
-    return trimmed.slice(0, 200);
+    return truncateUtf16Safe(trimmed, 200);
   }
 }
 
@@ -350,7 +351,7 @@ function normalizeRelayRegistration(
     !sendGrant ||
     !installationId ||
     !isValidTopic(topic) ||
-    environment !== "production" ||
+    !environment ||
     distribution !== "official"
   ) {
     return null;
@@ -465,8 +466,8 @@ export async function registerApnsRegistration(
       const environment = normalizeApnsEnvironment(params.environment);
       const distribution = normalizeDistribution(params.distribution);
       const relayOrigin = normalizeRelayOrigin(params.relayOrigin);
-      if (environment !== "production") {
-        throw new Error("relay registrations must use production environment");
+      if (!environment) {
+        throw new Error("relay registrations must use valid APNs environment");
       }
       if (distribution !== "official") {
         throw new Error("relay registrations must use official distribution");
@@ -558,6 +559,7 @@ function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boole
       a.sendGrant === b.sendGrant &&
       a.installationId === b.installationId &&
       a.distribution === b.distribution &&
+      a.relayOrigin === b.relayOrigin &&
       a.tokenDebugSuffix === b.tokenDebugSuffix
     );
   }
@@ -587,10 +589,7 @@ export async function clearApnsRegistrationIfCurrent(params: {
 }
 
 /** Returns true for APNs responses that mean the direct device token is no longer usable. */
-export function shouldInvalidateApnsRegistration(result: {
-  status: number;
-  reason?: string;
-}): boolean {
+function shouldInvalidateApnsRegistration(result: { status: number; reason?: string }): boolean {
   if (result.status === 410) {
     return true;
   }
@@ -838,7 +837,7 @@ function toPushResult(params: {
         "tokenSuffix" in response ? response : undefined,
       ),
     topic: params.registration.topic,
-    environment: params.registration.transport === "relay" ? "production" : response.environment,
+    environment: response.environment ?? params.registration.environment,
     transport: params.registration.transport,
   };
 }
@@ -929,7 +928,10 @@ function resolveExecApprovalAlertBody(): string {
   return EXEC_APPROVAL_GENERIC_ALERT_BODY;
 }
 
-function createExecApprovalAlertPayload(params: { nodeId: string; approvalId: string }): object {
+function createExecApprovalAlertPayload(params: {
+  approvalId: string;
+  gatewayDeviceId: string;
+}): object {
   return {
     aps: {
       alert: {
@@ -943,12 +945,16 @@ function createExecApprovalAlertPayload(params: { nodeId: string; approvalId: st
     openclaw: {
       kind: "exec.approval.requested",
       approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
       ts: Date.now(),
     },
   };
 }
 
-function createExecApprovalResolvedPayload(params: { nodeId: string; approvalId: string }): object {
+function createExecApprovalResolvedPayload(params: {
+  approvalId: string;
+  gatewayDeviceId: string;
+}): object {
   return {
     aps: {
       "content-available": 1,
@@ -956,6 +962,7 @@ function createExecApprovalResolvedPayload(params: { nodeId: string; approvalId:
     openclaw: {
       kind: "exec.approval.resolved",
       approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
       ts: Date.now(),
     },
   };
@@ -1011,6 +1018,7 @@ type RelayApnsBackgroundWakeParams = ApnsBackgroundWakeCommonParams & {
 type ApnsExecApprovalAlertCommonParams = {
   nodeId: string;
   approvalId: string;
+  gatewayDeviceId: string;
   timeoutMs?: number;
 };
 
@@ -1034,6 +1042,7 @@ type RelayApnsExecApprovalAlertParams = ApnsExecApprovalAlertCommonParams & {
 type ApnsExecApprovalResolvedCommonParams = {
   nodeId: string;
   approvalId: string;
+  gatewayDeviceId: string;
   timeoutMs?: number;
 };
 
@@ -1126,8 +1135,8 @@ export async function sendApnsExecApprovalAlert(
   params: DirectApnsExecApprovalAlertParams | RelayApnsExecApprovalAlertParams,
 ): Promise<ApnsPushAlertResult> {
   const payload = createExecApprovalAlertPayload({
-    nodeId: params.nodeId,
     approvalId: params.approvalId,
+    gatewayDeviceId: params.gatewayDeviceId,
   });
 
   if (params.registration.transport === "relay") {
@@ -1159,8 +1168,8 @@ export async function sendApnsExecApprovalResolvedWake(
   params: DirectApnsExecApprovalResolvedParams | RelayApnsExecApprovalResolvedParams,
 ): Promise<ApnsPushWakeResult> {
   const payload = createExecApprovalResolvedPayload({
-    nodeId: params.nodeId,
     approvalId: params.approvalId,
+    gatewayDeviceId: params.gatewayDeviceId,
   });
 
   if (params.registration.transport === "relay") {
@@ -1188,3 +1197,4 @@ export async function sendApnsExecApprovalResolvedWake(
 }
 
 export { type ApnsRelayConfig, resolveApnsRelayConfigFromEnv };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

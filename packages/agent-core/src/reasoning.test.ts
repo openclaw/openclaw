@@ -35,6 +35,21 @@ describe("resolveAgentReasoningOption", () => {
     expect(resolveAgentReasoningOption(makeModel({ off: "low" }), "high")).toBe("high");
   });
 
+  it("preserves explicit off for Sonnet 5 on Anthropic Messages routes", () => {
+    expect(
+      resolveAgentReasoningOption(makeModel(undefined, { id: "claude-sonnet-5" }), "off"),
+    ).toBe("off");
+  });
+
+  it("uses the route-owned Sonnet 5 off mapping when provided", () => {
+    expect(
+      resolveAgentReasoningOption(
+        makeModel({ off: "low" }, { id: "anthropic.claude-sonnet-5" }),
+        "off",
+      ),
+    ).toBe("low");
+  });
+
   it.each(["anthropic-messages", "bedrock-converse-stream"] as const)(
     "maps explicit off to low for canonical Fable aliases on %s",
     (api) => {

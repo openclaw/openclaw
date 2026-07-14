@@ -35,10 +35,6 @@ type SyntheticOpenAIModelCatalogEntry = {
 
 const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
-export function toOpenAIDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
-
 export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined): string {
   return normalizeOptionalString(cfg?.models?.providers?.openai?.baseUrl) ?? OPENAI_API_BASE_URL;
 }

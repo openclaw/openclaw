@@ -18,6 +18,7 @@
       "provider": "fireworks",
       "method": "api-key",
       "choiceId": "fireworks-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Fireworks API key",
       "groupId": "fireworks",
       "groupLabel": "Fireworks",

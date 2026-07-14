@@ -6,15 +6,18 @@
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
+  buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
+  type LatestSubagentRunReadIndex,
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export {
   getSubagentSessionRuntimeMs,
@@ -29,6 +32,11 @@ export function buildSubagentRunReadIndex(now = Date.now()): SubagentRunReadInde
     inMemoryRuns: subagentRuns.values(),
     now,
   });
+}
+
+/** Builds an O(1) latest-run lookup from one persisted and in-memory snapshot. */
+export function buildLatestSubagentRunReadIndex(): LatestSubagentRunReadIndex {
+  return buildLatestSubagentRunReadIndexFromRuns(getSubagentRunsSnapshotForRead(subagentRuns));
 }
 
 /** Lists runs controlled by a session key. */
@@ -89,12 +97,12 @@ export function getSessionDisplaySubagentRunByChildSessionKey(
       continue;
     }
     if (typeof entry.endedAt === "number") {
-      if (!latestInMemoryEnded || entry.createdAt > latestInMemoryEnded.createdAt) {
+      if (!latestInMemoryEnded || compareSubagentRunGeneration(entry, latestInMemoryEnded) > 0) {
         latestInMemoryEnded = entry;
       }
       continue;
     }
-    if (!latestInMemoryActive || entry.createdAt > latestInMemoryActive.createdAt) {
+    if (!latestInMemoryActive || compareSubagentRunGeneration(entry, latestInMemoryActive) > 0) {
       latestInMemoryActive = entry;
     }
   }
@@ -103,7 +111,8 @@ export function getSessionDisplaySubagentRunByChildSessionKey(
     // Fresh in-memory terminal state is more accurate than an older active snapshot row.
     if (
       latestInMemoryEnded &&
-      (!latestInMemoryActive || latestInMemoryEnded.createdAt > latestInMemoryActive.createdAt)
+      (!latestInMemoryActive ||
+        compareSubagentRunGeneration(latestInMemoryEnded, latestInMemoryActive) > 0)
     ) {
       return latestInMemoryEnded;
     }
@@ -127,7 +136,7 @@ export function getLatestSubagentRunByChildSessionKey(
     if (entry.childSessionKey !== key) {
       continue;
     }
-    if (!latest || entry.createdAt > latest.createdAt) {
+    if (!latest || compareSubagentRunGeneration(entry, latest) > 0) {
       latest = entry;
     }
   }

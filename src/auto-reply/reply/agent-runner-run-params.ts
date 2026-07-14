@@ -19,14 +19,16 @@ export function resolveModelFallbackOptions(
   configOverride: FollowupRun["run"]["config"] = run.config,
 ) {
   const config = configOverride;
-  const fallbacksOverride = resolveEffectiveModelFallbacks({
-    cfg: config,
-    agentId: run.agentId,
-    sessionKey: run.sessionKey,
-    hasSessionModelOverride: run.hasSessionModelOverride === true,
-    modelOverrideSource: run.modelOverrideSource,
-    hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
-  });
+  const fallbacksOverride = run.modelSelectionLocked
+    ? []
+    : resolveEffectiveModelFallbacks({
+        cfg: config,
+        agentId: run.agentId,
+        sessionKey: run.sessionKey,
+        hasSessionModelOverride: run.hasSessionModelOverride === true,
+        modelOverrideSource: run.modelOverrideSource,
+        hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
+      });
   return {
     cfg: config,
     provider: run.provider,
@@ -39,7 +41,7 @@ export function resolveModelFallbackOptions(
 }
 
 /** Resolves whether final-answer tags should be enforced for an embedded follow-up run. */
-export function resolveEnforceFinalTagWithResolver(
+function resolveEnforceFinalTagWithResolver(
   run: FollowupRun["run"],
   provider: string,
   model: string,
@@ -69,14 +71,16 @@ export function buildEmbeddedRunBaseParams(params: {
   isReasoningTagProvider?: ReasoningTagProviderResolver;
 }) {
   const config = params.run.config;
-  const modelFallbacksOverride = resolveEffectiveModelFallbacks({
-    cfg: config,
-    agentId: params.run.agentId,
-    sessionKey: params.run.sessionKey,
-    hasSessionModelOverride: params.run.hasSessionModelOverride === true,
-    modelOverrideSource: params.run.modelOverrideSource,
-    hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
-  });
+  const modelFallbacksOverride = params.run.modelSelectionLocked
+    ? []
+    : resolveEffectiveModelFallbacks({
+        cfg: config,
+        agentId: params.run.agentId,
+        sessionKey: params.run.sessionKey,
+        hasSessionModelOverride: params.run.hasSessionModelOverride === true,
+        modelOverrideSource: params.run.modelOverrideSource,
+        hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
+      });
   const enforceFinalTag = resolveEnforceFinalTagWithResolver(
     params.run,
     params.provider,
@@ -94,14 +98,18 @@ export function buildEmbeddedRunBaseParams(params: {
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
+    channelContext: params.run.channelContext,
     approvalReviewerDeviceId: params.run.approvalReviewerDeviceId,
     enforceFinalTag,
     silentExpected: params.run.silentExpected,
     allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
+    clientCaps: params.run.clientCaps,
+    taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     provider: params.provider,
     model: params.model,
+    modelSelectionLocked: params.run.modelSelectionLocked,
     modelFallbacksOverride,
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,

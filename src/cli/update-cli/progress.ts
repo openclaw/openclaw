@@ -48,10 +48,7 @@ function isAdvisoryStep(step: { advisory?: UpdateStepAdvisory }): boolean {
 }
 
 /** Convert updater failure reasons and stderr tails into operator-facing recovery hints. */
-export function inferUpdateFailureHints(
-  result: UpdateRunResult,
-  params?: { isContainerEnvironment?: boolean },
-): string[] {
+function inferUpdateFailureHints(result: UpdateRunResult): string[] {
   if (result.status !== "error") {
     return [];
   }
@@ -93,7 +90,7 @@ export function inferUpdateFailureHints(
     failedStep.name.startsWith("global update") || failedStep.name.startsWith("global install");
 
   if (isGlobalPackageInstallStep && stderr.includes("eacces")) {
-    if (params?.isContainerEnvironment ?? isContainerEnvironment()) {
+    if (isContainerEnvironment()) {
       hints.push("Detected package update permission failure (EACCES) inside a container.");
       hints.push(
         "Container package updates are not durable. Pull or build an OpenClaw image with the target version, then recreate or redeploy the container.",
@@ -126,7 +123,7 @@ export function inferUpdateFailureHints(
 }
 
 /** Runner-facing progress callbacks plus terminal spinner cleanup. */
-export type ProgressController = {
+type ProgressController = {
   progress: UpdateStepProgress;
   stop: () => void;
 };

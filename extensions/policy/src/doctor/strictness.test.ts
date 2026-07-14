@@ -11,6 +11,9 @@ describe("policy doctor strictness", () => {
     const denyTools = POLICY_RULE_METADATA.find(
       (rule) => rule.policyPath.join(".") === "tools.denyTools",
     );
+    const denyNodeCommands = POLICY_RULE_METADATA.find(
+      (rule) => rule.policyPath.join(".") === "gateway.nodes.denyCommands",
+    );
     const fsWorkspaceOnly = POLICY_RULE_METADATA.find(
       (rule) => rule.policyPath.join(".") === "tools.fs.requireWorkspaceOnly",
     );
@@ -23,6 +26,7 @@ describe("policy doctor strictness", () => {
 
     expect(allowHosts).toBeDefined();
     expect(denyTools).toBeDefined();
+    expect(denyNodeCommands).toBeDefined();
     expect(fsWorkspaceOnly).toBeDefined();
     expect(denyHostNetwork).toBeDefined();
     expect(alsoAllow).toBeDefined();
@@ -34,6 +38,13 @@ describe("policy doctor strictness", () => {
     expect(isPolicyValueAtLeastAsStrict(denyTools!, ["write"], ["exec"])).toBe(false);
     expect(isPolicyValueAtLeastAsStrict(denyTools!, ["group:runtime"], ["exec"])).toBe(true);
     expect(isPolicyValueAtLeastAsStrict(denyTools!, ["exec"], ["group:runtime"])).toBe(false);
+    expect(isPolicyValueAtLeastAsStrict(denyNodeCommands!, ["system.run"], ["system.run"])).toBe(
+      true,
+    );
+    expect(isPolicyValueAtLeastAsStrict(denyNodeCommands!, [], ["system.run"])).toBe(false);
+    expect(isPolicyValueAtLeastAsStrict(denyNodeCommands!, ["system.Run"], ["system.run"])).toBe(
+      false,
+    );
     expect(isPolicyValueAtLeastAsStrict(denyHostNetwork!, true, true)).toBe(true);
     expect(isPolicyValueAtLeastAsStrict(denyHostNetwork!, false, true)).toBe(false);
     expect(isPolicyValueAtLeastAsStrict(fsWorkspaceOnly!, true, true)).toBe(true);

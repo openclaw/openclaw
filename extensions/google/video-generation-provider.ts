@@ -22,12 +22,14 @@ import {
   GOOGLE_VIDEO_MAX_DURATION_SECONDS,
   GOOGLE_VIDEO_MIN_DURATION_SECONDS,
 } from "./generation-provider-metadata.js";
+import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtime.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 10_000;
 const MAX_POLL_ATTEMPTS = 120;
 const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
+const GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
   "Google video generation response missing generated videos";
 
@@ -349,7 +351,15 @@ async function requestGoogleVideoJson(params: {
           signal: controller.signal,
         });
         try {
-          const text = await response.text();
+          const buffer = await readResponseWithLimit(
+            response,
+            GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES,
+            {
+              onOverflow: ({ maxBytes }) =>
+                new Error(`Google video operation response exceeds ${maxBytes} bytes`),
+            },
+          );
+          const text = new TextDecoder().decode(buffer);
           if (!response.ok) {
             let detail: unknown = text;
             if (text) {
@@ -456,7 +466,15 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
 
       const configuredBaseUrl = resolveConfiguredGoogleVideoBaseUrl(req);
       const restBaseUrl = resolveGoogleVideoRestBaseUrl(configuredBaseUrl);
-      const authHeaders = parseGeminiAuth(apiKey).headers;
+      const authHeaders = {
+        ...parseGeminiAuth(apiKey).headers,
+        ...resolveGoogleApiClientHeaders({
+          baseUrl: restBaseUrl,
+          api: "google-generative-ai",
+          capability: "video",
+          transport: "http",
+        }),
+      };
       const durationSeconds = resolveDurationSeconds(req.durationSeconds);
       const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL;
       const aspectRatio = resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size });

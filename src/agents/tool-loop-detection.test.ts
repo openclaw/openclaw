@@ -1264,5 +1264,5 @@ describe("tool-loop-detection", () => {
       expect(loopResult.stuck && loopResult.level).not.toBe("critical");
     });
   });
-
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

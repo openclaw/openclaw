@@ -5,7 +5,6 @@ import { vi } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { createEmptyUninstallActions } from "../plugins/uninstall.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -26,6 +25,20 @@ type UpdateNpmInstalledPluginsFn =
 type UpdateNpmInstalledHookPacksFn =
   (typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"];
 type PluginInstallRecordMap = Record<string, PluginInstallRecord>;
+
+function createEmptyUninstallActions() {
+  return {
+    entry: false,
+    install: false,
+    allowlist: false,
+    denylist: false,
+    loadPath: false,
+    memorySlot: false,
+    contextEngineSlot: false,
+    channelConfig: false,
+    directory: false,
+  };
+}
 
 let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
 
@@ -77,10 +90,10 @@ export const clearPluginRegistryLoadCache: UnknownMock = vi.fn();
 export const applyExclusiveSlotSelection: UnknownMock = vi.fn();
 export const planPluginUninstall: UnknownMock = vi.fn();
 export const applyPluginUninstallDirectoryRemoval: AsyncUnknownMock = vi.fn();
-const uninstallPlugin: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledPlugins: Mock<UpdateNpmInstalledPluginsFn> = vi.fn();
 export const updateNpmInstalledHookPacks: Mock<UpdateNpmInstalledHookPacksFn> = vi.fn();
 export const promptYesNo: AsyncUnknownMock = vi.fn();
+export const promptText: AsyncUnknownMock = vi.fn();
 export class PromptInputClosedError extends Error {
   constructor() {
     super("Prompt input closed before an answer was received.");
@@ -481,18 +494,6 @@ vi.mock("../plugins/uninstall.js", async (importOriginal) => {
         applyPluginUninstallDirectoryRemoval,
         ...args,
       )) as (typeof import("../plugins/uninstall.js"))["applyPluginUninstallDirectoryRemoval"],
-    uninstallPlugin: ((
-      ...args: Parameters<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>
-    ) =>
-      invokeMock<
-        Parameters<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>,
-        ReturnType<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>
-      >(uninstallPlugin, ...args)) as (typeof import("../plugins/uninstall.js"))["uninstallPlugin"],
-    resolveUninstallDirectoryTarget: ({
-      installRecord,
-    }: {
-      installRecord?: { installPath?: string; sourcePath?: string };
-    }) => installRecord?.installPath ?? installRecord?.sourcePath ?? null,
   };
 });
 
@@ -528,6 +529,11 @@ vi.mock("../hooks/update.js", () => ({
 
 vi.mock("./prompt.js", () => ({
   PromptInputClosedError,
+  promptText: ((...args: Parameters<(typeof import("./prompt.js"))["promptText"]>) =>
+    invokeMock<
+      Parameters<(typeof import("./prompt.js"))["promptText"]>,
+      ReturnType<(typeof import("./prompt.js"))["promptText"]>
+    >(promptText, ...args)) as (typeof import("./prompt.js"))["promptText"],
   promptYesNo: ((...args: Parameters<(typeof import("./prompt.js"))["promptYesNo"]>) =>
     invokeMock<
       Parameters<(typeof import("./prompt.js"))["promptYesNo"]>,
@@ -618,6 +624,10 @@ vi.mock("../plugins/git-install.js", () => ({
 }));
 
 vi.mock("../hooks/install.js", () => ({
+  HOOK_INSTALL_ERROR_CODE: {
+    MISSING_OPENCLAW_HOOKS: "missing_openclaw_hooks",
+    EMPTY_OPENCLAW_HOOKS: "empty_openclaw_hooks",
+  },
   installHooksFromNpmSpec: ((
     ...args: Parameters<(typeof import("../hooks/install.js"))["installHooksFromNpmSpec"]>
   ) =>
@@ -722,9 +732,9 @@ export function resetPluginsCliTestState() {
   applyExclusiveSlotSelection.mockReset();
   planPluginUninstall.mockReset();
   applyPluginUninstallDirectoryRemoval.mockReset();
-  uninstallPlugin.mockReset();
   updateNpmInstalledPlugins.mockReset();
   updateNpmInstalledHookPacks.mockReset();
+  promptText.mockReset();
   promptYesNo.mockReset();
   installPluginFromGitSpec.mockReset();
   parseGitPluginSpec.mockReset();
@@ -849,12 +859,6 @@ export function resetPluginsCliTestState() {
     directoryRemoved: false,
     warnings: [],
   });
-  uninstallPlugin.mockResolvedValue({
-    ok: true,
-    config: {} as OpenClawConfig,
-    warnings: [],
-    actions: createEmptyUninstallActions(),
-  });
   updateNpmInstalledPlugins.mockResolvedValue({
     outcomes: [],
     changed: false,
@@ -866,6 +870,7 @@ export function resetPluginsCliTestState() {
     config: {} as OpenClawConfig,
   });
   promptYesNo.mockResolvedValue(true);
+  promptText.mockResolvedValue("demo");
   installPluginFromPath.mockResolvedValue({ ok: false, error: "path install disabled in test" });
   installPluginFromGitSpec.mockResolvedValue({
     ok: false,
@@ -908,3 +913,4 @@ export function resetPluginsCliTestState() {
     ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

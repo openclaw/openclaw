@@ -27,6 +27,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
@@ -54,6 +55,7 @@ import {
 import type { TelegramBotInfo } from "./bot-info.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { telegramMessageActions as telegramMessageActionsImpl } from "./channel-actions.js";
+import { resolveTelegramConversationBaseSessionKey } from "./conversation-route.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
@@ -76,6 +78,7 @@ import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
+import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   resolveTelegramSessionConversation,
   resolveTelegramSessionTarget,
@@ -92,7 +95,6 @@ import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";
-import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   createTelegramThreadBindingManager,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
@@ -103,14 +105,10 @@ import { resolveTelegramToken } from "./token.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
-type TelegramUpdateOffsetRuntime = typeof import("../update-offset-runtime-api.js");
 
-let telegramUpdateOffsetRuntimePromise: Promise<TelegramUpdateOffsetRuntime> | undefined;
-
-async function loadTelegramUpdateOffsetRuntime() {
-  telegramUpdateOffsetRuntimePromise ??= import("../update-offset-runtime-api.js");
-  return await telegramUpdateOffsetRuntimePromise;
-}
+const loadTelegramUpdateOffsetRuntime = createLazyRuntimeModule(
+  () => import("../update-offset-runtime-api.js"),
+);
 
 function resolveTelegramProbe() {
   return (
@@ -293,6 +291,14 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.isToolDeliveryAction?.(ctx) ??
     telegramMessageActionsImpl.isToolDeliveryAction?.(ctx) ??
     false,
+  prepareSendPayload: async (ctx) => {
+    const runtimePrepareSendPayload =
+      getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.prepareSendPayload;
+    if (runtimePrepareSendPayload) {
+      return await runtimePrepareSendPayload(ctx);
+    }
+    return await telegramMessageActionsImpl.prepareSendPayload?.(ctx);
+  },
   handleAction: async (ctx) => {
     const runtimeHandleAction =
       getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.handleAction;
@@ -537,22 +543,26 @@ function resolveTelegramOutboundSessionRoute(params: {
     return null;
   }
   const resolvedThreadId = parsed.messageThreadId ?? parseTelegramThreadId(params.threadId);
+  const resolvedKind = params.resolvedTarget?.kind;
   const isGroup =
     parsed.chatType === "group" ||
-    (parsed.chatType === "unknown" &&
-      params.resolvedTarget?.kind &&
-      params.resolvedTarget.kind !== "user");
+    (parsed.chatType === "unknown" && resolvedKind !== undefined && resolvedKind !== "user");
+  // Telegram private chat ids are the sender's stable numeric user id, while
+  // group ids are negative. Usernames remain aliases and cannot key replies.
+  const recipientSessionExact = /^-?\d+$/.test(chatId);
   const peerId =
     isGroup && resolvedThreadId ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : chatId;
   const peer: RoutePeer = {
     kind: isGroup ? "group" : "direct",
     id: peerId,
   };
+  const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "telegram",
-    accountId: params.accountId,
+    accountId,
+    recipientSessionExact,
     peer,
     chatType: isGroup ? ("group" as const) : ("direct" as const),
     from: isGroup
@@ -566,12 +576,29 @@ function resolveTelegramOutboundSessionRoute(params: {
   if (isGroup) {
     return baseRoute;
   }
+  const inboundBaseSessionKey = resolveTelegramConversationBaseSessionKey({
+    cfg: params.cfg,
+    route: {
+      agentId: params.agentId,
+      accountId,
+      matchedBy: "default",
+      sessionKey: baseRoute.sessionKey,
+    },
+    chatId,
+    isGroup: false,
+    senderId: chatId,
+  });
+  const directBaseRoute = {
+    ...baseRoute,
+    sessionKey: inboundBaseSessionKey,
+    baseSessionKey: inboundBaseSessionKey,
+  };
   const canonicalThreadId =
     resolvedThreadId !== undefined
       ? buildTelegramCanonicalTopicThreadId({ chatId, topicId: resolvedThreadId })
       : undefined;
   const route = buildThreadAwareOutboundSessionRoute({
-    route: baseRoute,
+    route: directBaseRoute,
     threadId: canonicalThreadId,
     currentSessionKey: params.currentSessionKey,
     precedence: ["threadId", "currentSession"],
@@ -660,7 +687,12 @@ async function resolveTelegramTargets(params: {
         const id = await lookupTelegramChatId({
           token,
           chatId: normalized,
+          // Runtime requests honor configured routing. Doctor intentionally omits these
+          // fields so repair does not send the bot token to config-controlled endpoints.
+          proxyUrl: account.config.proxy,
+          apiRoot: account.config.apiRoot,
           network: account.config.network,
+          timeoutSeconds: account.config.timeoutSeconds,
         });
         if (!id) {
           return {
@@ -806,8 +838,9 @@ export const telegramPlugin = createChatChannelPlugin({
         resolveTelegramInboundConversation({ to, conversationId, threadId }),
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) =>
         resolveTelegramDeliveryTarget({ conversationId, parentConversationId }),
-      resolveSessionConversation: ({ kind, rawId }) =>
-        resolveTelegramSessionConversation({ kind, rawId }),
+      // Same function as the public session-key artifact so the pre-registry
+      // fast path cannot drift from plugin behavior (pinned by contract test).
+      resolveSessionConversation: resolveTelegramSessionConversation,
       resolveSessionTarget: ({ kind, id }) => resolveTelegramSessionTarget({ kind, id }),
       inferTargetChatType: ({ to }) => resolveTelegramRouteTarget(to).chatType,
       preserveHeartbeatThreadIdForGroupRoute: true,
@@ -833,6 +866,7 @@ export const telegramPlugin = createChatChannelPlugin({
       targetResolver: {
         looksLikeId: looksLikeTelegramTargetId,
         hint: "<chatId>",
+        reservedLiterals: ["current", "self", "this", "me"],
       },
     },
     resolver: {
@@ -1193,3 +1227,4 @@ export const telegramPlugin = createChatChannelPlugin({
   },
   outbound: telegramChannelOutbound,
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

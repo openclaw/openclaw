@@ -1,15 +1,15 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Parameter contracts shared by directive-only and fast-lane directive handlers. */
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../templating.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 
 /** Core directive handler inputs that do not depend on the inbound message shape. */
-export type HandleDirectiveOnlyCoreParams = {
+type HandleDirectiveOnlyCoreParams = {
   cfg: OpenClawConfig;
   directives: InlineDirectives;
   sessionEntry: SessionEntry;
@@ -49,6 +49,8 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   gatewayClientScopes?: string[];
   commandAuthorized?: boolean;
   senderIsOwner?: boolean;
+  /** Internal handoff for mixed inline directives to avoid retrying rejected writes. */
+  persistenceState?: { sessionChangesApplied: boolean };
 };
 
 /** Inputs for applying inline directives before the full reply run is prepared. */

@@ -2,6 +2,16 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+const PLAIN_GH_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+export const PLAIN_GH_SYSTEM_CANDIDATES = [
+  // Prefer package-manager opt paths: bin/gh may intentionally be an Octopool shim.
+  "/opt/homebrew/opt/gh/bin/gh",
+  "/usr/local/opt/gh/bin/gh",
+  "/home/linuxbrew/.linuxbrew/opt/gh/bin/gh",
+  "/opt/homebrew/bin/gh",
+  "/usr/local/bin/gh",
+];
+
 function isExecutable(filePath) {
   try {
     fs.accessSync(filePath, fs.constants.X_OK);
@@ -30,7 +40,10 @@ export function plainGhEnv(env = process.env) {
   return next;
 }
 
-export function resolvePlainGhBin(env = process.env) {
+export function resolvePlainGhBin(
+  env = process.env,
+  systemCandidates = PLAIN_GH_SYSTEM_CANDIDATES,
+) {
   if (env.OPENCLAW_GH_BIN) {
     if (isExecutable(env.OPENCLAW_GH_BIN)) {
       return env.OPENCLAW_GH_BIN;
@@ -38,7 +51,7 @@ export function resolvePlainGhBin(env = process.env) {
     throw new Error(`OPENCLAW_GH_BIN is not executable: ${env.OPENCLAW_GH_BIN}`);
   }
 
-  for (const candidate of ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"]) {
+  for (const candidate of systemCandidates) {
     if (isExecutable(candidate)) {
       return candidate;
     }
@@ -71,6 +84,7 @@ export function execPlainGh(args, options = {}) {
   return execFileSync(ghBin, args, {
     ...options,
     env,
+    maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
   });
 }
 
@@ -80,5 +94,6 @@ export function spawnPlainGh(args, options = {}) {
   return spawnSync(ghBin, args, {
     ...options,
     env,
+    maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
   });
 }

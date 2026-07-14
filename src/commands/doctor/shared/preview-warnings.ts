@@ -234,7 +234,7 @@ function formatTargets(targets: string[]): string {
 }
 
 /** Warn when visible-reply policy selects message_tool but message is unavailable. */
-export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
+function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
   const warnings: string[] = [];
   if (groupPolicy.value === "message_tool") {
@@ -275,7 +275,7 @@ function formatChannelList(channels: string[]): string {
 }
 
 /** Warn when routed channel agents lack the message tool required for channel actions. */
-export function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
+function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   return collectChannelRouteTargets(cfg).flatMap((target) => {
     const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
     const runtimeMayAllowMessage = sourceReplyRuntimeMayAllowMessageTool(cfg);
@@ -601,7 +601,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
 }
 
 /** Warn when configured tool sections no longer widen restrictive tool profiles. */
-export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
+function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
   const globalAlsoAllow = Array.isArray(globalTools?.alsoAllow)
@@ -668,14 +668,14 @@ export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig)
   return warnings;
 }
 
-export type DoctorPreviewNotes = {
+type DoctorPreviewNotes = {
   /** Non-warning doctor notes shown during preview. */
   infoNotes: string[];
   /** Warning notes shown during preview. */
   warningNotes: string[];
 };
 
-async function resolveDoctorChannelPreviewConfig(params: {
+export async function resolveDoctorChannelPreviewConfig(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   allowExec?: boolean;
@@ -905,5 +905,15 @@ export async function collectDoctorPreviewNotes(params: {
     );
   }
 
+  const { collectStaleConfiguredAuthOrderWarnings } = await import("./stale-auth-order.js");
+  warnings.push(
+    ...collectStaleConfiguredAuthOrderWarnings({
+      cfg: params.cfg,
+      doctorFixCommand: params.doctorFixCommand,
+      env,
+    }),
+  );
+
   return { infoNotes, warningNotes: warnings };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

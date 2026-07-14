@@ -13,8 +13,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
+import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
@@ -353,6 +355,10 @@ const DISCORD_QA_DEFAULT_SCENARIOS = DISCORD_QA_SCENARIOS.filter(
     scenario.id !== "discord-thread-reply-filepath-attachment",
 );
 
+function listDiscordQaScenarioCatalog() {
+  return DISCORD_QA_SCENARIOS.map((scenario) => ({ id: scenario.id }));
+}
+
 const DISCORD_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   scenarios: DISCORD_QA_SCENARIOS,
 });
@@ -443,7 +449,6 @@ function buildDiscordQaConfig(
     ...baseCfg.plugins?.entries,
     discord: { enabled: true },
   };
-  const requireMention = !options.statusReactionsToolOnly;
   const messages = options.statusReactionsToolOnly
     ? {
         ...baseCfg.messages,
@@ -473,6 +478,7 @@ function buildDiscordQaConfig(
     ? {
         ...baseCfg.channels?.discord?.voice,
         enabled: true,
+        mode: "stt-tts" as const,
         autoJoin: [options.voiceAutoJoin],
       }
     : undefined;
@@ -498,12 +504,12 @@ function buildDiscordQaConfig(
             groupPolicy: "allowlist",
             guilds: {
               [params.guildId]: {
-                requireMention,
+                requireMention: !options.statusReactionsToolOnly,
                 users: [params.driverBotId],
                 channels: {
                   [params.channelId]: {
                     enabled: true,
-                    requireMention,
+                    requireMention: !options.statusReactionsToolOnly,
                     users: [params.driverBotId],
                   },
                 },
@@ -780,14 +786,6 @@ function collectSeenReactionSequence(
     }
   }
   return sequence;
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/gu, "&amp;")
-    .replace(/</gu, "&lt;")
-    .replace(/>/gu, "&gt;")
-    .replace(/"/gu, "&quot;");
 }
 
 function renderDiscordStatusReactionHtml(params: {
@@ -1512,7 +1510,7 @@ async function assertDiscordApplicationCommandsRegistered(params: {
   );
 }
 
-export async function runDiscordQaLive(params: {
+async function runDiscordQaLive(params: {
   repoRoot?: string;
   outputDir?: string;
   providerMode?: QaProviderModeInput;
@@ -1527,7 +1525,7 @@ export async function runDiscordQaLive(params: {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const outputDir =
     params.outputDir ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `discord-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `discord-${createQaArtifactRunId()}`);
   await fs.mkdir(outputDir, { recursive: true });
 
   const providerMode = normalizeQaProviderMode(
@@ -1862,6 +1860,7 @@ export async function runDiscordQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
+    repoRoot,
     transportId: "discord",
   });
   await fs.writeFile(
@@ -1930,7 +1929,7 @@ export async function runDiscordQaLive(params: {
   };
 }
 
-export const testing = {
+const testing = {
   DISCORD_QA_SCENARIOS,
   DISCORD_QA_STANDARD_SCENARIO_IDS,
   collectSeenReactionSequence,
@@ -1955,4 +1954,10 @@ export const testing = {
   resolveDiscordQaRuntimeEnv,
   waitForDiscordChannelRunning,
 };
-export { testing as __testing };
+
+export const discordQaLiveRuntime = {
+  listScenarioCatalog: listDiscordQaScenarioCatalog,
+  run: runDiscordQaLive,
+  testing,
+};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

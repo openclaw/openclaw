@@ -11,7 +11,12 @@ export * from "../media/fetch.js";
 export * from "../media/ffmpeg-limits.js";
 export * from "@openclaw/media-core/inbound-path-policy";
 export * from "../media/load-options.js";
-export * from "../media/local-media-access.js";
+export {
+  assertLocalMediaAllowed,
+  getDefaultLocalRoots,
+  LocalMediaAccessError,
+  type LocalMediaAccessErrorCode,
+} from "../media/local-media-access.js";
 export * from "../media/local-roots.js";
 export {
   IMAGE_REDUCE_QUALITY_STEPS,
@@ -46,7 +51,11 @@ export * from "../media/png-encode.ts";
 export * from "../media/qr-image.ts";
 export * from "../media/qr-terminal.ts";
 export * from "@openclaw/media-core/read-byte-stream-with-limit";
-export * from "@openclaw/media-core/read-response-with-limit";
+export {
+  readChunkWithIdleTimeout,
+  readResponseTextSnippet,
+  readResponseWithLimit,
+} from "../infra/http-body.js";
 export * from "../media/store.js";
 export * from "../media/temp-files.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";

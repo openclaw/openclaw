@@ -32,8 +32,12 @@ import {
 const installedManifestRegistryIndexFingerprintCache = new WeakMap<InstalledPluginIndex, string>();
 const installedPackageJsonPathCache = new Map<string, string | null>();
 const installedPackageMetadataCache = new Map<string, InstalledPackageMetadata>();
+// Installed plugin metadata is process-stable between explicit lifecycle clears.
+// Share realpaths across fingerprint builds to avoid repeated package boundary IO.
+const installedManifestRegistryRealpathCache = new Map<string, string>();
 const MAX_INSTALLED_PACKAGE_JSON_PATH_CACHE_ENTRIES = 256;
 const MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES = 256;
+const MAX_INSTALLED_MANIFEST_REGISTRY_REALPATH_CACHE_ENTRIES = 512;
 
 type InstalledPackageMetadata = {
   packageManifest?: OpenClawPackageManifest;
@@ -41,9 +45,10 @@ type InstalledPackageMetadata = {
   packageOptionalDependencies?: PluginDependencySpecMap;
 };
 
-export function clearInstalledManifestRegistryProcessCaches(): void {
+function clearInstalledManifestRegistryProcessCaches(): void {
   installedPackageJsonPathCache.clear();
   installedPackageMetadataCache.clear();
+  installedManifestRegistryRealpathCache.clear();
 }
 
 registerPluginMetadataProcessMemoLifecycleClear(clearInstalledManifestRegistryProcessCaches);
@@ -169,6 +174,19 @@ function rememberInstalledPackageJsonPath(
   return packageJsonPath;
 }
 
+function trimInstalledManifestRegistryRealpathCache(): void {
+  while (
+    installedManifestRegistryRealpathCache.size >
+    MAX_INSTALLED_MANIFEST_REGISTRY_REALPATH_CACHE_ENTRIES
+  ) {
+    const oldest = installedManifestRegistryRealpathCache.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    installedManifestRegistryRealpathCache.delete(oldest);
+  }
+}
+
 function buildInstalledPackageJsonPathCacheKey(
   record: InstalledPluginIndexRecord,
 ): string | undefined {
@@ -196,7 +214,6 @@ function buildInstalledPackageMetadataCacheKey(params: {
 }
 
 function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
-  const realpathCache = new Map<string, string>();
   return {
     version: index.version,
     hostContractVersion: index.hostContractVersion,
@@ -206,7 +223,11 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
     plugins: index.plugins.map((record) => {
-      const packageJsonPath = resolvePackageJsonPath(record, realpathCache);
+      const packageJsonPath = resolvePackageJsonPath(
+        record,
+        installedManifestRegistryRealpathCache,
+      );
+      trimInstalledManifestRegistryRealpathCache();
       const packageJsonFile = record.packageJson?.fileSignature
         ? packageJsonPath
           ? formatFileSignature(packageJsonPath, record.packageJson.fileSignature)

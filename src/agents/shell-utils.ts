@@ -6,13 +6,14 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { stripAnsiForStreamChunk } from "../../packages/terminal-core/src/ansi.js";
 import {
   killProcessTree as killProcessTreeGracefully,
   type KillProcessTreeOptions,
 } from "../process/kill-tree.js";
 import { getBinDir } from "./config.js";
 
-export interface ShellConfig {
+interface ShellConfig {
   shell: string;
   args: string[];
 }
@@ -261,8 +262,15 @@ export function detectRuntimeShell(): string | undefined {
   return undefined;
 }
 
-export function sanitizeBinaryOutput(text: string): string {
-  const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
+export function sanitizeBinaryOutput(
+  text: string,
+  options?: { ansiMode?: "standard" | "compat" },
+): string {
+  // Output callbacks are stream chunks, not true EOF. Preserve a pending CSI
+  // visibly so a split final byte cannot leak from the following chunk.
+  const scrubbed = stripAnsiForStreamChunk(text, {
+    compatibilityGrammar: options?.ansiMode === "compat",
+  }).replace(/[\p{Format}\p{Surrogate}]/gu, "");
   if (!scrubbed) {
     return scrubbed;
   }
@@ -276,7 +284,8 @@ export function sanitizeBinaryOutput(text: string): string {
       chunks.push(char);
       continue;
     }
-    if (code < 0x20) {
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+      chunks.push(`\\x${code.toString(16).padStart(2, "0")}`);
       continue;
     }
     chunks.push(char);

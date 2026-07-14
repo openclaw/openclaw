@@ -4,18 +4,32 @@ import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "openclaw/plugin-sdk/routing";
 import {
   normalizeSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { resolveDefaultTelegramAccountId } from "./account-selection.js";
 
 type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
 
 export type TelegramTokenResolution = BaseTokenResolution & {
   source: TelegramTokenSource;
 };
+
+export function resolveTelegramBotUserIdFromToken(token?: string): number | undefined {
+  const rawBotId = token?.trim().split(":", 1)[0];
+  if (!rawBotId || !/^\d+$/.test(rawBotId)) {
+    return undefined;
+  }
+  return parseStrictPositiveInteger(rawBotId);
+}
 
 type RuntimeTokenValueResolution =
   | { status: "available"; value: string }
@@ -104,7 +118,9 @@ export function resolveTelegramToken(
   cfg?: OpenClawConfig,
   opts: ResolveTelegramTokenOpts = {},
 ): TelegramTokenResolution {
-  const accountId = normalizeAccountId(opts.accountId);
+  const requestedAccountId = normalizeOptionalAccountId(opts.accountId);
+  const accountId =
+    requestedAccountId ?? (cfg ? resolveDefaultTelegramAccountId(cfg) : DEFAULT_ACCOUNT_ID);
   const telegramCfg = cfg?.channels?.telegram;
 
   // Account IDs are normalized for routing (e.g. lowercased). Config keys may not

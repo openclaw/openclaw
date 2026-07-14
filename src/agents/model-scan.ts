@@ -1,6 +1,5 @@
-/**
- * Scans remote provider model catalogs for configured providers.
- */
+import type { OpenAICompletionsOptions } from "@openclaw/ai/internal/openai";
+import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
@@ -14,10 +13,13 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import pMap from "p-map";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
-import { getEnvApiKey } from "../llm/env-api-keys.js";
-import type { OpenAICompletionsOptions } from "../llm/providers/openai-completions.js";
+/**
+ * Scans remote provider model catalogs for configured providers.
+ */
+import { readResponseWithLimit } from "../infra/http-body.js";
 import { complete } from "../llm/stream.js";
 import type { Context, Model, Tool } from "../llm/types.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
@@ -25,6 +27,12 @@ import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_CONCURRENCY = 3;
+// The OpenRouter /models catalog is a provider-controlled, runtime-fetched body
+// (already >100 KB and growing). Read it under a byte cap before JSON.parse so a
+// faulty or hostile provider cannot stream an unbounded document and exhaust
+// process memory. Keep this aligned with the runtime capability cache for the
+// same endpoint so scan and runtime discovery fail at the same boundary.
+const OPENROUTER_MODELS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
@@ -184,6 +192,26 @@ async function withTimeout<T>(
   }
 }
 
+// Reads the OpenRouter /models success body under a byte cap before JSON.parse.
+// The success path was previously buffered with an unbounded res.json(); a faulty
+// or hostile provider could stream an effectively endless document and exhaust
+// memory. readResponseWithLimit caps the read, cancels the stream on overflow,
+// and bounds idle stalls with the call's existing timeout.
+async function readOpenRouterModelsJson(response: Response, timeoutMs: number): Promise<unknown> {
+  const buffer = await readResponseWithLimit(response, OPENROUTER_MODELS_BODY_MAX_BYTES, {
+    chunkTimeoutMs: timeoutMs,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(`OpenRouter /models response too large: ${size} bytes (limit ${maxBytes} bytes)`),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`OpenRouter /models response stalled after ${chunkTimeoutMs}ms`),
+  });
+  try {
+    return JSON.parse(buffer.toString("utf8")) as unknown;
+  } catch (cause) {
+    throw new Error("OpenRouter /models response is malformed JSON", { cause });
+  }
+}
+
 async function fetchOpenRouterModels(
   fetchImpl: typeof fetch,
   timeoutMs: number,
@@ -199,7 +227,7 @@ async function fetchOpenRouterModels(
     if (!res.ok) {
       throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
     }
-    const payload = (await res.json()) as { data?: unknown };
+    const payload = (await readOpenRouterModelsJson(res, timeoutMs)) as { data?: unknown };
     const entries = Array.isArray(payload.data) ? payload.data : [];
 
     return entries
@@ -384,39 +412,6 @@ function buildOpenRouterScanResult(params: {
   };
 }
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T, index: number) => Promise<R>,
-  opts?: { onProgress?: (completed: number, total: number) => void },
-): Promise<R[]> {
-  const limit = Math.max(1, Math.floor(concurrency));
-  const results: R[] = Array.from({ length: items.length }, () => undefined as R);
-  let nextIndex = 0;
-  let completed = 0;
-
-  const worker = async () => {
-    while (true) {
-      const current = nextIndex;
-      nextIndex += 1;
-      if (current >= items.length) {
-        return;
-      }
-      results[current] = await fn(items[current], current);
-      completed += 1;
-      opts?.onProgress?.(completed, items.length);
-    }
-  };
-
-  if (items.length === 0) {
-    opts?.onProgress?.(0, 0);
-    return results;
-  }
-
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
-  return results;
-}
-
 export async function scanOpenRouterModels(
   options: OpenRouterScanOptions = {},
 ): Promise<ModelScanResult[]> {
@@ -483,49 +478,46 @@ export async function scanOpenRouterModels(
     total: filtered.length,
   });
 
-  return mapWithConcurrency(
+  let completed = 0;
+  return pMap(
     filtered,
-    concurrency,
     async (entry) => {
       const isFree = isFreeOpenRouterModel(entry);
+      let result: ModelScanResult;
       if (!probe) {
-        return buildOpenRouterScanResult({
+        result = buildOpenRouterScanResult({
           entry,
           isFree,
           tool: { ok: false, latencyMs: null, skipped: true },
           image: { ok: false, latencyMs: null, skipped: true },
         });
+      } else {
+        const model: OpenAIModel = {
+          ...baseModel,
+          id: entry.id,
+          name: entry.name || entry.id,
+          contextWindow: entry.contextLength ?? baseModel.contextWindow,
+          maxTokens: entry.maxCompletionTokens ?? baseModel.maxTokens,
+          input: parseModality(entry.modality),
+          reasoning: baseModel.reasoning,
+        };
+
+        const toolResult = await probeTool(model, apiKey, timeoutMs);
+        const imageResult = model.input?.includes("image")
+          ? await probeImage(ensureImageInput(model), apiKey, timeoutMs)
+          : { ok: false, latencyMs: null, skipped: true };
+
+        result = buildOpenRouterScanResult({
+          entry,
+          isFree,
+          tool: toolResult,
+          image: imageResult,
+        });
       }
-
-      const model: OpenAIModel = {
-        ...baseModel,
-        id: entry.id,
-        name: entry.name || entry.id,
-        contextWindow: entry.contextLength ?? baseModel.contextWindow,
-        maxTokens: entry.maxCompletionTokens ?? baseModel.maxTokens,
-        input: parseModality(entry.modality),
-        reasoning: baseModel.reasoning,
-      };
-
-      const toolResult = await probeTool(model, apiKey, timeoutMs);
-      const imageResult = model.input?.includes("image")
-        ? await probeImage(ensureImageInput(model), apiKey, timeoutMs)
-        : { ok: false, latencyMs: null, skipped: true };
-
-      return buildOpenRouterScanResult({
-        entry,
-        isFree,
-        tool: toolResult,
-        image: imageResult,
-      });
+      completed += 1;
+      options.onProgress?.({ phase: "probe", completed, total: filtered.length });
+      return result;
     },
-    {
-      onProgress: (completed, total) =>
-        options.onProgress?.({
-          phase: "probe",
-          completed,
-          total,
-        }),
-    },
+    { concurrency, stopOnError: true },
   );
 }

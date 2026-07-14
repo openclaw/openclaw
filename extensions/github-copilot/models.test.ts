@@ -1,4 +1,6 @@
 // Github Copilot tests cover models plugin behavior.
+import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
@@ -126,6 +128,7 @@ describe("resolveCopilotForwardCompatModel", () => {
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400_000,
+      contextTokens: 272_000,
       maxTokens: 128_000,
     });
   });
@@ -200,6 +203,30 @@ describe("resolveCopilotForwardCompatModel", () => {
 });
 
 describe("fetchCopilotUsage", () => {
+  it("targets the public github.com usage endpoint by default", async () => {
+    let calledUrl: string | undefined;
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      calledUrl = url;
+      return makeResponse(200, { copilot_plan: "pro" });
+    });
+
+    await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(calledUrl).toBe("https://api.github.com/copilot_internal/user");
+  });
+
+  it("routes usage through the tenant host for *.ghe.com domains", async () => {
+    let calledUrl: string | undefined;
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      calledUrl = url;
+      return makeResponse(200, { copilot_plan: "business" });
+    });
+
+    await fetchCopilotUsage("token", 5000, mockFetch, "acme.ghe.com");
+
+    expect(calledUrl).toBe("https://api.acme.ghe.com/copilot_internal/user");
+  });
+
   it("returns HTTP errors for failed requests", async () => {
     const mockFetch = createProviderUsageFetch(async () => makeResponse(500, "boom"));
     const result = await fetchCopilotUsage("token", 5000, mockFetch);
@@ -267,6 +294,47 @@ describe("fetchCopilotUsage", () => {
       plan: "free",
     });
   });
+
+  it("bounds the usage read and cancels the stream when the body exceeds the JSON byte cap", async () => {
+    // Larger than the shared 16 MiB readProviderJsonResponse cap so the bounded reader cancels the
+    // stream mid-flight; if the cap were removed the unbounded res.json() would buffer the whole body.
+    const ONE_MIB = 1024 * 1024;
+    const TOTAL_CHUNKS = 32; // 32 MiB advertised body, double the cap.
+    const chunk = new Uint8Array(ONE_MIB);
+
+    let bytesPulled = 0;
+    let canceled = false;
+    const makeOversizedJsonResponse = (): Response => {
+      let pulled = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (pulled >= TOTAL_CHUNKS) {
+            controller.close();
+            return;
+          }
+          pulled += 1;
+          bytesPulled += chunk.length;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const mockFetch = createProviderUsageFetch(async () => makeOversizedJsonResponse());
+
+    await expect(fetchCopilotUsage("token", 5000, mockFetch)).rejects.toThrow(
+      /github-copilot-usage: JSON response exceeds/,
+    );
+    // The bounded reader cancels the body and never pulls the full advertised 32 MiB stream.
+    expect(canceled).toBe(true);
+    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+  });
 });
 
 describe("github-copilot token", () => {
@@ -293,6 +361,8 @@ describe("github-copilot token", () => {
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
       integrationId: "vscode-chat",
+      sourceCredentialFingerprint: createHash("sha256").update("gh").digest("hex"),
+      domain: "github.com",
     });
 
     const fetchImpl = vi.fn();
@@ -313,14 +383,18 @@ describe("github-copilot token", () => {
   it("fetches and stores token when cache is missing", async () => {
     jsonStoreMocks.loadJsonFile.mockReturnValue(undefined);
 
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        token: "fresh;proxy-ep=https://proxy.contoso.test;",
-        expires_at: Math.floor(Date.now() / 1000) + 3600,
-      }),
-    });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          token: "fresh;proxy-ep=https://proxy.contoso.test;",
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
 
     const res = await resolveCopilotApiToken({
       githubToken: "gh",
@@ -464,11 +538,7 @@ describe("fetchCopilotModelCatalog", () => {
   };
 
   it("maps Copilot /models entries to ModelDefinitionConfig with real context windows", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => sampleApiResponse,
-    });
+    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, sampleApiResponse));
 
     const out = await fetchCopilotModelCatalog({
       copilotApiToken: "tid=test",
@@ -504,6 +574,7 @@ describe("fetchCopilotModelCatalog", () => {
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400000,
+      contextTokens: 272000,
       maxTokens: 128000,
       compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
     });
@@ -512,6 +583,7 @@ describe("fetchCopilotModelCatalog", () => {
     expect(codex?.input).toEqual(["text"]);
     expect(codex?.reasoning).toBe(true);
     expect(codex?.contextWindow).toBe(400000);
+    expect(codex?.contextTokens).toBeUndefined();
 
     const gemini = out.find((m) => m.id === "gemini-3.1-pro-preview");
     expect(gemini?.api).toBe("openai-completions");
@@ -539,11 +611,7 @@ describe("fetchCopilotModelCatalog", () => {
   });
 
   it("strips trailing slash from baseUrl when building the /models URL", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ data: [] }),
-    });
+    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, { data: [] }));
 
     await fetchCopilotModelCatalog({
       copilotApiToken: "tid=test",
@@ -555,10 +623,8 @@ describe("fetchCopilotModelCatalog", () => {
   });
 
   it("dedupes by id when API returns duplicates", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
+    const fetchImpl = vi.fn().mockResolvedValue(
+      makeResponse(200, {
         data: [
           {
             id: "gpt-5.5",
@@ -580,7 +646,7 @@ describe("fetchCopilotModelCatalog", () => {
           },
         ],
       }),
-    });
+    );
 
     const out = await fetchCopilotModelCatalog({
       copilotApiToken: "tid=test",
@@ -589,14 +655,12 @@ describe("fetchCopilotModelCatalog", () => {
     });
 
     expect(out).toHaveLength(1);
-    expect(out[0].name).toBe("GPT-5.5");
+    expect(expectDefined(out[0], "GitHub Copilot model").name).toBe("GPT-5.5");
   });
 
   it("falls back from malformed live token limits", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
+    const fetchImpl = vi.fn().mockResolvedValue(
+      makeResponse(200, {
         data: [
           {
             id: "gpt-bad-window",
@@ -606,6 +670,7 @@ describe("fetchCopilotModelCatalog", () => {
               type: "chat",
               limits: {
                 max_context_window_tokens: -1,
+                max_prompt_tokens: -1,
                 max_output_tokens: 128000.5,
               },
             },
@@ -618,13 +683,14 @@ describe("fetchCopilotModelCatalog", () => {
               type: "chat",
               limits: {
                 max_context_window_tokens: Number.POSITIVE_INFINITY,
+                max_prompt_tokens: Number.POSITIVE_INFINITY,
                 max_output_tokens: 0,
               },
             },
           },
         ],
       }),
-    });
+    );
 
     const out = await fetchCopilotModelCatalog({
       copilotApiToken: "tid=test",
@@ -638,19 +704,17 @@ describe("fetchCopilotModelCatalog", () => {
       contextWindow: 128000,
       maxTokens: 8192,
     });
+    expect(out[0]).not.toHaveProperty("contextTokens");
     expect(out[1]).toMatchObject({
       id: "gpt-bad-output",
       contextWindow: 128000,
       maxTokens: 8192,
     });
+    expect(out[1]).not.toHaveProperty("contextTokens");
   });
 
   it("throws on non-2xx HTTP responses so the caller can fall back to the static catalog", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 401,
-      json: async () => ({}),
-    });
+    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(401, {}));
 
     await expect(
       fetchCopilotModelCatalog({
@@ -663,11 +727,7 @@ describe("fetchCopilotModelCatalog", () => {
 
   it("throws provider-owned errors for malformed successful /models payloads", async () => {
     for (const payload of [[], { data: {} }, { data: [null] }]) {
-      const fetchImpl = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => payload,
-      });
+      const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, payload));
 
       await expect(
         fetchCopilotModelCatalog({

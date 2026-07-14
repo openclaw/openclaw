@@ -68,6 +68,9 @@ describe("plugin-sdk memory-core bundled runtime", () => {
       artifactBasename: "runtime-api.js",
     });
     expect(configureMemoryCoreDreamingStateImpl).toHaveBeenCalledWith(expect.any(Function));
+    expect(createEmbeddingProviderImpl).toHaveBeenCalledWith({
+      acquireLocalService: expect.any(Function),
+    });
   });
 
   it("delegates doctor and embedding helpers through the bundled public surfaces", async () => {

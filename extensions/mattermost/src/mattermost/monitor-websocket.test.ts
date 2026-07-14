@@ -1,10 +1,12 @@
 // Mattermost tests cover monitor websocket plugin behavior.
+import { once } from "node:events";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import {
   createMattermostConnectOnce,
-  type MattermostWebSocketLike,
-  WebSocketClosedBeforeOpenError,
+  type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
@@ -17,7 +19,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
   return count;
 }
 
-class FakeWebSocket implements MattermostWebSocketLike {
+class FakeWebSocket implements ReturnType<MattermostWebSocketFactory> {
   public readonly sent: string[] = [];
   public pingCalls = 0;
   public closeCalls = 0;
@@ -136,12 +138,12 @@ describe("mattermost websocket monitor", () => {
     } catch (caught) {
       failure = caught;
     }
-    expect(failure).toBeInstanceOf(WebSocketClosedBeforeOpenError);
-    expect((failure as WebSocketClosedBeforeOpenError).message).toBe(
-      "websocket closed before open (code 1006)",
-    );
-    expect((failure as WebSocketClosedBeforeOpenError).code).toBe(1006);
-    expect((failure as WebSocketClosedBeforeOpenError).reason).toBe("connection refused");
+    expect(failure).toMatchObject({
+      name: "WebSocketClosedBeforeOpenError",
+      code: 1006,
+      reason: "connection refused",
+    });
+    expect((failure as Error).message).toBe("websocket closed before open (code 1006)");
   });
 
   it("retries when first attempt errors before open and next attempt succeeds", async () => {
@@ -178,20 +180,92 @@ describe("mattermost websocket monitor", () => {
     });
 
     const firstAttempt = connectOnce();
-    await expect(firstAttempt).rejects.toBeInstanceOf(WebSocketClosedBeforeOpenError);
+    await expect(firstAttempt).rejects.toMatchObject({ name: "WebSocketClosedBeforeOpenError" });
 
     await connectOnce();
 
     expect(sockets).toHaveLength(2);
-    expect(sockets[0].closeCalls).toBe(1);
-    expect(sockets[1].sent).toHaveLength(1);
-    expect(JSON.parse(sockets[1].sent[0] ?? "")).toEqual({
+    const firstSocket = expectDefined(sockets[0], "first Mattermost socket");
+    const secondSocket = expectDefined(sockets[1], "second Mattermost socket");
+    expect(firstSocket.closeCalls).toBe(1);
+    expect(secondSocket.sent).toHaveLength(1);
+    expect(JSON.parse(expectDefined(secondSocket.sent[0], "Mattermost auth payload"))).toEqual({
       action: "authentication_challenge",
       data: { token: "token" },
       seq: 1,
     });
     expect(countMatching(patches, (patch) => patch.connected === true)).toBe(1);
     expect(countMatching(patches, (patch) => patch.connected === false)).toBe(2);
+  });
+
+  it("accepts large valid post envelopes and rejects oversized websocket payloads", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP websocket server address");
+    }
+
+    const quotedCardBody = '"'.repeat(380_000);
+    const largeProps = { cards: [{ body: quotedCardBody }] };
+    const largePostEnvelope = JSON.stringify({
+      event: "posted",
+      data: {
+        post: JSON.stringify({
+          id: "post-large",
+          message: "large Mattermost integration post",
+          props: largeProps,
+        }),
+      },
+    });
+    expect(JSON.stringify(largeProps).length).toBeLessThan(800_000);
+    expect(Buffer.byteLength(largePostEnvelope)).toBeGreaterThan(1024 * 1024);
+    expect(Buffer.byteLength(largePostEnvelope)).toBeLessThan(16 * 1024 * 1024);
+
+    const runtime = testRuntime();
+    const onPosted = vi.fn(async () => {});
+    server.on("connection", (socket) => {
+      socket.once("message", () => {
+        socket.send(
+          JSON.stringify({
+            event: "posted",
+            data: {
+              post: JSON.stringify({
+                id: "post-1",
+                message: "normal Mattermost post",
+              }),
+            },
+          }),
+        );
+        socket.send(largePostEnvelope);
+        socket.send(Buffer.alloc(16 * 1024 * 1024 + 1, 0x78));
+      });
+    });
+
+    try {
+      await createMattermostConnectOnce({
+        wsUrl: `ws://127.0.0.1:${address.port}`,
+        botToken: "token",
+        runtime,
+        nextSeq: () => 1,
+        onPosted,
+      })();
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
+
+    expect(onPosted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "post-1", message: "normal Mattermost post" }),
+      expect.any(Object),
+    );
+    expect(onPosted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "post-large", props: largeProps }),
+      expect.any(Object),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Max payload size exceeded"),
+    );
   });
 
   it("dispatches reaction events to the reaction handler", async () => {

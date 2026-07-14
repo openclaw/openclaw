@@ -15,8 +15,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   type ExecutionEnv,
   ExecutionError,
@@ -26,7 +27,6 @@ import {
   type FileKind,
   ok,
   type Result,
-  toError,
 } from "../types.js";
 import { killProcessTree } from "./kill-tree.js";
 
@@ -37,7 +37,7 @@ function resolvePath(cwd: string, path: string): string {
 }
 
 /** Convert user-facing timeout seconds into a positive, timer-safe millisecond delay. */
-export function resolveExecTimeoutMs(timeoutSeconds: unknown): number | undefined {
+function resolveExecTimeoutMs(timeoutSeconds: unknown): number | undefined {
   if (
     typeof timeoutSeconds !== "number" ||
     !Number.isFinite(timeoutSeconds) ||
@@ -84,7 +84,7 @@ function fileInfoFromStats(
     return err(new FileError("invalid", "Unsupported file type", path));
   }
   return ok({
-    name: path.replace(/\/+$/, "").split("/").pop() ?? path,
+    name: basename(path),
     path,
     kind,
     size: stats.size,
@@ -100,7 +100,7 @@ function toFileError(error: unknown, path?: string): FileError {
   if (error instanceof FileError) {
     return error;
   }
-  const cause = toError(error);
+  const cause = toErrorObject(error, "Non-Error thrown");
   if (isNodeError(error)) {
     const message = error.message;
     switch (error.code) {
@@ -131,6 +131,17 @@ function abortResult(
   return signal?.aborted ? err(new FileError("aborted", "aborted", path)) : undefined;
 }
 
+type ChildOutputStreamName = "stdout" | "stderr";
+
+function listenForChildOutputErrors(
+  child: ReturnType<typeof spawn>,
+  onError: (stream: ChildOutputStreamName, error: Error) => void,
+): void {
+  for (const streamName of ["stdout", "stderr"] as const) {
+    child[streamName]?.on("error", (error: Error) => onError(streamName, error));
+  }
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path, constants.F_OK);
@@ -159,12 +170,19 @@ async function runCommand(
     }
     const timeout = setTimeout(() => {
       if (child.pid) {
-        killProcessTree(child.pid, { force: true });
+        killProcessTree(child.pid, { force: true, detached: false });
       }
     }, timeoutMs);
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
       stdout += chunk;
+    });
+    listenForChildOutputErrors(child, () => {
+      if (child.pid) {
+        killProcessTree(child.pid, { force: true, detached: false });
+      }
+      clearTimeout(timeout);
+      resolveLocal({ stdout: "", status: null });
     });
     child.on("error", () => {
       clearTimeout(timeout);
@@ -324,7 +342,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
           windowsHide: true,
         });
       } catch (error) {
-        const cause = toError(error);
+        const cause = toErrorObject(error, "Non-Error thrown");
         settle(err(new ExecutionError("spawn_error", cause.message, cause)));
         return;
       }
@@ -355,7 +373,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
         try {
           options?.onStdout?.(chunk);
         } catch (error) {
-          const cause = toError(error);
+          const cause = toErrorObject(error, "Non-Error thrown");
           callbackError = new ExecutionError("callback_error", cause.message, cause);
           onAbort();
         }
@@ -365,11 +383,25 @@ export class NodeExecutionEnv implements ExecutionEnv {
         try {
           options?.onStderr?.(chunk);
         } catch (error) {
-          const cause = toError(error);
+          const cause = toErrorObject(error, "Non-Error thrown");
           callbackError = new ExecutionError("callback_error", cause.message, cause);
           onAbort();
         }
       });
+
+      // Guard stdout/stderr against stream errors (e.g. EPIPE when the
+      // child exits before all pipe data is consumed). Without listeners,
+      // Node.js throws an uncaught exception that crashes the process.
+      const onStreamError = (stream: ChildOutputStreamName, error: Error) => {
+        if (settled) {
+          return;
+        }
+        onAbort();
+        settle(
+          err(new ExecutionError("spawn_error", `${stream} read error: ${error.message}`, error)),
+        );
+      };
+      listenForChildOutputErrors(child, onStreamError);
 
       child.on("error", (error) => {
         settle(err(new ExecutionError("spawn_error", error.message, error)));

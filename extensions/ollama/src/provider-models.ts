@@ -1,5 +1,6 @@
 // Ollama provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -21,6 +22,7 @@ export type OllamaTagModel = {
   details?: {
     family?: string;
     parameter_size?: string;
+    quantization_level?: string;
   };
 };
 
@@ -101,7 +103,7 @@ function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
   return typeof info.contextWindow === "number" || (info.capabilities?.length ?? 0) > 0;
 }
 
-export function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
+function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
   if (typeof parameters !== "string" || !parameters.trim()) {
     return undefined;
   }
@@ -112,7 +114,11 @@ export function parseOllamaNumCtxParameter(parameters: unknown): number | undefi
     if (!match) {
       continue;
     }
-    const parsed = Number.parseInt(match[1], 10);
+    const rawValue = match[1];
+    if (!rawValue) {
+      continue;
+    }
+    const parsed = Number.parseInt(rawValue, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
       lastValue = parsed;
     }
@@ -146,11 +152,11 @@ export async function queryOllamaModelShowInfo(
       if (!response.ok) {
         return {};
       }
-      const data = (await response.json()) as {
+      const data = await readProviderJsonResponse<{
         model_info?: Record<string, unknown>;
         capabilities?: unknown;
         parameters?: unknown;
-      };
+      }>(response, "ollama-provider-models.show");
 
       let contextWindow: number | undefined;
       if (data.model_info) {
@@ -314,7 +320,10 @@ export async function fetchOllamaModels(
       if (!response.ok) {
         return { reachable: true, models: [] };
       }
-      const data = (await response.json()) as OllamaTagsResponse;
+      const data = await readProviderJsonResponse<OllamaTagsResponse>(
+        response,
+        "ollama-provider-models.tags",
+      );
       const models = (data.models ?? []).filter((m) => m.name);
       return { reachable: true, models };
     } finally {

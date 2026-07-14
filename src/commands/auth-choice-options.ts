@@ -23,6 +23,11 @@ const FEATURED_AUTH_GROUP_ORDER = new Map<string, number>([
   ["openrouter", 4],
 ]);
 
+/** Keep the first-tier provider list stable; every other group belongs under More. */
+export function isFeaturedAuthChoiceGroup(group: AuthChoiceGroup): boolean {
+  return FEATURED_AUTH_GROUP_ORDER.has(group.value);
+}
+
 function compareAssistantOptions(a: AuthChoiceOption, b: AuthChoiceOption): number {
   const priorityA = a.assistantPriority ?? 0;
   const priorityB = b.assistantPriority ?? 0;
@@ -56,6 +61,7 @@ function resolveProviderChoiceOptions(params?: {
     Object.assign(
       {},
       { value: contribution.option.value as AuthChoice, label: contribution.option.label },
+      { providerId: contribution.providerId },
       contribution.option.hint ? { hint: contribution.option.hint } : {},
       contribution.option.assistantPriority !== undefined
         ? { assistantPriority: contribution.option.assistantPriority }
@@ -97,7 +103,7 @@ export function formatAuthChoiceChoicesForCli(params?: {
 }
 
 /** Build flat auth-choice options from core choices plus provider setup flows. */
-export function buildAuthChoiceOptions(params: {
+function buildAuthChoiceOptions(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
   assistantVisibleOnly?: boolean;
@@ -131,10 +137,11 @@ export function buildAuthChoiceOptions(params: {
   return options;
 }
 
-/** Build grouped assistant-visible auth choices for the onboarding prompt. */
+/** Build grouped auth choices, filtering manual-only methods by default. */
 export function buildAuthChoiceGroups(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
+  assistantVisibleOnly?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -145,7 +152,7 @@ export function buildAuthChoiceGroups(params: {
   const options = buildAuthChoiceOptions({
     ...params,
     includeSkip: false,
-    assistantVisibleOnly: true,
+    assistantVisibleOnly: params.assistantVisibleOnly ?? true,
   });
   const groupsById = new Map<AuthChoiceGroupId, AuthChoiceGroup>();
 
@@ -156,12 +163,17 @@ export function buildAuthChoiceGroups(params: {
     const existing = groupsById.get(option.groupId);
     if (existing) {
       existing.options.push(option);
+      if (option.providerId) {
+        existing.providerIds = uniqueStrings([...(existing.providerIds ?? []), option.providerId]);
+      }
       continue;
     }
+    const providerIds = option.providerId ? [option.providerId] : [];
     groupsById.set(option.groupId, {
       value: option.groupId,
       label: option.groupLabel,
       ...(option.groupHint ? { hint: option.groupHint } : {}),
+      ...(providerIds.length > 0 ? { providerIds } : {}),
       options: [option],
     });
   }

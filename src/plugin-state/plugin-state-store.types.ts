@@ -40,9 +40,12 @@ export type PluginStateSyncKeyedStore<T> = {
 };
 
 /** Options for opening a keyed plugin-state namespace. */
+export type PluginStateOverflowPolicy = "evict-oldest" | "reject-new";
+
 export type OpenKeyedStoreOptions = {
   namespace: string;
   maxEntries: number;
+  overflowPolicy?: PluginStateOverflowPolicy;
   defaultTtlMs?: number;
   env?: NodeJS.ProcessEnv;
 };
@@ -70,7 +73,7 @@ export type PluginStateStoreOperation =
   | "probe"
   | "close";
 
-export type PluginStateStoreErrorOptions = {
+type PluginStateStoreErrorOptions = {
   code: PluginStateStoreErrorCode;
   operation: PluginStateStoreOperation;
   path?: string;

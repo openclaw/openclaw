@@ -52,7 +52,13 @@ export class MatrixAuthedHttpClient {
       if (!text.trim()) {
         return {};
       }
-      return JSON.parse(text);
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw Object.assign(new Error("Matrix homeserver returned malformed JSON"), {
+          statusCode: response.status,
+        });
+      }
     }
     return text;
   }

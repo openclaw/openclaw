@@ -1,15 +1,18 @@
 /** Extension that safeguards compaction with structured summaries and quality repair. */
+
 import fs from "node:fs";
 import path from "node:path";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import {
   buildHistoryPrunePlanWithWorker,
   computeAdaptiveChunkRatioWithWorker,
@@ -207,8 +210,13 @@ async function tryProviderSummarize(
     log.warn(`Compaction provider "${provider.id}" returned empty result, falling back to LLM.`);
     return undefined;
   } catch (err) {
-    // Abort/timeout errors must propagate — the caller requested cancellation.
-    if (isAbortError(err) || isTimeoutError(err)) {
+    // Propagate only when the caller explicitly cancelled. Provider-side
+    // AbortErrors (signal not aborted) fall through to LLM summarization.
+    if (params.signal?.aborted) {
+      throw err;
+    }
+    // Real non-abort transport timeouts (e.g. ETIMEDOUT) still propagate.
+    if (!isAbortError(err) && isTimeoutError(err)) {
       throw err;
     }
     log.warn(
@@ -339,15 +347,10 @@ async function resolveModelAuth(
       reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${requestAuth.error}`,
     };
   }
-  if (!requestAuth.apiKey && !requestAuth.headers) {
-    log.warn(
-      "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
-    );
-    return {
-      ok: false,
-      reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
-    };
-  }
+  // `ok: true` is the registry's authoritative success signal; it already returns
+  // `ok: false` when auth cannot resolve. Do not re-derive failure from absent
+  // key/headers. SDK-managed modes (aws-sdk, oauth) sign the request later and
+  // legitimately carry neither, so gating on them wedges compaction forever.
   return { ok: true, apiKey: requestAuth.apiKey, headers: requestAuth.headers };
 }
 
@@ -398,7 +401,7 @@ function truncateFailureText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  return `${text.slice(0, Math.max(0, maxChars - 3))}...`;
+  return `${truncateUtf16Safe(text, Math.max(0, maxChars - 3))}...`;
 }
 
 function formatToolFailureMeta(details: unknown): string | undefined {
@@ -445,6 +448,17 @@ function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
       isError?: unknown;
     };
     if (toolResult.isError !== true) {
+      continue;
+    }
+    // Accepted sessions_spawn launches are successes, not failures, even when a legacy
+    // transcript persisted them with isError:true. Mirror the observer's detection
+    // (toolName + accepted child-run identity, see embedded-agent-subscribe.handlers.tools)
+    // so only real failures stay in the summary and non-spawn tools are never matched by shape.
+    if (
+      typeof toolResult.toolName === "string" &&
+      toolResult.toolName.trim() === "sessions_spawn" &&
+      normalizeAcceptedSessionSpawnResult(toolResult)
+    ) {
       continue;
     }
     const toolCallId = typeof toolResult.toolCallId === "string" ? toolResult.toolCallId : "";
@@ -551,9 +565,9 @@ function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY
   const budget = Math.max(0, maxChars - marker.length);
   if (budget <= 0) {
     // Marker cannot fit; keep body prefix instead of a partial marker fragment.
-    return summary.slice(0, maxChars);
+    return truncateUtf16Safe(summary, maxChars);
   }
-  return `${summary.slice(0, budget)}${marker}`;
+  return `${truncateUtf16Safe(summary, budget)}${marker}`;
 }
 
 function capCompactionSummaryPreservingSuffix(
@@ -569,7 +583,7 @@ function capCompactionSummaryPreservingSuffix(
   }
   if (suffix.length >= maxChars) {
     // Preserve tail (workspace rules, diagnostics) over head (preserved turns).
-    return suffix.slice(-maxChars);
+    return sliceUtf16Safe(suffix, -maxChars);
   }
   const bodyBudget = Math.max(0, maxChars - suffix.length);
   const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
@@ -657,8 +671,8 @@ function splitPreservedRecentTurns(params: {
   }
   const conversationIndexes: number[] = [];
   const userIndexes: number[] = [];
-  for (let i = 0; i < params.messages.length; i += 1) {
-    const role = (params.messages[i] as { role?: unknown }).role;
+  for (const [i, message] of params.messages.entries()) {
+    const role = message.role;
     if (role === "user" || role === "assistant") {
       conversationIndexes.push(i);
       if (role === "user") {
@@ -700,11 +714,10 @@ function splitPreservedRecentTurns(params: {
     return { summarizableMessages: params.messages, preservedMessages: [] };
   }
   const preservedToolCallIds = new Set<string>();
-  for (let i = 0; i < params.messages.length; i += 1) {
+  for (const [i, message] of params.messages.entries()) {
     if (!preservedIndexSet.has(i)) {
       continue;
     }
-    const message = params.messages[i];
     if (message.role !== "assistant") {
       continue;
     }
@@ -722,14 +735,13 @@ function splitPreservedRecentTurns(params: {
       }
     }
     if (preservedStartIndex >= 0) {
-      for (let i = preservedStartIndex; i < params.messages.length; i += 1) {
-        const message = params.messages[i];
+      for (const [offset, message] of params.messages.slice(preservedStartIndex).entries()) {
         if (message.role !== "toolResult") {
           continue;
         }
         const toolResultId = extractToolResultId(message);
         if (toolResultId && preservedToolCallIds.has(toolResultId)) {
-          preservedIndexSet.add(i);
+          preservedIndexSet.add(preservedStartIndex + offset);
         }
       }
     }
@@ -773,7 +785,7 @@ function formatContextMessages(messages: AgentMessage[]): string[] {
       }
       const trimmed =
         rendered.length > MAX_RECENT_TURN_TEXT_CHARS
-          ? `${rendered.slice(0, MAX_RECENT_TURN_TEXT_CHARS)}...`
+          ? `${truncateUtf16Safe(rendered, MAX_RECENT_TURN_TEXT_CHARS)}...`
           : rendered;
       return `- ${roleLabel}: ${trimmed}`;
     })
@@ -803,8 +815,7 @@ function formatSplitTurnContextSection(messages: AgentMessage[]): string {
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
+  for (const message of messages.toReversed()) {
     if (message.role !== "user") {
       continue;
     }
@@ -867,7 +878,7 @@ async function readWorkspaceContextForSummary(
     const combined = sections.join("\n\n");
     const safeContent =
       combined.length > MAX_SUMMARY_CONTEXT_CHARS
-        ? combined.slice(0, MAX_SUMMARY_CONTEXT_CHARS) + "\n...[truncated]..."
+        ? `${truncateUtf16Safe(combined, MAX_SUMMARY_CONTEXT_CHARS)}\n...[truncated]...`
         : combined;
 
     return `\n\n<workspace-critical-rules>\n${safeContent}\n</workspace-critical-rules>`;
@@ -1009,9 +1020,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           // Provider returned empty — fall through to LLM path.
           log.info("Compaction provider did not produce a result; falling back to LLM path.");
         } catch (err) {
-          // tryProviderSummarize rethrows abort/timeout — if we reach here it is
-          // an unexpected error from the assembly step. Fall through to LLM path.
-          if (isAbortError(err) || isTimeoutError(err)) {
+          // tryProviderSummarize rethrows on caller cancellation; reaching here
+          // means an unexpected error in the assembly step. Fall through to LLM.
+          if (signal?.aborted) {
+            throw err;
+          }
+          if (!isAbortError(err) && isTimeoutError(err)) {
             throw err;
           }
           log.warn(
@@ -1348,4 +1362,4 @@ export const testing = {
   MAX_FILE_OPS_LIST_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } as const;
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

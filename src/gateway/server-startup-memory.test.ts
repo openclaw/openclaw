@@ -13,6 +13,24 @@ vi.mock("../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManager: getMemorySearchManagerMock,
 }));
 
+// This suite owns startup orchestration; agent and memory config resolution have
+// separate tests. Keep those graphs out of this non-isolated Gateway shard.
+vi.mock("../agents/agent-scope.js", () => ({
+  listAgentEntries: (cfg: OpenClawConfig) => cfg.agents?.list ?? [],
+  listAgentIds: (cfg: OpenClawConfig) => cfg.agents?.list?.map((entry) => entry.id) ?? ["main"],
+  resolveDefaultAgentId: (cfg: OpenClawConfig) =>
+    cfg.agents?.list?.find((entry) => entry.default)?.id ?? "main",
+}));
+
+vi.mock("../agents/memory-search.js", () => ({
+  resolveMemorySearchConfig: (cfg: OpenClawConfig, agentId: string) => {
+    const agent = cfg.agents?.list?.find((entry) => entry.id === agentId);
+    const enabled =
+      agent?.memorySearch?.enabled ?? cfg.agents?.defaults?.memorySearch?.enabled ?? true;
+    return enabled ? {} : null;
+  },
+}));
+
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 function createQmdConfig(
