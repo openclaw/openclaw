@@ -2,8 +2,8 @@
 import { OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./model-selection.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
+import { scenarioMatchesQaProviderLane } from "./scenario-lane.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
-import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
 
 const QA_SMOKE_PROFILE = "smoke-ci";
 const QA_SMOKE_CI_PARTS = ["profile-1", "profile-2"] as const;
@@ -73,6 +73,7 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
         providerMode,
         primaryModel,
         channelDriver: profile.channelDriver,
+        channel: scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
       }),
   );
   if (scenarios.length === 0) {
