@@ -284,8 +284,8 @@ type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
     binding: import("../execution-auth-binding.js").AgentExecutionAuthBinding,
   ) => void;
   authProfileStateMode?: "read-write" | "read-only";
-  /** Ring-zero tool override, supplied only by the Crestodian orchestrator. */
-  crestodianTool?: import("../tools/crestodian-tool.js").CrestodianToolOptions;
+  /** Ring-zero tool override, supplied only by the OpenClaw orchestrator. */
+  systemAgentTool?: import("../tools/system-agent-tool.js").SystemAgentToolOptions;
 };
 type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
@@ -1857,7 +1857,7 @@ async function runEmbeddedAgentInternal(
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,
             toolsAllow: params.toolsAllow,
-            ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
+            ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
             cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
             forceRestartSafeTools: params.forceRestartSafeTools,

@@ -188,27 +188,27 @@ describe("createCopilotToolBridge", () => {
     expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a", "tool-b"]);
   });
 
-  it("preserves direct-only Crestodian through the exact Copilot allowlist", async () => {
-    const crestodianTool = makeTool({
-      name: "crestodian",
+  it("preserves direct-only OpenClaw through the exact Copilot allowlist", async () => {
+    const systemAgentTool = makeTool({
+      name: "openclaw",
       catalogMode: "direct-only",
     } as never);
 
     const result = await createCopilotToolBridge({
-      agentId: "crestodian",
+      agentId: "openclaw",
       attemptParams: {
-        runId: "crestodian-turn-1",
-        sessionKey: "agent:crestodian:main",
-        toolsAllow: ["crestodian"],
+        runId: "openclaw-turn-1",
+        sessionKey: "agent:openclaw:main",
+        toolsAllow: ["openclaw"],
       } as never,
-      createOpenClawCodingTools: async () => [crestodianTool],
+      createOpenClawCodingTools: async () => [systemAgentTool],
       modelId: "gpt-4.1",
       modelProvider: "github-copilot",
-      sessionId: "crestodian-session",
+      sessionId: "openclaw-session",
     });
 
-    expect(result.sourceTools).toEqual([crestodianTool]);
-    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["crestodian"]);
+    expect(result.sourceTools).toEqual([systemAgentTool]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["openclaw"]);
   });
 
   it("compacts the Copilot tool surface behind tool_search controls when enabled", async () => {
