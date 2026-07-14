@@ -3688,6 +3688,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         packageRoot,
         runCommand: createRootRunner(globalRoot),
         runStep,
+        reapplyLocalOverrides: true,
         timeoutMs: 1000,
       });
 
@@ -3696,10 +3697,38 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.steps.map((step) => step.name)).toEqual([
         "global update",
         "global install swap",
+        "local overrides",
       ]);
-      expect(result.localOverrides?.status).toBe("none");
-      expect(result.localOverrides?.added).toBe(0);
+      expect(result.localOverrides?.status).toBe("preserved");
+      expect(result.localOverrides?.added).toBe(1);
+      expect(result.localOverrides?.applied).toBe(0);
+      expect(result.localOverrides?.warnings).toEqual([
+        expect.stringContaining("were not automatically reapplied"),
+      ]);
       await expectPathMissing(staleChunk);
+      await expect(
+        fs.readFile(
+          path.join(
+            result.localOverrides?.recoveryDir ?? "",
+            "files",
+            "dist",
+            "install-C_GuuNz6.js",
+          ),
+          "utf8",
+        ),
+      ).resolves.toBe('import "./install.runtime-Xom5hOHq.js";\n');
+      await expect(
+        fs
+          .readFile(path.join(result.localOverrides?.recoveryDir ?? "", "manifest.json"), "utf8")
+          .then((content) => JSON.parse(content))
+          .then((manifest) => manifest.changes),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          kind: "added",
+          path: "dist/install-C_GuuNz6.js",
+          reapply: false,
+        }),
+      ]);
     });
   });
 

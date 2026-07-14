@@ -31,6 +31,7 @@ type LocalPackageOverrideChange = {
   path: string;
   baseline?: PackageDistContentInventoryEntry;
   dependencies?: string[];
+  reapply?: boolean;
   savedPath?: string;
   mode?: number;
 };
@@ -929,10 +930,9 @@ export async function captureLocalPackageOverrides(params: {
         change.dependencies = referencedAdded.dependenciesByChangePath.get(change.path) ?? [];
       }
     }
-    const addedOverridePaths = new Set([...standaloneAddedPaths, ...referencedAdded.addedPaths]);
-    for (const relativePath of [...addedOverridePaths].toSorted((left, right) =>
-      left.localeCompare(right),
-    )) {
+    const replayableAddedPaths = new Set([...standaloneAddedPaths, ...referencedAdded.addedPaths]);
+    const allAddedPaths = actualFiles.filter((relativePath) => !baselineSet.has(relativePath));
+    for (const relativePath of allAddedPaths.toSorted((left, right) => left.localeCompare(right))) {
       const payload = await copyOverridePayload({
         packageFs,
         recoveryDir: await ensureRecoveryDir(),
@@ -942,6 +942,7 @@ export async function captureLocalPackageOverrides(params: {
         kind: "added",
         path: relativePath,
         dependencies: referencedAdded.dependenciesByChangePath.get(relativePath) ?? [],
+        ...(replayableAddedPaths.has(relativePath) ? {} : { reapply: false }),
         savedPath: payload.savedPath,
         mode: payload.mode,
       });
@@ -1211,23 +1212,45 @@ export async function applyLocalPackageOverrides(params: {
     };
   }
 
+  const replayableChanges = params.plan.changes.filter((change) => change.reapply !== false);
+  const preservedOnlyChanges = params.plan.changes.length - replayableChanges.length;
+  const preservedOnlyWarning =
+    preservedOnlyChanges > 0
+      ? [
+          `${preservedOnlyChanges} local content-hashed file(s) were preserved in the recovery bundle but were not automatically reapplied. Inspect the bundle and restore trusted files manually if needed.`,
+        ]
+      : [];
+  if (replayableChanges.length === 0) {
+    return {
+      ...params.plan.result,
+      status: "preserved",
+      applied: 0,
+      warnings: preservedOnlyWarning,
+    };
+  }
+  const replayPlan =
+    replayableChanges.length === params.plan.changes.length
+      ? params.plan
+      : { ...params.plan, changes: replayableChanges };
   const packageRootIdentity = await readLocalOverridePackageRootIdentity(params.packageRoot).catch(
     () => null,
   );
   if (!packageRootIdentity) {
-    return localOverrideInspectionConflict(params.plan);
+    const result = localOverrideInspectionConflict(replayPlan);
+    return { ...result, warnings: [...result.warnings, ...preservedOnlyWarning] };
   }
   const conflicts = await preflightLocalOverrides({
     packageRoot: params.packageRoot,
     realPackageRoot: packageRootIdentity.realPath,
-    plan: params.plan,
+    plan: replayPlan,
   }).catch(() => null);
   if (!conflicts) {
-    return localOverrideInspectionConflict(params.plan);
+    const result = localOverrideInspectionConflict(replayPlan);
+    return { ...result, warnings: [...result.warnings, ...preservedOnlyWarning] };
   }
   const conflictPaths = new Set(conflicts.map((conflict) => conflict.path));
   const changesToApply: LocalPackageOverrideChange[] = [];
-  for (const change of params.plan.changes) {
+  for (const change of replayPlan.changes) {
     if (conflictPaths.has(change.path)) {
       continue;
     }
@@ -1243,15 +1266,17 @@ export async function applyLocalPackageOverrides(params: {
   if (changesToApply.length === 0) {
     return {
       ...params.plan.result,
-      status: conflicts.length > 0 ? "conflict" : "applied",
+      status:
+        conflicts.length > 0 ? "conflict" : preservedOnlyChanges > 0 ? "preserved" : "applied",
       applied: 0,
       conflicts,
       warnings:
         conflicts.length > 0
           ? [
               "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
+              ...preservedOnlyWarning,
             ]
-          : [],
+          : preservedOnlyWarning,
     };
   }
 
@@ -1279,7 +1304,8 @@ export async function applyLocalPackageOverrides(params: {
       !openedPackageRootIdentity ||
       !isSameLocalOverridePackageRoot(packageRootIdentity, openedPackageRootIdentity)
     ) {
-      return localOverrideInspectionConflict(params.plan);
+      const result = localOverrideInspectionConflict(replayPlan);
+      return { ...result, warnings: [...result.warnings, ...preservedOnlyWarning] };
     }
     rollbackDir = await fs.mkdtemp(path.join(params.plan.recoveryDir, "rollback-"));
     for (const change of changesToApply) {
@@ -1404,6 +1430,7 @@ export async function applyLocalPackageOverrides(params: {
       })),
       warnings: [
         "Local OpenClaw changes were preserved but could not be reapplied.",
+        ...preservedOnlyWarning,
         ...(rollbackFailures.size > 0
           ? [
               `Rollback could not fully restore ${rollbackFailures.size} installed file(s); the package may be partially modified. Inspect the preserved rollback data before retrying.`,
@@ -1420,14 +1447,15 @@ export async function applyLocalPackageOverrides(params: {
 
   return {
     ...params.plan.result,
-    status: conflicts.length > 0 ? "conflict" : "applied",
+    status: conflicts.length > 0 ? "conflict" : preservedOnlyChanges > 0 ? "preserved" : "applied",
     applied,
     conflicts,
     warnings:
       conflicts.length > 0
         ? [
             "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
+            ...preservedOnlyWarning,
           ]
-        : [],
+        : preservedOnlyWarning,
   };
 }
