@@ -29,17 +29,19 @@ import {
 } from "./protocol.js";
 
 /** Default timeout for Codex dynamic tool calls. */
-export const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
+const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 /** Hard cap for per-call Codex dynamic tool timeout overrides. */
-export const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
+const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 // timeoutSeconds is an inner tool budget. Keep enough outer-watchdog headroom
 // for bounded setup RPCs and the tool's structured timeout result to complete.
 const CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS = 30_000;
 const CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
+const CODEX_DYNAMIC_COMPUTER_GATEWAY_TIMEOUT_MS = 30_000;
+const CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS = 30_000;
 /** Timeout for image-understanding style dynamic tool calls. */
-export const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
+const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 /** Timeout for message-delivery dynamic tool calls. */
-export const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 120_000;
+const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
 const LOG_FIELD_MAX_LENGTH = 160;
 
 type DynamicToolTimeoutDetails = {
@@ -373,7 +375,7 @@ export function shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(
 }
 
 /** Action chosen after checking terminal dynamic-tool diagnostics. */
-export type TerminalDynamicToolBatchAction =
+type TerminalDynamicToolBatchAction =
   | "idle"
   | "wait"
   | "clear-nonterminal-batch"
@@ -474,10 +476,37 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
 }): number {
+  if (params.call.tool === "computer") {
+    return clampDynamicToolTimeoutMs(readComputerToolTimeoutMs(params.call.arguments));
+  }
+  // The message tool's `timeoutMs` is a Gateway transport budget. Its outer
+  // watchdog must also cover bounded same-key reconciliation after that timer.
+  if (params.call.tool === "message") {
+    return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
+  }
   return clampDynamicToolTimeoutMs(
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
       readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
       CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+  );
+}
+
+function readComputerToolTimeoutMs(value: JsonValue | undefined): number {
+  const args = isJsonObject(value) ? value : undefined;
+  const action = typeof args?.action === "string" ? args.action : undefined;
+  const gatewayTimeoutMs =
+    readPositiveFiniteTimeoutMs(args?.timeoutMs) ?? CODEX_DYNAMIC_COMPUTER_GATEWAY_TIMEOUT_MS;
+  // Node discovery can make two calls when it falls back from node.list to the
+  // legacy pairing list. Screenshot/wait then capture once; input also acts.
+  const gatewayCallCount = action === "screenshot" || action === "wait" ? 3 : 4;
+  const durationMs =
+    action === "wait" || action === "hold_key"
+      ? Math.max(0, Number(args?.duration) || 0) * 1000
+      : 0;
+  // `timeoutMs` is a per-Gateway-call transport budget, not the whole dynamic
+  // tool deadline. Computer use can resolve a node, perform/wait, then capture.
+  return (
+    durationMs + gatewayCallCount * gatewayTimeoutMs + CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS
   );
 }
 

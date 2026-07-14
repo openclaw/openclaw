@@ -46,12 +46,22 @@ export type PairedDevice = {
   deviceId: string;
   publicKey?: string;
   displayName?: string;
+  /** Operator-assigned label; preferred over client displayName when rendering. */
+  operatorLabel?: string;
+  platform?: string;
+  clientId?: string;
+  clientMode?: string;
+  role?: string;
   roles?: string[];
   scopes?: string[];
   remoteIp?: string;
   tokens?: DeviceTokenSummary[];
+  approvedVia?: "owner" | "silent" | "trusted-cidr" | "ssh-verified" | "bootstrap";
+  /** Server-computed: the device currently holds a live gateway connection. */
+  connected?: boolean;
   createdAtMs?: number;
   approvedAtMs?: number;
+  lastSeenAtMs?: number;
 };
 
 export type DevicePairingList = {
@@ -59,7 +69,7 @@ export type DevicePairingList = {
   paired: PairedDevice[];
 };
 
-export type ExecApprovalsDefaults = {
+type ExecApprovalsDefaults = {
   security?: string;
   ask?: string;
   askFallback?: string;
@@ -88,14 +98,14 @@ export type ExecApprovalsFile = {
   agents?: Record<string, ExecApprovalsAgent>;
 };
 
-export type FileExecApprovalsSnapshot = {
+type FileExecApprovalsSnapshot = {
   path: string;
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
 };
 
-export type NativeExecApprovalRule = {
+type NativeExecApprovalRule = {
   pattern: string;
   action: "allow" | "deny" | "prompt";
   shells?: string[];
@@ -139,7 +149,7 @@ type DevicesState = NodesRequestState & {
   devicesList: DevicePairingList | null;
 };
 
-export type ExecApprovalsState = NodesRequestState & {
+type ExecApprovalsState = NodesRequestState & {
   execApprovalsLoading: boolean;
   execApprovalsSaving: boolean;
   execApprovalsDirty: boolean;
@@ -160,7 +170,7 @@ type StoredIdentity = {
   createdAtMs: number;
 };
 
-export type DeviceIdentity = {
+type DeviceIdentity = {
   deviceId: string;
   publicKey: string;
   privateKey: string;
@@ -296,6 +306,110 @@ export async function rejectDevicePairing(state: DevicesState, requestId: string
     if (isCurrentNodesRequest(state, client, generation)) {
       state.devicesError = String(err);
     }
+  }
+}
+
+/** Entry removal request resolved from the unified inventory row. */
+export type InventoryRemovalRequest = {
+  id: string;
+  name: string;
+  removeNode: boolean;
+  removeDevice: boolean;
+};
+
+type InventoryState = NodesState & DevicesState;
+
+async function removeInventoryEntryRpc(
+  client: GatewayRequestClient,
+  entry: InventoryRemovalRequest,
+) {
+  // Node removal first: it revokes the node role (deleting node-only device rows)
+  // and clears any legacy node pairing under the same id. A mixed-role record
+  // then loses its remaining roles via the device-level removal.
+  if (entry.removeNode) {
+    await client.request("node.pair.remove", { nodeId: entry.id });
+  }
+  if (entry.removeDevice) {
+    await client.request("device.pair.remove", { deviceId: entry.id });
+  }
+}
+
+// Reload quietly and assign the failure afterwards: a non-quiet loadDevices
+// clears devicesError first, which would erase the message before it renders.
+async function reloadInventory(state: InventoryState, opts?: { error?: string }) {
+  const quiet = opts?.error !== undefined;
+  await Promise.all([loadDevices(state, { quiet }), loadNodes(state, { quiet })]);
+  if (opts?.error !== undefined) {
+    state.devicesError = opts.error;
+  }
+}
+
+// Confirmation for these removals lives in the page (in-page dialog): native
+// window.confirm silently returns false in webviews without a dialog bridge.
+export async function removeInventoryEntry(state: InventoryState, entry: InventoryRemovalRequest) {
+  const client = state.client;
+  if (!client || !state.connected) {
+    return;
+  }
+  try {
+    await removeInventoryEntryRpc(client, entry);
+    await reloadInventory(state);
+  } catch (err) {
+    await reloadInventory(state, { error: String(err) });
+  }
+}
+
+export async function removeStaleInventoryEntries(
+  state: InventoryState,
+  entries: InventoryRemovalRequest[],
+) {
+  const client = state.client;
+  if (!client || !state.connected || entries.length === 0) {
+    return;
+  }
+  const failures: string[] = [];
+  for (const entry of entries) {
+    try {
+      await removeInventoryEntryRpc(client, entry);
+    } catch (err) {
+      failures.push(`${entry.name}: ${String(err)}`);
+    }
+  }
+  await reloadInventory(
+    state,
+    failures.length > 0
+      ? {
+          error: `Failed to remove ${failures.length} entr${failures.length === 1 ? "y" : "ies"}: ${failures[0]}`,
+        }
+      : undefined,
+  );
+}
+
+export async function approveNodePairingRequest(state: InventoryState, requestId: string) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  try {
+    await state.client.request("node.pair.approve", { requestId });
+    await reloadInventory(state);
+  } catch (err) {
+    await reloadInventory(state, { error: String(err) });
+  }
+}
+
+export async function rejectNodePairingRequest(state: InventoryState, requestId: string) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const confirmed = window.confirm("Reject this node pairing request?");
+  if (!confirmed) {
+    return;
+  }
+  try {
+    await state.client.request("node.pair.reject", { requestId });
+    await reloadInventory(state);
+  } catch (err) {
+    await reloadInventory(state, { error: String(err) });
   }
 }
 

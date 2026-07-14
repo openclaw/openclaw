@@ -9,43 +9,34 @@ import { css, html, nothing, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
+import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import {
+  isTerminalPanelShortcut,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+  type TerminalPanelToggleDetail,
+} from "../panel-toggle-contract.ts";
 import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
+import { renderTerminalPanelTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
+import {
+  loadPersistedTerminalSessionIds,
+  persistTerminalSessionIds,
+} from "./terminal-session-storage.ts";
+import { createTerminalStartupInput, type StartupInputBuffer } from "./terminal-startup-input.ts";
+import { TerminalTaskQueue } from "./terminal-task-queue.ts";
 import { terminalTheme } from "./terminal-theme.ts";
 
 // Inline icon set (self-contained; the Control UI blocks external asset loads).
-const TERMINAL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3-3 3M8 11h5" /></svg>`;
 const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const PLUS_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>`;
 const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
 const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
 
-type TerminalDock = "bottom" | "right";
-type TerminalToggleDetail = {
-  dock?: TerminalDock;
-  open?: boolean;
-};
-
-type PanelLayout = {
-  open: boolean;
-  dock: TerminalDock;
-  height: number;
-  width: number;
-};
-
-type TerminalTabState = {
-  id: string;
-  sequence: number;
+type TerminalDock = DockPanelSide;
+type TerminalTabState = TerminalPanelTab & {
   gatewaySessionId: string;
-  /** Shell basename shown on the tab, e.g. "zsh". */
-  shellName: string | null;
-  agentId: string | null;
-  cwd: string | null;
+  pendingInput: StartupInputBuffer;
   controller: GhosttyTerminalController;
   host: HTMLDivElement;
-  status: "live" | "exited";
-  exitReason?: string;
-  exitCode?: number | null;
   /** Why an in-flight open/attach must not adopt this disposed terminal. */
   cancelled?: "close" | "lifecycle";
 };
@@ -62,94 +53,17 @@ function shellBasename(shell: string): string {
   return base && base.length > 0 ? base : "shell";
 }
 
-function terminalTabLabel(tab: TerminalTabState): string {
-  return tab.shellName ?? t("terminal.tabLabel", { n: String(tab.sequence) });
-}
-
-function terminalTabHint(tab: TerminalTabState): string | null {
-  if (tab.agentId === null || tab.cwd === null) {
-    return null;
-  }
-  return t("terminal.tabHint", { agent: tab.agentId, cwd: tab.cwd });
-}
-
-function terminalTabStatusLabel(tab: TerminalTabState): string | null {
-  if (tab.status !== "exited") {
-    return null;
-  }
-  if (tab.exitReason === "detached") {
-    return t("terminal.detached");
-  }
-  return tab.exitReason === "process_exit" && typeof tab.exitCode === "number"
-    ? t("terminal.exitedCode", { code: String(tab.exitCode) })
-    : t("terminal.exited");
-}
-
-const LAYOUT_KEY = "openclaw.terminal.panel.v1";
-// Session ids for reattach after a reload/reconnect. Deliberately
-// sessionStorage, not localStorage: attach is take-over, and a shared
-// per-origin key would make multiple Control UI windows clobber each other's
-// ids and steal each other's live shells. Per-tab storage survives exactly the
-// cases reattach is for (reload, laptop sleep, transient disconnect).
-const SESSIONS_KEY = "openclaw.terminal.sessions.v1";
-const DEFAULT_LAYOUT: PanelLayout = { open: false, dock: "bottom", height: 320, width: 520 };
-const MIN_HEIGHT = 140;
-const MIN_WIDTH = 320;
-const TOGGLE_EVENT = "openclaw:terminal-toggle";
+const panelLayout = createDockPanelLayout({
+  storageKey: "openclaw.terminal.panel.v1",
+  minHeight: 140,
+  minWidth: 320,
+  defaultDock: "bottom",
+  defaultHeight: 320,
+  defaultWidth: 520,
+});
 const TERMINAL_FONT_FAMILY =
   'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
-const TERMINAL_INPUT_DECODER = new TextDecoder();
 const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
-
-function loadLayout(): PanelLayout {
-  try {
-    const raw = globalThis.localStorage?.getItem(LAYOUT_KEY);
-    if (!raw) {
-      return { ...DEFAULT_LAYOUT };
-    }
-    const parsed = JSON.parse(raw) as Partial<PanelLayout>;
-    return {
-      open: Boolean(parsed.open),
-      dock: parsed.dock === "right" ? "right" : "bottom",
-      height: clampSize(parsed.height, MIN_HEIGHT, maxPanelHeight(), DEFAULT_LAYOUT.height),
-      width: clampSize(parsed.width, MIN_WIDTH, maxPanelWidth(), DEFAULT_LAYOUT.width),
-    };
-  } catch {
-    return { ...DEFAULT_LAYOUT };
-  }
-}
-
-// A size persisted on a large desktop must not swallow a smaller window: cap
-// the dock at 80% of the viewport so the header/resizer stay reachable and the
-// shell content keeps a usable slice.
-function maxPanelHeight(): number {
-  return Math.max(MIN_HEIGHT, Math.floor((globalThis.innerHeight || 800) * 0.8));
-}
-
-function maxPanelWidth(): number {
-  return Math.max(MIN_WIDTH, Math.floor((globalThis.innerWidth || 1280) * 0.8));
-}
-
-function clampSize(value: unknown, min: number, max: number, fallback: number): number {
-  const size =
-    typeof value === "number" && Number.isFinite(value) && value >= min ? value : fallback;
-  return Math.min(size, max);
-}
-
-function loadPersistedSessionIds(): string[] {
-  try {
-    const raw = globalThis.sessionStorage?.getItem(SESSIONS_KEY);
-    if (!raw) {
-      return [];
-    }
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((id): id is string => typeof id === "string" && id.length > 0)
-      : [];
-  } catch {
-    return [];
-  }
-}
 
 /** `<openclaw-terminal-panel>` — the dockable Control UI shell surface. */
 export class OpenClawTerminalPanel extends OpenClawLitElement {
@@ -169,8 +83,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   @state() private open = false;
   @state() private dock: TerminalDock = "bottom";
-  @state() private height = DEFAULT_LAYOUT.height;
-  @state() private width = DEFAULT_LAYOUT.width;
+  @state() private height = panelLayout.defaults.height;
+  @state() private width = panelLayout.defaults.width;
   @state() private tabs: TerminalTabState[] = [];
   @state() private activeId: string | null = null;
   @state() private booting = false;
@@ -184,13 +98,15 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   private lifecycleSyncToken = 0;
   private resizeCleanup: (() => void) | null = null;
   private tabSeq = 0;
+  private readonly bootQueue = new TerminalTaskQueue();
+  protected createTerminal = createIsolatedGhosttyTerminal;
   private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   // Re-clamp a dock sized on a larger window so the header/resizer never end
   // up off-screen after the viewport shrinks (e.g. rotate, window resize).
   private readonly onViewportResize = () => {
-    const height = Math.min(this.height, maxPanelHeight());
-    const width = Math.min(this.width, maxPanelWidth());
+    const height = Math.min(this.height, panelLayout.maxHeight());
+    const width = Math.min(this.width, panelLayout.maxWidth());
     if (height === this.height && width === this.width) {
       return;
     }
@@ -205,14 +121,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     this.activeClient = this.client;
     this.activeAvailable = this.available;
     if (!this.fullscreen) {
-      const layout = loadLayout();
+      const layout = panelLayout.load();
       this.dock = layout.dock;
       this.height = layout.height;
       this.width = layout.width;
       // Only restore the open state when the surface is actually available.
       this.open = layout.open && this.available;
       window.addEventListener("keydown", this.onGlobalKeyDown);
-      window.addEventListener(TOGGLE_EVENT, this.onToggleRequest);
+      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
       window.addEventListener("resize", this.onViewportResize);
     } else {
       // Fullscreen documents have no toggle/dock chrome; the panel is simply
@@ -227,7 +143,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener("keydown", this.onGlobalKeyDown);
-    window.removeEventListener(TOGGLE_EVENT, this.onToggleRequest);
+    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.removeEventListener("resize", this.onViewportResize);
     // Release the content-area reservation so the shell reflows to full size.
     document.documentElement.style.setProperty("--oc-terminal-reserve-bottom", "0px");
@@ -314,7 +230,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         // panel WITHOUT persisting: a disconnect must not overwrite the user's
         // open preference, or the reconnect path would never auto-reopen.
         this.open = false;
-      } else if (!this.open && (this.fullscreen || loadLayout().open)) {
+      } else if (!this.open && (this.fullscreen || panelLayout.load().open)) {
         // Hello arrived after mount (or a reconnect); restore the persisted
         // open state (fullscreen documents are always open while available)
         // and reattach persisted sessions where possible.
@@ -361,23 +277,23 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  private handleToggleRequest(event: Event): void {
+  handleToggleRequest(event: Event): void {
     const detail =
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
-        ? (event.detail as TerminalToggleDetail)
+        ? (event.detail as TerminalPanelToggleDetail)
         : null;
     const dock = detail?.dock === "right" || detail?.dock === "bottom" ? detail.dock : null;
     if (dock) {
       this.dock = dock;
     }
-    if (detail?.open === true) {
+    if (detail?.catalog || detail?.open === true) {
       if (!this.available) {
         return;
       }
       this.open = true;
       this.syncLayoutReservation();
       this.persistLayout();
-      void this.restoreSessions();
+      void (detail.catalog ? this.openCatalogSession(detail.catalog) : this.restoreSessions());
       return;
     }
     this.toggle();
@@ -391,7 +307,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   private handleGlobalKey(event: KeyboardEvent): void {
     // Ctrl+` toggles the terminal, matching common IDE shells.
-    if (event.ctrlKey && !event.metaKey && !event.altKey && event.code === "Backquote") {
+    if (isTerminalPanelShortcut(event)) {
       event.preventDefault();
       this.toggle();
     }
@@ -402,11 +318,25 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
    * the gateway still has them, otherwise fall back to one fresh session.
    */
   private async restoreSessions(): Promise<void> {
+    await this.bootQueue.enqueueSteps(
+      () => this.reattachPersistedSessions(),
+      () => this.ensureInitialSession(),
+    );
+  }
+
+  private async openCatalogSession(catalog: NonNullable<TerminalPanelToggleDetail["catalog"]>) {
+    await this.bootQueue.enqueueSteps(
+      () => this.reattachPersistedSessions(),
+      () => this.openSessionNow(catalog),
+    );
+  }
+
+  private async reattachPersistedSessions(): Promise<void> {
     const operation = this.captureTerminalOperation();
-    if (!operation || this.booting || this.tabs.length > 0) {
+    if (!operation || this.tabs.length > 0) {
       return;
     }
-    const persisted = loadPersistedSessionIds();
+    const persisted = loadPersistedTerminalSessionIds();
     if (persisted.length > 0) {
       this.booting = true;
       try {
@@ -439,12 +369,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       // Prune ids the gateway no longer knows (reaped or externally closed).
       this.persistLiveSessions();
     }
-    await this.ensureInitialSession();
   }
 
   private async ensureInitialSession(): Promise<void> {
     if (this.tabs.length === 0 && !this.booting) {
-      await this.openSession();
+      await this.openSessionNow();
     }
   }
 
@@ -456,8 +385,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     rows: number;
   }> {
     const connection = this.connectionFor(operation);
-    // Captured so the cancelled-open cleanup can close the session even if a
-    // teardown swaps this.connection while the open/attach RPC is in flight.
+    // Preserve the connection so cancelled-open cleanup still closes the in-flight session.
     const host = document.createElement("div");
     host.className = "tp-host";
     const id = `tab-${++this.tabSeq}`;
@@ -473,9 +401,13 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
     viewport.append(host);
     const tabRef = { current: undefined as TerminalTabState | undefined };
+    const startupInput = createTerminalStartupInput(
+      connection,
+      () => tabRef.current?.gatewaySessionId,
+    );
     let controller: GhosttyTerminalController;
     try {
-      controller = await createIsolatedGhosttyTerminal({
+      controller = await this.createTerminal({
         parent: host,
         readOnly: false,
         terminalOptions: {
@@ -487,19 +419,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         },
         signal: operation.signal,
         // The browser controller owns these subscriptions and their teardown.
-        // Ignore startup callbacks until the Gateway session is adopted.
-        onData: (bytes) => {
-          const sessionId = tabRef.current?.gatewaySessionId;
-          if (sessionId) {
-            void connection.input(sessionId, TERMINAL_INPUT_DECODER.decode(bytes));
-          }
-        },
-        onResize: ({ columns, rows }) => {
-          const sessionId = tabRef.current?.gatewaySessionId;
-          if (sessionId) {
-            void connection.resize(sessionId, columns, rows);
-          }
-        },
+        onData: startupInput.onData,
+        onResize: startupInput.onResize,
       });
     } catch (error) {
       host.remove();
@@ -517,6 +438,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       id,
       sequence: this.tabSeq,
       gatewaySessionId: "",
+      pendingInput: startupInput.buffer,
       shellName: null,
       agentId: null,
       cwd: null,
@@ -548,16 +470,19 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   /** Binds a freshly opened or attached gateway session to its tab. */
   private adoptSession(
     tab: TerminalTabState,
-    result: { sessionId: string; shell: string; agentId: string; cwd: string },
+    result: { sessionId: string; shell: string; agentId: string; cwd: string; title?: string },
   ): void {
     tab.gatewaySessionId = result.sessionId;
-    tab.shellName = shellBasename(result.shell);
+    tab.shellName = result.title ?? shellBasename(result.shell);
     tab.agentId = result.agentId;
     tab.cwd = result.cwd;
     // Libterminal observes layout before the Gateway session exists. Resync the
     // current grid now so a resize during the open/attach RPC is not lost.
     const { cols, rows } = tab.controller.terminal;
     void this.connection?.resize(result.sessionId, cols || 80, rows || 24);
+    for (const data of tab.pendingInput.drain()) {
+      void this.connection?.input(result.sessionId, data);
+    }
 
     this.tabs = [...this.tabs];
     this.persistLiveSessions();
@@ -572,9 +497,13 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  private async openSession(): Promise<void> {
+  private async openSession(catalog?: TerminalPanelToggleDetail["catalog"]): Promise<void> {
+    await this.bootQueue.enqueue(() => this.openSessionNow(catalog));
+  }
+
+  private async openSessionNow(catalog?: TerminalPanelToggleDetail["catalog"]): Promise<void> {
     const operation = this.captureTerminalOperation();
-    if (!operation || this.booting) {
+    if (!operation) {
       return;
     }
     this.booting = true;
@@ -587,7 +516,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       const boot = await this.bootTab(operation);
       createdTab = boot.tab;
       const result = await boot.connection.open(
-        { agentId, cols: boot.cols, rows: boot.rows },
+        { agentId, cols: boot.cols, rows: boot.rows, ...(catalog ? { catalog } : {}) },
         this.tabSink(boot.tab),
       );
       if (!this.isTerminalOperationCurrent(operation) || boot.tab.cancelled) {
@@ -750,6 +679,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     this.lifecycleGeneration += 1;
     this.lifecycleAbortController.abort();
     this.lifecycleAbortController = new AbortController();
+    this.bootQueue.reset();
     this.booting = false;
     this.clearResizeListeners();
     for (const tab of this.tabs) {
@@ -792,25 +722,16 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     const ids = this.tabs
       .filter((tab) => tab.status === "live" && tab.gatewaySessionId)
       .map((tab) => tab.gatewaySessionId);
-    try {
-      globalThis.sessionStorage?.setItem(SESSIONS_KEY, JSON.stringify(ids));
-    } catch {
-      // Storage may be unavailable (private mode); reattach just won't work.
-    }
+    persistTerminalSessionIds(ids);
   }
 
   private persistLayout(): void {
-    try {
-      const layout: PanelLayout = {
-        open: this.open,
-        dock: this.dock,
-        height: this.height,
-        width: this.width,
-      };
-      globalThis.localStorage?.setItem(LAYOUT_KEY, JSON.stringify(layout));
-    } catch {
-      // Storage may be unavailable (private mode); layout just won't persist.
-    }
+    panelLayout.save({
+      open: this.open,
+      dock: this.dock,
+      height: this.height,
+      width: this.width,
+    });
   }
 
   private startResize(event: PointerEvent): void {
@@ -822,11 +743,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     const startWidth = this.width;
     const onMove = (move: PointerEvent) => {
       if (this.dock === "bottom") {
-        const next = Math.max(MIN_HEIGHT, startHeight + (startY - move.clientY));
-        this.height = Math.min(next, maxPanelHeight());
+        const next = Math.max(panelLayout.minHeight, startHeight + (startY - move.clientY));
+        this.height = Math.min(next, panelLayout.maxHeight());
       } else {
-        const next = Math.max(MIN_WIDTH, startWidth + (startX - move.clientX));
-        this.width = Math.min(next, maxPanelWidth());
+        const next = Math.max(panelLayout.minWidth, startWidth + (startX - move.clientX));
+        this.width = Math.min(next, panelLayout.maxWidth());
       }
       // Reflow the content reservation live so the shell tracks the drag.
       this.syncLayoutReservation();
@@ -882,51 +803,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
               aria-label=${t("terminal.resize")}
             ></div>`}
         <header class="tp-header">
-          <div class="tp-tabs" role="tablist">
-            ${this.tabs.map((tab) => {
-              const statusLabel = terminalTabStatusLabel(tab);
-              return html`
-                <div
-                  class="tp-tab ${tab.id === this.activeId ? "is-active" : ""} ${tab.status ===
-                  "exited"
-                    ? "is-exited"
-                    : ""}"
-                  role="tab"
-                  title=${terminalTabHint(tab) || nothing}
-                  aria-selected=${tab.id === this.activeId ? "true" : "false"}
-                  @click=${() => this.switchTo(tab.id)}
-                >
-                  <span class="tp-tab__icon" aria-hidden="true">${TERMINAL_GLYPH}</span>
-                  <span class="tp-tab__label">${terminalTabLabel(tab)}</span>
-                  ${statusLabel
-                    ? html`<span class="tp-tab__status">${statusLabel}</span>`
-                    : nothing}
-                  <button
-                    class="tp-tab__close"
-                    type="button"
-                    title=${t("terminal.closeSession")}
-                    aria-label=${t("terminal.closeSession")}
-                    @click=${(e: Event) => {
-                      e.stopPropagation();
-                      this.closeTab(tab.id);
-                    }}
-                  >
-                    ${CLOSE_GLYPH}
-                  </button>
-                </div>
-              `;
-            })}
-            <button
-              class="tp-new"
-              type="button"
-              ?disabled=${this.booting}
-              title=${t("terminal.newSession")}
-              aria-label=${t("terminal.newSession")}
-              @click=${() => void this.openSession()}
-            >
-              ${PLUS_GLYPH}
-            </button>
-          </div>
+          ${renderTerminalPanelTabs({
+            tabs: this.tabs,
+            activeId: this.activeId,
+            booting: this.booting,
+            onSelect: (id) => this.switchTo(id),
+            onClose: (id) => this.closeTab(id),
+            onNew: () => void this.openSession(),
+          })}
           ${this.fullscreen
             ? nothing
             : html`<div class="tp-actions">
@@ -962,11 +846,17 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         ${this.errorText
           ? html`<div class="tp-error" role="alert">${this.errorText}</div>`
           : nothing}
-        <div class="tp-viewport">
+        <wa-tab-panel
+          id="terminal-tab-panel"
+          class="tp-viewport"
+          name=${this.activeId ?? "terminal"}
+          active
+          aria-labelledby=${this.activeId ? `terminal-tab-${this.activeId}` : nothing}
+        >
           ${this.booting && this.tabs.length === 0
             ? html`<div class="tp-empty">${t("terminal.starting")}</div>`
             : nothing}
-        </div>
+        </wa-tab-panel>
       </section>
     `;
   }
@@ -1045,22 +935,28 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       min-height: 36px;
     }
     .tp-tabs {
+      --track-width: 0;
+      display: block;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .tp-tabs::part(nav) {
       display: flex;
       align-items: stretch;
       gap: 1px;
-      overflow-x: auto;
-      scrollbar-width: none;
+    }
+    .tp-tabs::part(body) {
+      display: none;
     }
     .tp-tabs::-webkit-scrollbar {
       display: none;
     }
-    .tp-tab {
+    .tp-tab::part(base) {
       display: flex;
       align-items: center;
       gap: 7px;
       padding: 0 10px;
       height: 36px;
-      cursor: pointer;
       color: var(--muted, #8a919e);
       white-space: nowrap;
       font-size: 12.5px;
@@ -1070,15 +966,15 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         color 0.12s ease,
         background 0.12s ease;
     }
-    .tp-tab:hover {
+    .tp-tab:hover::part(base) {
       color: var(--text, #d7dae0);
       background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
     }
-    .tp-tab.is-active {
+    .tp-tab[active]::part(base) {
       color: var(--text, #d7dae0);
       border-bottom-color: var(--accent, #ff5c5c);
     }
-    .tp-tab.is-exited {
+    .tp-tab.is-exited::part(base) {
       opacity: 0.55;
     }
     .tp-tab__icon {
@@ -1105,12 +1001,13 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       border: none;
       background: transparent;
       color: inherit;
-      cursor: pointer;
       border-radius: 4px;
       padding: 0;
     }
-    .tp-tab:hover .tp-tab__close,
-    .tp-tab.is-active .tp-tab__close {
+    .tp-tab:hover + .tp-tab__close,
+    .tp-tab[active] + .tp-tab__close,
+    .tp-tab__close:hover,
+    .tp-tab__close:focus-visible {
       opacity: 0.7;
     }
     .tp-new,
@@ -1123,7 +1020,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       border: none;
       background: transparent;
       color: var(--muted, #8a919e);
-      cursor: pointer;
       border-radius: 6px;
       padding: 0;
     }
@@ -1170,12 +1066,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       color: var(--danger, #ff6b6b);
     }
   `;
-}
-
-// Guarded define (not @customElement) so re-imports under a shared registry —
-// e.g. vitest with isolate=false — don't throw "already registered".
-if (!customElements.get("openclaw-terminal-panel")) {
-  customElements.define("openclaw-terminal-panel", OpenClawTerminalPanel);
 }
 
 declare global {

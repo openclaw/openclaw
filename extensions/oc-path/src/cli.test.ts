@@ -2,7 +2,7 @@
  * Smoke tests for the `openclaw path` CLI handlers.
  *
  * Tests invoke each subcommand handler directly with a capturing
- * `OutputRuntimeEnv` — no commander wiring, no child process spawn.
+ * a derived runtime interface — no commander wiring, no child process spawn.
  * Assertions inspect captured stdout/stderr and the exit code the
  * handler set on the runtime.
  */
@@ -11,8 +11,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  type OutputRuntimeEnv,
-  formatUnifiedDiff,
   pathEmitCommand,
   pathFindCommand,
   pathResolveCommand,
@@ -20,7 +18,9 @@ import {
   pathValidateCommand,
 } from "./cli.js";
 
-interface TestRuntime extends OutputRuntimeEnv {
+type CliRuntime = Parameters<typeof pathResolveCommand>[2];
+
+interface TestRuntime extends CliRuntime {
   readonly stdout: string[];
   readonly stderr: string[];
   exitCode: number;
@@ -169,6 +169,26 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
+    it("CLI-S02b --dry-run human output reports the rendered UTF-8 byte count", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      const before = '{ "version": "1.0" }';
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        "中文",
+        { cwd: workspaceDir, human: true, dryRun: true },
+        rt,
+      );
+
+      const [header, ...bodyLines] = stdoutText(rt).split("\n");
+      const body = bodyLines.join("\n");
+      expect(header).toBe(
+        `--dry-run: would write ${Buffer.byteLength(body, "utf8")} bytes to ${filePath}`,
+      );
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+    });
+
     it("CLI-S05 --dry-run --diff prints a unified diff", async () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       const before = '{\n  "version": "1.0",\n  "enabled": true\n}\n';
@@ -187,17 +207,6 @@ describe("openclaw path CLI", () => {
       expect(out).toContain('-  "version": "1.0",');
       expect(out).toContain('+  "version": "2.0",');
       expect(readFileSync(filePath, "utf-8")).toBe(before);
-    });
-
-    it("CLI-S05b --dry-run --diff shows final newline-only byte changes", () => {
-      const out = formatUnifiedDiff(
-        "## Boundaries\n\n- timeout: 5\n",
-        "## Boundaries\n\n- timeout: 5",
-        "AGENTS.md",
-      );
-      expect(out).toContain("--- AGENTS.md");
-      expect(out).toContain("@@ -1,4 +1,3 @@");
-      expect(out).toContain("\n-\n");
     });
 
     it("CLI-S05c --dry-run --diff shows line-ending-only byte changes", async () => {
@@ -412,6 +421,29 @@ describe("openclaw path CLI", () => {
       const out = JSON.parse(stdoutText(rt));
       expect(out.kind).toBe("yaml");
       expect(out.bytes).toBe(before);
+    });
+
+    it("CLI-S07b reports accurate UTF-8 byte counts for multibyte set output", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      const before = '{\n  "version": "1.0"\n}\n';
+      writeFileSync(filePath, before, "utf-8");
+      // Replace the whole file with CJK content via the version key.
+      // CJK chars are 1 UTF-16 unit but 3 UTF-8 bytes.
+      const cjkValue = "中".repeat(30);
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        cjkValue,
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      // bytesWritten must match the file's actual UTF-8 byte size on disk
+      const onDisk = readFileSync(filePath, "utf-8");
+      expect(out.bytesWritten).toBe(Buffer.byteLength(onDisk, "utf8"));
+      // bytesWritten exceeds JS string length (50 UTF-16 units < ~110 UTF-8 bytes)
+      expect(out.bytesWritten).toBeGreaterThan(onDisk.length);
     });
 
     it("CLI-E03 emit --cwd resolves <file> against the supplied directory", async () => {

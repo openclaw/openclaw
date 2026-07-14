@@ -8,12 +8,13 @@ import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import {
   getManagedBrowserMissingDisplayError,
-  OPENCLAW_BROWSER_HEADLESS_ENV,
   resolveBrowserConfig,
   resolveManagedBrowserHeadlessMode,
   resolveProfile,
 } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+
+const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
 
 // Isolate the extension relay secret (read from stateDir/credentials) so the
 // extension-token assertions do not pick up a developer's real secret file.
@@ -532,7 +533,21 @@ describe("browser config", () => {
           platform: "linux",
           env: noDisplayEnv,
         }),
-      ).toContain("browser.profiles.openclaw.headless=false");
+      ).toMatchObject({
+        message: expect.stringContaining("browser.profiles.openclaw.headless=false"),
+        headlessSource: "profile",
+      });
+
+      expect(
+        getManagedBrowserMissingDisplayError(defaultResolved, defaultProfile, {
+          headlessOverride: false,
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toMatchObject({
+        message: expect.stringContaining("request override"),
+        headlessSource: "request",
+      });
     });
   });
 

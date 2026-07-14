@@ -27,7 +27,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
-import { getRegisteredWhatsAppConnectionController } from "../connection-controller-registry.js";
+import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { getPrimaryIdentityId, identitiesOverlap, resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
@@ -106,13 +106,13 @@ import type {
   WebListenerCloseReason,
 } from "./types.js";
 
-const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+const LOGGED_OUT_STATUS = DisconnectReason.loggedOut;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
 const GROUP_META_TTL_MS = 5 * 60 * 1000;
 const BAILEYS_MESSAGE_TTL_MS = 10 * 60 * 1000;
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
-export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
+const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
 type WhatsAppGroupMetadataCacheEntry = {
   subject?: string;
@@ -258,10 +258,6 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
     return;
   }
   defaultRuntime.log(message);
-}
-
-function isGroupJid(jid: string): boolean {
-  return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
 }
 
 function isDirectUserJid(jid: string): boolean {
@@ -445,7 +441,7 @@ export async function attachWebInboxToSocket(
     if (!self.e164 && !self.jid && !self.lid) {
       return null;
     }
-    const successor = getRegisteredWhatsAppConnectionController(options.accountId);
+    const successor = getWhatsAppConnectionController(options.accountId);
     if (!successor) {
       return null;
     }
@@ -923,7 +919,7 @@ export async function attachWebInboxToSocket(
     jid: string,
     text: string,
   ): Promise<{ text: string; mentionedJids: string[] }> => {
-    if (!isGroupJid(jid) || !mayContainWhatsAppOutboundMention(text)) {
+    if (isJidGroup(jid) !== true || !mayContainWhatsAppOutboundMention(text)) {
       return { text, mentionedJids: [] };
     }
     const meta = await getGroupMeta(jid);
@@ -981,7 +977,7 @@ export async function attachWebInboxToSocket(
       return null;
     }
 
-    const group = isGroupJid(remoteJid);
+    const group = isJidGroup(remoteJid) === true;
     // Drop echoes of messages the gateway itself sent (tracked by sendTrackedMessage).
     // Applies to both groups and DMs/self-chat — without this, self-chat mode
     // re-processes the bot's own replies as new inbound user messages.

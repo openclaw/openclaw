@@ -53,7 +53,7 @@ function createGateway(connected: boolean): GatewayHarness {
     get snapshot() {
       return snapshot;
     },
-    connection: { gatewayUrl: "ws://localhost", token: "", password: "" },
+    connection: { gatewayUrl: "ws://localhost", token: "", bootstrapToken: "", password: "" },
     eventLog: [],
     connect: () => undefined,
     setSessionKey: () => undefined,
@@ -161,7 +161,11 @@ describe("CommandPalette lifecycle", () => {
 
     palette.remove();
     provider.append(palette);
-    expect(palette.querySelector("dialog")?.open).toBe(false);
+    const modal = palette.querySelector("openclaw-modal-dialog");
+    const dialog = modal?.shadowRoot
+      ?.querySelector("wa-dialog")
+      ?.shadowRoot?.querySelector("dialog");
+    expect(dialog?.open).toBe(false);
     await palette.updateComplete;
 
     expect(palette.querySelector("dialog")).toBeNull();
@@ -220,5 +224,22 @@ describe("CommandPalette lifecycle", () => {
     expect(replacementList).toHaveBeenCalledOnce();
     expect(palette.textContent).toContain("Fresh chat");
     expect(palette.textContent).not.toContain("Stale chat");
+  });
+
+  it("navigates to the plugin manager from search", async () => {
+    const { gateway } = createGateway(true);
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+      ),
+    );
+    await enterQuery(palette, "plugins");
+
+    const item = palette.querySelector<HTMLButtonElement>("#cmd-palette-option-nav-plugins");
+    expect(item?.textContent).toContain("Plugins");
+    item?.click();
+
+    expect(palette.onNavigate).toHaveBeenCalledWith("plugins");
   });
 });

@@ -49,6 +49,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Bash",
       detailKeys: ["command"],
     },
+    computer: {
+      emoji: "🖱️",
+      title: "Computer",
+      detailKeys: ["action", "coordinate", "text", "node", "nodeId", "screenIndex"],
+    },
     process: {
       emoji: "🧰",
       title: "Process",
@@ -359,6 +364,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🧾",
       title: "Session History",
       detailKeys: ["sessionKey", "limit", "includeTools"],
+    },
+    sessions_search: {
+      emoji: "🔎",
+      title: "Session Search",
+      detailKeys: ["query", "sessionKey", "limit"],
     },
     transcripts: {
       emoji: "🎙️",

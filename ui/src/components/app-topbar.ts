@@ -1,28 +1,21 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import type { NavigationRouteId } from "../app-navigation.ts";
+import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
-import "./dashboard-header.ts";
 import "./tooltip.ts";
 
+/** Narrow-viewport header: drawer toggle, brand, and command-palette search.
+ * Desktop hides it entirely (layout.css) — the sidebar owns navigation there. */
 class AppTopbar extends OpenClawLightDomContentsElement {
-  @property({ attribute: false }) routeId?: NavigationRouteId;
   @property({ attribute: false }) navDrawerOpen = false;
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) basePath = "";
-  @property({ attribute: false }) agentLabel = "";
-  @property({ attribute: false }) overviewHref = "";
   @property({ attribute: false }) onToggleDrawer?: (trigger: HTMLElement) => void;
   @property({ attribute: false }) onOpenPalette?: () => void;
-  @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
   @property({ attribute: false }) searchDisabled = false;
-
-  private readonly handleNavigate = (event: CustomEvent<NavigationRouteId>) => {
-    this.onNavigate?.(event.detail);
-  };
 
   override render() {
     const drawerLabel = this.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
@@ -45,7 +38,9 @@ class AppTopbar extends OpenClawLightDomContentsElement {
               <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
             </button>
           </openclaw-tooltip>
-          <div class="topnav-shell__content">
+          <!-- The Mac app used to float a native drag strip over this brand
+               row; the web now asks the host to move the window itself. -->
+          <div class="topnav-shell__content" @mousedown=${beginNativeWindowDrag}>
             <div class="topbar-brand" aria-label="OpenClaw">
               <img
                 class="topbar-brand__logo"
@@ -55,13 +50,6 @@ class AppTopbar extends OpenClawLightDomContentsElement {
               />
               <span class="topbar-brand__title">OpenClaw</span>
             </div>
-            <dashboard-header
-              .routeId=${this.routeId}
-              .basePath=${this.basePath}
-              .agentLabel=${this.agentLabel}
-              .overviewHref=${this.overviewHref}
-              @navigate=${this.handleNavigate}
-            ></dashboard-header>
           </div>
           <div class="topnav-shell__actions">
             <openclaw-tooltip .content=${t("chat.commandPaletteTitle")}>

@@ -3,6 +3,7 @@ import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -19,6 +20,7 @@ import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
@@ -75,8 +77,10 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
-  /** Abort the guarded fetch request if it has not completed by this deadline (ms). */
+  /** Abort the complete guarded fetch and body operation after this deadline (ms). */
   timeoutMs?: number;
+  /** Abort if final response headers have not arrived by this deadline (ms). */
+  responseHeaderTimeoutMs?: number;
   /** Abort if the response body stops yielding data for this long (ms). */
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
@@ -189,6 +193,7 @@ async function fetchGuardedMediaResponse(
     requestInit,
     maxRedirects,
     timeoutMs,
+    responseHeaderTimeoutMs,
     ssrfPolicy,
     lookupFn,
     dispatcherPolicy,
@@ -203,6 +208,13 @@ async function fetchGuardedMediaResponse(
     dispatcherAttempts && dispatcherAttempts.length > 0
       ? dispatcherAttempts
       : [{ dispatcherPolicy, lookupFn }];
+  const responseHeaderDeadline = buildTimeoutAbortSignal({
+    timeoutMs: responseHeaderTimeoutMs,
+    signal: requestInit?.signal ?? undefined,
+    operation: "media response headers",
+    url,
+  });
+  const requestSignal = responseHeaderDeadline.signal;
   const runGuardedFetch = async (attempt: FetchDispatcherAttempt) =>
     await fetchWithSsrFGuard(
       (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
@@ -213,6 +225,7 @@ async function fetchGuardedMediaResponse(
         init: requestInit,
         maxRedirects,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        ...(requestSignal ? { signal: requestSignal } : {}),
         policy: ssrfPolicy,
         lookupFn: attempt.lookupFn ?? lookupFn,
         dispatcherPolicy: attempt.dispatcherPolicy,
@@ -223,7 +236,7 @@ async function fetchGuardedMediaResponse(
     const attemptErrors: unknown[] = [];
     for (let i = 0; i < attempts.length; i += 1) {
       try {
-        result = await runGuardedFetch(attempts[i]);
+        result = await runGuardedFetch(expectDefined(attempts[i], "attempts entry at i"));
         break;
       } catch (err) {
         if (
@@ -253,13 +266,19 @@ async function fetchGuardedMediaResponse(
         attemptErrors.push(err);
       }
     }
+    // Clear only the header timer. The merged parent signal stays attached until
+    // release so shutdown can still interrupt a response body read.
+    responseHeaderDeadline.cleanup();
     return {
       response: result.response,
       finalUrl: result.finalUrl,
-      release: result.release,
+      release: async () => {
+        await result.release();
+      },
       sourceUrl,
     };
   } catch (err) {
+    responseHeaderDeadline.cleanup();
     throw new MediaFetchError(
       "fetch_failed",
       `Failed to fetch media from ${sourceUrl}: ${formatErrorMessage(err)}`,

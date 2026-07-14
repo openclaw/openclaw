@@ -6,6 +6,12 @@ struct GatewaySetupRequest {
     let link: GatewayConnectDeepLink
 }
 
+enum GatewayConnectionAttempt: Equatable {
+    case gateway(GatewayStableIdentifier.Key)
+    case manual
+    case setupCode
+}
+
 struct SettingsProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(VoiceWakeManager.self) var voiceWake
@@ -42,7 +48,7 @@ struct SettingsProTab: View {
     @State var isReconnectingGateway = false
     @State var isRefreshingGateway = false
     @State var isChangingLocationMode = false
-    @State var connectingGatewayID: String?
+    @State var connectingGateway: GatewayConnectionAttempt?
     @State var gatewayRegistry = GatewaySettingsStore.GatewayRegistry.empty
     @State var pendingForgetGateway: GatewaySettingsStore.GatewayRegistryEntry?
     @State var selectedAgentPickerId = ""
@@ -60,9 +66,13 @@ struct SettingsProTab: View {
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false
     @State var scannerError: String?
+    @State var showLocationAccessDialog = false
+    @State var pendingLocationMode: OpenClawLocationMode?
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
+    @State var watchDirectSetupStatusText: String?
+    @State var isSendingWatchDirectSetup = false
     @State var locationPermissionSummary = LocationPermissionSummary(
         desiredMode: .off,
         locationServicesEnabled: true,
@@ -84,6 +94,7 @@ struct SettingsProTab: View {
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
+    let onApprovalNotificationsRoute: ((String) -> Void)?
     let gatewaySetupRequest: GatewaySetupRequest?
     let onGatewaySetupRequestHandled: ((Int) -> Void)?
 
@@ -95,6 +106,7 @@ struct SettingsProTab: View {
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
         onRouteChange: ((SettingsRoute?) -> Void)? = nil,
+        onApprovalNotificationsRoute: ((String) -> Void)? = nil,
         gatewaySetupRequest: GatewaySetupRequest? = nil,
         onGatewaySetupRequestHandled: ((Int) -> Void)? = nil)
     {
@@ -105,6 +117,7 @@ struct SettingsProTab: View {
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
+        self.onApprovalNotificationsRoute = onApprovalNotificationsRoute
         self.gatewaySetupRequest = gatewaySetupRequest
         self.onGatewaySetupRequestHandled = onGatewaySetupRequestHandled
     }
@@ -176,6 +189,7 @@ struct SettingsProTab: View {
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
                     self.syncSettingsState()
+                    self.applyPendingLocationModeIfAvailable()
                     self.refreshNotificationSettings()
                 }
             }
@@ -285,8 +299,11 @@ struct SettingsProTab: View {
                 "QR Scanner Unavailable",
                 isPresented: Binding(
                     get: { self.scannerError != nil },
-                    set: { if !$0 { self.scannerError = nil } }))
-            {
+                    set: {
+                        if !$0 {
+                            self.scannerError = nil
+                        }
+                    })) {
                 Button(role: .cancel) {} label: {
                     Text("OK")
                         .font(OpenClawType.subheadSemiBold)
@@ -296,10 +313,41 @@ struct SettingsProTab: View {
                     .font(OpenClawType.subhead)
             }
             .confirmationDialog(
-                    "Forget \(self.pendingForgetGateway?.name ?? "gateway")?",
+                "Access Level",
+                isPresented: self.$showLocationAccessDialog,
+                titleVisibility: .visible)
+            {
+                Button {
+                    self.selectLocationAccessLevel(.whileUsing)
+                } label: {
+                    Text("While Using the App")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Button {
+                    self.selectLocationAccessLevel(.always)
+                } label: {
+                    Text("Always")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Button(role: .cancel) {} label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+            } message: {
+                Text("Choose when OpenClaw may share this iPhone's location with gateway tools.")
+                    .font(OpenClawType.subhead)
+            }
+            .confirmationDialog(
+                    String(
+                        format: String(localized: "Forget %@?"),
+                        self.pendingForgetGateway?.name ?? String(localized: "gateway")),
                     isPresented: Binding(
                         get: { self.pendingForgetGateway != nil },
-                        set: { if !$0 { self.pendingForgetGateway = nil } }),
+                        set: {
+                            if !$0 {
+                                self.pendingForgetGateway = nil
+                            }
+                        }),
                     titleVisibility: .visible)
             {
                 Button(role: .destructive) {
@@ -315,8 +363,14 @@ struct SettingsProTab: View {
                         .font(OpenClawType.subheadSemiBold)
                 }
                 } message: {
-                    Text("This removes saved credentials, device access, TLS trust, and cached chats for this gateway.")
+                    // Keep the extraction key contiguous for the native localization inventory.
+                    // swiftlint:disable line_length
+                    Text(
+                        String(
+                            localized:
+                            "This removes saved credentials, device access, TLS trust, and cached chats for this gateway."))
                         .font(OpenClawType.subhead)
+                    // swiftlint:enable line_length
                 }
     }
 
@@ -329,6 +383,9 @@ struct SettingsProTab: View {
 
     func openNotificationsRouteFromApprovals() {
         guard self.directRoute == nil else { return }
+        if let approvalID = ExecApprovalIdentifier.exact(self.appModel.pendingExecApprovalPrompt?.id) {
+            self.onApprovalNotificationsRoute?(approvalID)
+        }
         if !self.ownsNavigationStack, let navigateToRoute {
             navigateToRoute(.notifications)
             return

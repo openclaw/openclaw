@@ -2,7 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -65,7 +65,6 @@ const bundledMocks = vi.hoisted(() => ({
 
 vi.mock("../channels/plugins/catalog.js", () => ({
   getChannelPluginCatalogEntry: catalogMocks.getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
   listRawChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
 }));
 
@@ -92,9 +91,9 @@ vi.mock("../channels/plugins/bundled.js", async () => {
 
 vi.mock("./channel-setup/plugin-install.js", () => pluginInstallMocks);
 
-vi.mock("../cli/plugins-registry-refresh.js", () => registryRefreshMocks);
+vi.mock("../plugins/registry-refresh.js", () => registryRefreshMocks);
 
-vi.mock("../cli/plugins-install-record-commit.js", () => pluginInstallRecordCommitMocks);
+vi.mock("../plugins/install-record-commit.js", () => pluginInstallRecordCommitMocks);
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: () => channelWizardMocks.prompter,
@@ -381,14 +380,17 @@ function createSignalPlugin(
   } as ChannelPlugin;
 }
 
-async function runSignalAddCommand(afterAccountConfigWritten: SignalAfterAccountConfigWritten) {
+async function runSignalAddCommand(
+  afterAccountConfigWritten: SignalAfterAccountConfigWritten,
+  beforePersistentEffect?: () => Promise<void>,
+) {
   const plugin = createSignalPlugin(afterAccountConfigWritten);
   setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]));
   configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
   await channelsAddCommand(
     { channel: "signal", account: "ops", signalNumber: "+15550001" },
     runtime,
-    { hasFlags: true },
+    { hasFlags: true, ...(beforePersistentEffect ? { beforePersistentEffect } : {}) },
   );
 }
 
@@ -1197,5 +1199,21 @@ describe("channelsAddCommand", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       'Channel signal post-setup warning for "ops": hook failed',
     );
+  });
+
+  it("rechecks persistent authority before direct account post-setup hooks", async () => {
+    const afterAccountConfigWritten = vi.fn().mockResolvedValue(undefined);
+    const beforePersistentEffect = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("inference authority changed"));
+
+    await expect(
+      runSignalAddCommand(afterAccountConfigWritten, beforePersistentEffect),
+    ).rejects.toThrow("inference authority changed");
+
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(2);
+    expect(afterAccountConfigWritten).not.toHaveBeenCalled();
   });
 });

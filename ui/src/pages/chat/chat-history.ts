@@ -1,12 +1,6 @@
 // Control UI page module owns Chat transcript loading and selected-session message subscription.
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayHelloOk,
-} from "../../api/gateway.ts";
-
-export { GatewayRequestError };
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
@@ -20,7 +14,11 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import type { ChatSideResult } from "../../lib/chat/side-result.ts";
+import {
+  retirePendingChatSideQuestion,
+  type ChatSideResult,
+  type ChatSideResultPending,
+} from "../../lib/chat/side-result.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -30,6 +28,7 @@ import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentParamsForSession,
   unsubscribeSessionMessages,
+  visibleSessionMatches,
   type SessionCapability,
 } from "../../lib/sessions/index.ts";
 import {
@@ -44,6 +43,17 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import {
+  isRetryableStartupUnavailable,
+  isUnknownGatewayMethodError,
+  resolveStartupRetryDelayMs,
+  sleep,
+} from "./chat-history-retry.ts";
+import {
+  isLocallyOptimisticHistoryMessage,
+  messageDisplaySignature,
+  preserveOptimisticTailMessages,
+} from "./history-merge.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -68,14 +78,13 @@ import {
   prunePersistedToolStreamMessages,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
+import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const CHAT_HISTORY_REQUEST_LIMIT = 100;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
-const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
-const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
 
@@ -252,43 +261,6 @@ function chatPersistCommentaryEnabled(state: ChatState): boolean {
   return state.settings?.chatPersistCommentary === true;
 }
 
-function hasTranscriptMeta(message: unknown): boolean {
-  return Boolean(
-    message &&
-    typeof message === "object" &&
-    (message as { __openclaw?: unknown })["__openclaw"] &&
-    typeof (message as { __openclaw?: unknown })["__openclaw"] === "object",
-  );
-}
-
-function isLocallyOptimisticHistoryMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || hasTranscriptMeta(message)) {
-    return false;
-  }
-  const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
-  return role === "user" || role === "assistant";
-}
-
-function messageDisplaySignature(message: unknown): string | null {
-  if (!message || typeof message !== "object") {
-    return null;
-  }
-  const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
-  if (!role) {
-    return null;
-  }
-  const text = extractText(message)?.trim();
-  if (text) {
-    return `${role}:text:${text}`;
-  }
-  try {
-    const content = JSON.stringify((message as { content?: unknown }).content ?? null);
-    return `${role}:content:${content}`;
-  } catch {
-    return null;
-  }
-}
-
 function historyHasSameOrNewerDisplayMessage(
   historyMessages: unknown[],
   signature: string,
@@ -305,59 +277,6 @@ function historyHasSameOrNewerDisplayMessage(
     const historyTimestamp = messageTimestampMs(historyMessage);
     return historyTimestamp != null && historyTimestamp >= timestamp;
   });
-}
-
-export function preserveOptimisticTailMessages(
-  historyMessages: unknown[],
-  previousMessages: unknown[],
-): unknown[] {
-  if (previousMessages.length === 0) {
-    return historyMessages;
-  }
-  if (historyMessages.length === 0) {
-    const optimisticMessages = previousMessages.filter(
-      (message) => isLocallyOptimisticHistoryMessage(message) && !shouldHideHistoryMessage(message),
-    );
-    return optimisticMessages.length === previousMessages.length
-      ? previousMessages
-      : historyMessages;
-  }
-  const historySignatureIndexes = new Map<string, number>();
-  historyMessages.forEach((message, index) => {
-    const signature = messageDisplaySignature(message);
-    if (signature) {
-      historySignatureIndexes.set(signature, index);
-    }
-  });
-  let sharedPreviousIndex = -1;
-  let sharedHistoryIndex = -1;
-  for (let index = previousMessages.length - 1; index >= 0; index--) {
-    const signature = messageDisplaySignature(previousMessages[index]);
-    const historyIndex = signature ? historySignatureIndexes.get(signature) : undefined;
-    if (typeof historyIndex === "number") {
-      sharedPreviousIndex = index;
-      sharedHistoryIndex = historyIndex;
-      break;
-    }
-  }
-  if (sharedPreviousIndex < 0) {
-    return historyMessages;
-  }
-  if (sharedHistoryIndex < historyMessages.length - 1) {
-    return historyMessages;
-  }
-  const optimisticTail: unknown[] = [];
-  for (const message of previousMessages.slice(sharedPreviousIndex + 1)) {
-    if (!isLocallyOptimisticHistoryMessage(message) || shouldHideHistoryMessage(message)) {
-      return historyMessages;
-    }
-    const signature = messageDisplaySignature(message);
-    if (!signature || historySignatureIndexes.has(signature)) {
-      return historyMessages;
-    }
-    optimisticTail.push(message);
-  }
-  return optimisticTail.length > 0 ? [...historyMessages, ...optimisticTail] : historyMessages;
 }
 
 function collectLateOptimisticTailMessages(
@@ -388,41 +307,6 @@ function collectLateOptimisticTailMessages(
   return lateTail;
 }
 
-function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
-  if (!(err instanceof GatewayRequestError)) {
-    return false;
-  }
-  if (err.gatewayCode !== "UNAVAILABLE" || !err.retryable) {
-    return false;
-  }
-  const details = err.details;
-  if (!details || typeof details !== "object") {
-    return true;
-  }
-  const detailMethod = (details as { method?: unknown }).method;
-  return typeof detailMethod !== "string" || detailMethod === method;
-}
-
-function isUnknownGatewayMethodError(err: unknown, method: string): err is GatewayRequestError {
-  return (
-    err instanceof GatewayRequestError &&
-    err.gatewayCode === "INVALID_REQUEST" &&
-    err.message.includes(`unknown method: ${method}`)
-  );
-}
-
-function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
-  const retryAfterMs =
-    typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
-  return Math.min(Math.max(retryAfterMs, 100), STARTUP_CHAT_HISTORY_MAX_RETRY_MS);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -432,6 +316,7 @@ export type ChatState = {
   currentSessionId?: string | null;
   reconnectResumeSessionId?: string | null;
   chatLoading: boolean;
+  chatHistoryPagination?: ChatHistoryPagination;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
   chatThinkingLevel: string | null;
@@ -445,8 +330,12 @@ export type ChatState = {
   chatStreamStartedAt: number | null;
   lastError: string | null;
   chatError?: string | null;
-  chatSideResult?: ChatSideResult | null;
+  /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
+  chatSideChatTurns?: ChatSideResult[];
+  chatSideResultPending?: ChatSideResultPending | null;
   chatSideResultTerminalRuns?: Set<string>;
+  /** Panel closed via X/Escape; conversation kept until cleared or reset. */
+  chatSideChatHidden?: boolean;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
   onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => void;
@@ -473,6 +362,11 @@ type ChatSessionMessageSubscriptionState = ChatState & {
 
 export type ChatHistoryResult = {
   messages?: Array<unknown>;
+  offset?: number;
+  nextOffset?: number;
+  hasMore?: boolean;
+  totalMessages?: number;
+  completeSnapshot?: boolean;
   sessionId?: string;
   thinkingLevel?: string;
   verboseLevel?: string;
@@ -481,6 +375,38 @@ export type ChatHistoryResult = {
   agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
 };
+
+export type ChatHistoryPagination =
+  | { hasMore: false; totalMessages?: number; completeSnapshot?: true }
+  | { hasMore: true; nextOffset: number; totalMessages?: number };
+
+export function resolveChatHistoryPagination(
+  result: ChatHistoryResult | undefined,
+): ChatHistoryPagination {
+  const totalMessages = result?.totalMessages;
+  const validTotal =
+    typeof totalMessages === "number" && Number.isSafeInteger(totalMessages) && totalMessages >= 0
+      ? totalMessages
+      : undefined;
+  const nextOffset = result?.nextOffset;
+  if (
+    result?.hasMore === true &&
+    typeof nextOffset === "number" &&
+    Number.isSafeInteger(nextOffset) &&
+    nextOffset > 0
+  ) {
+    return {
+      hasMore: true,
+      nextOffset,
+      ...(validTotal !== undefined ? { totalMessages: validTotal } : {}),
+    };
+  }
+  return {
+    hasMore: false,
+    ...(validTotal !== undefined ? { totalMessages: validTotal } : {}),
+    ...(result?.completeSnapshot === true ? { completeSnapshot: true as const } : {}),
+  };
+}
 
 export type ChatMetadataResult = CommandsListResult & {
   models?: ModelCatalogEntry[];
@@ -750,6 +676,8 @@ type ClearChatHistoryState = ChatState &
     sessions: Pick<SessionCapability, "reset">;
   };
 
+type ClearChatHistoryResult = "completed" | "failed" | "uncertain";
+
 function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   if (state.chatRunId) {
     return true;
@@ -761,43 +689,99 @@ function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   );
 }
 
-function clearCachedChatMessagesForSession(state: ClearChatHistoryState, sessionKey: string) {
+function clearCachedChatMessagesForSession(
+  state: ClearChatHistoryState,
+  sessionKey: string,
+  agentId?: string,
+) {
   if (!state.chatMessagesBySession) {
     return;
   }
-  clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey });
+  clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey, agentId });
 }
 
-export async function clearChatHistory(state: ClearChatHistoryState) {
+export async function clearChatHistory(
+  state: ClearChatHistoryState,
+): Promise<ClearChatHistoryResult> {
   if (!state.client || !state.connected) {
-    return;
+    return "failed";
   }
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const sessionKey = state.sessionKey;
+  const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  const runId = state.chatRunId;
   const hadActiveRun = hasAbortableChatSessionRun(state);
   try {
-    await state.sessions.reset(
-      state.sessionKey,
-      scopedAgentParamsForSession(state, state.sessionKey),
-    );
-    state.chatMessages = [];
-    clearCachedChatMessagesForSession(state, state.sessionKey);
-    state.chatSideResult = null;
-    state.chatReplyTarget = null;
-    reconcileChatRunLifecycle(state, {
-      outcome: hadActiveRun ? "interrupted" : undefined,
-      sessionStatus: "killed",
-      runId: state.chatRunId,
-      sessionKey: state.sessionKey,
-      clearLocalRun: true,
-      clearChatStream: true,
-      clearToolStream: true,
-      clearSideResultTerminalRuns: true,
-      clearRunStatus: !hadActiveRun,
-    });
-    await loadChatHistory(state);
+    const resetResult = await state.sessions.reset(sessionKey, agentParams);
+    if (resetResult === "not-started") {
+      setChatError(state, "Gateway was unavailable before chat history could be cleared.");
+      scheduleChatScroll(state);
+      return "failed";
+    }
+    // Reset is destructive once issued. Drop the captured session's cached
+    // transcript before classifying the result so an ambiguous response cannot
+    // expose stale pre-reset history after a route switch.
+    clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId);
+    if (
+      resetResult === "uncertain" ||
+      state.client !== client ||
+      state.connectionEpoch !== connectionEpoch ||
+      !state.connected
+    ) {
+      let historyRefreshed = false;
+      if (
+        state.client &&
+        state.connected &&
+        visibleSessionMatches(state, sessionKey, agentParams.agentId)
+      ) {
+        // Do not let a failed refresh keep rendering the transcript that the
+        // ambiguous reset may already have destroyed. Clearing first also
+        // prevents history loading from preserving a pre-reset optimistic tail.
+        state.chatMessages = [];
+        historyRefreshed = Boolean(await loadChatHistory(state));
+      }
+      setChatError(
+        state,
+        historyRefreshed
+          ? "The clear request may have completed. Current history was refreshed; review it before resuming queued messages."
+          : "The clear request may have completed. Cached history was cleared, but current history could not be refreshed; reconnect and review it before resuming queued messages.",
+      );
+      scheduleChatScroll(state);
+      // sessions.reset is not idempotent. Treat an uncertain completion as
+      // consumed so a durable /clear row cannot erase newer history on retry.
+      return "uncertain";
+    }
   } catch (err) {
     setChatError(state, String(err));
+    scheduleChatScroll(state);
+    return "failed";
   }
+  if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+    return "completed";
+  }
+  state.chatMessages = [];
+  state.chatSideChatTurns = [];
+  state.chatSideChatHidden = false;
+  state.chatReplyTarget = null;
+  reconcileChatRunLifecycle(state, {
+    outcome: hadActiveRun ? "interrupted" : undefined,
+    sessionStatus: "killed",
+    runId,
+    sessionKey,
+    clearLocalRun: true,
+    clearChatStream: true,
+    clearToolStream: true,
+    clearSideResultTerminalRuns: true,
+    clearRunStatus: !hadActiveRun,
+  });
+  // After the suppression-set wipe above: retire (not just drop) a pending
+  // BTW run so its late resultless terminal event cannot re-enter the freshly
+  // cleared transcript.
+  retirePendingChatSideQuestion(state);
+  await loadChatHistory(state);
   scheduleChatScroll(state);
+  return "completed";
 }
 
 export async function loadChatHistory(
@@ -846,6 +830,42 @@ export async function loadChatHistory(
     promise,
   });
   return promise;
+}
+
+export async function loadOlderChatHistoryPage(
+  state: ChatState,
+  offset: number,
+): Promise<ChatHistoryResult | undefined> {
+  if (!state.client || !state.connected) {
+    return undefined;
+  }
+  const client = state.client;
+  const sessionKey = state.sessionKey;
+  const requestAgentId = isUiSelectedGlobalSessionKey(sessionKey)
+    ? resolveUiSelectedSessionAgentId(state)
+    : undefined;
+  const ownership = beginChatHistoryRequest(
+    state,
+    client,
+    state.connectionEpoch,
+    sessionKey,
+    requestAgentId,
+  );
+  const result = await client.request<ChatHistoryResult>("chat.history", {
+    sessionKey,
+    ...(requestAgentId ? { agentId: requestAgentId } : {}),
+    limit: CHAT_HISTORY_REQUEST_LIMIT,
+    offset,
+  });
+  if (!shouldApplyChatHistoryResult(state, ownership)) {
+    return undefined;
+  }
+  return {
+    ...result,
+    messages: (Array.isArray(result.messages) ? result.messages : []).filter(
+      (message) => !shouldHideHistoryMessage(message),
+    ),
+  };
 }
 
 export function applyChatAgentsList(
@@ -951,14 +971,26 @@ async function loadChatHistoryUncached(
       return undefined;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
+    state.chatHistoryPagination = resolveChatHistoryPagination(res);
     applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
-    const lateOptimisticTail = collectLateOptimisticTailMessages(
+    const reconciledTerminal = reconcileAuthoritativeTerminalHistory({
+      currentMessages: state.chatMessages,
+      host: state,
       previousMessages,
-      state.chatMessages,
+      sessionKey,
+      visibleMessages,
+    });
+    const lateOptimisticTail = collectLateOptimisticTailMessages(
+      reconciledTerminal.previousMessages,
+      reconciledTerminal.currentMessages,
       visibleMessages,
     );
-    state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
+    state.chatMessages = preserveOptimisticTailMessages(
+      visibleMessages,
+      reconciledTerminal.previousMessages,
+      shouldHideHistoryMessage,
+    );
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
     }

@@ -38,6 +38,32 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
     }
 
+    func testAutomationManagementScreenshot() {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "control",
+            initialDestination: "cron",
+            name: "automation-management"))
+
+        XCTAssertTrue(self.app?.staticTexts["Release briefing"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.staticTexts["Weekly project review"].exists == true)
+        self.attachScreenshot(named: "automation-management")
+    }
+
+    func testSkillsManagementScreenshot() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "skills-management"))
+
+        let skills = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Skills").firstMatch)
+        XCTAssertTrue(skills.waitForExistence(timeout: 8))
+        skills.tap()
+        XCTAssertTrue(self.app?.staticTexts["github"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.staticTexts["calendar"].exists == true)
+        self.attachScreenshot(named: "skills-management")
+    }
+
     func testOnboardingExplainsCapabilitiesAndTrust() {
         let app = XCUIApplication()
         app.launchArguments += ["--openclaw-reset-onboarding"]
@@ -417,6 +443,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
         app.tap()
 
         let copySetupCommand = app.buttons["Copy setup code command"]
@@ -674,6 +702,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
         app.tap()
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
         app.buttons["Connect Manually"].tap()
@@ -731,7 +761,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(privacy.waitForExistence(timeout: 8))
         privacy.tap()
 
-        let request = try XCTUnwrap(self.app?.buttons["privacy-access-Photos-action"])
+        let request = try XCTUnwrap(self.app?.buttons["privacy-access-photos-action"])
         XCTAssertTrue(request.waitForExistence(timeout: 5))
         request.tap()
         self.app?.tap()
@@ -746,10 +776,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let limitedStatus = try XCTUnwrap(self.app?.staticTexts.matching(
             NSPredicate(
                 format: "identifier == %@ AND label == %@",
-                "privacy-access-Photos-status",
+                "privacy-access-photos-status",
                 "Limited")).firstMatch)
         XCTAssertTrue(limitedStatus.waitForExistence(timeout: 8))
-        XCTAssertEqual(self.app?.buttons["privacy-access-Photos-action"].label, "Manage Access")
+        XCTAssertEqual(self.app?.buttons["privacy-access-photos-action"].label, "Manage Access")
         self.attachScreenshot(named: "photos-limited-access")
     }
 
@@ -826,6 +856,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
         app.tap()
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
         app.buttons["Connect Manually"].tap()
@@ -876,7 +908,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(send.isEnabled)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
-        send.tap()
+        send.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         XCTAssertTrue(app.staticTexts[replyMarker].waitForExistence(timeout: 60))
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))

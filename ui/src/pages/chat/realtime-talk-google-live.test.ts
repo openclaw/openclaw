@@ -1,10 +1,10 @@
 // Control UI tests cover realtime talk google live behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
 import {
-  buildGoogleLiveUrl,
-  GoogleLiveRealtimeTalkTransport,
-} from "./realtime-talk-google-live.ts";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "./realtime-talk-shared.ts";
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+} from "./realtime-talk-shared.ts";
 import type {
   RealtimeTalkJsonPcmWebSocketSessionResult,
   RealtimeTalkTransportContext,
@@ -22,7 +22,14 @@ type MockWebSocketEventType = "close" | "error" | "message" | "open";
 const wsInstances: MockGoogleLiveWebSocket[] = [];
 const createdSources: MockAudioBufferSource[] = [];
 const inputProcessors: Array<{
+  connect: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
   onaudioprocess: ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void) | null;
+}> = [];
+const inputSinks: Array<{
+  connect: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
+  gain: { value: number };
 }> = [];
 let getUserMedia: ReturnType<typeof vi.fn>;
 
@@ -106,6 +113,16 @@ class MockAudioContext {
     };
     inputProcessors.push(processor);
     return processor;
+  }
+
+  createGain() {
+    const sink = {
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      gain: { value: 1 },
+    };
+    inputSinks.push(sink);
+    return sink;
   }
 
   createAnalyser() {
@@ -214,6 +231,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     wsInstances.length = 0;
     createdSources.length = 0;
     inputProcessors.length = 0;
+    inputSinks.length = 0;
     vi.stubGlobal("WebSocket", MockGoogleLiveWebSocket);
     vi.stubGlobal("AudioContext", MockAudioContext);
     getUserMedia = vi.fn(async () => ({
@@ -230,15 +248,70 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     vi.unstubAllGlobals();
   });
 
+  it("connects only to the allowlisted endpoint with the ephemeral token", async () => {
+    const transport = new GoogleLiveRealtimeTalkTransport(
+      createSession(
+        "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?ignored=1",
+      ),
+      { callbacks: {}, client: createClient(), sessionKey: "main" },
+    );
+
+    await transport.start();
+
+    expect(latestWebSocket().url).toBe(
+      "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=auth_tokens%2Fbrowser-session",
+    );
+    transport.stop();
+  });
+
+  it.each([
+    "ws://generativelanguage.googleapis.com/ws/google.ai",
+    "wss://attacker.test/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+    "wss://generativelanguage.googleapis.com/evil",
+  ])("rejects attacker-controlled WebSocket URL %s", async (websocketUrl) => {
+    const transport = new GoogleLiveRealtimeTalkTransport(createSession(websocketUrl), {
+      callbacks: {},
+      client: createClient(),
+      sessionKey: "main",
+    });
+
+    await expect(transport.start()).rejects.toThrow(/wss:\/\/|Untrusted Google Live WebSocket/u);
+    expect(wsInstances).toHaveLength(0);
+  });
+
   it("captures from the selected microphone with an exact constraint", async () => {
     const transport = createTransport({}, createClient(), "usb-mic");
 
     await transport.start();
 
     expect(getUserMedia).toHaveBeenCalledWith({
-      audio: { deviceId: { exact: "usb-mic" } },
+      audio: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+        deviceId: { exact: "usb-mic" },
+      },
     });
     transport.stop();
+  });
+
+  it("keeps the microphone processor inaudible locally", async () => {
+    const transport = createTransport();
+
+    await transport.start();
+    latestWebSocket().emitOpen();
+
+    const processor = inputProcessors.at(-1);
+    const sink = inputSinks.at(-1);
+    if (!processor || !sink) {
+      throw new Error("missing microphone capture graph");
+    }
+    expect(sink.gain.value).toBe(0);
+    expect(processor.connect).toHaveBeenCalledWith(sink);
+    expect(sink.connect).toHaveBeenCalledOnce();
+
+    transport.stop();
+    expect(sink.disconnect).toHaveBeenCalledOnce();
   });
 
   it("releases microphone access that resolves after stop", async () => {
@@ -495,6 +568,69 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("surfaces Google Live tool-result send failures without an unhandled rejection", async () => {
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const client = createClient();
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
+      if (method === "talk.client.steer") {
+        return {
+          ok: true,
+          mode: "status",
+          sessionKey: "main",
+          active: true,
+          message: "Still working.",
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const transport = createTransport({ onStatus, onTalkEvent }, client);
+
+    await transport.start();
+    const ws = latestWebSocket();
+    vi.spyOn(ws, "send").mockImplementation(() => {
+      throw new Error("Google Live socket rejected the tool result");
+    });
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: {
+          functionCalls: [
+            {
+              id: "call-control",
+              name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+              args: { text: "status", mode: "status" },
+            },
+          ],
+        },
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(onStatus).toHaveBeenCalledWith("error", "Google Live socket rejected the tool result"),
+    );
+    expect(
+      onTalkEvent.mock.calls.some(
+        ([event]) =>
+          (event.type === "tool.progress" || event.type === "tool.error") && event.final === true,
+      ),
+    ).toBe(false);
+    expect(
+      (
+        transport as unknown as {
+          pendingCalls: Map<string, unknown>;
+        }
+      ).pendingCalls.has("call-control"),
+    ).toBe(true);
+    expect(() =>
+      (
+        transport as unknown as {
+          submitToolResult: (callId: string, result: unknown) => void;
+        }
+      ).submitToolResult("missing-call", { ok: true }),
+    ).toThrow("Google Live has no pending tool call for missing-call");
+    transport.stop();
+  });
+
   it("sends spoken active-control acknowledgements through Google Live", async () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
@@ -707,35 +843,5 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const sent = ws.sent.map((payload) => JSON.parse(payload));
     expect(sent.some((event) => event.clientContent)).toBe(false);
     transport.stop();
-  });
-});
-
-describe("Google Live realtime Talk URL", () => {
-  it("only preserves the allowlisted Google Live endpoint and appends the ephemeral token", () => {
-    const url = buildGoogleLiveUrl(
-      createSession(
-        "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?ignored=1",
-      ),
-    );
-
-    expect(url).toBe(
-      "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=auth_tokens%2Fbrowser-session",
-    );
-  });
-
-  it("rejects attacker-controlled Google Live WebSocket URLs", () => {
-    expect(() =>
-      buildGoogleLiveUrl(createSession("ws://generativelanguage.googleapis.com/ws/google.ai")),
-    ).toThrow("wss://");
-    expect(() =>
-      buildGoogleLiveUrl(
-        createSession(
-          "wss://attacker.test/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
-        ),
-      ),
-    ).toThrow("Untrusted Google Live WebSocket host");
-    expect(() =>
-      buildGoogleLiveUrl(createSession("wss://generativelanguage.googleapis.com/evil")),
-    ).toThrow("Untrusted Google Live WebSocket path");
   });
 });

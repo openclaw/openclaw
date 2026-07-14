@@ -1,23 +1,41 @@
 // Browser tests cover session tab registry plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const clientMocks = vi.hoisted(() => ({
+  browserCloseTabByRawTargetId: vi.fn(async () => {}),
+}));
+
+vi.mock("./client.js", () => clientMocks);
+
 import {
-  countTrackedSessionBrowserTabsForTests,
-  resetTrackedSessionBrowserTabsForTests,
   closeTrackedBrowserTabsForSessions,
   sweepTrackedBrowserTabs,
   touchSessionBrowserTab,
-  trackSessionBrowserTab,
+  trackSessionBrowserTab as trackSessionBrowserTabRuntime,
   untrackSessionBrowserTab,
 } from "./session-tab-registry.js";
+
+const trackedSessionKeys = new Set<string>();
+
+function trackSessionBrowserTab(params: Parameters<typeof trackSessionBrowserTabRuntime>[0]) {
+  if (params.sessionKey) {
+    trackedSessionKeys.add(params.sessionKey);
+  }
+  trackSessionBrowserTabRuntime(params);
+}
 
 describe("session tab registry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    resetTrackedSessionBrowserTabsForTests();
+    clientMocks.browserCloseTabByRawTargetId.mockClear();
+    trackedSessionKeys.clear();
   });
 
-  afterEach(() => {
-    resetTrackedSessionBrowserTabsForTests();
+  afterEach(async () => {
+    await closeTrackedBrowserTabsForSessions({
+      sessionKeys: [...trackedSessionKeys],
+      closeTab: async () => {},
+    });
     vi.useRealTimers();
   });
 
@@ -34,8 +52,6 @@ describe("session tab registry", () => {
       baseUrl: "http://127.0.0.1:9222",
       profile: "OpenClaw",
     });
-    expect(countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(2);
-
     const closeTab = vi.fn(async () => {});
     const closed = await closeTrackedBrowserTabsForSessions({
       sessionKeys: ["agent:main:main"],
@@ -54,7 +70,25 @@ describe("session tab registry", () => {
       baseUrl: "http://127.0.0.1:9222",
       profile: "openclaw",
     });
-    expect(countTrackedSessionBrowserTabsForTests()).toBe(0);
+  });
+
+  it("closes tracked tabs through the raw target-id client path", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "RAW_TARGET",
+      baseUrl: "http://127.0.0.1:9222",
+      profile: "OpenClaw",
+    });
+
+    await expect(
+      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:main"] }),
+    ).resolves.toBe(1);
+
+    expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222",
+      "RAW_TARGET",
+      { profile: "openclaw" },
+    );
   });
 
   it("untracks specific tabs", async () => {
@@ -114,7 +148,6 @@ describe("session tab registry", () => {
     expect(closed).toBe(0);
     expect(closeTab).toHaveBeenCalledTimes(2);
     expect(warnings).toEqual(["failed to close tracked browser tab tab-b: Error: network down"]);
-    expect(countTrackedSessionBrowserTabsForTests()).toBe(0);
   });
 
   it("sweeps idle tracked tabs and keeps recently touched tabs", async () => {
@@ -146,7 +179,12 @@ describe("session tab registry", () => {
       baseUrl: undefined,
       profile: undefined,
     });
-    expect(countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(1);
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:main"],
+        closeTab: async () => {},
+      }),
+    ).resolves.toBe(1);
   });
 
   it("caps tracked tabs per session by closing least recently used tabs first", async () => {
@@ -170,7 +208,12 @@ describe("session tab registry", () => {
       baseUrl: undefined,
       profile: undefined,
     });
-    expect(countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(2);
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:main"],
+        closeTab: async () => {},
+      }),
+    ).resolves.toBe(2);
   });
 
   it("honors session filters during sweeps", async () => {
@@ -192,6 +235,11 @@ describe("session tab registry", () => {
       baseUrl: undefined,
       profile: undefined,
     });
-    expect(countTrackedSessionBrowserTabsForTests()).toBe(1);
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:subagent:child"],
+        closeTab: async () => {},
+      }),
+    ).resolves.toBe(1);
   });
 });
