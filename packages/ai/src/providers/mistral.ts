@@ -771,7 +771,6 @@ async function consumeChatStream(
       continue;
     }
     const toolBlock = block as ToolCall & { partialArgs?: string };
-    toolBlock.arguments = parseStreamingJson(toolBlock.partialArgs);
     // Finalize in-place and strip the scratch buffer so replay only
     // carries parsed arguments.
     delete toolBlock.partialArgs;

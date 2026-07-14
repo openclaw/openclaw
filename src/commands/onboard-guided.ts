@@ -34,6 +34,7 @@ export type GuidedOnboardingDeps = {
     acceptRisk: boolean,
   ) => Promise<void>;
   createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
+  persistRiskAcknowledgement?: (config: OpenClawConfig) => Promise<void>;
 };
 
 type GuidedOnboardingHandoff = { workspace: string };
@@ -270,6 +271,22 @@ function activationLines(result: Extract<ActivateSetupInferenceResult, { ok: tru
   ];
 }
 
+async function persistRiskAcknowledgement(config: OpenClawConfig): Promise<void> {
+  const securityAcknowledgedAt = config.wizard?.securityAcknowledgedAt;
+  if (!securityAcknowledgedAt) {
+    return;
+  }
+  const { mutateConfigFileWithRetry } = await import("../config/config.js");
+  await mutateConfigFileWithRetry({
+    mutate: (draft) => {
+      if (draft.wizard?.securityAcknowledgedAt) {
+        return;
+      }
+      draft.wizard = { ...draft.wizard, securityAcknowledgedAt };
+    },
+  });
+}
+
 async function runGuidedOnboardingFlow(
   opts: OnboardOptions,
   runtime: RuntimeEnv,
@@ -307,14 +324,21 @@ async function runGuidedOnboardingFlow(
   }
   const existingConfig =
     snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
-  await requireRiskAcknowledgement({ opts, prompter, config: existingConfig });
+  const acknowledgedConfig = await requireRiskAcknowledgement({
+    opts,
+    prompter,
+    config: existingConfig,
+  });
+  if (!existingConfig.wizard?.securityAcknowledgedAt) {
+    await (deps.persistRiskAcknowledgement ?? persistRiskAcknowledgement)(acknowledgedConfig);
+  }
 
   // Inference is the only prerequisite for Crestodian. Use the caller's or
   // current default workspace as isolated probe context; Crestodian owns any
   // workspace choice and persistence after the live completion succeeds.
   const workspace = resolveUserPath(
     opts.workspace?.trim() ||
-      existingConfig.agents?.defaults?.workspace?.trim() ||
+      acknowledgedConfig.agents?.defaults?.workspace?.trim() ||
       onboardHelpers.DEFAULT_WORKSPACE,
   );
 

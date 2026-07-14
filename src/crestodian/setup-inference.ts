@@ -74,6 +74,7 @@ import {
   createCrestodianModelSelectionUpdater,
   createQuickstartNotePrompter,
 } from "./setup-apply.js";
+import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   captureCrestodianOwnerPluginArtifacts,
   createCrestodianVerifiedInferenceBinding,
@@ -95,7 +96,6 @@ const log = createSubsystemLogger("crestodian/setup-inference");
  */
 export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
 const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
-const SETUP_INFERENCE_TEST_MAX_TOKENS = 32;
 
 export type SetupInferenceCandidate = {
   kind: InferenceBackendKind;
@@ -2880,7 +2880,7 @@ async function runSetupInferenceTest(params: {
         thinkLevel: "off",
         reasoningLevel: "off",
         verboseLevel: "off",
-        streamParams: { maxTokens: SETUP_INFERENCE_TEST_MAX_TOKENS },
+        ...resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride),
         disableTools: true,
         modelRun: true,
         messageChannel: "crestodian",
