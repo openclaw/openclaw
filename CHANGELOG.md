@@ -253,13 +253,13 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.7.1
 
-OpenClaw v2026.7.1 brings major Control UI and onboarding overhauls, major updates to the official iOS and Android apps, compatibility work for GPT-5.6, new support for Tencent Hy3 and Meta Muse Spark 1.1, and current Grok 4.5 compatibility. It also spans native app chats, Gateway recovery, scheduled automation, remote browser tools, workspace terminals, sessions and goals, and Apple Messages, making OpenClaw easier to set up and manage. The release also includes many smaller fixes and refinements throughout OpenClaw.
+OpenClaw v2026.7.1 brings major Control UI and onboarding overhauls, major updates to the official iOS, Android, and macOS apps, expanded model and provider support including GPT-5.6 compatibility, Tencent Hy3, and Meta Muse Spark 1.1, and stronger Codex and connected coding-agent workflows. Telegram, Slack, Discord, and Apple Messages each receive substantial updates, while Gateway crash loops, scheduled work, remote browser control, workspace terminals, sessions, and goals also improve. There are also many general fixes and refinements throughout OpenClaw.
 
 [Full release notes](https://docs.openclaw.ai/releases/2026.7.1)
 
 ### Highlights
 
-#### Control UI rework: chat, workspaces, usage, and everyday controls
+#### Control UI
 
 The [Control UI](https://docs.openclaw.ai/web/control-ui) now works more like one browser workspace for conversations and parallel work. Chats receive clearer titles, recent sessions are easier to find, pin, group, rename, fork, archive, and mark read, and multiple sessions can sit in resizable panes that return after a reload. Drag-and-drop placement, a denser Sessions page, and a live Tasks view make it easier to move between active work without juggling browser tabs.
 
@@ -267,7 +267,7 @@ Chat controls are clearer while work is in progress. The composer keeps attachme
 
 Usage information is easier to understand from both [status views](https://docs.openclaw.ai/cli/status) and the browser. The Usage page compares recent estimated spend and daily values without repeated reloads or hovering, shows each provider, model, agent, or channel's share, and can include provider-reported plans, quotas, balances, budgets, and Anthropic or OpenAI billing details. Seven-, thirty-, and ninety-day charts now keep zero-activity days visible, large all-agent reports limit concurrent work to reduce slowdowns and memory pressure, and chat-level context panels and completed-message details show the active model, tokens, cache use, context pressure, and estimated cost.
 
-Everyday operator work stays closer to the conversation. Administrators can start [mobile pairing](https://docs.openclaw.ai/channels/pairing), check the connected Gateway's host health, manage execution approvals for supported desktop nodes, inspect linked GitHub work and workspace files, choose models for scheduled jobs, manage worktrees and Workboard items, and supervise background tasks from the same interface. Pairing codes, host diagnostics, file previews, downloads, cron controls, node approvals, and admin-only actions now give clearer state and access guidance.
+Mobile pairing, Gateway health, desktop-node approvals, linked GitHub work, workspace files, scheduled jobs, worktrees, Workboard items, and background tasks are now available closer to the conversation. Their status, permissions, and next steps are also clearer.
 
 The rework also strengthens the paths underneath those controls. Dashboard connects and reconnects use less temporary Gateway memory, reducing false pressure warnings, while temporary Gateway restarts and stale assets recover more cleanly. Path-routed Gateways keep the right destination and credentials, saved choices survive refreshes, and authentication, protocol, update, and pairing failures show more useful next steps instead of leaving the page stuck or ambiguous.
 
@@ -312,6 +312,7 @@ Responsive layouts keep chat history and controls usable on phones, tablets, sho
 - Control UI pages for multiple Gateways on one domain now stay connected to the Gateway named by their path instead of reusing a sibling page's saved destination. [#97665](https://github.com/openclaw/openclaw/pull/97665) Thanks @alix-007.
 - `/pair qr` now delivers a scannable code in Telegram and Control UI or a readable code in the TUI without storing the one-time setup secret in chat history. [#97933](https://github.com/openclaw/openclaw/pull/97933) Thanks @joshavant.
 - Expired `/pair qr` cards in Control UI now clearly say the code is unusable and direct users to generate a fresh one. [#98049](https://github.com/openclaw/openclaw/pull/98049) Related [#98039](https://github.com/openclaw/openclaw/issues/98039). Thanks @ooiuuii.
+- Expired mobile-pairing codes now explain how to run `/pair qr` again in the selected language. Sources: [bb4afe4](https://github.com/openclaw/openclaw/commit/bb4afe40ae6dbd1c711d22cdaee0b36cf404e5f8), [da9308d](https://github.com/openclaw/openclaw/commit/da9308ddb73113b54c860eafe8d8c2a81b860e41), [dfaec18](https://github.com/openclaw/openclaw/commit/dfaec1888d7ab3f5464ddd5a4a0b6f9fa9cfdb68), [6b7986e](https://github.com/openclaw/openclaw/commit/6b7986e14e00978e4a0b30faf324b3a21f35c717), [21af6e7](https://github.com/openclaw/openclaw/commit/21af6e7b19bfcea5da47316bac973eeb2d211ce8), [4e62124](https://github.com/openclaw/openclaw/commit/4e621240e8da1783657b87ea0c53a750274ea377), [6cd0106](https://github.com/openclaw/openclaw/commit/6cd0106bbc20b9d42a3d714f09e3ced3607fb208), [a72a641](https://github.com/openclaw/openclaw/commit/a72a64136ea047a05a0558f41760b57480ae5e5e), [a143ae4](https://github.com/openclaw/openclaw/commit/a143ae4e7dfea84b209948cd26044b8d8aec77e3), [cd30b1c](https://github.com/openclaw/openclaw/commit/cd30b1c3eeef9eb1b20b858aebb805698cded6f2), [f69e27a](https://github.com/openclaw/openclaw/commit/f69e27afa2b4fb99e169c51a49f39c3fb7e09c21), [ccddbee](https://github.com/openclaw/openclaw/commit/ccddbeea6a104fdf292a9d6ba2e8cca60dd21631), [9ed03df](https://github.com/openclaw/openclaw/commit/9ed03df44d812ccb14b2e69897be7e3209b65770), [f84243f](https://github.com/openclaw/openclaw/commit/f84243fe3fb4d83adb97e88baf607329ab9e9aa2), [3d06ee9](https://github.com/openclaw/openclaw/commit/3d06ee9ed78e946cc02d5b7af9e974c331e60e96), [9bd071e](https://github.com/openclaw/openclaw/commit/9bd071ead3d14e533e619acac075dba2c40bc9ec), [405b7a5](https://github.com/openclaw/openclaw/commit/405b7a52c159f996fc9a7dfc3bc899e2f3411ba0), [1a160ce](https://github.com/openclaw/openclaw/commit/1a160cec093e48141912e8b2f92a5c5ea007e6b5).
 - Control UI now shows channel-triggered agent runs as in progress, so users can tell that messages from channels such as Weixin are actively being handled. [#98257](https://github.com/openclaw/openclaw/pull/98257) Thanks @scotthuang.
 - The Control UI workspace rail now gives long Project files lists their own scrollbar so files remain browsable without spilling off screen. [#98646](https://github.com/openclaw/openclaw/pull/98646) Related [#98566](https://github.com/openclaw/openclaw/issues/98566). Thanks @645648406-max, @wuqxuan.
 - Session Workspace file paths can now be copied from Chat even when the Control UI runs over plain HTTP or another context without the standard Clipboard API. [#98764](https://github.com/openclaw/openclaw/pull/98764) Related [#98759](https://github.com/openclaw/openclaw/issues/98759). Thanks @adinballew, @zengwen-dt.
@@ -350,57 +351,8 @@ Responsive layouts keep chat history and controls usable on phones, tablets, sho
 - The Control UI now puts search, sidebar access, theme choice, and macOS branding in clearer, more predictable locations with accurate screen-reader labels. [#101497](https://github.com/openclaw/openclaw/pull/101497)
 - Temporary Gateway drops no longer push Control UI content down with a full-width banner, so the dashboard stays in place while a compact Retry notice appears. [#101812](https://github.com/openclaw/openclaw/pull/101812)
 - Temporary Gateway disconnects now use a calmer, dashboard-native reconnect pill with the same Retry and accessibility behavior. [#101844](https://github.com/openclaw/openclaw/pull/101844)
-- Traditional Chinese Control UI users now see the chat commentary controls in their selected language instead of English fallback text. [34badde](https://github.com/openclaw/openclaw/commit/34badde1d983c247cd6b16ad8f5b4e1f9891c0f1)
-- German Control UI users now see localized labels for the commentary controls rather than mixed German and English chat settings. [a9cb866](https://github.com/openclaw/openclaw/commit/a9cb866f62fe9c2f7c8f9a8c3ef1a23cae556781)
-- Simplified Chinese Control UI users now see localized commentary labels and toggle text throughout chat settings. [ce9166d](https://github.com/openclaw/openclaw/commit/ce9166d1cd8404db51004bbdd5edc95d229788c8)
-- Brazilian Portuguese Control UI users now see the commentary label and keep-commentary setting in Portuguese instead of English. [6b67ada](https://github.com/openclaw/openclaw/commit/6b67ada87ad934f6dd8afbda95830381b3767247)
-- Spanish Control UI users now get Spanish labels for the commentary control and the option that keeps commentary visible after the final answer. [006c2f7](https://github.com/openclaw/openclaw/commit/006c2f7a2b28433753521f2f9f729ba0032b51ff)
-- Japanese Control UI users can now read and configure the commentary controls in Japanese. [6bdffa5](https://github.com/openclaw/openclaw/commit/6bdffa501bcf8eb1b3b13122b6e2e76149693f07)
-- Korean Control UI users now see localized commentary settings without needing to interpret English fallback labels. [b4476ab](https://github.com/openclaw/openclaw/commit/b4476ab72f9d74a946ef0cc963e4d26dab280e45)
-- French Control UI users now see the commentary label and keep-commentary option in French. [5b5c623](https://github.com/openclaw/openclaw/commit/5b5c6237c236b79a894c6d2c1dd4d3bd7e5188f3)
-- Arabic Control UI users now see localized commentary controls instead of English labels in chat settings. [1520d09](https://github.com/openclaw/openclaw/commit/1520d0980741c85407c4e2037dfd5fb9d8f9d1c4)
-- Italian Control UI users now see the commentary label and toggle consistently in Italian. [6140326](https://github.com/openclaw/openclaw/commit/614032676d16bf2dd98030e7925f14ad52f5618e)
-- Turkish Control UI users now see the commentary setting fully localized in Turkish. [75bd44a](https://github.com/openclaw/openclaw/commit/75bd44a94bfb096010273ae14935b9cd90ccc2d3)
-- Indonesian Control UI users now see the commentary label and keep-commentary setting in Indonesian instead of mixed-language text. [c1aeaf9](https://github.com/openclaw/openclaw/commit/c1aeaf9287ec25428ed1e673d869e193e930ba6b)
-- Ukrainian Control UI users now get localized labels for both commentary options in chat settings. [49edc0a](https://github.com/openclaw/openclaw/commit/49edc0a8af2f06cca21cd6df2abd81a7d99a574c)
-- Polish Control UI users now see consistent Polish labels for the commentary display controls instead of English fallback text. [cb69ce7](https://github.com/openclaw/openclaw/commit/cb69ce7ba84f7252acd3b87653a0a91b7442f41d)
-- Thai Control UI users now see both chat commentary controls in Thai rather than a mix of Thai and English. [bb0af61](https://github.com/openclaw/openclaw/commit/bb0af61d20277cf91205e6fe561dc7cccfc8e969)
-- Vietnamese Control UI users now get Vietnamese wording for the commentary label and its visibility setting. [0dcfbb0](https://github.com/openclaw/openclaw/commit/0dcfbb09d807800585219a4363eb67438b006f40)
-- Dutch chat settings now show the commentary controls in Dutch, removing the remaining English labels. [db73ece](https://github.com/openclaw/openclaw/commit/db73ece2de77053433a767bcc587348d5a77fef1)
-- Persian Control UI users now see localized wording for the commentary label and the option to keep commentary visible. [21e6fc9](https://github.com/openclaw/openclaw/commit/21e6fc948b1977b5702ab4c981dacf4d0b3b6de6)
-- Traditional Chinese users now see the expired pairing QR notice and its `/pair qr` recovery step entirely in their language. [bb4afe4](https://github.com/openclaw/openclaw/commit/bb4afe40ae6dbd1c711d22cdaee0b36cf404e5f8)
-- German users now get a German expired-QR notice that clearly directs them to run `/pair qr` for a new setup code. [da9308d](https://github.com/openclaw/openclaw/commit/da9308ddb73113b54c860eafe8d8c2a81b860e41)
-- Brazilian Portuguese users now receive localized guidance to run `/pair qr` again when a pairing code expires. [dfaec18](https://github.com/openclaw/openclaw/commit/dfaec1888d7ab3f5464ddd5a4a0b6f9fa9cfdb68)
-- Simplified Chinese users now get a localized expired-QR message with the command needed to create a fresh setup code. [ccddbee](https://github.com/openclaw/openclaw/commit/ccddbeea6a104fdf292a9d6ba2e8cca60dd21631)
-- Spanish Control UI users now see the pairing QR expiration message and `/pair qr` recovery instruction in Spanish. [9ed03df](https://github.com/openclaw/openclaw/commit/9ed03df44d812ccb14b2e69897be7e3209b65770)
-- Japanese users now receive the expired pairing QR explanation and rerun instruction in Japanese instead of English. [6b7986e](https://github.com/openclaw/openclaw/commit/6b7986e14e00978e4a0b30faf324b3a21f35c717)
-- Korean users now see a Korean expiration notice that tells them to run `/pair qr` again after a setup code times out. [f84243f](https://github.com/openclaw/openclaw/commit/f84243fe3fb4d83adb97e88baf607329ab9e9aa2)
-- French users now get French guidance for replacing an expired pairing QR code with a fresh one. [21af6e7](https://github.com/openclaw/openclaw/commit/21af6e7b19bfcea5da47316bac973eeb2d211ce8)
-- Arabic Control UI users now see the expired pairing code notice and `/pair qr` recovery guidance in Arabic. [4e62124](https://github.com/openclaw/openclaw/commit/4e621240e8da1783657b87ea0c53a750274ea377)
-- Turkish users now get a Turkish explanation and recovery step when their pairing QR code has expired. [6cd0106](https://github.com/openclaw/openclaw/commit/6cd0106bbc20b9d42a3d714f09e3ced3607fb208)
-- Ukrainian users now see the expired pairing QR prompt and fresh-code instruction in Ukrainian. [a72a641](https://github.com/openclaw/openclaw/commit/a72a64136ea047a05a0558f41760b57480ae5e5e)
-- Italian Control UI users now receive a fully localized expired-QR notice with clear guidance to rerun `/pair qr`. [a143ae4](https://github.com/openclaw/openclaw/commit/a143ae4e7dfea84b209948cd26044b8d8aec77e3)
-- Indonesian users now get the pairing QR expiration explanation and recovery command in Indonesian. [3d06ee9](https://github.com/openclaw/openclaw/commit/3d06ee9ed78e946cc02d5b7af9e974c331e60e96)
-- Polish users no longer drop into English when a setup QR expires and now get Polish instructions for generating another code. [9bd071e](https://github.com/openclaw/openclaw/commit/9bd071ead3d14e533e619acac075dba2c40bc9ec)
-- Thai users now see the complete expired pairing QR message, including the `/pair qr` recovery step, in Thai. [cd30b1c](https://github.com/openclaw/openclaw/commit/cd30b1c3eeef9eb1b20b858aebb805698cded6f2)
-- Vietnamese users now receive localized guidance for creating a new pairing code after the previous QR expires. [f69e27a](https://github.com/openclaw/openclaw/commit/f69e27afa2b4fb99e169c51a49f39c3fb7e09c21)
-- Dutch users now get a Dutch expired-QR notice that explains how to generate a fresh setup code. [405b7a5](https://github.com/openclaw/openclaw/commit/405b7a52c159f996fc9a7dfc3bc899e2f3411ba0)
-- Farsi users now see the pairing QR expiration message and rerun instruction in Farsi rather than English. [1a160ce](https://github.com/openclaw/openclaw/commit/1a160cec093e48141912e8b2f92a5c5ea007e6b5)
-- German Control UI users now see the all-sessions navigation label in German instead of a leftover English string. [b2c3dc2](https://github.com/openclaw/openclaw/commit/b2c3dc2d55f8bef05f2c8107b9c9b867653aec20)
-- Traditional Chinese Control UI users now see the all-sessions sidebar label in their selected language. [61347a5](https://github.com/openclaw/openclaw/commit/61347a5054e6c4fce8dee39509c104521b087c7e)
-- Brazilian Portuguese Control UI users now get a consistent translated label for the all-sessions sidebar view. [a2674b6](https://github.com/openclaw/openclaw/commit/a2674b6aa4333a6c37ddb3cf7a4c7f52924c37c6)
-- Simplified Chinese Control UI users now see the session-list label in Chinese rather than English. [bbabad4](https://github.com/openclaw/openclaw/commit/bbabad4031c3cab4f0e685fb0fcab183520291ab)
-- Japanese Control UI users now get a localized all-sessions label in the chat sidebar. [8909289](https://github.com/openclaw/openclaw/commit/89092893fea34eefecca09076d643a5b08f62498)
-- Spanish Control UI users now see "Todas las sesiones" for the all-sessions chat sidebar entry. [22552d6](https://github.com/openclaw/openclaw/commit/22552d6e667fa8c35ff236f85d3d3e1aa66872fb)
-- French Control UI users now see the all-sessions chat sidebar label in French rather than English. [96e3615](https://github.com/openclaw/openclaw/commit/96e361558e7367f452a2b400fc8120c3a4f6fc72)
-- Arabic Control UI users now get a localized all-sessions control in the chat sidebar. [452351c](https://github.com/openclaw/openclaw/commit/452351cc7152abdd765445a2109726e5278b153f)
-- Turkish Control UI users now see the all-sessions chat sidebar label in Turkish. [5e9a62c](https://github.com/openclaw/openclaw/commit/5e9a62cc1945850b72d7944e937fef969c9f8ed1)
-- Ukrainian Control UI users now get a localized session-list label instead of an English fallback. [0a9648b](https://github.com/openclaw/openclaw/commit/0a9648ba4766e0c5da87866d6c7299bb07ede4fa)
-- Italian Control UI users now see the all-sessions sidebar label in Italian during everyday chat navigation. [a803589](https://github.com/openclaw/openclaw/commit/a8035892b1f04b20f1b8e687094e6e7a18dee45c)
-- Indonesian Control UI users now see "Semua sesi" instead of the English "All sessions" sidebar label. [7c30ff8](https://github.com/openclaw/openclaw/commit/7c30ff8a60896a290de07af45d0176d2e30069e5)
-- Polish Control UI users now get a localized all-sessions label in the chat sidebar. [e3d2878](https://github.com/openclaw/openclaw/commit/e3d2878af44f7095436d6754f73431b9add676b1)
-- Vietnamese Control UI users now get a localized all-sessions option in the chat sidebar. [620f2e3](https://github.com/openclaw/openclaw/commit/620f2e3112016622c59350e4aaf71a0e448d0c1a)
-- Persian Control UI users now get a localized all-sessions label instead of an English fallback. [aa0f36c](https://github.com/openclaw/openclaw/commit/aa0f36cb0632ae283493f9d01f3d9819548b5107)
+- Control UI commentary settings now use the selected language across the supported translations in this release. Sources: [34badde](https://github.com/openclaw/openclaw/commit/34badde1d983c247cd6b16ad8f5b4e1f9891c0f1), [a9cb866](https://github.com/openclaw/openclaw/commit/a9cb866f62fe9c2f7c8f9a8c3ef1a23cae556781), [ce9166d](https://github.com/openclaw/openclaw/commit/ce9166d1cd8404db51004bbdd5edc95d229788c8), [6b67ada](https://github.com/openclaw/openclaw/commit/6b67ada87ad934f6dd8afbda95830381b3767247), [006c2f7](https://github.com/openclaw/openclaw/commit/006c2f7a2b28433753521f2f9f729ba0032b51ff), [6bdffa5](https://github.com/openclaw/openclaw/commit/6bdffa501bcf8eb1b3b13122b6e2e76149693f07), [b4476ab](https://github.com/openclaw/openclaw/commit/b4476ab72f9d74a946ef0cc963e4d26dab280e45), [5b5c623](https://github.com/openclaw/openclaw/commit/5b5c6237c236b79a894c6d2c1dd4d3bd7e5188f3), [1520d09](https://github.com/openclaw/openclaw/commit/1520d0980741c85407c4e2037dfd5fb9d8f9d1c4), [6140326](https://github.com/openclaw/openclaw/commit/614032676d16bf2dd98030e7925f14ad52f5618e), [75bd44a](https://github.com/openclaw/openclaw/commit/75bd44a94bfb096010273ae14935b9cd90ccc2d3), [c1aeaf9](https://github.com/openclaw/openclaw/commit/c1aeaf9287ec25428ed1e673d869e193e930ba6b), [49edc0a](https://github.com/openclaw/openclaw/commit/49edc0a8af2f06cca21cd6df2abd81a7d99a574c), [cb69ce7](https://github.com/openclaw/openclaw/commit/cb69ce7ba84f7252acd3b87653a0a91b7442f41d), [bb0af61](https://github.com/openclaw/openclaw/commit/bb0af61d20277cf91205e6fe561dc7cccfc8e969), [0dcfbb0](https://github.com/openclaw/openclaw/commit/0dcfbb09d807800585219a4363eb67438b006f40), [db73ece](https://github.com/openclaw/openclaw/commit/db73ece2de77053433a767bcc587348d5a77fef1), [21e6fc9](https://github.com/openclaw/openclaw/commit/21e6fc948b1977b5702ab4c981dacf4d0b3b6de6).
+- The All Sessions sidebar label now uses the selected language across the supported Control UI translations in this release. Sources: [b2c3dc2](https://github.com/openclaw/openclaw/commit/b2c3dc2d55f8bef05f2c8107b9c9b867653aec20), [61347a5](https://github.com/openclaw/openclaw/commit/61347a5054e6c4fce8dee39509c104521b087c7e), [a2674b6](https://github.com/openclaw/openclaw/commit/a2674b6aa4333a6c37ddb3cf7a4c7f52924c37c6), [bbabad4](https://github.com/openclaw/openclaw/commit/bbabad4031c3cab4f0e685fb0fcab183520291ab), [8909289](https://github.com/openclaw/openclaw/commit/89092893fea34eefecca09076d643a5b08f62498), [22552d6](https://github.com/openclaw/openclaw/commit/22552d6e667fa8c35ff236f85d3d3e1aa66872fb), [96e3615](https://github.com/openclaw/openclaw/commit/96e361558e7367f452a2b400fc8120c3a4f6fc72), [452351c](https://github.com/openclaw/openclaw/commit/452351cc7152abdd765445a2109726e5278b153f), [5e9a62c](https://github.com/openclaw/openclaw/commit/5e9a62cc1945850b72d7944e937fef969c9f8ed1), [0a9648b](https://github.com/openclaw/openclaw/commit/0a9648ba4766e0c5da87866d6c7299bb07ede4fa), [a803589](https://github.com/openclaw/openclaw/commit/a8035892b1f04b20f1b8e687094e6e7a18dee45c), [7c30ff8](https://github.com/openclaw/openclaw/commit/7c30ff8a60896a290de07af45d0176d2e30069e5), [e3d2878](https://github.com/openclaw/openclaw/commit/e3d2878af44f7095436d6754f73431b9add676b1), [620f2e3](https://github.com/openclaw/openclaw/commit/620f2e3112016622c59350e4aaf71a0e448d0c1a), [aa0f36c](https://github.com/openclaw/openclaw/commit/aa0f36cb0632ae283493f9d01f3d9819548b5107), [c336256](https://github.com/openclaw/openclaw/commit/c336256309956b18ff4c211ab62481c6dcd59d8b), [64dd688](https://github.com/openclaw/openclaw/commit/64dd68899e6b9f8b15c9a3c533e470ba6e36d7a5), [e2ecbc8](https://github.com/openclaw/openclaw/commit/e2ecbc85b7fe30b3096f86ba9cb189fb43807850).
 - The Control UI mobile-pairing flow now appears in the selected language across 18 supported locales instead of mixing localized screens with English setup text. [c78b0d5](https://github.com/openclaw/openclaw/commit/c78b0d59f5a2becf7e3e0f0bb5d470f72e8526ed)
 - A failed Control UI login or Gateway connection now immediately shows the error, recovery steps, and relevant documentation link instead of hiding them in a collapsed panel. [f9e194e](https://github.com/openclaw/openclaw/commit/f9e194e4a122f0c142c23f1bc9603466add7eb03)
 - The web sidebar now reliably fills pinned and overflow navigation routes, keeping destinations such as Worktrees available. [55a0012](https://github.com/openclaw/openclaw/commit/55a0012c44b52af2f22982cc85568e6e5d0df5c7) Thanks @vincentkoc.
@@ -408,9 +360,6 @@ Responsive layouts keep chat history and controls usable on phones, tablets, sho
 - The Control UI microphone-access warning for realtime voice input now appears in the user's selected language. [68c85ef](https://github.com/openclaw/openclaw/commit/68c85effcd1e0a1c65673397a206e53bf7d672ac)
 - The Control UI sidebar now builds cleanly with session grouping and drag-to-split behavior intact after stray merge-conflict text was removed. [0e3ce24](https://github.com/openclaw/openclaw/commit/0e3ce24cc8cd16faa78d87b12b114fcf24a42d87)
 - Hindi and Russian users can now receive matching Control UI translations, and documentation operators can generate those language editions through the existing locale workflow. [689baa5](https://github.com/openclaw/openclaw/commit/689baa5c1e48be2aa31564fd5c3fd21bf4dfb754) Thanks @vincentkoc.
-- Korean Control UI users now see the all-sessions chat navigation entry in Korean. [c336256](https://github.com/openclaw/openclaw/commit/c336256309956b18ff4c211ab62481c6dcd59d8b)
-- Thai Control UI users now see the all-sessions chat sidebar label in Thai instead of English. [64dd688](https://github.com/openclaw/openclaw/commit/64dd68899e6b9f8b15c9a3c533e470ba6e36d7a5)
-- Dutch Control UI users now see "Alle sessies" as the session-list label. [e2ecbc8](https://github.com/openclaw/openclaw/commit/e2ecbc85b7fe30b3096f86ba9cb189fb43807850)
 - During device pairing, `/ pair qr` now follows the same authorized pairing flow as `/pair qr` without starting an agent turn or disrupting the existing Control UI route. [#98262](https://github.com/openclaw/openclaw/pull/98262) Thanks @brokemac79.
 - Opening or reconnecting the Control UI dashboard now uses much less temporary Gateway memory, reducing false `rss_growth` warnings while preserving requested usage totals. [#100054](https://github.com/openclaw/openclaw/pull/100054) Thanks @nianjiuzst.
 - Control UI Settings now shows a remote Gateway's host identity, address, operating system, runtime, uptime, CPU load, memory, and free disk space without requiring SSH. [#100478](https://github.com/openclaw/openclaw/pull/100478)
@@ -461,7 +410,7 @@ Responsive layouts keep chat history and controls usable on phones, tablets, sho
 - Users with saved working dashboard credentials no longer see the login screen flash briefly while Control UI reconnects. [#101849](https://github.com/openclaw/openclaw/pull/101849)
 - Typing anywhere in the active Control UI chat now places the first character in the message composer without stealing input from the command palette. [#102210](https://github.com/openclaw/openclaw/pull/102210) Thanks @shakkernerd.
 
-#### Onboarding overhaul: guided setup and safer recovery
+#### Setup and onboarding
 
 [Onboarding](https://docs.openclaw.ai/cli/onboard) now offers clearer paths to a usable first chat. Fresh CLI installs enter guided setup, configured installs open the TUI, and conversational Crestodian setup remains optional. Android and macOS guide users through [pairing](https://docs.openclaw.ai/channels/pairing), permissions, local or remote setup, and recovery; macOS can also test detected Claude Code, Codex, Gemini CLI, API-key, and supported provider-catalog choices before saving them. Interrupted authentication or channel setup retains earlier choices, while users without a working model are guided through credential and model selection instead of being sent into an unusable chat. Owners and administrators can also renew an expired Codex or OpenAI login through private Telegram, Web UI, Discord, or Slack commands without SSH access.
 
@@ -471,34 +420,41 @@ Existing installations receive safeguards before their working state is changed.
 - `openclaw doctor --fix` now preserves aliases, parameters, streaming choices, runtime settings, and other model tuning when several retired model names merge into one current model, and reports any merge conflicts accurately. [#96544](https://github.com/openclaw/openclaw/pull/96544) Thanks @vincentkoc, @yetval.
 - Owners and admins can now restore an expired Codex or OpenAI login from a browser through private Telegram, Web UI, Discord, or Slack commands without SSH access. [#98006](https://github.com/openclaw/openclaw/pull/98006) Thanks @100yenadmin, @jalehman, @obviyus.
 - The CLI now guides fresh installs through setup, opens configured installs directly in the TUI, preserves existing choices on reruns, and finishes onboarding in a usable terminal chat. [#98218](https://github.com/openclaw/openclaw/pull/98218) Thanks @fuller-stack-dev.
-- New Android users now get a guided first-run path through setup-code or QR entry, Gateway pairing, node approval, permissions, recovery steps, and confirmed phone readiness before onboarding completes. [#98752](https://github.com/openclaw/openclaw/pull/98752) Thanks @jesse-merhi.
-- New Mac users can now open the app and reach a working local agent without Terminal, Homebrew, administrator access, or an extra approval prompt for the app's own node. [#99767](https://github.com/openclaw/openclaw/pull/99767) Related [#99764](https://github.com/openclaw/openclaw/issues/99764).
 - Package installs can now select and retain `openclaw update --channel extended-stable`, inspect its availability, and fail safely if its npm metadata is incomplete. [#99811](https://github.com/openclaw/openclaw/pull/99811) Thanks @kevinslin.
 - Fresh installs can now complete conversational Crestodian setup, approve the proposed plan once, connect channels, and continue into the normal agent while classic and scripted onboarding remain available. [#99935](https://github.com/openclaw/openclaw/pull/99935)
-- macOS onboarding now verifies the chosen AI connection before first chat, presents clearer local and remote setup choices, and offers friendly recovery or a verified manual API-key path when authentication fails. [#100288](https://github.com/openclaw/openclaw/pull/100288)
 - First-time onboarding now preserves earlier choices after authentication or pairing trouble and gives users an actionable model-configuration next step instead of opening an unusable first chat. [#100632](https://github.com/openclaw/openclaw/pull/100632)
-- macOS onboarding now offers the Gateway's supported text-inference provider catalog instead of only Anthropic, OpenAI, and Google, and tests credentials before saving them. [#101132](https://github.com/openclaw/openclaw/pull/101132)
 - Container upgrades now finish required migrations and plugin repairs before reporting the Gateway ready, and failed repairs stop with actionable guidance instead of leaving a false-green service. [#101881](https://github.com/openclaw/openclaw/pull/101881) Thanks @sallyom.
 - Crestodian setup now guides users who lack a usable model provider through masked credential entry and model selection, while deterministic setup and repair commands remain available until inference is configured. [#101887](https://github.com/openclaw/openclaw/pull/101887) Thanks @fuller-stack-dev.
 - OpenClaw now blocks unsafe runtimes before they can open SQLite-backed state, guides legacy Bun services to Node, and selects a WAL-safe Node runtime during setup and repair. [#106065](https://github.com/openclaw/openclaw/pull/106065) Thanks @vincentkoc.
 
-#### Native app chat continuity
+#### Official apps
 
-The official [iOS](https://docs.openclaw.ai/platforms/ios), [Android](https://docs.openclaw.ai/platforms/android), and [macOS](https://docs.openclaw.ai/platforms/macos) apps keep recent conversations useful through temporary Gateway disconnects. Cached sessions and transcripts remain available for reading, supported text sends can wait for reconnection in the correct chat, and long conversations are easier to resume without losing the current place or mistaking an offline view for live history.
+The official [iOS](https://docs.openclaw.ai/platforms/ios), [Android](https://docs.openclaw.ai/platforms/android), and [macOS](https://docs.openclaw.ai/platforms/macos) apps received substantial updates across setup, navigation, chat, voice, permissions, localization, files, scheduled work, native session controls, and Gateway recovery. Recent conversations remain useful through temporary disconnects: cached sessions and transcripts stay available for reading, supported text sends can wait for reconnection in the correct chat, and long conversations are easier to resume without losing the current place or mistaking an offline view for live history.
 
-These post-launch improvements also bring the native clients closer together: mobile queues survive app restarts, macOS gains fuller session and transcript tools, and each client refreshes the same conversation when the Gateway returns.
+These improvements also bring the native clients closer together. Mobile queues survive app restarts, the [macOS](https://docs.openclaw.ai/platforms/macos) app gains fuller session and transcript tools, and each client refreshes the same conversation when the Gateway returns.
+
+##### iOS and Android
 
 - iOS and Android chats now preserve the reader's scroll position as new messages and tool activity arrive, with a clear way to return to the latest reply. [#98258](https://github.com/openclaw/openclaw/pull/98258) Related [#98255](https://github.com/openclaw/openclaw/issues/98255). Thanks @christopheraaronhogg.
+
+##### iOS and iPadOS
+
 - iPhone and iPad chat now opens with the last known conversation and lets users browse recent cached sessions while the Gateway is unavailable. [#100219](https://github.com/openclaw/openclaw/pull/100219)
-- Android chat now shows the last known transcript immediately and keeps recent cached conversations readable during a Gateway outage, then refreshes them after reconnection. [#100227](https://github.com/openclaw/openclaw/pull/100227)
-- Mac chat now restores recent sessions and transcripts immediately, remains browsable while disconnected, and queues offline sends for the correct Gateway identity. [#100275](https://github.com/openclaw/openclaw/pull/100275)
-- Android users can queue text while the Gateway is offline, keep it through an app restart, and send it in order after reconnection with Retry and Delete controls for failures. [#100290](https://github.com/openclaw/openclaw/pull/100290)
 - iOS users can queue chat messages while disconnected, keep them through app restarts, and send them in order after reconnection with clear retry and delete controls. [#100331](https://github.com/openclaw/openclaw/pull/100331)
+
+##### Android
+
+- Android chat now shows the last known transcript immediately and keeps recent cached conversations readable during a Gateway outage, then refreshes them after reconnection. [#100227](https://github.com/openclaw/openclaw/pull/100227)
+- Android users can queue text while the Gateway is offline, keep it through an app restart, and send it in order after reconnection with Retry and Delete controls for failures. [#100290](https://github.com/openclaw/openclaw/pull/100290)
+
+##### macOS
+
+- Mac chat now restores recent sessions and transcripts immediately, remains browsable while disconnected, and queues offline sends for the correct Gateway identity. [#100275](https://github.com/openclaw/openclaw/pull/100275)
 - The native macOS chat window now provides a full session sidebar, real new-session creation, slash-command completion, context and cost visibility, message copying, transcript export, and compact or clear-history actions. [#101103](https://github.com/openclaw/openclaw/pull/101103)
 
-#### Models and providers: GPT-5.6, Hy3, Meta, and more
+#### Models and providers
 
-OpenClaw [model selection](https://docs.openclaw.ai/concepts/models) now covers several distinct additions rather than one generic provider path. Each supported [provider route](https://docs.openclaw.ai/concepts/model-providers) retains its own authentication, model limits, reasoning controls, tool behavior, image support, and usage reporting.
+OpenClaw [model selection](https://docs.openclaw.ai/concepts/models) expands across major hosted, managed, and local choices. Each supported [provider route](https://docs.openclaw.ai/concepts/model-providers) retains its own authentication, model limits, reasoning controls, tool behavior, image support, and usage reporting.
 
 ##### GPT-5.6 and Codex
 
@@ -527,7 +483,7 @@ Claude Sonnet 5 is selectable through direct Anthropic, Claude CLI, supported Ve
 - Claude Sonnet 5 is now selectable across Anthropic, Claude CLI, supported Vertex regions, Bedrock inference profiles, and Bedrock Mantle with its documented context, output, image, thinking, and pricing behavior. [#98254](https://github.com/openclaw/openclaw/pull/98254) Thanks @vortexopenclaw.
 - Users with Claude Mythos 5 access can select it through Anthropic, Anthropic Vertex, Amazon Bedrock, or Bedrock Mantle with its required context, output, thinking, caching, and replay behavior. [#101238](https://github.com/openclaw/openclaw/pull/101238) Thanks @vincentkoc.
 
-##### Other provider routes
+##### More provider options
 
 Copilot sessions can explicitly use supported custom OpenAI, Azure OpenAI, Ollama-compatible, or Anthropic providers and start a compatible session when connection or credential settings change. Paired computers can run short tasks on eligible local Ollama models, while ClawRouter can expose the models granted to one managed key and report their usage and budget. Users can also claim active promotional models without replacing existing defaults, install LongCat-2.0 through its official provider, and continue Gemini latest tool-calling conversations across both supported Google transports.
 
@@ -538,13 +494,84 @@ Copilot sessions can explicitly use supported custom OpenAI, Azure OpenAI, Ollam
 - Hosted LongCat-2.0 can now be installed through the official LongCat plugin, configured with `LONGCAT_API_KEY` during onboarding, and selected as `longcat/LongCat-2.0` for multi-turn tool use. [#100501](https://github.com/openclaw/openclaw/pull/100501) Thanks @vincentkoc.
 - Gemini latest aliases now continue tool-calling conversations across both supported Google transports instead of stopping with a missing-thought-signature HTTP 400. [#100605](https://github.com/openclaw/openclaw/pull/100605) Thanks @chenxiaoyu209, @guarismo.
 
-#### Gateway crash-loop recovery
+#### Coding agents
+
+OpenClaw now works more cleanly with coding agents that live outside the current chat. `openclaw attach` can open Claude Code against the main or a selected Gateway session with temporary, revocable access instead of process-wide credentials. Codex app-server sessions can resume, delegate to native subagents, and return their results as tracked work, while Copilot sessions can use explicitly selected custom providers and restart when their connection settings change.
+
+The surrounding session workflow is more durable too. Important conversations can be pinned, renamed, archived, restored, and monitored as ongoing work, while active goals remain part of working memory across later turns, compaction, queues, and interruptions.
+
+- External tools can now receive session-scoped Gateway access without process-wide credentials or permission to impersonate another session, forming the secure base for `openclaw attach`. [#96351](https://github.com/openclaw/openclaw/pull/96351) Thanks @anagnorisis2peripeteia, @obviyus.
+- `openclaw attach` now launches Claude Code with temporary access to the main or selected Gateway session, keeps credentials out of arguments, and revokes the grant when the session ends. [#96454](https://github.com/openclaw/openclaw/pull/96454) Thanks @anagnorisis2peripeteia, @obviyus.
+- GPT-5.6 users can now select supported Ultra modes consistently, keep model and thinking choices aligned across OpenClaw surfaces, and receive native Codex child-agent results as tracked tasks. [#98021](https://github.com/openclaw/openclaw/pull/98021) Thanks @anyech.
+- Codex app-server agents can again list allowed agents, spawn OpenClaw or connected subagents, and yield during delegated work without resumed heartbeats hitting incompatible tool definitions. [#99561](https://github.com/openclaw/openclaw/pull/99561) Related [#99464](https://github.com/openclaw/openclaw/issues/99464). Thanks @100yenadmin, @joshavant.
+- Codex-native delegation from OpenClaw threads now creates native task records again, while unsupported custom Codex app-server versions fail startup with a clear minimum-version error. [#101221](https://github.com/openclaw/openclaw/pull/101221)
+- Copilot sessions can now use explicitly selected custom OpenAI, Azure OpenAI, Ollama-compatible, or Anthropic providers and restart cleanly when model, endpoint, credentials, headers, or token limits change. [#96345](https://github.com/openclaw/openclaw/pull/96345) Thanks @vincentkoc.
+- Sessions can now be pinned, archived without losing transcripts, restored, renamed from chat surfaces, and monitored for active runs as durable conversation threads. [#98510](https://github.com/openclaw/openclaw/pull/98510) Thanks @maziyang2.
+- An active `/goal` now keeps guiding later turns and survives compaction, queues, and interruptions until the goal is paused, completed, blocked, or limited. [#100468](https://github.com/openclaw/openclaw/pull/100468)
+
+#### Telegram
+
+[Telegram](https://docs.openclaw.ai/channels/telegram) received broad work across live progress, media, documents, topics, commands, retries, account routing, setup, and delivery. Albums reach the model with every available image, long replies remain easier to follow while they run, and temporary conflicts or network failures are less likely to block later messages or create duplicates.
+
+Messages and actions also stay with the intended bot, topic, and conversation more consistently, while setup and account-health problems provide clearer ways to recover.
+
+- Telegram photo albums now give the model every successfully downloaded image in order instead of only one photo and unusable file references, while failed items are omitted. [#97045](https://github.com/openclaw/openclaw/pull/97045) Thanks @nianjiuzst, @obviyus.
+- Telegram's live progress view now keeps reasoning, commentary, formatting, and tool activity readable and stable, then leaves a concise completion summary instead of disappearing. [#98907](https://github.com/openclaw/openclaw/pull/98907) Thanks @marvinthebored, @peetiegonzalez.
+- Telegram users should see fewer failed final replies or bot delivery sends during flaky network handshakes, without increasing duplicate-message risk for failures that may have happened after a request was sent. [#101258](https://github.com/openclaw/openclaw/pull/101258) Thanks @lzw112.
+
+- Telegram PDFs and other documents now provide agents with a usable local path so normal runner tools can open the attachment. [#97647](https://github.com/openclaw/openclaw/pull/97647) Thanks @gallup007, @joshavant.
+- Telegram timeout logs now hide bot tokens embedded in Bot API paths, including custom and proxy roots, while retaining useful endpoint context. [#99428](https://github.com/openclaw/openclaw/pull/99428) Related [#96982](https://github.com/openclaw/openclaw/issues/96982). Thanks @liuhaiyang14, @xialonglee.
+- Telegram bot tokens now remain masked even when they cross internal boundaries inside very large logs or tool-error messages. [#103861](https://github.com/openclaw/openclaw/pull/103861) Thanks @vincentkoc.
+- When a Telegram plugin approval cannot be routed, operators now receive practical Web UI, terminal UI, and configuration guidance instead of a generic failure or timeout. [#95973](https://github.com/openclaw/openclaw/pull/95973) Related [#95800](https://github.com/openclaw/openclaw/issues/95800). Thanks @chrisbot2026, @monkeyleet.
+- Scheduled deliveries to numeric threads such as Telegram forum topics now return to the configured thread after Gateway restarts instead of falling back to the general chat. [#98699](https://github.com/openclaw/openclaw/pull/98699) Thanks @yetval.
+
+#### Slack
+
+[Slack](https://docs.openclaw.ai/channels/slack) threads retain their conversation history more consistently, interactive cards and progress stay in the right place, and accepted replies are less likely to be repeated after an uncertain confirmation. Long-running conversations also avoid more unnecessary waits before reaching the agent.
+
+- Slack replies stay attached to the root thread's session history instead of accumulating separate, nearly empty child sessions. [#97168](https://github.com/openclaw/openclaw/pull/97168) Related [#96535](https://github.com/openclaw/openclaw/issues/96535). Thanks @gorkem2020, @liuwqgit.
+- When Slack accepts a reply but the confirmation is lost, OpenClaw can verify the existing post and avoid sending a duplicate. [#97480](https://github.com/openclaw/openclaw/pull/97480) Thanks @joeyfrasier.
+
+- Slack and similar channel turns with context-injecting plugins now send each inbound system label to the model once instead of duplicating it. [#95349](https://github.com/openclaw/openclaw/pull/95349) Thanks @gorkem2020, @openperf, @vincentkoc.
+- Slack rooms that require a mention no longer wake OpenClaw for ordinary messages when the bot identity is missing or untrusted, and setup warnings point operators to a Bot User OAuth Token when needed. [#91584](https://github.com/openclaw/openclaw/pull/91584) Thanks @hiragram.
+
+#### Discord
+
+[Discord](https://docs.openclaw.ai/channels/discord) improves reply visibility, attachments, voice sessions, progress, reconnects, and multi-account behavior. Completed replies produce more useful unread cues, brief Gateway reconnects are less likely to lose outbound messages, and repeated session-resume failures can recover without taking the whole Gateway down.
+
+- Completed partial-stream Discord replies now arrive as fresh messages that can trigger normal unread cues after a user leaves the channel. [#99711](https://github.com/openclaw/openclaw/pull/99711) Thanks @davelutztx.
+- Discord replies, cron reports, and other outbound messages are less likely to disappear during a brief Gateway reconnect, without replaying chunks or media Discord already accepted. [#100896](https://github.com/openclaw/openclaw/pull/100896) Thanks @tiffanychum.
+- Discord bots can now recover in place after repeated session-resume rejection, reducing prolonged outages, lost replies, and full Gateway restarts. [#103596](https://github.com/openclaw/openclaw/pull/103596)
+
+- Discord Code Mode progress no longer fills with repetitive Wait rows from background polling, while ordinary custom and plugin tools remain visible. [#100164](https://github.com/openclaw/openclaw/pull/100164)
+- Long Discord approval previews now preserve complete emoji and flags when shortened, avoiding broken replacement characters. [#99539](https://github.com/openclaw/openclaw/pull/99539) Thanks @zhangguiping-xydt.
+- Discord read allowlists now block guild metadata, channel details, and thread listings before any provider request when those resources are outside the configured scope. [#98966](https://github.com/openclaw/openclaw/pull/98966) Thanks @pgondhi987.
+- Discord users can complete approved Codex Computer Use actions such as `get_app_state` and receive the native tool result instead of getting a false timeout while the tool is still running. [#96818](https://github.com/openclaw/openclaw/pull/96818) Thanks @pollybot13, @zhangguiping-xydt.
+
+#### Apple Messages
+
+[Apple Messages](https://docs.openclaw.ai/channels/imessage) receives broader improvements to replies, typing, media, routing, setup guidance, and chat continuity. Remote Mac attachments can reach the active conversation through a usable local path, replies work in more bridge setups, and ordinary message text is less likely to be mistaken for internal role markers.
+
+- Photos bridged from a remote iMessage Mac to a separate Gateway host now arrive in Codex conversations through a readable local path rather than a Mac-only filename. [#91803](https://github.com/openclaw/openclaw/pull/91803) Thanks @turbotheturtle.
+- AppleScript-only and bot-user or SSH iMessage setups now deliver replies even when threading is unavailable, and database changes no longer leave inbound messages hidden behind stale recovery state. [#100446](https://github.com/openclaw/openclaw/pull/100446) Thanks @omarshahine.
+- Direct iMessage chats using the `imsg` private API bridge now show typing as soon as a slow turn is accepted, without waiting for a read receipt. [#95621](https://github.com/openclaw/openclaw/pull/95621) Thanks @omarshahine.
+- iMessage replies no longer lose ordinary sentence text that happens to end with `user:`, `system:`, or `assistant:`. [#96392](https://github.com/openclaw/openclaw/pull/96392) Thanks @ly-wang19.
+
+- Hidden MiniMax reasoning no longer appears as a new iMessage or feeds back into the conversation as an echo-triggering inbound message. [#93820](https://github.com/openclaw/openclaw/pull/93820) Thanks @alix-007.
+- Renaming iMessage groups, changing icons or membership, and leaving groups now require verified owner or administrator authority. [#97961](https://github.com/openclaw/openclaw/pull/97961) Thanks @eleqtrizit.
+- Mac users setting up iMessage can install or update `imsg` from the setup flow, receive clearer probe guidance, and recover sessions that still reference the old skill location. [#101407](https://github.com/openclaw/openclaw/pull/101407) Thanks @omarshahine.
+
+#### Gateway restart recovery
 
 A supervised Gateway that repeatedly fails during startup now leaves operators a stable [restart and recovery](https://docs.openclaw.ai/gateway/restart-recovery) process to inspect and repair. Instead of relaunching forever, the control path remains available while automatic channel and provider restarts pause until the underlying problem is fixed.
 
 - A repeatedly crashing supervised Gateway now leaves a stable control process available for inspection and repair instead of trapping operators in a restart loop. [a18708c](https://github.com/openclaw/openclaw/commit/a18708c5c12d93f14eb753b543a6747e8baa8c47) Thanks @obviyus.
 
-#### Scheduled work that wakes only when needed
+#### Automation, browser control, and terminals
+
+Scheduled work can wake when a command finishes or a watched condition changes, remote browser control can pair selected signed-in tabs and save completed downloads safely, and guarded workspace terminals are available across web and mobile.
+
+##### Scheduled work
 
 [Scheduled jobs](https://docs.openclaw.ai/automation/cron-jobs) can react when an external command finishes or a watched condition changes, so the full agent runs only when there is something new to handle. Reapplying the same declaration updates the intended job in place, preserving identity and history instead of creating duplicate schedules.
 
@@ -552,7 +579,7 @@ A supervised Gateway that repeatedly fails during startup now leaves operators a
 - Cron declarations can now be safely reapplied without duplicate jobs or lost history, while ownership, next run, latest result, delivery, and failure notifications are easier to inspect. [#100480](https://github.com/openclaw/openclaw/pull/100480)
 - Cron jobs can now watch an outside condition and run their real payload only when that state changes, avoiding full agent wakeups on unchanged polls. [#101195](https://github.com/openclaw/openclaw/pull/101195)
 
-#### Remote browser pairing and downloads
+##### Remote browser control
 
 [Browser control](https://docs.openclaw.ai/tools/browser-control) is easier to use across machines: operators can pair the bundled Chrome extension with a remote Gateway, share only selected signed-in tabs, diagnose Windows and WSL2 connection details, and revoke access by removing a tab from the OpenClaw group. Agents can also wait for delayed downloads and save the finished file to a guarded local path with its final URL and suggested name.
 
@@ -561,7 +588,7 @@ A supervised Gateway that repeatedly fails during startup now leaves operators a
 - Remote Gateway users can pair the bundled Chrome extension from another browser machine with `openclaw browser extension pair --gateway-url wss://...`, without installing OpenClaw or Node.js there or opening an inbound port. [#101127](https://github.com/openclaw/openclaw/pull/101127)
 - Agents can now save a browser download to a chosen guarded path or wait for a delayed export, receiving the final URL, filename, and local path. [#101369](https://github.com/openclaw/openclaw/pull/101369) Thanks @grd-chang.
 
-#### Workspace terminals across web and mobile
+##### Workspace terminals
 
 Authenticated operators can open a guarded workspace terminal from the [Control UI](https://docs.openclaw.ai/web/control-ui), iOS, or Android without leaving the current workspace. Sessions use the selected agent's workspace and configured shell, can be disabled by policy, and follow the [Gateway protocol](https://docs.openclaw.ai/gateway/protocol) controls for ownership and connection state. Browser terminals can dock, resize, and run side by side, while iOS and Android provide focused entry points with clear connection guidance.
 
@@ -569,8 +596,6 @@ Same-release browser hardening completes the capability: terminals can reattach 
 
 - Authenticated admins can open an interactive terminal in an agent workspace from Gateway-backed controls, while fully sandboxed agents remain blocked and the feature can be disabled with `gateway.terminal.enabled`. [f083f35](https://github.com/openclaw/openclaw/commit/f083f35ddb467fa5ed7077244525913673bc7aa0)
 - Control UI admins can now keep chat, session controls, and live shells together by opening multiple dockable, resizable terminal tabs inside the browser workspace. [ec72de4](https://github.com/openclaw/openclaw/commit/ec72de41faa71b71d0e479eaa31d791e3b6afe58)
-- iOS users can open Terminal directly from the Control hub, see a Gateway setup prompt when disconnected, and keep active shell sessions running through unrelated screen updates. [211e0d7](https://github.com/openclaw/openclaw/commit/211e0d7263c188ef8cbc5956808306b37bbfccc0)
-- Android users can open an agent-workspace shell from Settings &gt; Terminal, with clear connection guidance and Gateway credentials passed without placing the token in the URL when supported. [fcd7eb6](https://github.com/openclaw/openclaw/commit/fcd7eb6130ed0d3de4a850bda6434f6a8b67664f)
 - Opt-in Control UI terminal sessions can now survive page reloads, sleep, and brief network drops, letting operators reattach and replay recent output instead of losing running commands. [#100089](https://github.com/openclaw/openclaw/pull/100089)
 - Opening a new Control UI terminal after closing the final tab now starts with a blank fresh shell instead of restoring the closed terminal output. [#100665](https://github.com/openclaw/openclaw/pull/100665)
 - Control UI terminal tabs now close cleanly while opening, follow theme changes, and reopen at a usable size instead of leaving hidden sessions, stale colors, or unreachable controls. [2399ce7](https://github.com/openclaw/openclaw/commit/2399ce7c854d278276e65c9ed75f273a3c972e39)
@@ -581,43 +606,100 @@ Same-release browser hardening completes the capability: terminals can reattach 
 - The Control UI integrated terminal now shows one cursor instead of overlapping Chrome and terminal carets, making focus and typing state clearer. [#100240](https://github.com/openclaw/openclaw/pull/100240)
 - The Control UI terminal's new-session button now aligns with the surrounding tabs for a cleaner, easier-to-scan tab bar. [#100256](https://github.com/openclaw/openclaw/pull/100256)
 
-#### Session organization and goal continuity
-
-Frequent conversations can be pinned, older ones archived and restored, and active work renamed or located through the [session controls](https://docs.openclaw.ai/cli/sessions). A started goal also remains part of the conversation's [working memory](https://docs.openclaw.ai/concepts/memory) across later turns and compaction, so long-running work is less likely to lose its objective after an interruption.
-
-- Sessions can now be pinned, archived without losing transcripts, restored, renamed from chat surfaces, and monitored for active runs as durable conversation threads. [#98510](https://github.com/openclaw/openclaw/pull/98510) Thanks @maziyang2.
-- An active `/goal` now keeps guiding later turns and survives compaction, queues, and interruptions until the goal is paused, completed, blocked, or limited. [#100468](https://github.com/openclaw/openclaw/pull/100468)
-
-#### Native polls in Apple Messages
-
-Agents using a compatible [Apple Messages bridge](https://docs.openclaw.ai/channels/imessage) on iOS, iPadOS, or macOS 26 and later can create native polls, read their questions and choices, inspect vote totals, and vote by option index, text, or identifier.
-
-- Compatible iMessage bridge users can create, read, and vote on native Apple Messages polls, with upgrade guidance for unsupported `imsg` installations. [#98421](https://github.com/openclaw/openclaw/pull/98421) Thanks @lobster, @omarshahine.
-
 ### Channels and Messaging
-
-#### Channels and messaging
 
 Replies and media now stay attached to the intended conversation more consistently across workspace, mobile, and community channels. [Signal](https://docs.openclaw.ai/channels/signal) can quote the triggering message and use friendly destination aliases, while [Telegram](https://docs.openclaw.ai/channels/telegram) handles albums, progress, retries, topics, routing, and delivery with fewer dropped, duplicated, stale, or hard-to-read results.
 
 Discord, Slack, WhatsApp, Apple Messages, and other supported channels also receive clearer command, thread, attachment, proxy, and recovery behavior. The [Apple Messages](https://docs.openclaw.ai/channels/imessage) setup and delivery paths in this group preserve the chat context readers expect rather than exposing the routing work underneath.
 
-#### Signal replies stay easy to follow and approve
+#### Telegram
+
+- Telegram automations can now tell from platform metadata whether a sender is a bot, making routing and classification less dependent on usernames or naming conventions. [#96810](https://github.com/openclaw/openclaw/pull/96810) Thanks @lin-hongkuan, @ohyeah521.
+- Telegram sends and message actions that omit an account now consistently use the configured default bot instead of a stale identity that can misroute or reject the action. [#98789](https://github.com/openclaw/openclaw/pull/98789) Thanks @yetval.
+- Telegram destinations genuinely named `current`, `self`, `this`, or `me` can now be reached through configured entries, while accidental bare session words fail closed. [#94107](https://github.com/openclaw/openclaw/pull/94107) Thanks @obviyus, @silver-state, @zhangguiping-xydt.
+- Telegram sends to an `username` now use the account's configured proxy or custom Bot API endpoint for both target resolution and message delivery. [#100868](https://github.com/openclaw/openclaw/pull/100868) Thanks @machine3at.
+- Telegram webhook startup now releases its listener, bot, and network resources after a fatal registration error such as invalid or revoked credentials. [#100863](https://github.com/openclaw/openclaw/pull/100863) Thanks @machine3at.
+- Telegram photo albums now give the model every successfully downloaded image in order instead of only one photo and unusable file references, while failed items are omitted. [#97045](https://github.com/openclaw/openclaw/pull/97045) Thanks @nianjiuzst, @obviyus.
+- Telegram replies now omit internal tool-execution failure lines and deliver only the intended assistant answer. [#95774](https://github.com/openclaw/openclaw/pull/95774) Thanks @mushuiyu886.
+- Telegram replies retain literal wording such as `&lt;think&gt;` when it is part of the answer, while genuinely marked reasoning remains hidden. [#97286](https://github.com/openclaw/openclaw/pull/97286) Thanks @drickon, @obviyus.
+- Telegram heartbeat fallbacks now hide the `notify=false` control marker and deliver silently as requested, including suppressing marker-only replies. [#100735](https://github.com/openclaw/openclaw/pull/100735) Thanks @hackerismydream, @vincentkoc.
+- Telegram stickers and other plugin message actions now stay in the active forum topic or thread when sent to the matching conversation, including through Gateway dispatch. [#80293](https://github.com/openclaw/openclaw/pull/80293) Thanks @artdaal.
+- Telegram messages can now be sent proactively through the `message` tool or `openclaw message send` instead of failing as an unsupported channel. [#92107](https://github.com/openclaw/openclaw/pull/92107) Thanks @bladin, @obviyus.
+- `sessions_send` now rejects Telegram topic child sessions before dispatch and directs callers to the parent group, reducing misrouted agent work. [#99845](https://github.com/openclaw/openclaw/pull/99845) Thanks @nianjiuzst, @qingminglong.
+- Polls now follow the selected direct or hybrid channel instead of being misrouted through the Gateway, with clear errors for unsupported duration or anonymity options. [#99950](https://github.com/openclaw/openclaw/pull/99950) Thanks @nianjiuzst.
+- Established Telegram direct-message sessions now avoid resending recent messages already stored in the transcript, reducing token use and repetitive or confused replies. [#89855](https://github.com/openclaw/openclaw/pull/89855) Thanks @sweetcornna.
+- Telegram direct-message follow-ups now include one copy of the previous assistant reply in recent context instead of duplicating it and wasting tokens. [#98769](https://github.com/openclaw/openclaw/pull/98769) Related [#98767](https://github.com/openclaw/openclaw/issues/98767). Thanks @rabsef-bicrym.
+- Telegram bots in ambient group mode now see recent room context before deciding whether to speak, reducing replies to isolated fragments that were not directed at the bot. [#99143](https://github.com/openclaw/openclaw/pull/99143) Related [#99142](https://github.com/openclaw/openclaw/issues/99142). Thanks @obviyus.
+- Telegram group agents now receive one chronological copy of recent messages instead of duplicated history and repeated delivery details consuming context. [#99256](https://github.com/openclaw/openclaw/pull/99256) Related [#99218](https://github.com/openclaw/openclaw/issues/99218). Thanks @obviyus.
+- Telegram ambient group conversations can now retain unmentioned room context across later turns, restarts, and compaction without repeatedly replaying the same window. [#99306](https://github.com/openclaw/openclaw/pull/99306) Related [#99257](https://github.com/openclaw/openclaw/issues/99257). Thanks @obviyus.
+- Telegram ambient group sessions now restore the relevant older chat context after a reset instead of silently treating archived messages as already visible. [#99385](https://github.com/openclaw/openclaw/pull/99385) Related [#99373](https://github.com/openclaw/openclaw/issues/99373). Thanks @obviyus.
+- Telegram group agents now post visible replies when directly mentioned or replied to, while continuing to ignore unaddressed background chatter. [#99866](https://github.com/openclaw/openclaw/pull/99866) Related [#99854](https://github.com/openclaw/openclaw/issues/99854). Thanks @obviyus.
+- Telegram direct-message follow-ups now include one accurate copy of each earlier assistant reply instead of duplicating a hidden-instruction version. [#100573](https://github.com/openclaw/openclaw/pull/100573) Thanks @momothemage, @mooresoftware.
+- Telegram's live progress view now keeps reasoning, commentary, formatting, and tool activity readable and stable, then leaves a concise completion summary instead of disappearing. [#98907](https://github.com/openclaw/openclaw/pull/98907) Thanks @marvinthebored, @peetiegonzalez.
+- Telegram rich replies and progress messages containing OAuth email addresses now arrive instead of being rejected by Telegram validation. [#95900](https://github.com/openclaw/openclaw/pull/95900) Thanks @obviyus.
+- Telegram progress updates now truncate safely around emoji and other multi-unit characters, preventing broken glyphs and rejected Bot API payloads. [#96456](https://github.com/openclaw/openclaw/pull/96456) Thanks @he-yufeng.
+- Telegram streaming draft previews no longer break or show garbled text when an emoji falls at the size boundary, so long previews can keep updating normally. [#96504](https://github.com/openclaw/openclaw/pull/96504) Thanks @mushuiyu886, @obviyus.
+- Telegram replies now keep typing visible through more temporary API failures and fall back to plain text when valid rich content cannot be delivered. [#99745](https://github.com/openclaw/openclaw/pull/99745) Thanks @obviyus, @veda-openclaw.
+- Telegram typing indicators now retry after transient network failures, restoring status feedback without adding duplicate-message risk to normal sends. [#100762](https://github.com/openclaw/openclaw/pull/100762) Thanks @lzw112, @vincentkoc.
+- Telegram's final collapsed progress summary now includes Claude CLI thinking activity that was shown during the run instead of making that work appear to vanish. [4212de9](https://github.com/openclaw/openclaw/commit/4212de9e08d6e69357d937e399db3df63c1b66d7) Thanks @vincentkoc.
+- Telegram users with `/reasoning on` now receive the model's saved reasoning messages alongside the final answer. [#97875](https://github.com/openclaw/openclaw/pull/97875) Thanks @fuller-stack-dev, @marvinthebored.
+- Telegram groups and forum topics now show a typing indicator as soon as an addressed message is accepted, without signaling activity for ignored chatter. [#99965](https://github.com/openclaw/openclaw/pull/99965) Thanks @moeedahmed.
+- Telegram configurations with legacy `capabilities: []` now inherit the normal inline-button policy, restoring clickable buttons without overriding intentional opt-outs. [#96468](https://github.com/openclaw/openclaw/pull/96468) Thanks @vincentkoc, @zhangguiping-xydt.
+- Telegram users still receive a plain-text reply when rich formatting for an email, URL, mention, hashtag, command, phone number, bank card, or similar entity is rejected, instead of the bot going silent. [#96642](https://github.com/openclaw/openclaw/pull/96642) Thanks @moguangyu5-design.
+- Telegram inline buttons supplied by plugins now run their intended actions and cleanup instead of posting raw callback data into chat. [#97174](https://github.com/openclaw/openclaw/pull/97174) Thanks @goldmar.
+- Telegram rich-text replies now render math formulas more reliably instead of exposing raw LaTeX-style markers. [#97197](https://github.com/openclaw/openclaw/pull/97197) Thanks @vincentkoc, @wangwllu.
+- Telegram final replies and media sends now fall back to readable plain text when formatting, captions, or quotes are rejected, and routine flood waits up to 60 seconds are honored instead of dropping the message. [#98786](https://github.com/openclaw/openclaw/pull/98786) Related [#98778](https://github.com/openclaw/openclaw/issues/98778). Thanks @obviyus.
+- Telegram plugins can now turn a button tap into a normal user reply to the agent, while failed or skipped submissions leave the button available for another attempt. [#98922](https://github.com/openclaw/openclaw/pull/98922) Thanks @goldmar.
+- Telegram tables, rankings, and literal line breaks now remain readable, with explicit logs when rich content must fall back to plain text. [#99861](https://github.com/openclaw/openclaw/pull/99861) Related [#99833](https://github.com/openclaw/openclaw/issues/99833). Thanks @obviyus.
+- Telegram rich messages using `richMessages: true` and Markdown table mode `block` now display bordered, striped tables with the source column alignment. [#95822](https://github.com/openclaw/openclaw/pull/95822) Thanks @obviyus, @zhangguiping-xydt.
+- Telegram fallback messages now replace invalid numeric Unicode surrogate entities safely instead of emitting malformed text, while valid numeric emoji entities still render. [#96581](https://github.com/openclaw/openclaw/pull/96581) Thanks @llagy007, @weeli-009.
+- Telegram documents received through a containerized local Bot API now arrive with their actual contents when its mounted data path differs between containers. [#91984](https://github.com/openclaw/openclaw/pull/91984) Thanks @ailucasdz, @dizesales.
+- Telegram documents sent near a Gateway restart now retry after recovery instead of disappearing silently, while permanent failures still request a resend. [#98102](https://github.com/openclaw/openclaw/pull/98102) Related [#98076](https://github.com/openclaw/openclaw/issues/98076). Thanks @davearcher18, @luoyanglang, @obviyus.
+- Telegram rich messages and text-bearing forwards without a normal caption now reach the agent as readable conversation content instead of an unsupported-message placeholder. [#98735](https://github.com/openclaw/openclaw/pull/98735) Thanks @obviyus.
+- Telegram now tells users when an attachment cannot be downloaded, reports the actual size limit for oversized files, and still retries transient failures such as rate limits. [#100051](https://github.com/openclaw/openclaw/pull/100051) Thanks @batyaro777.
+- Telegram replies and forwards now preserve visible text from rich details, lists, math, captions, and credits so the agent receives the context users actually saw. [#100570](https://github.com/openclaw/openclaw/pull/100570) Thanks @veda-openclaw, @wangwllu.
+- MP3 speech from Piper, Kokoro, and other OpenAI-compatible TTS endpoints now arrives in Telegram as a native voice note rather than a filename-style audio attachment. [#100715](https://github.com/openclaw/openclaw/pull/100715) Thanks @hemantsudarshan.
+- Telegram no longer follows a successfully delivered final answer with a contradictory generic error when a later dispatch step fails, while partial-only failures still receive the existing fallback. [#90152](https://github.com/openclaw/openclaw/pull/90152) Thanks @zhangguiping-xydt.
+- A temporary Telegram reply-session conflict no longer traps a DM or forum topic in constant retries that block later messages; retries are paced, conversation order is retained, and unrelated chats continue processing. [#96550](https://github.com/openclaw/openclaw/pull/96550) Thanks @cnbarrier404, @vacinc.
+- Telegram reactions and message deletions now retry brief socket or Undici network failures, reducing unnecessary action failures without adding duplicate risk to ordinary message sends. [#96612](https://github.com/openclaw/openclaw/pull/96612) Thanks @miorbnli.
+- Telegram messages entering through isolated ingress now proceed to the agent reply instead of replaying the same message in a loop. [#96847](https://github.com/openclaw/openclaw/pull/96847) Thanks @obviyus.
+- Long-running Telegram turns can finish without being reclaimed and processed again midway, reducing stalled or duplicate delivery while giving operators a clearer unhealthy status when the backlog stops draining. [#96962](https://github.com/openclaw/openclaw/pull/96962) Thanks @joshavant.
+- Telegram bots using isolated polling can resume ordered message processing after a stalled drain or Gateway restart without manual database repair. [#97118](https://github.com/openclaw/openclaw/pull/97118) Thanks @romneyda, @vincentkoc.
+- Long non-streamed Telegram group replies now keep every chunk visible, including the beginning, while delivery receipts cover all generated text chunks. [#97304](https://github.com/openclaw/openclaw/pull/97304) Thanks @aliseturtle-lu, @obviyus.
+- Long streamed Telegram replies now deliver their middle sections under the default configuration instead of silently omitting part of the answer. [#97312](https://github.com/openclaw/openclaw/pull/97312) Thanks @brycemurray, @obviyus.
+- Telegram polling now recovers from temporary rate limits, server failures, and malformed error responses without disabling the account, while busy bots avoid cache writes that could trigger false stall restarts. [#98775](https://github.com/openclaw/openclaw/pull/98775) Related [#98772](https://github.com/openclaw/openclaw/issues/98772), [#98773](https://github.com/openclaw/openclaw/issues/98773). Thanks @obviyus.
+- A repeatedly failing Telegram update no longer blocks later messages in the same chat or topic, and replayed updates are retried safely without duplicate commands or apology spam. [#98776](https://github.com/openclaw/openclaw/pull/98776) Related [#98774](https://github.com/openclaw/openclaw/issues/98774). Thanks @obviyus.
+- Telegram webhook messages now survive Gateway restarts and temporary processing failures, while accounts recover from brief startup errors and repeated restarts stop leaking network connections. [#98806](https://github.com/openclaw/openclaw/pull/98806) Related [#98777](https://github.com/openclaw/openclaw/issues/98777). Thanks @obviyus.
+- Queued Telegram updates now remain replayable until restart recovery is safely recorded, reducing message loss during a crash at processing startup. [#104032](https://github.com/openclaw/openclaw/pull/104032) Thanks @obviyus, @vincentkoc.
+- Telegram sends now retry a safe TCP or TLS connection timeout, reducing lost final replies during flaky handshakes without retrying failures that may already have reached Telegram. [#101258](https://github.com/openclaw/openclaw/pull/101258) Thanks @lzw112.
+- Telegram startup logs now show local socket failures such as `EADDRNOTAVAIL` instead of incorrectly steering operators toward DNS troubleshooting. [#97130](https://github.com/openclaw/openclaw/pull/97130) Thanks @zhangguiping-xydt.
+- Telegram bot probes, webhook checks, membership audits, and polling now reject oversized Bot API success bodies before they can exhaust Gateway memory. [#97271](https://github.com/openclaw/openclaw/pull/97271) Thanks @hugenshen.
+- Telegram chat-ID lookup now fails safely on oversized `getChat` responses instead of risking excessive Gateway memory use during onboarding or routing. [#97274](https://github.com/openclaw/openclaw/pull/97274) Thanks @hugenshen.
+- Telegram onboarding now offers both the classic BotFather chat flow and the official web interface for creating a bot and copying its token into OpenClaw. [#100540](https://github.com/openclaw/openclaw/pull/100540)
+- After `/login codex` succeeds in Telegram, retrying the request now uses the newly authenticated OpenAI profile instead of the previous account. [fca0c81](https://github.com/openclaw/openclaw/commit/fca0c81791a5040536d4907913ed975bfcde1642) Thanks @100yenadmin.
+- Telegram `/steer` and `/tell` commands can redirect an active Codex task during streaming or tool work instead of arriving late or becoming follow-up messages. [#98126](https://github.com/openclaw/openclaw/pull/98126) Related [#81594](https://github.com/openclaw/openclaw/issues/81594). Thanks @100yenadmin, @kyzcreig.
+- Saying `wait` in a Telegram group conversation no longer cancels active OpenClaw work, while explicit stop commands still take effect immediately. [#98639](https://github.com/openclaw/openclaw/pull/98639) Thanks @ianchen08.
+- Telegram messages that cannot be steered into an active Codex turn are now retained for handling afterward instead of disappearing without a reply. [#103916](https://github.com/openclaw/openclaw/pull/103916) Thanks @jalehman.
+- When Telegram requests overlap, the newest authorized message now wins without an outdated reply being sent or replaced queued work being started. [#103965](https://github.com/openclaw/openclaw/pull/103965)
+- A Telegram reply that has already started is no longer unexpectedly cancelled when another authorized command arrives. [52a3314](https://github.com/openclaw/openclaw/commit/52a331466882ca0b6befa56c883355c758305813) Thanks @vincentkoc.
+
+#### Signal
 
 - Signal auto-replies now quote the message that triggered them, making responses easier to follow in groups and busy conversations. [#95718](https://github.com/openclaw/openclaw/pull/95718) Thanks @jesse-merhi.
 - Signal reaction shortcuts now apply only to the intended structured exec or plugin approval, including forwarded monitor and chunked prompts, while ordinary messages that merely quote approval commands no longer gain controls; older delivered prompts may still require `/approve` once after upgrade. [#96880](https://github.com/openclaw/openclaw/pull/96880) Thanks @joshavant.
 - Signal users who enable status reactions can now see when OpenClaw accepts a message, works, uses tools, compacts, stalls, or finishes in direct and group chats. [#98791](https://github.com/openclaw/openclaw/pull/98791) Thanks @jesse-merhi.
-
-#### Signal setup and container failures stay recoverable
-
 - Signal QuickStart now shows one clear `signal-cli` installation failure and proceeds directly to the custom-path prompt instead of repeating the missing-binary message. [#96932](https://github.com/openclaw/openclaw/pull/96932) Thanks @romneyda.
 - Signal plugin setup now handles slow, malformed, or oversized GitHub release metadata without risking process memory exhaustion. [#97536](https://github.com/openclaw/openclaw/pull/97536) Thanks @hugenshen.
 - Signal container mode now stops oversized or runaway `signal-cli-rest-api` responses from threatening the entire OpenClaw process. [#97539](https://github.com/openclaw/openclaw/pull/97539) Thanks @alix-007.
 - Invalid JSON from the Signal REST container now produces a clear Signal-specific failure instead of exposing a raw parser error. [#98073](https://github.com/openclaw/openclaw/pull/98073) Thanks @lsr911, @vincentkoc.
 - Signal QuickStart on macOS now installs `signal-cli` through Homebrew instead of downloading an incompatible Linux package, and gives platform-specific guidance when Homebrew is unavailable. [#96909](https://github.com/openclaw/openclaw/pull/96909) Thanks @romneyda.
 - Signal container receives now reject oversized JSON frames before buffering them, limiting memory pressure without affecting normal messages or separately fetched attachments. [#99992](https://github.com/openclaw/openclaw/pull/99992) Thanks @sunlit-deng.
+- Signal users can assign stable names such as `signal:me` or `signal:ops` to repeat contacts and groups instead of reusing raw phone numbers, UUIDs, or IDs. [#95738](https://github.com/openclaw/openclaw/pull/95738) Thanks @jesse-merhi.
+- Signal users now receive clean assistant replies without internal tool status, reasoning tags, or tool-call markup. [#97360](https://github.com/openclaw/openclaw/pull/97360) Thanks @masatohoshino.
 
-#### Slack threads keep their conversation context
+- Signal local-file attachments that are oversized or use suspicious paths now fail quickly with a clear error before consuming excessive Gateway memory. [#101391](https://github.com/openclaw/openclaw/pull/101391) Thanks @cxbasdev.
+
+#### Slack
 
 - Slack channels can keep ambient OpenClaw participation while the opt-in `ignoreOtherMentions` setting prevents replies to conversations aimed at another person or group and retains that conversation as context for a later bot mention. [#53467](https://github.com/openclaw/openclaw/pull/53467) Thanks @hanamizuki.
 - Slack operators can now choose `off`, `first`, `all`, or `batched` reply threading per channel, with automatic replies and message tools following the same effective choice. [#82253](https://github.com/openclaw/openclaw/pull/82253)
@@ -629,9 +711,6 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - Slack replies in very long threads and on busy Gateways now avoid several unnecessary waits, reducing stalls before thread and direct-message events reach the agent. [#101888](https://github.com/openclaw/openclaw/pull/101888) Thanks @obviyus.
 - Slack agents can now read thread messages whose visible content exists only in attachments or blocks, including alerts with empty top-level text. [#97727](https://github.com/openclaw/openclaw/pull/97727) Thanks @chthtlo.
 - Slack Codex conversations now retain one final assistant reply in history instead of duplicating it through both the app-server transcript and delivery fallback. [#100160](https://github.com/openclaw/openclaw/pull/100160) Thanks @steipete-oai.
-
-#### Slack cards, progress, identity, and reactions stay consistent
-
 - Scheduled and heartbeat-driven Slack messages now use the configured agent name and icon, with graceful fallback to the app identity when Slack rejects customization. [#84335](https://github.com/openclaw/openclaw/pull/84335) Thanks @rohang2005.
 - Longer Slack assistant-thread replies now show changing progress notes so users can tell OpenClaw is still working. [#85507](https://github.com/openclaw/openclaw/pull/85507) Thanks @emergentash.
 - Slack presentation messages now arrive as native Block Kit cards with working headers, controls, and receipts instead of flattened plain text. [#95463](https://github.com/openclaw/openclaw/pull/95463) Thanks @zoowh.
@@ -643,9 +722,6 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - Long Slack command and plugin approval previews now keep emoji intact at the length boundary, avoiding malformed approval text or payloads. [#96576](https://github.com/openclaw/openclaw/pull/96576) Thanks @llagy007, @weeli-009.
 - Slack slash-command choice menus now shorten long labels without splitting emoji at the 75-character limit. [#97923](https://github.com/openclaw/openclaw/pull/97923) Thanks @lexes7.
 - Slack replies now keep each agent's custom name and avatar through streaming or fallback delivery instead of reverting to the app identity. [#100084](https://github.com/openclaw/openclaw/pull/100084) Thanks @moerai.
-
-#### Slack setup and delivery problems become easier to diagnose
-
 - Slack operators running multiple Gateways through one Socket Mode app now receive a startup warning explaining why events may reach another connection and how to choose a safer deployment setup. [#79938](https://github.com/openclaw/openclaw/pull/79938) Thanks @jeffvsutherland.
 - Slack replies no longer expose internal tool-failure banners, reasoning scaffolding, or tool-call markup to users. [#97367](https://github.com/openclaw/openclaw/pull/97367) Thanks @masatohoshino.
 - When Slack accepts a reply but the confirmation is lost, OpenClaw can verify the existing post and avoid sending a duplicate. [#97480](https://github.com/openclaw/openclaw/pull/97480) Thanks @joeyfrasier.
@@ -658,7 +734,7 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - Slack startup and account checks now warn when a user OAuth credential is configured as the bot token, before identity confusion affects mentions or replies. [#99931](https://github.com/openclaw/openclaw/pull/99931) Thanks @ooiuuii.
 - Long-running Slack integrations now keep conversation metadata caching within a fixed limit, preventing memory use from growing indefinitely as more channels and workspaces are encountered. [#101562](https://github.com/openclaw/openclaw/pull/101562) Thanks @vincentkoc, @zhangguiping-xydt.
 
-#### Discord replies, progress, and attachments stay visible
+#### Discord
 
 - Discord tool-only replies no longer leave overlapping typing refreshes that suggest another answer is still coming, while explicitly configured typing behavior remains intact. [#84288](https://github.com/openclaw/openclaw/pull/84288) Thanks @dr00-eth.
 - When a Discord voice-note reply fails, users now receive the assistant's answer as a threaded text fallback without duplicating text that was already delivered. [#89962](https://github.com/openclaw/openclaw/pull/89962) Thanks @danhayman.
@@ -666,7 +742,6 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - Discord now shows enabled Anthropic reasoning, notes, and tool activity in the right order with accurate counters and nonblank summaries. [#96106](https://github.com/openclaw/openclaw/pull/96106) Thanks @marvinthebored, @obviyus, @peetiegonzalez.
 - Discord users now receive the reply text and a clear notice when an attachment is too large instead of seeing the completed response disappear. [#99577](https://github.com/openclaw/openclaw/pull/99577) Thanks @lin-hongkuan.
 - Completed partial-stream Discord replies now arrive as fresh messages that can trigger normal unread cues after a user leaves the channel. [#99711](https://github.com/openclaw/openclaw/pull/99711) Thanks @davelutztx.
-- Discord and other progress views now hide repetitive internal Code Mode polling while continuing to show meaningful tool activity. [#99893](https://github.com/openclaw/openclaw/pull/99893)
 - Discord completion and error reactions now remain visible for the configured `doneHoldMs` and `errorHoldMs` durations instead of fixed default delays. [#94736](https://github.com/openclaw/openclaw/pull/94736) Thanks @liuwqgit.
 - Discord voice replies now keep their accompanying text and extra media attached to the original message even when single-use reply mode is enabled. [#95978](https://github.com/openclaw/openclaw/pull/95978) Thanks @nxmxbbd.
 - Discord attachments queued while OpenClaw is busy now remain available when the message finally runs instead of disappearing after temporary download links expire. [#96183](https://github.com/openclaw/openclaw/pull/96183) Thanks @judsonnudson, @zacharyyw.
@@ -676,9 +751,6 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - Discord replies, cron reports, and other outbound messages are less likely to disappear during a brief Gateway reconnect, without replaying chunks or media Discord already accepted. [#100896](https://github.com/openclaw/openclaw/pull/100896) Thanks @tiffanychum.
 - Discord automatic thread titles now handle long messages and channel details containing emoji without building malformed prompt text. [#101551](https://github.com/openclaw/openclaw/pull/101551) Thanks @alix-007.
 - Discord voice playback failures now produce a readable error within the 8,192-byte limit, including when ffmpeg output contains non-English text or emoji. [#104230](https://github.com/openclaw/openclaw/pull/104230) Thanks @qingminglong.
-
-#### Discord voice and multi-account sessions recover cleanly
-
 - Multiple Discord bot accounts in one server now keep independent voice sessions, and configured voice auto-join works even when Discord becomes ready before voice startup completes. [#87530](https://github.com/openclaw/openclaw/pull/87530) Thanks @geekhuashan.
 - Checking a Discord member who is not in voice now reports them as disconnected instead of raising a misleading command or gateway failure. [#90969](https://github.com/openclaw/openclaw/pull/90969) Thanks @asock.
 - Adding a named Discord account no longer knocks a SecretRef-backed default account offline or into a restart loop. [#96401](https://github.com/openclaw/openclaw/pull/96401) Thanks @849261680.
@@ -687,9 +759,6 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - Discord bots can now recover in place after repeated session-resume rejection, reducing prolonged outages, lost replies, and full Gateway restarts. [#103596](https://github.com/openclaw/openclaw/pull/103596)
 - Discord voice playback now cleans up ffmpeg after output-pipe failures, reducing both Gateway crashes and leftover transcoder processes. [#101124](https://github.com/openclaw/openclaw/pull/101124)
 - The configured primary Discord account now starts first in multi-account setups, so the main bot is not delayed behind secondary or invalid entries after a restart. [#101292](https://github.com/openclaw/openclaw/pull/101292) Thanks @turbotheturtle.
-
-#### Discord network responses are bounded and readable
-
 - Discord message reads and searches now decode raw compressed responses correctly and return clear errors for unexpected data instead of garbled output or opaque failures. [#80788](https://github.com/openclaw/openclaw/pull/80788) Thanks @jbetala7.
 - Discord REST calls now fail with a clear error when a response is oversized or stalls instead of risking unbounded memory use and process instability. [#95412](https://github.com/openclaw/openclaw/pull/95412) Thanks @alix-007.
 - Discord account health checks now fail safely on oversized identity responses instead of risking a Gateway crash or out-of-memory failure. [#97278](https://github.com/openclaw/openclaw/pull/97278) Thanks @hugenshen.
@@ -699,8 +768,9 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - An oversized Discord gateway metadata response now logs a bounded error and falls back to Discord's default gateway URL instead of risking a Gateway crash. [#98682](https://github.com/openclaw/openclaw/pull/98682) Thanks @wings1029.
 - Discord deployments in restricted networks can now route Gateway and REST traffic through an explicitly configured DNS or private HTTP(S) proxy without opening broad direct HTTPS egress. [#99126](https://github.com/openclaw/openclaw/pull/99126) Related [#98266](https://github.com/openclaw/openclaw/issues/98266). Thanks @joshavant, @sallyom, @svuppala2006.
 - Discord Gateway connections now cap incoming frames at 16 MiB, preserving tested large member events while rejecting extreme traffic before it pressures memory. [#99998](https://github.com/openclaw/openclaw/pull/99998) Thanks @sunlit-deng.
+- Discord agents now receive `is_bot: true` for admitted bot messages while human and PluralKit sender behavior stays unchanged. [#97824](https://github.com/openclaw/openclaw/pull/97824) Thanks @masatohoshino, @vincentkoc.
 
-#### WhatsApp accounts reconnect without losing or misordering replies
+#### WhatsApp
 
 - Logged-out or replaced WhatsApp accounts now stay stopped until reconnection instead of entering repeated restart loops that can consume resources and slow other accounts. [#78511](https://github.com/openclaw/openclaw/pull/78511) Thanks @openperf.
 - Eligible WhatsApp messages received during a brief reconnect now reach OpenClaw for an automatic reply instead of being marked read and silently skipped. [#80642](https://github.com/openclaw/openclaw/pull/80642) Thanks @vishalj99.
@@ -711,9 +781,6 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - `openclaw channels login --channel whatsapp` now replaces expired QR codes in place so interactive terminals show one current, scannable code. [#100159](https://github.com/openclaw/openclaw/pull/100159)
 - A WhatsApp message interrupted by a temporary reply-session conflict can now be retried instead of being marked delivered and silently ignored on redelivery. [#101106](https://github.com/openclaw/openclaw/pull/101106) Thanks @andersonjeccel.
 - OpenClaw can use a trusted override to point the normal Baileys socket at a compatible local WebSocket endpoint, while normal WhatsApp connections continue using the default path unless explicitly overridden. [#97155](https://github.com/openclaw/openclaw/pull/97155) Thanks @romneyda.
-
-#### WhatsApp commands, quotes, formatting, and outreach behave as expected
-
 - WhatsApp group owners can reliably use `/new`, `/stop`, `/status`, and similar commands even when their sender identity arrives as an internal LID. [#93379](https://github.com/openclaw/openclaw/pull/93379) Related [#77755](https://github.com/openclaw/openclaw/issues/77755). Thanks @jiveshkalra, @xialonglee.
 - Direct WhatsApp polls now honor the same outreach timelock as other sends instead of reaching recipients during a blocked window. [1d128b4](https://github.com/openclaw/openclaw/commit/1d128b4dd23297ee3553142954e4ce0542ba83e6) Thanks @vincentkoc.
 - Replies to OpenClaw-authored WhatsApp group messages now remain visible on WhatsApp Desktop and other multi-device clients with their quote context intact. [#94879](https://github.com/openclaw/openclaw/pull/94879) Thanks @bartok9.
@@ -721,8 +788,16 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - Long WhatsApp auto-reply and inbound-message previews now preserve emoji and report the truncated character count accurately, making affected diagnostics readable without changing delivery. [#96580](https://github.com/openclaw/openclaw/pull/96580) Thanks @llagy007, @weeli-009.
 - WhatsApp direct messages blocked by a reachout timelock now fail immediately with an explicit explanation instead of appearing accepted before a later delivery error. [#101264](https://github.com/openclaw/openclaw/pull/101264) Thanks @mcaxtr.
 
-#### Apple Messages keep polls, threads, media, and destinations intact
+- With `channels.whatsapp.actions.calls`, MeowCaller, and telephony TTS configured, a WhatsApp agent can now call the requester and speak a short task-completion or urgent message. [#99635](https://github.com/openclaw/openclaw/pull/99635)
 
+#### Weixin
+
+- Configured Weixin accounts with opaque IDs containing characters such as an at sign or `.` now start normally and preserve their account-specific routing. [#93686](https://github.com/openclaw/openclaw/pull/93686) Related [#93556](https://github.com/openclaw/openclaw/issues/93556). Thanks @htkillermax-gif, @zhangguiping-xydt.
+- Official Weixin installs and core-upgrade reconciliation now target plugin version 2.4.6 with its correct compatibility requirement instead of unexpectedly returning users to 2.4.3. [#96801](https://github.com/openclaw/openclaw/pull/96801) Thanks @lin-hongkuan.
+
+#### Apple Messages
+
+- Compatible iMessage bridge users can create, read, and vote on native Apple Messages polls, with upgrade guidance for unsupported `imsg` installations. [#98421](https://github.com/openclaw/openclaw/pull/98421) Thanks @lobster, @omarshahine.
 - Photos bridged from a remote iMessage Mac to a separate Gateway host now arrive in Codex conversations through a readable local path rather than a Mac-only filename. [#91803](https://github.com/openclaw/openclaw/pull/91803) Thanks @turbotheturtle.
 - Voting for an emoji-labeled iMessage poll option no longer sends an extra one-word message that repeats the selected answer. [#98691](https://github.com/openclaw/openclaw/pull/98691) Thanks @omarshahine.
 - Agents now answer iMessage polls, including polls with comments, with one native vote instead of an ordinary text answer, a repeated selection, or a separate reply to the comment. [#98781](https://github.com/openclaw/openclaw/pull/98781) Thanks @omarshahine.
@@ -731,8 +806,11 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - iMessage replies no longer lose ordinary sentence text that happens to end with `user:`, `system:`, or `assistant:`. [#96392](https://github.com/openclaw/openclaw/pull/96392) Thanks @ly-wang19.
 - Bursts of long iMessage messages can now be combined without cutting an emoji in half and sending broken text to the agent. [#97598](https://github.com/openclaw/openclaw/pull/97598) Thanks @weeli-009.
 - iMessage startup warnings now distinguish working sender-allowlisted group setups from truly blocked configurations and point blocked operators to the correct fix. [#100046](https://github.com/openclaw/openclaw/pull/100046)
+- Bare 32-character iMessage group IDs from `imsg` now route scheduled and direct sends to the intended conversation instead of a nonexistent phone number. [#99525](https://github.com/openclaw/openclaw/pull/99525) Related [#89235](https://github.com/openclaw/openclaw/issues/89235). Thanks @matthewdelprado.
+- An iMessage helper pipe failure now ends pending work predictably and lets the monitor recover or stop cleanly instead of crashing the Gateway or hanging requests. [#101084](https://github.com/openclaw/openclaw/pull/101084) Thanks @masatohoshino.
+- iMessage CLI send and action failures caused by broken output pipes now return a controlled error instead of risking a Gateway worker crash. [#101401](https://github.com/openclaw/openclaw/pull/101401) Thanks @cxbasdev.
 
-#### LINE bots keep webhooks, media, cards, and emoji usable
+#### LINE
 
 - Default and named LINE bots configured under `channels.line.accounts` now receive working webhook routes unless explicitly disabled, preventing valid inbound messages from ending in 404 responses. [#81471](https://github.com/openclaw/openclaw/pull/81471) Thanks @edenfunf, @honorlin.
 - LINE file uploads now retain recognizable audio extensions such as `.m4a`, allowing valid recordings to reach transcription instead of being treated as unknown files. [#96403](https://github.com/openclaw/openclaw/pull/96403) Thanks @tancolo, @zaidazmi.
@@ -741,7 +819,7 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - LINE messages, cards, menus, locations, and code blocks now preserve emoji and other multi-unit characters at field limits instead of producing broken text or rejected payloads. [#98994](https://github.com/openclaw/openclaw/pull/98994) Thanks @lexes7, @vincentkoc.
 - LINE replies that combine text with an image, card, or location now report a failed rich-media portion accurately while delivering the text once and avoiding duplicate retries. [#100996](https://github.com/openclaw/openclaw/pull/100996) Thanks @masatohoshino.
 
-#### Feishu replies, cards, and direct messages keep moving
+#### Feishu
 
 - Feishu replies now arrive as completed blocks when block streaming is enabled without streaming cards, rather than disappearing entirely. [#94250](https://github.com/openclaw/openclaw/pull/94250) Related [#55027](https://github.com/openclaw/openclaw/issues/55027). Thanks @vincentkoc, @xialonglee, @zichaolong.
 - When an interactive command button falls back to text, users now receive the command they can copy, with Feishu document comments explaining the manual step. [#94385](https://github.com/openclaw/openclaw/pull/94385) Related [#69754](https://github.com/openclaw/openclaw/issues/69754). Thanks @1yihui, @xialonglee.
@@ -759,51 +837,91 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - Feishu direct messages received while the bot identity is temporarily unavailable no longer turn ordinary user mentions into accidental forwarding targets. [#100891](https://github.com/openclaw/openclaw/pull/100891) Thanks @zhangguiping-xydt.
 - Feishu error logs now shorten emoji-containing text at a valid character boundary, making card-action and WebSocket cleanup failures easier to read. [#101364](https://github.com/openclaw/openclaw/pull/101364) Thanks @zengwen-dt.
 - Feishu Drive can now list files beyond the first page of a large shared folder by accepting its returned `next_page_token`, with invalid page sizes rejected clearly before the request. [#101572](https://github.com/openclaw/openclaw/pull/101572) Thanks @zhangguiping-xydt.
+- A Feishu connection that stops receiving messages is less likely to remain falsely marked healthy because transport activity now updates channel health. [#90966](https://github.com/openclaw/openclaw/pull/90966) Thanks @acache, @richardataxai-lab, @vincentkoc.
+- Canceling a Feishu reconnect, startup, or bot-identity retry wait now ends cleanly instead of risking a `ReferenceError` during cleanup. [#98137](https://github.com/openclaw/openclaw/pull/98137) Thanks @zhanglei99586.
+- Feishu bot replies no longer expose internal tool or runtime failure banners alongside the intended response. [#98705](https://github.com/openclaw/openclaw/pull/98705) Thanks @zengwen-dt.
 
-#### Microsoft Teams and Google Chat preserve card actions and conversation text
+- Multi-account Feishu setups can now start the default channel with an environment-backed top-level SecretRef and separate inline secrets for named accounts, without replacing the protected secret with plaintext. [#96965](https://github.com/openclaw/openclaw/pull/96965) Thanks @zw-xysk.
+
+#### Google Chat
+
+- Google Chat sends and request verification now bound oversized API, certificate, and error responses, allowing normal traffic through while broken or hostile bodies fail or truncate without exhausting memory. [#96772](https://github.com/openclaw/openclaw/pull/96772) Thanks @vincentkoc, @wangmiao0668000666.
+- Google Chat agents can now distinguish allowed bot messages through `is_bot: true` and handle automated senders differently from people. [#97825](https://github.com/openclaw/openclaw/pull/97825) Thanks @masatohoshino, @vincentkoc.
+- Long Google Chat approval cards now preserve emoji at the text limit, preventing corrupted approval text or malformed card payloads. [#96573](https://github.com/openclaw/openclaw/pull/96573) Thanks @llagy007, @weeli-009.
+
+#### Google Meet
+
+- Google Meet join, creation, talk-back, transcription, and related automation now work across browser and account languages by using English in OpenClaw-controlled Meet tabs. [#89671](https://github.com/openclaw/openclaw/pull/89671) Thanks @unayung.
+- Google Meet sessions launched through a paired macOS Chrome node now open the intended URL with the configured Chrome profile and audio tools, while unsupported actions and executable overrides are rejected before reaching the node. [#96908](https://github.com/openclaw/openclaw/pull/96908) Thanks @joshavant.
+- When Google Meet's local OAuth callback port is occupied, `openclaw meet auth login` now offers the manual redirect-paste flow instead of stopping sign-in. [#96492](https://github.com/openclaw/openclaw/pull/96492) Thanks @jinduwang1001-max, @yetval.
+
+#### Microsoft Teams
 
 - Microsoft Teams replies to long parent messages now keep emoji and similar characters intact in the agent's parent-message context instead of inserting malformed text. [#96569](https://github.com/openclaw/openclaw/pull/96569) Thanks @llagy007, @weeli-009.
-- Google Chat sends and request verification now bound oversized API, certificate, and error responses, allowing normal traffic through while broken or hostile bodies fail or truncate without exhausting memory. [#96772](https://github.com/openclaw/openclaw/pull/96772) Thanks @vincentkoc, @wangmiao0668000666.
 - Microsoft Teams Adaptive Card button clicks now deliver the submitted value to the agent instead of arriving as empty messages. [#97546](https://github.com/openclaw/openclaw/pull/97546) Thanks @jimmypuckett.
 - Microsoft Teams file delivery and chat lookup now cap large Microsoft Graph responses and return a labeled error instead of risking a process crash. [#97784](https://github.com/openclaw/openclaw/pull/97784) Thanks @alix-007.
 - Microsoft Teams attachment recovery now declines oversized Graph metadata with diagnostics instead of buffering it into Gateway memory, while normal hosted media still downloads within configured limits. [#101082](https://github.com/openclaw/openclaw/pull/101082) Thanks @cxbasdev.
-- Google Chat agents can now distinguish allowed bot messages through `is_bot: true` and handle automated senders differently from people. [#97825](https://github.com/openclaw/openclaw/pull/97825) Thanks @masatohoshino, @vincentkoc.
 - The Microsoft Teams personal-chat welcome card now displays its greeting with the intended bold, medium emphasis. [#96290](https://github.com/openclaw/openclaw/pull/96290) Thanks @ly-wang19, @vincentkoc.
 - Microsoft Teams thread history now preserves literal entity text such as `&lt;APIKEY&gt;` instead of turning it into different markup before the agent sees it. [#96342](https://github.com/openclaw/openclaw/pull/96342) Thanks @ly-wang19.
-- Long Google Chat approval cards now preserve emoji at the text limit, preventing corrupted approval text or malformed card payloads. [#96573](https://github.com/openclaw/openclaw/pull/96573) Thanks @llagy007, @weeli-009.
 - Microsoft Teams feedback on long responses now carries intact emoji into reflection processing, preventing a cutoff from corrupting prompts, logs, or encoding. [#96578](https://github.com/openclaw/openclaw/pull/96578) Thanks @llagy007, @weeli-009.
 
-#### Matrix, Mattermost, and Nextcloud stay readable and recoverable
+- Oversized or malformed Microsoft Teams personal-chat attachment metadata now fails safely with a warning instead of consuming unbounded Gateway memory. [#99125](https://github.com/openclaw/openclaw/pull/99125) Thanks @ly85206559.
 
-- Long-running Discord and Nextcloud Talk integrations now bound their channel metadata caches instead of letting each newly encountered room increase memory use forever. [#101650](https://github.com/openclaw/openclaw/pull/101650) Thanks @alix-007, @vincentkoc.
-- Nextcloud Talk sends and reactions now bound server response sizes, protecting OpenClaw from hangs or runaway memory use while preserving normal delivery. [#96031](https://github.com/openclaw/openclaw/pull/96031) Thanks @alix-007.
+#### Matrix
+
 - Long Matrix thread starters keep emoji and other special characters intact when OpenClaw shortens them for agent context. [#97121](https://github.com/openclaw/openclaw/pull/97121) Thanks @bartok9, @ly-wang19.
 - Matrix operators now receive a structured warning when token rotations leave multiple populated storage roots, with details for identifying and carefully archiving stale folders. [#97353](https://github.com/openclaw/openclaw/pull/97353) Thanks @eldron81-r2d2, @outdog-hwh.
 - Long Matrix reply quotes sent to agents now truncate emoji and other multi-unit characters without leaving broken text. [#97471](https://github.com/openclaw/openclaw/pull/97471) Thanks @ly-wang19.
-- Mattermost streaming draft previews now shorten long text containing emoji without showing a malformed replacement character. [#97472](https://github.com/openclaw/openclaw/pull/97472) Thanks @ly-wang19.
 - Matrix media downloads now enforce size and idle-timeout limits before buffering, including for encrypted media. [#97662](https://github.com/openclaw/openclaw/pull/97662) Thanks @alix-007.
+- Malformed successful Matrix responses now produce a controlled homeserver error instead of an opaque unhandled JSON parsing failure. [#97973](https://github.com/openclaw/openclaw/pull/97973) Thanks @lsr911.
+- Matrix dependency setup now stops its child process predictably and reports the failure when a local command's output pipe breaks. [#101597](https://github.com/openclaw/openclaw/pull/101597) Thanks @alix-007.
+- Matrix replies now deliver the intended answer without leaking internal tool diagnostics, reasoning tags, or assistant-only scaffolding. [#97372](https://github.com/openclaw/openclaw/pull/97372) Thanks @masatohoshino.
+
+#### Mattermost
+
+- Mattermost streaming draft previews now shorten long text containing emoji without showing a malformed replacement character. [#97472](https://github.com/openclaw/openclaw/pull/97472) Thanks @ly-wang19.
 - Mattermost channel monitoring now rejects inbound events above 16 MiB and reconnects, limiting memory exposure while continuing to accept normal large messages. [#99366](https://github.com/openclaw/openclaw/pull/99366) Thanks @sunlit-deng.
-- Nextcloud Talk startup checks now show a concise bot-admin API failure without buffering an arbitrarily large error body. [#97811](https://github.com/openclaw/openclaw/pull/97811) Thanks @pick-cat.
 - Mattermost API calls now stop oversized or endless successful responses before they can consume unbounded memory, while normal requests and uploads continue unchanged. [#96033](https://github.com/openclaw/openclaw/pull/96033) Thanks @alix-007.
 - Mattermost API failures with an empty JSON body now produce a clear status-based error instead of an `Unexpected end of JSON input` crash. [#97851](https://github.com/openclaw/openclaw/pull/97851) Thanks @pick-cat.
-- Malformed successful Matrix responses now produce a controlled homeserver error instead of an opaque unhandled JSON parsing failure. [#97973](https://github.com/openclaw/openclaw/pull/97973) Thanks @lsr911.
 - Mattermost installations repaired after an upgrade now load and reconnect on Gateway restart without requiring a manual plugin-enable setting, including restrictive allowlist setups. [#98608](https://github.com/openclaw/openclaw/pull/98608) Related [#98564](https://github.com/openclaw/openclaw/issues/98564). Thanks @jacobtomlinson, @shakkernerd.
 - Mattermost teams with more than 200 members can now discover and address valid peers beyond the first page of the team directory. [#98877](https://github.com/openclaw/openclaw/pull/98877) Related [#98871](https://github.com/openclaw/openclaw/issues/98871). Thanks @qingminglong.
+- Mattermost replies now show the intended assistant response without exposing internal tool-failure diagnostics. [#98693](https://github.com/openclaw/openclaw/pull/98693) Thanks @zengwen-dt.
 
-#### IRC, SMS, Synology, and Zalo deliver clean, complete messages
+- Native `/oc_*` Mattermost commands work again in packaged installs using `openclaw/mattermost`, without allowing disabled or denied plugins to bypass Gateway checks. [#98819](https://github.com/openclaw/openclaw/pull/98819) Related [#98740](https://github.com/openclaw/openclaw/issues/98740). Thanks @amknight, @keltech-services.
+
+#### Nextcloud
+
+- Nextcloud Talk sends and reactions now bound server response sizes, protecting OpenClaw from hangs or runaway memory use while preserving normal delivery. [#96031](https://github.com/openclaw/openclaw/pull/96031) Thanks @alix-007.
+- Nextcloud Talk startup checks now show a concise bot-admin API failure without buffering an arbitrarily large error body. [#97811](https://github.com/openclaw/openclaw/pull/97811) Thanks @pick-cat.
+
+#### IRC
 
 - Long IRC messages now keep emoji and other supplementary characters intact when split into delivery chunks, including with unusually small configured chunk limits. [#96572](https://github.com/openclaw/openclaw/pull/96572) Thanks @llagy007, @weeli-009.
-- Zalo setup, polling, sending, and health checks now reject abnormally large successful replies before they can push the Gateway into severe memory pressure. [#97277](https://github.com/openclaw/openclaw/pull/97277) Thanks @hugenshen.
-- Twilio SMS account checks now handle malformed successful JSON with safe phone-number listing or a clear Messaging Service error. [#97999](https://github.com/openclaw/openclaw/pull/97999) Thanks @lsr911.
-- Zalo operators can point Bot API calls at a compatible alternate endpoint without patching code, while ordinary workspace environment files cannot silently redirect traffic and millisecond message times remain accurate. [#98768](https://github.com/openclaw/openclaw/pull/98768) Thanks @romneyda.
 - IRC reconnects now rotate fallback nicknames after a 433 conflict instead of repeatedly retrying the same occupied name. [#96108](https://github.com/openclaw/openclaw/pull/96108) Thanks @wendy-chsy.
-- Long Synology Chat messages and diagnostic previews now truncate without cutting an emoji or other supplementary character in half, keeping downstream text valid. [#96574](https://github.com/openclaw/openclaw/pull/96574) Thanks @weeli-009.
 - IRC outbound text now preserves escaped emoji and keeps invalid surrogate escapes literal instead of silently replacing them with corrupted characters. [#97683](https://github.com/openclaw/openclaw/pull/97683) Thanks @llagy007, @weeli-009.
 - Long IRC replies now arrive complete when they contain Chinese, Cyrillic, emoji, or other non-ASCII text, while respecting `messageChunkMaxChars`. [#99138](https://github.com/openclaw/openclaw/pull/99138) Thanks @yetval.
+- IRC bots now reconnect and rejoin configured channels after a temporary server or network disconnect instead of staying silent until OpenClaw is restarted. [#100799](https://github.com/openclaw/openclaw/pull/100799) Thanks @zhangguiping-xydt.
+- IRC users now receive the intended answer without internal tool-failure banners or assistant-only scaffolding appearing in channel messages. [#97214](https://github.com/openclaw/openclaw/pull/97214) Thanks @masatohoshino, @studentzhou-svg, @vincentkoc.
+
+- IRC allowlists now reject host-less `nick!user` entries by default and guide operators toward verified full host masks, reducing impersonation risk. [#98339](https://github.com/openclaw/openclaw/pull/98339) Thanks @yetval.
+
+#### SMS
+
+- Twilio SMS account checks now handle malformed successful JSON with safe phone-number listing or a clear Messaging Service error. [#97999](https://github.com/openclaw/openclaw/pull/97999) Thanks @lsr911.
+- SMS replies now hide internal tool-trace failure banners and show only the intended assistant response. [#97989](https://github.com/openclaw/openclaw/pull/97989) Thanks @zengwen-dt.
+
+#### Synology
+
+- Long Synology Chat messages and diagnostic previews now truncate without cutting an emoji or other supplementary character in half, keeping downstream text valid. [#96574](https://github.com/openclaw/openclaw/pull/96574) Thanks @weeli-009.
+
+#### Zalo
+
+- Zalo setup, polling, sending, and health checks now reject abnormally large successful replies before they can push the Gateway into severe memory pressure. [#97277](https://github.com/openclaw/openclaw/pull/97277) Thanks @hugenshen.
+- Zalo operators can point Bot API calls at a compatible alternate endpoint without patching code, while ordinary workspace environment files cannot silently redirect traffic and millisecond message times remain accurate. [#98768](https://github.com/openclaw/openclaw/pull/98768) Thanks @romneyda.
 - Zalo gateway startup output now shows the connected bot account name when the Bot Platform supplies it. [#99274](https://github.com/openclaw/openclaw/pull/99274) Thanks @romneyda.
 - Zalo operators can send proactive CLI or scripted messages to valid nonnumeric `chat_id` values without an `Unknown target` rejection. [#101548](https://github.com/openclaw/openclaw/pull/101548) Thanks @goutamadwant.
 
-#### QQBot upgrades, media, and status stay usable
+#### QQBot
 
 - QQBot upgrades now migrate recoverable credential backups into SQLite without deleting source files when import fails, while disposable caches rebuild separately. [#89597](https://github.com/openclaw/openclaw/pull/89597)
 - QQBot can now deliver documents and media created by sandboxed agents from authorized workspace paths while continuing to block path escapes. [#92872](https://github.com/openclaw/openclaw/pull/92872) Thanks @sliverp, @zhangguiping-xydt.
@@ -814,18 +932,22 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - QQBot approval cards, message previews, logs, media paths, and retry warnings now shorten emoji-containing text without broken replacement characters. [#101421](https://github.com/openclaw/openclaw/pull/101421) Thanks @wangmiao0668000666.
 - QQBot previews, errors, commands, speech-to-text messages, media diagnostics, and logs now remain valid when emoji-containing text reaches a length limit. [#101516](https://github.com/openclaw/openclaw/pull/101516) Thanks @vincentkoc, @wangmiao0668000666.
 
-#### Tlon, Urbit, and Nostr requests fail without destabilizing chat
+- QQBot now avoids accidental reminders, limits exposure of private media details, and requires explicit confirmation before destructive channel or announcement actions. [#98032](https://github.com/openclaw/openclaw/pull/98032) Thanks @patrick-erichsen.
+
+#### Tlon and Urbit
 
 - Tlon and Urbit channel failures now bound oversized or malformed error responses before they can cause memory spikes, while retaining useful short messages. [#98496](https://github.com/openclaw/openclaw/pull/98496) Thanks @pandah97.
 - Tlon now stops oversized or stalled external image downloads before they consume unbounded memory and can continue the message with the original URL. [#100374](https://github.com/openclaw/openclaw/pull/100374) Thanks @hugenshen.
 - Oversized Tlon scry responses now fail with a clear path-specific error instead of risking a Gateway out-of-memory crash. [#100376](https://github.com/openclaw/openclaw/pull/100376) Thanks @hugenshen.
 - Tlon approval notifications now keep emoji intact at the preview limit, preventing malformed message previews. [#97599](https://github.com/openclaw/openclaw/pull/97599) Thanks @llagy007, @weeli-009.
-- Repeated Nostr profile publishing now clears relay timeout timers after success, reducing stale resource buildup in long-running agents. [#98720](https://github.com/openclaw/openclaw/pull/98720) Related [#98463](https://github.com/openclaw/openclaw/issues/98463). Thanks @wangmiao0668000666, @zhanglei99586.
 - Tlon media uploads now stop safely when Memex returns an oversized or malformed response instead of allowing the upload attempt to consume excessive memory. [#101115](https://github.com/openclaw/openclaw/pull/101115) Thanks @cxbasdev.
 
-#### Voice calls preserve the chosen agent and natural conversation flow
+#### Nostr
 
-- With `channels.whatsapp.actions.calls`, MeowCaller, and telephony TTS configured, a WhatsApp agent can now call the requester and speak a short task-completion or urgent message. [#99635](https://github.com/openclaw/openclaw/pull/99635)
+- Repeated Nostr profile publishing now clears relay timeout timers after success, reducing stale resource buildup in long-running agents. [#98720](https://github.com/openclaw/openclaw/pull/98720) Related [#98463](https://github.com/openclaw/openclaw/issues/98463). Thanks @wangmiao0668000666, @zhanglei99586.
+
+#### Voice Calls
+
 - Google Meet and direct Voice Call sessions now keep the identity, workspace, routing, and transcript attribution of the agent that started the call instead of silently switching to the default agent. [#77763](https://github.com/openclaw/openclaw/pull/77763) Thanks @quangtran88.
 - Google Live call history now keeps both sides of the conversation, while reconnects avoid submitting unfinished speech or combining unrelated utterances. [#84161](https://github.com/openclaw/openclaw/pull/84161)
 - OpenAI Realtime outbound calls now play one opening greeting even when the recipient speaks immediately after answering, while later interruptions continue to stop active speech. [#86285](https://github.com/openclaw/openclaw/pull/86285) Thanks @giodl73-repo, @jnikolaidis.
@@ -838,8 +960,19 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - The Twilio voice-call provider now rejects unsupported API hostnames before sending a request and accepts only OpenClaw's supported Twilio regional hosts. [094c0d4](https://github.com/openclaw/openclaw/commit/094c0d421faff7691d259a26af9cb135f00c6ebc) Thanks @vincentkoc.
 - An accepted voice message that arrives while OpenClaw is already replying can still receive a voice response when `tts.auto: "inbound"` is configured. [#95596](https://github.com/openclaw/openclaw/pull/95596) Thanks @mcaxtr.
 - Realtime voice prompts now remain readable when long agent names or injected context containing emoji must be shortened. [#101304](https://github.com/openclaw/openclaw/pull/101304) Thanks @alix-007.
+- Google Meet local audio bridges now shut down cleanly and log a warning when a capture or playback command pipe fails, rather than crashing on an unhandled stream error. [#101596](https://github.com/openclaw/openclaw/pull/101596) Thanks @alix-007.
 
-#### Outbound replies reach the right destination without false success or duplicates
+- Voice Call history now stays with the correct configured agent across Gateway restarts and upgrades, while ambiguous legacy state is left untouched with actionable warnings. [#89884](https://github.com/openclaw/openclaw/pull/89884) Thanks @mushuiyu886.
+- Completed Voice Call status remains available through the Gateway, tool, and CLI after restart or eviction instead of incorrectly appearing missing. [#99797](https://github.com/openclaw/openclaw/pull/99797) Thanks @darren2030.
+
+#### ClickClack
+
+- ClickClack agent replies to top-level messages now stay in the active channel or direct message, while replies inside real threads remain threaded. [#100582](https://github.com/openclaw/openclaw/pull/100582) Thanks @marvinthebored, @vincentkoc.
+- ClickClack can now show opt-in, durable commentary and tool activity during a run so users are not left with an empty channel until the final reply. [#99954](https://github.com/openclaw/openclaw/pull/99954) Thanks @obviyus, @ragesaq.
+
+- ClickClack now stops oversized REST success responses at the provider limit, giving users and operators a predictable failure instead of continued streaming and memory growth. [#96970](https://github.com/openclaw/openclaw/pull/96970) Thanks @mushuiyu886, @vincentkoc.
+
+#### Shared channel improvements
 
 - Messages that fail before reaching Discord, Slack, Matrix, or another channel can now be replayed after connectivity returns, while uncertain post-send outcomes still avoid blind duplicates. [#101024](https://github.com/openclaw/openclaw/pull/101024) Thanks @sunnyshu0925.
 - Messages sent through OpenClaw's message tool now retain configured static or identity response prefixes, keeping routed and broadcast messages consistently labeled. [#93639](https://github.com/openclaw/openclaw/pull/93639) Thanks @zengwen-dt.
@@ -849,49 +982,20 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - Non-streaming channels no longer send the same final text or media twice for one message, while genuinely separate replies with different routing or thread identities still go through. [#100828](https://github.com/openclaw/openclaw/pull/100828) Thanks @vincentkoc, @zhangxiaojiujiayi.
 - Cron and outbound channel sends no longer report success without a usable platform receipt, making missing notifications show as not delivered or suppressed instead of falsely delivered. [#79811](https://github.com/openclaw/openclaw/pull/79811) Thanks @indulgeback.
 - Queued messages now resume at a gentler pace after an outage, restart, or reconnect, reducing avoidable channel and provider rate-limit bursts while keeping recovery bounded. [#101118](https://github.com/openclaw/openclaw/pull/101118) Thanks @zengwen-dt.
-
-#### Account names and recipient identifiers route to the intended chat
-
-- Signal users can assign stable names such as `signal:me` or `signal:ops` to repeat contacts and groups instead of reusing raw phone numbers, UUIDs, or IDs. [#95738](https://github.com/openclaw/openclaw/pull/95738) Thanks @jesse-merhi.
-- Bare 32-character iMessage group IDs from `imsg` now route scheduled and direct sends to the intended conversation instead of a nonexistent phone number. [#99525](https://github.com/openclaw/openclaw/pull/99525) Related [#89235](https://github.com/openclaw/openclaw/issues/89235). Thanks @matthewdelprado.
 - Noisy phone numbers with extra plus signs now match the intended Signal, iMessage, or WhatsApp contact, while identities with no digits are rejected safely. [#100467](https://github.com/openclaw/openclaw/pull/100467) Thanks @morluto.
 - Reply directives containing hidden unsafe characters now produce stable, display-safe reply IDs before chat routing uses them. [#96446](https://github.com/openclaw/openclaw/pull/96446) Thanks @lin-hongkuan.
-- Telegram automations can now tell from platform metadata whether a sender is a bot, making routing and classification less dependent on usernames or naming conventions. [#96810](https://github.com/openclaw/openclaw/pull/96810) Thanks @lin-hongkuan, @ohyeah521.
-- Telegram sends and message actions that omit an account now consistently use the configured default bot instead of a stale identity that can misroute or reject the action. [#98789](https://github.com/openclaw/openclaw/pull/98789) Thanks @yetval.
-- Configured Weixin accounts with opaque IDs containing characters such as an at sign or `.` now start normally and preserve their account-specific routing. [#93686](https://github.com/openclaw/openclaw/pull/93686) Related [#93556](https://github.com/openclaw/openclaw/issues/93556). Thanks @htkillermax-gif, @zhangguiping-xydt.
-- Telegram destinations genuinely named `current`, `self`, `this`, or `me` can now be reached through configured entries, while accidental bare session words fail closed. [#94107](https://github.com/openclaw/openclaw/pull/94107) Thanks @obviyus, @silver-state, @zhangguiping-xydt.
-- Telegram sends to an `username` now use the account's configured proxy or custom Bot API endpoint for both target resolution and message delivery. [#100868](https://github.com/openclaw/openclaw/pull/100868) Thanks @machine3at.
-
-#### Ambient group bots stay quiet until the conversation calls for them
-
 - Ambient agents now stay quieter in observed group conversations and honor operator instructions such as replying only when spoken to. [#99144](https://github.com/openclaw/openclaw/pull/99144) Thanks @obviyus.
 - Ambient group chats now remain silent unless the agent deliberately sends a message, without stray status lines, tool summaries, compaction notices, delivery warnings, or overflow follow-ups. [#99145](https://github.com/openclaw/openclaw/pull/99145) Thanks @obviyus.
 - Always-on group agents can now receive and answer valid unmentioned messages after a plugin fallback instead of silently dropping them. [#99506](https://github.com/openclaw/openclaw/pull/99506) Related [#99457](https://github.com/openclaw/openclaw/issues/99457). Thanks @lzy3538, @zqchris.
 - Agents catching up in busy group chats now receive clearer sender-by-sender history, making multi-person conversations easier to follow without exposing local paths or URLs. [#100366](https://github.com/openclaw/openclaw/pull/100366) Thanks @gorkem2020.
 - Telegram and Discord plugin commands that send their own response can return `{ suppressReply: true }`, preventing a second misleading empty-response warning or failure. [#80928](https://github.com/openclaw/openclaw/pull/80928) Related [#80756](https://github.com/openclaw/openclaw/issues/80756). Thanks @alexuser, @unclouded77.
 - With `messages.ackReactionScope: "all"`, ambient room messages now receive the configured acknowledgement reaction across Discord, Slack, and Telegram. [#87433](https://github.com/openclaw/openclaw/pull/87433) Thanks @paul-phan, @scoootscooob.
-- Discord agents now receive `is_bot: true` for admitted bot messages while human and PluralKit sender behavior stays unchanged. [#97824](https://github.com/openclaw/openclaw/pull/97824) Thanks @masatohoshino, @vincentkoc.
-
-#### Channel monitors and helpers recover after disconnects and broken pipes
-
-- A Feishu connection that stops receiving messages is less likely to remain falsely marked healthy because transport activity now updates channel health. [#90966](https://github.com/openclaw/openclaw/pull/90966) Thanks @acache, @richardataxai-lab, @vincentkoc.
-- An iMessage helper pipe failure now ends pending work predictably and lets the monitor recover or stop cleanly instead of crashing the Gateway or hanging requests. [#101084](https://github.com/openclaw/openclaw/pull/101084) Thanks @masatohoshino.
-- Canceling a Feishu reconnect, startup, or bot-identity retry wait now ends cleanly instead of risking a `ReferenceError` during cleanup. [#98137](https://github.com/openclaw/openclaw/pull/98137) Thanks @zhanglei99586.
-- A transient Gmail watch-renewal failure now produces an error without crashing a long-running foreground `openclaw webhooks gmail run` process. [#100342](https://github.com/openclaw/openclaw/pull/100342) Thanks @cxbasdev, @vincentkoc.
-- Telegram webhook startup now releases its listener, bot, and network resources after a fatal registration error such as invalid or revoked credentials. [#100863](https://github.com/openclaw/openclaw/pull/100863) Thanks @machine3at.
-- iMessage CLI send and action failures caused by broken output pipes now return a controlled error instead of risking a Gateway worker crash. [#101401](https://github.com/openclaw/openclaw/pull/101401) Thanks @cxbasdev.
-- IRC bots now reconnect and rejoin configured channels after a temporary server or network disconnect instead of staying silent until OpenClaw is restarted. [#100799](https://github.com/openclaw/openclaw/pull/100799) Thanks @zhangguiping-xydt.
 - Channel plugins can resume automatic recovery after a long healthy run, so an occasional later disconnect is not blocked by an old restart budget while true rapid crash loops remain capped. [#101413](https://github.com/openclaw/openclaw/pull/101413) Thanks @clintoncodewell.
-- Google Meet local audio bridges now shut down cleanly and log a warning when a capture or playback command pipe fails, rather than crashing on an unhandled stream error. [#101596](https://github.com/openclaw/openclaw/pull/101596) Thanks @alix-007.
-- Matrix dependency setup now stops its child process predictably and reports the failure when a local command's output pipe breaks. [#101597](https://github.com/openclaw/openclaw/pull/101597) Thanks @alix-007.
-
-#### ClickClack replies stay in place and show live progress
-
-- ClickClack agent replies to top-level messages now stay in the active channel or direct message, while replies inside real threads remain threaded. [#100582](https://github.com/openclaw/openclaw/pull/100582) Thanks @marvinthebored, @vincentkoc.
-- ClickClack can now show opt-in, durable commentary and tool activity during a run so users are not left with an empty channel until the final reply. [#99954](https://github.com/openclaw/openclaw/pull/99954) Thanks @obviyus, @ragesaq.
-
-#### Long messages, previews, and labels preserve emoji and formatting
-
+- Telegram and other channels can recover automatically after certain API outages and timed-out shutdowns instead of remaining silent until a Gateway restart. [#94016](https://github.com/openclaw/openclaw/pull/94016) Thanks @sheyanmin.
+- A partially delivered queued send is no longer blindly replayed after reconnect, reducing duplicate Telegram and other channel messages. [#96247](https://github.com/openclaw/openclaw/pull/96247) Thanks @obviyus, @rosenlo.
+- Discord and other progress views now hide repetitive internal Code Mode polling while continuing to show meaningful tool activity. [#99893](https://github.com/openclaw/openclaw/pull/99893)
+- Long-running Discord and Nextcloud Talk integrations now bound their channel metadata caches instead of letting each newly encountered room increase memory use forever. [#101650](https://github.com/openclaw/openclaw/pull/101650) Thanks @alix-007, @vincentkoc.
+- A transient Gmail watch-renewal failure now produces an error without crashing a long-running foreground `openclaw webhooks gmail run` process. [#100342](https://github.com/openclaw/openclaw/pull/100342) Thanks @cxbasdev, @vincentkoc.
 - Channel previews, thread names, snippets, and shortened errors across browser and messaging integrations now preserve whole emoji and other Unicode characters. [c16bb87](https://github.com/openclaw/openclaw/commit/c16bb8725a8a04d5de92855769cf87e13574384f) Thanks @vincentkoc.
 - Long Slack context labels, Zalo messages and captions, and extension command output now truncate without breaking emoji or other non-BMP characters. [7e03242](https://github.com/openclaw/openclaw/commit/7e0324263b867d3d47138d1d2b1e9afd1dd2016f) Thanks @hugenshen, @mushuiyu886, @vincentkoc.
 - Fenced code blocks that contain example lines resembling Markdown fence markers are now kept together instead of being split mid-block and becoming confusing or misread. [#96745](https://github.com/openclaw/openclaw/pull/96745) Thanks @ly-wang19, @vincentkoc.
@@ -899,156 +1003,68 @@ Discord, Slack, WhatsApp, Apple Messages, and other supported channels also rece
 - Skill command descriptions now remain fuller where supported and stay valid in Discord and Mattermost when emoji appears near a platform limit. [#99593](https://github.com/openclaw/openclaw/pull/99593) Thanks @pick-cat.
 - Long emoji-containing agent labels now produce clean native channel thread names and introductions instead of broken characters. [#101527](https://github.com/openclaw/openclaw/pull/101527) Thanks @lsr911.
 - Chinese, Japanese, and Korean bold labels followed immediately by text now render as bold instead of exposing literal `**` markers in Telegram and other shared-Markdown channels. [#101230](https://github.com/openclaw/openclaw/pull/101230) Thanks @nicknmorty.
-
-#### Attachments remain complete, named, and actionable across channels
-
-- Telegram photo albums now give the model every successfully downloaded image in order instead of only one photo and unusable file references, while failed items are omitted. [#97045](https://github.com/openclaw/openclaw/pull/97045) Thanks @nianjiuzst, @obviyus.
 - Attachment download failures across WhatsApp, LINE, Signal, iMessage, Teams, Feishu, Mattermost, and Zalo now remain visible and actionable instead of disappearing or masquerading as successful media. [#100119](https://github.com/openclaw/openclaw/pull/100119)
 - OpenClaw now recognizes `.m2a` recordings as audio, allowing them to move through attachment, transcription, memory, and chat display workflows without conversion. [#92167](https://github.com/openclaw/openclaw/pull/92167) Thanks @llljjjwww333.
 - Files sent through Telegram and other supported chat channels now keep clean names such as `report.png` instead of exposing an internal cache identifier in the attachment filename. [#96565](https://github.com/openclaw/openclaw/pull/96565) Thanks @narahariraghava, @obviyus.
-
-#### Replies stay clean and channel commands return useful feedback
-
 - Cron summaries, Teams and Slack replies, and other embedded assistant responses no longer expose provider reasoning markers such as `&lt;/mm:think&gt;`. [#101036](https://github.com/openclaw/openclaw/pull/101036) Thanks @velanir-ai-manager.
-- Signal users now receive clean assistant replies without internal tool status, reasoning tags, or tool-call markup. [#97360](https://github.com/openclaw/openclaw/pull/97360) Thanks @masatohoshino.
-- IRC users now receive the intended answer without internal tool-failure banners or assistant-only scaffolding appearing in channel messages. [#97214](https://github.com/openclaw/openclaw/pull/97214) Thanks @masatohoshino, @studentzhou-svg, @vincentkoc.
-- Matrix replies now deliver the intended answer without leaking internal tool diagnostics, reasoning tags, or assistant-only scaffolding. [#97372](https://github.com/openclaw/openclaw/pull/97372) Thanks @masatohoshino.
-- SMS replies now hide internal tool-trace failure banners and show only the intended assistant response. [#97989](https://github.com/openclaw/openclaw/pull/97989) Thanks @zengwen-dt.
 - Punctuation around a model's `NO_REPLY` token no longer turns it into a visible chat message, while legitimate messages containing the token still arrive. [#98224](https://github.com/openclaw/openclaw/pull/98224) Thanks @sunnyshu0925.
-- Mattermost replies now show the intended assistant response without exposing internal tool-failure diagnostics. [#98693](https://github.com/openclaw/openclaw/pull/98693) Thanks @zengwen-dt.
-- Feishu bot replies no longer expose internal tool or runtime failure banners alongside the intended response. [#98705](https://github.com/openclaw/openclaw/pull/98705) Thanks @zengwen-dt.
-- Telegram replies now omit internal tool-execution failure lines and deliver only the intended assistant answer. [#95774](https://github.com/openclaw/openclaw/pull/95774) Thanks @mushuiyu886.
 - Slack, Discord, Telegram, WhatsApp, and Microsoft Teams users now receive a clear retry and re-authentication message when a model provider returns a recognized HTTP 401 error instead of seeing only a reaction or no useful reply. [#96599](https://github.com/openclaw/openclaw/pull/96599) Thanks @sjf-oa.
-- Telegram replies retain literal wording such as `&lt;think&gt;` when it is part of the answer, while genuinely marked reasoning remains hidden. [#97286](https://github.com/openclaw/openclaw/pull/97286) Thanks @drickon, @obviyus.
-- Telegram heartbeat fallbacks now hide the `notify=false` control marker and deliver silently as requested, including suppressing marker-only replies. [#100735](https://github.com/openclaw/openclaw/pull/100735) Thanks @hackerismydream, @vincentkoc.
 - Text commands such as `/model fable` now reliably display their confirmation even in flows that suppress ordinary source replies. [#100151](https://github.com/openclaw/openclaw/pull/100151)
 - The bare `/think` command now shows available thinking levels promptly in Telegram, Slack, and Discord without waiting on slow model discovery. [#101926](https://github.com/openclaw/openclaw/pull/101926) Thanks @vincentkoc.
-
-#### Telegram topics, destinations, and default accounts route correctly
-
-- Telegram stickers and other plugin message actions now stay in the active forum topic or thread when sent to the matching conversation, including through Gateway dispatch. [#80293](https://github.com/openclaw/openclaw/pull/80293) Thanks @artdaal.
-- Telegram messages can now be sent proactively through the `message` tool or `openclaw message send` instead of failing as an unsupported channel. [#92107](https://github.com/openclaw/openclaw/pull/92107) Thanks @bladin, @obviyus.
-- `sessions_send` now rejects Telegram topic child sessions before dispatch and directs callers to the parent group, reducing misrouted agent work. [#99845](https://github.com/openclaw/openclaw/pull/99845) Thanks @nianjiuzst, @qingminglong.
-- Polls now follow the selected direct or hybrid channel instead of being misrouted through the Gateway, with clear errors for unsupported duration or anonymity options. [#99950](https://github.com/openclaw/openclaw/pull/99950) Thanks @nianjiuzst.
-
-#### Telegram groups keep the right context and reply only when addressed
-
-- Established Telegram direct-message sessions now avoid resending recent messages already stored in the transcript, reducing token use and repetitive or confused replies. [#89855](https://github.com/openclaw/openclaw/pull/89855) Thanks @sweetcornna.
-- Telegram direct-message follow-ups now include one copy of the previous assistant reply in recent context instead of duplicating it and wasting tokens. [#98769](https://github.com/openclaw/openclaw/pull/98769) Related [#98767](https://github.com/openclaw/openclaw/issues/98767). Thanks @rabsef-bicrym.
-- Telegram bots in ambient group mode now see recent room context before deciding whether to speak, reducing replies to isolated fragments that were not directed at the bot. [#99143](https://github.com/openclaw/openclaw/pull/99143) Related [#99142](https://github.com/openclaw/openclaw/issues/99142). Thanks @obviyus.
-- Telegram group agents now receive one chronological copy of recent messages instead of duplicated history and repeated delivery details consuming context. [#99256](https://github.com/openclaw/openclaw/pull/99256) Related [#99218](https://github.com/openclaw/openclaw/issues/99218). Thanks @obviyus.
-- Telegram ambient group conversations can now retain unmentioned room context across later turns, restarts, and compaction without repeatedly replaying the same window. [#99306](https://github.com/openclaw/openclaw/pull/99306) Related [#99257](https://github.com/openclaw/openclaw/issues/99257). Thanks @obviyus.
-- Telegram ambient group sessions now restore the relevant older chat context after a reset instead of silently treating archived messages as already visible. [#99385](https://github.com/openclaw/openclaw/pull/99385) Related [#99373](https://github.com/openclaw/openclaw/issues/99373). Thanks @obviyus.
 - Direct mentions to Telegram and Discord group bots using `message_tool_only` now produce visible channel replies on both new and resumed sessions. [#99389](https://github.com/openclaw/openclaw/pull/99389) Related [#99371](https://github.com/openclaw/openclaw/issues/99371). Thanks @obviyus.
-- Telegram group agents now post visible replies when directly mentioned or replied to, while continuing to ignore unaddressed background chatter. [#99866](https://github.com/openclaw/openclaw/pull/99866) Related [#99854](https://github.com/openclaw/openclaw/issues/99854). Thanks @obviyus.
-- Telegram direct-message follow-ups now include one accurate copy of each earlier assistant reply instead of duplicating a hidden-instruction version. [#100573](https://github.com/openclaw/openclaw/pull/100573) Thanks @momothemage, @mooresoftware.
 
-#### Telegram progress, typing, and reasoning remain visible
-
-- Telegram's live progress view now keeps reasoning, commentary, formatting, and tool activity readable and stable, then leaves a concise completion summary instead of disappearing. [#98907](https://github.com/openclaw/openclaw/pull/98907) Thanks @marvinthebored, @peetiegonzalez.
-- Telegram rich replies and progress messages containing OAuth email addresses now arrive instead of being rejected by Telegram validation. [#95900](https://github.com/openclaw/openclaw/pull/95900) Thanks @obviyus.
-- Telegram progress updates now truncate safely around emoji and other multi-unit characters, preventing broken glyphs and rejected Bot API payloads. [#96456](https://github.com/openclaw/openclaw/pull/96456) Thanks @he-yufeng.
-- Telegram streaming draft previews no longer break or show garbled text when an emoji falls at the size boundary, so long previews can keep updating normally. [#96504](https://github.com/openclaw/openclaw/pull/96504) Thanks @mushuiyu886, @obviyus.
-- Telegram replies now keep typing visible through more temporary API failures and fall back to plain text when valid rich content cannot be delivered. [#99745](https://github.com/openclaw/openclaw/pull/99745) Thanks @obviyus, @veda-openclaw.
-- Telegram typing indicators now retry after transient network failures, restoring status feedback without adding duplicate-message risk to normal sends. [#100762](https://github.com/openclaw/openclaw/pull/100762) Thanks @lzw112, @vincentkoc.
-- Telegram's final collapsed progress summary now includes Claude CLI thinking activity that was shown during the run instead of making that work appear to vanish. [4212de9](https://github.com/openclaw/openclaw/commit/4212de9e08d6e69357d937e399db3df63c1b66d7) Thanks @vincentkoc.
-- Telegram users with `/reasoning on` now receive the model's saved reasoning messages alongside the final answer. [#97875](https://github.com/openclaw/openclaw/pull/97875) Thanks @fuller-stack-dev, @marvinthebored.
-- Telegram groups and forum topics now show a typing indicator as soon as an addressed message is accepted, without signaling activity for ignored chatter. [#99965](https://github.com/openclaw/openclaw/pull/99965) Thanks @moeedahmed.
-
-#### Telegram rich text, buttons, tables, and polls stay usable
-
-- Telegram configurations with legacy `capabilities: []` now inherit the normal inline-button policy, restoring clickable buttons without overriding intentional opt-outs. [#96468](https://github.com/openclaw/openclaw/pull/96468) Thanks @vincentkoc, @zhangguiping-xydt.
-- Telegram users still receive a plain-text reply when rich formatting for an email, URL, mention, hashtag, command, phone number, bank card, or similar entity is rejected, instead of the bot going silent. [#96642](https://github.com/openclaw/openclaw/pull/96642) Thanks @moguangyu5-design.
-- Telegram inline buttons supplied by plugins now run their intended actions and cleanup instead of posting raw callback data into chat. [#97174](https://github.com/openclaw/openclaw/pull/97174) Thanks @goldmar.
-- Telegram rich-text replies now render math formulas more reliably instead of exposing raw LaTeX-style markers. [#97197](https://github.com/openclaw/openclaw/pull/97197) Thanks @vincentkoc, @wangwllu.
-- Telegram final replies and media sends now fall back to readable plain text when formatting, captions, or quotes are rejected, and routine flood waits up to 60 seconds are honored instead of dropping the message. [#98786](https://github.com/openclaw/openclaw/pull/98786) Related [#98778](https://github.com/openclaw/openclaw/issues/98778). Thanks @obviyus.
-- Telegram plugins can now turn a button tap into a normal user reply to the agent, while failed or skipped submissions leave the button available for another attempt. [#98922](https://github.com/openclaw/openclaw/pull/98922) Thanks @goldmar.
-- Telegram tables, rankings, and literal line breaks now remain readable, with explicit logs when rich content must fall back to plain text. [#99861](https://github.com/openclaw/openclaw/pull/99861) Related [#99833](https://github.com/openclaw/openclaw/issues/99833). Thanks @obviyus.
-- Telegram rich messages using `richMessages: true` and Markdown table mode `block` now display bordered, striped tables with the source column alignment. [#95822](https://github.com/openclaw/openclaw/pull/95822) Thanks @obviyus, @zhangguiping-xydt.
-- Telegram fallback messages now replace invalid numeric Unicode surrogate entities safely instead of emitting malformed text, while valid numeric emoji entities still render. [#96581](https://github.com/openclaw/openclaw/pull/96581) Thanks @llagy007, @weeli-009.
-
-#### Telegram media and documents arrive intact
-
-- Telegram documents received through a containerized local Bot API now arrive with their actual contents when its mounted data path differs between containers. [#91984](https://github.com/openclaw/openclaw/pull/91984) Thanks @ailucasdz, @dizesales.
-- Telegram documents sent near a Gateway restart now retry after recovery instead of disappearing silently, while permanent failures still request a resend. [#98102](https://github.com/openclaw/openclaw/pull/98102) Related [#98076](https://github.com/openclaw/openclaw/issues/98076). Thanks @davearcher18, @luoyanglang, @obviyus.
-- Telegram rich messages and text-bearing forwards without a normal caption now reach the agent as readable conversation content instead of an unsupported-message placeholder. [#98735](https://github.com/openclaw/openclaw/pull/98735) Thanks @obviyus.
-- Telegram now tells users when an attachment cannot be downloaded, reports the actual size limit for oversized files, and still retries transient failures such as rate limits. [#100051](https://github.com/openclaw/openclaw/pull/100051) Thanks @batyaro777.
-- Telegram replies and forwards now preserve visible text from rich details, lists, math, captions, and credits so the agent receives the context users actually saw. [#100570](https://github.com/openclaw/openclaw/pull/100570) Thanks @veda-openclaw, @wangwllu.
-- MP3 speech from Piper, Kokoro, and other OpenAI-compatible TTS endpoints now arrives in Telegram as a native voice note rather than a filename-style audio attachment. [#100715](https://github.com/openclaw/openclaw/pull/100715) Thanks @hemantsudarshan.
-
-#### Telegram retries recover without blocking or duplicating later messages
-
-- Telegram no longer follows a successfully delivered final answer with a contradictory generic error when a later dispatch step fails, while partial-only failures still receive the existing fallback. [#90152](https://github.com/openclaw/openclaw/pull/90152) Thanks @zhangguiping-xydt.
-- Telegram and other channels can recover automatically after certain API outages and timed-out shutdowns instead of remaining silent until a Gateway restart. [#94016](https://github.com/openclaw/openclaw/pull/94016) Thanks @sheyanmin.
-- A partially delivered queued send is no longer blindly replayed after reconnect, reducing duplicate Telegram and other channel messages. [#96247](https://github.com/openclaw/openclaw/pull/96247) Thanks @obviyus, @rosenlo.
-- A temporary Telegram reply-session conflict no longer traps a DM or forum topic in constant retries that block later messages; retries are paced, conversation order is retained, and unrelated chats continue processing. [#96550](https://github.com/openclaw/openclaw/pull/96550) Thanks @cnbarrier404, @vacinc.
-- Telegram reactions and message deletions now retry brief socket or Undici network failures, reducing unnecessary action failures without adding duplicate risk to ordinary message sends. [#96612](https://github.com/openclaw/openclaw/pull/96612) Thanks @miorbnli.
-- Telegram messages entering through isolated ingress now proceed to the agent reply instead of replaying the same message in a loop. [#96847](https://github.com/openclaw/openclaw/pull/96847) Thanks @obviyus.
-- Long-running Telegram turns can finish without being reclaimed and processed again midway, reducing stalled or duplicate delivery while giving operators a clearer unhealthy status when the backlog stops draining. [#96962](https://github.com/openclaw/openclaw/pull/96962) Thanks @joshavant.
-- Telegram bots using isolated polling can resume ordered message processing after a stalled drain or Gateway restart without manual database repair. [#97118](https://github.com/openclaw/openclaw/pull/97118) Thanks @romneyda, @vincentkoc.
-- Long non-streamed Telegram group replies now keep every chunk visible, including the beginning, while delivery receipts cover all generated text chunks. [#97304](https://github.com/openclaw/openclaw/pull/97304) Thanks @aliseturtle-lu, @obviyus.
-- Long streamed Telegram replies now deliver their middle sections under the default configuration instead of silently omitting part of the answer. [#97312](https://github.com/openclaw/openclaw/pull/97312) Thanks @brycemurray, @obviyus.
-- Telegram polling now recovers from temporary rate limits, server failures, and malformed error responses without disabling the account, while busy bots avoid cache writes that could trigger false stall restarts. [#98775](https://github.com/openclaw/openclaw/pull/98775) Related [#98772](https://github.com/openclaw/openclaw/issues/98772), [#98773](https://github.com/openclaw/openclaw/issues/98773). Thanks @obviyus.
-- A repeatedly failing Telegram update no longer blocks later messages in the same chat or topic, and replayed updates are retried safely without duplicate commands or apology spam. [#98776](https://github.com/openclaw/openclaw/pull/98776) Related [#98774](https://github.com/openclaw/openclaw/issues/98774). Thanks @obviyus.
-- Telegram webhook messages now survive Gateway restarts and temporary processing failures, while accounts recover from brief startup errors and repeated restarts stop leaking network connections. [#98806](https://github.com/openclaw/openclaw/pull/98806) Related [#98777](https://github.com/openclaw/openclaw/issues/98777). Thanks @obviyus.
-- Queued Telegram updates now remain replayable until restart recovery is safely recorded, reducing message loss during a crash at processing startup. [#104032](https://github.com/openclaw/openclaw/pull/104032) Thanks @obviyus, @vincentkoc.
-- Telegram sends now retry a safe TCP or TLS connection timeout, reducing lost final replies during flaky handshakes without retrying failures that may already have reached Telegram. [#101258](https://github.com/openclaw/openclaw/pull/101258) Thanks @lzw112.
-
-#### Telegram setup, webhooks, and account health recover cleanly
-
-- Telegram startup logs now show local socket failures such as `EADDRNOTAVAIL` instead of incorrectly steering operators toward DNS troubleshooting. [#97130](https://github.com/openclaw/openclaw/pull/97130) Thanks @zhangguiping-xydt.
-- Telegram bot probes, webhook checks, membership audits, and polling now reject oversized Bot API success bodies before they can exhaust Gateway memory. [#97271](https://github.com/openclaw/openclaw/pull/97271) Thanks @hugenshen.
-- Telegram chat-ID lookup now fails safely on oversized `getChat` responses instead of risking excessive Gateway memory use during onboarding or routing. [#97274](https://github.com/openclaw/openclaw/pull/97274) Thanks @hugenshen.
-- Telegram onboarding now offers both the classic BotFather chat flow and the official web interface for creating a bot and copying its token into OpenClaw. [#100540](https://github.com/openclaw/openclaw/pull/100540)
-- After `/login codex` succeeds in Telegram, retrying the request now uses the newly authenticated OpenAI profile instead of the previous account. [fca0c81](https://github.com/openclaw/openclaw/commit/fca0c81791a5040536d4907913ed975bfcde1642) Thanks @100yenadmin.
-
-#### Telegram commands steer active work without losing later requests
-
-- Telegram `/steer` and `/tell` commands can redirect an active Codex task during streaming or tool work instead of arriving late or becoming follow-up messages. [#98126](https://github.com/openclaw/openclaw/pull/98126) Related [#81594](https://github.com/openclaw/openclaw/issues/81594). Thanks @100yenadmin, @kyzcreig.
-- Saying `wait` in a Telegram group conversation no longer cancels active OpenClaw work, while explicit stop commands still take effect immediately. [#98639](https://github.com/openclaw/openclaw/pull/98639) Thanks @ianchen08.
-- Telegram messages that cannot be steered into an active Codex turn are now retained for handling afterward instead of disappearing without a reply. [#103916](https://github.com/openclaw/openclaw/pull/103916) Thanks @jalehman.
-- When Telegram requests overlap, the newest authorized message now wins without an outdated reply being sent or replaced queued work being started. [#103965](https://github.com/openclaw/openclaw/pull/103965)
-- A Telegram reply that has already started is no longer unexpectedly cancelled when another authorized command arrives. [52a3314](https://github.com/openclaw/openclaw/commit/52a331466882ca0b6befa56c883355c758305813) Thanks @vincentkoc.
+- The `/usage full` footer is shorter and easier to read on Telegram and other narrow displays, with detailed token information still available through dedicated views. [#92877](https://github.com/openclaw/openclaw/pull/92877) Thanks @marvinthebored.
+- Custom usage footers now render alias and map fallbacks correctly even when model or mode names collide with properties such as `toString` or `constructor`. [#98503](https://github.com/openclaw/openclaw/pull/98503) Related [#98466](https://github.com/openclaw/openclaw/issues/98466). Thanks @chenyangjun-xy, @zhanglei99586.
+- Transient stdout or stderr read errors from `gog gmail watch serve` no longer crash OpenClaw while Gmail watch mode is running. [#100519](https://github.com/openclaw/openclaw/pull/100519) Thanks @cxbasdev.
 
 ### Providers and Models
-
-#### Providers and models
 
 Across Anthropic and Claude, Gemini, OpenAI and Codex, local models, and other supported routes, [providers](https://docs.openclaw.ai/concepts/model-providers) now handle credentials, catalogs, limits, fallbacks, streaming, and tool calls more consistently. Readers should see fewer requests fail because the selected route used the wrong model metadata, replayed incompatible reasoning, lost authentication state, or interpreted a provider response incorrectly.
 
 The [model catalog](https://docs.openclaw.ai/concepts/models) also reports availability and capability more accurately, while [Codex supervision](https://docs.openclaw.ai/plugins/codex-supervision) keeps connected model choices and session behavior aligned with the backend that was actually selected.
 
-#### Provider onboarding and route configuration
+#### Provider setup and model selection
+
+##### New providers and integrations
 
 - OpenCode Zen users can browse and run its supported Claude, GPT, Gemini, GLM, DeepSeek, MiniMax, Qwen, and other models without manually defining each route. [#92495](https://github.com/openclaw/openclaw/pull/92495) Thanks @mushuiyu886, @sallyom.
+- Library and integration developers can now install a version-matched package, create independent AI runtimes, and reuse OpenClaw's supported model transports without embedding the full application. [#99059](https://github.com/openclaw/openclaw/pull/99059)
+- Featherless AI now has an official provider install and onboarding path, including `FEATHERLESS_API_KEY`, a curated `featherless/Qwen/Qwen3-32B` default, and support for exact Featherless model IDs. [#101092](https://github.com/openclaw/openclaw/pull/101092) Thanks @vincentkoc.
+- Meta Model API is now exposed through the public `meta` provider, with `meta/muse-spark-1.1`, canonical provider docs, and standalone npm or ClawHub installation paths. [#103070](https://github.com/openclaw/openclaw/pull/103070) Thanks @vincentkoc.
+- The bundled Meta provider now uses `https://api.meta.ai/v1`, advertises Muse Spark 1.1's documented 131,072-token output limit, and applies official-host request protections. [#103680](https://github.com/openclaw/openclaw/pull/103680) Thanks @vincentkoc.
+
+##### Anthropic, Google, and OpenAI setup
+
 - Claude Fable 5 now works through Anthropic Vertex for simple-completion tasks such as generated conversation labels instead of failing before the request reaches Vertex. [#98932](https://github.com/openclaw/openclaw/pull/98932)
 - Claude CLI users can combine multiple `--mcp-config` files without losing servers or corrupting the prompt, and concurrent Gemini CLI runs are less likely to interfere with shared credential files. [#98983](https://github.com/openclaw/openclaw/pull/98983) Related [#98944](https://github.com/openclaw/openclaw/issues/98944), [#98945](https://github.com/openclaw/openclaw/issues/98945). Thanks @obviyus.
 - Google image generation can now use `models.providers.google.apiKey` and an optional custom `baseUrl` without separate environment credentials or an auth profile. [#100779](https://github.com/openclaw/openclaw/pull/100779) Thanks @amknight.
-- Provider setup now stops reading runaway model-discovery responses before they can stall or exhaust memory, while normal self-hosted server responses continue to work. [#95244](https://github.com/openclaw/openclaw/pull/95244) Thanks @alix-007, @sallyom.
-- Ollama model discovery now stops oversized or never-ending endpoint responses before they can exhaust memory or leave setup hanging. [#96027](https://github.com/openclaw/openclaw/pull/96027) Thanks @alix-007.
-- Rerunning provider onboarding or refreshing models now preserves operator-owned timeouts, transport settings, MiniMax models, and SecretRef credentials instead of silently erasing them. [#100107](https://github.com/openclaw/openclaw/pull/100107) Thanks @frank-beans.
-- Library and integration developers can now install a version-matched package, create independent AI runtimes, and reuse OpenClaw's supported model transports without embedding the full application. [#99059](https://github.com/openclaw/openclaw/pull/99059)
 - OpenAI image generation can now be enabled from `models.providers.openai` with a usable API key and custom base URL, without also requiring `OPENAI_API_KEY` or an auth profile. [#100745](https://github.com/openclaw/openclaw/pull/100745) Thanks @amknight.
+- Configurations using the retired `openai-codex-responses` API ID now receive a validation message naming the supported replacement instead of a generic failure. [#96257](https://github.com/openclaw/openclaw/pull/96257) Thanks @james-16, @yetval.
+- Legacy `openai-codex` references now direct operators to `openclaw doctor --fix` and `openclaw models status` instead of suggesting configuration that fails validation. [#100120](https://github.com/openclaw/openclaw/pull/100120) Thanks @jason-vaughan, @sunnyshu0925, @vincentkoc.
+
+##### Local and self-hosted models
+
+- Ollama model discovery now stops oversized or never-ending endpoint responses before they can exhaust memory or leave setup hanging. [#96027](https://github.com/openclaw/openclaw/pull/96027) Thanks @alix-007.
+- LM Studio model discovery and startup now stop pathological server responses at a fixed size and report a clear error instead of buffering them indefinitely. [#96042](https://github.com/openclaw/openclaw/pull/96042) Thanks @alix-007.
+- `openclaw models list` now reports configured local Ollama models as available when they are running and usable. [#97491](https://github.com/openclaw/openclaw/pull/97491) Thanks @lingfeizi, @qingminglong.
+- Custom Xiaomi MiMo and other OpenAI-compatible models without a known output limit can now complete chats instead of failing with an invented oversized cap. [#98312](https://github.com/openclaw/openclaw/pull/98312) Thanks @peole, @sanjays2402.
+
+##### Shared provider configuration
+
+- Provider setup now stops reading runaway model-discovery responses before they can stall or exhaust memory, while normal self-hosted server responses continue to work. [#95244](https://github.com/openclaw/openclaw/pull/95244) Thanks @alix-007, @sallyom.
+- Rerunning provider onboarding or refreshing models now preserves operator-owned timeouts, transport settings, MiniMax models, and SecretRef credentials instead of silently erasing them. [#100107](https://github.com/openclaw/openclaw/pull/100107) Thanks @frank-beans.
 - With `models.mode` set to `replace`, agent startup now uses only explicitly configured providers and skips the slow implicit provider scan. [#82638](https://github.com/openclaw/openclaw/pull/82638) Related [#66957](https://github.com/openclaw/openclaw/issues/66957). Thanks @eldar702, @wangzhengshu.
 - Bundled provider aliases now accept supported overlay settings such as request timeouts without demanding custom-provider fields like `baseUrl` and `models`. [#88400](https://github.com/openclaw/openclaw/pull/88400) Thanks @pluviobyte.
-- LM Studio model discovery and startup now stop pathological server responses at a fixed size and report a clear error instead of buffering them indefinitely. [#96042](https://github.com/openclaw/openclaw/pull/96042) Thanks @alix-007.
 - Isolated cron jobs can now use models supplied by enabled bundled plugins without failing as unknown or silently resolving to the wrong provider. [#96070](https://github.com/openclaw/openclaw/pull/96070) Thanks @sallyom, @sunnyshu0925.
 - Z.AI endpoint and model detection now fails gracefully on oversized or endless error responses instead of exhausting host memory. [#97540](https://github.com/openclaw/openclaw/pull/97540) Thanks @alix-007.
 - Microsoft Foundry connection tests now stop oversized or continuously streamed error responses while preserving concise setup diagnostics. [#97812](https://github.com/openclaw/openclaw/pull/97812) Thanks @pick-cat.
 - Generic provider configurations for official DashScope/Qwen, Moonshot, Z.AI, DeepSeek, Groq, Cerebras, and Chutes endpoints now retain the compatibility behavior those services require even without optional plugins. [#100125](https://github.com/openclaw/openclaw/pull/100125)
-- Featherless AI now has an official provider install and onboarding path, including `FEATHERLESS_API_KEY`, a curated `featherless/Qwen/Qwen3-32B` default, and support for exact Featherless model IDs. [#101092](https://github.com/openclaw/openclaw/pull/101092) Thanks @vincentkoc.
-- Meta Model API is now exposed through the public `meta` provider, with `meta/muse-spark-1.1`, canonical provider docs, and standalone npm or ClawHub installation paths. [#103070](https://github.com/openclaw/openclaw/pull/103070) Thanks @vincentkoc.
-- The bundled Meta provider now uses `https://api.meta.ai/v1`, advertises Muse Spark 1.1's documented 131,072-token output limit, and applies official-host request protections. [#103680](https://github.com/openclaw/openclaw/pull/103680) Thanks @vincentkoc.
-- Configurations using the retired `openai-codex-responses` API ID now receive a validation message naming the supported replacement instead of a generic failure. [#96257](https://github.com/openclaw/openclaw/pull/96257) Thanks @james-16, @yetval.
-- Legacy `openai-codex` references now direct operators to `openclaw doctor --fix` and `openclaw models status` instead of suggesting configuration that fails validation. [#100120](https://github.com/openclaw/openclaw/pull/100120) Thanks @jason-vaughan, @sunnyshu0925, @vincentkoc.
-- Switching a live Control UI or TUI session through a provider-qualified model alias now saves the canonical provider and model, preventing the next request from being rejected. [#100209](https://github.com/openclaw/openclaw/pull/100209) Thanks @sahilsatralkar.
 - Provider onboarding no longer writes an empty `request` block when no request overrides were supplied. [3a0a736](https://github.com/openclaw/openclaw/commit/3a0a736843af2877d66f5b8b8bcc78786d8f04a0) Thanks @vincentkoc.
 
-#### Model discovery, defaults, and capability accuracy
+##### Model catalogs and selection
 
+- Switching a live Control UI or TUI session through a provider-qualified model alias now saves the canonical provider and model, preventing the next request from being rejected. [#100209](https://github.com/openclaw/openclaw/pull/100209) Thanks @sahilsatralkar.
 - Bedrock Mantle model discovery now times out and caps oversized catalog responses instead of hanging or consuming excessive memory, while cached models remain available. [#99961](https://github.com/openclaw/openclaw/pull/99961) Thanks @zhangguiping-xydt.
-- `openclaw models list` now reports configured local Ollama models as available when they are running and usable. [#97491](https://github.com/openclaw/openclaw/pull/97491) Thanks @lingfeizi, @qingminglong.
-- Custom Xiaomi MiMo and other OpenAI-compatible models without a known output limit can now complete chats instead of failing with an invented oversized cap. [#98312](https://github.com/openclaw/openclaw/pull/98312) Thanks @peole, @sanjays2402.
 - OpenRouter video model discovery now stops oversized or runaway catalog responses promptly instead of letting them consume memory without limit, while normal discovery behavior is preserved. [#96505](https://github.com/openclaw/openclaw/pull/96505) Thanks @mushuiyu886.
 - Model aliases and partial names such as `opus` now resolve to the newest matching version even when catalogs reach double-digit versions, preventing silent routing to an older model. [#96609](https://github.com/openclaw/openclaw/pull/96609) Thanks @yetval, @zw-xysk.
 - Paginated provider catalogs now expose models beyond the first page, while malformed, endless, or redirected catalogs fail safely instead of caching an incomplete list or forwarding sensitive headers across origins. [#97012](https://github.com/openclaw/openclaw/pull/97012) Thanks @zhangguiping-xydt.
@@ -1059,206 +1075,290 @@ The [model catalog](https://docs.openclaw.ai/concepts/models) also reports avail
 - Media-generation catalogs now keep the correct default model marker even when provider metadata includes harmless surrounding whitespace. [#96430](https://github.com/openclaw/openclaw/pull/96430) Thanks @lin-hongkuan.
 - Very long OpenRouter Fusion model IDs now remain valid Unicode in the agent prompt instead of showing a corrupted character when an emoji reaches the display limit. [#104433](https://github.com/openclaw/openclaw/pull/104433) Thanks @zhangguiping-xydt.
 
-#### Provider sign-in, token refresh, and recovery
+#### Sign-in and credentials
+
+##### Anthropic and Claude
 
 - Anthropic OAuth token exchange and refresh now reject oversized endpoint responses early instead of reading an unbounded body into memory. [#96644](https://github.com/openclaw/openclaw/pull/96644) Thanks @solodmd.
+- Anthropic sign-in now rejects unsupported callback-host overrides, keeps authorization on standard local loopback addresses, and avoids callback failures or exposure through a non-local listener. [#96917](https://github.com/openclaw/openclaw/pull/96917) Thanks @xialonglee.
+- Expired Claude CLI authentication now shows the exact recovery command `claude auth login && openclaw models auth login --provider anthropic --method cli` instead of a generic failure. [#97669](https://github.com/openclaw/openclaw/pull/97669) Thanks @alix-007.
+- Anthropic OAuth subscription requests now carry the Claude Code-style billing identity, helping them use the intended subscription route instead of failing or being treated as the wrong request type. [709be93](https://github.com/openclaw/openclaw/commit/709be93ca8987009540eb56ed1b6bfda136427de) Thanks @vincentkoc.
+
+##### OpenAI, ChatGPT, and Codex
+
+- ChatGPT OAuth sign-in and refresh now reject unexpectedly large token responses cleanly instead of risking Gateway memory exhaustion. [#99479](https://github.com/openclaw/openclaw/pull/99479) Thanks @pandah97.
+- Cloudflare 403 challenges on OpenAI or Codex OAuth requests now produce gateway-block guidance instead of incorrectly telling users their authentication failed. [#94440](https://github.com/openclaw/openclaw/pull/94440) Related [#94432](https://github.com/openclaw/openclaw/issues/94432). Thanks @lzyyzznl, @pbm9z95m6z-hue.
+- OpenAI authentication errors now point ChatGPT/Codex OAuth users to a model compatible with their existing sign-in instead of recommending an outdated default. [#100579](https://github.com/openclaw/openclaw/pull/100579) Thanks @zhangguiping-xydt.
+- For Codex-backed OpenAI models, `/status` now identifies ChatGPT login authentication as `oauth (codex-cli)` instead of incorrectly labeling it as an environment API key. [#91240](https://github.com/openclaw/openclaw/pull/91240) Related [#91099](https://github.com/openclaw/openclaw/issues/91099). Thanks @849261680, @ukstem.
+- OpenAI Realtime voice in Talk, Voice Call, and Discord can now use an existing Codex/OpenAI OAuth login when no explicit API key is configured. [#100671](https://github.com/openclaw/openclaw/pull/100671) Thanks @steipete-oai.
+
+##### Google and Gemini
+
 - Google Gemini CLI sign-in now rejects oversized OAuth, profile, project, and onboarding responses with labeled errors instead of risking excessive memory use. [#97587](https://github.com/openclaw/openclaw/pull/97587) Thanks @hugenshen.
 - Google Gemini CLI OAuth failures now keep oversized or malformed provider responses bounded while preserving useful error details. [#99605](https://github.com/openclaw/openclaw/pull/99605) Thanks @mushuiyu886.
+- Google OAuth sign-in, token exchange, and project discovery now return a bounded error for oversized responses instead of risking a process crash. [#97628](https://github.com/openclaw/openclaw/pull/97628) Thanks @vincentkoc, @wangmiao0668000666.
+
+##### GitHub Copilot
+
+- GitHub Copilot sign-in, refresh, and model-list checks now fail with labeled size limits when GitHub or a proxy returns an oversized response. [#97499](https://github.com/openclaw/openclaw/pull/97499) Thanks @wangmiao0668000666.
+- GitHub Copilot sign-in and token refresh now reject oversized service responses with a clear error before they can exhaust OpenClaw's memory. [#97579](https://github.com/openclaw/openclaw/pull/97579) Thanks @hugenshen.
+- GitHub Copilot device login now fails cleanly on an oversized successful response instead of risking an out-of-memory crash. [#97583](https://github.com/openclaw/openclaw/pull/97583) Thanks @hugenshen.
+- OpenAI-compatible providers routed through the GitHub Copilot BYOK harness now retain bearer authentication, reducing false 401 errors for valid credentials. [#99955](https://github.com/openclaw/openclaw/pull/99955) Thanks @hxy91819.
+
+##### xAI and Grok
+
+- xAI and Grok OAuth sign-in now works on SSH hosts, containers, VPS systems, and other headless environments without forwarding a localhost callback port. [#97249](https://github.com/openclaw/openclaw/pull/97249) Thanks @fuller-stack-dev, @jaaneek.
+- xAI sign-in, token refresh, and device approval now stop oversized OAuth responses before they can consume unbounded memory. [#97615](https://github.com/openclaw/openclaw/pull/97615) Thanks @cxbasdev.
+- Existing xAI and Grok OAuth sessions using the retired token endpoint can renew after expiry without forcing another browser or SSH-tunneled login. [#96146](https://github.com/openclaw/openclaw/pull/96146) Thanks @fuller-stack-dev, @jaaneek.
+
+##### Ollama, MiniMax, Chutes, Z.AI, OpenRouter, and ClawRouter
+
 - Ollama Cloud setup now stops oversized or malicious authentication responses before they can consume excessive memory, while normal sign-in remains unchanged. [#97581](https://github.com/openclaw/openclaw/pull/97581) Thanks @hugenshen.
-- ChatGPT OAuth sign-in and refresh now reject unexpectedly large token responses cleanly instead of risking Gateway memory exhaustion. [#99479](https://github.com/openclaw/openclaw/pull/99479) Thanks @pandah97.
-- OpenAI/Codex and Anthropic OAuth result pages now show OpenClaw branding instead of the legacy Pi logo. [1834592](https://github.com/openclaw/openclaw/commit/1834592be17668cbfc9ea834c57df73e05b71f14)
 - MiniMax OAuth device setup now limits authorization response size so a faulty proxied or self-hosted endpoint cannot exhaust Gateway memory. [#96322](https://github.com/openclaw/openclaw/pull/96322) Thanks @lsr911.
 - Chutes login, user lookup, and token refresh now stop unexpectedly large OAuth responses with a bounded error instead of buffering them without limit. [#96777](https://github.com/openclaw/openclaw/pull/96777) Thanks @wangmiao0668000666.
 - Chutes onboarding now fails clearly when token-exchange or user-info responses are oversized, preventing abnormal authentication traffic from causing unbounded memory growth. [#96779](https://github.com/openclaw/openclaw/pull/96779) Thanks @wangmiao0668000666.
-- xAI and Grok OAuth sign-in now works on SSH hosts, containers, VPS systems, and other headless environments without forwarding a localhost callback port. [#97249](https://github.com/openclaw/openclaw/pull/97249) Thanks @fuller-stack-dev, @jaaneek.
-- GitHub Copilot sign-in, refresh, and model-list checks now fail with labeled size limits when GitHub or a proxy returns an oversized response. [#97499](https://github.com/openclaw/openclaw/pull/97499) Thanks @wangmiao0668000666.
 - Z.AI users can recover a profile that accidentally stored an onboarding command as the API key without wiping all authentication state. [#97520](https://github.com/openclaw/openclaw/pull/97520) Thanks @zhangguiping-xydt.
-- GitHub Copilot sign-in and token refresh now reject oversized service responses with a clear error before they can exhaust OpenClaw's memory. [#97579](https://github.com/openclaw/openclaw/pull/97579) Thanks @hugenshen.
-- GitHub Copilot device login now fails cleanly on an oversized successful response instead of risking an out-of-memory crash. [#97583](https://github.com/openclaw/openclaw/pull/97583) Thanks @hugenshen.
-- xAI sign-in, token refresh, and device approval now stop oversized OAuth responses before they can consume unbounded memory. [#97615](https://github.com/openclaw/openclaw/pull/97615) Thanks @cxbasdev.
-- Google OAuth sign-in, token exchange, and project discovery now return a bounded error for oversized responses instead of risking a process crash. [#97628](https://github.com/openclaw/openclaw/pull/97628) Thanks @vincentkoc, @wangmiao0668000666.
 - Chutes sign-in and token refresh errors now include a useful bounded snippet without allowing an endpoint to stream an unlimited response into memory. [#97808](https://github.com/openclaw/openclaw/pull/97808) Thanks @pick-cat.
-- Anthropic sign-in now rejects unsupported callback-host overrides, keeps authorization on standard local loopback addresses, and avoids callback failures or exposure through a non-local listener. [#96917](https://github.com/openclaw/openclaw/pull/96917) Thanks @xialonglee.
-- Expired Claude CLI authentication now shows the exact recovery command `claude auth login && openclaw models auth login --provider anthropic --method cli` instead of a generic failure. [#97669](https://github.com/openclaw/openclaw/pull/97669) Thanks @alix-007.
-- Cloudflare 403 challenges on OpenAI or Codex OAuth requests now produce gateway-block guidance instead of incorrectly telling users their authentication failed. [#94440](https://github.com/openclaw/openclaw/pull/94440) Related [#94432](https://github.com/openclaw/openclaw/issues/94432). Thanks @lzyyzznl, @pbm9z95m6z-hue.
-- OpenAI authentication errors now point ChatGPT/Codex OAuth users to a model compatible with their existing sign-in instead of recommending an outdated default. [#100579](https://github.com/openclaw/openclaw/pull/100579) Thanks @zhangguiping-xydt.
-- Existing xAI and Grok OAuth sessions using the retired token endpoint can renew after expiry without forcing another browser or SSH-tunneled login. [#96146](https://github.com/openclaw/openclaw/pull/96146) Thanks @fuller-stack-dev, @jaaneek.
 - OpenRouter sign-in now fails safely on oversized replies, and Discord webhook sends remain successful when their optional response body is absent, malformed, or too large. [#98098](https://github.com/openclaw/openclaw/pull/98098) Thanks @lwy-2.
-
-#### Credentials and authentication status across routes
-
-- Amazon Bedrock users can now analyze images and PDFs with the same AWS profile, role, SSO, environment, or instance credentials already used for chat. [#72092](https://github.com/openclaw/openclaw/pull/72092) Thanks @truffle-dev.
-- Anthropic OAuth subscription requests now carry the Claude Code-style billing identity, helping them use the intended subscription route instead of failing or being treated as the wrong request type. [709be93](https://github.com/openclaw/openclaw/commit/709be93ca8987009540eb56ed1b6bfda136427de) Thanks @vincentkoc.
-- For Codex-backed OpenAI models, `/status` now identifies ChatGPT login authentication as `oauth (codex-cli)` instead of incorrectly labeling it as an environment API key. [#91240](https://github.com/openclaw/openclaw/pull/91240) Related [#91099](https://github.com/openclaw/openclaw/issues/91099). Thanks @849261680, @ukstem.
-- OpenAI-compatible providers routed through the GitHub Copilot BYOK harness now retain bearer authentication, reducing false 401 errors for valid credentials. [#99955](https://github.com/openclaw/openclaw/pull/99955) Thanks @hxy91819.
-- OpenAI Realtime voice in Talk, Voice Call, and Discord can now use an existing Codex/OpenAI OAuth login when no explicit API key is configured. [#100671](https://github.com/openclaw/openclaw/pull/100671) Thanks @steipete-oai.
 - OpenRouter model probes and agent requests now use discovered environment or profile API keys correctly instead of failing with a missing-authentication-header error. [#98187](https://github.com/openclaw/openclaw/pull/98187) Related [#97934](https://github.com/openclaw/openclaw/issues/97934). Thanks @laurencebrown, @sunlit-deng.
 - ClawRouter models selected in agent defaults now resolve at runtime when the credential is stored in an auth profile instead of the environment. [#99759](https://github.com/openclaw/openclaw/pull/99759)
+
+##### Amazon Bedrock
+
+- Amazon Bedrock users can now analyze images and PDFs with the same AWS profile, role, SSO, environment, or instance credentials already used for chat. [#72092](https://github.com/openclaw/openclaw/pull/72092) Thanks @truffle-dev.
+
+##### Shared sign-in and credential behavior
+
+- OpenAI/Codex and Anthropic OAuth result pages now show OpenClaw branding instead of the legacy Pi logo. [1834592](https://github.com/openclaw/openclaw/commit/1834592be17668cbfc9ea834c57df73e05b71f14)
 - Agents created by copying credentials now preserve the source agent's portable provider-profile priority instead of unexpectedly choosing a different credential. [#100833](https://github.com/openclaw/openclaw/pull/100833) Thanks @machine3at.
 - New or updated provider credentials entered through the CLI now appear in the running Gateway and Control UI model picker without a manual secrets reload or restart. [#101256](https://github.com/openclaw/openclaw/pull/101256) Thanks @fuller-stack-dev.
 - OAuth-backed models now become available in Gateway model browsing after credentials are renewed from another CLI process, without requiring a Gateway restart. [#104732](https://github.com/openclaw/openclaw/pull/104732) Thanks @fuller-stack-dev.
 
-#### Fallbacks, retries, and session recovery
+#### Fallbacks and model switching
+
+##### Anthropic and Claude
 
 - Anthropic conversations rejected for a missing tool result now tell users to retry or start a fresh session with `/new` instead of showing only a generic provider failure. [#98163](https://github.com/openclaw/openclaw/pull/98163) Thanks @masatohoshino.
 - Claude native-thinking sessions can now recover automatically after Anthropic rejects a replayed thinking block, without manual compaction or transcript loss. [#98411](https://github.com/openclaw/openclaw/pull/98411) Related [#98308](https://github.com/openclaw/openclaw/issues/98308). Thanks @clearhorizoninvestments, @sunlit-deng.
 - Claude CLI agent runs now fail over instead of presenting provider errors or raw stream data as answers, preserve multilingual and emoji output, and stop runaway one-shot output before it exhausts Gateway memory. [#98942](https://github.com/openclaw/openclaw/pull/98942) Related [#98896](https://github.com/openclaw/openclaw/issues/98896). Thanks @obviyus.
+- Eligible direct API-key requests to Claude Fable 5 now return an Opus 4.8 answer when Anthropic's safety classifier declines Fable, with diagnostics and Opus billing made clear. [#99906](https://github.com/openclaw/openclaw/pull/99906)
+
+##### Google and Gemini
+
 - Gemini streaming can retry with another configured API key after a retryable quota or rate-limit response instead of failing on the first key. [#97328](https://github.com/openclaw/openclaw/pull/97328) Thanks @monkeyleet.
-- Replay-safe model timeouts can now advance to the next configured provider, letting agent, chat, and cron runs recover without repeating work that may have side effects. [#96142](https://github.com/openclaw/openclaw/pull/96142) Thanks @brokemac79, @riazrahaman.
+
+##### Ollama, OpenAI-compatible providers, and Z.AI
+
 - Ollama requests whose native response stream ends early can now continue to a configured fallback model instead of stopping with `LLM request failed`. [#100482](https://github.com/openclaw/openclaw/pull/100482) Thanks @turbotheturtle.
 - A detail-less failure from an OpenAI-compatible provider no longer puts a valid API-key profile into cooldown or forces avoidable fallback traffic. [#100617](https://github.com/openclaw/openclaw/pull/100617) Thanks @fengjikui.
+- Z.AI and similar HTTP 429 responses now distinguish temporary service overload from ordinary rate limiting and preserve provider-supplied retry timing. [#98165](https://github.com/openclaw/openclaw/pull/98165) Thanks @sunnyshu0925.
+- Continued conversations with strict custom OpenAI Responses-compatible endpoints no longer fail on an unsupported `input[n].status` field and needlessly switch to a fallback model. [#100831](https://github.com/openclaw/openclaw/pull/100831) Thanks @chenxiaoyu209.
+
+##### Shared fallback and model-selection behavior
+
+- Replay-safe model timeouts can now advance to the next configured provider, letting agent, chat, and cron runs recover without repeating work that may have side effects. [#96142](https://github.com/openclaw/openclaw/pull/96142) Thanks @brokemac79, @riazrahaman.
 - Agent runs can move to the next configured model after a provider drops a stream, while genuine cancellations still stop promptly. [#90908](https://github.com/openclaw/openclaw/pull/90908) Thanks @shengting.
 - Embedded-agent runs can now try the next configured fallback model after a temporary upstream `LLM request failed` error. [#95542](https://github.com/openclaw/openclaw/pull/95542) Thanks @altaywtf, @mikasa0818.
 - Configured fallback chains now try an alternate model when the primary provider reports `model_not_found`, reducing failures after model availability changes. [#97571](https://github.com/openclaw/openclaw/pull/97571) Thanks @liuhao1024.
 - When a configured runtime model is no longer available, chat now explains that a new session will not help and directs operators to choose an available model. [#97611](https://github.com/openclaw/openclaw/pull/97611) Thanks @romneyda.
-- Z.AI and similar HTTP 429 responses now distinguish temporary service overload from ordinary rate limiting and preserve provider-supplied retry timing. [#98165](https://github.com/openclaw/openclaw/pull/98165) Thanks @sunnyshu0925.
 - Provider failures now keep fallback error text within the configured size limit, preventing oversized responses from overwhelming logs or visible diagnostics. [#99340](https://github.com/openclaw/openclaw/pull/99340) Thanks @pick-cat.
-- Eligible direct API-key requests to Claude Fable 5 now return an Opus 4.8 answer when Anthropic's safety classifier declines Fable, with diagnostics and Opus billing made clear. [#99906](https://github.com/openclaw/openclaw/pull/99906)
-- Continued conversations with strict custom OpenAI Responses-compatible endpoints no longer fail on an unsupported `input[n].status` field and needlessly switch to a fallback model. [#100831](https://github.com/openclaw/openclaw/pull/100831) Thanks @chenxiaoyu209.
 - `/model default` now actually returns an active session to its configured model after steering, fallback, or a previous manual selection. [#96318](https://github.com/openclaw/openclaw/pull/96318) Thanks @marsman-lab, @sunnyshu0925.
 - Gateway chat now classifies mixed provider messages as rate limits when throttling is the real failure, giving users recovery guidance that matches the problem. [#100755](https://github.com/openclaw/openclaw/pull/100755) Thanks @pick-cat.
 - `openclaw status` and `session_status` now identify when a session is using a fallback model and show the configured primary model beside it. [#101337](https://github.com/openclaw/openclaw/pull/101337) Thanks @lzy3538.
 
-#### Streaming replies, reasoning, and tool calls
+#### Replies, reasoning, and tool calls
+
+##### Anthropic and Claude
 
 - Claude CLI replies that streamed successfully are now retained when the final success envelope contains no text, preventing the completed answer from disappearing or triggering an empty-response fallback. [#90450](https://github.com/openclaw/openclaw/pull/90450) Thanks @totobusnello.
 - Claude Code 2.1 users can again approve and run Bash, WebFetch, Grep, Glob, AskUserQuestion, and other native tools in claude-cli sessions. [#98665](https://github.com/openclaw/openclaw/pull/98665) Related [#95171](https://github.com/openclaw/openclaw/issues/95171). Thanks @carterdawson, @yetval.
 - Claude CLI-backed agents now show native reasoning in `/reasoning stream` or `/reasoning on`, while `/reasoning off` consistently suppresses it for queued follow-ups too. [#99401](https://github.com/openclaw/openclaw/pull/99401) Thanks @marvinthebored.
 - Anthropic Opus 4.8 can now run with `tools.profile=coding` without every turn failing with an HTTP 400 schema error before the assistant replies. [#100492](https://github.com/openclaw/openclaw/pull/100492) Thanks @lin-hongkuan, @vincentkoc.
 - Anthropic Messages-compatible proxy users no longer see raw antml tool-call XML or arguments leak into visible Claude replies. [b2787a1](https://github.com/openclaw/openclaw/commit/b2787a1c7a7ae1a20d05411bba1dbf9091490c23) Thanks @jerry-xin.
-- Realtime voice sessions now omit an individual custom tool with an invalid provider-specific name and warn about it instead of letting that tool break the entire OpenAI, Azure, or Google session. [#89175](https://github.com/openclaw/openclaw/pull/89175) Thanks @vincentkoc.
-- Ollama Cloud and other OpenAI-compatible Ollama chats can now continue after a tool call instead of failing the next turn with a provider 400 error. [#96474](https://github.com/openclaw/openclaw/pull/96474) Thanks @849261680.
-- vLLM, Ollama proxies, and other OpenAI-compatible gateways can deliver streamed replies even when they incorrectly label an event stream as JSON, avoiding an early parsing failure that previously ended the agent run. [#96503](https://github.com/openclaw/openclaw/pull/96503) Thanks @zengwen-dt.
-- GPT-5.5 and other models can send valid streaming events larger than 64 KiB through ChatGPT Responses without failing the request, while malformed unbounded streams remain limited. [#98198](https://github.com/openclaw/openclaw/pull/98198) Thanks @marvinthebored, @obviyus, @peetiegonzalez.
-- `openclaw agent --local` now reports a clear first-event timeout when a provider opens a stream but never sends usable output instead of appearing to hang indefinitely. [#98525](https://github.com/openclaw/openclaw/pull/98525) Thanks @osolmaz.
-- Switching from thinking-off mode to a reasoning-required model now selects its lowest supported effort rather than silently choosing the most expensive level. [#93335](https://github.com/openclaw/openclaw/pull/93335) Thanks @obuchowski.
-- MiniMax M3 replies, including those routed through Fireworks, no longer expose hidden `mm:` reasoning in visible chat or progress output. [#93767](https://github.com/openclaw/openclaw/pull/93767) Thanks @drhack1, @vincentkoc.
-- Hidden MiniMax reasoning no longer appears as a new iMessage or feeds back into the conversation as an echo-triggering inbound message. [#93820](https://github.com/openclaw/openclaw/pull/93820) Thanks @alix-007.
-- Long opencode-go model runs are less likely to be falsely stopped as stalled while valid provider events are still arriving. [#97128](https://github.com/openclaw/openclaw/pull/97128) Thanks @liuwqgit, @vincentkoc, @yetval.
-- OpenRouter's DeepSeek V4 Flash and Pro models can answer with thinking enabled without failing with an HTTP 400. [#97208](https://github.com/openclaw/openclaw/pull/97208) Related [#97196](https://github.com/openclaw/openclaw/issues/97196). Thanks @nianjiuzst, @patelmm79.
-- Google Live voice sessions can now register and call OpenClaw tools instead of rejecting their declarations before a tool-backed turn begins. [#100260](https://github.com/openclaw/openclaw/pull/100260)
-- Direct `mistral-medium-3-5` requests now send the user-selected adjustable reasoning level to Mistral as `reasoningEffort`. [#100688](https://github.com/openclaw/openclaw/pull/100688) Thanks @aniruddhaadak80, @wm0018.
 - Anthropic agents routed through AWS Bedrock can keep Feishu Bitable write tools enabled without the tool definitions blocking every conversation. [#94990](https://github.com/openclaw/openclaw/pull/94990) Thanks @twinslee, @vincentkoc.
 - Claude Fable 5 now uses the expected Anthropic `context1m` stream setup when 1M context is enabled, without affecting similar model IDs. [#100572](https://github.com/openclaw/openclaw/pull/100572) Thanks @zhangguiping-xydt.
 - Claude conversations through GitHub Copilot can continue after a tool failure with no visible output instead of entering repeated provider-schema failures. [#101373](https://github.com/openclaw/openclaw/pull/101373) Thanks @galiniliev.
 - Anthropic-compatible calls with token caps too small for manual thinking now run normally without thinking instead of failing provider validation. [#101415](https://github.com/openclaw/openclaw/pull/101415) Thanks @pick-cat.
+
+##### OpenAI-compatible and local models
+
+- Ollama Cloud and other OpenAI-compatible Ollama chats can now continue after a tool call instead of failing the next turn with a provider 400 error. [#96474](https://github.com/openclaw/openclaw/pull/96474) Thanks @849261680.
+- vLLM, Ollama proxies, and other OpenAI-compatible gateways can deliver streamed replies even when they incorrectly label an event stream as JSON, avoiding an early parsing failure that previously ended the agent run. [#96503](https://github.com/openclaw/openclaw/pull/96503) Thanks @zengwen-dt.
+- GPT-5.5 and other models can send valid streaming events larger than 64 KiB through ChatGPT Responses without failing the request, while malformed unbounded streams remain limited. [#98198](https://github.com/openclaw/openclaw/pull/98198) Thanks @marvinthebored, @obviyus, @peetiegonzalez.
+- `openclaw agent --local` now reports a clear first-event timeout when a provider opens a stream but never sends usable output instead of appearing to hang indefinitely. [#98525](https://github.com/openclaw/openclaw/pull/98525) Thanks @osolmaz.
 - MCP tools that expect arrays or objects can now accept those values when Xiaomi MiMo, Ollama, or another affected provider returns them as JSON strings, avoiding a pre-execution validation failure. [#96922](https://github.com/openclaw/openclaw/pull/96922) Thanks @liuhao1024.
 - Repaired plain-text tool calls from LM Studio, xAI, and Ollama now emit a final completion event so plugins and other streaming consumers can finish them reliably. [#104714](https://github.com/openclaw/openclaw/pull/104714)
 
-#### Voice, transcription, and media behavior
+##### Google and Gemini
+
+- Google Live voice sessions can now register and call OpenClaw tools instead of rejecting their declarations before a tool-backed turn begins. [#100260](https://github.com/openclaw/openclaw/pull/100260)
+
+##### MiniMax, OpenRouter, Mistral, and opencode-go
+
+- MiniMax M3 replies, including those routed through Fireworks, no longer expose hidden `mm:` reasoning in visible chat or progress output. [#93767](https://github.com/openclaw/openclaw/pull/93767) Thanks @drhack1, @vincentkoc.
+- Long opencode-go model runs are less likely to be falsely stopped as stalled while valid provider events are still arriving. [#97128](https://github.com/openclaw/openclaw/pull/97128) Thanks @liuwqgit, @vincentkoc, @yetval.
+- OpenRouter's DeepSeek V4 Flash and Pro models can answer with thinking enabled without failing with an HTTP 400. [#97208](https://github.com/openclaw/openclaw/pull/97208) Related [#97196](https://github.com/openclaw/openclaw/issues/97196). Thanks @nianjiuzst, @patelmm79.
+- Direct `mistral-medium-3-5` requests now send the user-selected adjustable reasoning level to Mistral as `reasoningEffort`. [#100688](https://github.com/openclaw/openclaw/pull/100688) Thanks @aniruddhaadak80, @wm0018.
+
+##### Shared reasoning and tool behavior
+
+- Realtime voice sessions now omit an individual custom tool with an invalid provider-specific name and warn about it instead of letting that tool break the entire OpenAI, Azure, or Google session. [#89175](https://github.com/openclaw/openclaw/pull/89175) Thanks @vincentkoc.
+- Switching from thinking-off mode to a reasoning-required model now selects its lowest supported effort rather than silently choosing the most expensive level. [#93335](https://github.com/openclaw/openclaw/pull/93335) Thanks @obuchowski.
+
+#### Voice, transcription, images, and video
+
+##### OpenAI and Azure voice and images
 
 - OpenAI Realtime voice and transcription sessions now start behind Clash, Surge, sing-box, and similar TUN proxy setups that resolve `api.openai.com` into fake-IP ranges. [#86526](https://github.com/openclaw/openclaw/pull/86526) Thanks @shushushv.
 - OpenAI and Azure realtime voice connections now close inbound messages above 16 MiB, limiting avoidable gateway memory pressure. [#99450](https://github.com/openclaw/openclaw/pull/99450) Thanks @sunlit-deng.
-- Configured Voice Call transcription providers such as xAI remain selectable when another provider registry is active, allowing Talk sessions to start normally. [#97170](https://github.com/openclaw/openclaw/pull/97170) Thanks @solavrc.
-- Missing official media providers now produce errors with the exact recovery commands needed to restore transcription and other media workflows. [#97484](https://github.com/openclaw/openclaw/pull/97484) Thanks @wangmiao0668000666.
-- Image and video tools can now automatically select configured provider-plugin models authenticated through environment variables. [#98623](https://github.com/openclaw/openclaw/pull/98623) Thanks @medns.
-- A malformed Inworld voices response now produces a clear provider-specific error instead of an unhelpful parsing exception or process crash. [#98660](https://github.com/openclaw/openclaw/pull/98660) Thanks @solodmd.
-- Automatically configured video understanding now uses provider defaults such as Moonshot's intended video model unless the user selected a model explicitly. [#99791](https://github.com/openclaw/openclaw/pull/99791) Thanks @vincentkoc, @zhangguiping-xydt.
-- Gemini CLI media analysis now returns its description even when the valid response also contains nested usage or other metadata. [#96432](https://github.com/openclaw/openclaw/pull/96432) Thanks @lin-hongkuan.
 - OpenAI realtime voice sessions now default to `gpt-realtime-2.1` when no model is specified, while explicit model pins continue to work. [#101390](https://github.com/openclaw/openclaw/pull/101390) Thanks @vincentkoc.
 - OpenAI image generation and reference-image editing no longer crash when credentials or a custom base URL are ready before the provider model catalog finishes loading. [#105518](https://github.com/openclaw/openclaw/pull/105518) Thanks @vincentkoc.
+- OpenAI video generation now stops oversized or endless submission responses with a bounded provider error before they can hang the request or exhaust memory. [#96905](https://github.com/openclaw/openclaw/pull/96905) Thanks @alix-007.
+
+##### Google and Gemini media
+
+- Gemini CLI media analysis now returns its description even when the valid response also contains nested usage or other metadata. [#96432](https://github.com/openclaw/openclaw/pull/96432) Thanks @lin-hongkuan.
+- Google Veo video generation now ends oversized create or status responses early with a clear bounded error, preventing a broken endpoint from hanging OpenClaw or consuming memory indefinitely. [#96605](https://github.com/openclaw/openclaw/pull/96605) Thanks @alix-007.
+
+##### MiniMax, xAI, and Fal-hosted media
+
 - Reference-image edits through Fal-hosted Grok Imagine and Nano Banana 2 Lite now reach the correct service, while mixed-model fallbacks honor each candidate's supported resolution and reference limits. [#98688](https://github.com/openclaw/openclaw/pull/98688) Thanks @davenicoll, @vincentkoc.
-- Short non-English audio now keeps the configured language hint without an unrelated English prompt, reducing accidental translation when users expect a transcript in the spoken language. [#99023](https://github.com/openclaw/openclaw/pull/99023) Thanks @flyveryhigh, @nianjiuzst.
 - MiniMax TTS now accurately explains that volume must be greater than 0 and may be as high as 10 when a directive is invalid. [#101359](https://github.com/openclaw/openclaw/pull/101359) Thanks @quratulain-bilal.
 - MiniMax VLM and native PDF provider errors now remain readable when emoji or other supplementary characters land at the diagnostic snippet limit. [#101728](https://github.com/openclaw/openclaw/pull/101728) Thanks @wings1029.
+- MiniMax video generation now rejects oversized task, status, or file-metadata responses before unbounded memory use or binary download begins, while normal responses continue to work. [#96889](https://github.com/openclaw/openclaw/pull/96889) Thanks @alix-007.
+- xAI video generation now stops oversized create or status responses with a clear size-limit error instead of buffering until OpenClaw hangs or consumes excessive memory. [#96903](https://github.com/openclaw/openclaw/pull/96903) Thanks @alix-007, @vincentkoc.
+- MiniMax image understanding now stops oversized or malformed successful responses at a bounded limit, protecting memory while returning a useful diagnostic. [#100694](https://github.com/openclaw/openclaw/pull/100694) Thanks @zhangguiping-xydt.
 
-#### Image and video requests that fail safely
+##### Video providers and generation services
 
-- OpenAI video generation now stops oversized or endless submission responses with a bounded provider error before they can hang the request or exhaust memory. [#96905](https://github.com/openclaw/openclaw/pull/96905) Thanks @alix-007.
-- Image generation now stops with a clear size-limit error when a provider or custom endpoint sends an oversized or endless response, preventing hangs and runaway memory use while valid images and edits continue normally. [#96495](https://github.com/openclaw/openclaw/pull/96495) Thanks @hugenshen, @sallyom.
 - Moonshot video understanding now returns a predictable error for oversized or malformed responses instead of hanging or consuming memory indefinitely, including with custom base URLs. [#96502](https://github.com/openclaw/openclaw/pull/96502) Thanks @hugenshen.
 - Qwen video understanding now stops oversized or malformed endpoint responses with a clear error instead of hanging or reading without limit, while normal descriptions continue unchanged. [#96604](https://github.com/openclaw/openclaw/pull/96604) Thanks @alix-007.
-- Google Veo video generation now ends oversized create or status responses early with a clear bounded error, preventing a broken endpoint from hanging OpenClaw or consuming memory indefinitely. [#96605](https://github.com/openclaw/openclaw/pull/96605) Thanks @alix-007.
 - BytePlus video generation now stops oversized task-submission or status responses with a clear error before they can stall OpenClaw or exhaust memory, while normal responses continue unchanged. [#96606](https://github.com/openclaw/openclaw/pull/96606) Thanks @alix-007.
 - DashScope-compatible video submission and polling now reject oversized JSON responses with a bounded error instead of risking memory pressure or process instability, while ordinary responses continue normally. [#96782](https://github.com/openclaw/openclaw/pull/96782) Thanks @wangmiao0668000666.
 - OpenRouter video generation now rejects oversized submit and polling responses before they can hang OpenClaw or consume runaway memory, while normal-sized malformed responses retain their established error handling. [#96873](https://github.com/openclaw/openclaw/pull/96873) Thanks @alix-007.
 - Vydra image, video, and speech generation now fails with a bounded error on oversized or endless control responses instead of hanging or exhausting memory, while valid responses continue normally. [#96875](https://github.com/openclaw/openclaw/pull/96875) Thanks @alix-007.
 - fal music and video generation now stops oversized successful responses with a clear size-limit error before they can hang or exhaust memory, while normal generation continues as before. [#96886](https://github.com/openclaw/openclaw/pull/96886) Thanks @alix-007.
-- MiniMax video generation now rejects oversized task, status, or file-metadata responses before unbounded memory use or binary download begins, while normal responses continue to work. [#96889](https://github.com/openclaw/openclaw/pull/96889) Thanks @alix-007.
-- xAI video generation now stops oversized create or status responses with a clear size-limit error instead of buffering until OpenClaw hangs or consumes excessive memory. [#96903](https://github.com/openclaw/openclaw/pull/96903) Thanks @alix-007, @vincentkoc.
 - Together and PixVerse video generation now returns a provider-labelled size error for oversized successful responses instead of continuing until severe memory pressure or process failure. [#96904](https://github.com/openclaw/openclaw/pull/96904) Thanks @alix-007.
 - Runway video generation now stops oversized create and status responses instead of continuing to consume memory or stall, while normal polling and provider-specific errors remain intact. [#96907](https://github.com/openclaw/openclaw/pull/96907) Thanks @alix-007.
 - Comfy image-generation workflows now stop oversized ComfyUI responses with the actual size-limit error instead of risking memory exhaustion or misreporting the response as malformed JSON. [#96927](https://github.com/openclaw/openclaw/pull/96927) Thanks @wangmiao0668000666.
 - DeepInfra video generation now rejects oversized successful responses with a bounded error instead of risking an out-of-memory crash. [#97486](https://github.com/openclaw/openclaw/pull/97486) Thanks @hugenshen.
-- MiniMax image understanding now stops oversized or malformed successful responses at a bounded limit, protecting memory while returning a useful diagnostic. [#100694](https://github.com/openclaw/openclaw/pull/100694) Thanks @zhangguiping-xydt.
 
-#### Speech, search, embeddings, and document processing
+##### Voice and transcription across providers
+
+- Configured Voice Call transcription providers such as xAI remain selectable when another provider registry is active, allowing Talk sessions to start normally. [#97170](https://github.com/openclaw/openclaw/pull/97170) Thanks @solavrc.
+- Missing official media providers now produce errors with the exact recovery commands needed to restore transcription and other media workflows. [#97484](https://github.com/openclaw/openclaw/pull/97484) Thanks @wangmiao0668000666.
+- A malformed Inworld voices response now produces a clear provider-specific error instead of an unhelpful parsing exception or process crash. [#98660](https://github.com/openclaw/openclaw/pull/98660) Thanks @solodmd.
+- Short non-English audio now keeps the configured language hint without an unrelated English prompt, reducing accidental translation when users expect a transcript in the spoken language. [#99023](https://github.com/openclaw/openclaw/pull/99023) Thanks @flyveryhigh, @nianjiuzst.
+
+##### Shared media selection and response safety
+
+- Image and video tools can now automatically select configured provider-plugin models authenticated through environment variables. [#98623](https://github.com/openclaw/openclaw/pull/98623) Thanks @medns.
+- Automatically configured video understanding now uses provider defaults such as Moonshot's intended video model unless the user selected a model explicitly. [#99791](https://github.com/openclaw/openclaw/pull/99791) Thanks @vincentkoc, @zhangguiping-xydt.
+- Image generation now stops with a clear size-limit error when a provider or custom endpoint sends an oversized or endless response, preventing hangs and runaway memory use while valid images and edits continue normally. [#96495](https://github.com/openclaw/openclaw/pull/96495) Thanks @hugenshen, @sallyom.
+
+#### Speech, search, embeddings, and documents
+
+##### Speech and transcription
 
 - Google Gemini TTS now rejects oversized responses before buffering them into memory, while normal speech results continue through the existing audio workflow. [#96984](https://github.com/openclaw/openclaw/pull/96984) Thanks @mushuiyu886.
+- Inworld text-to-speech and voice-list requests now fail safely on oversized, malformed, or never-ending responses instead of hanging or consuming unbounded Gateway memory. [#95416](https://github.com/openclaw/openclaw/pull/95416) Thanks @alix-007, @vincentkoc.
+- Azure Speech, Microsoft Speech, ElevenLabs, MiniMax TTS, OpenRouter transcription, and xAI transcription now stop oversized or endless responses before they can stall speech work or strain Gateway memory, while ordinary responses remain unchanged. [#96496](https://github.com/openclaw/openclaw/pull/96496) Thanks @hugenshen.
+- Volcengine, BytePlus Seed Speech, and Xiaomi TTS now stop oversized provider responses before one speech request can stall or destabilize OpenClaw. [#96874](https://github.com/openclaw/openclaw/pull/96874) Thanks @alix-007.
+- Google audio and video understanding now stops oversized provider responses at the shared 16 MiB limit with a clear error instead of allowing them to consume excessive memory. [#96920](https://github.com/openclaw/openclaw/pull/96920) Thanks @mushuiyu886, @vincentkoc.
+
+##### Embeddings and memory search
+
 - Gemini memory-embedding batch uploads, creation, and status checks now fail safely when a compatible endpoint returns an oversized control response. [#97535](https://github.com/openclaw/openclaw/pull/97535) Thanks @hugenshen.
 - OpenAI-compatible embedding requests now close oversized responses early with a clear provider error instead of buffering until OpenClaw stalls or runs out of memory, while normal embeddings continue working. [#96868](https://github.com/openclaw/openclaw/pull/96868) Thanks @alix-007.
 - OpenAI embedding batch polling and Realtime setup now cancel oversized successful responses early and return a bounded error instead of growing memory without limit. [#97533](https://github.com/openclaw/openclaw/pull/97533) Thanks @hugenshen.
 - OpenAI-compatible embedding batch downloads now process valid large outputs while stopping oversized files or JSONL records before they can exhaust memory. [#98554](https://github.com/openclaw/openclaw/pull/98554) Thanks @sunlit-deng, @vincentkoc.
-- Inworld text-to-speech and voice-list requests now fail safely on oversized, malformed, or never-ending responses instead of hanging or consuming unbounded Gateway memory. [#95416](https://github.com/openclaw/openclaw/pull/95416) Thanks @alix-007, @vincentkoc.
-- Azure Speech, Microsoft Speech, ElevenLabs, MiniMax TTS, OpenRouter transcription, and xAI transcription now stop oversized or endless responses before they can stall speech work or strain Gateway memory, while ordinary responses remain unchanged. [#96496](https://github.com/openclaw/openclaw/pull/96496) Thanks @hugenshen.
 - GitHub Copilot model discovery and memory search now reject oversized or malformed responses instead of buffering them without limit, while valid catalog and embedding results continue normally. [#96499](https://github.com/openclaw/openclaw/pull/96499) Thanks @hugenshen, @sallyom.
 - Voyage embedding batch jobs now stop oversized status, failure, and error-file responses before they can hang or exhaust worker memory, while oversized diagnostics degrade safely and ordinary responses remain unchanged. [#96608](https://github.com/openclaw/openclaw/pull/96608) Thanks @alix-007.
-- Volcengine, BytePlus Seed Speech, and Xiaomi TTS now stop oversized provider responses before one speech request can stall or destabilize OpenClaw. [#96874](https://github.com/openclaw/openclaw/pull/96874) Thanks @alix-007.
-- Google audio and video understanding now stops oversized provider responses at the shared 16 MiB limit with a clear error instead of allowing them to consume excessive memory. [#96920](https://github.com/openclaw/openclaw/pull/96920) Thanks @mushuiyu886, @vincentkoc.
-- Google Meet document processing now rejects oversized Google Drive exports before they can destabilize OpenClaw, while ordinary documents still export as text. [#97620](https://github.com/openclaw/openclaw/pull/97620) Thanks @alix-007, @vincentkoc.
 - LM Studio embedding preload now respects the configured context limit, reducing GPU out-of-memory failures during memory search on constrained hardware. [#100750](https://github.com/openclaw/openclaw/pull/100750) Thanks @hxz398, @zak-li, @zoowh.
-- Parallel web search now returns a bounded error when an upstream response is malformed, oversized, or never-ending instead of risking a hang or out-of-memory crash. [#96035](https://github.com/openclaw/openclaw/pull/96035) Thanks @alix-007.
-- Exa searches now reject responses above the supported limit, preventing excessive provider output from hanging OpenClaw or creating memory pressure. [#96038](https://github.com/openclaw/openclaw/pull/96038) Thanks @alix-007.
 - Malformed Voyage embedding batches now close their download connections after parsing fails, reducing resource buildup during repeated or large workloads. [#98840](https://github.com/openclaw/openclaw/pull/98840) Thanks @solodmd.
 
-#### Oversized streams and clearer provider failures
+##### Search and document processing
+
+- Google Meet document processing now rejects oversized Google Drive exports before they can destabilize OpenClaw, while ordinary documents still export as text. [#97620](https://github.com/openclaw/openclaw/pull/97620) Thanks @alix-007, @vincentkoc.
+- Parallel web search now returns a bounded error when an upstream response is malformed, oversized, or never-ending instead of risking a hang or out-of-memory crash. [#96035](https://github.com/openclaw/openclaw/pull/96035) Thanks @alix-007.
+- Exa searches now reject responses above the supported limit, preventing excessive provider output from hanging OpenClaw or creating memory pressure. [#96038](https://github.com/openclaw/openclaw/pull/96038) Thanks @alix-007.
+
+#### Provider response safety and clearer errors
+
+##### Anthropic and OpenAI-compatible streams
 
 - Anthropic-compatible requests now fail promptly with a bounded transport error when an upstream stream sends an oversized partial event instead of hanging and consuming memory. [#100686](https://github.com/openclaw/openclaw/pull/100686) Thanks @zhangguiping-xydt.
 - OpenAI ChatGPT Responses streaming now cancels oversized or endless provider bodies with a clear error before they can consume excessive process memory, while normal responses keep using the existing parser. [#96762](https://github.com/openclaw/openclaw/pull/96762) Thanks @vincentkoc, @wangmiao0668000666.
 - OpenAI-compatible provider and proxy streams now stop oversized malformed or never-ending bodies at the affected request instead of letting them destabilize or crash the OpenClaw process. [#96989](https://github.com/openclaw/openclaw/pull/96989) Thanks @vincentkoc, @wangmiao0668000666.
 - OpenAI-compatible Chat Completions now use OpenClaw's guarded network path, adding the same response safety controls used by other protected model calls. [#97228](https://github.com/openclaw/openclaw/pull/97228) Thanks @vincentkoc, @wangmiao0668000666.
 - Azure OpenAI Responses now bound oversized streaming and error bodies, protecting memory while preserving normal errors and cancellation. [#97349](https://github.com/openclaw/openclaw/pull/97349) Thanks @wangmiao0668000666.
-- ClickClack now stops oversized REST success responses at the provider limit, giving users and operators a predictable failure instead of continued streaming and memory growth. [#96970](https://github.com/openclaw/openclaw/pull/96970) Thanks @mushuiyu886, @vincentkoc.
+- Anthropic-compatible model requests now consistently use OpenClaw's guarded transport, response normalization, and managed stream cleanup rather than bypassing them through the SDK. [#101357](https://github.com/openclaw/openclaw/pull/101357) Thanks @wangmiao0668000666.
+- When an OpenAI or OpenAI-compatible chat-completions model refuses a request, users now see the provider's explanation instead of a blank assistant reply. [#102344](https://github.com/openclaw/openclaw/pull/102344) Thanks @wuqxuan, @yetval.
+
+##### Proxies and other provider endpoints
+
 - Proxy-backed model streams now fail with bounded, clearer errors when responses are oversized, malformed, incomplete, or idle instead of hanging or consuming unbounded data. [#97235](https://github.com/openclaw/openclaw/pull/97235) Thanks @vincentkoc, @zhangguiping-xydt.
 - Mistral-compatible endpoints now stop oversized streaming responses with a labeled error before OpenClaw can run out of memory. [#97648](https://github.com/openclaw/openclaw/pull/97648) Thanks @wangmiao0668000666.
 - Abnormally large Google Meet, Calendar, or OAuth responses now stop with an error before they can consume uncontrolled Gateway memory. [#98850](https://github.com/openclaw/openclaw/pull/98850) Thanks @pandah97.
-- Anthropic-compatible model requests now consistently use OpenClaw's guarded transport, response normalization, and managed stream cleanup rather than bypassing them through the SDK. [#101357](https://github.com/openclaw/openclaw/pull/101357) Thanks @wangmiao0668000666.
-- When an OpenAI or OpenAI-compatible chat-completions model refuses a request, users now see the provider's explanation instead of a blank assistant reply. [#102344](https://github.com/openclaw/openclaw/pull/102344) Thanks @wuqxuan, @yetval.
+
+##### Shared provider diagnostics
+
 - Request-format and schema failures now show the relevant diagnostic without sending users through unnecessary provider login or reconfiguration steps. [#95779](https://github.com/openclaw/openclaw/pull/95779) Thanks @pick-cat.
 
-#### Codex app-server compatibility and session supervision
+#### Codex app-server and supervised sessions
 
-- Scheduled and CLI Codex runs with an explicit timeout longer than 30 minutes can now use that full budget instead of being stopped by the terminal-idle guard. [#85296](https://github.com/openclaw/openclaw/pull/85296) Thanks @alkor2000, @vincentkoc.
-- A missing or hung local Codex tool result no longer switches the active session to another provider that cannot resolve the local failure. [#95543](https://github.com/openclaw/openclaw/pull/95543) Thanks @mikasa0818.
+##### Runtime and model compatibility
+
 - Codex users can route both `codex/*` and `openai/*` models through the bundled runtime, and older conversations resume without unnecessary context reprojection. [#105034](https://github.com/openclaw/openclaw/pull/105034)
 - The bundled Codex plugin can complete backend requests again after updating its managed app-server runtime, with no model-picker or configuration migration required. [#106098](https://github.com/openclaw/openclaw/pull/106098)
 - OpenClaw's managed Codex workflow now uses app-server 0.143.0, and self-managed installations must use 0.143.0 or newer for protocol compatibility. [366258d](https://github.com/openclaw/openclaw/commit/366258dee6e4a3ea0bb04b1316e5a0c419c60188) Thanks @vincentkoc.
 - The managed Codex harness now surfaces supported GPT-5.6 Sol, Terra, and Luna models returned by the account catalog and gives self-managed users current version guidance. [f80ce21](https://github.com/openclaw/openclaw/commit/f80ce219fcf0c5cbe9871b9ad05b7570fbfeba6e) Thanks @vincentkoc.
 - Managed Codex users on macOS, Linux, and Windows now receive app-server 0.144.1 instead of 0.144.0. [5dcba9f](https://github.com/openclaw/openclaw/commit/5dcba9fae725c080b62c4b4e19533f5fcd59b964) Thanks @vincentkoc.
+- Codex-native delegation from OpenClaw threads now creates native task records again, while unsupported custom Codex app-server versions fail startup with a clear minimum-version error. [#101221](https://github.com/openclaw/openclaw/pull/101221)
+- Codex sessions using `gpt-5.5-pro` or `gpt-5.4-pro` now clamp unsupported reasoning levels before the first turn, avoiding an immediate request rejection when live metadata is unavailable. [#101484](https://github.com/openclaw/openclaw/pull/101484) Thanks @zhangguiping-xydt.
+
+##### Session reliability and diagnostics
+
+- Scheduled and CLI Codex runs with an explicit timeout longer than 30 minutes can now use that full budget instead of being stopped by the terminal-idle guard. [#85296](https://github.com/openclaw/openclaw/pull/85296) Thanks @alkor2000, @vincentkoc.
+- A missing or hung local Codex tool result no longer switches the active session to another provider that cannot resolve the local failure. [#95543](https://github.com/openclaw/openclaw/pull/95543) Thanks @mikasa0818.
 - Codex app-server runs with an invalid ChatGPT OAuth session now surface the real sign-in error promptly instead of waiting for a misleading ten-second authentication timeout. [#100713](https://github.com/openclaw/openclaw/pull/100713) Thanks @lin-hongkuan.
 - Codex runs stopped by the guardian rejection limit now say why they ended, so operators do not have to mistake the result for a crash, cancellation, or generic interruption. [#101220](https://github.com/openclaw/openclaw/pull/101220) Thanks @darren2030.
-- Codex-native delegation from OpenClaw threads now creates native task records again, while unsupported custom Codex app-server versions fail startup with a clear minimum-version error. [#101221](https://github.com/openclaw/openclaw/pull/101221)
 - Crestodian setup and repair chats on Codex-backed runs can now access the status and repair tool they need instead of stopping with a missing-tool response. [#101281](https://github.com/openclaw/openclaw/pull/101281)
 - Shared Codex app-server clients now keep usage limits, auth cooldowns, thread subscriptions, and resumed connections tied to the account and conversation that actually owns them. [#101376](https://github.com/openclaw/openclaw/pull/101376)
-- Codex sessions using `gpt-5.5-pro` or `gpt-5.4-pro` now clamp unsupported reasoning levels before the first turn, avoiding an immediate request rejection when live metadata is unavailable. [#101484](https://github.com/openclaw/openclaw/pull/101484) Thanks @zhangguiping-xydt.
 - Codex app-server stdout failures now end affected requests cleanly, while a diagnostics-only stderr failure no longer interrupts an otherwise healthy turn. [#101505](https://github.com/openclaw/openclaw/pull/101505) Thanks @mushuiyu886, @vincentkoc.
 
 #### Usage, context, cost, and diagnostics
 
-- Amazon Bedrock adaptive-thinking Claude and Fable runs now honor configured high output-token limits for longer answers, reasoning, and tool calls. [#97343](https://github.com/openclaw/openclaw/pull/97343) Thanks @lilan0125, @prasithg.
+##### Usage and quota reporting
+
 - Anthropic usage checks now cap unusually large error responses so a CDN, firewall, or proxy page cannot exhaust OpenClaw's memory. [#97614](https://github.com/openclaw/openclaw/pull/97614) Thanks @cxbasdev.
-- Long, tool-heavy or media-heavy embedded-agent conversations now retain more prompt-cache reuse between turns, reducing repeated token processing, latency, and cost on prefix-cached providers. [#102610](https://github.com/openclaw/openclaw/pull/102610) Thanks @ugiezzz.
 - OpenAI and Codex users authenticated through the app server can again see their five-hour and weekly quota windows in chat, CLI, and JSON status output. [#92520](https://github.com/openclaw/openclaw/pull/92520) Thanks @brokemac79.
 - OpenAI OAuth usage checks now cap oversized WHAM rate-limit responses before they can destabilize the process. [#97702](https://github.com/openclaw/openclaw/pull/97702) Thanks @cxbasdev.
 - GitHub Copilot usage checks now contain oversized or endless endpoint responses as a usage error instead of buffering them indefinitely, while normal usage data still loads. [#96607](https://github.com/openclaw/openclaw/pull/96607) Thanks @alix-007.
 - OpenRouter cost tracking now caps unexpectedly large metadata responses and keeps the original streamed estimate instead of disrupting the agent turn. [#97490](https://github.com/openclaw/openclaw/pull/97490) Thanks @hugenshen.
 - MiniMax and other shared provider usage checks now fail safely on oversized or malformed replies instead of buffering them without limit. [#97659](https://github.com/openclaw/openclaw/pull/97659) Thanks @cxbasdev, @vincentkoc.
+- OpenRouter completions that the provider bills at $0 now stay recorded as free in transcripts, summaries, logs, and usage totals instead of being replaced with estimated catalog pricing. [#101177](https://github.com/openclaw/openclaw/pull/101177)
+
+##### Context limits and prompt efficiency
+
+- Amazon Bedrock adaptive-thinking Claude and Fable runs now honor configured high output-token limits for longer answers, reasoning, and tool calls. [#97343](https://github.com/openclaw/openclaw/pull/97343) Thanks @lilan0125, @prasithg.
+- Long, tool-heavy or media-heavy embedded-agent conversations now retain more prompt-cache reuse between turns, reducing repeated token processing, latency, and cost on prefix-cached providers. [#102610](https://github.com/openclaw/openclaw/pull/102610) Thanks @ugiezzz.
 - Nemotron 3 Super now exposes its full 1,048,576-token context budget in OpenClaw's bundled NVIDIA fallback catalog instead of compacting at the stale 262,144-token limit. [#98726](https://github.com/openclaw/openclaw/pull/98726) Thanks @eleqtrizit.
 - ChatGPT OAuth-backed Responses sessions now retain backend affinity across turns, improving prompt-cache reuse and reducing repeated processing of the same conversation context. [#100233](https://github.com/openclaw/openclaw/pull/100233) Thanks @marvinthebored, @obviyus, @peetiegonzalez.
+
+##### Session and model diagnostics
+
 - After `/model` changes a session's provider, `/status` and `session_status` now report that provider's usage, authentication, runtime, and context details rather than stale defaults. [#93384](https://github.com/openclaw/openclaw/pull/93384) Thanks @obviyus, @osolmaz, @rollingshmily, @samiralibabic, @zhangguiping-xydt.
 - Model-call traces now include prompt-size and per-call token usage details, helping operators investigate cost and prompt growth without capturing raw content. [#95770](https://github.com/openclaw/openclaw/pull/95770) Thanks @amknight.
-- OpenRouter completions that the provider bills at $0 now stay recorded as free in transcripts, summaries, logs, and usage totals instead of being replaced with estimated catalog pricing. [#101177](https://github.com/openclaw/openclaw/pull/101177)
 - The diagnostics timeline now shows when provider model calls ran, how long they took, and whether they succeeded without recording prompt or response content. [7253552](https://github.com/openclaw/openclaw/commit/7253552c68d0ac8c6098126d373f185bb6df22a2) Thanks @vincentkoc.
 
-### Memory, Sessions, and State
-
-#### Memory, sessions, and state
+### Memory and Sessions
 
 [Memory](https://docs.openclaw.ai/concepts/memory) indexing, recall, wiki synchronization, and search recover from more malformed pages, stale status, large indexes, transient reads, and provider mismatches without hiding useful stored context or overwriting user notes. When a result is incomplete or a configured memory provider is unavailable, the failure is clearer instead of looking like a complete answer.
 
 [Sessions](https://docs.openclaw.ai/cli/sessions), transcripts, compaction, goals, and routing also retain the intended conversation more consistently through restarts, resets, delayed follow-ups, tool-heavy runs, and client changes. The practical result is less missing history, fewer replies stored against the wrong session, and more dependable continuation of long-running work.
 
-#### Memory Search, Indexing, and Recall
+#### Memory search and recall
 
 - QMD `search` and `vsearch` modes now skip the LLM reranker, reducing latency and avoiding unnecessary GPU failures while full `query` mode keeps reranking. [#88887](https://github.com/openclaw/openclaw/pull/88887) Thanks @potterdigital.
 - Memory-wiki pages titled `Index` now remain stored, searchable, and retrievable instead of being hidden or overwritten by generated directory pages. [#94326](https://github.com/openclaw/openclaw/pull/94326) Thanks @vincentkoc, @yetval.
@@ -1285,7 +1385,7 @@ The [model catalog](https://docs.openclaw.ai/concepts/models) also reports avail
 - `openclaw memory status --fix` now repairs session-corpus state without mistaking healthy daily-memory records for stale data. [#93389](https://github.com/openclaw/openclaw/pull/93389) Thanks @alix-007, @vincentkoc.
 - `openclaw memory status` no longer shows impossible session indexing totals where the indexed file count exceeds the total file count. [#95452](https://github.com/openclaw/openclaw/pull/95452) Thanks @buyitsydney, @liuhao1024.
 
-#### Durable Memory and Wiki Integrity
+#### Memory Wiki and long-term memory
 
 - Durable memory promotion now keeps OpenClaw's managed dreaming markers and adjacent managed content out of `MEMORY.md` when a recalled range touches a block boundary. [#83718](https://github.com/openclaw/openclaw/pull/83718) Thanks @grifjef.
 - Inferred follow-up commitments now return to the queue after temporary model or network extraction failures, reducing missed reminders without duplicate processing. [#89817](https://github.com/openclaw/openclaw/pull/89817) Thanks @masatohoshino.
@@ -1303,12 +1403,10 @@ The [model catalog](https://docs.openclaw.ai/concepts/models) also reports avail
 - `openclaw wiki lint` now recognizes valid imported Obsidian links by title, slug, fragment-free path, or source-path suffix, reducing false broken-link warnings. [#100017](https://github.com/openclaw/openclaw/pull/100017) Thanks @ishangodawatta, @k-kerrigan, @vincentkoc.
 - Archived memories around user messages that begin with `[cron:]` remain searchable after a session reset or deletion, while genuine cron-generated archives stay hidden. [#101322](https://github.com/openclaw/openclaw/pull/101322) Thanks @ly-wang19.
 
-#### Session Continuity and Conversation Routing
+#### Session continuity
 
-- iOS voice notes now stay with the intended chat and recover more reliably across offline queues, app recreation, uncertain sends, and competing microphone use. [#101236](https://github.com/openclaw/openclaw/pull/101236)
 - After `/new` or `/reset`, the previous conversation remains available for daily memory summaries and full-history searches through the session-logs skill. [#71537](https://github.com/openclaw/openclaw/pull/71537) Thanks @injinj.
 - A group chat or Gateway session can now resume on the next visible request after a failed, timed-out, or killed turn without requiring `/new` or manual session-file edits. [#89045](https://github.com/openclaw/openclaw/pull/89045) Thanks @jerry-xin.
-- Voice Call history now stays with the correct configured agent across Gateway restarts and upgrades, while ambiguous legacy state is left untouched with actionable warnings. [#89884](https://github.com/openclaw/openclaw/pull/89884) Thanks @mushuiyu886.
 - Aborted or timed-out embedded runs now release their session write lock, so the next message can proceed without minutes of waiting or manual file cleanup. [#96100](https://github.com/openclaw/openclaw/pull/96100) Thanks @richwilson-bloom, @sallyom, @xialonglee.
 - Replies that span an automatic daily or idle reset now remain together in one accessible transcript instead of losing later output. [#97164](https://github.com/openclaw/openclaw/pull/97164) Thanks @joshavant, @yetval.
 - Resuming work from a project now opens only that project's saved agent session, preventing unrelated transcripts from being mixed together. [#97785](https://github.com/openclaw/openclaw/pull/97785) Related [#96542](https://github.com/openclaw/openclaw/issues/96542). Thanks @qingminglong, @yetval.
@@ -1326,7 +1424,24 @@ The [model catalog](https://docs.openclaw.ai/concepts/models) also reports avail
 - A successfully completed main-agent conversation now continues in the same session on the next message instead of unexpectedly resetting and archiving its transcript. [#99985](https://github.com/openclaw/openclaw/pull/99985) Thanks @sunnyshu0925.
 - Dashboard session labels and display names now remain attached when a session rolls over after a day or idle period. [#101576](https://github.com/openclaw/openclaw/pull/101576) Thanks @merlin-zhou, @zengwen-dt.
 
-#### Transcript and Export Integrity
+#### CLI and Codex sessions
+
+- Claude CLI conversations that exhaust their context now recover into a fresh reseeded session automatically, and timeout retries retain the temporary files they need to complete. [#98934](https://github.com/openclaw/openclaw/pull/98934) Related [#98897](https://github.com/openclaw/openclaw/issues/98897). Thanks @obviyus.
+- Local Ollama-backed CLI agent turns can now continue when the context engine reports an already-compacted transcript, allowing the assistant or MCP tool result to reach the user. [#99136](https://github.com/openclaw/openclaw/pull/99136) Thanks @mushuiyu886, @peterskwang, @pkoserowski, @psedd.
+- Existing Codex sessions can resume their bound threads more reliably after upgrades, resets, and compaction without depending on leftover transcript-side JSON files. [#101210](https://github.com/openclaw/openclaw/pull/101210)
+- A Codex reply delivered through `sourceReplyDeliveryMode: "message_tool_only"` now completes its turn promptly instead of later ending as an incomplete reply. [#95942](https://github.com/openclaw/openclaw/pull/95942) Thanks @omarshahine.
+- Codex app-server installations using the retired `on-failure` approval policy now upgrade to the supported `on-request` behavior without losing saved bindings. [70153f7](https://github.com/openclaw/openclaw/commit/70153f7f9c12be2ff025802c019e428047d1f579) Thanks @vincentkoc.
+- Existing Codex app-server conversations with dynamic tools can resume through the tool-fingerprint format upgrade instead of starting an avoidable replacement thread. [3051748](https://github.com/openclaw/openclaw/commit/305174845f38f075bfd5096a0a4912b8d7d2559a) Thanks @vincentkoc.
+- Legacy Codex bindings with large tool or MCP configurations can now migrate without overflowing plugin-state records or copying raw configuration secrets. [23228b6](https://github.com/openclaw/openclaw/commit/23228b67a47bf32fc9b662d13037757f51d329b8) Thanks @vincentkoc.
+- Upgraded Codex installations can now finish legacy binding migration and archive old sidecars instead of repeatedly retaining them after an earlier partial import. [39fac06](https://github.com/openclaw/openclaw/commit/39fac06f48745dcd4d7a840f8261631614bb1926) Thanks @vincentkoc.
+- Codex sessions created in beta 5 can keep their existing conversation after upgrade when the user MCP configuration is unchanged, without retaining its authorization token. [272750d](https://github.com/openclaw/openclaw/commit/272750daed354029c1968dce7cd6747163e0957a) Thanks @vincentkoc.
+- Provider-owned CLI conversations now keep the same session and transcript across the daily default reset boundary unless an explicit reset policy or `/reset` applies. [#97931](https://github.com/openclaw/openclaw/pull/97931) Thanks @yetval.
+- New Codex-backed threads now preserve configured plugin apps, can activate remote curated plugins, and run Guardian on the first eligible native OpenAI turn. [#98042](https://github.com/openclaw/openclaw/pull/98042) Thanks @kevinslin.
+- A stuck Claude CLI startup now fails only the affected turn instead of exiting the Gateway, and heartbeat activity no longer causes the next user turn to lose its CLI conversation history. [#98933](https://github.com/openclaw/openclaw/pull/98933) Related [#98894](https://github.com/openclaw/openclaw/issues/98894), [#98895](https://github.com/openclaw/openclaw/issues/98895). Thanks @obviyus.
+- Claude CLI agent runs now fail clearly when messaging tools are unavailable, recover when Claude exits without a result, retain more long-session continuity, and clean up prompt images and failed preparation files. [#99159](https://github.com/openclaw/openclaw/pull/99159) Related [#98946](https://github.com/openclaw/openclaw/issues/98946). Thanks @obviyus.
+- The same-release Codex session-continuity work now covers app-server thread start and resume, with binding fingerprints kept bounded throughout. [78edf1c](https://github.com/openclaw/openclaw/commit/78edf1cec15c4a45881386b94e06c71c64f90fa4) Thanks @vincentkoc.
+
+#### Transcripts and exports
 
 - Shared group and channel transcripts now retain the sender ID, display name, and username for each durable user turn, making later history and memory processing correctly attribute participants. [#90552](https://github.com/openclaw/openclaw/pull/90552) Thanks @pick-cat.
 - `/export-session` now warns when a CLI- or ACP-backed export contains only user messages and points users to the backend transcript for missing assistant, tool, usage, and cost details. [#90867](https://github.com/openclaw/openclaw/pull/90867) Thanks @tank-x3, @vincentkoc, @xydigit-sj.
@@ -1348,9 +1463,8 @@ The [model catalog](https://docs.openclaw.ai/concepts/models) also reports avail
 - `openclaw sessions tail` now rejects oversized trajectory snapshots and updates with a clear limit error before they can exhaust memory. [#101450](https://github.com/openclaw/openclaw/pull/101450) Thanks @cxbasdev, @vincentkoc.
 - Long usage and session log messages now truncate emoji cleanly instead of displaying malformed character artifacts. [#101517](https://github.com/openclaw/openclaw/pull/101517) Thanks @maweibin.
 
-#### Tool Results, Media, and Replay Integrity
+#### Tool results, files, and media
 
-- Images shared from iOS or through node `agent.request` now remain attached to the correct conversation turn after history reload, so later messages can still use them. [#86936](https://github.com/openclaw/openclaw/pull/86936) Thanks @peterdsp.
 - Reopened sessions can now replay older string or single-object tool results correctly instead of treating successful output as empty or failing on its stored shape. [#98891](https://github.com/openclaw/openclaw/pull/98891) Related [#98825](https://github.com/openclaw/openclaw/issues/98825). Thanks @obviyus.
 - Agents in long-running WebChat, Discord, and other direct sessions can keep reading fresh command, file, browser, and status output instead of seeing it disappear or turn into an image placeholder. [#98955](https://github.com/openclaw/openclaw/pull/98955) Related [#98874](https://github.com/openclaw/openclaw/issues/98874). Thanks @lamkan0210, @momothemage.
 - Imported Claude CLI history now keeps image-only and attachment-bearing turns visible when removing empty legacy reseed text. [#99839](https://github.com/openclaw/openclaw/pull/99839) Thanks @vincentkoc.
@@ -1360,7 +1474,27 @@ The [model catalog](https://docs.openclaw.ai/concepts/models) also reports avail
 - Media-provider audit details containing emoji now remain valid and readable when shortened, instead of ending with malformed characters. [#101298](https://github.com/openclaw/openclaw/pull/101298) Thanks @alix-007.
 - Long agent prompt data containing emoji or other paired Unicode characters now stays well-formed when capped, avoiding broken text in agent and automation context. [#101303](https://github.com/openclaw/openclaw/pull/101303) Thanks @alix-007.
 
-#### Compaction and Long-Context Recovery
+#### Long conversations and compaction
+
+- Embedded agents now retain configured compaction reserve limits when runtime safeguards save settings, reducing unexpected context-budget shrinkage during long work. [#92237](https://github.com/openclaw/openclaw/pull/92237) Thanks @sercada.
+- Telling an agent to remember a preference no longer triggers the unrelated warning used for promises to schedule an automatic reminder. [#93862](https://github.com/openclaw/openclaw/pull/93862) Thanks @arkyu2077.
+- Sessions with large command output or summaries now compact before exceeding the model context, avoiding failed provider requests and misleading token budgets. [#97861](https://github.com/openclaw/openclaw/pull/97861) Thanks @yetval.
+- Long tool-heavy or compacted sessions now budget the real size of command output and summaries before sending a prompt, reducing context overflow failures. [#97928](https://github.com/openclaw/openclaw/pull/97928) Related [#97927](https://github.com/openclaw/openclaw/issues/97927). Thanks @liuhao1024, @yetval.
+- Edge-case fixes now preserve literal memory text and valid Unicode, improve voice-call cleanup and port checks, report Claude models and context limits accurately, and retain useful ClickClack connection errors. [#100204](https://github.com/openclaw/openclaw/pull/100204) Thanks @cxbasdev, @harjothkhara, @lilan0125, @lin-hongkuan, @liuhao1024, @mikasa0818, @pandah97, @sunlit-deng, @zoowh.
+- Fresh Claude CLI workspaces now run a pending `BOOTSTRAP.md` on the first reply so required identity, memory, and setup steps are completed before normal conversation. [#100560](https://github.com/openclaw/openclaw/pull/100560) Thanks @bill-starfoundry, @kruegerb, @vincentkoc.
+- Long-running agents are less likely to lose workspace instructions such as `AGENTS.md`, `SOUL.md`, or `MEMORY.md` for a turn during a temporary filesystem error. [#100910](https://github.com/openclaw/openclaw/pull/100910) Thanks @masatohoshino.
+- Embedded agent runs that omit a session key now retain the intended fallback session context more reliably. [31a65e0](https://github.com/openclaw/openclaw/commit/31a65e0647ae85eb4c9048051145f07003722caf) Thanks @vincentkoc.
+- A malformed custom tool in realtime Talk no longer removes the built-in consult tool or other valid custom tools from the session. [170150a](https://github.com/openclaw/openclaw/commit/170150a306e39204ebe1ab7be47450b73005de1f) Thanks @vincentkoc.
+- Local-model conversations now retain reusable prompt work when switching between interactive chats and background jobs, avoiding repeated multi-minute warm-up delays. [#98267](https://github.com/openclaw/openclaw/pull/98267) Related [#98261](https://github.com/openclaw/openclaw/issues/98261). Thanks @headbouyjb.
+- A response interrupted mid-tool-call no longer runs or saves that incomplete action, preventing accidental child sessions and other unintended side effects. [#97140](https://github.com/openclaw/openclaw/pull/97140) Thanks @galiniliev.
+- Agents running on macOS 26 now receive the macOS product version in their runtime prompt instead of the Darwin kernel version. [#95225](https://github.com/openclaw/openclaw/pull/95225) Thanks @sunlit-deng.
+- Level directives such as `/verbose` and `/think` no longer remove the first word of the user's message when both are sent together. [#97929](https://github.com/openclaw/openclaw/pull/97929) Thanks @yetval.
+- Malformed surrogate HTML entities in provider output no longer corrupt agent tool arguments, transcripts, or URLs, while legitimate entities and emoji still decode normally. [#99564](https://github.com/openclaw/openclaw/pull/99564) Thanks @mikasa0818.
+- Leaving one answer blank in a multi-question prompt no longer shifts the remaining typed answers onto the wrong questions. [#100832](https://github.com/openclaw/openclaw/pull/100832) Thanks @machine3at.
+- ACP runtime controls can now truly clear saved model, thinking, working-directory, permission, timeout, mode, and backend-extra settings so later turns do not reuse stale values. [#101044](https://github.com/openclaw/openclaw/pull/101044) Thanks @mushuiyu886.
+- Skill Workshop sessions now carry a clearer prompt with about 1.8KB less repeated prompt and schema overhead while retaining the same reviewable proposal flow. [#100481](https://github.com/openclaw/openclaw/pull/100481)
+- Prompt caching and cache traces now fingerprint malformed incoming text consistently with the cleaned text providers receive, avoiding needless cache misses and misleading diagnostics. [#101009](https://github.com/openclaw/openclaw/pull/101009) Thanks @qingminglong.
+- Operators now receive `payload.large` or `truncated` diagnostics and an accurate count whenever `chat.history` omits older messages, making hidden history trimming visible without changing client responses. [#96788](https://github.com/openclaw/openclaw/pull/96788) Thanks @zengwen-dt.
 
 - With memory flush enabled, important conversation context now gets a chance to reach durable memory before automatic compaction, reducing silent gaps in saved notes. [#84792](https://github.com/openclaw/openclaw/pull/84792) Thanks @turbotheturtle.
 - Long CJK-heavy sessions using a context engine such as lossless-claw no longer stop on a false `prompt too large` precheck after the engine has already managed the prompt. [#95342](https://github.com/openclaw/openclaw/pull/95342) Thanks @jalehman, @mpz4life.
@@ -1378,22 +1512,20 @@ The [model catalog](https://docs.openclaw.ai/concepts/models) also reports avail
 - Context-engine plugins can now identify the exact session that continues after compaction while older integrations using `sessionFile` remain compatible. [#101182](https://github.com/openclaw/openclaw/pull/101182) Thanks @jalehman.
 - Preparing a reset for a long-running session now avoids scanning the entire transcript, reducing startup file activity and memory use as history grows. [#99335](https://github.com/openclaw/openclaw/pull/99335) Thanks @gmschasiepen, @momothemage.
 
-#### Session Storage, Cleanup, and Diagnostics
+#### Session storage and cleanup
 
 - Gateway and embedded TUI startup now reclaim old session temporary files left by hard shutdowns, reducing hidden disk growth while preserving fresh or potentially recoverable state. [#90503](https://github.com/openclaw/openclaw/pull/90503) Thanks @sahibzada-allahyar.
 - Long-running gateways can clear stale one-shot model-check sessions before they crowd out real conversation history, with dedicated CLI reporting for review. [#91057](https://github.com/openclaw/openclaw/pull/91057) Thanks @jalehman, @wangwllu.
 - Mac users now get stronger protection for local OpenClaw SQLite data after abrupt power loss or an operating-system crash, with no configuration change. [#99067](https://github.com/openclaw/openclaw/pull/99067) Thanks @ooiuuii.
 - Session-memory diagnostics now show the correct workspace and memory-file paths for sibling directories whose names merely resemble the user's home path. [#101577](https://github.com/openclaw/openclaw/pull/101577) Thanks @cxbasdev.
 
-### Gateway, Security, and Trust
-
-#### Gateway and agent reliability
+### Gateway and Agent Reliability
 
 The [Gateway](https://docs.openclaw.ai/gateway) now starts, connects, reloads, and reports health with clearer behavior across configuration, networking, task routing, and result delivery. Agents are less likely to lose their selected workspace or conversation, background work reaches the right destination more consistently, and tool failures can stay out of chat progress when a useful final reply is still available.
 
 The [Gateway protocol](https://docs.openclaw.ai/gateway/protocol) and [restart recovery](https://docs.openclaw.ai/gateway/restart-recovery) paths also reject invalid state more clearly and keep inspection available during common lifecycle failures. Skill loading and prompt overhead are steadier as well, with [skill controls](https://docs.openclaw.ai/cli/skills) avoiding unnecessary work and preserving cache fingerprints for the text providers actually receive.
 
-#### Agent Run Completion and Recovery
+#### Run completion and replies
 
 - Timed-out cron jobs, expired agent requests, and disconnected HTTP clients now stop promptly instead of spending more time and provider calls on model fallback. [#62682](https://github.com/openclaw/openclaw/pull/62682) Thanks @altaywtf, @cinapbot, @simonusa.
 - Channel replies can now continue as soon as an embedded-agent turn finishes instead of waiting roughly 50 seconds for post-run authentication bookkeeping. [#85829](https://github.com/openclaw/openclaw/pull/85829) Thanks @turbotheturtle.
@@ -1415,7 +1547,7 @@ The [Gateway protocol](https://docs.openclaw.ai/gateway/protocol) and [restart r
 - With `messages.suppressToolErrors` enabled, tool failures no longer leak into chat as progress updates while normal progress and final replies continue. [#98063](https://github.com/openclaw/openclaw/pull/98063) Thanks @amittell, @moeedahmed.
 - Interactive and queued turns that finish without a visible answer now return a clear, sanitized failure message instead of leaving the chat looking stuck. [#100456](https://github.com/openclaw/openclaw/pull/100456) Thanks @mushuiyu886.
 
-#### Connected-Agent and Subagent Coordination
+#### Delegated agents and shared work
 
 - Legacy subagent sessions now follow their actual nesting level, so nested-agent limits and controls no longer fall back to top-level behavior. [#54593](https://github.com/openclaw/openclaw/pull/54593) Thanks @ruanrrn.
 - Subagent completion notices now arrive once instead of being repeated when the requesting session changes during delivery. [#92274](https://github.com/openclaw/openclaw/pull/92274) Related [#91527](https://github.com/openclaw/openclaw/issues/91527). Thanks @fsdwen, @obviyus, @zackchiutw.
@@ -1437,10 +1569,9 @@ The [Gateway protocol](https://docs.openclaw.ai/gateway/protocol) and [restart r
 - ACP run-to-session lookups now return the current active run instead of a stale association from an older run. [#96427](https://github.com/openclaw/openclaw/pull/96427) Thanks @lin-hongkuan.
 - Parent sessions no longer repeat an earlier child-agent progress message when the child later reports completion. [#101042](https://github.com/openclaw/openclaw/pull/101042) Thanks @mushuiyu886.
 
-#### Remote Result Delivery and Media
+#### Files, images, and result delivery
 
 - Isolated cron jobs can announce a cross-session result without feeding the recipient's reply back into the cron run and creating duplicate message loops. [#92283](https://github.com/openclaw/openclaw/pull/92283) Related [#92257](https://github.com/openclaw/openclaw/issues/92257). Thanks @harjothkhara, @nailujac, @vincentkoc.
-- Telegram PDFs and other documents now provide agents with a usable local path so normal runner tools can open the attachment. [#97647](https://github.com/openclaw/openclaw/pull/97647) Thanks @gallup007, @joshavant.
 - Agents can now read structured JSON and resource tool results during provider replay instead of receiving an empty result or generic media placeholder. [#97742](https://github.com/openclaw/openclaw/pull/97742) Thanks @obviyus.
 - Images attached to a CLI-backed prompt now survive embedded-model fallback, preserving the visual context needed to answer. [#99891](https://github.com/openclaw/openclaw/pull/99891) Thanks @vincentkoc.
 - Messages mixing inline and offloaded images now preserve every attachment position so model instructions that depend on sequence remain accurate. [#99902](https://github.com/openclaw/openclaw/pull/99902) Thanks @vincentkoc.
@@ -1453,47 +1584,7 @@ The [Gateway protocol](https://docs.openclaw.ai/gateway/protocol) and [restart r
 - Discord now presents commentary, reasoning, and tool activity in a clearer sequence across queued turns, while loopback MCP clients can attach to one Gateway session with an expiring, revocable token. [35af831](https://github.com/openclaw/openclaw/commit/35af831fd0bc549d9333a197a90abbecbc55ff35) Thanks @dwc1997, @lsr911, @ooiuuii, @romneyda, @solodmd, @vincentkoc, @wendy-chsy, @yeager, @zenglingbiao.
 - Successful agent tools that return safe plain text now show that output instead of leaving users with an apparently empty result. [#99526](https://github.com/openclaw/openclaw/pull/99526) Related [#99523](https://github.com/openclaw/openclaw/issues/99523). Thanks @snowzlm.
 
-#### Long-Run Context and Prompt Integrity
-
-- Embedded agents now retain configured compaction reserve limits when runtime safeguards save settings, reducing unexpected context-budget shrinkage during long work. [#92237](https://github.com/openclaw/openclaw/pull/92237) Thanks @sercada.
-- Telling an agent to remember a preference no longer triggers the unrelated warning used for promises to schedule an automatic reminder. [#93862](https://github.com/openclaw/openclaw/pull/93862) Thanks @arkyu2077.
-- Slack and similar channel turns with context-injecting plugins now send each inbound system label to the model once instead of duplicating it. [#95349](https://github.com/openclaw/openclaw/pull/95349) Thanks @gorkem2020, @openperf, @vincentkoc.
-- Sessions with large command output or summaries now compact before exceeding the model context, avoiding failed provider requests and misleading token budgets. [#97861](https://github.com/openclaw/openclaw/pull/97861) Thanks @yetval.
-- Long tool-heavy or compacted sessions now budget the real size of command output and summaries before sending a prompt, reducing context overflow failures. [#97928](https://github.com/openclaw/openclaw/pull/97928) Related [#97927](https://github.com/openclaw/openclaw/issues/97927). Thanks @liuhao1024, @yetval.
-- Edge-case fixes now preserve literal memory text and valid Unicode, improve voice-call cleanup and port checks, report Claude models and context limits accurately, and retain useful ClickClack connection errors. [#100204](https://github.com/openclaw/openclaw/pull/100204) Thanks @cxbasdev, @harjothkhara, @lilan0125, @lin-hongkuan, @liuhao1024, @mikasa0818, @pandah97, @sunlit-deng, @zoowh.
-- Fresh Claude CLI workspaces now run a pending `BOOTSTRAP.md` on the first reply so required identity, memory, and setup steps are completed before normal conversation. [#100560](https://github.com/openclaw/openclaw/pull/100560) Thanks @bill-starfoundry, @kruegerb, @vincentkoc.
-- Long-running agents are less likely to lose workspace instructions such as `AGENTS.md`, `SOUL.md`, or `MEMORY.md` for a turn during a temporary filesystem error. [#100910](https://github.com/openclaw/openclaw/pull/100910) Thanks @masatohoshino.
-- Embedded agent runs that omit a session key now retain the intended fallback session context more reliably. [31a65e0](https://github.com/openclaw/openclaw/commit/31a65e0647ae85eb4c9048051145f07003722caf) Thanks @vincentkoc.
-- A malformed custom tool in realtime Talk no longer removes the built-in consult tool or other valid custom tools from the session. [170150a](https://github.com/openclaw/openclaw/commit/170150a306e39204ebe1ab7be47450b73005de1f) Thanks @vincentkoc.
-- Local-model conversations now retain reusable prompt work when switching between interactive chats and background jobs, avoiding repeated multi-minute warm-up delays. [#98267](https://github.com/openclaw/openclaw/pull/98267) Related [#98261](https://github.com/openclaw/openclaw/issues/98261). Thanks @headbouyjb.
-- A response interrupted mid-tool-call no longer runs or saves that incomplete action, preventing accidental child sessions and other unintended side effects. [#97140](https://github.com/openclaw/openclaw/pull/97140) Thanks @galiniliev.
-- Agents running on macOS 26 now receive the macOS product version in their runtime prompt instead of the Darwin kernel version. [#95225](https://github.com/openclaw/openclaw/pull/95225) Thanks @sunlit-deng.
-- Level directives such as `/verbose` and `/think` no longer remove the first word of the user's message when both are sent together. [#97929](https://github.com/openclaw/openclaw/pull/97929) Thanks @yetval.
-- Malformed surrogate HTML entities in provider output no longer corrupt agent tool arguments, transcripts, or URLs, while legitimate entities and emoji still decode normally. [#99564](https://github.com/openclaw/openclaw/pull/99564) Thanks @mikasa0818.
-- Leaving one answer blank in a multi-question prompt no longer shifts the remaining typed answers onto the wrong questions. [#100832](https://github.com/openclaw/openclaw/pull/100832) Thanks @machine3at.
-- ACP runtime controls can now truly clear saved model, thinking, working-directory, permission, timeout, mode, and backend-extra settings so later turns do not reuse stale values. [#101044](https://github.com/openclaw/openclaw/pull/101044) Thanks @mushuiyu886.
-- Skill Workshop sessions now carry a clearer prompt with about 1.8KB less repeated prompt and schema overhead while retaining the same reviewable proposal flow. [#100481](https://github.com/openclaw/openclaw/pull/100481)
-- Prompt caching and cache traces now fingerprint malformed incoming text consistently with the cleaned text providers receive, avoiding needless cache misses and misleading diagnostics. [#101009](https://github.com/openclaw/openclaw/pull/101009) Thanks @qingminglong.
-- Operators now receive `payload.large` or `truncated` diagnostics and an accurate count whenever `chat.history` omits older messages, making hidden history trimming visible without changing client responses. [#96788](https://github.com/openclaw/openclaw/pull/96788) Thanks @zengwen-dt.
-
-#### CLI and Codex Conversation Continuity
-
-- Claude CLI conversations that exhaust their context now recover into a fresh reseeded session automatically, and timeout retries retain the temporary files they need to complete. [#98934](https://github.com/openclaw/openclaw/pull/98934) Related [#98897](https://github.com/openclaw/openclaw/issues/98897). Thanks @obviyus.
-- Local Ollama-backed CLI agent turns can now continue when the context engine reports an already-compacted transcript, allowing the assistant or MCP tool result to reach the user. [#99136](https://github.com/openclaw/openclaw/pull/99136) Thanks @mushuiyu886, @peterskwang, @pkoserowski, @psedd.
-- Existing Codex sessions can resume their bound threads more reliably after upgrades, resets, and compaction without depending on leftover transcript-side JSON files. [#101210](https://github.com/openclaw/openclaw/pull/101210)
-- A Codex reply delivered through `sourceReplyDeliveryMode: "message_tool_only"` now completes its turn promptly instead of later ending as an incomplete reply. [#95942](https://github.com/openclaw/openclaw/pull/95942) Thanks @omarshahine.
-- Codex app-server installations using the retired `on-failure` approval policy now upgrade to the supported `on-request` behavior without losing saved bindings. [70153f7](https://github.com/openclaw/openclaw/commit/70153f7f9c12be2ff025802c019e428047d1f579) Thanks @vincentkoc.
-- Existing Codex app-server conversations with dynamic tools can resume through the tool-fingerprint format upgrade instead of starting an avoidable replacement thread. [3051748](https://github.com/openclaw/openclaw/commit/305174845f38f075bfd5096a0a4912b8d7d2559a) Thanks @vincentkoc.
-- Legacy Codex bindings with large tool or MCP configurations can now migrate without overflowing plugin-state records or copying raw configuration secrets. [23228b6](https://github.com/openclaw/openclaw/commit/23228b67a47bf32fc9b662d13037757f51d329b8) Thanks @vincentkoc.
-- Upgraded Codex installations can now finish legacy binding migration and archive old sidecars instead of repeatedly retaining them after an earlier partial import. [39fac06](https://github.com/openclaw/openclaw/commit/39fac06f48745dcd4d7a840f8261631614bb1926) Thanks @vincentkoc.
-- Codex sessions created in beta 5 can keep their existing conversation after upgrade when the user MCP configuration is unchanged, without retaining its authorization token. [272750d](https://github.com/openclaw/openclaw/commit/272750daed354029c1968dce7cd6747163e0957a) Thanks @vincentkoc.
-- Provider-owned CLI conversations now keep the same session and transcript across the daily default reset boundary unless an explicit reset policy or `/reset` applies. [#97931](https://github.com/openclaw/openclaw/pull/97931) Thanks @yetval.
-- New Codex-backed threads now preserve configured plugin apps, can activate remote curated plugins, and run Guardian on the first eligible native OpenAI turn. [#98042](https://github.com/openclaw/openclaw/pull/98042) Thanks @kevinslin.
-- A stuck Claude CLI startup now fails only the affected turn instead of exiting the Gateway, and heartbeat activity no longer causes the next user turn to lose its CLI conversation history. [#98933](https://github.com/openclaw/openclaw/pull/98933) Related [#98894](https://github.com/openclaw/openclaw/issues/98894), [#98895](https://github.com/openclaw/openclaw/issues/98895). Thanks @obviyus.
-- Claude CLI agent runs now fail clearly when messaging tools are unavailable, recover when Claude exits without a result, retain more long-session continuity, and clean up prompt images and failed preparation files. [#99159](https://github.com/openclaw/openclaw/pull/99159) Related [#98946](https://github.com/openclaw/openclaw/issues/98946). Thanks @obviyus.
-- The same-release Codex session-continuity work now covers app-server thread start and resume, with binding fingerprints kept bounded throughout. [78edf1c](https://github.com/openclaw/openclaw/commit/78edf1cec15c4a45881386b94e06c71c64f90fa4) Thanks @vincentkoc.
-
-#### Gateway Restart, Readiness, and Queue Recovery
+#### Gateway restarts and queued work
 
 - A successfully delivered heartbeat notification no longer leaves stale recovery state that can block later heartbeat alerts or check-ins. [#83187](https://github.com/openclaw/openclaw/pull/83187) Thanks @agocs.
 - Restarting the Gateway during a deferred channel reload no longer starts the same channel twice, avoiding webhook port conflicts and repeated restart failures. [#94964](https://github.com/openclaw/openclaw/pull/94964) Related [#79487](https://github.com/openclaw/openclaw/issues/79487). Thanks @lzyyzznl, @tseller.
@@ -1511,10 +1602,9 @@ The [Gateway protocol](https://docs.openclaw.ai/gateway/protocol) and [restart r
 - Control UI and other Gateway clients now show the correct pairing or protocol-version guidance even when detail codes contain extra whitespace. [#99555](https://github.com/openclaw/openclaw/pull/99555) Thanks @ly85206559.
 - Gateway override authentication errors now tell CLI and TUI users whether to add a token or password, remove `--url`, or pair the relevant environment variables. [#100418](https://github.com/openclaw/openclaw/pull/100418) Thanks @gmays.
 - Standalone ACP clients now close the shared SQLite state database during shutdown so hot reloads and immediate restarts can reopen it without stale locks or callbacks. [#100691](https://github.com/openclaw/openclaw/pull/100691) Thanks @lzy3538.
-- First-run macOS setup now recognizes a successfully saved Codex login and is less likely to finish with a stale Gateway or bundled-skills warning. [#101218](https://github.com/openclaw/openclaw/pull/101218)
 - Voice-call webhook setup through ngrok or Tailscale now fails cleanly on tunnel stream errors instead of crashing the Gateway, and shutdown avoids waiting on an already-ended tunnel. [#101394](https://github.com/openclaw/openclaw/pull/101394) Thanks @cxbasdev.
 
-#### Transport and Process Failure Isolation
+#### Crashes and connection failures
 
 - Provider failures that contain BigInt, circular objects, or other unusual values now produce the intended structured transport error instead of crashing the error-reporting path. [#88401](https://github.com/openclaw/openclaw/pull/88401) Thanks @pluviobyte.
 - OpenClaw no longer crashes when a supervised child output stream fails immediately after launch. [#99802](https://github.com/openclaw/openclaw/pull/99802) Thanks @cxbasdev, @vincentkoc.
@@ -1529,7 +1619,7 @@ The [Gateway protocol](https://docs.openclaw.ai/gateway/protocol) and [restart r
 - Built-in grep stream failures now become ordinary tool errors instead of crashing the agent runtime, hanging the search, or leaving incomplete results unexplained. [#101014](https://github.com/openclaw/openclaw/pull/101014) Thanks @cxbasdev.
 - SSH-backed sandbox commands and uploads now stop cleanly, clean up child processes, and preserve the useful error when an input or output stream fails. [#101031](https://github.com/openclaw/openclaw/pull/101031) Thanks @cxbasdev.
 
-#### Gateway Tools and Operator Controls
+#### Gateway controls and settings
 
 - Experimental local-model lean mode now offers a smaller default tool menu for constrained models, while operators can explicitly retain media, voice, or PDF tools through allowlists. [#88881](https://github.com/openclaw/openclaw/pull/88881) Thanks @vincentkoc.
 - Operators can now set `OPENCLAW_SANDBOX_IMAGE` to build revision-specific sandbox image tags for controlled rollout and rollback. [#99915](https://github.com/openclaw/openclaw/pull/99915)
@@ -1541,12 +1631,11 @@ The [Gateway protocol](https://docs.openclaw.ai/gateway/protocol) and [restart r
 - External tools can now receive session-scoped Gateway access without process-wide credentials or permission to impersonate another session, forming the secure base for `openclaw attach`. [#96351](https://github.com/openclaw/openclaw/pull/96351) Thanks @anagnorisis2peripeteia, @obviyus.
 - Operators can inspect the effective tools for global sessions assigned to any configured agent, not only the default one. [#97265](https://github.com/openclaw/openclaw/pull/97265) Thanks @pick-cat.
 - Agent runs, Doctor, and Gateway tool views now describe access using the same policy that actually governs the run, reducing confusing permission mismatches. [#99817](https://github.com/openclaw/openclaw/pull/99817)
-- Trusted Gateway clients can now browse workspace directories and preview supported files, enabling the iOS and Android apps to inspect and share agent output without SSH. [#100738](https://github.com/openclaw/openclaw/pull/100738)
 - Bounded write-scope clients can now rename, pin, archive, categorize, and mark sessions unread without admin access, while user labels and stable list ordering survive refreshes. [#100964](https://github.com/openclaw/openclaw/pull/100964)
 - Embedded terminals can now open, resize, stream output, and close consistently across the Gateway, Control UI, and native apps. [6601576](https://github.com/openclaw/openclaw/commit/66015762a39030584d6a7cc91fad09f4709f8d3f)
 - Developers can build against and consume managed-worktree session results from the Gateway protocol package without duplicate-name failures. [8ce620f](https://github.com/openclaw/openclaw/commit/8ce620f3e675b25111dcbed6d1e124fedd4756a3) Thanks @vincentkoc.
 
-#### Diagnostics, Usage, and Status Accuracy
+#### Health, usage, and status
 
 - Embedded `openclaw agent --local` runs using OpenAI-compatible providers now report and save streamed token usage instead of showing zero, improving session, context, cost, and monitoring records. [#96523](https://github.com/openclaw/openclaw/pull/96523) Thanks @ly85206559, @vincentkoc.
 - Unusual ACP failure causes now produce stable, readable diagnostic details instead of a missing or invalid explanation. [#96270](https://github.com/openclaw/openclaw/pull/96270) Thanks @ly-wang19.
@@ -1555,12 +1644,11 @@ The [Gateway protocol](https://docs.openclaw.ai/gateway/protocol) and [restart r
 - Gateway MCP logs are now quieter and identify the responsible tool when schema problems occur, while distinct conflicts remain visible. [#98821](https://github.com/openclaw/openclaw/pull/98821) Thanks @alvelda, @harjothkhara.
 - Malformed Gateway MCP `tools/call` arguments now return a clear invalid-parameters response before any hook or tool can process them. [#99180](https://github.com/openclaw/openclaw/pull/99180) Thanks @vectorpeak.
 - MCP attach requests without a valid session key now return the intended validation error instead of crashing the Gateway with a TypeError. [#99488](https://github.com/openclaw/openclaw/pull/99488) Thanks @zhanglei99586.
-- Discord Code Mode progress no longer fills with repetitive Wait rows from background polling, while ordinary custom and plugin tools remain visible. [#100164](https://github.com/openclaw/openclaw/pull/100164)
 - Starting a new Codex session no longer emits a false history warning before its transcript exists, while genuine history failures remain visible. [#100484](https://github.com/openclaw/openclaw/pull/100484) Thanks @litang9, @vincentkoc.
 - Gateway usage reports now label start and end dates in the requested timezone, including correct calendar-day handling across local daylight-saving transitions. [#100567](https://github.com/openclaw/openclaw/pull/100567) Thanks @nianjiuzst.
 - Session usage details now recover malformed transcript dates from available message timestamps and return finite, consistently ordered values instead of nulls. [#100687](https://github.com/openclaw/openclaw/pull/100687) Thanks @sheyanmin.
 
-#### Unicode-Safe Output and Previews
+#### Text, emoji, and translated output
 
 - Truncated agent logs and diagnostic previews now keep emoji and other extended Unicode characters intact at the cutoff. [#96296](https://github.com/openclaw/openclaw/pull/96296) Thanks @ly-wang19.
 - Long agent grep lines now truncate emoji and uncommon CJK characters cleanly instead of ending with corrupted replacement symbols. [#97559](https://github.com/openclaw/openclaw/pull/97559) Thanks @zenglingbiao.
@@ -1580,18 +1668,17 @@ The [Gateway protocol](https://docs.openclaw.ai/gateway/protocol) and [restart r
 - Oversized agent tool results now preserve complete emoji and similar Unicode characters when shortened before being sent to the model. [#102087](https://github.com/openclaw/openclaw/pull/102087) Thanks @chengzhichao-xydt.
 - Gateway WebSocket failures now keep non-ASCII close reasons readable and within the byte limit instead of cutting characters into garbled text. [#100047](https://github.com/openclaw/openclaw/pull/100047) Thanks @narahariraghava.
 
-#### Security and trust
+### Accounts, Devices, and Data Protection
 
 Trust-sensitive actions stop earlier and explain more of what requires attention. The persistent [activity audit](https://docs.openclaw.ai/gateway/audit) can be filtered and exported after restarts, ClawHub installations distinguish blocked releases from releases that need deliberate acknowledgement, and guarded networking supports approved proxy-only paths without weakening destination checks.
 
 Credential resolution and redaction now cover more model and plugin paths, while [sandboxing and approvals](https://docs.openclaw.ai/gateway/sandboxing) enforce clearer device, permission, and workspace boundaries. The [secrets](https://docs.openclaw.ai/gateway/secrets) workflow also avoids exposing resolved model credentials in ordinary request and error paths.
 
-#### Secrets, Credentials, and Redaction
+#### Credentials and private data
 
 - Model-provider keys stored with SecretRefs now receive additional protection against accidental exposure in logs, errors, proxy captures, SDK setup, and runtime inspection, with a compatibility switch for secret sentinels. [#102009](https://github.com/openclaw/openclaw/pull/102009)
 - Operators can use targeted Doctor lint to detect credential residue in historical `config-audit.jsonl` entries and preview redaction before running `openclaw doctor --fix`. [#84450](https://github.com/openclaw/openclaw/pull/84450) Thanks @giodl73-repo.
 - Gateway service regeneration now keeps environment-backed secrets out of Linux unit definitions and preserves resolved provider and channel credentials on macOS. [#96065](https://github.com/openclaw/openclaw/pull/96065) Thanks @darren2030, @obviyus.
-- Multi-account Feishu setups can now start the default channel with an environment-backed top-level SecretRef and separate inline secrets for named accounts, without replacing the protected secret with plaintext. [#96965](https://github.com/openclaw/openclaw/pull/96965) Thanks @zw-xysk.
 - `openclaw doctor --fix` now preserves separate OAuth accounts for the same provider, including each account reference and saved display name. [#97541](https://github.com/openclaw/openclaw/pull/97541) Thanks @liuhao1024, @yetval.
 - Bare Fireworks API keys are now masked in logs, provider errors, command details, tool output, and Control UI diagnostics even without a nearby sensitive-field label. [#98226](https://github.com/openclaw/openclaw/pull/98226) Related [#98225](https://github.com/openclaw/openclaw/issues/98225). Thanks @ooiuuii.
 - Failed OpenAI or Codex credential refreshes now report that reauthentication is required and privately identify the affected profile instead of appearing healthy until model turns fail. [#99134](https://github.com/openclaw/openclaw/pull/99134) Related [#99120](https://github.com/openclaw/openclaw/issues/99120). Thanks @100yenadmin, @fuller-stack-dev.
@@ -1605,13 +1692,21 @@ Credential resolution and redaction now cover more model and plugin paths, while
 - Copied provider keys and tokens now have hidden terminal control characters removed before request headers are prepared, while intentional spaces remain intact. [#96444](https://github.com/openclaw/openclaw/pull/96444) Thanks @lin-hongkuan.
 - Masked malformed credentials now stay on one safe line in setup and authentication diagnostics even when the original input contains newlines or other control bytes. [#96445](https://github.com/openclaw/openclaw/pull/96445) Thanks @lin-hongkuan.
 - Security audits no longer mistake bundled placeholder keys for LM Studio, Ollama, and other keyless local providers as exposed plaintext credentials. [#97622](https://github.com/openclaw/openclaw/pull/97622) Thanks @xydigit-sj.
-- Telegram timeout logs now hide bot tokens embedded in Bot API paths, including custom and proxy roots, while retaining useful endpoint context. [#99428](https://github.com/openclaw/openclaw/pull/99428) Related [#96982](https://github.com/openclaw/openclaw/issues/96982). Thanks @liuhaiyang14, @xialonglee.
 - Control UI Activity previews now conceal API keys stored under dotted configuration names or returned in structured tool output. [#99460](https://github.com/openclaw/openclaw/pull/99460) Related [#99459](https://github.com/openclaw/openclaw/issues/99459). Thanks @ooiuuii.
 - Custom ACP error redactors now keep OpenClaw's built-in secret cleanup, preventing known tokens, credentials, and private-key material from leaking into formatted errors. [#100191](https://github.com/openclaw/openclaw/pull/100191) Thanks @lin-hongkuan.
 - When another OpenClaw process is refreshing OpenAI OAuth credentials, operators now see one useful contention error without duplicated wording or exposed local file paths. [#101573](https://github.com/openclaw/openclaw/pull/101573) Thanks @vincentkoc.
-- Telegram bot tokens now remain masked even when they cross internal boundaries inside very large logs or tool-error messages. [#103861](https://github.com/openclaw/openclaw/pull/103861) Thanks @vincentkoc.
 
-#### Owner and Administrator Boundaries
+#### Devices and pairing
+
+- Running a read-only local Gateway check no longer leaves stale pairing permissions that block a later agent, admin, write, or device-approval command. [#96002](https://github.com/openclaw/openclaw/pull/96002) Thanks @vincentkoc.
+- `/pair` now refuses setup codes that point to non-routable `0.0.0.0` or `::` addresses and gives operators secure Gateway URL guidance instead. [#98617](https://github.com/openclaw/openclaw/pull/98617) Thanks @crh-code.
+- Gateway authentication retries now send stored device tokens only to true loopback endpoints, not remote hostnames that merely resemble `127.*` addresses. [#99859](https://github.com/openclaw/openclaw/pull/99859) Thanks @ly85206559.
+- The `/pair` mobile setup flow now accepts local IPv6 ULA and link-local Gateway addresses without requiring TLS or a different advertised host, while public cleartext URLs remain blocked. [#101008](https://github.com/openclaw/openclaw/pull/101008) Thanks @zhangguiping-xydt.
+- Device owners can approve the request ID most recently shown by `openclaw devices list` after a reconnect, without weakening protection against newly expanded scopes. [#98145](https://github.com/openclaw/openclaw/pull/98145) Thanks @romneyda.
+- Swift native clients now support device-scoped skill approvals, with the reviewer-device field encoded in their generated Gateway models. [1403c64](https://github.com/openclaw/openclaw/commit/1403c64799ae62785e36327b6fc4c5235b10d8ba)
+- Gateway sign-in tracking now keeps bounded memory use during floods of failed attempts from many addresses while preserving existing lockouts. [#96224](https://github.com/openclaw/openclaw/pull/96224) Thanks @eleqtrizit.
+
+#### Permissions and approvals
 
 - Browser control now requires the same administrator permission through direct node invocation as through the standard browser request path, preventing write-only credentials or third-party plugins from gaining elevated access. [#85916](https://github.com/openclaw/openclaw/pull/85916) Thanks @eleqtrizit, @laphilosophie.
 - Only the configured owner can now change whether a group responds to mentions or every message through `/activation`. [#97838](https://github.com/openclaw/openclaw/pull/97838) Thanks @pgondhi987.
@@ -1627,36 +1722,7 @@ Credential resolution and redaction now cover more model and plugin paths, while
 - Only owners and administrative Gateway clients can now turn Memory Core dreaming on or off through `/dreaming`, while status and help remain available to others. [#97869](https://github.com/openclaw/openclaw/pull/97869) Thanks @eleqtrizit.
 - Non-admin Telegram and Discord users can no longer change the Gateway's Talk voice, though they can still view the current and available voices. [#97874](https://github.com/openclaw/openclaw/pull/97874) Thanks @eleqtrizit.
 - Installing or reconfiguring Codex Computer Use resources now requires owner or administrator access, while other authorized senders can still inspect status. [#97955](https://github.com/openclaw/openclaw/pull/97955) Thanks @eleqtrizit.
-- Renaming iMessage groups, changing icons or membership, and leaving groups now require verified owner or administrator authority. [#97961](https://github.com/openclaw/openclaw/pull/97961) Thanks @eleqtrizit.
 - Authenticated owners can use their already-granted shell, file, process, Skill Workshop, and plugin tools in WebChat without extending those permissions to guests or external senders. [#101271](https://github.com/openclaw/openclaw/pull/101271) Thanks @fuller-stack-dev.
-
-#### Channel Identity, Privacy, and Session Isolation
-
-- Slack rooms that require a mention no longer wake OpenClaw for ordinary messages when the bot identity is missing or untrusted, and setup warnings point operators to a Bot User OAuth Token when needed. [#91584](https://github.com/openclaw/openclaw/pull/91584) Thanks @hiragram.
-- Agents using OpenClaw's cron tools are now limited to their own scheduled jobs and session targets, while operator-managed cron remains unchanged and mixed-version setups fail closed with an `openclaw gateway restart` instruction. [#96883](https://github.com/openclaw/openclaw/pull/96883) Thanks @joshavant.
-- Cron wake actions started by an agent now remain within that agent's own session lanes, reducing the chance of waking another agent's conversation. [#97949](https://github.com/openclaw/openclaw/pull/97949) Thanks @eleqtrizit.
-- IRC allowlists now reject host-less `nick!user` entries by default and guide operators toward verified full host masks, reducing impersonation risk. [#98339](https://github.com/openclaw/openclaw/pull/98339) Thanks @yetval.
-- Write-scoped Gateway clients can still perform supported message actions but can no longer supply identity fields that masquerade as a trusted requester or owner. [#102031](https://github.com/openclaw/openclaw/pull/102031) Thanks @pgondhi987.
-- QQBot now avoids accidental reminders, limits exposure of private media details, and requires explicit confirmation before destructive channel or announcement actions. [#98032](https://github.com/openclaw/openclaw/pull/98032) Thanks @patrick-erichsen.
-- Discord read allowlists now block guild metadata, channel details, and thread listings before any provider request when those resources are outside the configured scope. [#98966](https://github.com/openclaw/openclaw/pull/98966) Thanks @pgondhi987.
-- Android SMS commands now clearly distinguish phone permission from the Gateway's separate opt-in, allowing read-only `sms.search` without also enabling `sms.send`. [#100993](https://github.com/openclaw/openclaw/pull/100993) Thanks @narcissus0702.
-- Multi-user bridges using `openclaw agent --agent ... --channel ... --to ...` now keep recipients in separate sessions when per-recipient isolation is configured. [#101507](https://github.com/openclaw/openclaw/pull/101507) Thanks @pingfanfan, @vincentkoc.
-- Read-only voice-call status now omits phone numbers, transcripts, routing details, processed event IDs, and raw metadata. [#97870](https://github.com/openclaw/openclaw/pull/97870) Thanks @eleqtrizit.
-- Android notification forwarding now leaves WhatsApp, Telegram, Discord, and Signal messages with their dedicated channel sessions, preventing duplicate or wrong-conversation replies while other selected apps continue to follow forwarding rules. [#101170](https://github.com/openclaw/openclaw/pull/101170)
-
-#### Pairing, Devices, and Authentication
-
-- Running a read-only local Gateway check no longer leaves stale pairing permissions that block a later agent, admin, write, or device-approval command. [#96002](https://github.com/openclaw/openclaw/pull/96002) Thanks @vincentkoc.
-- `/pair` now refuses setup codes that point to non-routable `0.0.0.0` or `::` addresses and gives operators secure Gateway URL guidance instead. [#98617](https://github.com/openclaw/openclaw/pull/98617) Thanks @crh-code.
-- Gateway authentication retries now send stored device tokens only to true loopback endpoints, not remote hostnames that merely resemble `127.*` addresses. [#99859](https://github.com/openclaw/openclaw/pull/99859) Thanks @ly85206559.
-- The `/pair` mobile setup flow now accepts local IPv6 ULA and link-local Gateway addresses without requiring TLS or a different advertised host, while public cleartext URLs remain blocked. [#101008](https://github.com/openclaw/openclaw/pull/101008) Thanks @zhangguiping-xydt.
-- Device owners can approve the request ID most recently shown by `openclaw devices list` after a reconnect, without weakening protection against newly expanded scopes. [#98145](https://github.com/openclaw/openclaw/pull/98145) Thanks @romneyda.
-- Repeated pairing repair attempts now produce one usable macOS approval prompt per device instead of stacking stale alerts that cannot complete approval. [#100976](https://github.com/openclaw/openclaw/pull/100976)
-- Swift native clients now support device-scoped skill approvals, with the reviewer-device field encoded in their generated Gateway models. [1403c64](https://github.com/openclaw/openclaw/commit/1403c64799ae62785e36327b6fc4c5235b10d8ba)
-- Gateway sign-in tracking now keeps bounded memory use during floods of failed attempts from many addresses while preserving existing lockouts. [#96224](https://github.com/openclaw/openclaw/pull/96224) Thanks @eleqtrizit.
-- On macOS, an explicit `OPENCLAW_STATE_DIR` now stays isolated from the machine's existing App Group pairing identity and device tokens. [#101779](https://github.com/openclaw/openclaw/pull/101779)
-
-#### Approvals and Execution Trust
 
 - With `strictInlineEval` enabled, versioned Python and PyPy commands plus additional PHP and R inline forms now require fresh explicit approval rather than inheriting executable trust. [#96216](https://github.com/openclaw/openclaw/pull/96216) Thanks @eleqtrizit.
 - In shared channels, only the person who started a Claude Code command can approve or deny its tool permission requests. [#98256](https://github.com/openclaw/openclaw/pull/98256) Thanks @eleqtrizit.
@@ -1665,7 +1731,6 @@ Credential resolution and redaction now cover more model and plugin paths, while
 - Codex plugin apps now avoid approval prompts for read-only actions, preserve per-app write policies across recovery, and refresh their app inventory after upgrades. [#97327](https://github.com/openclaw/openclaw/pull/97327) Thanks @kevinslin.
 - Windows exact-path execution approvals now launch the approved executable rather than a same-named program from the working directory. [#98260](https://github.com/openclaw/openclaw/pull/98260) Thanks @eleqtrizit.
 - The Codex plugin now names per-action destructive approval mode `ask`, making it clear that each write or destructive action remains available but requires confirmation. [#98501](https://github.com/openclaw/openclaw/pull/98501) Related [#98499](https://github.com/openclaw/openclaw/issues/98499). Thanks @kevinslin.
-- Long Discord approval previews now preserve complete emoji and flags when shortened, avoiding broken replacement characters. [#99539](https://github.com/openclaw/openclaw/pull/99539) Thanks @zhangguiping-xydt.
 - Exec approval prompts now display and transmit long command text containing emoji or malformed Unicode without broken characters or encoding failures. [#99566](https://github.com/openclaw/openclaw/pull/99566) Thanks @mikasa0818.
 - The Control UI terminal is now explicit opt-in, opens tabs under the selected agent's workspace and policy, and closes affected shells when accepted access restrictions tighten. [#100081](https://github.com/openclaw/openclaw/pull/100081) Thanks @rayncc.
 - Windows companion-node exec policies can now be viewed and updated through node-aware approvals commands and displayed correctly in Control UI. [#101669](https://github.com/openclaw/openclaw/pull/101669) Thanks @vincentkoc.
@@ -1679,10 +1744,24 @@ Credential resolution and redaction now cover more model and plugin paths, while
 - Long exec auto-review explanations containing emoji or supplementary CJK characters now shorten cleanly instead of showing a broken replacement symbol. [#101513](https://github.com/openclaw/openclaw/pull/101513) Thanks @wm0018.
 - Plugin approval titles and descriptions now remain readable when emoji or supplementary CJK characters fall at the Gateway's text limit. [#101580](https://github.com/openclaw/openclaw/pull/101580) Thanks @wm0018.
 
-#### Audits, Package Trust, and Managed Repairs
+#### Channels, users, and conversation separation
+
+- Agents using OpenClaw's cron tools are now limited to their own scheduled jobs and session targets, while operator-managed cron remains unchanged and mixed-version setups fail closed with an `openclaw gateway restart` instruction. [#96883](https://github.com/openclaw/openclaw/pull/96883) Thanks @joshavant.
+- Cron wake actions started by an agent now remain within that agent's own session lanes, reducing the chance of waking another agent's conversation. [#97949](https://github.com/openclaw/openclaw/pull/97949) Thanks @eleqtrizit.
+- Write-scoped Gateway clients can still perform supported message actions but can no longer supply identity fields that masquerade as a trusted requester or owner. [#102031](https://github.com/openclaw/openclaw/pull/102031) Thanks @pgondhi987.
+- Multi-user bridges using `openclaw agent --agent ... --channel ... --to ...` now keep recipients in separate sessions when per-recipient isolation is configured. [#101507](https://github.com/openclaw/openclaw/pull/101507) Thanks @pingfanfan, @vincentkoc.
+- Read-only voice-call status now omits phone numbers, transcripts, routing details, processed event IDs, and raw metadata. [#97870](https://github.com/openclaw/openclaw/pull/97870) Thanks @eleqtrizit.
+
+#### Plugin and skill download checks
 
 - ClawHub now checks community plugin and skill releases before download, blocking prohibited releases and requiring explicit acknowledgement for suspicious ones while leaving existing installs in place when an update is skipped. [#81364](https://github.com/openclaw/openclaw/pull/81364) Thanks @jesse-merhi.
+
+#### Activity history
+
 - Authorized operators now have a durable audit history for agent and tool activity, with filters, stable paging, bounded JSON export, configurable recording, and automatic retention limits. [#98704](https://github.com/openclaw/openclaw/pull/98704)
+
+#### Security checks and guided fixes
+
 - Operators using workspace repairs can now run `doctor --fix` to disable policy-denied Gateway HTTP endpoints without removing nested URL-fetch settings. [#99731](https://github.com/openclaw/openclaw/pull/99731) Thanks @giodl73-repo.
 - `openclaw security audit` now warns that per-agent skill allowlists do not prevent shell-capable agents from reaching globally configured MCP servers. [#98352](https://github.com/openclaw/openclaw/pull/98352) Thanks @momothemage.
 - Managed deployments can now require entries such as `system.run` in `gateway.nodes.denyCommands`, and Policy doctor warns when configuration drift leaves a privileged node command available. [#99121](https://github.com/openclaw/openclaw/pull/99121) Thanks @giodl73-repo.
@@ -1693,13 +1772,11 @@ Credential resolution and redaction now cover more model and plugin paths, while
 - `doctor --fix` now shows the exact `gateway.bind=loopback` or `gateway.nodes.denyCommands` change needed for sensitive findings without applying it automatically. [#99776](https://github.com/openclaw/openclaw/pull/99776) Thanks @giodl73-repo.
 - `openclaw security audit` now reports Browser exposure only when plugin policy actually allows the Browser plugin to run. [#97732](https://github.com/openclaw/openclaw/pull/97732) Thanks @amtellezfernandez.
 
-#### Network and Request Safety
+#### Network request protections
 
 - Provider, channel, media, and web requests can now reach public destinations through a managed proxy even when local DNS is unavailable or differs from the proxy's DNS. [#98951](https://github.com/openclaw/openclaw/pull/98951) Related [#98925](https://github.com/openclaw/openclaw/issues/98925). Thanks @momothemage, @sandl99.
 - Malformed MCP OAuth failures now return a bounded HTTP-status diagnostic instead of allowing an unbounded error response to exhaust agent memory. [#98143](https://github.com/openclaw/openclaw/pull/98143) Thanks @pick-cat.
 - Under strict SSRF policy, remote-browser discovery can no longer redirect OpenClaw from the configured CDP endpoint to a different host, port, or security mode. [cbc833a](https://github.com/openclaw/openclaw/commit/cbc833a7f33804db11f11274678770a1b55be3ca) Thanks @vincentkoc.
-- Oversized or malformed Microsoft Teams personal-chat attachment metadata now fails safely with a warning instead of consuming unbounded Gateway memory. [#99125](https://github.com/openclaw/openclaw/pull/99125) Thanks @ly85206559.
-- Android Canvas content can no longer navigate to device-local web services, while normal remote and Gateway-hosted pages continue to work. [#99874](https://github.com/openclaw/openclaw/pull/99874) Thanks @ly85206559.
 - Oversized or never-ending responses from supported external providers now stop at a fixed limit with a labeled error instead of consuming memory until the full body arrives. [0a14444](https://github.com/openclaw/openclaw/commit/0a14444924e34e031133c997b00d30573353c5a0) Thanks @joshavant.
 - Web fetch and provider integrations now enforce response-size caps without allocating an entire nonstandard response in memory. [#99884](https://github.com/openclaw/openclaw/pull/99884) Thanks @zenglingbiao.
 - Trusted custom provider hosts are now protected from DNS rebinding into local services; intentional loopback aliases must use an explicit local origin or enable `allowPrivateNetwork`. [#100835](https://github.com/openclaw/openclaw/pull/100835) Thanks @machine3at.
@@ -1710,7 +1787,7 @@ Credential resolution and redaction now cover more model and plugin paths, while
 - Anthropic and Gemini PDF analysis now blocks unsafe private-network redirects and oversized responses by default while still supporting configured local endpoints. [#97872](https://github.com/openclaw/openclaw/pull/97872) Thanks @eleqtrizit.
 - Anthropic requests through Cloudflare AI Gateway now receive OpenClaw's standard private-address blocking, timeouts, retry guidance, and managed response safeguards. [#98003](https://github.com/openclaw/openclaw/pull/98003) Thanks @wangmiao0668000666.
 
-#### Sandbox, Paths, and Configuration Trust
+#### File, path, and configuration protections
 
 - Sandboxed agents with host browser control disabled can no longer reach a signed-in host browser through a paired browser node. [#97958](https://github.com/openclaw/openclaw/pull/97958) Thanks @eleqtrizit.
 - Hooks and skills no longer activate from unsafe inherited configuration values, while ordinary configured paths and explicit defaults continue to work. [#59694](https://github.com/openclaw/openclaw/pull/59694) Thanks @yonganzhang.
@@ -1720,44 +1797,97 @@ Credential resolution and redaction now cover more model and plugin paths, while
 - The Windows installer now accepts patched SQLite runtimes, rejects unsafe or unreadable ones, and reports the detected version when another Node.js upgrade is required. [28db140](https://github.com/openclaw/openclaw/commit/28db14005a77ca146c1f10979501dcfd375e8d01) Thanks @vincentkoc.
 - Managed host tools no longer inherit the active Conda environment from the shell that launched OpenClaw, avoiding unintended Python and package-manager behavior. [#99425](https://github.com/openclaw/openclaw/pull/99425) Related [#99424](https://github.com/openclaw/openclaw/issues/99424). Thanks @krissding, @ooiuuii.
 - OpenShell workspace file operations now stay inside the validated local sandbox mirror, with unsafe symlink, hard-link, cross-root, and changing-directory cases failing cleanly. [c6f5725](https://github.com/openclaw/openclaw/commit/c6f5725906dcaaaeeb0b5942addc844ffc579caf) Thanks @joshavant.
-- Signal local-file attachments that are oversized or use suspicious paths now fail quickly with a clear error before consuming excessive Gateway memory. [#101391](https://github.com/openclaw/openclaw/pull/101391) Thanks @cxbasdev.
 - Config recovery now warns when the file was repaired but its final permissions could not be hardened, preserving the recovery while exposing the security issue. [#95348](https://github.com/openclaw/openclaw/pull/95348) Thanks @hugenshen.
-- Android release builds no longer expose detailed `camera.clip` settings, device data, temporary paths, and recording events in production logs. [#99484](https://github.com/openclaw/openclaw/pull/99484) Thanks @nianjiuzst.
 - Installing or updating ClawHub skills, plugins, and packages on Linux no longer risks changing shared `/tmp` permissions and disrupting unrelated services. [#101246](https://github.com/openclaw/openclaw/pull/101246) Thanks @ch3ch2cho2021, @yangxiansheng.
 
-### Clients and Interfaces
-
-#### Clients and interfaces
+### Official App Updates
 
 Across first-party client surfaces, conversation lists, command palettes, notifications, media, connection state, and file or diff views behave more consistently. Shared keyboard, path, status, Talk, and voice behavior is less likely to drift between clients, and failures leave clearer recovery paths.
-
 The [Android](https://docs.openclaw.ai/platforms/android), [iOS](https://docs.openclaw.ai/platforms/ios), and [macOS](https://docs.openclaw.ai/platforms/macos) apps add refreshed navigation, voice-message and Watch reply workflows, multiple Gateway profiles, background location options, and many chat and connection fixes. Cached state, trust, push settings, and the selected Gateway remain better separated when people switch between installations.
 
-#### Compare usage, quotas, costs, and context at a glance
-
-- The `/usage full` footer is shorter and easier to read on Telegram and other narrow displays, with detailed token information still available through dedicated views. [#92877](https://github.com/openclaw/openclaw/pull/92877) Thanks @marvinthebored.
-- iOS and macOS chat now show a context-usage ring that changes warning color near the limit, helping users anticipate compaction or truncation in long conversations. [#101183](https://github.com/openclaw/openclaw/pull/101183)
-- Custom usage footers now render alias and map fallbacks correctly even when model or mode names collide with properties such as `toString` or `constructor`. [#98503](https://github.com/openclaw/openclaw/pull/98503) Related [#98466](https://github.com/openclaw/openclaw/issues/98466). Thanks @chenyangjun-xy, @zhanglei99586.
-
-#### Preview linked work, files, downloads, and diffs without leaving the client
+#### Shared app changes
 
 - The Diffs viewer now provides a multi-file overview and direct file navigation, while PNG and PDF exports omit controls that cannot be used. [#100753](https://github.com/openclaw/openclaw/pull/100753)
-- iPhone and iPad users can now browse an agent workspace, preview generated files, logs, and configuration, and share a file without returning to the host computer. [#100767](https://github.com/openclaw/openclaw/pull/100767)
 - After the Diffs viewer is reopened or refreshed, its toolbar controls now act only on the currently displayed diff cards. [#96138](https://github.com/openclaw/openclaw/pull/96138) Thanks @brokemac79, @davinci282828.
 - Session tools now display the correct absolute path for projects beside the home directory instead of turning a shared text prefix into a misleading `~...` path. [#96562](https://github.com/openclaw/openclaw/pull/96562) Thanks @he-yufeng.
-
-#### Follow live web replies and tool activity without transcript clutter
-
 - Realtime Talk consult calls acknowledge as soon as the embedded agent run is accepted, rather than waiting for it to finish. [#101091](https://github.com/openclaw/openclaw/pull/101091) Thanks @romneyda.
+- Authorized remote clients can now request playable speech for an individual assistant message using the existing Gateway TTS configuration without accessing server-local files. [#100770](https://github.com/openclaw/openclaw/pull/100770)
 
-#### Write, read, and organize Android chats
+##### Android and iOS
+
+- Trusted Gateway clients can now browse workspace directories and preview supported files, enabling the iOS and Android apps to inspect and share agent output without SSH. [#100738](https://github.com/openclaw/openclaw/pull/100738)
+- iOS and Android users can create empty session groups, rename them once across their sessions, and remove a group without deleting the conversations inside it. [#101234](https://github.com/openclaw/openclaw/pull/101234)
+- Android and iOS now explain which side needs an update when app and Gateway protocol versions differ and avoid offering reconnect attempts that cannot succeed. [#98385](https://github.com/openclaw/openclaw/pull/98385) Related [#98384](https://github.com/openclaw/openclaw/issues/98384). Thanks @joshavant.
+- Mobile camera clips and screen recordings longer than 30 seconds can now finish within the existing duration limit without the request expiring early. [#99455](https://github.com/openclaw/openclaw/pull/99455) Thanks @nianjiuzst.
+- The iOS and Android terminal pages now receive the operator credential from the connected device session, so authenticated users do not land on a terminal that cannot connect. [451190d](https://github.com/openclaw/openclaw/commit/451190d625693153dfdca800fdbb9a05b2c21b6a) Thanks @vincentkoc.
+- iOS and Android can now show the Gateway terminal as a focused full-screen view with stored credentials and a clear unavailable state instead of embedding the full desktop Control UI. [9c78489](https://github.com/openclaw/openclaw/commit/9c7848928f8b7f4104dd3eb4ddc9330d850d1886)
+- Android and iOS Gateway setup now clearly requires Secure TLS for remote hosts, warns before trusted LAN use without encryption, and offers actionable update guidance for protocol mismatches. [#101325](https://github.com/openclaw/openclaw/pull/101325) Thanks @joshavant.
+
+##### iOS and macOS
+
+- iOS and macOS chat now show a context-usage ring that changes warning color near the limit, helping users anticipate compaction or truncation in long conversations. [#101183](https://github.com/openclaw/openclaw/pull/101183)
+- Apple native app users across 21 supported non-English locales now see translated Listen and speech-playback status controls. [0146534](https://github.com/openclaw/openclaw/commit/01465340f6dfe6dd51671e3a0c3b33d23c1ff1d7)
+- Swift clients can now decode skill curator actions and status details such as pinned state, use counts, timestamps, archived reasons, and overlaps. [ad833d7](https://github.com/openclaw/openclaw/commit/ad833d788305faeb9c12f3f4c5068674d201ee68)
+- Apple chat now presents fenced code with theme-aware highlighting and GitHub-style tables as aligned native tables on iOS and macOS. [#100207](https://github.com/openclaw/openclaw/pull/100207)
+- Apple chat now restores the visible in-progress state after backgrounding or reconnecting, preventing overlapping sends and reconciling one correct final reply. [#100277](https://github.com/openclaw/openclaw/pull/100277)
+- iOS chat now shows and switches the active model, while iOS and macOS model pickers support pinned favorites and the five most recent choices. [#100774](https://github.com/openclaw/openclaw/pull/100774)
+- Display equations in iOS and macOS chats now appear as readable, accessible typeset math, with horizontal scrolling for wide formulas and raw text retained for malformed expressions. [#100829](https://github.com/openclaw/openclaw/pull/100829)
+- iOS and macOS hide the thinking-level control for models that cannot use it, avoid sending stale unsupported settings, and restore the previous level when a reasoning-capable model is selected again. [#100875](https://github.com/openclaw/openclaw/pull/100875)
+- Streaming replies in iOS and macOS chats now reveal text more smoothly word by word, while reduced-motion users still receive immediate text and completed messages remain unchanged. [#100884](https://github.com/openclaw/openclaw/pull/100884)
+- iOS and macOS users can preview a safe link's title and description inside chat before deciding whether to open it. [#101198](https://github.com/openclaw/openclaw/pull/101198)
+- Expanded link previews on iOS and macOS can now show a safe page thumbnail, with the existing text card retained when image loading fails. [#101387](https://github.com/openclaw/openclaw/pull/101387)
+- Finished iOS and macOS chat replies now typeset inline LaTeX formulas while streaming text, code, currency, and invalid math remain readable as plain text. [#101388](https://github.com/openclaw/openclaw/pull/101388)
+- iOS chat and macOS webchat users can search, pin, rename, archive, restore, and reopen sessions from the in-chat switcher instead of scrolling a simple recent list. [#101053](https://github.com/openclaw/openclaw/pull/101053)
+
+##### Native app localization and design
+
+- Transcript export controls, chat actions, and export failure messages are now translated across 21 supported native app locales. [45f561a](https://github.com/openclaw/openclaw/commit/45f561ab6c24de9848b70823c80b7ac770531c41)
+- Supported non-English native apps now translate newer app information, support links, and message retry, delete, and waiting-to-send states. [82f5ac1](https://github.com/openclaw/openclaw/commit/82f5ac150ffde0c847696cddcdcb2d300bb44294)
+- Broader native app setup, chat, Talk, permission, connection, session, provider, and status text now uses the selected language across the language packs updated in this release. Sources: [a39b07b](https://github.com/openclaw/openclaw/commit/a39b07bb15f280c6d83522f79b1397104e5e05c4), [f8e1e0c](https://github.com/openclaw/openclaw/commit/f8e1e0c5bfbc1b43339ffaaaddd3ee6e45083c2d), [db27d2e](https://github.com/openclaw/openclaw/commit/db27d2ecfa77666397f841d6c0d47153ff94d822), [28a8414](https://github.com/openclaw/openclaw/commit/28a841472684eed2d98a1a277fcefc30855b580b), [e8e96bf](https://github.com/openclaw/openclaw/commit/e8e96bf7ee03aa251fc196693deb70af81da3d63), [6ea407d](https://github.com/openclaw/openclaw/commit/6ea407d46223ad3336abfc93abfb0345b2a58e75), [0011a18](https://github.com/openclaw/openclaw/commit/0011a184786686e625268f55799bdfbb8c8c7fda), [8c5adbf](https://github.com/openclaw/openclaw/commit/8c5adbfe3ec4f68a49d41a3b313a3b6b059c81d3), [019603d](https://github.com/openclaw/openclaw/commit/019603d336028c31de7c49814b45bb29314174e8), [d3d7282](https://github.com/openclaw/openclaw/commit/d3d7282a8cf4c99a29efa8c58c1980557f1c1abc), [267898c](https://github.com/openclaw/openclaw/commit/267898cddb9804bc2f27f94350e0c2342b48bf4b), [55ed57a](https://github.com/openclaw/openclaw/commit/55ed57a4e39b8e40628b9fcbfc982e9ac5fd86b5), [c54dc67](https://github.com/openclaw/openclaw/commit/c54dc67381933fa6240fe617e414fd6f1933ea38), [fd0355d](https://github.com/openclaw/openclaw/commit/fd0355d5b1a12c263bbd87e01ee88f451d11514b), [49726a5](https://github.com/openclaw/openclaw/commit/49726a5f5cbc013d42d7bf64c3033bbce4af319c), [2ffeedf](https://github.com/openclaw/openclaw/commit/2ffeedf406e741e9f58858c83af06aa763ba1ab6), [#98043](https://github.com/openclaw/openclaw/pull/98043), [beca2b1](https://github.com/openclaw/openclaw/commit/beca2b1749733f4afccf47a780187859e7afce22), [4078dc7](https://github.com/openclaw/openclaw/commit/4078dc78cc79b6a9ab0564f065fe1871a9a0c499), [e7e98f6](https://github.com/openclaw/openclaw/commit/e7e98f6399cd7bffdd5598bb86a48066dd2ce3e3), [3020f78](https://github.com/openclaw/openclaw/commit/3020f7817eb3ecf54057ed2847a0d54d0801d348), [0c82908](https://github.com/openclaw/openclaw/commit/0c82908f78e9eb33a9ad13dd726fa92833a688d9), [8a3935f](https://github.com/openclaw/openclaw/commit/8a3935fe0ba7b06dd76203b4f20b11a74ecbc688), [3f289fd](https://github.com/openclaw/openclaw/commit/3f289fdb4042446042b6cd9a5261a17dc3edf6a0), [203a896](https://github.com/openclaw/openclaw/commit/203a896b27c5c5191823138a4365578e0e77352d), [6afef15](https://github.com/openclaw/openclaw/commit/6afef15100fb402fb747a3543822d33fb9086f68). Thanks @yeager.
+- New-chat and worktree-chat entry points now appear in the selected language across supported Android and Apple app locales. [24bca38](https://github.com/openclaw/openclaw/commit/24bca38cdaad4a304a5624ef8ddc6cdc9b7d4d5a)
+- Supported non-English native apps now cover more Gateway setup, session, provider, health, messaging, terminal, and device text without English gaps. [52f1e05](https://github.com/openclaw/openclaw/commit/52f1e056006dc3aeca574877d51b942c87fa7cb1)
+- Refreshed native language packs now cover workspace files, sharing actions, folder states, Android SMS guidance, message delivery states, and related branding. [a9b0a9a](https://github.com/openclaw/openclaw/commit/a9b0a9a12b07899d8a0c4638a8521f5865d75bc6)
+- Supported non-English native apps now translate the new Terminal destination, Gateway setup guidance, Back action, connection messages, and OpenClaw branding. [e069cb2](https://github.com/openclaw/openclaw/commit/e069cb26f72a2e6233df8e2bd18a4274e1d53722)
+- Native app onboarding and AI connection guidance now reflects Crestodian and the current setup flow across supported non-English locales. Sources: [ad4809f](https://github.com/openclaw/openclaw/commit/ad4809f677f531cb00085c1d006db3d46a529ed8), [f0ecc16](https://github.com/openclaw/openclaw/commit/f0ecc16629f018d157345f1c653011f3ec9c97d3).
+- Native app command search now translates loading, unavailable, retry, and no-result states across the languages updated in this release. Sources: [745d2d0](https://github.com/openclaw/openclaw/commit/745d2d09cdbc79a019d2f7491bf04959ead4e51b), [7f7bec7](https://github.com/openclaw/openclaw/commit/7f7bec78445d049ba1d1b7019b2085cc808beb5a), [35be1c8](https://github.com/openclaw/openclaw/commit/35be1c81439c8df99e4de7057344c5bf0d056f56), [7db67ab](https://github.com/openclaw/openclaw/commit/7db67abd9eb01c36c55f3621a1b3521b290131b3), [4bc5766](https://github.com/openclaw/openclaw/commit/4bc57666cd8b0924f5ab15d5d8cafc4ba9b0ddbb), [0672720](https://github.com/openclaw/openclaw/commit/06727207d66ec1aef814664cf1e88da82c100140), [2a8cd44](https://github.com/openclaw/openclaw/commit/2a8cd440d14ae66e41c63140ea0c0067ca033461), [fd648fb](https://github.com/openclaw/openclaw/commit/fd648fbb17575fec3780c7d8fddf13780b083df2), [00b0b40](https://github.com/openclaw/openclaw/commit/00b0b40e284f40c3c8906251bbb202b81caab656), [a67990a](https://github.com/openclaw/openclaw/commit/a67990a180d6915328165dd7dc9975395160a784), [7640f67](https://github.com/openclaw/openclaw/commit/7640f672b407cf28384cbf5396cdf5d20965da6b), [15f4819](https://github.com/openclaw/openclaw/commit/15f481920c079364513b06939edc06aba6caef04), [4d1d720](https://github.com/openclaw/openclaw/commit/4d1d720164dbf3eb46c4d3a4a98814c2a1d2bdc2), [d1d3a27](https://github.com/openclaw/openclaw/commit/d1d3a2724feeca65759f2658c4af6a8350c1f854), [c2737d5](https://github.com/openclaw/openclaw/commit/c2737d55a9ffea741e07687a6eb40eff61fd369d), [bd3263d](https://github.com/openclaw/openclaw/commit/bd3263d713a1dbb299c14392139bab3cc5aed428), [127ce63](https://github.com/openclaw/openclaw/commit/127ce639547ef0f6016c829c31b915d97d4a55df), [0c960cd](https://github.com/openclaw/openclaw/commit/0c960cd8ae6a1553bdef3820b8167376772e7e53), [e6c3ad9](https://github.com/openclaw/openclaw/commit/e6c3ad99637b4f6fba34d9f2d64f7ca5b2413e45), [84c86f7](https://github.com/openclaw/openclaw/commit/84c86f73eb99b716598d031e7dce58ed73fa5d28), [e7aea60](https://github.com/openclaw/openclaw/commit/e7aea605426cfe8e39287b1e07fa23436260c88b).
+- Native chat controls for jumping to the latest message or reply now use the selected language across the translations in this release. Sources: [e31fa36](https://github.com/openclaw/openclaw/commit/e31fa360d94a0efd6003079271986ad32f0c2f9c), [375def8](https://github.com/openclaw/openclaw/commit/375def86042a938141bed0c635c361df72cf0ab2), [aabe44f](https://github.com/openclaw/openclaw/commit/aabe44f6382206a49855e8b7c7f1848666790f61), [48c3f4b](https://github.com/openclaw/openclaw/commit/48c3f4b10326a890352ba5e7dd51fad897145c38), [3db6fb9](https://github.com/openclaw/openclaw/commit/3db6fb9972768d7b4979a2649f202d8851935dd8), [a4b51e5](https://github.com/openclaw/openclaw/commit/a4b51e58d3627ba4524a98d9aebe2c11115b284e), [a60686d](https://github.com/openclaw/openclaw/commit/a60686dbc376667625e1613aa131af5487e5d8fa), [12e17ec](https://github.com/openclaw/openclaw/commit/12e17ec052982a37c29245d738954488248ea8c7), [6c4ac0c](https://github.com/openclaw/openclaw/commit/6c4ac0c71da53cd99968a976894c7b8def078f67), [bdc6258](https://github.com/openclaw/openclaw/commit/bdc625866b942f8f8d82ecfb72427f7c90992e78), [a775f9f](https://github.com/openclaw/openclaw/commit/a775f9f78e80a76b49cdf259e71ee002ee1da101), [a1f6acc](https://github.com/openclaw/openclaw/commit/a1f6accef457ab9f48adff2975a853e28c291909), [ee9f61d](https://github.com/openclaw/openclaw/commit/ee9f61d724ff265017c93aef0b11c2d5f1a2401b), [f188c66](https://github.com/openclaw/openclaw/commit/f188c664c0e73d455f3bf6c5ac074a5432269c50), [2525078](https://github.com/openclaw/openclaw/commit/2525078b86544143634697a4f46aef850b783025), [ed5ccda](https://github.com/openclaw/openclaw/commit/ed5ccda79c8b0b96c59a6af880bf114997e85414), [a6a4792](https://github.com/openclaw/openclaw/commit/a6a4792098a88953f1be8a81035f06b9bd7ed83a), [0924bee](https://github.com/openclaw/openclaw/commit/0924bee96bcc86715942d11c31b878c323548e90), [0420aef](https://github.com/openclaw/openclaw/commit/0420aefb1d4eeab37bbcf7f50268c41cfb760b26), [d23c4fd](https://github.com/openclaw/openclaw/commit/d23c4fdbb55f06833b9e37675185c003f7b3ea81), [37f0067](https://github.com/openclaw/openclaw/commit/37f006725d3706cfa28922178e123d8ff192f352).
+- Native prompts for starting work, checking status, using phone and voice controls, pairing, and returning to Chat now use the selected language across the translations in this release. Sources: [dd050bc](https://github.com/openclaw/openclaw/commit/dd050bc5f8151488e080b117714ea9f5cad832b5), [db72ffd](https://github.com/openclaw/openclaw/commit/db72ffd5d47050acb2d4dd72de8087c162876523), [4997802](https://github.com/openclaw/openclaw/commit/4997802eb0051cc83b9da1a06c923f211ff12159), [2dc7bd1](https://github.com/openclaw/openclaw/commit/2dc7bd19cb67742a7908427d2512d7b816f4d96f), [4381c29](https://github.com/openclaw/openclaw/commit/4381c294942b342c0b7df82668fdae7883978ba8), [9eb1a05](https://github.com/openclaw/openclaw/commit/9eb1a05c49082f221547015ad7a69561d113964a), [7838bc8](https://github.com/openclaw/openclaw/commit/7838bc82b6df287946b9d45afd52f507c1e1463c), [4352eaf](https://github.com/openclaw/openclaw/commit/4352eaf6ade181654d5a729e5632a1681385b1e6), [43fe5cc](https://github.com/openclaw/openclaw/commit/43fe5cc890fc98a29af7aacd4030a0c288f76f76), [6bd1a4b](https://github.com/openclaw/openclaw/commit/6bd1a4b89f2f82da1e19b0205c80fc4bd855be6d), [531af42](https://github.com/openclaw/openclaw/commit/531af42246acecc8ee37d0ee189c8d3b8fea3af6), [305715c](https://github.com/openclaw/openclaw/commit/305715c725af26d80c69bc9daa3fad77df330139), [8f9e163](https://github.com/openclaw/openclaw/commit/8f9e1635a1d6351f9ec4a64c2624423e45b5e7a8), [2abad57](https://github.com/openclaw/openclaw/commit/2abad575d250b6e7723a660c92b5ad7fed9ea379).
+- Native app status and appearance choices now use the selected language across the translations in this release. Sources: [58d199b](https://github.com/openclaw/openclaw/commit/58d199bbcbd298a3e806bcf5c56eb242759dea5b), [c15348b](https://github.com/openclaw/openclaw/commit/c15348b74f6291282d79b592ec29577b2b871852), [c047a3a](https://github.com/openclaw/openclaw/commit/c047a3a9c669f12c51e3cf0f72606e53e85f7f2b), [e191685](https://github.com/openclaw/openclaw/commit/e191685be93f9a461d6346439ce227419fb41d1d), [b1e173d](https://github.com/openclaw/openclaw/commit/b1e173d4c30419f8c7f7393a9c4977f30a49ddcd), [50fecf8](https://github.com/openclaw/openclaw/commit/50fecf848c405af2902838cecb34771367f3552c), [5211afe](https://github.com/openclaw/openclaw/commit/5211afeb67cc521eb7b55cf19884e1d77c6dbbce), [4c43cf5](https://github.com/openclaw/openclaw/commit/4c43cf5eaba52ab729587c9d4f4a660638770701), [fb394de](https://github.com/openclaw/openclaw/commit/fb394de179ba7b5914b1b886795d67c17aff39e8), [ba8c1fa](https://github.com/openclaw/openclaw/commit/ba8c1fa76fe9031424cc2727c7d0f7b2cd08ecba), [7bee4f6](https://github.com/openclaw/openclaw/commit/7bee4f67d4cd66c78009497f931b8a19e03dda2a), [77ab268](https://github.com/openclaw/openclaw/commit/77ab268f79a5cee110df9ee0014b08f67368ff55), [2417d94](https://github.com/openclaw/openclaw/commit/2417d94663fdfd8770ebf00d67f0a73ae1a904cb), [9b6ef34](https://github.com/openclaw/openclaw/commit/9b6ef34f9deaa6f6fa524b860340d7000eb87ccd), [9c4274f](https://github.com/openclaw/openclaw/commit/9c4274f94570f1f41ee30350eae32255c675c38e), [2671bcc](https://github.com/openclaw/openclaw/commit/2671bcc39f8c17d55ae3e96cabf48e4d474cac19), [b21153b](https://github.com/openclaw/openclaw/commit/b21153b98d6d2bde03cd1979d6db6ecb2ad47bab), [117e8e1](https://github.com/openclaw/openclaw/commit/117e8e1e042709b6eba851fc8d208b98c43b22b9), [cc0d7e1](https://github.com/openclaw/openclaw/commit/cc0d7e1dd4c638034cafc27a93da1bb7c7735694), [e6f3f54](https://github.com/openclaw/openclaw/commit/e6f3f54ad05728d874fdc4ff492e688741785249), [dd64f66](https://github.com/openclaw/openclaw/commit/dd64f66bb981595b8558af907d628fd49322a06f), [4c16e66](https://github.com/openclaw/openclaw/commit/4c16e669b2252724cd6e68bf68d727de3edfedc9), [3a8375c](https://github.com/openclaw/openclaw/commit/3a8375c29a810d923603d9f043e3e0916548bddf), [3e3b6d6](https://github.com/openclaw/openclaw/commit/3e3b6d6669468460959f1c9a57f4cb6a84b00620), [c356245](https://github.com/openclaw/openclaw/commit/c356245fc0d04803f768b6cd0675744728618fcd), [d506201](https://github.com/openclaw/openclaw/commit/d506201c6578e5ae782c4a401cdfd46557a11b1f).
+- Native app license notices, acknowledgements, and unavailable-file explanations now use the selected language across the translations in this release. Sources: [34bf5a9](https://github.com/openclaw/openclaw/commit/34bf5a90b4ae2ff2b987899a44f9c6b10467f6fe), [068088c](https://github.com/openclaw/openclaw/commit/068088c7fc98d6e18d67855abb2c9ad9e6de449a), [a623ac7](https://github.com/openclaw/openclaw/commit/a623ac71eba10364e558490326273cf369d9ee3c), [71374d3](https://github.com/openclaw/openclaw/commit/71374d379b40cd080992955e57587b552e55a5f6), [a9b0de8](https://github.com/openclaw/openclaw/commit/a9b0de803789a9945c12bf37f143ae4cde2faeba), [8f495e2](https://github.com/openclaw/openclaw/commit/8f495e2f805af548d78ee1f3834bde962a86f1a9), [436dd39](https://github.com/openclaw/openclaw/commit/436dd3934328bce7d75d77998212441859a044db), [f917e89](https://github.com/openclaw/openclaw/commit/f917e893a6d3fb2005074b6a1d752cf4fd505497), [2c8b97c](https://github.com/openclaw/openclaw/commit/2c8b97cee9e056f155e2144311eccd5e5a66a6e2), [ace162b](https://github.com/openclaw/openclaw/commit/ace162b95b47d1a16e9b2dd42851af64c731a9f1), [e60cccf](https://github.com/openclaw/openclaw/commit/e60cccf8a9c95d7a158e3fe4b8f47204141fea2e), [359ea4c](https://github.com/openclaw/openclaw/commit/359ea4c19bc9251e225a130d6f9c0fcab71d0ec2), [b7bc860](https://github.com/openclaw/openclaw/commit/b7bc8600e46aca2fbac8e0ddbea1a1084db80c64), [49ea27e](https://github.com/openclaw/openclaw/commit/49ea27ecc230b49b664b594e99758400595fa80f), [99cbc58](https://github.com/openclaw/openclaw/commit/99cbc589536e7309a5f8c468de4d9795addad55f), [204526a](https://github.com/openclaw/openclaw/commit/204526ac0a2a35fd7482cac4c64ecee6ad7de0fa), [3821c36](https://github.com/openclaw/openclaw/commit/3821c36d58cebab82ebf46614413b688930e3b47), [030d184](https://github.com/openclaw/openclaw/commit/030d184254756706af637fb1eeb0a9c31036eb8c), [24f639c](https://github.com/openclaw/openclaw/commit/24f639c66ca9a05a6531d4504971f67434989324), [499feb2](https://github.com/openclaw/openclaw/commit/499feb2e2fd474c7abeff9e87743b720ba03f593), [591d099](https://github.com/openclaw/openclaw/commit/591d099897938a27c6383b17ca36e128abcf098c).
+- Native photo-permission controls now explain limited, selected, and recent-photo access in the selected language across the translations in this release. Sources: [c360f92](https://github.com/openclaw/openclaw/commit/c360f92563fb2221452ae599412ea61f9eee188b), [4dd027e](https://github.com/openclaw/openclaw/commit/4dd027eaa1f14356f4f7740d4258d72adb59d2f2), [9cde1ca](https://github.com/openclaw/openclaw/commit/9cde1ca97141784f89816afd9283b2d7416b9a8c), [328fb70](https://github.com/openclaw/openclaw/commit/328fb70ba730bc7bb4cd3a0eaa5e6d1d089c734c), [71e5fcc](https://github.com/openclaw/openclaw/commit/71e5fccb644b51e50f61e8e3bd6715a0fd717a58), [b11d710](https://github.com/openclaw/openclaw/commit/b11d710e524f7d6d664ea5857f358f4ebbaff6e4), [55a2a9b](https://github.com/openclaw/openclaw/commit/55a2a9b0f0c4c56d03292b930ed116a146322e6c), [c4b40d0](https://github.com/openclaw/openclaw/commit/c4b40d0b2a008c1ba1bae82a180e455bc8656e00), [3a1b983](https://github.com/openclaw/openclaw/commit/3a1b983bc227f67ac0862f1761d53f6a3fee083d), [dea40a5](https://github.com/openclaw/openclaw/commit/dea40a5f96307e9da0862bbc774100f799110d6c), [4b1fab8](https://github.com/openclaw/openclaw/commit/4b1fab8047319bc07e47ef8136a9c83594729ed8), [44ca739](https://github.com/openclaw/openclaw/commit/44ca739f77ab7dfaa1f096627e84bc79e859b849), [d36452c](https://github.com/openclaw/openclaw/commit/d36452cc0bd66722f426c7c686859cbfcb1e9f24), [a50a59e](https://github.com/openclaw/openclaw/commit/a50a59e64802a1263bd8befe6c4bea57e055499e), [49b68e1](https://github.com/openclaw/openclaw/commit/49b68e1039347867c227e992fa7fcfac3e58f932), [122e4ba](https://github.com/openclaw/openclaw/commit/122e4ba3a30f32b8d563d7afa2f60cc4cd6c431b), [4086d35](https://github.com/openclaw/openclaw/commit/4086d35caf54c3a9759b21ad5f83536cdf08c2bc), [547a563](https://github.com/openclaw/openclaw/commit/547a563e4ca3cf6d573cf6210db3ffbedb592175), [538f28a](https://github.com/openclaw/openclaw/commit/538f28abce55949ee0a412da07664092427413d1), [c5afa92](https://github.com/openclaw/openclaw/commit/c5afa92c1f8ac63a9c01b7971acabcfb1d6f948f), [32a986d](https://github.com/openclaw/openclaw/commit/32a986d21c170741b5505870dd0a2e98ec410b1d).
+- Native skill availability, Gateway setup, diagnostics, privacy, and access guidance now use the selected language across the translations in this release. Sources: [fdcd5c0](https://github.com/openclaw/openclaw/commit/fdcd5c0eb0c2493f5d3845fcf76a02f4e1a6d6ba), [26f6735](https://github.com/openclaw/openclaw/commit/26f673526e7a6680df175570da67baf6fe5abeed), [5220eff](https://github.com/openclaw/openclaw/commit/5220effc10c92cec20abb6df0c5acdaa40e56ad6), [bb7dbda](https://github.com/openclaw/openclaw/commit/bb7dbda027b9451281f2d81d2f4cbad9a003599c), [952245b](https://github.com/openclaw/openclaw/commit/952245b49c4b6743afc9ad97f6f3e48af407e5ed), [edb1e74](https://github.com/openclaw/openclaw/commit/edb1e74645ebba0b8992863a9d395d80fd10498f), [f7bad57](https://github.com/openclaw/openclaw/commit/f7bad5749b9a441a6b55d1dc34cf9ef037270960), [0602930](https://github.com/openclaw/openclaw/commit/060293056b33ff1a44dd5ab6f44ff8783d612f31), [e779b8f](https://github.com/openclaw/openclaw/commit/e779b8f1bde92173dcaeadd87853a458656dd7b3), [0400be7](https://github.com/openclaw/openclaw/commit/0400be7118c03b6e3c2330fc31d9451e5a2c0151), [851d0ad](https://github.com/openclaw/openclaw/commit/851d0ad7354321ccad43ecf5f7c04abd168da0dc), [1e0dd95](https://github.com/openclaw/openclaw/commit/1e0dd95e5d9a0bb4d62dd72ce451a9902b4eb6d3), [703e1ad](https://github.com/openclaw/openclaw/commit/703e1adadefe213c4fcc312ccb4aead7b120a3a1), [1c93e50](https://github.com/openclaw/openclaw/commit/1c93e509a36673ee8a58b0c1aa6c4b9a9a00a5e8), [37c45f2](https://github.com/openclaw/openclaw/commit/37c45f28fbbdbd768bd7fefa8d8a94274d075aa9), [8fe917b](https://github.com/openclaw/openclaw/commit/8fe917b4f7784e44dabcb6cf7b673da74bf3753e), [da21e4b](https://github.com/openclaw/openclaw/commit/da21e4b8dd47fc174cef6e3373471aba37f851e0), [f4f63b1](https://github.com/openclaw/openclaw/commit/f4f63b187041cd20fe4016ad62d85ad59b94fa66), [3e4febb](https://github.com/openclaw/openclaw/commit/3e4febbe68f82d8ee06977486a0f50ecba933452), [a82cd35](https://github.com/openclaw/openclaw/commit/a82cd35ed5405a5cca392a5272fe898264eaf107), [52323b6](https://github.com/openclaw/openclaw/commit/52323b67c5872f5c396ad2eb5e5749bfa1a63f6e).
+- Native Gateway connection, diagnostics, permissions, onboarding, Chat, and Talk guidance now uses the selected language across the translations in this release. Sources: [3b27bb4](https://github.com/openclaw/openclaw/commit/3b27bb4536a3bdc4b6bdf82fc59f878e478121d0), [e296d14](https://github.com/openclaw/openclaw/commit/e296d1447eb7b7666100e34169b0cd27b07e759c), [5516775](https://github.com/openclaw/openclaw/commit/5516775933a84f3bc88f9a485d7f53ad2d9e5928), [6ec4962](https://github.com/openclaw/openclaw/commit/6ec49620baf962ecbd2c69f0299fd98410f18a8f), [291f2a4](https://github.com/openclaw/openclaw/commit/291f2a477373c01cde9aac0f36438b9073b7677e), [7e2d41b](https://github.com/openclaw/openclaw/commit/7e2d41b94c7a11ba96abe1839819e7c63c3e6c87), [81bc96f](https://github.com/openclaw/openclaw/commit/81bc96f70f9e50fcf7cbbe014d0e6f9b10ff35d0), [574556c](https://github.com/openclaw/openclaw/commit/574556cd32d816436209d006d6744273b82a0276), [8bb44e6](https://github.com/openclaw/openclaw/commit/8bb44e60d0cf740d13663d40a780fa28705eeeed), [ae09908](https://github.com/openclaw/openclaw/commit/ae09908259e163598eea8170640255aa6d8c04ce), [42fc19d](https://github.com/openclaw/openclaw/commit/42fc19d77e93e7a41ce634c43f3317d3e123fd6a), [28bbb43](https://github.com/openclaw/openclaw/commit/28bbb439f6398a3e48fa8a88e67879290bb70ea0), [6ff9185](https://github.com/openclaw/openclaw/commit/6ff9185637fc3ab0fd1f966355fc7cfe505863e8), [4be0be6](https://github.com/openclaw/openclaw/commit/4be0be697fb95444596f9d604cf54ea4ecd12943), [0f1fbbe](https://github.com/openclaw/openclaw/commit/0f1fbbe8779dfbe317bf99de0a45aebcdadec1ea), [d893a72](https://github.com/openclaw/openclaw/commit/d893a724f6f0e91161a93a223d01057c04cd8db4), [f5cb29b](https://github.com/openclaw/openclaw/commit/f5cb29b2881edf85de14569adbfaea44b7b02056).
+- Wake Words and Discovery Logs now use current, natural labels across supported non-English native app locales. [de30d2f](https://github.com/openclaw/openclaw/commit/de30d2f5c333d49004f0771f529b578ed1af6f17)
+- Supported non-English native apps now translate workspace file browsing and sharing, image preview failures, offline status, and custom Gateway header controls. [6b99fd9](https://github.com/openclaw/openclaw/commit/6b99fd9a94ce99023c77e733efe7943e4f51c285)
+- OpenClaw's mascot now uses the same float, blink, antenna, and claw animations across web, iOS, and Android surfaces while respecting reduced-motion preferences. [851156a](https://github.com/openclaw/openclaw/commit/851156af3b35b56c56d8d20fff7fb97104d13d1a)
+
+#### Android
+
+##### Setup, navigation, and app tools
+
+- New Android users now get a guided first-run path through setup-code or QR entry, Gateway pairing, node approval, permissions, recovery steps, and confirmed phone readiness before onboarding completes. [#98752](https://github.com/openclaw/openclaw/pull/98752) Thanks @jesse-merhi.
+- Android users can open an agent-workspace shell from Settings &gt; Terminal, with clear connection guidance and Gateway credentials passed without placing the token in the URL when supported. [fcd7eb6](https://github.com/openclaw/openclaw/commit/fcd7eb6130ed0d3de4a850bda6434f6a8b67664f)
+- Android users can sideload the official signed `OpenClaw-Android.apk` from a stable GitHub release and verify it with the published SHA-256 checksums. [#101212](https://github.com/openclaw/openclaw/pull/101212)
+- Android node reconnects now point users from a failed `devices approve` attempt to the correct `openclaw nodes approve &lt;requestId&gt;` command, including a reminder to reuse connection flags. [#98115](https://github.com/openclaw/openclaw/pull/98115) Thanks @welfo-beo.
+- Android SMS commands now clearly distinguish phone permission from the Gateway's separate opt-in, allowing read-only `sms.search` without also enabling `sms.send`. [#100993](https://github.com/openclaw/openclaw/pull/100993) Thanks @narcissus0702.
+- Android notification forwarding now leaves WhatsApp, Telegram, Discord, and Signal messages with their dedicated channel sessions, preventing duplicate or wrong-conversation replies while other selected apps continue to follow forwarding rules. [#101170](https://github.com/openclaw/openclaw/pull/101170)
+- Android Canvas content can no longer navigate to device-local web services, while normal remote and Gateway-hosted pages continue to work. [#99874](https://github.com/openclaw/openclaw/pull/99874) Thanks @ly85206559.
+- Android release builds no longer expose detailed `camera.clip` settings, device data, temporary paths, and recording events in production logs. [#99484](https://github.com/openclaw/openclaw/pull/99484) Thanks @nianjiuzst.
+- Android Back navigation now returns users from Gateway or Talk settings, Sessions, and Providers to the Voice, Chat, or command-palette tab where they started. [#98914](https://github.com/openclaw/openclaw/pull/98914) Thanks @lokimorty.
+- Android now presents evenly spaced bottom tabs and avoids the chat-cache startup crash that could block entry to the post-onboarding shell. [#100382](https://github.com/openclaw/openclaw/pull/100382) Thanks @iwhatsskill.
+- Android's Home overview now uses more consistent card, Talk, and recent-session spacing for a calmer, easier-to-tap first screen. [#100059](https://github.com/openclaw/openclaw/pull/100059) Thanks @iwhatsskill.
+- Android's command palette now keeps action and session rows visually aligned, with consistent icons, navigation spacing, and clean truncation for long labels. [#101072](https://github.com/openclaw/openclaw/pull/101072) Thanks @iwhatsskill.
+- Android users can open a scheduled job to inspect its timing, payload, delivery state, recent results, errors, and exact ID. [#95107](https://github.com/openclaw/openclaw/pull/95107) Thanks @tosko4.
+- The Android Files card now lets users browse the active agent workspace, preview text and images, and share output directly from their phone. [#100776](https://github.com/openclaw/openclaw/pull/100776)
+- Android users can now read bundled third-party and open-source license notices directly from Settings &gt; Licenses. [#99299](https://github.com/openclaw/openclaw/pull/99299) Thanks @joshavant.
+- Android's About screen now clearly identifies OpenClaw and provides direct links to the website, documentation, source repository, and Discord community. [#100994](https://github.com/openclaw/openclaw/pull/100994)
+
+##### Chat and sessions
 
 - Android Chat now includes a New chat action and a `/` command browser that filters the current agent's advertised commands without dropping command arguments. [#98796](https://github.com/openclaw/openclaw/pull/98796) Thanks @iwhatsskill, @solvely-colin.
 - Android Chat now lets users choose and verify the configured agent for new messages, with Chat, Talk mode, and the home canvas staying aligned to that selection. [#80422](https://github.com/openclaw/openclaw/pull/80422) Thanks @bcperry.
 - Android chats now render links, lists, quotes, emphasis, code, and plain text consistently through the shared Markdown renderer. [#88899](https://github.com/openclaw/openclaw/pull/88899) Related [#88014](https://github.com/openclaw/openclaw/issues/88014). Thanks @iman-sharif, @pluviobyte.
-- Android Back navigation now returns users from Gateway or Talk settings, Sessions, and Providers to the Voice, Chat, or command-palette tab where they started. [#98914](https://github.com/openclaw/openclaw/pull/98914) Thanks @lokimorty.
 - Android chat now adds light- and dark-mode syntax highlighting to supported fenced code, making code-heavy replies easier to scan without delaying partial or oversized messages. [#100217](https://github.com/openclaw/openclaw/pull/100217)
-- Android now presents evenly spaced bottom tabs and avoids the chat-cache startup crash that could block entry to the post-onboarding shell. [#100382](https://github.com/openclaw/openclaw/pull/100382) Thanks @iwhatsskill.
 - Android chat now restores an active response with buffered text after reconnecting or reopening, and recovers missed event gaps without duplicating transcript rows. [#100384](https://github.com/openclaw/openclaw/pull/100384)
 - Android chat now keeps sent messages and active replies stable through reconnects, reconciling delayed history without duplicate turns or stale composer activity. [#100551](https://github.com/openclaw/openclaw/pull/100551)
 - Android chats now keep internal reasoning, tool results, and raw operational details out of both live conversations and reopened offline caches. [#100826](https://github.com/openclaw/openclaw/pull/100826) Thanks @iman-sharif.
@@ -1772,17 +1902,13 @@ The [Android](https://docs.openclaw.ai/platforms/android), [iOS](https://docs.op
 - Android users with a hardware keyboard can now send from the chat composer with Enter, while an unaccepted send still preserves the draft. [de8db74](https://github.com/openclaw/openclaw/commit/de8db7405850146199c5f4e6e9efa0704878eea4) Thanks @vincentkoc.
 - Android users can switch the current chat's model from the composer, pin favorites, revisit recent choices, and return to the default without leaving the conversation; older pairings may need to be renewed. [#100798](https://github.com/openclaw/openclaw/pull/100798)
 - Android chat now renders top-level display LaTeX as readable equations while invalid or still-streaming math remains visible as text. [#101435](https://github.com/openclaw/openclaw/pull/101435)
-- iOS and Android users can create empty session groups, rename them once across their sessions, and remove a group without deleting the conversations inside it. [#101234](https://github.com/openclaw/openclaw/pull/101234)
 - Android's thread picker now prioritizes real conversations, hides internal setup and device sessions, and still makes valid older chats available through All. [#99557](https://github.com/openclaw/openclaw/pull/99557) Thanks @ly85206559.
-- Android's Home overview now uses more consistent card, Talk, and recent-session spacing for a calmer, easier-to-tap first screen. [#100059](https://github.com/openclaw/openclaw/pull/100059) Thanks @iwhatsskill.
-- Android's "New chat in worktree" action is now translated across supported non-English locales instead of appearing with a missing resource. [#100805](https://github.com/openclaw/openclaw/pull/100805) Thanks @amknight.
 - Returning to an already loaded Android chat no longer flashes a loading screen, and the Overview recent-session list stays deduplicated and steadier during refreshes. [#100966](https://github.com/openclaw/openclaw/pull/100966) Thanks @solvely-colin.
-- Android's command palette now keeps action and session rows visually aligned, with consistent icons, navigation spacing, and clean truncation for long labels. [#101072](https://github.com/openclaw/openclaw/pull/101072) Thanks @iwhatsskill.
 - Android Home's Recent Sessions section now keeps recently active rows in a stable order, collapses duplicates, and preserves labels and timestamps during partial live refreshes. [#101161](https://github.com/openclaw/openclaw/pull/101161) Thanks @solvely-colin.
 - Android physical-keyboard users can press or hold Enter to send once without leaving a stray newline, while Shift+Enter and in-progress input-method composition keep working. [#101360](https://github.com/openclaw/openclaw/pull/101360) Thanks @3ninyt3nin-creator, @joshavant.
 - Expanded Android link previews now keep thumbnail memory within a byte budget, reducing excessive memory retention during long chats. [#101560](https://github.com/openclaw/openclaw/pull/101560)
 
-#### Pair, switch, and recover Android Gateways
+##### Gateway setup and connections
 
 - Android can now keep multiple Gateways paired and switch among them without repeating setup, while each Gateway retains its own credentials, chat state, queued messages, and removable local data. [#100947](https://github.com/openclaw/openclaw/pull/100947)
 - Android Gateway actions now stop promptly when their connection closes, while requests started after reconnect are not cancelled by old cleanup. [#98067](https://github.com/openclaw/openclaw/pull/98067) Thanks @nianjiuzst.
@@ -1799,7 +1925,6 @@ The [Android](https://docs.openclaw.ai/platforms/android), [iOS](https://docs.op
 - Android now isolates cached conversations and queued commands when users re-pair, sign out, or replace Gateway credentials, preventing a new identity from inheriting the previous one's data. [#100454](https://github.com/openclaw/openclaw/pull/100454)
 - Android onboarding now finishes after permission-triggered node approval instead of trapping users in a loop between the Permissions and approval screens. [#100959](https://github.com/openclaw/openclaw/pull/100959)
 - Android users can now connect to Gateways behind Cloudflare Access or another authenticating reverse proxy by saving the required credential headers in Advanced manual-connection settings. [#100765](https://github.com/openclaw/openclaw/pull/100765)
-- Android and iOS now explain which side needs an update when app and Gateway protocol versions differ and avoid offering reconnect attempts that cannot succeed. [#98385](https://github.com/openclaw/openclaw/pull/98385) Related [#98384](https://github.com/openclaw/openclaw/issues/98384). Thanks @joshavant.
 - When Android Chat cannot reach the Gateway, users can open Gateway Settings or copy connection diagnostics directly from the blocked screen. [#94566](https://github.com/openclaw/openclaw/pull/94566) Thanks @tosko4.
 - Android manual Gateway setup now accepts IPv6 hosts such as `::1` directly instead of rejecting an address that works only when entered as a bracketed WebSocket URL. [#99107](https://github.com/openclaw/openclaw/pull/99107) Thanks @ly85206559.
 - Android manual setup now accepts and preserves complete `ws://`, `wss://`, and HTTP Gateway addresses, including embedded ports, so private-LAN onboarding reaches the intended server. [#99110](https://github.com/openclaw/openclaw/pull/99110) Related [#87216](https://github.com/openclaw/openclaw/issues/87216). Thanks @cursoragent, @ly85206559, @ruben2000de.
@@ -1808,7 +1933,7 @@ The [Android](https://docs.openclaw.ai/platforms/android), [iOS](https://docs.op
 - Android Gateway settings now show both setup actions as full-width buttons, keeping `Pair New Gateway` readable and easy to tap. [#100090](https://github.com/openclaw/openclaw/pull/100090) Thanks @iwhatsskill.
 - The Android app now respects a user's disconnect, connect, or gateway-switch choice during startup and reports final disconnect failures to fire-and-forget callers. [#101799](https://github.com/openclaw/openclaw/pull/101799)
 
-#### Talk, dictate, listen, and record on Android
+##### Voice and Talk
 
 - Android users can record and send a voice note of up to three minutes from the chat composer without entering live Talk mode. [#101193](https://github.com/openclaw/openclaw/pull/101193)
 - Android background push-to-talk requests now return `NODE_BACKGROUND_UNAVAILABLE` instead of attempting a microphone start that the operating system may reject. [#98055](https://github.com/openclaw/openclaw/pull/98055) Thanks @nianjiuzst.
@@ -1818,14 +1943,13 @@ The [Android](https://docs.openclaw.ai/platforms/android), [iOS](https://docs.op
 - Android push-to-talk now cleans up backgrounded, cancelled, or retried captures without reopening the microphone or stopping a newer voice session, and overlapping requests return busy. [#100552](https://github.com/openclaw/openclaw/pull/100552) Thanks @xialonglee.
 - Android users can now long-press an assistant reply and choose Listen, with visible playback status, tap-to-stop, and on-device speech fallback. [#100772](https://github.com/openclaw/openclaw/pull/100772)
 - Android Talk Mode now keeps push-to-talk busy until the active turn is safely handed off, preventing overlapping microphones, stale playback, or the wrong relay resuming. [#100786](https://github.com/openclaw/openclaw/pull/100786)
-- Authorized remote clients can now request playable speech for an individual assistant message using the existing Gateway TTS configuration without accessing server-local files. [#100770](https://github.com/openclaw/openclaw/pull/100770)
 - Android voice features now speak only chat events explicitly identified as assistant replies, preventing user, tool, system, or role-less text from being read aloud. [#99123](https://github.com/openclaw/openclaw/pull/99123) Thanks @ly85206559.
 - Android Talk now applies supported directive values even when generated or dictated JSON uses different capitalization for keys such as `Voice` or `Language_Code`. [#99592](https://github.com/openclaw/openclaw/pull/99592) Thanks @ly85206559.
 - Android Talk Mode now delivers agent-consult answers even when realtime completion events arrive out of order, preventing sessions from remaining stuck on `Thinking...`. [#100049](https://github.com/openclaw/openclaw/pull/100049) Thanks @qingminglong.
 - Android Voice and Talk setup text now truncates cleanly on narrow screens and at larger accessibility font sizes instead of appearing clipped. [#100060](https://github.com/openclaw/openclaw/pull/100060) Thanks @iwhatsskill, @solvely-colin.
 - The Android Voice tab now gives Realtime Talk and Dictation text and controls enough room to remain readable on phones and at larger font sizes. [#100491](https://github.com/openclaw/openclaw/pull/100491) Thanks @iwhatsskill.
 
-#### Use Android cameras, photos, location, permissions, and notifications safely
+##### Device permissions, notifications, and capture
 
 - Third-party Android builds can allow Gateway-requested location checks while the app is in the background by selecting Location &gt; Always and granting Android's persistent location permission. [#100967](https://github.com/openclaw/openclaw/pull/100967) Thanks @ioridev.
 - Android notification automations now queue accepted events during Gateway connection or reconnection and deliver them in order once the link is ready. [#92602](https://github.com/openclaw/openclaw/pull/92602) Related [#79552](https://github.com/openclaw/openclaw/issues/79552). Thanks @ashishpatel26, @hectorrp13.
@@ -1834,494 +1958,43 @@ The [Android](https://docs.openclaw.ai/platforms/android), [iOS](https://docs.op
 - Android onboarding now marks Contacts and Calendar ready only after both read and write access are available, including when those permissions arrive in separate prompts. [#99158](https://github.com/openclaw/openclaw/pull/99158) Thanks @nianjiuzst.
 - Android now reports Contacts and Calendar access as granted only when both reading and adding entries are authorized, preventing misleading setup results. [#99204](https://github.com/openclaw/openclaw/pull/99204) Thanks @nianjiuzst.
 - The Android companion no longer forwards OpenClaw's own notifications back to the Gateway, even when older allowlists still include the app package. [#99568](https://github.com/openclaw/openclaw/pull/99568) Thanks @ly85206559.
-- Mobile camera clips and screen recordings longer than 30 seconds can now finish within the existing duration limit without the request expiring early. [#99455](https://github.com/openclaw/openclaw/pull/99455) Thanks @nianjiuzst.
 - Android third-party onboarding now recognizes SMS access when send and read permissions are granted in separate prompts, while genuinely missing permissions remain unauthorized. [#99147](https://github.com/openclaw/openclaw/pull/99147) Thanks @nianjiuzst.
 - Cancelled, timed-out, failed, or interrupted Android `camera.clip` requests now release the camera and remove unfinished temporary files before later camera commands run. [#99153](https://github.com/openclaw/openclaw/pull/99153) Thanks @nianjiuzst.
 - Android node commands now honor common boolean values such as `yes`, `no`, `1`, and `0` for app filters and camera audio options. [#99873](https://github.com/openclaw/openclaw/pull/99873) Thanks @ly85206559.
 - Tapping an Android notification created by `system.notify` now brings OpenClaw to the foreground. [#100888](https://github.com/openclaw/openclaw/pull/100888)
 
-#### Inspect scheduled jobs and workspace files on Android
+##### Localization
 
-- Android users can open a scheduled job to inspect its timing, payload, delivery state, recent results, errors, and exact ID. [#95107](https://github.com/openclaw/openclaw/pull/95107) Thanks @tosko4.
-- The Android Files card now lets users browse the active agent workspace, preview text and images, and share output directly from their phone. [#100776](https://github.com/openclaw/openclaw/pull/100776)
-
-#### Find Android licenses and support links
-
-- Android users can now read bundled third-party and open-source license notices directly from Settings &gt; Licenses. [#99299](https://github.com/openclaw/openclaw/pull/99299) Thanks @joshavant.
-- Android's About screen now clearly identifies OpenClaw and provides direct links to the website, documentation, source repository, and Discord community. [#100994](https://github.com/openclaw/openclaw/pull/100994)
-
-#### Keep Android setup and recovery understandable in more languages
-
+- Android's "New chat in worktree" action is now translated across supported non-English locales instead of appearing with a missing resource. [#100805](https://github.com/openclaw/openclaw/pull/100805) Thanks @amknight.
 - Android users in supported languages now see key Gateway setup, connection, trust, shell, and recovery prompts in their device language. [#97111](https://github.com/openclaw/openclaw/pull/97111) Thanks @vincentkoc.
 - Indonesian Android strings ship under Android's recognized locale; the same prior-release work also prepared the 2026.6.11 Play version and store text. [3412318](https://github.com/openclaw/openclaw/commit/341231831b706df0024d2d9e2096438e3581b5af) Thanks @joshavant.
 - Traditional Chinese users now see localized wording for common native app actions, permissions, connection messages, and mobile states. [f0d2066](https://github.com/openclaw/openclaw/commit/f0d2066787f172079c19f26b72f49ad3950ceea6)
-- Traditional Chinese Android users now get clearer localized prompts for keeping a saved token or replacing Gateway setup. [32f3eb3](https://github.com/openclaw/openclaw/commit/32f3eb3fa805e776f562ea1af6f7731bf4ce8b48)
-- French users now see clearer localized Android prompts for preserving saved tokens and replacing Gateway setup. [6336762](https://github.com/openclaw/openclaw/commit/6336762b68e5cebd44acbda527ba1d964448355a)
-- Hindi users now get localized instructions and actions for keeping a token, replacing Gateway setup, or canceling the change. [eeb0682](https://github.com/openclaw/openclaw/commit/eeb0682409b86dcd956ffe30e45f12c6424d8c05)
-- Turkish users now see current native app wording for keeping a token and replacing Gateway setup. [ed72b86](https://github.com/openclaw/openclaw/commit/ed72b860a436eb187c9fa2fb4ef91ecb13180760)
-- Indonesian Android users now see current localized prompts for keeping a token, replacing Gateway setup, or canceling replacement. [e376f28](https://github.com/openclaw/openclaw/commit/e376f285e87bfa07bf3111b446b9e44fcba6cd9e)
-- Polish Android users now get clearer localized prompts for saved tokens and replacing an existing Gateway setup. [a6631fe](https://github.com/openclaw/openclaw/commit/a6631fee6d465b30e116038d8e6e8aa1f041019c)
-- Vietnamese Android users now get clearer Gateway setup text when keeping a token or replacing an existing setup. [283bd82](https://github.com/openclaw/openclaw/commit/283bd82eb414f0ba968157aec77eac7701e7ae1e)
-- Russian users now see current local-language prompts while entering Gateway credentials, preserving a token, or replacing setup. [6d5a1db](https://github.com/openclaw/openclaw/commit/6d5a1db04859adbf8860376ddbd5ce1b5d5f3efa)
-- Traditional Chinese Android users now see localized recovery guidance when setup codes expire, Gateway credentials need attention, or node approval is required. [48eae1b](https://github.com/openclaw/openclaw/commit/48eae1b8c96d9e8873ba59ccc6e2493fa847c27e)
-- Simplified Chinese Android users now get localized next steps for expired setup codes, invalid Gateway credentials, approval requirements, and saved-authentication problems. [f095eb9](https://github.com/openclaw/openclaw/commit/f095eb9fd989020ad1bdd57a57702ce899f98607)
-- German Android users now see localized recovery prompts when setup codes expire, Gateway credentials fail, or a node still needs approval. [714c2b0](https://github.com/openclaw/openclaw/commit/714c2b07bdf715055205b550018d289e4fb06948)
-- Spanish Android users can now complete Gateway pairing and recovery with localized guidance for expired codes, invalid credentials, approvals, and saved authentication. [d2b5bb7](https://github.com/openclaw/openclaw/commit/d2b5bb72e8e3b61dac5ddc7085fb0b5dfe53a18c)
-- Japanese Android users now see localized next steps for expired setup codes, Gateway credential errors, node approval, failed saved credentials, and rescanning. [d2551bd](https://github.com/openclaw/openclaw/commit/d2551bdd3cf53973d679a47f3e753fc0d75f3edb)
-- Korean Android users now get localized recovery prompts for expired setup codes, Gateway credential failures, node approval, identity requirements, and retries. [6b91507](https://github.com/openclaw/openclaw/commit/6b915072208b121055000ef1d3a36578eac4da2e)
-- Hindi Android users now get localized recovery guidance for expired setup codes, invalid Gateway credentials, node approval, and saved-authentication repair. [f1c4476](https://github.com/openclaw/openclaw/commit/f1c44762771edb9fe2124a15c871dc466b215c43)
-- Arabic Android users now see localized next steps for expired setup codes, Gateway credential problems, failed saved authentication, approvals, and retries. [5ef6fb4](https://github.com/openclaw/openclaw/commit/5ef6fb4d7cd053e1caa0d1caf27ff93f7bb3311c)
-- Italian Android users now see localized guidance for expired setup codes, Gateway authentication problems, required approvals, and access review. [e2e0312](https://github.com/openclaw/openclaw/commit/e2e03127240c1878b3ea6a336fd91bd995a2be83)
-- Turkish Android users now get localized recovery instructions for expired setup codes, invalid Gateway credentials, failed saved authentication, and node approval. [7fb70b2](https://github.com/openclaw/openclaw/commit/7fb70b235d1d7d4ece6519b27f2d65d51999272c)
-- Ukrainian Android users now see localized next steps when setup codes expire, Gateway credentials fail, saved authentication breaks, or node approval is needed. [d702f5c](https://github.com/openclaw/openclaw/commit/d702f5c6e6c4f1463c82c4f74d96765b316f76bf)
-- Polish Android users now see current Polish guidance when Gateway setup codes, credentials, saved authentication, or node approval block a connection. [24e6b9f](https://github.com/openclaw/openclaw/commit/24e6b9fbe1b9449b837fecddf1f9b160ed7bb896)
-- Dutch Android users now receive up-to-date Dutch instructions when Gateway pairing or reconnection needs a new setup code, corrected credentials, approval, or another retry. [7cb41cc](https://github.com/openclaw/openclaw/commit/7cb41ccc63f51208630426e08ceef65e78b02bf9)
-- Persian Android users now see Persian instructions for Gateway pairing and recovery when setup codes expire, credentials are missing, or access needs approval. [a6040c3](https://github.com/openclaw/openclaw/commit/a6040c3560c18005b58aed73a687b8c0d06b7d6b)
-- Swedish Android users now get Swedish recovery messages when Gateway setup codes expire, credentials fail, approval is required, or the connection should be retried. [5e61da3](https://github.com/openclaw/openclaw/commit/5e61da3deb190b16899157ace98aa520b424e085)
-- Simplified Chinese users now see clear localized prompts for Gateway tokens, cancellation, and setup replacement. [3a2baef](https://github.com/openclaw/openclaw/commit/3a2baef0bfc62b0d37b4f7648869e57fabaa3cb3)
-- German users now get clearer prompts for replacing Gateway setup, while the token field explains that leaving it blank preserves the saved token. [d3087fc](https://github.com/openclaw/openclaw/commit/d3087fcf375c81b81ffb0cf7b65764559b6e836f)
-- Brazilian Portuguese users now see current localized guidance for keeping a saved token or replacing Gateway setup, without the obsolete elevated-access warning. [8bab3f7](https://github.com/openclaw/openclaw/commit/8bab3f7dbd8364de93422d064c00c7171139ccf4)
-- Japanese users now get clearer localized wording when keeping an existing token or choosing whether to replace Gateway setup. [dfb7bc8](https://github.com/openclaw/openclaw/commit/dfb7bc84d8194177988d2870fe17b963912a1c52)
-- Spanish users now see localized guidance for preserving a saved token and confirming Gateway setup replacement. [7780e30](https://github.com/openclaw/openclaw/commit/7780e3062dcb547227d90cbd02111910e00e3f6f)
-- Korean users now get current prompts for keeping a saved token or replacing Gateway setup, with outdated pairing-admin wording removed. [b109b88](https://github.com/openclaw/openclaw/commit/b109b88b5785b22fea0fe20f06b314dbda156d58)
-- Arabic users now see current localized wording for saved tokens and Gateway setup replacement controls. [c1b7bf2](https://github.com/openclaw/openclaw/commit/c1b7bf23bc16d641e966ff4de7cbb8b2becfaddc)
-- Italian users now get clear localized prompts for preserving a saved token or replacing an existing Gateway setup. [dedb17c](https://github.com/openclaw/openclaw/commit/dedb17ceff3c93c938aaff5c3f697d70d06e9dd1)
-- Ukrainian users now get localized prompts for preserving a saved token, replacing Gateway setup, or canceling the action. [6f84c10](https://github.com/openclaw/openclaw/commit/6f84c10bdae1f73b112777c9a94d5933171d4b75)
-- Thai users now see clear localized text for preserving a saved token or replacing Gateway setup. [a8358e8](https://github.com/openclaw/openclaw/commit/a8358e8848c8228893a259b36cd6f54139fa18da)
-- Dutch users now see localized actions for keeping a token and replacing or canceling Gateway setup, without the obsolete elevated-access warning. [2501ca3](https://github.com/openclaw/openclaw/commit/2501ca340945072642b9bb2ec1348a15de83d4b6)
-- Persian users now get clear native app guidance for saved tokens and the actions that confirm or cancel Gateway replacement. [1b40eb9](https://github.com/openclaw/openclaw/commit/1b40eb9e6a2feb0c436948fbcd113424e85db01e)
-- Swedish users now get clear setup wording for keeping a token, replacing Gateway setup, confirming the change, or canceling it. [d47308f](https://github.com/openclaw/openclaw/commit/d47308f8008ca08c7df983d3932c63d4ede4060c)
-- Brazilian Portuguese users now get localized instructions for expired setup codes, Gateway credential problems, approval requirements, and connection retries. [18360ac](https://github.com/openclaw/openclaw/commit/18360ac668f82631f61cf48d0816800385f4cf05)
-- French users now see clearer localized guidance while pairing a device or recovering from setup-code and Gateway authentication problems. [17a1e3b](https://github.com/openclaw/openclaw/commit/17a1e3bbb2b8de1da6569fe4f46a4ea4138c56e6)
-- Indonesian users now get localized instructions for Gateway pairing, expired setup codes, access review, and missing or invalid credentials. [adafb56](https://github.com/openclaw/openclaw/commit/adafb56b2eb9207d93896ebf6c5faa9205875833)
-- Thai native-app users now get clear Thai explanations for failed Gateway setup or authentication, with next steps such as refreshing the setup code, checking credentials, reviewing access, or configuring authentication on the host. [5b5fadb](https://github.com/openclaw/openclaw/commit/5b5fadbf0d17c1fddb13d891037767beb64aa144)
-- Vietnamese native-app users now get localized guidance for pairing with a Gateway, replacing an expired setup code, and recovering from authentication trouble. [9b30570](https://github.com/openclaw/openclaw/commit/9b30570a935ecdae8ee0e2bc45a42ffdd7223948)
-- Russian native-app users now receive Russian next steps when Gateway pairing, reconnection, credentials, device identity, or node approval prevents access. [d331a36](https://github.com/openclaw/openclaw/commit/d331a36250f8ebb29bda2ae8fa480a2aa5e15193)
-
-#### Follow Android Gateway setup in your language
-
-- Simplified Chinese Android users now get current localized guidance throughout Gateway setup, QR or manual connection, security review, approval, testing, and permission selection. [28062c8](https://github.com/openclaw/openclaw/commit/28062c868c03e1e6876013d450c8f92bf1fc2faf)
-- Traditional Chinese Android users can now complete Gateway setup in their language across QR scanning, manual connection, trust prompts, credential entry, approval, testing, and permissions. [3d43858](https://github.com/openclaw/openclaw/commit/3d438588c5eb0497bdb2fbccf9d6f6cd325d0ec5)
-- Brazilian Portuguese Android users now see clearer localized Gateway setup, connection, approval, testing, and device-permission screens. [ad74b32](https://github.com/openclaw/openclaw/commit/ad74b322ba80178c1c0f68348a55d5d3e65e64ae)
-- German Android users now get current German guidance for Gateway setup methods, security notices, node approval, permissions, and connection failures. [1b07620](https://github.com/openclaw/openclaw/commit/1b076209c4d2ea37a7178b50f5ba5c54b5753c2b)
-- Spanish Android users now receive current localized labels and recovery instructions while connecting a phone to a Gateway, approving access, and enabling device capabilities. [4fa4c9e](https://github.com/openclaw/openclaw/commit/4fa4c9e06e39e095a7373390240b3a5a5cf1be79)
-- Japanese Android users can now follow the current Gateway onboarding, QR or manual setup, approval, permission, and connection-detail flows in Japanese. [1dd5230](https://github.com/openclaw/openclaw/commit/1dd52307fcd74bc25ea31800a4c551bc415f7645)
-- French Android users now see localized guidance across Gateway setup, QR scanning, manual connection, security review, approval, permissions, testing, and connection details. [9db7ec5](https://github.com/openclaw/openclaw/commit/9db7ec5edd62e3f05758a28a6c6acb14f6889ea5)
-- Korean Android users now get current Korean instructions for connecting a phone to a Gateway, entering setup codes, choosing connection details, approving access, and managing permissions. [e6f8788](https://github.com/openclaw/openclaw/commit/e6f8788bf5569e87e9df0d3e404eaef5f86184ab)
-- Hindi Android users now see localized setup, security, error, approval, and permission text throughout the Gateway connection flow. [e5cf67e](https://github.com/openclaw/openclaw/commit/e5cf67ea1d73d9724a227000eadead902fa606a9)
-- Arabic Android users can now follow Gateway connection, trust, setup-code, node-approval, and device-permission steps with current Arabic prompts. [b52d988](https://github.com/openclaw/openclaw/commit/b52d98861e8c14f30dc459c395fd60281fa99604)
-- Italian Android users now receive current Italian guidance while connecting to a Gateway, entering setup details, choosing connection settings, approving access, and reviewing permissions. [cd3b4ee](https://github.com/openclaw/openclaw/commit/cd3b4eee7d104d266d8514afea2ae53eea435e9d)
-- Turkish Android users now see current Turkish wording throughout Gateway setup, QR pairing, manual connection, security review, and permission approval. [c3bcb9f](https://github.com/openclaw/openclaw/commit/c3bcb9fa21ec5f1b98bdb89940e93707b8f9a3e1)
-- Ukrainian Android users can now complete Gateway setup and permission decisions with localized connection choices, safety notices, error states, and approval instructions. [8af3aa0](https://github.com/openclaw/openclaw/commit/8af3aa0b1bfa3f5d2950b053a8d7d2568cbbea31)
-- Indonesian Android users now get current local-language setup and trust guidance across Gateway connection, QR or manual entry, testing, node approval, and permission selection. [c34e79e](https://github.com/openclaw/openclaw/commit/c34e79e7299b19267000a79bb94bcae9608f93a1)
-- Polish Android users now see current Polish prompts across Gateway setup, QR or manual connection, permission approval, and connection details instead of mismatched fallback text. [c9c8f6c](https://github.com/openclaw/openclaw/commit/c9c8f6c9f6a9ebf337ff486c15b9cc4d43904ffe)
-- Thai Android users now get clear localized setup and security prompts while pairing a phone with a Gateway, entering setup details, approving access, and choosing permissions. [255e251](https://github.com/openclaw/openclaw/commit/255e2518de492d518cde78617f6c5b220bb1278d)
-- Vietnamese Android users now receive current Vietnamese instructions for Gateway setup, trust review, camera access, setup codes, connection testing, and node approval. [0e98ba4](https://github.com/openclaw/openclaw/commit/0e98ba4391dddfa9bcd48a978b5cd1df8ae03411)
-- Dutch Android users now see current Dutch prompts for setup-code onboarding, manual or secure Gateway connection, approval commands, connection checks, and permission choices. [0cc9927](https://github.com/openclaw/openclaw/commit/0cc9927577c6663a5839a4d2ad3e5708df04157a)
-- Persian Android users now get broader Persian coverage across Gateway pairing, QR and setup-code entry, trust warnings, permissions, connection details, and recovery states. [97955d9](https://github.com/openclaw/openclaw/commit/97955d969d83a158a70c23912703e92b69b0883a)
-- Russian Android users now see current Russian setup, security, approval, connection, and permission text while linking a phone to an OpenClaw Gateway. [ba449f2](https://github.com/openclaw/openclaw/commit/ba449f240d4e437752be44bef76e93c177454ca4)
-- Swedish Android users can now follow Gateway pairing, permission review, approval, connection details, and QR or manual setup with current Swedish wording. [0e22e54](https://github.com/openclaw/openclaw/commit/0e22e54431f5740b65ddbfcc307bd6b3c1f43eea)
-- Manual setup labels and plaintext-network security warnings now appear in the selected language across 21 supported native app locales. [ae65251](https://github.com/openclaw/openclaw/commit/ae65251fdf5ebfa7213a7d36f64a5bbb8883eb4c)
-- Gateway discovery, setup-code entry and scanning, security notices, and permission guidance now use current translations across 21 native app locales. [d957f5a](https://github.com/openclaw/openclaw/commit/d957f5a7900e134b514915cee07c45bb0c2a54be)
-
-#### Correct scoped IPv6 setup in your language
-
-- Traditional Chinese Android users now receive localized instructions to replace scoped IPv6 setup addresses with an unscoped address or LAN hostname. [5793f73](https://github.com/openclaw/openclaw/commit/5793f731f54f1de387a49e014a632517450f75a2)
-- Simplified Chinese Android users now see Chinese recovery guidance when a setup code or QR code contains an unsupported IPv6 zone ID. [066e697](https://github.com/openclaw/openclaw/commit/066e6973b084c62717a2e9ac99b84e99459597b7)
-- Brazilian Portuguese Android users now get local-language instructions to use an unscoped IPv6 address or LAN hostname when Gateway setup rejects a zone ID. [bf35947](https://github.com/openclaw/openclaw/commit/bf35947eb2695740e61cdd180fde44b4308ba472)
-- German Android users now see actionable German guidance when setup or QR pairing encounters an unsupported IPv6 zone ID. [3385817](https://github.com/openclaw/openclaw/commit/3385817658496c88166f16cdbcbb0dbd3b8419b5)
-- Spanish Android users now get localized instructions to correct a setup code, QR code, or Gateway URL that contains an unsupported IPv6 zone ID. [a0a5054](https://github.com/openclaw/openclaw/commit/a0a5054b93bf842ff4dd281dac2617129dd9900c)
-- Japanese Android users now receive Japanese guidance to use an unscoped IPv6 address or LAN hostname when Gateway setup rejects a zone ID. [66cb9a9](https://github.com/openclaw/openclaw/commit/66cb9a99b1d9c30589fcc9b42144c95322bd30ab)
-- Korean Android users now see localized recovery steps when setup codes, QR codes, or Gateway URLs contain unsupported IPv6 zone IDs. [3da73a7](https://github.com/openclaw/openclaw/commit/3da73a77fe51060659a3ad69018a65e19cf21837)
-- French Android users now get clear French guidance at setup time when a scoped IPv6 address must be replaced. [df659ec](https://github.com/openclaw/openclaw/commit/df659eca87253824b5eccaa1939fa38877a87e7e)
-- Hindi Android users now receive local-language instructions to use an unscoped IPv6 address or LAN hostname when setup or QR pairing rejects a zone ID. [57a3975](https://github.com/openclaw/openclaw/commit/57a3975ce14062de887707e38ab580b20ff39421)
-- Arabic Android users now see localized instructions for correcting an unsupported IPv6 zone ID during Gateway setup or QR pairing. [141b2cf](https://github.com/openclaw/openclaw/commit/141b2cf4d10cb33a487e62c7e304aba88b135da1)
-- Turkish Android users now receive Turkish instructions to use an unscoped IPv6 address or LAN hostname when pairing rejects a zone ID. [b043adf](https://github.com/openclaw/openclaw/commit/b043adf192bb64e8ff64bbf6b9631e30a4446f1e)
-- Ukrainian Android users now see localized setup guidance when a scoped IPv6 address in a code, QR code, or Gateway URL is unsupported. [dcc4fa8](https://github.com/openclaw/openclaw/commit/dcc4fa874683a59f86656be19adfc05b688cc3ea)
-- Indonesian Android users now get actionable Indonesian errors when setup-code or QR pairing contains an unsupported scoped IPv6 address. [eade8f1](https://github.com/openclaw/openclaw/commit/eade8f1c1a142eefa47a2657ef77a352944506cc)
-- Polish Android users now receive Polish instructions to replace an IPv6 address with a zone ID by an unscoped address or LAN hostname. [72a8098](https://github.com/openclaw/openclaw/commit/72a809840890575654f7d293631965af0541f9e9)
-- Thai Android users now get localized recovery guidance when a setup code or QR code contains an unsupported IPv6 zone ID. [355fa77](https://github.com/openclaw/openclaw/commit/355fa773f8ac13c433eea42f4e575c895b224863)
-- Vietnamese Android users now see Vietnamese instructions to use an unscoped IPv6 address or LAN hostname when setup rejects a scoped address. [8cc1786](https://github.com/openclaw/openclaw/commit/8cc1786f495af1c7c55ac5f2b145ff7df25853dd)
-- Dutch Android users now get Dutch instructions to use an unscoped IPv6 address or LAN hostname when setup-code or QR pairing fails on a zone ID. [a3ef37b](https://github.com/openclaw/openclaw/commit/a3ef37b991533671eae13ddbd25324bc5f9c4749)
-- Persian Android users now receive Persian guidance for replacing scoped IPv6 addresses during setup-code or QR pairing. [cb9ac50](https://github.com/openclaw/openclaw/commit/cb9ac50f5bc7f8148eeacbf8b921ebaa3bab6680)
-- Russian Android users now see Russian guidance when a setup code, QR code, or Gateway URL contains an unsupported IPv6 zone ID. [cab8147](https://github.com/openclaw/openclaw/commit/cab81470d96126ef92614ba38468e94964429c20)
-- Swedish Android users now get localized instructions to use an unscoped IPv6 address or LAN hostname when Gateway setup encounters a zone ID. [7cc3cb0](https://github.com/openclaw/openclaw/commit/7cc3cb0d28c807871b2e997a996f4c920fc0b7ae)
-- Italian native-app users now get Italian guidance to replace a scoped IPv6 setup address with an unscoped address or LAN hostname. [ca258fb](https://github.com/openclaw/openclaw/commit/ca258fb9452d6dac7344530fafbcf2939238d9a4)
-
-#### Read Android license notices in your language
-
-- Traditional Chinese Android users can now read the Licenses page, partner message, empty state, and open-license action in their selected language. [4b8b60f](https://github.com/openclaw/openclaw/commit/4b8b60f8abc1ae99228fe31bedd31977064062d1)
-- Simplified Chinese Android users now see localized labels, acknowledgements, empty-state guidance, and actions on the license notices screen. [3b16c41](https://github.com/openclaw/openclaw/commit/3b16c41daa8237f481c2b8061b0f6e00817ffbca)
-- Brazilian Portuguese Android users can now review license notices and open-source acknowledgements without English labels or actions. [c4966e8](https://github.com/openclaw/openclaw/commit/c4966e86cbc9403177ccb725d5d1cb87c519b853)
-- German Android users now see the Licenses screen, open-license action, and no-notices explanation in German. [116e9db](https://github.com/openclaw/openclaw/commit/116e9db2a18d5341b5e44844dfefa938fa467e6a)
-- Japanese Android users can now read the open-source Licenses screen, its actions, acknowledgement, and empty state in Japanese. [1617233](https://github.com/openclaw/openclaw/commit/1617233ff141c913def1675aaee33bac3590b1f6)
-- Spanish Android users now get a fully localized Licenses screen, from its acknowledgement and empty state to each open-license action. [a598c97](https://github.com/openclaw/openclaw/commit/a598c976d01db50adc35de495a981635c6a38cd4)
-- Korean Android users can now understand the Licenses screen and its open-source acknowledgement actions in Korean. [3b9e0c8](https://github.com/openclaw/openclaw/commit/3b9e0c86828e0d8f45acafd2908b82191ecfd13f)
-- French Android users now see localized license details, including the no-notices message and the action for opening a listed license. [eebbf6c](https://github.com/openclaw/openclaw/commit/eebbf6cba5fef565044e556b862f3ce09db2fd86)
-- Hindi Android users can now review license notices through localized headings, acknowledgements, empty-state guidance, and open actions. [4c08ea4](https://github.com/openclaw/openclaw/commit/4c08ea403ad9436d9a8cf0dd02799a441a1bc4db)
-- Arabic Android users now see the Licenses screen, partner acknowledgement, empty state, and open action in Arabic rather than mixed-language text. [21be45c](https://github.com/openclaw/openclaw/commit/21be45c17e845e4027f7a044d2c009423bcd07b7)
-- Italian Android users can now read the Licenses title, community acknowledgement, no-license notice, and open action in Italian. [b415072](https://github.com/openclaw/openclaw/commit/b415072a2e6a900f382d7e68594b4511bd1a0c5b)
-- Turkish Android users now see the full Licenses settings experience in Turkish instead of English fallback copy. [9eec24d](https://github.com/openclaw/openclaw/commit/9eec24df6710308e7a66a7a80bc232f7ee024900)
-- Ukrainian Android users can now read the license notices, explanations, empty state, and open action in Ukrainian. [de23987](https://github.com/openclaw/openclaw/commit/de23987f13b95d71a145218b11f36857a8eefc2c)
-- Indonesian Android users now get localized Licenses labels and open-source notice text that matches the rest of their selected-language experience. [898564e](https://github.com/openclaw/openclaw/commit/898564e71aef7abe66112d757eee8db83eaf04d2)
-- Polish Android users can now navigate license information, read the acknowledgement and empty state, and open individual licenses in Polish. [7af800b](https://github.com/openclaw/openclaw/commit/7af800b5be960b595829642b412fce2842017cfc)
-- Thai Android users now see localized license information, including guidance when no notices are packaged and the action for opening a license. [a47ec8d](https://github.com/openclaw/openclaw/commit/a47ec8d303e46642d81c8c231786fb0b2fd51045)
-- Vietnamese Android users can now read the Licenses screen, partner acknowledgement, missing-notices guidance, and open action in Vietnamese. [fac9e58](https://github.com/openclaw/openclaw/commit/fac9e586685666a9f8159f5132fb18ad2bc37210)
-- Dutch Android users now get localized labels and explanations throughout the license information screen. [61e4ef0](https://github.com/openclaw/openclaw/commit/61e4ef08f483e9e32eaa6edf6fb391185e462394)
-- Persian Android users can now review OpenClaw's open-source license notices without English fallback text. [399f9d6](https://github.com/openclaw/openclaw/commit/399f9d696171ec14eafa1d5de64533d2b9670819)
-- Russian Android users now see the Licenses title, acknowledgement, empty state, and open action in Russian. [9069f69](https://github.com/openclaw/openclaw/commit/9069f696986ed970565989efacb27024160dbad2)
-- Swedish Android users can now understand the open-source acknowledgements and license actions through consistent Swedish copy. [2e049f5](https://github.com/openclaw/openclaw/commit/2e049f509fad1ba2889186e457e630bad50d7a16)
-
-#### Set up Android Talk and dictation in your language
-
-- Traditional Chinese Android users now see localized setup, readiness, dictation, and failure messages for Gateway Talk and native voice features. [c785196](https://github.com/openclaw/openclaw/commit/c785196287d0e929396def1fc0929af672bdc7cf)
-- Brazilian Portuguese users can now understand whether Talk, dictation, and Gateway-backed voice providers are ready, unavailable, unsupported, or unexpectedly disconnected. [9edb906](https://github.com/openclaw/openclaw/commit/9edb9065a8596f8473bea1ae4a626da8f0508724)
-- French Android users can now configure Gateway speech providers and recover from Talk or Dictation failures with localized guidance. [da67520](https://github.com/openclaw/openclaw/commit/da67520b8d5fc49775005638425ca2d9317d6ee7)
-- Thai Android users now get localized Gateway and Talk setup, readiness, dictation, voice, and failure guidance instead of English fallbacks. [88f13ca](https://github.com/openclaw/openclaw/commit/88f13cab62999abe7c2650ccd32d55e72ee80046)
-- Swedish Android users now get localized readiness, setup, and recovery messages for Gateway speech providers, Realtime Talk, and Dictation. [e878efe](https://github.com/openclaw/openclaw/commit/e878efe9508edd88166a09eb5a1e503ab405aad9)
-- Simplified Chinese users now get clearer localized guidance for Gateway relay readiness, voice setup, dictation, Realtime Talk, and failure states. [662d127](https://github.com/openclaw/openclaw/commit/662d127f60b91aaaec4b5363c73bd00855d9e3f0)
-- German users now see localized guidance while setting up Gateway speech providers, checking readiness, and using Talk or dictation. [5002a0e](https://github.com/openclaw/openclaw/commit/5002a0e9ea9970e4e270ec029c994dc217549687)
-- Spanish users now get clearer localized setup, readiness, and failure messages for voice and Gateway-backed Talk. [fe57718](https://github.com/openclaw/openclaw/commit/fe57718b419a08a5306e3d195519d3527a07f936)
-- Japanese users can now follow localized status, setup, and recovery messages across Gateway and native voice workflows. [ebcf8dc](https://github.com/openclaw/openclaw/commit/ebcf8dcaf7120bfdc01d0b83c595895355944b5b)
-- Korean users now see consistent localized wording for Talk and dictation setup, provider readiness, and failures. [4e7ca8e](https://github.com/openclaw/openclaw/commit/4e7ca8e6c6afe672da1a40922e67f94e005f9e8b)
-- Hindi users now see translated setup, status, provider, dictation, and Talk failure messages in the native app. [9863ceb](https://github.com/openclaw/openclaw/commit/9863cebef12bf2e7b1414ac5f64bc3277a7ca28b)
-- Arabic users can now understand Gateway provider setup and Talk recovery through clearer localized status and troubleshooting messages. [768da09](https://github.com/openclaw/openclaw/commit/768da09ceb157a1bfd4dd309b8566a2b9ce7668d)
-- Italian users now get localized status and recovery guidance for Gateway configuration, voice setup, Dictation, and Talk failures. [ff5d986](https://github.com/openclaw/openclaw/commit/ff5d98681f7e38043bbc33a87fade6069da9795c)
-- Turkish users now see clearer localized setup, status, and error messages across Gateway Talk, Voice setup, Realtime Talk, and Dictation. [005ebd1](https://github.com/openclaw/openclaw/commit/005ebd108f4d6ebd663c8cf996634aeaf3e82287)
-- Ukrainian users now get localized status, setup, and failure messages while using voice, dictation, and Gateway-backed Realtime Talk. [2824796](https://github.com/openclaw/openclaw/commit/28247960130f88b6ac01d8a392d54d0996212c1a)
-- Indonesian users can now understand Talk and dictation setup, provider readiness, and Gateway errors through updated localized text. [4eaec93](https://github.com/openclaw/openclaw/commit/4eaec934e83d0bc4f0d595c37e06356c5b54dc2a)
-- Polish users now see localized Gateway setup states, voice controls, dictation guidance, and Realtime Talk failure messages. [f99fdc9](https://github.com/openclaw/openclaw/commit/f99fdc9403b49b59a42c8d3522368d64b9168498)
-- Vietnamese users now see localized readiness, setup, and error messages for Gateway providers, Realtime Talk, Dictation, and voice controls. [555f601](https://github.com/openclaw/openclaw/commit/555f601230c075185f362c71db518096c3818998)
-- Dutch users can now configure Gateway speech providers and troubleshoot Talk or dictation with current localized guidance. [d2af689](https://github.com/openclaw/openclaw/commit/d2af68965a0cdb3a1ed91c2d1ba8aedd76dcb3ac)
-- Persian users now get localized setup and troubleshooting guidance for Gateway speech providers, Realtime Talk, Dictation, and voice controls. [81e92de](https://github.com/openclaw/openclaw/commit/81e92deb089b54ccedbe0c9593b492f6f09b989d)
-- Russian users now see current localized labels and errors for Gateway readiness, speech-provider setup, Realtime Talk, Dictation, and provider closures. [8ed6c78](https://github.com/openclaw/openclaw/commit/8ed6c78b7891b12fee2b378d79e6888764455486)
-
-#### Use Android chat, models, links, and location prompts in your language
-
-- Simplified Chinese Android users now see current localized wording for an empty command search and the action to start a new chat. [b81c58b](https://github.com/openclaw/openclaw/commit/b81c58bdf6a07894231bc3afcab9a6b12b175bf8)
-- Brazilian Portuguese Android users now see localized text for an empty command search and starting a new chat. [8929118](https://github.com/openclaw/openclaw/commit/8929118353fce0b8ac8189a95fd4534b39e85903)
-- Spanish Android users now see localized labels when command search has no results and when starting a new chat. [1eee853](https://github.com/openclaw/openclaw/commit/1eee853c71e1ddd5c632e49f1e75b18c0837add7)
-- French native-app users now get current French labels for an empty command picker and starting a new chat. [a5c9662](https://github.com/openclaw/openclaw/commit/a5c9662cd17746a35adf350f55b3f6b7c6cae78c)
-- Hindi Android users now see localized text when command search finds nothing and when they begin a new chat. [9035729](https://github.com/openclaw/openclaw/commit/9035729528a9ae0ed4922728c94fd025cfdd8ea6)
-- Arabic native-app users now get localized labels for the empty command-search state and the New chat action. [2e359d4](https://github.com/openclaw/openclaw/commit/2e359d49951bf8c786e4c018ef59858743e80386)
-- Italian Android users now see complete Italian wording in the command picker and New chat control instead of missing or stale entries. [91f4d0a](https://github.com/openclaw/openclaw/commit/91f4d0ae25ae86f76cccaac709b84d87990c7ca1)
-- Turkish Android users now get translated labels for empty command results and starting a new chat, keeping those screens consistent with the localized app. [e785c4a](https://github.com/openclaw/openclaw/commit/e785c4a8f7025ee7a529816a50207c0f925e3a93)
-- Ukrainian Android users now see translated labels when command search finds nothing and when they start a new chat, avoiding a mixed-language screen. [2c5a076](https://github.com/openclaw/openclaw/commit/2c5a07661c153bced0feb10f34e74811f2920831)
-- Indonesian Android users now get Indonesian text for an empty command search and the New chat action instead of stale or English labels. [02250d9](https://github.com/openclaw/openclaw/commit/02250d957fed2a1e05baac4b33b7315603002732)
-- Polish Android users now see Polish wording when command search has no results and when opening a new chat. [bf23194](https://github.com/openclaw/openclaw/commit/bf23194888b626ec4318955d4305197c1c9c4a88)
-- Thai Android users now get Thai labels for "No commands found" and "New chat" rather than missing or outdated text. [603502f](https://github.com/openclaw/openclaw/commit/603502f60f54bf9c0e0b7bd8b200ac0a4cc0d5e5)
-- Vietnamese Android users now see the command-search empty state and New chat action in Vietnamese instead of English. [a837a1a](https://github.com/openclaw/openclaw/commit/a837a1ac6c00c3e71471bcf4ff451b9cecf02f69)
-- Dutch Android users now get Dutch wording for empty command results and starting a new chat, keeping those common actions in one language. [26df1fa](https://github.com/openclaw/openclaw/commit/26df1fa7bca40fbb24f199593ae4bd4de74b2302)
-- Persian Android users now see localized text when command search returns nothing and when they begin a new chat. [c926610](https://github.com/openclaw/openclaw/commit/c9266107d6c65489b75ae412fe9484d2eca347c6)
-- Swedish Android users now see "Inga kommandon hittades" and "Ny chatt" in the command and chat screens where those labels belong. [1fee4a5](https://github.com/openclaw/openclaw/commit/1fee4a5daf57a864cd730b9dc2f0bcb19d90c5d8)
+- Android now explains in the selected language how to keep a saved token or replace an existing Gateway setup. Sources: [32f3eb3](https://github.com/openclaw/openclaw/commit/32f3eb3fa805e776f562ea1af6f7731bf4ce8b48), [6336762](https://github.com/openclaw/openclaw/commit/6336762b68e5cebd44acbda527ba1d964448355a), [eeb0682](https://github.com/openclaw/openclaw/commit/eeb0682409b86dcd956ffe30e45f12c6424d8c05), [ed72b86](https://github.com/openclaw/openclaw/commit/ed72b860a436eb187c9fa2fb4ef91ecb13180760), [e376f28](https://github.com/openclaw/openclaw/commit/e376f285e87bfa07bf3111b446b9e44fcba6cd9e), [a6631fe](https://github.com/openclaw/openclaw/commit/a6631fee6d465b30e116038d8e6e8aa1f041019c), [283bd82](https://github.com/openclaw/openclaw/commit/283bd82eb414f0ba968157aec77eac7701e7ae1e), [6d5a1db](https://github.com/openclaw/openclaw/commit/6d5a1db04859adbf8860376ddbd5ce1b5d5f3efa), [d3087fc](https://github.com/openclaw/openclaw/commit/d3087fcf375c81b81ffb0cf7b65764559b6e836f), [8bab3f7](https://github.com/openclaw/openclaw/commit/8bab3f7dbd8364de93422d064c00c7171139ccf4), [dfb7bc8](https://github.com/openclaw/openclaw/commit/dfb7bc84d8194177988d2870fe17b963912a1c52), [7780e30](https://github.com/openclaw/openclaw/commit/7780e3062dcb547227d90cbd02111910e00e3f6f), [b109b88](https://github.com/openclaw/openclaw/commit/b109b88b5785b22fea0fe20f06b314dbda156d58), [c1b7bf2](https://github.com/openclaw/openclaw/commit/c1b7bf23bc16d641e966ff4de7cbb8b2becfaddc), [dedb17c](https://github.com/openclaw/openclaw/commit/dedb17ceff3c93c938aaff5c3f697d70d06e9dd1), [6f84c10](https://github.com/openclaw/openclaw/commit/6f84c10bdae1f73b112777c9a94d5933171d4b75), [a8358e8](https://github.com/openclaw/openclaw/commit/a8358e8848c8228893a259b36cd6f54139fa18da), [2501ca3](https://github.com/openclaw/openclaw/commit/2501ca340945072642b9bb2ec1348a15de83d4b6), [1b40eb9](https://github.com/openclaw/openclaw/commit/1b40eb9e6a2feb0c436948fbcd113424e85db01e), [d47308f](https://github.com/openclaw/openclaw/commit/d47308f8008ca08c7df983d3932c63d4ede4060c), [3a2baef](https://github.com/openclaw/openclaw/commit/3a2baef0bfc62b0d37b4f7648869e57fabaa3cb3).
+- Android pairing and connection failures now provide localized next steps for expired codes, credentials, approvals, and retries. Sources: [48eae1b](https://github.com/openclaw/openclaw/commit/48eae1b8c96d9e8873ba59ccc6e2493fa847c27e), [f095eb9](https://github.com/openclaw/openclaw/commit/f095eb9fd989020ad1bdd57a57702ce899f98607), [714c2b0](https://github.com/openclaw/openclaw/commit/714c2b07bdf715055205b550018d289e4fb06948), [d2b5bb7](https://github.com/openclaw/openclaw/commit/d2b5bb72e8e3b61dac5ddc7085fb0b5dfe53a18c), [d2551bd](https://github.com/openclaw/openclaw/commit/d2551bdd3cf53973d679a47f3e753fc0d75f3edb), [6b91507](https://github.com/openclaw/openclaw/commit/6b915072208b121055000ef1d3a36578eac4da2e), [f1c4476](https://github.com/openclaw/openclaw/commit/f1c44762771edb9fe2124a15c871dc466b215c43), [5ef6fb4](https://github.com/openclaw/openclaw/commit/5ef6fb4d7cd053e1caa0d1caf27ff93f7bb3311c), [e2e0312](https://github.com/openclaw/openclaw/commit/e2e03127240c1878b3ea6a336fd91bd995a2be83), [7fb70b2](https://github.com/openclaw/openclaw/commit/7fb70b235d1d7d4ece6519b27f2d65d51999272c), [d702f5c](https://github.com/openclaw/openclaw/commit/d702f5c6e6c4f1463c82c4f74d96765b316f76bf), [24e6b9f](https://github.com/openclaw/openclaw/commit/24e6b9fbe1b9449b837fecddf1f9b160ed7bb896), [7cb41cc](https://github.com/openclaw/openclaw/commit/7cb41ccc63f51208630426e08ceef65e78b02bf9), [a6040c3](https://github.com/openclaw/openclaw/commit/a6040c3560c18005b58aed73a687b8c0d06b7d6b), [5e61da3](https://github.com/openclaw/openclaw/commit/5e61da3deb190b16899157ace98aa520b424e085), [18360ac](https://github.com/openclaw/openclaw/commit/18360ac668f82631f61cf48d0816800385f4cf05), [17a1e3b](https://github.com/openclaw/openclaw/commit/17a1e3bbb2b8de1da6569fe4f46a4ea4138c56e6), [adafb56](https://github.com/openclaw/openclaw/commit/adafb56b2eb9207d93896ebf6c5faa9205875833), [5b5fadb](https://github.com/openclaw/openclaw/commit/5b5fadbf0d17c1fddb13d891037767beb64aa144), [9b30570](https://github.com/openclaw/openclaw/commit/9b30570a935ecdae8ee0e2bc45a42ffdd7223948), [d331a36](https://github.com/openclaw/openclaw/commit/d331a36250f8ebb29bda2ae8fa480a2aa5e15193).
+- Android Gateway discovery, QR and manual setup, connection checks, approvals, and permission guidance now use the selected language across the translations in this release. Sources: [28062c8](https://github.com/openclaw/openclaw/commit/28062c868c03e1e6876013d450c8f92bf1fc2faf), [3d43858](https://github.com/openclaw/openclaw/commit/3d438588c5eb0497bdb2fbccf9d6f6cd325d0ec5), [ad74b32](https://github.com/openclaw/openclaw/commit/ad74b322ba80178c1c0f68348a55d5d3e65e64ae), [1b07620](https://github.com/openclaw/openclaw/commit/1b076209c4d2ea37a7178b50f5ba5c54b5753c2b), [4fa4c9e](https://github.com/openclaw/openclaw/commit/4fa4c9e06e39e095a7373390240b3a5a5cf1be79), [1dd5230](https://github.com/openclaw/openclaw/commit/1dd52307fcd74bc25ea31800a4c551bc415f7645), [9db7ec5](https://github.com/openclaw/openclaw/commit/9db7ec5edd62e3f05758a28a6c6acb14f6889ea5), [e6f8788](https://github.com/openclaw/openclaw/commit/e6f8788bf5569e87e9df0d3e404eaef5f86184ab), [e5cf67e](https://github.com/openclaw/openclaw/commit/e5cf67ea1d73d9724a227000eadead902fa606a9), [b52d988](https://github.com/openclaw/openclaw/commit/b52d98861e8c14f30dc459c395fd60281fa99604), [cd3b4ee](https://github.com/openclaw/openclaw/commit/cd3b4eee7d104d266d8514afea2ae53eea435e9d), [c3bcb9f](https://github.com/openclaw/openclaw/commit/c3bcb9fa21ec5f1b98bdb89940e93707b8f9a3e1), [8af3aa0](https://github.com/openclaw/openclaw/commit/8af3aa0b1bfa3f5d2950b053a8d7d2568cbbea31), [c34e79e](https://github.com/openclaw/openclaw/commit/c34e79e7299b19267000a79bb94bcae9608f93a1), [c9c8f6c](https://github.com/openclaw/openclaw/commit/c9c8f6c9f6a9ebf337ff486c15b9cc4d43904ffe), [255e251](https://github.com/openclaw/openclaw/commit/255e2518de492d518cde78617f6c5b220bb1278d), [0e98ba4](https://github.com/openclaw/openclaw/commit/0e98ba4391dddfa9bcd48a978b5cd1df8ae03411), [0cc9927](https://github.com/openclaw/openclaw/commit/0cc9927577c6663a5839a4d2ad3e5708df04157a), [97955d9](https://github.com/openclaw/openclaw/commit/97955d969d83a158a70c23912703e92b69b0883a), [ba449f2](https://github.com/openclaw/openclaw/commit/ba449f240d4e437752be44bef76e93c177454ca4), [0e22e54](https://github.com/openclaw/openclaw/commit/0e22e54431f5740b65ddbfcc307bd6b3c1f43eea), [ae65251](https://github.com/openclaw/openclaw/commit/ae65251fdf5ebfa7213a7d36f64a5bbb8883eb4c), [d957f5a](https://github.com/openclaw/openclaw/commit/d957f5a7900e134b514915cee07c45bb0c2a54be).
+- Android now explains in the selected language when a scoped IPv6 address must be replaced with an unscoped address or LAN hostname. Sources: [5793f73](https://github.com/openclaw/openclaw/commit/5793f731f54f1de387a49e014a632517450f75a2), [066e697](https://github.com/openclaw/openclaw/commit/066e6973b084c62717a2e9ac99b84e99459597b7), [bf35947](https://github.com/openclaw/openclaw/commit/bf35947eb2695740e61cdd180fde44b4308ba472), [3385817](https://github.com/openclaw/openclaw/commit/3385817658496c88166f16cdbcbb0dbd3b8419b5), [a0a5054](https://github.com/openclaw/openclaw/commit/a0a5054b93bf842ff4dd281dac2617129dd9900c), [66cb9a9](https://github.com/openclaw/openclaw/commit/66cb9a99b1d9c30589fcc9b42144c95322bd30ab), [3da73a7](https://github.com/openclaw/openclaw/commit/3da73a77fe51060659a3ad69018a65e19cf21837), [df659ec](https://github.com/openclaw/openclaw/commit/df659eca87253824b5eccaa1939fa38877a87e7e), [57a3975](https://github.com/openclaw/openclaw/commit/57a3975ce14062de887707e38ab580b20ff39421), [141b2cf](https://github.com/openclaw/openclaw/commit/141b2cf4d10cb33a487e62c7e304aba88b135da1), [b043adf](https://github.com/openclaw/openclaw/commit/b043adf192bb64e8ff64bbf6b9631e30a4446f1e), [dcc4fa8](https://github.com/openclaw/openclaw/commit/dcc4fa874683a59f86656be19adfc05b688cc3ea), [eade8f1](https://github.com/openclaw/openclaw/commit/eade8f1c1a142eefa47a2657ef77a352944506cc), [72a8098](https://github.com/openclaw/openclaw/commit/72a809840890575654f7d293631965af0541f9e9), [355fa77](https://github.com/openclaw/openclaw/commit/355fa773f8ac13c433eea42f4e575c895b224863), [8cc1786](https://github.com/openclaw/openclaw/commit/8cc1786f495af1c7c55ac5f2b145ff7df25853dd), [a3ef37b](https://github.com/openclaw/openclaw/commit/a3ef37b991533671eae13ddbd25324bc5f9c4749), [cb9ac50](https://github.com/openclaw/openclaw/commit/cb9ac50f5bc7f8148eeacbf8b921ebaa3bab6680), [cab8147](https://github.com/openclaw/openclaw/commit/cab81470d96126ef92614ba38468e94964429c20), [7cc3cb0](https://github.com/openclaw/openclaw/commit/7cc3cb0d28c807871b2e997a996f4c920fc0b7ae), [ca258fb](https://github.com/openclaw/openclaw/commit/ca258fb9452d6dac7344530fafbcf2939238d9a4).
+- Android license notices, acknowledgements, empty states, and open-license actions now use the selected language across the translations in this release. Sources: [4b8b60f](https://github.com/openclaw/openclaw/commit/4b8b60f8abc1ae99228fe31bedd31977064062d1), [3b16c41](https://github.com/openclaw/openclaw/commit/3b16c41daa8237f481c2b8061b0f6e00817ffbca), [c4966e8](https://github.com/openclaw/openclaw/commit/c4966e86cbc9403177ccb725d5d1cb87c519b853), [116e9db](https://github.com/openclaw/openclaw/commit/116e9db2a18d5341b5e44844dfefa938fa467e6a), [1617233](https://github.com/openclaw/openclaw/commit/1617233ff141c913def1675aaee33bac3590b1f6), [a598c97](https://github.com/openclaw/openclaw/commit/a598c976d01db50adc35de495a981635c6a38cd4), [3b9e0c8](https://github.com/openclaw/openclaw/commit/3b9e0c86828e0d8f45acafd2908b82191ecfd13f), [eebbf6c](https://github.com/openclaw/openclaw/commit/eebbf6cba5fef565044e556b862f3ce09db2fd86), [4c08ea4](https://github.com/openclaw/openclaw/commit/4c08ea403ad9436d9a8cf0dd02799a441a1bc4db), [21be45c](https://github.com/openclaw/openclaw/commit/21be45c17e845e4027f7a044d2c009423bcd07b7), [b415072](https://github.com/openclaw/openclaw/commit/b415072a2e6a900f382d7e68594b4511bd1a0c5b), [9eec24d](https://github.com/openclaw/openclaw/commit/9eec24df6710308e7a66a7a80bc232f7ee024900), [de23987](https://github.com/openclaw/openclaw/commit/de23987f13b95d71a145218b11f36857a8eefc2c), [898564e](https://github.com/openclaw/openclaw/commit/898564e71aef7abe66112d757eee8db83eaf04d2), [7af800b](https://github.com/openclaw/openclaw/commit/7af800b5be960b595829642b412fce2842017cfc), [a47ec8d](https://github.com/openclaw/openclaw/commit/a47ec8d303e46642d81c8c231786fb0b2fd51045), [fac9e58](https://github.com/openclaw/openclaw/commit/fac9e586685666a9f8159f5132fb18ad2bc37210), [61e4ef0](https://github.com/openclaw/openclaw/commit/61e4ef08f483e9e32eaa6edf6fb391185e462394), [399f9d6](https://github.com/openclaw/openclaw/commit/399f9d696171ec14eafa1d5de64533d2b9670819), [9069f69](https://github.com/openclaw/openclaw/commit/9069f696986ed970565989efacb27024160dbad2), [2e049f5](https://github.com/openclaw/openclaw/commit/2e049f509fad1ba2889186e457e630bad50d7a16).
+- Android Talk, dictation, speech-provider setup, readiness, and failure guidance now use the selected language across the translations in this release. Sources: [c785196](https://github.com/openclaw/openclaw/commit/c785196287d0e929396def1fc0929af672bdc7cf), [9edb906](https://github.com/openclaw/openclaw/commit/9edb9065a8596f8473bea1ae4a626da8f0508724), [da67520](https://github.com/openclaw/openclaw/commit/da67520b8d5fc49775005638425ca2d9317d6ee7), [88f13ca](https://github.com/openclaw/openclaw/commit/88f13cab62999abe7c2650ccd32d55e72ee80046), [e878efe](https://github.com/openclaw/openclaw/commit/e878efe9508edd88166a09eb5a1e503ab405aad9), [662d127](https://github.com/openclaw/openclaw/commit/662d127f60b91aaaec4b5363c73bd00855d9e3f0), [5002a0e](https://github.com/openclaw/openclaw/commit/5002a0e9ea9970e4e270ec029c994dc217549687), [fe57718](https://github.com/openclaw/openclaw/commit/fe57718b419a08a5306e3d195519d3527a07f936), [ebcf8dc](https://github.com/openclaw/openclaw/commit/ebcf8dcaf7120bfdc01d0b83c595895355944b5b), [4e7ca8e](https://github.com/openclaw/openclaw/commit/4e7ca8e6c6afe672da1a40922e67f94e005f9e8b), [9863ceb](https://github.com/openclaw/openclaw/commit/9863cebef12bf2e7b1414ac5f64bc3277a7ca28b), [768da09](https://github.com/openclaw/openclaw/commit/768da09ceb157a1bfd4dd309b8566a2b9ce7668d), [ff5d986](https://github.com/openclaw/openclaw/commit/ff5d98681f7e38043bbc33a87fade6069da9795c), [005ebd1](https://github.com/openclaw/openclaw/commit/005ebd108f4d6ebd663c8cf996634aeaf3e82287), [2824796](https://github.com/openclaw/openclaw/commit/28247960130f88b6ac01d8a392d54d0996212c1a), [4eaec93](https://github.com/openclaw/openclaw/commit/4eaec934e83d0bc4f0d595c37e06356c5b54dc2a), [f99fdc9](https://github.com/openclaw/openclaw/commit/f99fdc9403b49b59a42c8d3522368d64b9168498), [555f601](https://github.com/openclaw/openclaw/commit/555f601230c075185f362c71db518096c3818998), [d2af689](https://github.com/openclaw/openclaw/commit/d2af68965a0cdb3a1ed91c2d1ba8aedd76dcb3ac), [81e92de](https://github.com/openclaw/openclaw/commit/81e92deb089b54ccedbe0c9593b492f6f09b989d), [8ed6c78](https://github.com/openclaw/openclaw/commit/8ed6c78b7891b12fee2b378d79e6888764455486).
+- Android command search and New Chat labels now use the selected language across the translations in this release. Sources: [b81c58b](https://github.com/openclaw/openclaw/commit/b81c58bdf6a07894231bc3afcab9a6b12b175bf8), [8929118](https://github.com/openclaw/openclaw/commit/8929118353fce0b8ac8189a95fd4534b39e85903), [1eee853](https://github.com/openclaw/openclaw/commit/1eee853c71e1ddd5c632e49f1e75b18c0837add7), [a5c9662](https://github.com/openclaw/openclaw/commit/a5c9662cd17746a35adf350f55b3f6b7c6cae78c), [9035729](https://github.com/openclaw/openclaw/commit/9035729528a9ae0ed4922728c94fd025cfdd8ea6), [2e359d4](https://github.com/openclaw/openclaw/commit/2e359d49951bf8c786e4c018ef59858743e80386), [91f4d0a](https://github.com/openclaw/openclaw/commit/91f4d0ae25ae86f76cccaac709b84d87990c7ca1), [e785c4a](https://github.com/openclaw/openclaw/commit/e785c4a8f7025ee7a529816a50207c0f925e3a93), [2c5a076](https://github.com/openclaw/openclaw/commit/2c5a07661c153bced0feb10f34e74811f2920831), [02250d9](https://github.com/openclaw/openclaw/commit/02250d957fed2a1e05baac4b33b7315603002732), [bf23194](https://github.com/openclaw/openclaw/commit/bf23194888b626ec4318955d4305197c1c9c4a88), [603502f](https://github.com/openclaw/openclaw/commit/603502f60f54bf9c0e0b7bd8b200ac0a4cc0d5e5), [a837a1a](https://github.com/openclaw/openclaw/commit/a837a1ac6c00c3e71471bcf4ff451b9cecf02f69), [26df1fa](https://github.com/openclaw/openclaw/commit/26df1fa7bca40fbb24f199593ae4bd4de74b2302), [c926610](https://github.com/openclaw/openclaw/commit/c9266107d6c65489b75ae412fe9484d2eca347c6), [c312f9f](https://github.com/openclaw/openclaw/commit/c312f9f0e059b838f4afdbf20f2f1bd8b938ba13), [f4275fa](https://github.com/openclaw/openclaw/commit/f4275fa00b8f89055a8b3a8b23740153750e97af), [69d4657](https://github.com/openclaw/openclaw/commit/69d4657bdb2da553641e34f1b7f85223cfb8c660), [3e66eb9](https://github.com/openclaw/openclaw/commit/3e66eb9de863d333d9f7b7951d2b63eac857df07), [db5057e](https://github.com/openclaw/openclaw/commit/db5057edf935d85b6324bd725506424f2554fc89), [1fee4a5](https://github.com/openclaw/openclaw/commit/1fee4a5daf57a864cd730b9dc2f0bcb19d90c5d8).
 - Supported non-English Android builds now localize offline Gateway queue guidance and the Retry and Delete actions for text messages. [660d752](https://github.com/openclaw/openclaw/commit/660d752b348f740f130610571101db1f0e3ebb53)
 - Supported non-English Android builds now translate more cron inspection, delivery error, copy feedback, default-state, and agent request details. [d83ee4c](https://github.com/openclaw/openclaw/commit/d83ee4c44f9562c4e73fb571016624cf54b538d7)
-- Native app model organization and pinning controls now appear in supported local languages instead of untranslated labels. [41bea62](https://github.com/openclaw/openclaw/commit/41bea62b4a28fab24edff319c7cd8807c494cd53)
+- Android model organization, default-model, and pinning controls now use the selected language. Sources: [41bea62](https://github.com/openclaw/openclaw/commit/41bea62b4a28fab24edff319c7cd8807c494cd53), [bdc98f4](https://github.com/openclaw/openclaw/commit/bdc98f482a1ab6f86766041d8c48a16dddde5a96).
 - Android link-preview controls and status messages now appear in the selected language across refreshed locales. [9997c53](https://github.com/openclaw/openclaw/commit/9997c534b8ebd82fb8db0e9a944e75e594facb2d)
-- Android users in refreshed locales now see translated controls for choosing the default model and pinning or unpinning models. [bdc98f4](https://github.com/openclaw/openclaw/commit/bdc98f482a1ab6f86766041d8c48a16dddde5a96)
 - The Android background-location explanation, settings action, and Not Now choice now appear in the selected language when Always location mode is offered. [4c38d89](https://github.com/openclaw/openclaw/commit/4c38d89c0c948b215dd00603db68a80029364c37)
-- Traditional Chinese native-app users now get localized labels for the empty command-search state and the New chat action. [c312f9f](https://github.com/openclaw/openclaw/commit/c312f9f0e059b838f4afdbf20f2f1bd8b938ba13)
-- German native-app users now get German labels for No commands found and New chat instead of English or outdated text. [f4275fa](https://github.com/openclaw/openclaw/commit/f4275fa00b8f89055a8b3a8b23740153750e97af)
-- Japanese native-app users now get current Japanese text for empty command search results and the New chat action. [69d4657](https://github.com/openclaw/openclaw/commit/69d4657bdb2da553641e34f1b7f85223cfb8c660)
-- Korean native-app users now see localized command-search and New chat labels instead of stale or English fallback text. [3e66eb9](https://github.com/openclaw/openclaw/commit/3e66eb9de863d333d9f7b7951d2b63eac857df07)
-- Russian native app users now get Russian labels for empty command searches and new-chat entry points instead of stale or English text. [db5057e](https://github.com/openclaw/openclaw/commit/db5057edf935d85b6324bd725506424f2554fc89)
-- Transcript export controls, chat actions, and export failure messages are now translated across 21 supported native app locales. [45f561a](https://github.com/openclaw/openclaw/commit/45f561ab6c24de9848b70823c80b7ac770531c41)
-- Supported non-English native apps now translate newer app information, support links, and message retry, delete, and waiting-to-send states. [82f5ac1](https://github.com/openclaw/openclaw/commit/82f5ac150ffde0c847696cddcdcb2d300bb44294)
 
-#### Use everyday native app flows in more languages
+#### iOS and Apple Watch
 
-- German users now get native app text in German across setup, permissions, connections, microphone controls, Gateway messages, and chat actions. [a39b07b](https://github.com/openclaw/openclaw/commit/a39b07bb15f280c6d83522f79b1397104e5e05c4)
-- Brazilian Portuguese users now get more native app setup, permission, chat, connection, Gateway, and recovery text in their language. [f8e1e0c](https://github.com/openclaw/openclaw/commit/f8e1e0c5bfbc1b43339ffaaaddd3ee6e45083c2d)
-- Korean users now see more of the Android and Apple app experience in Korean, including setup, chat, Talk, permissions, sessions, attachments, and recovery. [db27d2e](https://github.com/openclaw/openclaw/commit/db27d2ecfa77666397f841d6c0d47153ff94d822)
-- French users now get localized native app text for connection status, Talk and microphone controls, permissions, pairing, setup, chat, certificates, and retries. [28a8414](https://github.com/openclaw/openclaw/commit/28a841472684eed2d98a1a277fcefc30855b580b)
-- Hindi users now get localized native app labels, setup and recovery guidance, permissions, chat controls, sessions, and voice settings. [e8e96bf](https://github.com/openclaw/openclaw/commit/e8e96bf7ee03aa251fc196693deb70af81da3d63)
-- Italian users now see more native app setup, pairing, chat, permission, connection, and troubleshooting text in Italian. [6ea407d](https://github.com/openclaw/openclaw/commit/6ea407d46223ad3336abfc93abfb0345b2a58e75)
-- Turkish users now get localized native app labels, status messages, permission prompts, onboarding, setup, and connection errors. [0011a18](https://github.com/openclaw/openclaw/commit/0011a184786686e625268f55799bdfbb8c8c7fda)
-- Ukrainian users now see translated native app prompts, warnings, and recovery text across pairing, permissions, chat, voice, providers, models, and status screens. [8c5adbf](https://github.com/openclaw/openclaw/commit/8c5adbfe3ec4f68a49d41a3b313a3b6b059c81d3)
-- Indonesian users now get native app setup, pairing, chat, Talk, permission, Gateway, and status text in Indonesian. [019603d](https://github.com/openclaw/openclaw/commit/019603d336028c31de7c49814b45bb29314174e8)
-- Vietnamese users now see clearer native app labels, prompts, errors, and setup guidance in Vietnamese across Android and Apple surfaces. [d3d7282](https://github.com/openclaw/openclaw/commit/d3d7282a8cf4c99a29efa8c58c1980557f1c1abc)
-- Russian users now see native app connection setup, chat, permissions, provider status, sessions, logs, Talk, and settings text in Russian. [267898c](https://github.com/openclaw/openclaw/commit/267898cddb9804bc2f27f94350e0c2342b48bf4b)
-- Swedish users now see native app setup, connection, chat, Talk, settings, permission, Gateway, and notification text in Swedish. [55ed57a](https://github.com/openclaw/openclaw/commit/55ed57a4e39b8e40628b9fcbfc982e9ac5fd86b5)
-- Japanese users now see more native app connection, permission, chat, session, provider, and setup text in Japanese. [c54dc67](https://github.com/openclaw/openclaw/commit/c54dc67381933fa6240fe617e414fd6f1933ea38)
-- New-chat and worktree-chat entry points now appear in the selected language across supported Android and Apple app locales. [24bca38](https://github.com/openclaw/openclaw/commit/24bca38cdaad4a304a5624ef8ddc6cdc9b7d4d5a)
-- Supported non-English native apps now cover more Gateway setup, session, provider, health, messaging, terminal, and device text without English gaps. [52f1e05](https://github.com/openclaw/openclaw/commit/52f1e056006dc3aeca574877d51b942c87fa7cb1)
-- Refreshed native language packs now cover workspace files, sharing actions, folder states, Android SMS guidance, message delivery states, and related branding. [a9b0a9a](https://github.com/openclaw/openclaw/commit/a9b0a9a12b07899d8a0c4638a8521f5865d75bc6)
-- Dutch users now see more complete Dutch guidance across onboarding, Gateway discovery, settings, diagnostics, notification and permission prompts, and Talk controls. [fd0355d](https://github.com/openclaw/openclaw/commit/fd0355d5b1a12c263bbd87e01ee88f451d11514b)
-- Russian users now see more complete Russian text around setup, Gateway connection, permissions, diagnostics, approvals, onboarding, and voice controls. [49726a5](https://github.com/openclaw/openclaw/commit/49726a5f5cbc013d42d7bf64c3033bbce4af319c)
-- Swedish users now get current Swedish labels, setup guidance, permission text, diagnostics actions, appearance controls, and Talk settings. [2ffeedf](https://github.com/openclaw/openclaw/commit/2ffeedf406e741e9f58858c83af06aa763ba1ab6)
-- Supported non-English native apps now translate the new Terminal destination, Gateway setup guidance, Back action, connection messages, and OpenClaw branding. [e069cb2](https://github.com/openclaw/openclaw/commit/e069cb26f72a2e6233df8e2bd18a4274e1d53722)
-- Localized macOS builds now translate the new GitHub link label, including its accessibility-facing text, instead of falling back to English. [8be1d36](https://github.com/openclaw/openclaw/commit/8be1d366a1f72936495c3d2b00461c5b58572706)
-- Non-English native app onboarding now reflects Crestodian, expanded channel choices, automatic permission updates, and the retirement of Setup Wizard wording. [ad4809f](https://github.com/openclaw/openclaw/commit/ad4809f677f531cb00085c1d006db3d46a529ed8)
-- The refreshed native app setup, AI connection, Gateway, and Crestodian guidance is now translated across 21 supported non-English locales. [f0ecc16](https://github.com/openclaw/openclaw/commit/f0ecc16629f018d157345f1c653011f3ec9c97d3)
-- Swedish users now receive localized Android labels, iOS permission text and extension names, and iOS App Store information. [#98043](https://github.com/openclaw/openclaw/pull/98043) Thanks @yeager.
-- Persian users now get clearer Persian guidance across setup, Gateway connection, diagnostics, notification approvals, appearance, voice controls, and security onboarding. [beca2b1](https://github.com/openclaw/openclaw/commit/beca2b1749733f4afccf47a780187859e7afce22)
-- Brazilian Portuguese users can now follow local Gateway readiness, installation, repair, retry, and paused-setup states in Portuguese. [4078dc7](https://github.com/openclaw/openclaw/commit/4078dc78cc79b6a9ab0564f065fe1871a9a0c499)
-- Simplified Chinese users can now navigate native app setup, permissions, Gateway connections, chat, Talk, providers, updates, and errors with localized text. [e7e98f6](https://github.com/openclaw/openclaw/commit/e7e98f6399cd7bffdd5598bb86a48066dd2ce3e3)
-- Spanish users now see localized native app labels and messages across status, permissions, Gateway, sessions, and setup flows. [3020f78](https://github.com/openclaw/openclaw/commit/3020f7817eb3ecf54057ed2847a0d54d0801d348)
-- Arabic users now see native app screens, prompts, status messages, onboarding, and setup guidance in Arabic across everyday OpenClaw flows. [0c82908](https://github.com/openclaw/openclaw/commit/0c82908f78e9eb33a9ad13dd726fa92833a688d9)
-- Polish users now see native app text in Polish across setup, permissions, Gateway connections, sessions, providers, chat, Talk, and settings. [8a3935f](https://github.com/openclaw/openclaw/commit/8a3935fe0ba7b06dd76203b4f20b11a74ecbc688)
-- Thai users now get more native app onboarding, permission, Gateway recovery, chat, Talk, session, and settings text in Thai. [3f289fd](https://github.com/openclaw/openclaw/commit/3f289fdb4042446042b6cd9a5261a17dc3edf6a0)
-- Dutch users now get more native app pairing, Gateway recovery, permission, provider, chat, Talk, and settings text in Dutch. [203a896](https://github.com/openclaw/openclaw/commit/203a896b27c5c5191823138a4365578e0e77352d)
-- Persian users now get localized native app labels, prompts, connection states, and permission guidance across core mobile and Gateway screens. [6afef15](https://github.com/openclaw/openclaw/commit/6afef15100fb402fb747a3543822d33fb9086f68)
+##### Navigation, settings, and app information
 
-#### Search native app commands in your language
-
-- Simplified Chinese users now see localized loading, unavailable, retry, and no-result messages in the native chat command picker. [745d2d0](https://github.com/openclaw/openclaw/commit/745d2d09cdbc79a019d2f7491bf04959ead4e51b)
-- Traditional Chinese users now get translated command-search messages while commands load, fail, offer a retry, or return no matches. [7f7bec7](https://github.com/openclaw/openclaw/commit/7f7bec78445d049ba1d1b7019b2085cc808beb5a)
-- German users now see German command feedback when commands are loading, unavailable, ready to retry, or have no matching result. [35be1c8](https://github.com/openclaw/openclaw/commit/35be1c81439c8df99e4de7057344c5bf0d056f56)
-- Brazilian Portuguese users now get Portuguese status and recovery text while native app commands load, fail, retry, or return no matches. [7db67ab](https://github.com/openclaw/openclaw/commit/7db67abd9eb01c36c55f3621a1b3521b290131b3)
-- Spanish users now see translated command-picker feedback when commands load, become unavailable, need a retry, or produce no matches. [4bc5766](https://github.com/openclaw/openclaw/commit/4bc57666cd8b0924f5ab15d5d8cafc4ba9b0ddbb)
-- Japanese users now get Japanese command-list feedback while commands load, fail, retry, or filter down to no matches. [0672720](https://github.com/openclaw/openclaw/commit/06727207d66ec1aef814664cf1e88da82c100140)
-- Korean users now see command loading, unavailable, retry, and no-match states in Korean instead of English. [2a8cd44](https://github.com/openclaw/openclaw/commit/2a8cd440d14ae66e41c63140ea0c0067ca033461)
-- French users now get French status and recovery text while native app commands load, become unavailable, retry, or return no matches. [fd648fb](https://github.com/openclaw/openclaw/commit/fd648fbb17575fec3780c7d8fddf13780b083df2)
-- Hindi users now see command loading, unavailable, retry, and empty-search messages in Hindi instead of English. [00b0b40](https://github.com/openclaw/openclaw/commit/00b0b40e284f40c3c8906251bbb202b81caab656)
-- Arabic users now get Arabic labels for command-picker loading, unavailable, retry, and empty-result states. [a67990a](https://github.com/openclaw/openclaw/commit/a67990a180d6915328165dd7dc9975395160a784)
-- Italian users now see native-language feedback while commands load, become unavailable, offer a retry, or return no matches. [7640f67](https://github.com/openclaw/openclaw/commit/7640f672b407cf28384cbf5396cdf5d20965da6b)
-- Turkish users now get Turkish text for command-picker loading, unavailable, retry, and no-match states instead of English fallbacks. [15f4819](https://github.com/openclaw/openclaw/commit/15f481920c079364513b06939edc06aba6caef04)
-- Ukrainian users now see Ukrainian status and recovery messages when command lists load, fail, retry, or return no matches. [4d1d720](https://github.com/openclaw/openclaw/commit/4d1d720164dbf3eb46c4d3a4a98814c2a1d2bdc2)
-- Indonesian users now get localized feedback while commands load, fail to load, offer a retry, or find no matches. [d1d3a27](https://github.com/openclaw/openclaw/commit/d1d3a2724feeca65759f2658c4af6a8350c1f854)
-- Polish users now see Polish status and recovery text when command results load, become unavailable, retry, or come back empty. [c2737d5](https://github.com/openclaw/openclaw/commit/c2737d55a9ffea741e07687a6eb40eff61fd369d)
-- Thai users now get Thai guidance for command loading, unavailable, retry, and no-results states, making search recovery easier to follow. [bd3263d](https://github.com/openclaw/openclaw/commit/bd3263d713a1dbb299c14392139bab3cc5aed428)
-- Vietnamese users now see translated labels for loading commands, unavailable commands, retrying, and searches with no matches. [127ce63](https://github.com/openclaw/openclaw/commit/127ce639547ef0f6016c829c31b915d97d4a55df)
-- Dutch users now get Dutch text while command search loads, becomes unavailable, offers a retry, or shows no matching commands. [0c960cd](https://github.com/openclaw/openclaw/commit/0c960cd8ae6a1553bdef3820b8167376772e7e53)
-- Persian users now see localized messages while command lists load, become unavailable, offer a retry, or return no matches. [e6c3ad9](https://github.com/openclaw/openclaw/commit/e6c3ad99637b4f6fba34d9f2d64f7ca5b2413e45)
-- Russian users now get Russian loading, unavailable, retry, and empty-result messages when using native app commands. [84c86f7](https://github.com/openclaw/openclaw/commit/84c86f73eb99b716598d031e7dce58ed73fa5d28)
-- Swedish users now see command loading, unavailable, retry, and no-match feedback in Swedish instead of English. [e7aea60](https://github.com/openclaw/openclaw/commit/e7aea605426cfe8e39287b1e07fa23436260c88b)
-
-#### Start, return to, and move through chats in your language
-
-- Simplified Chinese native-app users now get Chinese labels for jumping directly to the latest message or reply on Android and Apple devices. [e31fa36](https://github.com/openclaw/openclaw/commit/e31fa360d94a0efd6003079271986ad32f0c2f9c)
-- German native-app users now get German labels for jumping back to the newest message or reply while reading longer chats. [375def8](https://github.com/openclaw/openclaw/commit/375def86042a938141bed0c635c361df72cf0ab2)
-- Japanese native-app users now get Japanese labels for the chat controls that jump to the newest message or reply. [aabe44f](https://github.com/openclaw/openclaw/commit/aabe44f6382206a49855e8b7c7f1848666790f61)
-- Hindi native-app users now see Hindi labels on the controls for moving to the latest message or latest reply. [48c3f4b](https://github.com/openclaw/openclaw/commit/48c3f4b10326a890352ba5e7dd51fad897145c38)
-- Arabic native-app users now get Arabic labels for jumping to the newest chat content or newest reply. [3db6fb9](https://github.com/openclaw/openclaw/commit/3db6fb9972768d7b4979a2649f202d8851935dd8)
-- Turkish native-app users now get Turkish labels for the latest-message and latest-reply navigation controls. [0420aef](https://github.com/openclaw/openclaw/commit/0420aefb1d4eeab37bbcf7f50268c41cfb760b26)
-- Dutch native-app users now see Dutch labels for the controls that return them to the latest message or reply. [a4b51e5](https://github.com/openclaw/openclaw/commit/a4b51e58d3627ba4524a98d9aebe2c11115b284e)
-- Simplified Chinese users now see translated prompts for starting work, checking status, viewing phone controls, starting voice chat, copying pairing commands, and returning to Chat. [dd050bc](https://github.com/openclaw/openclaw/commit/dd050bc5f8151488e080b117714ea9f5cad832b5)
-- Traditional Chinese users now get localized prompts across chat setup, status checks, phone capabilities, voice chat, pairing, and copy actions. [db72ffd](https://github.com/openclaw/openclaw/commit/db72ffd5d47050acb2d4dd72de8087c162876523)
-- Brazilian Portuguese users now see translated first-run prompts, status help, phone controls, voice-chat entry, pairing-copy feedback, and the Go to Chat action. [4997802](https://github.com/openclaw/openclaw/commit/4997802eb0051cc83b9da1a06c923f211ff12159)
-- German users now get German prompts for starting work, checking OpenClaw status, viewing phone controls, starting voice chat, copying pairing commands, and going to Chat. [2dc7bd1](https://github.com/openclaw/openclaw/commit/2dc7bd19cb67742a7908427d2512d7b816f4d96f)
-- Spanish users now see current Spanish prompts across Chat, Talk, onboarding, phone controls, pairing-copy actions, and chat navigation. [4381c29](https://github.com/openclaw/openclaw/commit/4381c294942b342c0b7df82668fdae7883978ba8)
-- Japanese users now get Japanese prompts for choosing work, checking status, viewing phone controls, starting voice chat, copying a pair command, and moving to Chat. [9eb1a05](https://github.com/openclaw/openclaw/commit/9eb1a05c49082f221547015ad7a69561d113964a)
-- Korean users now see translated prompts for status checks, phone controls, voice chat, pairing-command copies, chat setup, and going to Chat. [7838bc8](https://github.com/openclaw/openclaw/commit/7838bc82b6df287946b9d45afd52f507c1e1463c)
-- French users now get localized prompts for starting work, checking status, viewing phone controls, starting voice chat, copying pair commands, and going to Chat. [4352eaf](https://github.com/openclaw/openclaw/commit/4352eaf6ade181654d5a729e5632a1681385b1e6)
-- Hindi users now see translated prompts across chat, status and phone controls, voice-chat setup, pairing actions, and navigation back to Chat. [43fe5cc](https://github.com/openclaw/openclaw/commit/43fe5cc890fc98a29af7aacd4030a0c288f76f76)
-- Arabic users now get current Arabic labels across chat prompts, status checks, phone controls, voice chat, pairing-command copies, and navigation. [6bd1a4b](https://github.com/openclaw/openclaw/commit/6bd1a4b89f2f82da1e19b0205c80fc4bd855be6d)
-- Italian users now see localized wording across onboarding, chat entry points, status checks, phone controls, voice-chat setup, pairing copies, and chat navigation. [531af42](https://github.com/openclaw/openclaw/commit/531af42246acecc8ee37d0ee189c8d3b8fea3af6)
-- Turkish native app users now see current translations across onboarding, status checks, phone controls, voice chat, pairing, and Chat navigation. [305715c](https://github.com/openclaw/openclaw/commit/305715c725af26d80c69bc9daa3fad77df330139)
-- Ukrainian native app users now get translated prompts and labels for starting chats, checking status, using voice features, copying pairing commands, and returning to Chat. [8f9e163](https://github.com/openclaw/openclaw/commit/8f9e1635a1d6351f9ec4a64c2624423e45b5e7a8)
-- Persian, Indonesian, Dutch, Polish, Russian, Swedish, Thai, and Vietnamese native app users now see updated translations in newer chat, status, phone-control, voice, and pairing flows. [2abad57](https://github.com/openclaw/openclaw/commit/2abad575d250b6e7723a660c92b5ad7fed9ea379)
-- Traditional Chinese native-app users now see localized labels on the controls for jumping to the newest message or newest reply. [a60686d](https://github.com/openclaw/openclaw/commit/a60686dbc376667625e1613aa131af5487e5d8fa)
-- Brazilian Portuguese native-app users now see localized controls for returning to the latest message or reply in a conversation. [12e17ec](https://github.com/openclaw/openclaw/commit/12e17ec052982a37c29245d738954488248ea8c7)
-- Spanish native-app users now see Spanish labels on the controls that move directly to the latest message or reply. [6c4ac0c](https://github.com/openclaw/openclaw/commit/6c4ac0c71da53cd99968a976894c7b8def078f67)
-- Korean native-app users now see localized labels for moving to the newest message or reply, making those navigation controls easier to identify. [bdc6258](https://github.com/openclaw/openclaw/commit/bdc625866b942f8f8d82ecfb72427f7c90992e78)
-- French native-app users now get French labels for jumping straight to the newest message or reply in a chat. [a775f9f](https://github.com/openclaw/openclaw/commit/a775f9f78e80a76b49cdf259e71ee002ee1da101)
-- Italian native-app users now see Italian labels when moving back to the latest part of a conversation or reply thread. [a1f6acc](https://github.com/openclaw/openclaw/commit/a1f6accef457ab9f48adff2975a853e28c291909)
-- Ukrainian native-app users now see localized controls for returning to the newest message or reply instead of English fallback labels. [ee9f61d](https://github.com/openclaw/openclaw/commit/ee9f61d724ff265017c93aef0b11c2d5f1a2401b)
-- Indonesian native-app users now get Indonesian text on the controls that jump to the latest message or reply. [f188c66](https://github.com/openclaw/openclaw/commit/f188c664c0e73d455f3bf6c5ac074a5432269c50)
-- Polish native-app users now see clear Polish labels for returning to the newest part of a conversation. [d23c4fd](https://github.com/openclaw/openclaw/commit/d23c4fdbb55f06833b9e37675185c003f7b3ea81)
-- Thai native-app users now get Thai labels for jumping to the newest message or reply in a chat. [2525078](https://github.com/openclaw/openclaw/commit/2525078b86544143634697a4f46aef850b783025)
-- Vietnamese native-app users can now identify the controls for jumping to the latest message or reply without encountering English fallback text. [ed5ccda](https://github.com/openclaw/openclaw/commit/ed5ccda79c8b0b96c59a6af880bf114997e85414)
-- Persian native-app users now get localized labels for operating the latest-message and latest-reply jump controls. [37f0067](https://github.com/openclaw/openclaw/commit/37f006725d3706cfa28922178e123d8ff192f352)
-- Russian native-app users now see Russian labels on the controls for jumping to the latest message or reply. [a6a4792](https://github.com/openclaw/openclaw/commit/a6a4792098a88953f1be8a81035f06b9bd7ed83a)
-- Swedish native-app users now get Swedish labels for returning to the latest message or reply instead of mixed English text. [0924bee](https://github.com/openclaw/openclaw/commit/0924bee96bcc86715942d11c31b878c323548e90)
-
-#### Set up the local Mac Gateway in your language
-
-- Simplified Chinese users now get current translated guidance while OpenClaw installs, checks, repairs, retries, or resumes the local Gateway during onboarding. [7a717b7](https://github.com/openclaw/openclaw/commit/7a717b777037c6e5152eda24e135e2a64295d256)
-- Traditional Chinese users now see localized onboarding and local Gateway guidance for installation, repair, resuming setup, and enabled permissions. [85d31e1](https://github.com/openclaw/openclaw/commit/85d31e10d5fcbbeb331e31aa67f8bce520cdbd8e)
-- German users now get current translated onboarding and local Gateway messages for installation, verification, repair, updates, pauses, and resuming setup. [27778a7](https://github.com/openclaw/openclaw/commit/27778a7c3de9ba798ae821d5a8dfc3059d4b9af2)
-- Spanish macOS users now see clearer Spanish guidance through the welcome flow and local Gateway install, repair, retry, check-again, and resume states. [cffc6ad](https://github.com/openclaw/openclaw/commit/cffc6adbce9ca2c8421459a29cfc7bcabb5cf148)
-- Japanese users now get localized onboarding and local Gateway messages for installation, verification repair, retrying, checking again, and resuming setup. [ab0d604](https://github.com/openclaw/openclaw/commit/ab0d604ced35802e8e754ba298b76f5d9a933e1b)
-- Korean users now see current Korean instructions while OpenClaw installs, verifies, repairs, updates, or resumes the local Gateway. [972d394](https://github.com/openclaw/openclaw/commit/972d394c7b008ff278a138c6e1587647e8545c4f)
-- French users now get French guidance while onboarding, installing or repairing the local Gateway, checking setup, and resuming a paused setup. [edbbdf6](https://github.com/openclaw/openclaw/commit/edbbdf6728472f98b92bba22381dd7d70bcb9c0b)
-- Hindi users now see translated first-run and local Gateway messages for installed, repairing, paused, updated, and ready states. [863a054](https://github.com/openclaw/openclaw/commit/863a054576cdeed556bb55c110a451f5c8cab571)
-- Arabic macOS users can now follow onboarding and local Gateway setup with Arabic status, repair, retry, and recovery instructions. [ef5650f](https://github.com/openclaw/openclaw/commit/ef5650f7816433aa5003ebef40019220911bf126)
-- Turkish users now get Turkish guidance for local Gateway readiness, installation progress, repair, retry, check-again, and paused-setup states. [5f2e51f](https://github.com/openclaw/openclaw/commit/5f2e51fccfc1c700a854cf1b288b16311fd43f87)
-- Italian users now see current Italian onboarding and local Gateway guidance for installation, verification, repair, pauses, and resuming setup. [5769416](https://github.com/openclaw/openclaw/commit/5769416b6280042684efde75a64ebb36ff27c6d7)
-- Indonesian users now get localized explanations of the Gateway, its installation state, setup progress, and the actions for retrying or resuming setup. [a3aa917](https://github.com/openclaw/openclaw/commit/a3aa917225ecaf87ef83d41f7d23b31dba748722)
-- Ukrainian users now see current setup guidance while choosing where OpenClaw runs and while installing or verifying the local Gateway. [2f7bd01](https://github.com/openclaw/openclaw/commit/2f7bd01835c8e7fe28a0aee44d235a6fd521c7f4)
-- Polish users now get current Polish text while starting OpenClaw, choosing where the Gateway runs, and following setup or retry prompts. [c54a6f3](https://github.com/openclaw/openclaw/commit/c54a6f304e49ba6746e8d92bd96d7ed904352a2c)
-- Thai Mac users now see translated guidance for choosing where OpenClaw runs, installing or repairing the Gateway, retrying, checking status, and resuming setup. [9c3ffc5](https://github.com/openclaw/openclaw/commit/9c3ffc5aafbf1075c0f6a00bdd2956a71e8a5f05)
-- Vietnamese users can now follow local Gateway setup, permission guidance, status checks, retries, and paused-setup recovery in Vietnamese. [469e707](https://github.com/openclaw/openclaw/commit/469e707970ea5ac0465b83b259f060b13ed2eede)
-- Dutch users now get translated onboarding guidance for automatic Gateway installation, setup verification, repair, retry, and resume actions. [d066a81](https://github.com/openclaw/openclaw/commit/d066a81d225df29c3f763c62885219991585bea6)
-- Persian macOS users now see clearer onboarding and Gateway messages for install progress, version repair, setup checks, retries, permissions, and controls. [72a3b71](https://github.com/openclaw/openclaw/commit/72a3b712af9b02352d6f2d8d2af3202204480097)
-- Russian users now get translated onboarding and local Gateway guidance for readiness, installation, verification, pauses, retries, and resuming setup. [63aa909](https://github.com/openclaw/openclaw/commit/63aa90921602909f19293ba243c344f4d895da6e)
-- Swedish users can now follow onboarding and local Gateway status, repair, update, retry, and resume messages in Swedish. [b68e2e7](https://github.com/openclaw/openclaw/commit/b68e2e701ae5f083909e499a84d57ec225cc5ffb)
-
-#### Understand native status and appearance choices in your language
-
-- Simplified Chinese users now see the affected Voice Wake Off and Paused status labels in Chinese instead of English. [58d199b](https://github.com/openclaw/openclaw/commit/58d199bbcbd298a3e806bcf5c56eb242759dea5b)
-- Traditional Chinese native app users now get localized labels when a control or workflow is off or paused. [c15348b](https://github.com/openclaw/openclaw/commit/c15348b74f6291282d79b592ec29577b2b871852)
-- Brazilian Portuguese users now see localized Off and Paused status labels in the native app. [c047a3a](https://github.com/openclaw/openclaw/commit/c047a3a9c669f12c51e3cf0f72606e53e85f7f2b)
-- German native app users now get German labels for off and paused states rather than English text. [e191685](https://github.com/openclaw/openclaw/commit/e191685be93f9a461d6346439ce227419fb41d1d)
-- Spanish native app users now see localized labels for off and paused states instead of English fallbacks. [b1e173d](https://github.com/openclaw/openclaw/commit/b1e173d4c30419f8c7f7393a9c4977f30a49ddcd)
-- Korean users now get Korean wording for common Off and Paused states on affected Apple app screens. [50fecf8](https://github.com/openclaw/openclaw/commit/50fecf848c405af2902838cecb34771367f3552c)
-- French native app users now see Off and Paused states labeled in French. [5211afe](https://github.com/openclaw/openclaw/commit/5211afeb67cc521eb7b55cf19884e1d77c6dbbce)
-- Hindi users now get localized Off and Paused labels wherever the native app shows those states. [4c43cf5](https://github.com/openclaw/openclaw/commit/4c43cf5eaba52ab729587c9d4f4a660638770701)
-- Arabic native app users now see pause and off-state controls labeled in Arabic. [fb394de](https://github.com/openclaw/openclaw/commit/fb394de179ba7b5914b1b886795d67c17aff39e8)
-- German users now get more natural native app wording when choosing system, light, or dark appearance. [ba8c1fa](https://github.com/openclaw/openclaw/commit/ba8c1fa76fe9031424cc2727c7d0f7b2cd08ecba)
-- Spanish users now see refreshed wording for the native app's system, light, and dark appearance choices. [7bee4f6](https://github.com/openclaw/openclaw/commit/7bee4f67d4cd66c78009497f931b8a19e03dda2a)
-- Korean users now get clearer native app wording that describes the full system, light, or dark appearance setting. [77ab268](https://github.com/openclaw/openclaw/commit/77ab268f79a5cee110df9ee0014b08f67368ff55)
-- French users now see current native app guidance for selecting system, light, or dark appearance. [2417d94](https://github.com/openclaw/openclaw/commit/2417d94663fdfd8770ebf00d67f0a73ae1a904cb)
-- Hindi users now get more natural wording for choosing the native app's system, light, or dark appearance. [9b6ef34](https://github.com/openclaw/openclaw/commit/9b6ef34f9deaa6f6fa524b860340d7000eb87ccd)
-- Arabic users continue to see localized appearance guidance after the native app's string identifier changed. [9c4274f](https://github.com/openclaw/openclaw/commit/9c4274f94570f1f41ee30350eae32255c675c38e)
-- Italian users now get complete localized labels for native app appearance choices and off or paused states. [2671bcc](https://github.com/openclaw/openclaw/commit/2671bcc39f8c17d55ae3e96cabf48e4d474cac19)
-- Turkish users now see localized wording for appearance choices and for controls that are off or paused. [b21153b](https://github.com/openclaw/openclaw/commit/b21153b98d6d2bde03cd1979d6db6ecb2ad47bab)
-- Ukrainian users now get current native app text for appearance guidance and the Off and Paused states. [117e8e1](https://github.com/openclaw/openclaw/commit/117e8e1e042709b6eba851fc8d208b98c43b22b9)
-- Indonesian users now see refreshed localized labels for native app appearance choices and off or paused states. [cc0d7e1](https://github.com/openclaw/openclaw/commit/cc0d7e1dd4c638034cafc27a93da1bb7c7735694)
-- Polish users now get updated Apple app wording for appearance guidance and the affected activity or status labels. [e6f3f54](https://github.com/openclaw/openclaw/commit/e6f3f54ad05728d874fdc4ff492e688741785249)
-- Thai users now see current localized text for native app appearance selection and paused or off states. [dd64f66](https://github.com/openclaw/openclaw/commit/dd64f66bb981595b8558af907d628fd49322a06f)
-- Vietnamese users now get localized native app wording for the updated appearance choice and Off and Paused labels. [4c16e66](https://github.com/openclaw/openclaw/commit/4c16e669b2252724cd6e68bf68d727de3edfedc9)
-- Dutch users now see localized native app labels for appearance options and off or paused states. [3a8375c](https://github.com/openclaw/openclaw/commit/3a8375c29a810d923603d9f043e3e0916548bddf)
-- Persian users now get clearer localized wording for native app appearance choices and paused or off states. [3e3b6d6](https://github.com/openclaw/openclaw/commit/3e3b6d6669468460959f1c9a57f4cb6a84b00620)
-- Russian users now see appearance controls and status states in Russian instead of English fallback text. [c356245](https://github.com/openclaw/openclaw/commit/c356245fc0d04803f768b6cd0675744728618fcd)
-- Swedish users now get clearer native app labels for choosing an appearance and for Off and Paused states. [d506201](https://github.com/openclaw/openclaw/commit/d506201c6578e5ae782c4a401cdfd46557a11b1f)
-
-#### Read native app license notices in your language
-
-- Simplified Chinese users now see native app license and open-source acknowledgement text in Chinese instead of English. [34bf5a9](https://github.com/openclaw/openclaw/commit/34bf5a90b4ae2ff2b987899a44f9c6b10467f6fe)
-- Traditional Chinese users now get localized native app text for license information and open-source acknowledgements. [068088c](https://github.com/openclaw/openclaw/commit/068088c7fc98d6e18d67855abb2c9ad9e6de449a)
-- Brazilian Portuguese users can now read the native Licenses heading, empty and missing-file messages, and open-source acknowledgement in Portuguese. [a623ac7](https://github.com/openclaw/openclaw/commit/a623ac71eba10364e558490326273cf369d9ee3c)
-- German users now see native app license labels, unavailable or empty-state messages, and open-source appreciation text in German. [71374d3](https://github.com/openclaw/openclaw/commit/71374d379b40cd080992955e57587b552e55a5f6)
-- Spanish users can now read the native app's Licenses heading, empty-state guidance, unavailable-file explanation, and open-source acknowledgement in Spanish. [a9b0de8](https://github.com/openclaw/openclaw/commit/a9b0de803789a9945c12bf37f143ae4cde2faeba)
-- Japanese users now get localized native app Licenses copy and the messages shown when license information is unavailable. [8f495e2](https://github.com/openclaw/openclaw/commit/8f495e2f805af548d78ee1f3834bde962a86f1a9)
-- Korean users now see clear localized text on the native Licenses screen, including empty and unavailable-file states. [436dd39](https://github.com/openclaw/openclaw/commit/436dd3934328bce7d75d77998212441859a044db)
-- French users now get localized native app labels and explanations for Licenses, empty bundles, unavailable files, and open-source acknowledgements. [f917e89](https://github.com/openclaw/openclaw/commit/f917e893a6d3fb2005074b6a1d752cf4fd505497)
-- Hindi users can now read the native app's license and open-source notices, including the message shown when no license files are bundled, in Hindi. [2c8b97c](https://github.com/openclaw/openclaw/commit/2c8b97cee9e056f155e2144311eccd5e5a66a6e2)
-- Arabic users now see localized native app license labels, empty and unavailable states, and the open-source acknowledgement. [ace162b](https://github.com/openclaw/openclaw/commit/ace162b95b47d1a16e9b2dd42851af64c731a9f1)
-- Italian users now get native app license and open-source acknowledgement messages in Italian rather than English. [e60cccf](https://github.com/openclaw/openclaw/commit/e60cccf8a9c95d7a158e3fe4b8f47204141fea2e)
-- Turkish readers now see the native Licenses screen, its empty states, and open-source acknowledgements in Turkish rather than English. [359ea4c](https://github.com/openclaw/openclaw/commit/359ea4c19bc9251e225a130d6f9c0fcab71d0ec2)
-- Ukrainian readers now get localized labels and availability messages throughout the native Licenses and open-source acknowledgements screen. [b7bc860](https://github.com/openclaw/openclaw/commit/b7bc8600e46aca2fbac8e0ddbea1a1084db80c64)
-- Indonesian readers now see localized license details, acknowledgements, and clear messages when a build contains no available license files. [49ea27e](https://github.com/openclaw/openclaw/commit/49ea27ecc230b49b664b594e99758400595fa80f)
-- Polish readers can now review the native Licenses screen, its availability explanations, and open-source acknowledgement in Polish. [99cbc58](https://github.com/openclaw/openclaw/commit/99cbc589536e7309a5f8c468de4d9795addad55f)
-- Thai readers now see localized labels and fallback messages when they open license information in the native app. [204526a](https://github.com/openclaw/openclaw/commit/204526ac0a2a35fd7482cac4c64ecee6ad7de0fa)
-- Vietnamese readers now get localized text across the native app's license and open-source acknowledgement experience. [3821c36](https://github.com/openclaw/openclaw/commit/3821c36d58cebab82ebf46614413b688930e3b47)
-- Dutch readers can now review the native Licenses screen and its license-availability messages without English fallback text. [030d184](https://github.com/openclaw/openclaw/commit/030d184254756706af637fb1eeb0a9c31036eb8c)
-- Persian readers now see localized Licenses labels and explanations, including when a build does not include license files. [24f639c](https://github.com/openclaw/openclaw/commit/24f639c66ca9a05a6531d4504971f67434989324)
-- Russian readers can now understand the native Licenses and About copy, including why a build may have no license files available. [499feb2](https://github.com/openclaw/openclaw/commit/499feb2e2fd474c7abeff9e87743b720ba03f593)
-- Swedish readers now see translated Licenses labels, empty-state guidance, and the open-source community acknowledgement. [591d099](https://github.com/openclaw/openclaw/commit/591d099897938a27c6383b17ca36e128abcf098c)
-
-#### Understand native photo access in your language
-
-- Simplified Chinese users now see clear localized Photos controls for limited access and for the selected or recent photos the assistant may read. [c360f92](https://github.com/openclaw/openclaw/commit/c360f92563fb2221452ae599412ea61f9eee188b)
-- Traditional Chinese users now get localized Photos permission labels that explain limited access and which images the assistant can read. [4dd027e](https://github.com/openclaw/openclaw/commit/4dd027eaa1f14356f4f7740d4258d72adb59d2f2)
-- Brazilian Portuguese users can now more clearly choose what photos to share because the native permission controls explain the assistant's access in Portuguese. [9cde1ca](https://github.com/openclaw/openclaw/commit/9cde1ca97141784f89816afd9283b2d7416b9a8c)
-- German users now see localized Photos permission choices that explain selected-photo and recent-photo access. [328fb70](https://github.com/openclaw/openclaw/commit/328fb70ba730bc7bb4cd3a0eaa5e6d1d089c734c)
-- Japanese users can now understand which photos the assistant may read through updated Japanese permission labels and descriptions. [71e5fcc](https://github.com/openclaw/openclaw/commit/71e5fccb644b51e50f61e8e3bd6715a0fd717a58)
-- Spanish users now get clearer Photos permission text when choosing limited access or selecting images for the assistant. [b11d710](https://github.com/openclaw/openclaw/commit/b11d710e524f7d6d664ea5857f358f4ebbaff6e4)
-- Korean users now see localized Photos, Limited, selected-photo, and recent-photo permission guidance in the native app. [55a2a9b](https://github.com/openclaw/openclaw/commit/55a2a9b0f0c4c56d03292b930ed116a146322e6c)
-- French users can now review and grant assistant photo access through complete, current French permission text. [c4b40d0](https://github.com/openclaw/openclaw/commit/c4b40d0b2a008c1ba1bae82a180e455bc8656e00)
-- Hindi users now see localized Photos permission guidance explaining allowed, selected, recent, and limited photo access. [3a1b983](https://github.com/openclaw/openclaw/commit/3a1b983bc227f67ac0862f1761d53f6a3fee083d)
-- Italian users now see current Photos permission wording when choosing which images the assistant may read or share. [dea40a5](https://github.com/openclaw/openclaw/commit/dea40a5f96307e9da0862bbc774100f799110d6c)
-- Turkish users can now make limited or selected photo-access choices with clearer native-language explanations of what the assistant may use. [4b1fab8](https://github.com/openclaw/openclaw/commit/4b1fab8047319bc07e47ef8136a9c83594729ed8)
-- Ukrainian users now get localized explanations for limited, selected, and recent photo access when sharing images with the assistant. [44ca739](https://github.com/openclaw/openclaw/commit/44ca739f77ab7dfaa1f096627e84bc79e859b849)
-- Indonesian users can now understand the native Photos access choices and what images the assistant is permitted to read. [d36452c](https://github.com/openclaw/openclaw/commit/d36452cc0bd66722f426c7c686859cbfcb1e9f24)
-- Polish users now see current localized wording for Photos, limited access, selected images, recent images, and sharing permissions. [a50a59e](https://github.com/openclaw/openclaw/commit/a50a59e64802a1263bd8befe6c4bea57e055499e)
-- Thai users can now grant photo access with clearer Thai guidance for limited access and the images the assistant may read. [49b68e1](https://github.com/openclaw/openclaw/commit/49b68e1039347867c227e992fa7fcfac3e58f932)
-- Vietnamese users now see localized Photos, Limited, selected-photo, and recent-photo labels when managing assistant access. [122e4ba](https://github.com/openclaw/openclaw/commit/122e4ba3a30f32b8d563d7afa2f60cc4cd6c431b)
-- Dutch users can now tell whether the assistant may read selected or recent photos from clearer localized permission text. [4086d35](https://github.com/openclaw/openclaw/commit/4086d35caf54c3a9759b21ad5f83536cdf08c2bc)
-- Persian users now get clearer Photos permission explanations when choosing limited or selected image access for the assistant. [547a563](https://github.com/openclaw/openclaw/commit/547a563e4ca3cf6d573cf6210db3ffbedb592175)
-- Russian users can now understand Photos access modes and what the assistant may read or share through updated localized wording. [538f28a](https://github.com/openclaw/openclaw/commit/538f28abce55949ee0a412da07664092427413d1)
-- Swedish users now see localized Photos permission text describing the active access mode and which images the assistant may read. [c5afa92](https://github.com/openclaw/openclaw/commit/c5afa92c1f8ac63a9c01b7971acabcfb1d6f948f)
-- Arabic iOS users can now understand which photos their assistant may read through clearer localized permission controls. [32a986d](https://github.com/openclaw/openclaw/commit/32a986d21c170741b5505870dd0a2e98ec410b1d)
-
-#### Set up skills, diagnostics, and privacy controls in your language
-
-- Simplified Chinese users now see current translated text when skills are unavailable and across affected Gateway, diagnostics, and setup screens. [fdcd5c0](https://github.com/openclaw/openclaw/commit/fdcd5c0eb0c2493f5d3845fcf76a02f4e1a6d6ba)
-- Traditional Chinese users now get clearer translated guidance for unavailable skills, Gateway setup and discovery, QR scanning, privacy, and troubleshooting. [26f6735](https://github.com/openclaw/openclaw/commit/26f673526e7a6680df175570da67baf6fe5abeed)
-- Brazilian Portuguese users now see localized guidance when a skill is unavailable and throughout the affected Gateway setup and diagnostics screens. [5220eff](https://github.com/openclaw/openclaw/commit/5220effc10c92cec20abb6df0c5acdaa40e56ad6)
-- German users now get current translated text for unavailable skills, Gateway setup and discovery, diagnostics, QR scanning, and privacy controls. [bb7dbda](https://github.com/openclaw/openclaw/commit/bb7dbda027b9451281f2d81d2f4cbad9a003599c)
-- Spanish users now see updated Spanish wording for unavailable skills and affected Gateway discovery, setup, privacy, and diagnostics screens. [952245b](https://github.com/openclaw/openclaw/commit/952245b49c4b6743afc9ad97f6f3e48af407e5ed)
-- Japanese users now get localized guidance for unavailable skills, returning to the skills list, Gateway setup, diagnostics, access controls, and QR scanning. [edb1e74](https://github.com/openclaw/openclaw/commit/edb1e74645ebba0b8992863a9d395d80fd10498f)
-- Korean users now see Korean guidance when a skill is unavailable, along with current labels across Gateway setup, diagnostics, help, and access screens. [f7bad57](https://github.com/openclaw/openclaw/commit/f7bad5749b9a441a6b55d1dc34cf9ef037270960)
-- French users now get up-to-date French text across unavailable-skill, Gateway discovery, diagnostics, privacy, and onboarding screens. [0602930](https://github.com/openclaw/openclaw/commit/060293056b33ff1a44dd5ab6f44ff8783d612f31)
-- Hindi users now see clearer Hindi labels and messages across skill availability, Gateway discovery, setup, diagnostics, and related settings. [e779b8f](https://github.com/openclaw/openclaw/commit/e779b8f1bde92173dcaeadd87853a458656dd7b3)
-- Arabic users now get more complete Arabic guidance when skills are unavailable and while using Gateway setup, diagnostics, privacy, and access controls. [0400be7](https://github.com/openclaw/openclaw/commit/0400be7118c03b6e3c2330fc31d9451e5a2c0151)
-- Italian users now see current Italian wording across affected skill, Gateway, connection, QR scanning, privacy, and access screens. [851d0ad](https://github.com/openclaw/openclaw/commit/851d0ad7354321ccad43ecf5f7c04abd168da0dc)
-- Turkish users now get current Turkish guidance for unavailable skills, Gateway screens, setup prompts, diagnostics actions, and privacy controls. [1e0dd95](https://github.com/openclaw/openclaw/commit/1e0dd95e5d9a0bb4d62dd72ce451a9902b4eb6d3)
-- Ukrainian users now see updated Ukrainian text for unavailable skills and affected Gateway discovery, diagnostics, setup, and privacy screens. [703e1ad](https://github.com/openclaw/openclaw/commit/703e1adadefe213c4fcc312ccb4aead7b120a3a1)
-- Indonesian users now get current Indonesian text across skill availability, Gateway setup, diagnostics, and onboarding instead of fallback English. [1c93e50](https://github.com/openclaw/openclaw/commit/1c93e509a36673ee8a58b0c1aa6c4b9a9a00a5e8)
-- Thai users now see updated Thai guidance for unavailable skills and affected Gateway setup, diagnostics, onboarding, and privacy screens. [37c45f2](https://github.com/openclaw/openclaw/commit/37c45f28fbbdbd768bd7fefa8d8a94274d075aa9)
-- Polish users now get current Polish labels and instructions across skills, Gateway setup, diagnostics, privacy, and QR scanning. [8fe917b](https://github.com/openclaw/openclaw/commit/8fe917b4f7784e44dabcb6cf7b673da74bf3753e)
-- Vietnamese users now see localized unavailable-skill guidance and updated text across Gateway discovery, diagnostics, privacy, and setup. [da21e4b](https://github.com/openclaw/openclaw/commit/da21e4b8dd47fc174cef6e3373471aba37f851e0)
-- Dutch users now get Dutch text for the unavailable-skill message, returning to the skills list, and related updated native app labels. [f4f63b1](https://github.com/openclaw/openclaw/commit/f4f63b187041cd20fe4016ad62d85ad59b94fa66)
-- Persian users now see current Persian wording across skills, Gateway setup, diagnostics, privacy, and access screens. [3e4febb](https://github.com/openclaw/openclaw/commit/3e4febbe68f82d8ee06977486a0f50ecba933452)
-- Russian users now get updated Russian text across skills, Gateway setup, connection, diagnostics, privacy, and access screens. [a82cd35](https://github.com/openclaw/openclaw/commit/a82cd35ed5405a5cca392a5272fe898264eaf107)
-- Swedish users now see Swedish wording across unavailable-skill, Gateway connection, setup, diagnostics, and permission screens instead of stale labels. [52323b6](https://github.com/openclaw/openclaw/commit/52323b67c5872f5c396ad2eb5e5749bfa1a63f6e)
-
-#### Follow connection, security, permissions, Chat, and Talk in your language
-
-- Simplified Chinese users now get clearer translated guidance while connecting a Gateway, checking diagnostics, reviewing permissions, and using Voice & Talk settings. [3b27bb4](https://github.com/openclaw/openclaw/commit/3b27bb4536a3bdc4b6bdf82fc59f878e478121d0)
-- Traditional Chinese users now see current labels and clearer security and permission guidance across Chat, Talk, Gateway, diagnostics, and onboarding. [e296d14](https://github.com/openclaw/openclaw/commit/e296d1447eb7b7666100e34169b0cd27b07e759c)
-- Brazilian Portuguese users now get current prompts and safety guidance across onboarding, Gateway setup, diagnostics, appearance, notifications, permissions, and Talk. [5516775](https://github.com/openclaw/openclaw/commit/5516775933a84f3bc88f9a485d7f53ad2d9e5928)
-- German users now see updated German labels, prompts, and safety text throughout Chat, Talk, Gateway setup, diagnostics, permissions, and onboarding. [6ec4962](https://github.com/openclaw/openclaw/commit/6ec49620baf962ecbd2c69f0299fd98410f18a8f)
-- Spanish users now get current Spanish guidance for Gateway setup, connection checks, Chat and Talk status, permissions, diagnostics, and pairing. [291f2a4](https://github.com/openclaw/openclaw/commit/291f2a477373c01cde9aac0f36438b9073b7677e)
-- Japanese users now see clearer Japanese wording across Gateway setup, appearance, approvals, diagnostics, Voice & Talk, and onboarding. [7e2d41b](https://github.com/openclaw/openclaw/commit/7e2d41b94c7a11ba96abe1839819e7c63c3e6c87)
-- Korean users now get clearer Korean prompts for Gateway setup, security, permissions, diagnostics, appearance, connection status, and Talk controls. [81bc96f](https://github.com/openclaw/openclaw/commit/81bc96f70f9e50fcf7cbbe014d0e6f9b10ff35d0)
-- French users now see current French guidance across Gateway connection, diagnostics, appearance, notification approval, Talk, pairing, and onboarding. [574556c](https://github.com/openclaw/openclaw/commit/574556cd32d816436209d006d6744273b82a0276)
-- Hindi users now get current Hindi labels and guidance across Gateway setup, connection checks, permissions, diagnostics, onboarding, and Talk controls. [8bb44e6](https://github.com/openclaw/openclaw/commit/8bb44e60d0cf740d13663d40a780fa28705eeeed)
-- Arabic users now see current Arabic text across Gateway setup, connection status, permissions, diagnostics, settings, onboarding, Chat, and Talk. [ae09908](https://github.com/openclaw/openclaw/commit/ae09908259e163598eea8170640255aa6d8c04ce)
-- Italian users now get localized wording for Gateway connection, diagnostic checks, Voice & Talk controls, security guidance, onboarding, and pairing. [42fc19d](https://github.com/openclaw/openclaw/commit/42fc19d77e93e7a41ce634c43f3317d3e123fd6a)
-- Turkish users now see clearer Turkish text across onboarding, Gateway connection, diagnostics, approvals, notifications, permissions, appearance, and Talk. [28bbb43](https://github.com/openclaw/openclaw/commit/28bbb439f6398a3e48fa8a88e67879290bb70ea0)
-- Ukrainian users now get current Ukrainian labels and prompts across setup, settings, Gateway connection, permissions, diagnostics, approvals, and voice features. [6ff9185](https://github.com/openclaw/openclaw/commit/6ff9185637fc3ab0fd1f966355fc7cfe505863e8)
-- Indonesian users now see current translated labels, prompts, and notices across Chat, Talk, onboarding, Gateway, security, permissions, diagnostics, and settings. [4be0be6](https://github.com/openclaw/openclaw/commit/4be0be697fb95444596f9d604cf54ea4ecd12943)
-- Polish users now get current Polish instructions across connection, Talk, security, setup, diagnostics, permissions, onboarding, and settings screens. [0f1fbbe](https://github.com/openclaw/openclaw/commit/0f1fbbe8779dfbe317bf99de0a45aebcdadec1ea)
-- Thai users now see clearer Thai text while connecting a Gateway, checking diagnostics, configuring Talk, and reviewing permission or security prompts. [d893a72](https://github.com/openclaw/openclaw/commit/d893a724f6f0e91161a93a223d01057c04cd8db4)
-- Vietnamese users now get current localized labels and help text across setup, Gateway connection, approvals, diagnostics, permissions, voice, and security flows. [f5cb29b](https://github.com/openclaw/openclaw/commit/f5cb29b2881edf85de14569adbfaea44b7b02056)
-- Wake Words and Discovery Logs now use current, natural labels across supported non-English native app locales. [de30d2f](https://github.com/openclaw/openclaw/commit/de30d2f5c333d49004f0771f529b578ed1af6f17)
-- Supported non-English native apps now translate workspace file browsing and sharing, image preview failures, offline status, and custom Gateway header controls. [6b99fd9](https://github.com/openclaw/openclaw/commit/6b99fd9a94ce99023c77e733efe7943e4f51c285)
-
-#### Understand iOS location access in your language
-
-- Korean Apple-app users now see localized explanations for Off, While Using, Always, Precise Location, denied, restricted, and unknown location states. [3542585](https://github.com/openclaw/openclaw/commit/3542585de59987dd0b962df3ddb70bde093fa4dd)
-- Simplified Chinese native-app users now see localized explanations of whether location sharing is available, permitted, or limited by the selected iOS mode. [261d79a](https://github.com/openclaw/openclaw/commit/261d79a9a42ef45a41c3947caa6e616c92702ad4)
-- Traditional Chinese native-app users now get detailed localized location status text covering disabled sharing, iOS service state, foreground or background access, restrictions, and Precise Location. [ef1474d](https://github.com/openclaw/openclaw/commit/ef1474dd3d4dfdffd4a47a5f14166dc8e2e97a55)
-- Brazilian Portuguese native-app users now receive clearer Portuguese explanations when choosing a location mode or diagnosing iOS permission settings. [cc1d61b](https://github.com/openclaw/openclaw/commit/cc1d61bd3c04d86b470f94364b1fe7fc6762c456)
-- German native-app users now see localized explanations of the location access OpenClaw has, what iOS permits, and whether Settings needs attention. [2a1e118](https://github.com/openclaw/openclaw/commit/2a1e1184f5139d300567d0c2437669727dddc821)
-- Spanish iOS users now get clearer localized location-sharing and permission status text, including when a change is still needed in Settings. [748bfee](https://github.com/openclaw/openclaw/commit/748bfee90d16df63b9d89ae7db8c80579c8f7a6f)
-- Japanese native-app users now see detailed Japanese explanations for location sharing modes, denied or restricted access, effective permissions, and Precise Location. [e0b2dda](https://github.com/openclaw/openclaw/commit/e0b2ddad6cd7a8a562dd39fd99746557923549a1)
-- French native-app users now get clearer French wording for choosing location sharing and understanding foreground, background, precise, or blocked iOS access. [f371a2f](https://github.com/openclaw/openclaw/commit/f371a2f2022f9ef6dd9ee781ccf9cb3ee2cf5d88)
-- Hindi native-app users now receive localized explanations when location sharing is off, limited to foreground use, allowed in the background, denied, restricted, or affected by Precise Location. [ee00cc7](https://github.com/openclaw/openclaw/commit/ee00cc7c949469612e79a55479c363d62a00f7e6)
-- Arabic native-app users now get clearer Arabic text showing whether OpenClaw can use location while the app is open, at all times, or not at all. [27f9ae0](https://github.com/openclaw/openclaw/commit/27f9ae0c0a41f812c872439efdfb05f1df79c17c)
-- Italian native-app users now see clearer localized explanations when iOS location services, Precise Location, or effective permissions differ from the mode selected in OpenClaw. [51a07ae](https://github.com/openclaw/openclaw/commit/51a07aec27eee6ff7c75ddc9d2d1d40ce0d74672)
-- Turkish native-app users now get Turkish explanations for Off, While Using, Always, denied, restricted, unknown, and Precise Location states. [ba9d167](https://github.com/openclaw/openclaw/commit/ba9d167e1a9596eff784716992a1f9885d60e892)
-- Indonesian iOS users now see localized explanations for foreground, background, denied, restricted, disabled, and precise-location access. [576169e](https://github.com/openclaw/openclaw/commit/576169e6d247308fd92cb8cdd3ba493797fa2f3f)
-- Ukrainian native-app users now receive clearer local-language location status and recovery guidance when OpenClaw and iOS permission settings do not match. [10500a6](https://github.com/openclaw/openclaw/commit/10500a63fa5837a58d3e9b400daa7f52d20d0fbb)
-- Polish native-app users now see Polish guidance for location modes, permission mismatches, Precise Location, and blocked or restricted access. [a344252](https://github.com/openclaw/openclaw/commit/a34425273c4ed1796845f1706d1c3b3974044434)
-- Thai iOS users now get localized explanations of the effective location permission, selected sharing mode, iOS restrictions, and Precise Location state. [d7d280f](https://github.com/openclaw/openclaw/commit/d7d280fc78a0e8c51b3404294a6a1958a023eb03)
-- Vietnamese native-app users now see Vietnamese explanations for disabled, foreground, always, restricted, and Precise Location permission states. [cb2547f](https://github.com/openclaw/openclaw/commit/cb2547f329109ee0b81a62b12ebea7743cac5905)
-- Dutch native-app users now receive Dutch explanations for location sharing, foreground and background access, Precise Location, and cases where iOS grants a different level than requested. [2191c2e](https://github.com/openclaw/openclaw/commit/2191c2eb1f77eb24f5c0dc8499630d52ebb55a68)
-- Persian native-app users now get localized wording for Off, While Using, Always, denied, restricted, and Precise Location combinations. [c63e9f9](https://github.com/openclaw/openclaw/commit/c63e9f9bf8ac0e573cfd32937e11ee0e16248709)
-- Russian native-app users now see Russian labels and explanations for Location Off, While Using, Always, and the effective permission granted by iOS. [4b1e0de](https://github.com/openclaw/openclaw/commit/4b1e0deb3374012338586f39fa8f064515a50cc8)
-- Swedish native-app users now get translated explanations for location sharing, iOS service availability, foreground or background access, Precise Location, and permission mismatches. [525c4c7](https://github.com/openclaw/openclaw/commit/525c4c7ce1b821236a07901d80b14a0e7ed81ded)
-
-#### Hear replies and use Apple Watch controls in your language
-
-- Apple native app users across 21 supported non-English locales now see translated Listen and speech-playback status controls. [0146534](https://github.com/openclaw/openclaw/commit/01465340f6dfe6dd51671e3a0c3b33d23c1ff1d7)
-- Translated Gateway controls on iOS and approval actions on Apple Watch no longer fall back to English in supported locales. [#97112](https://github.com/openclaw/openclaw/pull/97112) Thanks @vincentkoc.
-
-#### Show complete skill details in Swift clients
-
-- Swift clients can now decode skill curator actions and status details such as pinned state, use counts, timestamps, archived reasons, and overlaps. [ad833d7](https://github.com/openclaw/openclaw/commit/ad833d788305faeb9c12f3f4c5068674d201ee68)
-
-#### Open the Gateway terminal directly from native clients
-
-- The iOS and Android terminal pages now receive the operator credential from the connected device session, so authenticated users do not land on a terminal that cannot connect. [451190d](https://github.com/openclaw/openclaw/commit/451190d625693153dfdca800fdbb9a05b2c21b6a) Thanks @vincentkoc.
-- iOS and Android can now show the Gateway terminal as a focused full-screen view with stored credentials and a clear unavailable state instead of embedding the full desktop Control UI. [9c78489](https://github.com/openclaw/openclaw/commit/9c7848928f8b7f4104dd3eb4ddc9330d850d1886)
 - Opening Control -&gt; Terminal on iOS now goes directly to the terminal without briefly showing the general Web UI login screen during connection. [#100727](https://github.com/openclaw/openclaw/pull/100727)
-
-#### Navigate iPhone and iPad controls, settings, and larger text
-
+- iOS users can open Terminal directly from the Control hub, see a Gateway setup prompt when disconnected, and keep active shell sessions running through unrelated screen updates. [211e0d7](https://github.com/openclaw/openclaw/commit/211e0d7263c188ef8cbc5956808306b37bbfccc0)
 - The iOS Control, Chat, Talk, Agent, Settings, Gateway, and Overview screens now use clearer navigation, status cues, controls, and a compact expanding chat composer. [#98452](https://github.com/openclaw/openclaw/pull/98452) Thanks @joelnishanth.
 - The iOS Control, Agents, and Settings screens are now easier to scan, with fewer duplicate destinations, more compact controls, standard navigation, and a direct Gateway shortcut from detail views. [#98811](https://github.com/openclaw/openclaw/pull/98811) Related [#98803](https://github.com/openclaw/openclaw/issues/98803).
 - Chat, Talk, Settings, navigation, and onboarding on iPhone and iPad now use more consistent native controls, appearance, and back behavior. [#99231](https://github.com/openclaw/openclaw/pull/99231) Related [#99195](https://github.com/openclaw/openclaw/issues/99195). Thanks @marvkr.
 - On iPad, selecting Overview, Chat, Talk, or another sidebar destination now leaves the current Settings detail and opens the requested screen. [#94991](https://github.com/openclaw/openclaw/pull/94991) Thanks @solvely-colin.
-- Native iOS Chat now follows Larger Text and Dynamic Type settings for messages, the intro, and composer text with less clipping. [#97552](https://github.com/openclaw/openclaw/pull/97552) Thanks @jmcte.
 - The iOS app now opens to Chat for normal launches while preserving direct navigation to Control, Settings, Agent, Talk, and nested destinations. [#98353](https://github.com/openclaw/openclaw/pull/98353) Thanks @bsniznd.
 - iOS Control, Talk, and Settings are easier to scan with clearer status emphasis, safer action styling, calmer idle visuals, and improved large-text support. [#98423](https://github.com/openclaw/openclaw/pull/98423) Related [#98397](https://github.com/openclaw/openclaw/issues/98397).
 - iOS connection, warning, and information text is now easier to read in light and dark modes, and Appearance settings accurately describe the selected behavior. [#98443](https://github.com/openclaw/openclaw/pull/98443) Related [#98440](https://github.com/openclaw/openclaw/issues/98440).
-- The iPhone app now presents a compact Talk control bar, a cleaner Appearance picker, and a properly aligned realtime-audio button beside the resting Chat composer. [#98736](https://github.com/openclaw/openclaw/pull/98736)
 - iOS users who open Gateway, Voice, or Notifications settings from another screen now return to the Chat, Talk, Agent, Control, or Approvals screen they came from. [#98898](https://github.com/openclaw/openclaw/pull/98898) Thanks @lokimorty.
 - The iOS app now applies OpenClaw's palette consistently across Talk, settings, Gateway, privacy, usage, and workboard views while retaining accessible contrast. [#98930](https://github.com/openclaw/openclaw/pull/98930) Thanks @joelnishanth.
 - iPhone users who open Chat from a Control detail can now return to that same Overview, Activity, Workboard, or Sessions screen without losing their place. [#99245](https://github.com/openclaw/openclaw/pull/99245) Thanks @solvely-colin.
@@ -2335,30 +2008,26 @@ The [Android](https://docs.openclaw.ai/platforms/android), [iOS](https://docs.op
 - The iPhone Control destination list is now denser and easier to scan without changing navigation or status information. [#99468](https://github.com/openclaw/openclaw/pull/99468) Related [#99439](https://github.com/openclaw/openclaw/issues/99439). Thanks @sahilsatralkar.
 - Already-paired iPhone users now return to Chat, Talk, and Settings instead of being trapped in setup when older onboarding flags are stale. [#101481](https://github.com/openclaw/openclaw/pull/101481)
 
-#### Write, format, search, and manage iOS and macOS chats
+##### Chat and sessions
 
+- Images shared from iOS or through node `agent.request` now remain attached to the correct conversation turn after history reload, so later messages can still use them. [#86936](https://github.com/openclaw/openclaw/pull/86936) Thanks @peterdsp.
+- iPhone and iPad users can now browse an agent workspace, preview generated files, logs, and configuration, and share a file without returning to the host computer. [#100767](https://github.com/openclaw/openclaw/pull/100767)
+- Native iOS Chat now follows Larger Text and Dynamic Type settings for messages, the intro, and composer text with less clipping. [#97552](https://github.com/openclaw/openclaw/pull/97552) Thanks @jmcte.
 - Native iOS Chat now gives the conversation more room, uses a compact composer that grows with longer drafts, and keeps attachment, Talk, and send controls comfortably tappable. [#98953](https://github.com/openclaw/openclaw/pull/98953) Related [#98929](https://github.com/openclaw/openclaw/issues/98929).
 - iOS Chat now keeps one final assistant reply per turn instead of briefly showing a duplicate that disappears after history refreshes. [#98117](https://github.com/openclaw/openclaw/pull/98117) Related [#98116](https://github.com/openclaw/openclaw/issues/98116). Thanks @joshavant, @ooiuuii.
 - iOS Chat now preserves intentional line breaks in assistant responses and other multiline messages without disrupting normal Markdown rendering. [#98304](https://github.com/openclaw/openclaw/pull/98304) Related [#98028](https://github.com/openclaw/openclaw/issues/98028). Thanks @jabato01, @joshavant.
 - The iOS chat experience now offers useful starting prompts, clearer pairing and setup actions, better agent placeholders, and steadier message ordering during refreshes. [#99243](https://github.com/openclaw/openclaw/pull/99243) Thanks @jcooley8.
 - iOS chat now lets users browse, filter, and select available commands and skills from the composer instead of memorizing exact slash commands. [#99426](https://github.com/openclaw/openclaw/pull/99426) Thanks @solvely-colin, @viczhang6.
-- Apple chat now presents fenced code with theme-aware highlighting and GitHub-style tables as aligned native tables on iOS and macOS. [#100207](https://github.com/openclaw/openclaw/pull/100207)
-- Apple chat now restores the visible in-progress state after backgrounding or reconnecting, preventing overlapping sends and reconciling one correct final reply. [#100277](https://github.com/openclaw/openclaw/pull/100277)
 - iOS chat now provides tactile feedback for accepted sends and most completed or failed runs, though some abort paths may still omit or misclassify failure feedback. [#100416](https://github.com/openclaw/openclaw/pull/100416)
 - iOS users can export the current conversation as a named, readable Markdown file and save or send it through the system share sheet. [#100417](https://github.com/openclaw/openclaw/pull/100417)
-- iOS chat now shows and switches the active model, while iOS and macOS model pickers support pinned favorites and the five most recent choices. [#100774](https://github.com/openclaw/openclaw/pull/100774)
-- Display equations in iOS and macOS chats now appear as readable, accessible typeset math, with horizontal scrolling for wide formulas and raw text retained for malformed expressions. [#100829](https://github.com/openclaw/openclaw/pull/100829)
-- iOS and macOS hide the thinking-level control for models that cannot use it, avoid sending stale unsupported settings, and restore the previous level when a reasoning-capable model is selected again. [#100875](https://github.com/openclaw/openclaw/pull/100875)
-- Streaming replies in iOS and macOS chats now reveal text more smoothly word by word, while reduced-motion users still receive immediate text and completed messages remain unchanged. [#100884](https://github.com/openclaw/openclaw/pull/100884)
 - Offline iOS messages now survive relaunch, remain tied to their original Gateway and conversation, and send once only when delivery can be confirmed, with clear uncertain-delivery status when it cannot. [#100942](https://github.com/openclaw/openclaw/pull/100942)
-- iOS and macOS users can preview a safe link's title and description inside chat before deciding whether to open it. [#101198](https://github.com/openclaw/openclaw/pull/101198)
-- Expanded link previews on iOS and macOS can now show a safe page thumbnail, with the existing text card retained when image loading fails. [#101387](https://github.com/openclaw/openclaw/pull/101387)
-- Finished iOS and macOS chat replies now typeset inline LaTeX formulas while streaming text, code, currency, and invalid math remain readable as plain text. [#101388](https://github.com/openclaw/openclaw/pull/101388)
-- iOS chat and macOS webchat users can search, pin, rename, archive, restore, and reopen sessions from the in-chat switcher instead of scrolling a simple recent list. [#101053](https://github.com/openclaw/openclaw/pull/101053)
 - Tapping the iPhone status bar now leaves the chat at the top for reading older messages until the user chooses Jump to latest. [#100502](https://github.com/openclaw/openclaw/pull/100502)
 
-#### Talk, record, listen, and reply from iPhone or Apple Watch
+##### Voice, Talk, and Apple Watch
 
+- Translated Gateway controls on iOS and approval actions on Apple Watch no longer fall back to English in supported locales. [#97112](https://github.com/openclaw/openclaw/pull/97112) Thanks @vincentkoc.
+- iOS voice notes now stay with the intended chat and recover more reliably across offline queues, app recreation, uncertain sends, and competing microphone use. [#101236](https://github.com/openclaw/openclaw/pull/101236)
+- The iPhone app now presents a compact Talk control bar, a cleaner Appearance picker, and a properly aligned realtime-audio button beside the resting Chat composer. [#98736](https://github.com/openclaw/openclaw/pull/98736)
 - Apple Watch users can dictate a message and hear OpenClaw's final reply on the Watch, with separate silent-send, cancel, and stop controls. [#100283](https://github.com/openclaw/openclaw/pull/100283)
 - iOS users can record and send a voice note of up to three minutes from the chat composer, optionally add text, and see the recording's duration in chat. [#100946](https://github.com/openclaw/openclaw/pull/100946)
 - Paired iOS users can start native ElevenLabs Talk with a SecretRef-backed Gateway key without copying the credential into plaintext mobile configuration. [#98210](https://github.com/openclaw/openclaw/pull/98210) Related [#98209](https://github.com/openclaw/openclaw/issues/98209). Thanks @joshavant, @ooiuuii.
@@ -2369,8 +2038,9 @@ The [Android](https://docs.openclaw.ai/platforms/android), [iOS](https://docs.op
 - Apple Watch pairing and companion status now refresh without restarting the iPhone app, while cold-launch actions wait for readiness or return a clear `WATCH_UNAVAILABLE` error. [#100732](https://github.com/openclaw/openclaw/pull/100732)
 - iPhone users can now choose Listen on an assistant reply, follow preparation and playback status, stop at any time, and fall back to on-device speech when needed. [#100771](https://github.com/openclaw/openclaw/pull/100771)
 - Apple Watch quick replies now survive an unavailable iPhone and reconnect later to the intended Gateway without being lost, duplicated, or misrouted. [#100372](https://github.com/openclaw/openclaw/pull/100372) Thanks @nianjiuzst.
+- OpenClaw now uses consistent branded typography throughout its iOS, Watch, and Live Activity interfaces while retaining Dynamic Type and accessibility support. [#99246](https://github.com/openclaw/openclaw/pull/99246) Thanks @joelnishanth, @joshavant.
 
-#### Pair iPhones and keep the right Gateway connection
+##### Gateway setup and connections
 
 - iOS users can pair multiple Gateways once and switch among them while keeping credentials, trust, chats, preferences, device access, and push registration attached to the correct Gateway. [#100948](https://github.com/openclaw/openclaw/pull/100948)
 - iPhone users pairing with a LAN Gateway now stay authenticated after the one-time bootstrap so Chat and the node connection do not immediately disconnect. [#98066](https://github.com/openclaw/openclaw/pull/98066) Related [#98064](https://github.com/openclaw/openclaw/issues/98064). Thanks @ooiuuii.
@@ -2384,10 +2054,10 @@ The [Android](https://docs.openclaw.ai/platforms/android), [iOS](https://docs.op
 - iOS pairing codes can now advertise both local and Tailnet Gateway routes, allowing the phone to save the first reachable address when it is away from the private LAN. [#100317](https://github.com/openclaw/openclaw/pull/100317)
 - iOS Gateway connection errors now appear as one dismissible toast that returns for a later failure and visibly reacts instead of stacking when the same problem repeats. [#98856](https://github.com/openclaw/openclaw/pull/98856) Thanks @lokimorty.
 - The iOS QR setup scanner is less likely to crash or become unstable when users open, cancel, or close the camera during onboarding. [#101235](https://github.com/openclaw/openclaw/pull/101235) Thanks @joshavant, @solvely-colin.
-- Android and iOS Gateway setup now clearly requires Secure TLS for remote hosts, warns before trusted LAN use without encryption, and offers actionable update guidance for protocol mismatches. [#101325](https://github.com/openclaw/openclaw/pull/101325) Thanks @joshavant.
 
-#### Use iOS location, camera, contacts, and recording permissions reliably
+##### Permissions, location, and capture
 
+- iOS location settings now explain Off, While Using, Always, Precise Location, restrictions, and permission mismatches in the selected language across the translations in this release. Sources: [3542585](https://github.com/openclaw/openclaw/commit/3542585de59987dd0b962df3ddb70bde093fa4dd), [261d79a](https://github.com/openclaw/openclaw/commit/261d79a9a42ef45a41c3947caa6e616c92702ad4), [ef1474d](https://github.com/openclaw/openclaw/commit/ef1474dd3d4dfdffd4a47a5f14166dc8e2e97a55), [cc1d61b](https://github.com/openclaw/openclaw/commit/cc1d61bd3c04d86b470f94364b1fe7fc6762c456), [2a1e118](https://github.com/openclaw/openclaw/commit/2a1e1184f5139d300567d0c2437669727dddc821), [748bfee](https://github.com/openclaw/openclaw/commit/748bfee90d16df63b9d89ae7db8c80579c8f7a6f), [e0b2dda](https://github.com/openclaw/openclaw/commit/e0b2ddad6cd7a8a562dd39fd99746557923549a1), [f371a2f](https://github.com/openclaw/openclaw/commit/f371a2f2022f9ef6dd9ee781ccf9cb3ee2cf5d88), [ee00cc7](https://github.com/openclaw/openclaw/commit/ee00cc7c949469612e79a55479c363d62a00f7e6), [27f9ae0](https://github.com/openclaw/openclaw/commit/27f9ae0c0a41f812c872439efdfb05f1df79c17c), [51a07ae](https://github.com/openclaw/openclaw/commit/51a07aec27eee6ff7c75ddc9d2d1d40ce0d74672), [ba9d167](https://github.com/openclaw/openclaw/commit/ba9d167e1a9596eff784716992a1f9885d60e892), [576169e](https://github.com/openclaw/openclaw/commit/576169e6d247308fd92cb8cdd3ba493797fa2f3f), [10500a6](https://github.com/openclaw/openclaw/commit/10500a63fa5837a58d3e9b400daa7f52d20d0fbb), [a344252](https://github.com/openclaw/openclaw/commit/a34425273c4ed1796845f1706d1c3b3974044434), [d7d280f](https://github.com/openclaw/openclaw/commit/d7d280fc78a0e8c51b3404294a6a1958a023eb03), [cb2547f](https://github.com/openclaw/openclaw/commit/cb2547f329109ee0b81a62b12ebea7743cac5905), [2191c2e](https://github.com/openclaw/openclaw/commit/2191c2eb1f77eb24f5c0dc8499630d52ebb55a68), [c63e9f9](https://github.com/openclaw/openclaw/commit/c63e9f9bf8ac0e573cfd32937e11ee0e16248709), [4b1e0de](https://github.com/openclaw/openclaw/commit/4b1e0deb3374012338586f39fa8f064515a50cc8), [525c4c7](https://github.com/openclaw/openclaw/commit/525c4c7ce1b821236a07901d80b14a0e7ed81ded).
 - iOS location settings now show the permission that is actually in effect, including Precise Location and mismatches between OpenClaw's selected mode and the iOS grant. [#99247](https://github.com/openclaw/openclaw/pull/99247) Thanks @pollybot13.
 - iOS users can now add contacts and search affected records without crashing the app or disconnecting the node. [#99475](https://github.com/openclaw/openclaw/pull/99475) Thanks @abdullahtas0.
 - iOS Calendar, Reminders, and Contacts commands now return an immediate permission-required result instead of opening a prompt that leaves the agent request waiting. [#99477](https://github.com/openclaw/openclaw/pull/99477) Thanks @nianjiuzst.
@@ -2398,14 +2068,22 @@ The [Android](https://docs.openclaw.ai/platforms/android), [iOS](https://docs.op
 - iOS now recognizes Limited Photos access as usable, offers in-app controls for requesting or managing the grant, and avoids interrupting gateway requests with a surprise prompt. [#99350](https://github.com/openclaw/openclaw/pull/99350) Related [#99046](https://github.com/openclaw/openclaw/issues/99046). Thanks @tony-ooo.
 - The iOS camera permission prompt now clearly connects access to Gateway setup and assistant-requested photo, video, document, screen, or workspace capture. [e77994e](https://github.com/openclaw/openclaw/commit/e77994ed5adfd5e69c457a5bca82795eff3555bf) Thanks @joshavant.
 
-#### Keep native branding and motion accessible
+#### macOS
 
-- OpenClaw's mascot now uses the same float, blink, antenna, and claw animations across web, iOS, and Android surfaces while respecting reduced-motion preferences. [851156a](https://github.com/openclaw/openclaw/commit/851156af3b35b56c56d8d20fff7fb97104d13d1a)
-- OpenClaw now uses consistent branded typography throughout its iOS, Watch, and Live Activity interfaces while retaining Dynamic Type and accessibility support. [#99246](https://github.com/openclaw/openclaw/pull/99246) Thanks @joelnishanth, @joshavant.
-- The Mac app now shows the animated OpenClaw mascot in onboarding and About, while Reduce Motion keeps it still. [f052a2f](https://github.com/openclaw/openclaw/commit/f052a2f23b2d2b510686526ce52c6637bca8a4c6)
-- The macOS onboarding and About mascot now more closely matches openclaw.ai with theme-aware colors, glow, hover scaling, and smoother motion that keeps its antennae visible. [05c9dcc](https://github.com/openclaw/openclaw/commit/05c9dccf35ec86ebd41e17fdcc0dbf67d203b54c)
+##### Setup and local agent
 
-#### Keep macOS remote tunnels and paired identity stable
+- Localized macOS builds now translate the new GitHub link label, including its accessibility-facing text, instead of falling back to English. [8be1d36](https://github.com/openclaw/openclaw/commit/8be1d366a1f72936495c3d2b00461c5b58572706)
+- macOS onboarding now translates local Gateway installation, checks, repairs, retries, paused setup, and resume guidance across the languages updated in this release. Sources: [7a717b7](https://github.com/openclaw/openclaw/commit/7a717b777037c6e5152eda24e135e2a64295d256), [85d31e1](https://github.com/openclaw/openclaw/commit/85d31e10d5fcbbeb331e31aa67f8bce520cdbd8e), [27778a7](https://github.com/openclaw/openclaw/commit/27778a7c3de9ba798ae821d5a8dfc3059d4b9af2), [cffc6ad](https://github.com/openclaw/openclaw/commit/cffc6adbce9ca2c8421459a29cfc7bcabb5cf148), [ab0d604](https://github.com/openclaw/openclaw/commit/ab0d604ced35802e8e754ba298b76f5d9a933e1b), [972d394](https://github.com/openclaw/openclaw/commit/972d394c7b008ff278a138c6e1587647e8545c4f), [edbbdf6](https://github.com/openclaw/openclaw/commit/edbbdf6728472f98b92bba22381dd7d70bcb9c0b), [863a054](https://github.com/openclaw/openclaw/commit/863a054576cdeed556bb55c110a451f5c8cab571), [ef5650f](https://github.com/openclaw/openclaw/commit/ef5650f7816433aa5003ebef40019220911bf126), [5f2e51f](https://github.com/openclaw/openclaw/commit/5f2e51fccfc1c700a854cf1b288b16311fd43f87), [5769416](https://github.com/openclaw/openclaw/commit/5769416b6280042684efde75a64ebb36ff27c6d7), [a3aa917](https://github.com/openclaw/openclaw/commit/a3aa917225ecaf87ef83d41f7d23b31dba748722), [2f7bd01](https://github.com/openclaw/openclaw/commit/2f7bd01835c8e7fe28a0aee44d235a6fd521c7f4), [c54a6f3](https://github.com/openclaw/openclaw/commit/c54a6f304e49ba6746e8d92bd96d7ed904352a2c), [9c3ffc5](https://github.com/openclaw/openclaw/commit/9c3ffc5aafbf1075c0f6a00bdd2956a71e8a5f05), [469e707](https://github.com/openclaw/openclaw/commit/469e707970ea5ac0465b83b259f060b13ed2eede), [d066a81](https://github.com/openclaw/openclaw/commit/d066a81d225df29c3f763c62885219991585bea6), [72a3b71](https://github.com/openclaw/openclaw/commit/72a3b712af9b02352d6f2d8d2af3202204480097), [63aa909](https://github.com/openclaw/openclaw/commit/63aa90921602909f19293ba243c344f4d895da6e), [b68e2e7](https://github.com/openclaw/openclaw/commit/b68e2e701ae5f083909e499a84d57ec225cc5ffb).
+- macOS users can run Codex Computer Use desktop controls through managed installation without a manual `appServer.command`, and an outdated Codex Desktop app-server no longer blocks a supported plugin-local binary. [#96730](https://github.com/openclaw/openclaw/pull/96730) Thanks @bdjben.
+- New Mac users can now open the app and reach a working local agent without Terminal, Homebrew, administrator access, or an extra approval prompt for the app's own node. [#99767](https://github.com/openclaw/openclaw/pull/99767) Related [#99764](https://github.com/openclaw/openclaw/issues/99764).
+- macOS onboarding now verifies the chosen AI connection before first chat, presents clearer local and remote setup choices, and offers friendly recovery or a verified manual API-key path when authentication fails. [#100288](https://github.com/openclaw/openclaw/pull/100288)
+- macOS onboarding now offers the Gateway's supported text-inference provider catalog instead of only Anthropic, OpenAI, and Google, and tests credentials before saving them. [#101132](https://github.com/openclaw/openclaw/pull/101132)
+- First-run macOS setup now recognizes a successfully saved Codex login and is less likely to finish with a stale Gateway or bundled-skills warning. [#101218](https://github.com/openclaw/openclaw/pull/101218)
+- After `openclaw doctor --fix` archives a legacy sidecar, the macOS app no longer recreates it or triggers the same migration conflict warning on every command or Gateway start. [#99039](https://github.com/openclaw/openclaw/pull/99039) Related [#98917](https://github.com/openclaw/openclaw/issues/98917). Thanks @momothemage, @p51moustache.
+- Repeated pairing repair attempts now produce one usable macOS approval prompt per device instead of stacking stale alerts that cannot complete approval. [#100976](https://github.com/openclaw/openclaw/pull/100976)
+- On macOS, an explicit `OPENCLAW_STATE_DIR` now stays isolated from the machine's existing App Group pairing identity and device tokens. [#101779](https://github.com/openclaw/openclaw/pull/101779)
+
+##### Remote mode and Gateway reliability
 
 - macOS remote mode can now connect through explicitly selected managed SSH aliases and recover app-owned tunnels when SSH multiplexing or backgrounding is enabled. [#99661](https://github.com/openclaw/openclaw/pull/99661)
 - Finder-launched macOS sessions can now use SSH aliases backed by common user-installed `ProxyCommand` helpers without losing agent state or failing Gateway readiness checks. [#100214](https://github.com/openclaw/openclaw/pull/100214)
@@ -2417,12 +2095,16 @@ The [Android](https://docs.openclaw.ai/platforms/android), [iOS](https://docs.op
 - The macOS app no longer mistakes a valid launchd-managed local Gateway for an unexpected listener and terminates active assistant or channel work. [#100867](https://github.com/openclaw/openclaw/pull/100867) Thanks @lsr911, @vincentkoc.
 - The macOS app now keeps the same paired device and node identity across upgrades, restarts, and Gateway reconnects instead of repeatedly asking for approval or creating stale duplicates. [#101105](https://github.com/openclaw/openclaw/pull/101105) Thanks @yetval.
 
-#### Open and identify the Mac app more easily
+##### App design and launching
 
+- The Mac app now shows the animated OpenClaw mascot in onboarding and About, while Reduce Motion keeps it still. [f052a2f](https://github.com/openclaw/openclaw/commit/f052a2f23b2d2b510686526ce52c6637bca8a4c6)
+- The macOS onboarding and About mascot now more closely matches openclaw.ai with theme-aware colors, glow, hover scaling, and smoother motion that keeps its antennae visible. [05c9dcc](https://github.com/openclaw/openclaw/commit/05c9dccf35ec86ebd41e17fdcc0dbf67d203b54c)
 - The Mac About screen now links directly to the OpenClaw website, documentation, GitHub project, and Discord community, matching the other native apps. [6e7ef63](https://github.com/openclaw/openclaw/commit/6e7ef631d2ac41370fc5b14b8e5b5992413a4cd7)
 - Opening OpenClaw again from the macOS Dock or Finder now brings up the dashboard or its failure window even when the menu-bar app is already running. [#97637](https://github.com/openclaw/openclaw/pull/97637) Thanks @solvely-colin.
 
-#### Stream, steer, and recover terminal conversations
+### Terminal UI and Other Clients
+
+#### Terminal conversations and recovery
 
 - `openclaw tui` now finds the custom port of an active local Gateway automatically, so users usually do not need to repeat its URL with `--url`. [#73338](https://github.com/openclaw/openclaw/pull/73338) Thanks @haishmg, @vincentkoc.
 - Gateway-backed and local TUI sessions now display assistant text as it arrives instead of appearing quiet until the final response. [#83000](https://github.com/openclaw/openclaw/pull/83000) Thanks @flashosophy.
@@ -2436,49 +2118,45 @@ The [Android](https://docs.openclaw.ai/platforms/android), [iOS](https://docs.op
 - TUI users can now submit prompts while an agent is working and receive the configured followup, collect, or interrupt behavior, with Esc and `/stop` canceling only the intended work. [#100123](https://github.com/openclaw/openclaw/pull/100123) Thanks @kevinlp, @sebtardif.
 - TUI `/new` now performs a real session transition with the expected lifecycle hooks and prevents a new session from racing an active turn. [#100241](https://github.com/openclaw/openclaw/pull/100241) Thanks @caopulan.
 - Terminal Hatch onboarding and other TUI connections now show `starting up` until session loading finishes, with accurate running indicators after reconnects. [#93999](https://github.com/openclaw/openclaw/pull/93999) Thanks @ml12580.
-- Codex CLI session lists now shorten long last-message previews without splitting emoji or similar characters into broken text. [#96582](https://github.com/openclaw/openclaw/pull/96582) Thanks @llagy007, @weeli-009.
 - Repeated submits while the TUI agent is busy now update one warning instead of flooding the conversation with duplicate notices. [#99879](https://github.com/openclaw/openclaw/pull/99879) Thanks @vincentkoc.
 - `openclaw tui --local` now explains when a known slash command requires the Gateway instead of sending that command to the model as an unwanted prompt. [#100188](https://github.com/openclaw/openclaw/pull/100188) Thanks @goslingmanagment.
 - Workspace skill approvals started in the TUI now appear in that terminal, so users can review and unblock the run without switching to Telegram. [#100251](https://github.com/openclaw/openclaw/pull/100251) Thanks @vincentkoc.
 - The terminal UI now stays open and shows a safe, useful error when a local shell command, slash command, or message submission fails. [#100340](https://github.com/openclaw/openclaw/pull/100340) Thanks @cxbasdev.
 
+#### Codex CLI session lists
+
+- Codex CLI session lists now shorten long last-message previews without splitting emoji or similar characters into broken text. [#96582](https://github.com/openclaw/openclaw/pull/96582) Thanks @llagy007, @weeli-009.
+
 ### Plugins and Packaging
 
-#### Plugins, skills, and distribution
-
 [Skills](https://docs.openclaw.ai/cli/skills) can be drafted from a conversation or source, reviewed, pinned, archived, restored, and kept out of future context when stale. [Plugin management](https://docs.openclaw.ai/plugins/manage-plugins) is clearer about discovery, installation, updates, marketplace snapshots, connected Codex apps, approvals, and runtime failures, while [Codex supervision](https://docs.openclaw.ai/plugins/codex-supervision) can give each new thread an explicit bounded app allowlist.
-
 Official packages are easier to obtain through the supported [Docker](https://docs.openclaw.ai/install/docker) and [Android](https://docs.openclaw.ai/platforms/android) paths, and plugin-backed workflows such as Google Meet and [Apple Messages](https://docs.openclaw.ai/channels/imessage) recover from more setup and migration problems. [Doctor](https://docs.openclaw.ai/cli/doctor) also handles damaged migration caches and older plugin or skill layouts without turning a recoverable upgrade into a dead end.
 
-#### Skills and connected plugin workflows
+#### Skills and personal workflows
 
 - Users can turn a conversation, file path, URL, or pasted note into a reviewable Skill Workshop proposal with one message instead of starting from a blank draft. [#100442](https://github.com/openclaw/openclaw/pull/100442)
 - Long-running agents can automatically retire unused Skill Workshop skills from future context, pin important ones, restore archives, and surface possible overlaps without deleting the underlying skills. [#101214](https://github.com/openclaw/openclaw/pull/101214)
-- Owner-operated native Codex agents can now use selected apps already connected to the operator's Codex account, with a bounded per-thread allowlist and existing approval controls preserved. [#100973](https://github.com/openclaw/openclaw/pull/100973) Thanks @pash-openai.
 - The opt-in Logbook lets users review a model-organized workday timeline, generate standups, and ask questions about captured activity, with owner-only local storage and configurable retention. [#99930](https://github.com/openclaw/openclaw/pull/99930)
-- Google Meet join, creation, talk-back, transcription, and related automation now work across browser and account languages by using English in OpenClaw-controlled Meet tabs. [#89671](https://github.com/openclaw/openclaw/pull/89671) Thanks @unayung.
-- Discord users can complete approved Codex Computer Use actions such as `get_app_state` and receive the native tool result instead of getting a false timeout while the tool is still running. [#96818](https://github.com/openclaw/openclaw/pull/96818) Thanks @pollybot13, @zhangguiping-xydt.
+- Skill archive validation and upload hashing errors now identify the missing or unreadable file while preserving the original filesystem error. [#101085](https://github.com/openclaw/openclaw/pull/101085) Thanks @cxbasdev, @vincentkoc.
+- The bundled xurl skill now shows a working Node/npm installation path, and the github skill no longer advertises an unsupported Linux apt option. [#102158](https://github.com/openclaw/openclaw/pull/102158) Thanks @not-stbenjam.
+
+#### Codex apps and connected agents
+
+- Owner-operated native Codex agents can now use selected apps already connected to the operator's Codex account, with a bounded per-thread allowlist and existing approval controls preserved. [#100973](https://github.com/openclaw/openclaw/pull/100973) Thanks @pash-openai.
 - Updated integration runtimes keep Codex, ACP, Copilot, Telegram, and diff rendering aligned with compatible upstream behavior, while reconnect recovery no longer floods operator logs with duplicate messages. [#100027](https://github.com/openclaw/openclaw/pull/100027)
-- macOS users can run Codex Computer Use desktop controls through managed installation without a manual `appServer.command`, and an outdated Codex Desktop app-server no longer blocks a supported plugin-local binary. [#96730](https://github.com/openclaw/openclaw/pull/96730) Thanks @bdjben.
 - Configured and accessible native Codex plugin apps now remain available when a new OpenClaw thread starts during an app-inventory and activation-state transition instead of disappearing silently. [#96872](https://github.com/openclaw/openclaw/pull/96872) Thanks @kevinslin.
-- Google Meet sessions launched through a paired macOS Chrome node now open the intended URL with the configured Chrome profile and audio tools, while unsupported actions and executable overrides are rejected before reaching the node. [#96908](https://github.com/openclaw/openclaw/pull/96908) Thanks @joshavant.
+
+#### Plugin workflows, hooks, and media
+
 - Changes made by plugin hooks now reach agent and child-run context, including replacements or removals made by `agent:bootstrap`. [#97281](https://github.com/openclaw/openclaw/pull/97281) Thanks @outdog-hwh.
 - Embedded context-engine plugins now see the current turn in the transcript during `afterTurn`, preventing missing first messages and duplicate imports. [#97342](https://github.com/openclaw/openclaw/pull/97342) Thanks @gorkem2020, @iwhatsskill, @sgh6688, @udjin79.
 - Windows can now load valid inbound media when configured roots and runtime file paths differ only in letter casing. [#97630](https://github.com/openclaw/openclaw/pull/97630) Thanks @vectorpeak.
 - Plugins can now react when a new DM pairing request is created, enabling owner alerts, audit records, tickets, and approval integrations without polling. [#97733](https://github.com/openclaw/openclaw/pull/97733) Thanks @clawsean, @omarshahine, @trupe-rs.
-- Native `/oc_*` Mattermost commands work again in packaged installs using `openclaw/mattermost`, without allowing disabled or denied plugins to bypass Gateway checks. [#98819](https://github.com/openclaw/openclaw/pull/98819) Related [#98740](https://github.com/openclaw/openclaw/issues/98740). Thanks @amknight, @keltech-services.
-- Mac users setting up iMessage can install or update `imsg` from the setup flow, receive clearer probe guidance, and recover sessions that still reference the old skill location. [#101407](https://github.com/openclaw/openclaw/pull/101407) Thanks @omarshahine.
-- When Google Meet's local OAuth callback port is occupied, `openclaw meet auth login` now offers the manual redirect-paste flow instead of stopping sign-in. [#96492](https://github.com/openclaw/openclaw/pull/96492) Thanks @jinduwang1001-max, @yetval.
-- Completed Voice Call status remains available through the Gateway, tool, and CLI after restart or eviction instead of incorrectly appearing missing. [#99797](https://github.com/openclaw/openclaw/pull/99797) Thanks @darren2030.
-- When a Telegram plugin approval cannot be routed, operators now receive practical Web UI, terminal UI, and configuration guidance instead of a generic failure or timeout. [#95973](https://github.com/openclaw/openclaw/pull/95973) Related [#95800](https://github.com/openclaw/openclaw/issues/95800). Thanks @chrisbot2026, @monkeyleet.
 - Provider plugins that mask text now restore intended values inside tool-call inputs before messages, file operations, and other external actions run. [#97769](https://github.com/openclaw/openclaw/pull/97769) Related [#97761](https://github.com/openclaw/openclaw/issues/97761). Thanks @get-viti, @zoowh.
 - Plugin and media workflows now handle malformed or truncated ffprobe output without crashing while continuing to read valid video dimensions normally. [#98613](https://github.com/openclaw/openclaw/pull/98613) Thanks @pick-cat.
 - Ordinary Lobster run and resume approvals no longer fail TaskFlow-only validation simply because unused default flow fields were present. [#102036](https://github.com/openclaw/openclaw/pull/102036) Thanks @arthurnie, @lilan0125, @vincentkoc.
-- Migration `agentDir` values beginning with `~` now resolve against OpenClaw's effective home. [#99901](https://github.com/openclaw/openclaw/pull/99901)
-- Skill archive validation and upload hashing errors now identify the missing or unreadable file while preserving the original filesystem error. [#101085](https://github.com/openclaw/openclaw/pull/101085) Thanks @cxbasdev, @vincentkoc.
-- The bundled xurl skill now shows a working Node/npm installation path, and the github skill no longer advertises an unsupported Linux apt option. [#102158](https://github.com/openclaw/openclaw/pull/102158) Thanks @not-stbenjam.
 
-#### Plugin marketplace, distribution, and development
+#### Plugin marketplace and development
 
 - Operators can run `openclaw plugins marketplace refresh` to verify and save a hosted feed, enforce a SHA-256 match, and see whether live, saved, or bundled data was used. [#96155](https://github.com/openclaw/openclaw/pull/96155) Thanks @giodl73-repo.
 - `openclaw plugins init` can now scaffold a model-provider plugin with authentication, model setup, tests, packaging, validation, and ClawHub publishing structure. [#94352](https://github.com/openclaw/openclaw/pull/94352) Thanks @patrick-erichsen.
@@ -2495,10 +2173,10 @@ Official packages are easier to obtain through the supported [Docker](https://do
 
 #### Plugin installation, updates, and repair
 
+- Migration `agentDir` values beginning with `~` now resolve against OpenClaw's effective home. [#99901](https://github.com/openclaw/openclaw/pull/99901)
 - Starting QR login without a required official channel plugin now returns the exact installation command or `openclaw doctor --fix` instead of only saying the provider is unavailable. [#90517](https://github.com/openclaw/openclaw/pull/90517) Related [#83277](https://github.com/openclaw/openclaw/issues/83277). Thanks @carol-iung, @tuaran.
 - Plugin update failures now report the real npm metadata or registry problem instead of disguising it as an unsupported package specification. [#96143](https://github.com/openclaw/openclaw/pull/96143) Thanks @brokemac79, @romneyda, @slideshow-dingo.
 - Operators can install a pinned older ClawHub plugin when that version is compatible with their OpenClaw deployment, without the latest release's requirements incorrectly blocking it; incompatible or unverifiable versions remain blocked. [#96506](https://github.com/openclaw/openclaw/pull/96506) Thanks @isaiahstapleton.
-- Official Weixin installs and core-upgrade reconciliation now target plugin version 2.4.6 with its correct compatibility requirement instead of unexpectedly returning users to 2.4.3. [#96801](https://github.com/openclaw/openclaw/pull/96801) Thanks @lin-hongkuan.
 - `openclaw plugins update --all` now realigns trusted official plugins with the current stable or beta catalog after a core upgrade, without manual force installs or overwriting intentional targeted pins. [#96831](https://github.com/openclaw/openclaw/pull/96831) Thanks @ooiuuii, @velvet-shark.
 - `openclaw plugins update &lt;id&gt; --dry-run` now tells operators when a newer default release exists even if the installed plugin is pinned exactly. [#97282](https://github.com/openclaw/openclaw/pull/97282) Thanks @yungchentang.
 - Windows plugin updates no longer create managed paths so long that official Codex-backed agents fail before they can start and reply. [#97488](https://github.com/openclaw/openclaw/pull/97488) Thanks @ooiuuii.
@@ -2535,7 +2213,6 @@ Official packages are easier to obtain through the supported [Docker](https://do
 #### Packages and platform installs
 
 - Official OpenClaw container images are now available from Docker Hub as well as GHCR, reducing reliance on unofficial mirrors. [#97122](https://github.com/openclaw/openclaw/pull/97122) Thanks @vincentkoc.
-- Android users can sideload the official signed `OpenClaw-Android.apk` from a stable GitHub release and verify it with the published SHA-256 checksums. [#101212](https://github.com/openclaw/openclaw/pull/101212)
 - Docker users now get a more complete bundled AI runtime, reducing startup and runtime failures caused by package links removed during image trimming. [57ca1b0](https://github.com/openclaw/openclaw/commit/57ca1b02543af9f4ac1d78446951b98cc31fba5a) Thanks @vincentkoc.
 - Affected npm installations can once again start the Gateway and produce replies because speech now loads only through its supported package-backed TTS path. [#89899](https://github.com/openclaw/openclaw/pull/89899) Thanks @zhangguiping-xydt.
 - OpenClaw npm packages are now about 3.18 MB smaller unpacked and 371 KB smaller compressed, with plugin SDK entrypoints and runtime behavior unchanged. [#98758](https://github.com/openclaw/openclaw/pull/98758) Related [#98757](https://github.com/openclaw/openclaw/issues/98757). Thanks @romneyda.
@@ -2545,45 +2222,51 @@ Official packages are easier to obtain through the supported [Docker](https://do
 
 ### Docs and Admin Tools
 
-#### CLI, installation, and admin workflows
+#### Setup and configuration
 
-Operators can [attach an external coding harness](https://docs.openclaw.ai/cli/attach) to an existing Gateway session and work with compatible [Codex-supervised](https://docs.openclaw.ai/plugins/codex-supervision) threads across native and OpenClaw surfaces. Everyday [status](https://docs.openclaw.ai/cli/status) and [configuration](https://docs.openclaw.ai/cli/config) commands provide clearer diagnostics, safer defaults, and more dependable control of sessions, services, credentials, and runtime behavior.
+##### Onboarding and guided setup
 
-The supported [installation](https://docs.openclaw.ai/install) and [update](https://docs.openclaw.ai/install/updating) paths preserve working state more carefully across packages, containers, and daemons. [Onboarding](https://docs.openclaw.ai/cli/onboard) and [doctor](https://docs.openclaw.ai/cli/doctor) retain choices through interrupted setup and migrations, surface actionable repair steps, and avoid silently continuing with stale services, missing plugins, or unusable model configuration.
-
-#### Configuration and onboarding
-
-- `openclaw config` now recommends a Gateway restart only when the changed settings require one, so hot-loadable agent, model, and provider edits no longer prompt unnecessary restarts. [#80823](https://github.com/openclaw/openclaw/pull/80823) Thanks @kiranmagic7.
-- Removing a visible built-in model alias now explains that the alias is automatic and shows how to shadow it, while genuinely absent aliases still report as not found. [#81641](https://github.com/openclaw/openclaw/pull/81641) Thanks @scientificprogrammer, @vincentkoc.
-- Repeated configuration warnings are now suppressed between meaningful recurrences, keeping long-running Gateway logs readable without hiding new diagnostics. [#100569](https://github.com/openclaw/openclaw/pull/100569) Thanks @vincentkoc.
-- Gateway settings marked as no-restart now take effect in live and heartbeat-driven turns without requiring a manual restart. [#100586](https://github.com/openclaw/openclaw/pull/100586) Thanks @obviyus, @sedrak-hovhannisyan.
-- Gateway `config.patch` now accepts unrelated configuration updates when a bundled provider uses its default endpoint, without saving empty runtime-only provider fields. [#98396](https://github.com/openclaw/openclaw/pull/98396) Related [#98270](https://github.com/openclaw/openclaw/issues/98270). Thanks @momothemage, @weltmaister.
-- Valid `openclaw.json` files with a BOM, PowerShell formatting, or deep indentation can now save authentication, model, repair, and other configuration changes without manual reformatting. [#100591](https://github.com/openclaw/openclaw/pull/100591) Thanks @vincentkoc.
 - `openclaw onboard` now explains up front what setup covers, why full onboarding can take longer, and which optional steps can be postponed. [#97482](https://github.com/openclaw/openclaw/pull/97482) Thanks @ly85206559.
-- Upgrades from the legacy config-health store no longer repeat a permanent conflict warning, and existing recovery backups remain available without overwriting newer observations. [#99728](https://github.com/openclaw/openclaw/pull/99728) Related [#99280](https://github.com/openclaw/openclaw/issues/99280). Thanks @ccbridle, @jalehman, @joshavant.
 - Crestodian on Claude Code or Gemini CLI can now hold multi-turn setup conversations, inspect state, request exact approval for changes, and verify writes instead of falling back immediately to a single-turn planner. [#100029](https://github.com/openclaw/openclaw/pull/100029)
 - Crestodian setup and repair chats no longer destabilize the local TUI when a terminal event consumer fails during response delivery. [#100341](https://github.com/openclaw/openclaw/pull/100341) Thanks @cxbasdev, @vincentkoc.
 - Crestodian now distinguishes ordinary questions from operational requests, accepts natural approval phrases, clears stale proposals, and keeps sensitive configuration out of the conversation model. [#100656](https://github.com/openclaw/openclaw/pull/100656)
 - Fresh git installs now lead users through setup, or give the exact command to finish later, before missing configuration or Gateway authentication can break first use. [#101901](https://github.com/openclaw/openclaw/pull/101901) Thanks @fuller-stack-dev.
 - Setup now checks the configured custom agent or auth directory for credentials instead of reporting the wrong bootstrap state from a default location. [0fd69dc](https://github.com/openclaw/openclaw/commit/0fd69dc3d2b864fb7d3a0b5204a7c720b5a19c0d) Thanks @vincentkoc.
+
+##### Configuration editing and live reload
+
+- `openclaw config` now recommends a Gateway restart only when the changed settings require one, so hot-loadable agent, model, and provider edits no longer prompt unnecessary restarts. [#80823](https://github.com/openclaw/openclaw/pull/80823) Thanks @kiranmagic7.
+- Removing a visible built-in model alias now explains that the alias is automatic and shows how to shadow it, while genuinely absent aliases still report as not found. [#81641](https://github.com/openclaw/openclaw/pull/81641) Thanks @scientificprogrammer, @vincentkoc.
 - `openclaw config unset` now explains when a visible value is an inherited runtime default that is not stored in the user's config, avoiding an unproductive loop between `config get` and `config unset` while leaving failed attempts unchanged. [#96557](https://github.com/openclaw/openclaw/pull/96557) Thanks @moeghashim.
 - Configuration and plugin-schema validation hints now show clear allowed values instead of the misleading literal label `undefined`. [#99045](https://github.com/openclaw/openclaw/pull/99045) Thanks @lzyyzznl.
-- `openclaw health` now warns when gateway configuration hot reload has stopped, so operators know a restart is needed instead of unknowingly running stale settings. [#99267](https://github.com/openclaw/openclaw/pull/99267) Thanks @masatohoshino, @vincentkoc.
+- Valid `openclaw.json` files with a BOM, PowerShell formatting, or deep indentation can now save authentication, model, repair, and other configuration changes without manual reformatting. [#100591](https://github.com/openclaw/openclaw/pull/100591) Thanks @vincentkoc.
+- Upgrades from the legacy config-health store no longer repeat a permanent conflict warning, and existing recovery backups remain available without overwriting newer observations. [#99728](https://github.com/openclaw/openclaw/pull/99728) Related [#99280](https://github.com/openclaw/openclaw/issues/99280). Thanks @ccbridle, @jalehman, @joshavant.
+- Repeated configuration warnings are now suppressed between meaningful recurrences, keeping long-running Gateway logs readable without hiding new diagnostics. [#100569](https://github.com/openclaw/openclaw/pull/100569) Thanks @vincentkoc.
+- Gateway settings marked as no-restart now take effect in live and heartbeat-driven turns without requiring a manual restart. [#100586](https://github.com/openclaw/openclaw/pull/100586) Thanks @obviyus, @sedrak-hovhannisyan.
+- Gateway `config.patch` now accepts unrelated configuration updates when a bundled provider uses its default endpoint, without saving empty runtime-only provider fields. [#98396](https://github.com/openclaw/openclaw/pull/98396) Related [#98270](https://github.com/openclaw/openclaw/issues/98270). Thanks @momothemage, @weltmaister.
 - Gateway configuration updates now reject missing redacted values for keys such as `toString` or `constructor` instead of restoring an inherited JavaScript function. [#99152](https://github.com/openclaw/openclaw/pull/99152) Thanks @zenglingbiao.
 - Manual Gateway setup now rejects port entries such as `1e3` or `0x1000` instead of silently saving a different port, while valid decimal ports remain unchanged. [#98689](https://github.com/openclaw/openclaw/pull/98689) Related [#98681](https://github.com/openclaw/openclaw/issues/98681). Thanks @qingminglong.
-- Pending exec approval cards now describe only the approval state, and the foreground-fallback warning appears only after a command actually runs that way. [#101561](https://github.com/openclaw/openclaw/pull/101561) Thanks @vincentkoc.
 
-#### Doctor diagnostics and repair
+#### Doctor and diagnostics
 
-- Shell-completion repair during `openclaw doctor` and updates now skips expensive plugin-command loading, avoiding unnecessary delays while full user-requested generation still includes plugin commands. [#76235](https://github.com/openclaw/openclaw/pull/76235)
-- Pressing Ctrl+C during the installer upgrade doctor now stops the flow cleanly and prevents an incomplete or failed installation from opening a stale dashboard. [#76386](https://github.com/openclaw/openclaw/pull/76386) Thanks @sebtardif.
+##### Core checks and repair behavior
+
 - `openclaw doctor` now warns when QMD session search is enabled without transcript export and provides commands and documentation to correct the missing recall setup. [#80947](https://github.com/openclaw/openclaw/pull/80947) Thanks @anyech.
 - `openclaw doctor` now gives a missing-transcript preview command that actually shows the entries eligible for removal before users choose to enforce cleanup. [#83630](https://github.com/openclaw/openclaw/pull/83630) Thanks @yuanhanzhong.
-- Operators can inspect stale session write locks with `openclaw doctor --lint --json --only core/doctor/session-locks` and preview which locks a repair would remove or preserve. [#84366](https://github.com/openclaw/openclaw/pull/84366) Thanks @giodl73-repo.
 - `openclaw doctor` now evaluates the default agent's actual per-agent bootstrap limits, producing accurate truncation warnings and remediation guidance. [#84424](https://github.com/openclaw/openclaw/pull/84424) Thanks @kasangyong, @vincentkoc.
 - Gateway-managed skill checks can now find commands installed through pnpm 11 and common npm-global layouts, reducing false missing-tool warnings and unnecessary reinstalls. [#85238](https://github.com/openclaw/openclaw/pull/85238) Thanks @shbernal, @vincentkoc.
 - `openclaw doctor` on Windows now detects supported Chrome versions accurately instead of warning that a working installation could not be identified. [#87937](https://github.com/openclaw/openclaw/pull/87937) Thanks @mukundakatta.
 - `openclaw doctor` no longer aborts when a configured agent workspace has not been created yet, while real file operations still enforce workspace boundaries. [#89226](https://github.com/openclaw/openclaw/pull/89226) Thanks @sasan1200, @shifengwang333-ai.
+- Gateway status, Doctor, and onboarding diagnostics now read large logs within fixed bounds and surface recent useful failures instead of stale noise. [#99407](https://github.com/openclaw/openclaw/pull/99407) Thanks @sunlit-deng.
+- Terminal notes, Doctor output, and diagnostics now wrap long runs of CJK, full-width, or emoji characters within the requested width instead of spilling across columns. [#96746](https://github.com/openclaw/openclaw/pull/96746) Thanks @ly-wang19.
+- Default `doctor --lint` results now focus on actionable configuration and runtime problems, with optional backup and memory advice available only when requested. [#99249](https://github.com/openclaw/openclaw/pull/99249) Thanks @giodl73-repo.
+- `openclaw doctor --fix` now completes successfully in locked-down environments when only shell-completion installation is blocked, while still reporting genuine write failures. [#99540](https://github.com/openclaw/openclaw/pull/99540) Related [#99237](https://github.com/openclaw/openclaw/issues/99237). Thanks @hunglp6d, @rballiance.
+- `doctor --lint --all` can now explain the path or permission that would block a configuration repair before operators run `doctor --fix`. [#100093](https://github.com/openclaw/openclaw/pull/100093) Thanks @giodl73-repo.
+- `openclaw health` now warns when gateway configuration hot reload has stopped, so operators know a restart is needed instead of unknowingly running stale settings. [#99267](https://github.com/openclaw/openclaw/pull/99267) Thanks @masatohoshino, @vincentkoc.
+
+##### Focused lint checks
+
+- Operators can inspect stale session write locks with `openclaw doctor --lint --json --only core/doctor/session-locks` and preview which locks a repair would remove or preserve. [#84366](https://github.com/openclaw/openclaw/pull/84366) Thanks @giodl73-repo.
 - Optional Doctor lint can now report missing, unsafe, unwritable, cloud-synced, removable, volatile, or incomplete OpenClaw state storage with paths and repair guidance. [#95979](https://github.com/openclaw/openclaw/pull/95979) Thanks @giodl73-repo.
 - An opt-in Doctor lint check now explains which configured plugin installation is broken and previews the repair before operators run the existing fix workflow. [#96171](https://github.com/openclaw/openclaw/pull/96171) Thanks @giodl73-repo.
 - Operators can run `openclaw doctor --lint --all` to include every opt-in diagnostic check without changing the behavior of existing `doctor --lint` automation. [#96471](https://github.com/openclaw/openclaw/pull/96471) Thanks @giodl73-repo.
@@ -2598,74 +2281,84 @@ The supported [installation](https://docs.openclaw.ai/install) and [update](http
 - Doctor lint can now identify legacy fenced `HEARTBEAT.md` templates and distinguish files suitable for automatic cleanup from those containing custom content. [#98400](https://github.com/openclaw/openclaw/pull/98400) Thanks @giodl73-repo.
 - Doctor lint can now flag the combination of WhatsApp, a strained Gateway event loop, and active local TUI sessions that is associated with delayed replies. [#98406](https://github.com/openclaw/openclaw/pull/98406) Thanks @giodl73-repo.
 - Structured Doctor lint can now report stale global plugin-runtime symlinks, including the obsolete link, its target, and the `openclaw doctor --fix` cleanup command. [#98729](https://github.com/openclaw/openclaw/pull/98729) Thanks @giodl73-repo.
-- After `openclaw doctor --fix` archives a legacy sidecar, the macOS app no longer recreates it or triggers the same migration conflict warning on every command or Gateway start. [#99039](https://github.com/openclaw/openclaw/pull/99039) Related [#98917](https://github.com/openclaw/openclaw/issues/98917). Thanks @momothemage, @p51moustache.
-- Gateway status, Doctor, and onboarding diagnostics now read large logs within fixed bounds and surface recent useful failures instead of stale noise. [#99407](https://github.com/openclaw/openclaw/pull/99407) Thanks @sunlit-deng.
 - Operators can use targeted Doctor lint to inspect legacy session transcripts and stale snapshot paths, preview the cleanup, and choose whether to apply it. [#95976](https://github.com/openclaw/openclaw/pull/95976) Thanks @giodl73-repo.
 - WhatsApp and Telegram default-account routing warnings are now available through selectable structured Doctor lint while normal Doctor output remains unchanged. [#96147](https://github.com/openclaw/openclaw/pull/96147) Thanks @pick-cat, @vincentkoc.
 - Optional Doctor lint can now identify stale or missing plugin registry data, shadowed bundled plugins, stale install records, and broken OpenClaw peer links. [#96169](https://github.com/openclaw/openclaw/pull/96169) Thanks @giodl73-repo.
-- Terminal notes, Doctor output, and diagnostics now wrap long runs of CJK, full-width, or emoji characters within the requested width instead of spilling across columns. [#96746](https://github.com/openclaw/openclaw/pull/96746) Thanks @ly-wang19.
 - Structured Doctor lint can now report low or critical disk space for the OpenClaw state directory, including the affected path, available space, requirement, and remediation. [#98391](https://github.com/openclaw/openclaw/pull/98391) Thanks @giodl73-repo.
 - Plugin operators can run `doctor --lint --only core/doctor/legacy-plugin-manifests` or `--all` to identify legacy manifest keys and see the affected plugin, path, and repair command. [#98695](https://github.com/openclaw/openclaw/pull/98695) Thanks @giodl73-repo.
 - Operators can use `openclaw doctor --lint --only core/doctor/legacy-plugin-dependencies` or `--all` to find stale plugin dependency state and receive a path plus safe repair guidance without changing the installation. [#98725](https://github.com/openclaw/openclaw/pull/98725) Thanks @giodl73-repo.
 - Channel setup warnings are now available as structured Doctor lint findings with stable paths and repair guidance for operators and automation. [#99238](https://github.com/openclaw/openclaw/pull/99238) Thanks @giodl73-repo.
-- Default `doctor --lint` results now focus on actionable configuration and runtime problems, with optional backup and memory advice available only when requested. [#99249](https://github.com/openclaw/openclaw/pull/99249) Thanks @giodl73-repo.
-- `openclaw doctor --fix` now completes successfully in locked-down environments when only shell-completion installation is blocked, while still reporting genuine write failures. [#99540](https://github.com/openclaw/openclaw/pull/99540) Related [#99237](https://github.com/openclaw/openclaw/issues/99237). Thanks @hunglp6d, @rballiance.
-- `doctor --lint --all` can now explain the path or permission that would block a configuration repair before operators run `doctor --fix`. [#100093](https://github.com/openclaw/openclaw/pull/100093) Thanks @giodl73-repo.
 
-#### CLI, sessions, status, and observability
+#### CLI
+
+Operators can [attach an external coding harness](https://docs.openclaw.ai/cli/attach) to an existing Gateway session and work with compatible [Codex-supervised](https://docs.openclaw.ai/plugins/codex-supervision) threads across native and OpenClaw surfaces. [Status](https://docs.openclaw.ai/cli/status) and [configuration](https://docs.openclaw.ai/cli/config) commands provide clearer diagnostics, safer defaults, and more dependable control of sessions, services, credentials, and runtime behavior.
+
+##### Attached coding and sessions
 
 - `openclaw attach` now launches Claude Code with temporary access to the main or selected Gateway session, keeps credentials out of arguments, and revokes the grant when the session ends. [#96454](https://github.com/openclaw/openclaw/pull/96454) Thanks @anagnorisis2peripeteia, @obviyus.
 - Owner-controlled agents can opt into `appServer.homeScope: "user"` to inspect and safely fork the same Codex threads available in Desktop and the CLI. [#99821](https://github.com/openclaw/openclaw/pull/99821)
-- The bounded `openclaw hooks` commands now return control promptly after printing their output, so terminals, scripts, and CI jobs no longer remain stuck. [#76922](https://github.com/openclaw/openclaw/pull/76922) Thanks @dorukardahan.
-- Non-interactive `openclaw models list` and `openclaw models status` now exit normally after printing their results, allowing scripts and SSH diagnostics to finish without an external timeout. [#77904](https://github.com/openclaw/openclaw/pull/77904) Thanks @dorukardahan, @vincentkoc.
 - `openclaw sessions --json` now includes available subagent lineage and runtime details such as parent linkage, workspace, depth, role, timestamps, and status. [#87917](https://github.com/openclaw/openclaw/pull/87917) Related [#80286](https://github.com/openclaw/openclaw/issues/80286). Thanks @islandpreneur007, @zhangguiping-xydt.
+- `status` and `status --json` now build session model labels with less unnecessary normalization, improving readback speed for larger session sets and incident checks. [#87831](https://github.com/openclaw/openclaw/pull/87831) Thanks @acskamloops.
+- `usage.cost` and `sessions.usage` now reject a start date later than the end date with a clear `INVALID_REQUEST` instead of returning a misleading empty report. [#94096](https://github.com/openclaw/openclaw/pull/94096) Thanks @alix-007.
+- Session cost summaries now estimate a real charge when a transcript records zero dollars despite token use and known model pricing. [c5260a3](https://github.com/openclaw/openclaw/commit/c5260a3c03b0444597f3dc4a80c1f003ca7c4b4a) Thanks @nianjiuzst.
+- Session logs and cached cost views now preserve provider-reconciled zero-dollar totals while recalculating genuinely missing costs from stored provider and model details. [c45124a](https://github.com/openclaw/openclaw/commit/c45124ab8554d70c4564ae1b3a81fc65872ecb9d)
+- `openclaw sessions tail --tail` now rejects counts too large to represent safely instead of applying an imprecise history limit. [#99398](https://github.com/openclaw/openclaw/pull/99398) Thanks @qingminglong.
+- A malformed transcript timestamp no longer corrupts session usage and cost records with invalid values. [#99420](https://github.com/openclaw/openclaw/pull/99420) Thanks @krissding.
+- Session maintenance warnings now say `1 minute`, `1 hour`, or `1 day` at rounded boundaries instead of awkward values such as `60 seconds`. [#100096](https://github.com/openclaw/openclaw/pull/100096) Thanks @narahariraghava, @vincentkoc.
+- Session maintenance warnings now show more accurate wait estimates near unit boundaries, so a roughly 90-second delay is not inflated to two minutes. [58d707f](https://github.com/openclaw/openclaw/commit/58d707fbed3400292b9d7bf8fe31e6480309a180) Thanks @vincentkoc.
+
+##### Status, logs, usage, and telemetry
+
 - `openclaw logs --follow` can bridge a brief local Gateway outage with journal output and automatically return to normal Gateway logs after recovery. [#88159](https://github.com/openclaw/openclaw/pull/88159) Thanks @anyech, @vincentkoc.
 - Debug proxy capture now keeps oversized or endless response bodies from crashing the agent, while retaining useful status and header metadata. [#97551](https://github.com/openclaw/openclaw/pull/97551) Thanks @alix-007.
 - The first Gateway status check after a restart now reports the selected model's actual context window instead of briefly showing a generic 200k limit. [#97576](https://github.com/openclaw/openclaw/pull/97576) Thanks @turbotheturtle.
 - `openclaw health` now surfaces permanently failed deliveries with queue counts and oldest-failure age instead of reporting an all-green state. [#99842](https://github.com/openclaw/openclaw/pull/99842) Thanks @masatohoshino.
 - Timing displays now roll rounded sub-second values over to `1s` instead of showing the awkward `1000ms`. [#100006](https://github.com/openclaw/openclaw/pull/100006) Thanks @qingminglong.
-- TUI links now leave malformed fragments and stray punctuation as plain text while keeping valid parenthetical, IPv6, and line-wrapped URLs clickable at the correct target. [#100780](https://github.com/openclaw/openclaw/pull/100780)
 - `openclaw logs` now reports log-tail stream failures cleanly instead of crashing, hanging, or leaving `journalctl` running. [#100850](https://github.com/openclaw/openclaw/pull/100850) Thanks @cxbasdev, @vincentkoc.
 - Trimmed OpenClaw CLI logs now remain valid UTF-8 when the retained byte range begins inside an emoji or other multibyte character. [#101029](https://github.com/openclaw/openclaw/pull/101029) Thanks @ly85206559.
-- Session cost summaries now estimate a real charge when a transcript records zero dollars despite token use and known model pricing. [c5260a3](https://github.com/openclaw/openclaw/commit/c5260a3c03b0444597f3dc4a80c1f003ca7c4b4a) Thanks @nianjiuzst.
-- Session logs and cached cost views now preserve provider-reconciled zero-dollar totals while recalculating genuinely missing costs from stored provider and model details. [c45124a](https://github.com/openclaw/openclaw/commit/c45124ab8554d70c4564ae1b3a81fc65872ecb9d)
-- `openclaw docs` now rejects oversized search responses with a clear error before they can destabilize the CLI or exhaust memory. [#98188](https://github.com/openclaw/openclaw/pull/98188) Thanks @cxbasdev.
-- Several edge cases now preserve transcript and voice text, surface MCP failures, bound oversized responses, show current session time, choose the right Linux package manager, and use port 443 for secure Gateway links without an explicit port. [#100258](https://github.com/openclaw/openclaw/pull/100258) Thanks @connermo, @cxbasdev, @gfaerny, @hailory, @harjothkhara, @ly85206559, @mushuiyu886, @simon-xydt, @sunlit-deng, @uditdewan.
-- `status` and `status --json` now build session model labels with less unnecessary normalization, improving readback speed for larger session sets and incident checks. [#87831](https://github.com/openclaw/openclaw/pull/87831) Thanks @acskamloops.
-- `usage.cost` and `sessions.usage` now reject a start date later than the end date with a clear `INVALID_REQUEST` instead of returning a misleading empty report. [#94096](https://github.com/openclaw/openclaw/pull/94096) Thanks @alix-007.
-- Browser CLI commands now accept `--browser-profile` before or after the subcommand, restoring existing remote-browser and WSL2 command patterns. [#94431](https://github.com/openclaw/openclaw/pull/94431) Thanks @ml12580.
 - Langfuse, OpenTelemetry, and Prometheus can now capture usage, cost, model, provider, timing, and session data for runs started through `/v1/responses` and `/v1/chat/completions`. [#96152](https://github.com/openclaw/openclaw/pull/96152) Thanks @rocke2020, @xialonglee.
-- Failed `openclaw --help` and `openclaw --version` startup now returns exit code 1 promptly instead of leaving the terminal process stuck. [#97807](https://github.com/openclaw/openclaw/pull/97807) Thanks @aniruddhaadak80, @maweibin.
-- CLI tables now shorten only the actual home directory and its descendants, so sibling paths such as `/home/alice2/project` no longer appear as misleading home-relative paths. [#98876](https://github.com/openclaw/openclaw/pull/98876) Related [#98872](https://github.com/openclaw/openclaw/issues/98872). Thanks @qingminglong.
 - File-backed usage-bar templates now keep watcher and file-descriptor use bounded in long-running OpenClaw processes while still reloading templates when needed. [#98990](https://github.com/openclaw/openclaw/pull/98990) Thanks @chenyangjun-xy, @vincentkoc, @zhanglei99586.
-- Message read, pinned-message, and search commands can now display more than 25 returned rows when a higher `--limit` is requested and warn when additional provider results remain. [#99089](https://github.com/openclaw/openclaw/pull/99089) Thanks @jerrytao-ai, @wm0018.
-- `openclaw sessions tail --tail` now rejects counts too large to represent safely instead of applying an imprecise history limit. [#99398](https://github.com/openclaw/openclaw/pull/99398) Thanks @qingminglong.
-- A malformed transcript timestamp no longer corrupts session usage and cost records with invalid values. [#99420](https://github.com/openclaw/openclaw/pull/99420) Thanks @krissding.
-- Session maintenance warnings now say `1 minute`, `1 hour`, or `1 day` at rounded boundaries instead of awkward values such as `60 seconds`. [#100096](https://github.com/openclaw/openclaw/pull/100096) Thanks @narahariraghava, @vincentkoc.
 - Compact `/status` no longer shows the ambiguous `Plugins: OK` row, while warnings and detailed plugin diagnostics remain available. [#100143](https://github.com/openclaw/openclaw/pull/100143)
-- `openclaw --help` now matches command-specific help and completions, with `config patch` and `config schema` visible from the main command list. [#100670](https://github.com/openclaw/openclaw/pull/100670) Thanks @amirf194, @vincentkoc.
-- Terminal-rendered links containing balanced parentheses now remain clickable through the complete intended URL instead of being shortened or misdirected. [#100697](https://github.com/openclaw/openclaw/pull/100697) Thanks @aniruddhaadak80, @zoowh.
 - Failed OpenClaw and plugin-harness traces now include useful redacted error details in OpenTelemetry instead of only a generic failure label. [#101244](https://github.com/openclaw/openclaw/pull/101244) Thanks @amknight.
 - OpenTelemetry trace viewers can now display captured tool results alongside tool inputs in standard GenAI fields, making failed-run investigation more complete. [#101371](https://github.com/openclaw/openclaw/pull/101371) Thanks @amknight.
 - `openclaw status --all` now keeps shortened channel issue messages readable when an emoji falls at the display boundary. [#101503](https://github.com/openclaw/openclaw/pull/101503) Thanks @wm0018.
-- Session maintenance warnings now show more accurate wait estimates near unit boundaries, so a roughly 90-second delay is not inflated to two minutes. [58d707f](https://github.com/openclaw/openclaw/commit/58d707fbed3400292b9d7bf8fe31e6480309a180) Thanks @vincentkoc.
+- OTLP traces, metrics, and logs now follow `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`, keeping diagnostics exports on the configured network path. [#100616](https://github.com/openclaw/openclaw/pull/100616) Thanks @jesse-merhi.
+
+##### Commands, help, tables, and terminal output
+
+- The bounded `openclaw hooks` commands now return control promptly after printing their output, so terminals, scripts, and CI jobs no longer remain stuck. [#76922](https://github.com/openclaw/openclaw/pull/76922) Thanks @dorukardahan.
+- Non-interactive `openclaw models list` and `openclaw models status` now exit normally after printing their results, allowing scripts and SSH diagnostics to finish without an external timeout. [#77904](https://github.com/openclaw/openclaw/pull/77904) Thanks @dorukardahan, @vincentkoc.
+- TUI links now leave malformed fragments and stray punctuation as plain text while keeping valid parenthetical, IPv6, and line-wrapped URLs clickable at the correct target. [#100780](https://github.com/openclaw/openclaw/pull/100780)
+- `openclaw docs` now rejects oversized search responses with a clear error before they can destabilize the CLI or exhaust memory. [#98188](https://github.com/openclaw/openclaw/pull/98188) Thanks @cxbasdev.
+- Several edge cases now preserve transcript and voice text, surface MCP failures, bound oversized responses, show current session time, choose the right Linux package manager, and use port 443 for secure Gateway links without an explicit port. [#100258](https://github.com/openclaw/openclaw/pull/100258) Thanks @connermo, @cxbasdev, @gfaerny, @hailory, @harjothkhara, @ly85206559, @mushuiyu886, @simon-xydt, @sunlit-deng, @uditdewan.
+- Failed `openclaw --help` and `openclaw --version` startup now returns exit code 1 promptly instead of leaving the terminal process stuck. [#97807](https://github.com/openclaw/openclaw/pull/97807) Thanks @aniruddhaadak80, @maweibin.
+- CLI tables now shorten only the actual home directory and its descendants, so sibling paths such as `/home/alice2/project` no longer appear as misleading home-relative paths. [#98876](https://github.com/openclaw/openclaw/pull/98876) Related [#98872](https://github.com/openclaw/openclaw/issues/98872). Thanks @qingminglong.
+- Message read, pinned-message, and search commands can now display more than 25 returned rows when a higher `--limit` is requested and warn when additional provider results remain. [#99089](https://github.com/openclaw/openclaw/pull/99089) Thanks @jerrytao-ai, @wm0018.
+- `openclaw --help` now matches command-specific help and completions, with `config patch` and `config schema` visible from the main command list. [#100670](https://github.com/openclaw/openclaw/pull/100670) Thanks @amirf194, @vincentkoc.
+- Terminal-rendered links containing balanced parentheses now remain clickable through the complete intended URL instead of being shortened or misdirected. [#100697](https://github.com/openclaw/openclaw/pull/100697) Thanks @aniruddhaadak80, @zoowh.
 - Generated shell completion now suggests accepted OpenClaw command aliases and continues completing their options and subcommands. [#99419](https://github.com/openclaw/openclaw/pull/99419) Thanks @amirf194, @jack-dev-ops, @vincentkoc.
 - Terminal and setup documentation links now resolve correctly when relative paths begin with `http` or absolute HTTP schemes use uppercase letters. [#96439](https://github.com/openclaw/openclaw/pull/96439) Thanks @lin-hongkuan.
-- OTLP traces, metrics, and logs now follow `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`, keeping diagnostics exports on the configured network path. [#100616](https://github.com/openclaw/openclaw/pull/100616) Thanks @jesse-merhi.
+- Long IDs and scopes no longer push `openclaw commitments` columns out of alignment, keeping the table readable at a glance. [#95923](https://github.com/openclaw/openclaw/pull/95923) Thanks @parveshsaini.
 
 #### Devices, nodes, and Gateway administration
 
+##### Pairing and node management
+
 - Built-in `openclaw nodes status`, `openclaw nodes list`, and related node commands now start quickly without unnecessary plugin initialization, while plugin-provided node commands still load when requested. [#96702](https://github.com/openclaw/openclaw/pull/96702) Thanks @erhhung, @qijian-zhang, @zengwen-dt.
-- Android node reconnects now point users from a failed `devices approve` attempt to the correct `openclaw nodes approve &lt;requestId&gt;` command, including a reminder to reuse connection flags. [#98115](https://github.com/openclaw/openclaw/pull/98115) Thanks @welfo-beo.
 - Failed `openclaw devices approve` attempts now explain whether to approve a scope upgrade elsewhere or refresh the pending request ID and retry. [#98146](https://github.com/openclaw/openclaw/pull/98146) Thanks @romneyda.
-- `openclaw gateway status` now gives relevant credential, configuration, restart, and log guidance when a running Gateway fails its probe instead of telling operators to wait for warm-up. [#98183](https://github.com/openclaw/openclaw/pull/98183) Thanks @masatohoshino.
 - An invalid `openclaw nodes approve &lt;requestId&gt;` now shows available pending IDs and the `openclaw nodes pending` recovery command instead of a raw client error. [#94452](https://github.com/openclaw/openclaw/pull/94452) Thanks @mushuiyu886.
-- Remote node hosts can now connect to Gateways mounted at reverse-proxy paths such as `/openclaw-gw`, including after daemon installation or reconnect. [#97679](https://github.com/openclaw/openclaw/pull/97679) Related [#97678](https://github.com/openclaw/openclaw/issues/97678). Thanks @wm0018.
 - `openclaw pairing list` now gives a useful device-approval next step when no chat DM pairing channels exist instead of displaying a broken empty-choice error. [#98142](https://github.com/openclaw/openclaw/pull/98142) Thanks @romneyda.
+- Node status, list, and pending-pairing views now tolerate malformed saved values and show the usable node information instead of crashing. [#93930](https://github.com/openclaw/openclaw/pull/93930) Thanks @ly-wang19.
+- Operators can upgrade the Gateway before N-1 subordinate nodes without losing the normal update, restart, repair, status, and maintenance path for those nodes. [#101109](https://github.com/openclaw/openclaw/pull/101109) Thanks @jtczville.
+- `openclaw agents list` now shows configured external channels even when their plugin is missing and provides the appropriate install or `openclaw doctor --fix` guidance. [#95363](https://github.com/openclaw/openclaw/pull/95363) Thanks @hugenshen.
+
+##### Gateway status, connectivity, and recovery
+
+- `openclaw gateway status` now gives relevant credential, configuration, restart, and log guidance when a running Gateway fails its probe instead of telling operators to wait for warm-up. [#98183](https://github.com/openclaw/openclaw/pull/98183) Thanks @masatohoshino.
+- Remote node hosts can now connect to Gateways mounted at reverse-proxy paths such as `/openclaw-gw`, including after daemon installation or reconnect. [#97679](https://github.com/openclaw/openclaw/pull/97679) Related [#97678](https://github.com/openclaw/openclaw/issues/97678). Thanks @wm0018.
 - Linux operators now see when systemd has stopped restarting a repeatedly crashing Gateway, and `openclaw gateway restart` can recover the latched failed service. [#98291](https://github.com/openclaw/openclaw/pull/98291) Thanks @masatohoshino.
 - Control UI, pairing, setup-code, QR, and status links now prefer a reachable LAN address on hosts with VPNs, virtual adapters, WSL, Hyper-V, or multiple networks. [#98482](https://github.com/openclaw/openclaw/pull/98482) Thanks @joshavant.
 - `openclaw gateway status --deep` can now identify Windows Firewall rules blocking LAN devices and suggest practical rule, loopback, Tailscale, or SSH-tunnel remedies. [#98666](https://github.com/openclaw/openclaw/pull/98666) Thanks @joshavant.
-- Node status, list, and pending-pairing views now tolerate malformed saved values and show the usable node information instead of crashing. [#93930](https://github.com/openclaw/openclaw/pull/93930) Thanks @ly-wang19.
 - `gateway run --force` now ignores malformed listener PID records during port cleanup instead of carrying invalid process state into recovery. [#98371](https://github.com/openclaw/openclaw/pull/98371) Thanks @lzyyzznl.
 - Gateway busy-port diagnostics and forced cleanup now ignore malformed listener IDs, avoid phantom processes, and verify that a port is actually free before reporting recovery. [#98505](https://github.com/openclaw/openclaw/pull/98505) Thanks @qiuyuang.
 - Windows now detects active Gateway listeners reliably from localized `netstat` output, improving port diagnostics and `gateway --force` cleanup without confusing established connections for listeners. [#100012](https://github.com/openclaw/openclaw/pull/100012) Thanks @qingminglong, @vincentkoc.
@@ -2673,139 +2366,79 @@ The supported [installation](https://docs.openclaw.ai/install) and [update](http
 - Windows Gateway restarts no longer depend on the `findstr` check that could leave a visible or hung command window blocking the handoff. [#101366](https://github.com/openclaw/openclaw/pull/101366) Thanks @deepujain.
 - `openclaw status`, `status --json`, and `status --all` now respect their timeout on Linux when systemd is unresponsive instead of hanging indefinitely. [#94149](https://github.com/openclaw/openclaw/pull/94149) Related [#84698](https://github.com/openclaw/openclaw/issues/84698). Thanks @zengwen-dt, @zus-assistant.
 - When a local Gateway is listening but unhealthy, `openclaw gateway status --deep` can surface a recent likely cause such as a full disk instead of only reporting a generic disconnect. [#95902](https://github.com/openclaw/openclaw/pull/95902) Thanks @vincentkoc, @wangbyg.
-- Operators can upgrade the Gateway before N-1 subordinate nodes without losing the normal update, restart, repair, status, and maintenance path for those nodes. [#101109](https://github.com/openclaw/openclaw/pull/101109) Thanks @jtczville.
-- `openclaw agents list` now shows configured external channels even when their plugin is missing and provides the appropriate install or `openclaw doctor --fix` guidance. [#95363](https://github.com/openclaw/openclaw/pull/95363) Thanks @hugenshen.
 - Remote Gateway status checks now fall back to the configured SSH target when local effective-config probing fails instead of crashing or stalling discovery. [#101160](https://github.com/openclaw/openclaw/pull/101160) Thanks @cxbasdev.
 
-#### Installation, updates, backups, and platform services
+#### Installation, updates, and backups
 
-- Windows backups now recover more reliably from live-write races by avoiding repeated use of the same locked temporary archive and cleaning stale retry files. [#101449](https://github.com/openclaw/openclaw/pull/101449) Thanks @lilan0125, @vincentkoc.
+The supported [installation](https://docs.openclaw.ai/install) and [update](https://docs.openclaw.ai/install/updating) paths preserve working state more carefully across packages, containers, and daemons. [Onboarding](https://docs.openclaw.ai/cli/onboard) and [doctor](https://docs.openclaw.ai/cli/doctor) retain choices through interrupted setup and migrations, surface actionable repair steps, and avoid silently continuing with stale services, missing plugins, or unusable model configuration.
+
+##### Installation and prerequisites
+
+- Shell-completion repair during `openclaw doctor` and updates now skips expensive plugin-command loading, avoiding unnecessary delays while full user-requested generation still includes plugin commands. [#76235](https://github.com/openclaw/openclaw/pull/76235)
+- Pressing Ctrl+C during the installer upgrade doctor now stops the flow cleanly and prevents an incomplete or failed installation from opening a stale dashboard. [#76386](https://github.com/openclaw/openclaw/pull/76386) Thanks @sebtardif.
 - LaunchAgent-managed Gateways on permission-constrained macOS volumes now start the generated environment wrapper through `/bin/sh`, preventing immediate background-service exits. [#89967](https://github.com/openclaw/openclaw/pull/89967) Related [#87199](https://github.com/openclaw/openclaw/issues/87199). Thanks @joshdaynard, @zhangguiping-xydt.
 - Windows command lookup now honors the caller's `PATHEXT`, allowing valid PowerShell scripts and executables to resolve in containers, CI, and isolated environments. [#98093](https://github.com/openclaw/openclaw/pull/98093) Thanks @wendy-chsy.
-- OpenClaw update checks now limit malformed or unexpectedly large npm registry responses before they can consume excessive memory. [#98508](https://github.com/openclaw/openclaw/pull/98508) Thanks @lzyyzznl.
-- `openclaw update` on Windows now prevents the managed Gateway Scheduled Task from relaunching during package replacement, avoiding partially updated or mixed-version processes. [#100757](https://github.com/openclaw/openclaw/pull/100757) Thanks @vincentkoc.
 - Windows Gateway setup now detects when Task Scheduler exits without starting a listener and can use the existing fallback launch without creating a duplicate if startup is merely late. [#76245](https://github.com/openclaw/openclaw/pull/76245)
 - Local Docker source builds are less likely to run out of memory, and failures that still exhaust memory now suggest the relevant build settings. [#98119](https://github.com/openclaw/openclaw/pull/98119) Related [#98118](https://github.com/openclaw/openclaw/issues/98118). Thanks @zyzo.
-- Managed Gateway updates now allow active work to finish within the configured drain period before timing out the service handoff. [#99695](https://github.com/openclaw/openclaw/pull/99695) Thanks @zoowh.
-- Large session histories now produce smaller `.usage-cost-cache.json` files with less parsing and rewrite work, rebuilding automatically after upgrade. [#99714](https://github.com/openclaw/openclaw/pull/99714) Related [#99511](https://github.com/openclaw/openclaw/issues/99511). Thanks @dexhunter, @wayne524.
 - First-run skill setup on minimal machines now groups missing Homebrew, uv, or Go prerequisites into one clear note while still installing dependencies that can succeed. [#99726](https://github.com/openclaw/openclaw/pull/99726) Thanks @fuller-stack-dev, @sedrak-hovhannisyan.
 - Installers and runtime checks now reject Node 23.0-23.10 early with supported-version guidance instead of leaving users with a broken OpenClaw CLI. [#99832](https://github.com/openclaw/openclaw/pull/99832) Thanks @fuller-stack-dev, @vincentkoc.
-- Extended-stable Gateways now show a periodic `openclaw update` hint when a newer exact package is verified, without changing the installation automatically. [#100438](https://github.com/openclaw/openclaw/pull/100438) Thanks @kevinslin.
 - The CLI and full-screen TUI now open with a clear recovery message when their launch directory has been deleted instead of crashing before startup. [#93636](https://github.com/openclaw/openclaw/pull/93636) Thanks @ml12580.
-- `openclaw backup create` now tolerates disposable runtime files disappearing during a live backup, while continuing to protect durable files under the existing inclusion policy. [#98879](https://github.com/openclaw/openclaw/pull/98879) Related [#98865](https://github.com/openclaw/openclaw/issues/98865). Thanks @carterstebbins23-spec, @vincentkoc, @zengwen-dt.
-- Timed-out commands on Windows are less likely to leave child processes running when `taskkill.exe` cannot start. [#101392](https://github.com/openclaw/openclaw/pull/101392) Thanks @aniruddhaadak80, @zengwen-dt.
-- `openclaw backup create` on Windows now retries live-file archive races with fresh temporary paths, reducing locked partial backups and leftover retry archives. [#101464](https://github.com/openclaw/openclaw/pull/101464) Thanks @lilan0125, @zoowh.
-- Restarting, updating, reinstalling, or repairing a macOS Gateway now preserves active SecretRef-backed channel credentials instead of leaving Telegram and other integrations unable to authenticate. [#99124](https://github.com/openclaw/openclaw/pull/99124) Thanks @mushuiyu886.
-- Update and status checks now identify malformed npm metadata as invalid JSON instead of returning only an opaque syntax error. [#100338](https://github.com/openclaw/openclaw/pull/100338) Thanks @cxbasdev.
 - Windows users can launch globally installed Gemini CLI and Claude Code backends through their npm command shims without immediate spawn failures or mangled prompt arguments. [#101378](https://github.com/openclaw/openclaw/pull/101378) Thanks @wendy-chsy.
-- A failed Gateway replacement process during an update no longer causes an additional uncaught crash in the existing parent process. [#101489](https://github.com/openclaw/openclaw/pull/101489) Thanks @aniruddhaadak80, @momothemage, @vincentkoc.
 - Failed CLI installations now clean up their temporary Node staging directories and pnpm workspace rewrite files. [#103725](https://github.com/openclaw/openclaw/pull/103725) Thanks @sebtardif.
 - Git installs now create an `openclaw` launcher that keeps using the intended Node.js runtime even after the user's PATH changes. [be7198f](https://github.com/openclaw/openclaw/commit/be7198f6a2225dd988e707c4ef11c3cf002c14c3)
-- Windows update and doctor repair now move an owned legacy Startup gateway to Task Scheduler without leaving a stale process, dropping authentication, or removing the fallback too early. [#101213](https://github.com/openclaw/openclaw/pull/101213) Thanks @vincentkoc.
-- `openclaw update` now targets the global Node installation that launched it, avoiding false success when Homebrew, nvm, asdf, or Volta exposes another OpenClaw copy. [#101228](https://github.com/openclaw/openclaw/pull/101228) Thanks @buddyh.
 - `openclaw plugins list` now uses substantially less peak memory on fresh and already-migrated packaged installs while preserving required migration behavior. [#103132](https://github.com/openclaw/openclaw/pull/103132)
 
-#### Scheduled work administration
+##### Updates and service handoff
+
+- OpenClaw update checks now limit malformed or unexpectedly large npm registry responses before they can consume excessive memory. [#98508](https://github.com/openclaw/openclaw/pull/98508) Thanks @lzyyzznl.
+- `openclaw update` on Windows now prevents the managed Gateway Scheduled Task from relaunching during package replacement, avoiding partially updated or mixed-version processes. [#100757](https://github.com/openclaw/openclaw/pull/100757) Thanks @vincentkoc.
+- Managed Gateway updates now allow active work to finish within the configured drain period before timing out the service handoff. [#99695](https://github.com/openclaw/openclaw/pull/99695) Thanks @zoowh.
+- Extended-stable Gateways now show a periodic `openclaw update` hint when a newer exact package is verified, without changing the installation automatically. [#100438](https://github.com/openclaw/openclaw/pull/100438) Thanks @kevinslin.
+- Restarting, updating, reinstalling, or repairing a macOS Gateway now preserves active SecretRef-backed channel credentials instead of leaving Telegram and other integrations unable to authenticate. [#99124](https://github.com/openclaw/openclaw/pull/99124) Thanks @mushuiyu886.
+- Update and status checks now identify malformed npm metadata as invalid JSON instead of returning only an opaque syntax error. [#100338](https://github.com/openclaw/openclaw/pull/100338) Thanks @cxbasdev.
+- A failed Gateway replacement process during an update no longer causes an additional uncaught crash in the existing parent process. [#101489](https://github.com/openclaw/openclaw/pull/101489) Thanks @aniruddhaadak80, @momothemage, @vincentkoc.
+- Windows update and doctor repair now move an owned legacy Startup gateway to Task Scheduler without leaving a stale process, dropping authentication, or removing the fallback too early. [#101213](https://github.com/openclaw/openclaw/pull/101213) Thanks @vincentkoc.
+- `openclaw update` now targets the global Node installation that launched it, avoiding false success when Homebrew, nvm, asdf, or Volta exposes another OpenClaw copy. [#101228](https://github.com/openclaw/openclaw/pull/101228) Thanks @buddyh.
+
+##### Backups and durable state
+
+- Windows backups now recover more reliably from live-write races by avoiding repeated use of the same locked temporary archive and cleaning stale retry files. [#101449](https://github.com/openclaw/openclaw/pull/101449) Thanks @lilan0125, @vincentkoc.
+- Large session histories now produce smaller `.usage-cost-cache.json` files with less parsing and rewrite work, rebuilding automatically after upgrade. [#99714](https://github.com/openclaw/openclaw/pull/99714) Related [#99511](https://github.com/openclaw/openclaw/issues/99511). Thanks @dexhunter, @wayne524.
+- `openclaw backup create` now tolerates disposable runtime files disappearing during a live backup, while continuing to protect durable files under the existing inclusion policy. [#98879](https://github.com/openclaw/openclaw/pull/98879) Related [#98865](https://github.com/openclaw/openclaw/issues/98865). Thanks @carterstebbins23-spec, @vincentkoc, @zengwen-dt.
+- `openclaw backup create` on Windows now retries live-file archive races with fresh temporary paths, reducing locked partial backups and leftover retry archives. [#101464](https://github.com/openclaw/openclaw/pull/101464) Thanks @lilan0125, @zoowh.
+
+#### Scheduled work
+
+[Scheduled automation](https://docs.openclaw.ai/automation/cron-jobs) retains intended models, timing, state, and delivery across more restarts and edits. Tool calls and results also recover more cleanly from timeouts, malformed content, oversized output, and interrupted work instead of leaving a task looking complete when its usable result was lost.
+
+##### Cron configuration and administration
 
 - When cron command output is truncated, operators can still recover the earlier login or setup instruction they need without exposing its raw secret through notifications. [#96393](https://github.com/openclaw/openclaw/pull/96393) Related [#96346](https://github.com/openclaw/openclaw/issues/96346). Thanks @nz365guy.
-- A timeout while one isolated cron job is setting up no longer restarts the Gateway or interrupts unrelated agent and scheduled work. [#96396](https://github.com/openclaw/openclaw/pull/96396) Thanks @849261680, @brycemurray, @velvet-shark.
 - Default cron failure alerts enabled with `openclaw cron edit &lt;job&gt; --failure-alert` now survive Gateway restarts instead of silently disappearing after reload. [#96615](https://github.com/openclaw/openclaw/pull/96615) Thanks @liuhao1024.
 - `openclaw doctor` now warns when cron jobs target channels whose plugins are inactive, letting operators correct delivery before the next scheduled run fails. [#98184](https://github.com/openclaw/openclaw/pull/98184) Thanks @masatohoshino, @vincentkoc.
 - Docker and bind-mount installations can finish legacy cron migration across filesystem boundaries, with actionable warnings and duplicate-safe retries when cleanup cannot complete. [#98217](https://github.com/openclaw/openclaw/pull/98217) Thanks @masatohoshino.
 - `openclaw doctor` now explains cron jobs that still look in flight after an interrupted Gateway run and how those leftover markers are cleared on the next start. [#98620](https://github.com/openclaw/openclaw/pull/98620) Thanks @masatohoshino.
 - Doctor now warns when enabled cron jobs are stuck in repeated failures without configured alerts, while healthy and below-threshold jobs stay quiet. [#99606](https://github.com/openclaw/openclaw/pull/99606) Thanks @masatohoshino.
-- `openclaw tasks maintenance --apply` now preserves active cron session history even when job IDs contain spaces, capitals, punctuation, or explicit session keys. [#96352](https://github.com/openclaw/openclaw/pull/96352) Thanks @ly-wang19, @vincentkoc.
 - `openclaw cron add` now rejects invalid `--no-output-timeout-seconds` and `--output-max-bytes` values immediately instead of silently creating a command job without the requested limits. [#96516](https://github.com/openclaw/openclaw/pull/96516) Thanks @zhangguiping-xydt.
 - Human-readable `cron list` and `cron show` output now reveals repeated failure streaks such as `error (12x)` while leaving JSON status values unchanged. [#99602](https://github.com/openclaw/openclaw/pull/99602) Thanks @masatohoshino.
 - Operators can opt into `core/doctor/legacy-cron-store` to find legacy cron data that needs attention without the lint check changing any stored state. [#99211](https://github.com/openclaw/openclaw/pull/99211) Thanks @giodl73-repo.
 - A normal Doctor lint run no longer invokes `crontab -l` for the optional legacy WhatsApp check unless an operator explicitly selects it. [#99250](https://github.com/openclaw/openclaw/pull/99250) Thanks @giodl73-repo.
-
-#### Documentation and operating guidance
-
-Official operating guidance now matches shipped commands, configuration, setup, status output, placeholders, and recovery behavior more closely. Generated documentation maps also preserve literal command parameters, reducing the chance that a reader follows an example whose identifiers were stripped or whose workflow no longer matches the product.
-
-- The CLI config documentation now clearly distinguishes normal JSON5 value parsing from `--strict-json`, which accepts standard JSON and rejects JSON5-only syntax. [#80981](https://github.com/openclaw/openclaw/pull/80981) Thanks @addu2612.
-- Plugin and channel-status documentation now clarifies that a `MessageReceipt` or durable `sent` result proves platform acceptance, not display or read confirmation on a recipient's device. [#90063](https://github.com/openclaw/openclaw/pull/90063) Thanks @pdurlej.
-- The macOS guide now gives users a clearer path from downloading the app through first-run setup, Gateway selection, and focused troubleshooting. [#97120](https://github.com/openclaw/openclaw/pull/97120) Thanks @romneyda.
-- The Discord setup guide now points users to the correct Developer settings section for enabling Developer Mode and copying required IDs. [#97336](https://github.com/openclaw/openclaw/pull/97336) Thanks @naseemm123.
-- Plugin developers now receive clearer SDK deprecations and migration guidance for session-store and transcript-file helpers ahead of the planned SQLite transition. [#97494](https://github.com/openclaw/openclaw/pull/97494) Thanks @jalehman.
-- OpenClaw's public docs now use shorter, task-first instructions with corrected commands, configuration names, defaults, provider behavior, and troubleshooting steps. [#100142](https://github.com/openclaw/openclaw/pull/100142)
-- Logbook users now have end-to-end guidance for setup, model routing, privacy choices, and troubleshooting missing capture or timeline results. [b6a7898](https://github.com/openclaw/openclaw/commit/b6a7898c7c7f43e4b984c6c62aaa685f6a206f33)
-- Safe-restart guidance now states that the default wait can end after `gateway.reload.deferralTimeoutMs` and explains how to configure an indefinite wait. [#95397](https://github.com/openclaw/openclaw/pull/95397) Thanks @zhangqueping.
-- The agent configuration guide now identifies the current models selected by the built-in `opus` and `gpt` aliases. [#96375](https://github.com/openclaw/openclaw/pull/96375) Thanks @niks999.
-- Docker operators now have an official path to install, authenticate, verify, and persist the `claude-cli` backend across container image upgrades. [#96380](https://github.com/openclaw/openclaw/pull/96380) Thanks @fffrank, @zaidazmi.
-- OpenClaw's Anthropic and Claude CLI documentation now reflects the current subscription-limit treatment for `claude -p` and related usage, with official references for billing and deployment decisions. [#96848](https://github.com/openclaw/openclaw/pull/96848) Thanks @fightingsleep, @tirion-p.
-- The Discord setup guide now separates General Permissions from Text Permissions so bot access choices are easier to read correctly. [#97584](https://github.com/openclaw/openclaw/pull/97584) Thanks @slammajamma28.
-- Telegram's error-reply documentation now lists the supported policies and correct cooldown defaults, avoiding invalid `errorPolicy: "reply"` configurations. [#97635](https://github.com/openclaw/openclaw/pull/97635) Thanks @wm0018.
-- The Feishu documentation no longer suggests the rejected `dmPolicy: disabled` setting, reducing configuration failures copied from the guide. [#97640](https://github.com/openclaw/openclaw/pull/97640) Thanks @wm0018.
-- The public onboarding docs now cover eleven existing non-interactive flags for token auth, Cloudflare AI Gateway, daemon, UI, hooks, and token output. [#97753](https://github.com/openclaw/openclaw/pull/97753) Thanks @vincentkoc, @wm0018.
-- Matrix documentation now explains progress streaming, room-specific mention matching, per-room enablement, and bot-loop safeguards that operators can configure. [#98318](https://github.com/openclaw/openclaw/pull/98318) Thanks @vincentkoc, @wm0018.
-- Telegram channel documentation now correctly states that an unset streaming mode uses partial previews and explains how to choose final-only replies. [#98453](https://github.com/openclaw/openclaw/pull/98453) Thanks @solodmd.
-- OpenClaw's mobile documentation now identifies the iOS and Android apps as official releases and provides consistent App Store, Google Play, and hosted iOS push-relay guidance. [#98843](https://github.com/openclaw/openclaw/pull/98843) Thanks @joshavant.
-- Plugin authors now get clearer packaging guidance for runtime dependencies, built artifacts, `npm-pack:` validation, and trusted official-plugin checks before publication. [#99962](https://github.com/openclaw/openclaw/pull/99962) Thanks @hxy91819.
-- Official plugin package examples now agree on the required `typebox` runtime and `openclaw` peer dependencies, reducing copy-and-paste setup failures. [#99973](https://github.com/openclaw/openclaw/pull/99973)
-- The bundled `imsg` skill now guides agents toward the correct direct or group conversation, stable targets, least-privilege actions, and confirmation before visible or sensitive changes. [#100105](https://github.com/openclaw/openclaw/pull/100105) Thanks @omarshahine.
-- Official OpenClaw docs now help operators and plugin authors handle credentials safely, preflight cron jobs that use local-provider fallbacks, apply Talk timing defaults, configure MiniMax providers and models, and copy a complete minimal plugin package with the required dependency metadata. [#100182](https://github.com/openclaw/openclaw/pull/100182)
-- Android node operators now have an end-to-end guide for securely mirroring and controlling a remote device from macOS, including authorization, troubleshooting, and clean disconnection. [#100398](https://github.com/openclaw/openclaw/pull/100398)
-- The Codex and WhatsApp plugin references now identify their tools contract, making supported plugin capabilities easier to match with OpenClaw workflows. [46ad3f9](https://github.com/openclaw/openclaw/commit/46ad3f9ae94cec1bfa94b14974a3d32b46921080) Thanks @vincentkoc.
-- The onboarding reference now explains that bare `openclaw` starts onboarding for a missing config, opens Crestodian for an invalid config, and launches the agent TUI for a valid config. [d9dbee7](https://github.com/openclaw/openclaw/commit/d9dbee7676fb4a7fcd4617e9fe3bd26f7adf4452)
-- ACP troubleshooting now names `PermissionPromptUnavailableError`, helping operators recognize a non-interactive permission failure and find the right configuration fix. [b3a74cc](https://github.com/openclaw/openclaw/commit/b3a74ccc3aef9d670994baee3b0039e4783d82a2)
-- The onboarding reference now gives accurate signal-cli, Gateway runtime, and channel allowlist guidance, including Windows limits and the IDs expected for direct messages. [aaaa803](https://github.com/openclaw/openclaw/commit/aaaa8030bf4f139d43717731fd3402e06b248d48)
-- Generated documentation navigation now preserves complete headings with command placeholders such as `&lt;id&gt;` and `&lt;deviceId&gt;` instead of hiding required arguments. [#99099](https://github.com/openclaw/openclaw/pull/99099) Thanks @hxy91819.
-
-
-#### Tools and automation
-
-Agents can read scanned PDFs with vision-capable models, work in isolated coding checkouts, and handle files, media, browser results, and execution failures with more usable output. [Browser control](https://docs.openclaw.ai/tools/browser-control) preserves pairing and download state more reliably, while parallel workspace operations are less likely to collide with one another or the user's current files.
-
-[Scheduled automation](https://docs.openclaw.ai/automation/cron-jobs) retains intended models, timing, state, and delivery across more restarts and edits. Tool calls and results also recover more cleanly from timeouts, malformed content, oversized output, and interrupted work instead of leaving a task looking complete when its usable result was lost.
-
-#### Browser control and downloads
-
-- A stalled remote Chrome or WSL2 browser can no longer hold tab-list requests indefinitely; OpenClaw returns a bounded timeout and can reconnect on the next request. [#80147](https://github.com/openclaw/openclaw/pull/80147) Thanks @hemantsudarshan, @keaneyan.
-- Remote-browser actions now recover from a closed or replaced selected tab by retrying without the stale tab ID, matching local browser behavior. [#89086](https://github.com/openclaw/openclaw/pull/89086) Thanks @rhclaw.
-- CDP-backed browser navigation to CSV, PDF, and other attachment URLs now returns a safely saved managed file with its URL and suggested filename. [#89416](https://github.com/openclaw/openclaw/pull/89416) Thanks @zhangguiping-xydt.
-- Browser downloads now tell the agent the saved filename and path, helping it use the completed download instead of retrying the action. [#93307](https://github.com/openclaw/openclaw/pull/93307) Thanks @sunlit-deng.
-- Updating `browser.profiles.*` connection details can now take effect without an unnecessary Gateway restart or interruption to active sessions. [#93827](https://github.com/openclaw/openclaw/pull/93827) Thanks @goutamadwant.
-- Browser automation can now act on tabs by suggested ID, tab ID, label, or unique prefix without false target-mismatch failures. [#96178](https://github.com/openclaw/openclaw/pull/96178) Thanks @zengwen-dt.
-- Persistent managed-browser logins now survive ordinary Chrome and Gateway restarts, reducing repeated sign-ins and MFA interruptions for unattended browser work. [#98284](https://github.com/openclaw/openclaw/pull/98284) Thanks @malashenia, @turbotheturtle.
-- Oversized browser-control error responses can no longer consume excessive Gateway memory, while ordinary failures still provide useful diagnostics. [#98455](https://github.com/openclaw/openclaw/pull/98455) Thanks @wings1029.
-- Browser `responsebody` requests for a short prefix of a large response now avoid decoding a second full-size text copy while still returning the requested truncated content. [#98940](https://github.com/openclaw/openclaw/pull/98940) Thanks @pandah97.
-- Browser extensions can reconnect with a newly rotated pairing token while Browser control remains running, and old tokens continue to be rejected. [a703183](https://github.com/openclaw/openclaw/commit/a7031832ecd5bb9eba30ce844b1a059c9c3b5395) Thanks @vincentkoc.
-- Remote browser CDP connections now accept URL-encoded Basic auth credentials containing spaces, at signs, and other reserved characters. [#97972](https://github.com/openclaw/openclaw/pull/97972) Thanks @vectorpeak.
-- Malformed browser fill data supplied through `--fields` or `--fields-file` now produces a clear actionable error and exits before any browser action starts. [#98861](https://github.com/openclaw/openclaw/pull/98861) Thanks @lsr911.
-- Running `/new` or `/reset` in a direct message now closes that conversation's managed browser tabs while leaving other people's tabs alone, even through a brief browser connection hiccup. [#100792](https://github.com/openclaw/openclaw/pull/100792) Thanks @fmls.
-- Agents can now screenshot a selected background Chromium tab without waiting for the browser command to time out, though capture may bring that tab forward. [#100857](https://github.com/openclaw/openclaw/pull/100857) Thanks @spencer2211.
-- Managed local browser pages can navigate normally under a restrictive `browser.ssrfPolicy.hostnameAllowlist`, while remote CDP endpoints and disallowed destinations remain blocked. [#100986](https://github.com/openclaw/openclaw/pull/100986) Thanks @nianjiuzst, @sarinv.
-- Browser screenshots used privately for visual inspection are no longer attached automatically to channel replies and are shared only when explicitly requested. [#101434](https://github.com/openclaw/openclaw/pull/101434)
-- Browser automation attached to an existing Chrome session now stops with a bounded error when Chrome crashes or a request is cancelled, and later requests can reconnect cleanly. [#101454](https://github.com/openclaw/openclaw/pull/101454) Thanks @aniruddhaadak80.
-- Browser uploads on re-rendering pages now recover more reliably and expose the real stale-reference or action error instead of a generic timeout. [#101465](https://github.com/openclaw/openclaw/pull/101465) Thanks @diwakarrankawat, @m13v, @tigicion.
-- Browser response bodies and page snapshots now stay valid and readable when output is shortened near an emoji. [#101761](https://github.com/openclaw/openclaw/pull/101761) Thanks @mushuiyu886.
-- Browser Control users who are missing Playwright now receive a working documentation pointer for installing or repairing the required browser runtime. [d460635](https://github.com/openclaw/openclaw/commit/d460635185a499ffb96b3ca32df8a05d058c9145)
-- Browser Control can now emulate no explicit color preference with `openclaw browser set media no-preference`, and invalid values list every supported choice. [9133118](https://github.com/openclaw/openclaw/commit/913311845ebdab6faf701ee73e07465f171274e7)
-- Browser POST actions now complete on supported Node 24.16 and newer runtimes after JSON parsing while still cancelling when the client disconnects. [52044e1](https://github.com/openclaw/openclaw/commit/52044e134567ebe3598684b6f968027723dd86a5) Thanks @obviyus, @vincentkoc.
-
-#### Files, documents, and media
-
-- Vision-capable models can now read rendered pages from scanned and image-only PDFs attached through chat channels. [#97354](https://github.com/openclaw/openclaw/pull/97354) Thanks @joshavant.
-- Screenshot-style images returned by plugin tools over MCP now reach clients as usable results instead of causing the tool call to fail. [#90902](https://github.com/openclaw/openclaw/pull/90902) Thanks @k-schmidt, @mushuiyu886.
-- After one generated video clip is ready, a different next clip can start immediately instead of waiting several extra minutes behind stale duplicate suppression. [#96018](https://github.com/openclaw/openclaw/pull/96018) Thanks @palomyates516-alt, @vincentkoc.
-- `openclaw capability video generate` now returns a bounded, actionable error when a provider URL serves an oversized video without `--output`. [#97549](https://github.com/openclaw/openclaw/pull/97549) Thanks @alix-007.
-- `openclaw infer image describe` now tries configured fallback image models after an explicitly selected model fails and reports which model ultimately succeeded. [#98347](https://github.com/openclaw/openclaw/pull/98347) Thanks @momothemage.
-- Fetching an empty file with an image-style name now returns a clear saved-file path instead of an unusable inline image result. [#99370](https://github.com/openclaw/openclaw/pull/99370) Thanks @2loch-ness6, @vincentkoc.
-- File Transfer folder downloads now either produce a complete verified archive or report a clear read failure instead of crashing or returning partial data. [#101590](https://github.com/openclaw/openclaw/pull/101590) Thanks @sunlit-deng.
-- Multi-page scanned PDFs now keep later pages at a usable image size during fallback extraction, allowing vision models to read the full document. [#96390](https://github.com/openclaw/openclaw/pull/96390) Thanks @cls3389, @vincentkoc, @zengwen-dt.
-- Multi-attachment prompts now keep real captions while removing duplicate transport markers and placeholder-only text that could confuse the model. [#96431](https://github.com/openclaw/openclaw/pull/96431) Thanks @lin-hongkuan.
-- GIF attachments are now recognized despite normal Content-Type parameters, spaces, or mixed casing instead of falling through as another media type. [#96435](https://github.com/openclaw/openclaw/pull/96435) Thanks @lin-hongkuan.
-- Valid inline image data URLs without trailing base64 padding are now accepted, while malformed image payloads remain blocked. [#96437](https://github.com/openclaw/openclaw/pull/96437) Thanks @lin-hongkuan, @vincentkoc.
-- Video inputs near the configured size boundary are now accepted or rejected according to their actual byte size, avoiding unexpected failures for files that are still within the limit. [#96519](https://github.com/openclaw/openclaw/pull/96519) Thanks @lin-hongkuan, @vincentkoc.
-- Requesting nonexistent PDF pages now returns a clear range error instead of accidentally sending the entire document to a native provider. [#97698](https://github.com/openclaw/openclaw/pull/97698) Thanks @zhangguiping-xydt.
-- Markdown frontmatter now preserves null-valued fields named `toString`, `constructor`, `valueOf`, or `hasOwnProperty` instead of silently dropping metadata from skills, hooks, or commands. [#99129](https://github.com/openclaw/openclaw/pull/99129) Thanks @vincentkoc, @zenglingbiao.
-- Fractional PDF page selections such as `1.5` now fail immediately with a clear validation error instead of silently omitting requested content. [#99399](https://github.com/openclaw/openclaw/pull/99399) Thanks @qingminglong.
-
-#### Scheduled jobs and reminders
-
 - Cron jobs with a valid future run exactly on a second boundary now keep that scheduled time instead of being incorrectly treated as stale and rebased. [#81731](https://github.com/openclaw/openclaw/pull/81731) Thanks @vincentkoc, @yashkot007.
+- Editing a recurring cron job no longer skips a run that is already due or shifts an unchanged interval schedule to the edit time. [#96159](https://github.com/openclaw/openclaw/pull/96159) Thanks @yetval.
+- Clearing a saved Model or Thinking/Effort override in the Cron Control UI now truly restores inherited defaults, with `--clear-thinking` available from the CLI. [#96293](https://github.com/openclaw/openclaw/pull/96293) Related [#96287](https://github.com/openclaw/openclaw/issues/96287). Thanks @takamasa-aiso, @zengwen-dt.
+- Failed `cron add`, `cron update`, and `cron remove` commands now leave the running scheduler unchanged, so live jobs match the saved configuration and reported result. [#99960](https://github.com/openclaw/openclaw/pull/99960) Thanks @masatohoshino, @vincentkoc.
+- Editing a scheduled job's message no longer accidentally breaks later CLI-backed runs, while explicit tool restrictions remain protected where they cannot be enforced. [#100203](https://github.com/openclaw/openclaw/pull/100203) Thanks @obviyus.
+- Cron job updates can now remove a job-specific fallback model setting so scheduled runs inherit the global defaults again without recreating the job. [#100801](https://github.com/openclaw/openclaw/pull/100801) Thanks @sunnyshu0925.
+- `openclaw cron edit` now finds jobs more reliably and with less delay on Gateways that contain many scheduled jobs, including `--exact` and timeout-only edits. [#100836](https://github.com/openclaw/openclaw/pull/100836) Thanks @machine3at, @vincentkoc.
+- Editing a cron payload with `--no-best-effort-deliver` no longer silently changes the job's delivery mode to announcements. [#100846](https://github.com/openclaw/openclaw/pull/100846) Thanks @machine3at.
+- Using `openclaw cron edit &lt;id&gt; --no-best-effort-deliver` on an older detached job no longer accidentally suppresses its completion announcement. [#101027](https://github.com/openclaw/openclaw/pull/101027)
+- Agent and MCP cron requests using mixed-case command labels now fail closed instead of slipping past the restriction on shell-backed agent cron jobs. [#101350](https://github.com/openclaw/openclaw/pull/101350) Thanks @pgondhi987.
+- Replies now correctly confirm reminders scheduled through commands such as `openclaw cron add` instead of also claiming that no reminder was created. [#101807](https://github.com/openclaw/openclaw/pull/101807) Thanks @bryantegomoh, @vincentkoc.
+
+##### Scheduled runs, delivery, and recovery
+
+- A timeout while one isolated cron job is setting up no longer restarts the Gateway or interrupts unrelated agent and scheduled work. [#96396](https://github.com/openclaw/openclaw/pull/96396) Thanks @849261680, @brycemurray, @velvet-shark.
+- `openclaw tasks maintenance --apply` now preserves active cron session history even when job IDs contain spaces, capitals, punctuation, or explicit session keys. [#96352](https://github.com/openclaw/openclaw/pull/96352) Thanks @ly-wang19, @vincentkoc.
 - Isolated `agentTurn` cron jobs can recover from temporarily mismatched runtime artifacts instead of failing at startup with a `sourceReplyDeliveryMode` error. [#85249](https://github.com/openclaw/openclaw/pull/85249) Thanks @jerry-xin.
 - `openclaw tasks maintenance --apply` can now repair false lost-task records when durable cron history proves the run completed successfully. [#86088](https://github.com/openclaw/openclaw/pull/86088) Thanks @altaywtf, @liaoandi.
 - Scheduled agent jobs now warn when `ANNOUNCE_SKIP` suppresses a cron completion, making missing reports and partial output easier to diagnose. [#90566](https://github.com/openclaw/openclaw/pull/90566) Related [#68561](https://github.com/openclaw/openclaw/issues/68561). Thanks @mibslee, @sahibzada-allahyar.
@@ -2813,41 +2446,92 @@ Agents can read scanned PDFs with vision-capable models, work in isolated coding
 - Scheduled agent turns using `claude-cli` or another CLI backend now start normally, while explicitly unsupported tool restrictions still fail closed. [#95615](https://github.com/openclaw/openclaw/pull/95615) Thanks @anagnorisis2peripeteia, @obviyus.
 - Timed-out or cancelled isolated cron runs now retain their provider, model, and session details in `cron_run_logs`, making failed jobs easier to trace. [#95943](https://github.com/openclaw/openclaw/pull/95943) Related [#95873](https://github.com/openclaw/openclaw/issues/95873). Thanks @luke-renjoy, @zengwen-dt.
 - A scheduled cloud-model job that opens a response but sends no content can now move to a healthy fallback model before the entire run times out. [#96096](https://github.com/openclaw/openclaw/pull/96096) Thanks @849261680, @velvet-shark.
-- Editing a recurring cron job no longer skips a run that is already due or shifts an unchanged interval schedule to the edit time. [#96159](https://github.com/openclaw/openclaw/pull/96159) Thanks @yetval.
-- Clearing a saved Model or Thinking/Effort override in the Cron Control UI now truly restores inherited defaults, with `--clear-thinking` available from the CLI. [#96293](https://github.com/openclaw/openclaw/pull/96293) Related [#96287](https://github.com/openclaw/openclaw/issues/96287). Thanks @takamasa-aiso, @zengwen-dt.
 - CLI-backed workers from isolated cron jobs now exit after completion instead of accumulating and slowing the host and Gateway. [#97227](https://github.com/openclaw/openclaw/pull/97227) Thanks @vianne-droid, @xialonglee, @yusukeit0.
 - Long cron failure alerts now preserve emoji and other supplementary Unicode characters instead of ending with a broken replacement symbol. [#97298](https://github.com/openclaw/openclaw/pull/97298) Thanks @zenglingbiao.
 - Heartbeat fallback failures no longer send noisy chat messages made only of repeated internal error placeholders. [#97364](https://github.com/openclaw/openclaw/pull/97364) Thanks @turbotheturtle.
 - Scheduled jobs that permit `web_search` now report that no usable search provider is selected instead of completing with an unusable result. [#97677](https://github.com/openclaw/openclaw/pull/97677) Thanks @lilan0125, @riazrahaman.
 - Scheduled commitment follow-ups now stay focused on their original conversation instead of absorbing unrelated heartbeat instructions, queued context, or recovery work. [#98169](https://github.com/openclaw/openclaw/pull/98169) Thanks @bdjben.
-- Scheduled deliveries to numeric threads such as Telegram forum topics now return to the configured thread after Gateway restarts instead of falling back to the general chat. [#98699](https://github.com/openclaw/openclaw/pull/98699) Thanks @yetval.
 - Scheduled jobs can deliver to a live chat without blocking replies or mixing background work into its transcript, and operators can clear stale childless cron tasks without cancelling active session-backed runs. [#98755](https://github.com/openclaw/openclaw/pull/98755) Related [#98121](https://github.com/openclaw/openclaw/issues/98121). Thanks @ethansk, @obviyus.
 - Recurring cron jobs created for `current` or `session:&lt;id&gt;` once again carry their selected conversation history into later runs, while `isolated` jobs still start clean. [#98947](https://github.com/openclaw/openclaw/pull/98947) Thanks @ethansk, @obviyus.
-- Failed `cron add`, `cron update`, and `cron remove` commands now leave the running scheduler unchanged, so live jobs match the saved configuration and reported result. [#99960](https://github.com/openclaw/openclaw/pull/99960) Thanks @masatohoshino, @vincentkoc.
-- Editing a scheduled job's message no longer accidentally breaks later CLI-backed runs, while explicit tool restrictions remain protected where they cannot be enforced. [#100203](https://github.com/openclaw/openclaw/pull/100203) Thanks @obviyus.
-- Cron job updates can now remove a job-specific fallback model setting so scheduled runs inherit the global defaults again without recreating the job. [#100801](https://github.com/openclaw/openclaw/pull/100801) Thanks @sunnyshu0925.
 - Completed heartbeat tasks remain recorded when the quiet `HEARTBEAT_OK` acknowledgment cannot be delivered, reducing repeated work and duplicate follow-up actions on the next heartbeat. [#100834](https://github.com/openclaw/openclaw/pull/100834) Thanks @machine3at, @vincentkoc.
-- `openclaw cron edit` now finds jobs more reliably and with less delay on Gateways that contain many scheduled jobs, including `--exact` and timeout-only edits. [#100836](https://github.com/openclaw/openclaw/pull/100836) Thanks @machine3at, @vincentkoc.
-- Editing a cron payload with `--no-best-effort-deliver` no longer silently changes the job's delivery mode to announcements. [#100846](https://github.com/openclaw/openclaw/pull/100846) Thanks @machine3at.
-- Using `openclaw cron edit &lt;id&gt; --no-best-effort-deliver` on an older detached job no longer accidentally suppresses its completion announcement. [#101027](https://github.com/openclaw/openclaw/pull/101027)
-- Agent and MCP cron requests using mixed-case command labels now fail closed instead of slipping past the restriction on shell-backed agent cron jobs. [#101350](https://github.com/openclaw/openclaw/pull/101350) Thanks @pgondhi987.
-- Replies now correctly confirm reminders scheduled through commands such as `openclaw cron add` instead of also claiming that no reminder was created. [#101807](https://github.com/openclaw/openclaw/pull/101807) Thanks @bryantegomoh, @vincentkoc.
 
-#### Worktrees and sandbox environments
+#### Browser control
+
+##### Connections, profiles, and tab control
+
+- Browser CLI commands now accept `--browser-profile` before or after the subcommand, restoring existing remote-browser and WSL2 command patterns. [#94431](https://github.com/openclaw/openclaw/pull/94431) Thanks @ml12580.
+- A stalled remote Chrome or WSL2 browser can no longer hold tab-list requests indefinitely; OpenClaw returns a bounded timeout and can reconnect on the next request. [#80147](https://github.com/openclaw/openclaw/pull/80147) Thanks @hemantsudarshan, @keaneyan.
+- Remote-browser actions now recover from a closed or replaced selected tab by retrying without the stale tab ID, matching local browser behavior. [#89086](https://github.com/openclaw/openclaw/pull/89086) Thanks @rhclaw.
+- Updating `browser.profiles.*` connection details can now take effect without an unnecessary Gateway restart or interruption to active sessions. [#93827](https://github.com/openclaw/openclaw/pull/93827) Thanks @goutamadwant.
+- Browser automation can now act on tabs by suggested ID, tab ID, label, or unique prefix without false target-mismatch failures. [#96178](https://github.com/openclaw/openclaw/pull/96178) Thanks @zengwen-dt.
+- Persistent managed-browser logins now survive ordinary Chrome and Gateway restarts, reducing repeated sign-ins and MFA interruptions for unattended browser work. [#98284](https://github.com/openclaw/openclaw/pull/98284) Thanks @malashenia, @turbotheturtle.
+- Browser extensions can reconnect with a newly rotated pairing token while Browser control remains running, and old tokens continue to be rejected. [a703183](https://github.com/openclaw/openclaw/commit/a7031832ecd5bb9eba30ce844b1a059c9c3b5395) Thanks @vincentkoc.
+- Remote browser CDP connections now accept URL-encoded Basic auth credentials containing spaces, at signs, and other reserved characters. [#97972](https://github.com/openclaw/openclaw/pull/97972) Thanks @vectorpeak.
+- Running `/new` or `/reset` in a direct message now closes that conversation's managed browser tabs while leaving other people's tabs alone, even through a brief browser connection hiccup. [#100792](https://github.com/openclaw/openclaw/pull/100792) Thanks @fmls.
+- Agents can now screenshot a selected background Chromium tab without waiting for the browser command to time out, though capture may bring that tab forward. [#100857](https://github.com/openclaw/openclaw/pull/100857) Thanks @spencer2211.
+- Managed local browser pages can navigate normally under a restrictive `browser.ssrfPolicy.hostnameAllowlist`, while remote CDP endpoints and disallowed destinations remain blocked. [#100986](https://github.com/openclaw/openclaw/pull/100986) Thanks @nianjiuzst, @sarinv.
+- Browser automation attached to an existing Chrome session now stops with a bounded error when Chrome crashes or a request is cancelled, and later requests can reconnect cleanly. [#101454](https://github.com/openclaw/openclaw/pull/101454) Thanks @aniruddhaadak80.
+- Browser Control users who are missing Playwright now receive a working documentation pointer for installing or repairing the required browser runtime. [d460635](https://github.com/openclaw/openclaw/commit/d460635185a499ffb96b3ca32df8a05d058c9145)
+- Browser Control can now emulate no explicit color preference with `openclaw browser set media no-preference`, and invalid values list every supported choice. [9133118](https://github.com/openclaw/openclaw/commit/913311845ebdab6faf701ee73e07465f171274e7)
+- Browser POST actions now complete on supported Node 24.16 and newer runtimes after JSON parsing while still cancelling when the client disconnects. [52044e1](https://github.com/openclaw/openclaw/commit/52044e134567ebe3598684b6f968027723dd86a5) Thanks @obviyus, @vincentkoc.
+
+##### Downloads, uploads, screenshots, and page data
+
+- CDP-backed browser navigation to CSV, PDF, and other attachment URLs now returns a safely saved managed file with its URL and suggested filename. [#89416](https://github.com/openclaw/openclaw/pull/89416) Thanks @zhangguiping-xydt.
+- Browser downloads now tell the agent the saved filename and path, helping it use the completed download instead of retrying the action. [#93307](https://github.com/openclaw/openclaw/pull/93307) Thanks @sunlit-deng.
+- Oversized browser-control error responses can no longer consume excessive Gateway memory, while ordinary failures still provide useful diagnostics. [#98455](https://github.com/openclaw/openclaw/pull/98455) Thanks @wings1029.
+- Browser `responsebody` requests for a short prefix of a large response now avoid decoding a second full-size text copy while still returning the requested truncated content. [#98940](https://github.com/openclaw/openclaw/pull/98940) Thanks @pandah97.
+- Malformed browser fill data supplied through `--fields` or `--fields-file` now produces a clear actionable error and exits before any browser action starts. [#98861](https://github.com/openclaw/openclaw/pull/98861) Thanks @lsr911.
+- Browser screenshots used privately for visual inspection are no longer attached automatically to channel replies and are shared only when explicitly requested. [#101434](https://github.com/openclaw/openclaw/pull/101434)
+- Browser uploads on re-rendering pages now recover more reliably and expose the real stale-reference or action error instead of a generic timeout. [#101465](https://github.com/openclaw/openclaw/pull/101465) Thanks @diwakarrankawat, @m13v, @tigicion.
+- Browser response bodies and page snapshots now stay valid and readable when output is shortened near an emoji. [#101761](https://github.com/openclaw/openclaw/pull/101761) Thanks @mushuiyu886.
+
+#### Files, documents, and media
+
+##### PDFs and image understanding
+
+- Vision-capable models can now read rendered pages from scanned and image-only PDFs attached through chat channels. [#97354](https://github.com/openclaw/openclaw/pull/97354) Thanks @joshavant.
+- `openclaw infer image describe` now tries configured fallback image models after an explicitly selected model fails and reports which model ultimately succeeded. [#98347](https://github.com/openclaw/openclaw/pull/98347) Thanks @momothemage.
+- Multi-page scanned PDFs now keep later pages at a usable image size during fallback extraction, allowing vision models to read the full document. [#96390](https://github.com/openclaw/openclaw/pull/96390) Thanks @cls3389, @vincentkoc, @zengwen-dt.
+- Requesting nonexistent PDF pages now returns a clear range error instead of accidentally sending the entire document to a native provider. [#97698](https://github.com/openclaw/openclaw/pull/97698) Thanks @zhangguiping-xydt.
+- Fractional PDF page selections such as `1.5` now fail immediately with a clear validation error instead of silently omitting requested content. [#99399](https://github.com/openclaw/openclaw/pull/99399) Thanks @qingminglong.
+
+##### Media, attachments, and file transfer
+
+- Screenshot-style images returned by plugin tools over MCP now reach clients as usable results instead of causing the tool call to fail. [#90902](https://github.com/openclaw/openclaw/pull/90902) Thanks @k-schmidt, @mushuiyu886.
+- After one generated video clip is ready, a different next clip can start immediately instead of waiting several extra minutes behind stale duplicate suppression. [#96018](https://github.com/openclaw/openclaw/pull/96018) Thanks @palomyates516-alt, @vincentkoc.
+- `openclaw capability video generate` now returns a bounded, actionable error when a provider URL serves an oversized video without `--output`. [#97549](https://github.com/openclaw/openclaw/pull/97549) Thanks @alix-007.
+- Fetching an empty file with an image-style name now returns a clear saved-file path instead of an unusable inline image result. [#99370](https://github.com/openclaw/openclaw/pull/99370) Thanks @2loch-ness6, @vincentkoc.
+- File Transfer folder downloads now either produce a complete verified archive or report a clear read failure instead of crashing or returning partial data. [#101590](https://github.com/openclaw/openclaw/pull/101590) Thanks @sunlit-deng.
+- Multi-attachment prompts now keep real captions while removing duplicate transport markers and placeholder-only text that could confuse the model. [#96431](https://github.com/openclaw/openclaw/pull/96431) Thanks @lin-hongkuan.
+- GIF attachments are now recognized despite normal Content-Type parameters, spaces, or mixed casing instead of falling through as another media type. [#96435](https://github.com/openclaw/openclaw/pull/96435) Thanks @lin-hongkuan.
+- Valid inline image data URLs without trailing base64 padding are now accepted, while malformed image payloads remain blocked. [#96437](https://github.com/openclaw/openclaw/pull/96437) Thanks @lin-hongkuan, @vincentkoc.
+- Video inputs near the configured size boundary are now accepted or rejected according to their actual byte size, avoiding unexpected failures for files that are still within the limit. [#96519](https://github.com/openclaw/openclaw/pull/96519) Thanks @lin-hongkuan, @vincentkoc.
+- Markdown frontmatter now preserves null-valued fields named `toString`, `constructor`, `valueOf`, or `hasOwnProperty` instead of silently dropping metadata from skills, hooks, or commands. [#99129](https://github.com/openclaw/openclaw/pull/99129) Thanks @vincentkoc, @zenglingbiao.
+- Markdown beginning with text such as `---not` or `----` now remains ordinary content instead of being mistaken for frontmatter and stripped. [#101795](https://github.com/openclaw/openclaw/pull/101795) Thanks @nianjiuzst.
+
+#### Worktrees and sandboxes
+
+##### Managed worktrees
 
 - Workboard tasks can now use managed isolated worktrees, with CLI and Control UI tools for creation, cleanup, restoration, and recovery snapshots when work cannot be removed safely. [#100535](https://github.com/openclaw/openclaw/pull/100535)
 - Users can now start a chat in its own managed worktree from the Control UI or mobile app, isolating parallel coding while preserving dirty work and cleaning safe idle checkouts automatically. [#100788](https://github.com/openclaw/openclaw/pull/100788)
+
+##### Sandboxes and workspace paths
+
 - Agent commands with an invalid explicit `workdir`, including a literal `~`, now stop clearly instead of running from an unintended fallback directory. [#94441](https://github.com/openclaw/openclaw/pull/94441) Thanks @jesse-merhi, @renaudcerrato.
 - SSH- and OpenShell-backed sandbox commands now clean up remote resources after failed launches, preserve the correct plugin session and channel context, and return a normal tool error for malformed input instead of an internal WeakMap failure. [#96926](https://github.com/openclaw/openclaw/pull/96926) Thanks @jesse-merhi.
 - OpenShell sandbox sessions now start with the intended workspace files in the managed remote directory, avoiding missing-file and wrong-directory failures. [d9034da](https://github.com/openclaw/openclaw/commit/d9034da0a60600cb1d2e081cb80e619ff7d180c5) Thanks @vincentkoc.
 - The optional common sandbox image now includes Node 24 and pnpm so documented Node-based development tasks can run inside it. [eabc12b](https://github.com/openclaw/openclaw/commit/eabc12b7d66687f6829009c103c0f33114e2949e) Thanks @vincentkoc.
 - OpenShell sandbox uploads now place workspace directories at the requested remote path so sandbox commands can reliably find their files. [#96303](https://github.com/openclaw/openclaw/pull/96303) Thanks @vincentkoc.
 
-#### Command execution and task recovery
+#### Command execution
 
+##### Process execution and cleanup
+
+- Pending exec approval cards now describe only the approval state, and the foreground-fallback warning appears only after a command actually runs that way. [#101561](https://github.com/openclaw/openclaw/pull/101561) Thanks @vincentkoc.
+- Timed-out commands on Windows are less likely to leave child processes running when `taskkill.exe` cannot start. [#101392](https://github.com/openclaw/openclaw/pull/101392) Thanks @aniruddhaadak80, @zengwen-dt.
 - Failed shell-tool messages now separate the command the agent typed from framework labels and show the exit code, node, and working directory more clearly. [#97511](https://github.com/openclaw/openclaw/pull/97511) Thanks @aditya-vithaldas.
-- Reliability fixes now reject unsafe cron and plugin inputs, preserve skill formatting, surface Gateway and memory failures, fail LSP startup sooner, and prevent stale Android camera results after cancellation. [#100399](https://github.com/openclaw/openclaw/pull/100399) Thanks @849261680, @anyech, @cxbasdev, @lin-hongkuan, @masatohoshino, @nankingjing, @qingminglong, @simon-xydt, @snotty, @xialonglee.
-- A broad reliability pass now replaces stalled child-process work with clear errors, improves sandbox diagnostics, bounds mobile calendar and voice state, normalizes cron fallbacks, and rejects unsafe provider responses. [#100483](https://github.com/openclaw/openclaw/pull/100483) Thanks @aniruddhaadak80, @cxbasdev, @jincheng-xydt, @morluto, @nianjiuzst, @pandah97, @versatagent, @xialonglee, @zenglingbiao, @zengwen-dt.
 - Exec and finished background-session results now include signals, timeout flags, failure kinds, and exit reasons so users can tell why a command stopped. [#89104](https://github.com/openclaw/openclaw/pull/89104) Thanks @yu-xin-c.
 - Windows `autoreview --engine copilot` runs now return a completed review result even when temporary-directory cleanup is briefly delayed. [#97901](https://github.com/openclaw/openclaw/pull/97901) Thanks @paulcam206.
 - Oversized local socket replies now fail promptly without consuming memory until timeout, while large macOS commands still return completion status and bounded recent output. [#98130](https://github.com/openclaw/openclaw/pull/98130) Thanks @pick-cat.
@@ -2857,61 +2541,116 @@ Agents can read scanned PDFs with vision-capable models, work in isolated coding
 - Agent workflows can now survive transient stdout or stderr read failures from helper processes instead of losing the whole OpenClaw process. [#100522](https://github.com/openclaw/openclaw/pull/100522) Thanks @cxbasdev, @vincentkoc.
 - Docker sandbox commands now return an explicit failure when output cannot be read instead of crashing OpenClaw or reporting an incomplete result as successful. [#100523](https://github.com/openclaw/openclaw/pull/100523) Thanks @cxbasdev.
 - Crestodian setup and local-tool checks no longer terminate OpenClaw when a probed command encounters a rare output-stream read failure. [#100741](https://github.com/openclaw/openclaw/pull/100741) Thanks @lsr911.
+- Stopping a chat through `chat.abort` can now find and terminate its matching embedded run instead of reporting failure while the underlying tool process continues. [#101222](https://github.com/openclaw/openclaw/pull/101222) Thanks @zoowh.
+- Broken child-process output, timeouts, and aborts during agent shell commands are now contained instead of causing rare Gateway crashes. [#101370](https://github.com/openclaw/openclaw/pull/101370) Thanks @wings1029.
+- Repeated failed or cancelled agent directory listings now release their cancellation listeners, avoiding listener buildup over time. [#101588](https://github.com/openclaw/openclaw/pull/101588) Thanks @lzw112.
+- Codex session tools now honor their requested seconds-based timeout and return their own useful timeout status instead of ending early. [#100722](https://github.com/openclaw/openclaw/pull/100722) Thanks @carterstebbins23-spec, @cxbasdev.
+- Cancelled ACP background tasks now appear as cancelled in task lists, summaries, and parent-run updates rather than being reported as successful. [#101245](https://github.com/openclaw/openclaw/pull/101245) Thanks @masatohoshino.
+
+##### Editing, diffs, and task recovery
+
+- Reliability fixes now reject unsafe cron and plugin inputs, preserve skill formatting, surface Gateway and memory failures, fail LSP startup sooner, and prevent stale Android camera results after cancellation. [#100399](https://github.com/openclaw/openclaw/pull/100399) Thanks @849261680, @anyech, @cxbasdev, @lin-hongkuan, @masatohoshino, @nankingjing, @qingminglong, @simon-xydt, @snotty, @xialonglee.
+- A broad reliability pass now replaces stalled child-process work with clear errors, improves sandbox diagnostics, bounds mobile calendar and voice state, normalizes cron fallbacks, and rejects unsafe provider responses. [#100483](https://github.com/openclaw/openclaw/pull/100483) Thanks @aniruddhaadak80, @cxbasdev, @jincheng-xydt, @morluto, @nianjiuzst, @pandah97, @versatagent, @xialonglee, @zenglingbiao, @zengwen-dt.
 - Agent runs now stop cleanly when a `write`, `edit`, or `apply_patch` operation would make no change, preventing repeated false-progress retries while real mutations and valid sibling edits continue normally. [#97044](https://github.com/openclaw/openclaw/pull/97044) Thanks @vincentkoc, @zw-xysk.
 - The diffs tool now renders default outputs faster, preserves highlighting for pack-only languages, handles unchanged input clearly, and reports file-render and invalid-patch errors more accurately. [#100487](https://github.com/openclaw/openclaw/pull/100487)
 - Failed code-mode tool attempts now show the error type, message, and location, giving the model and operator enough detail to diagnose or correct the problem. [#95906](https://github.com/openclaw/openclaw/pull/95906) Thanks @vincentkoc, @zengwen-dt.
 - When the edit tool cannot match `oldText`, its error now points to likely nearby lines and explains common indentation, escaping, and whitespace differences, reducing blind retries. [#97038](https://github.com/openclaw/openclaw/pull/97038) Thanks @aocogoal-gethub, @vincentkoc, @zoowh.
 - Legacy task upgrades now restore persisted tasks automatically, preventing linked TaskFlows from falsely reporting them missing or requiring manual SQLite recovery. [#103946](https://github.com/openclaw/openclaw/pull/103946) Thanks @bek91, @theo674.
-- Stopping a chat through `chat.abort` can now find and terminate its matching embedded run instead of reporting failure while the underlying tool process continues. [#101222](https://github.com/openclaw/openclaw/pull/101222) Thanks @zoowh.
-- Broken child-process output, timeouts, and aborts during agent shell commands are now contained instead of causing rare Gateway crashes. [#101370](https://github.com/openclaw/openclaw/pull/101370) Thanks @wings1029.
 - Terminal task lists now shorten emoji-heavy summaries without leaving broken replacement characters in the row. [#101600](https://github.com/openclaw/openclaw/pull/101600) Thanks @maweibin.
 - Progress summaries for inline scripts and generated files no longer present heredoc content as extra shell commands that ran. [#99379](https://github.com/openclaw/openclaw/pull/99379) Thanks @zengwen-dt.
 - Failed exact-match edits now show readable current-file context even when truncation falls beside an emoji or other non-BMP character. [#99527](https://github.com/openclaw/openclaw/pull/99527) Thanks @mikasa0818.
-- Repeated failed or cancelled agent directory listings now release their cancellation listeners, avoiding listener buildup over time. [#101588](https://github.com/openclaw/openclaw/pull/101588) Thanks @lzw112.
-- Codex session tools now honor their requested seconds-based timeout and return their own useful timeout status instead of ending early. [#100722](https://github.com/openclaw/openclaw/pull/100722) Thanks @carterstebbins23-spec, @cxbasdev.
-- Cancelled ACP background tasks now appear as cancelled in task lists, summaries, and parent-run updates rather than being reported as successful. [#101245](https://github.com/openclaw/openclaw/pull/101245) Thanks @masatohoshino.
 
-#### Search, links, and web content
+#### Search and web
+
+##### Web fetch and link understanding
 
 - `web_fetch` now reaches provider fallback much faster for shell-style pages with no locally extractable content, cutting the measured fresh-process delay from several seconds to about one. [#98559](https://github.com/openclaw/openclaw/pull/98559) Thanks @vincentkoc.
 - `web_fetch` now handles malformed or adversarial HTML more predictably, reducing excessive processing and keeping hidden script-like text out of fallback output. [#102033](https://github.com/openclaw/openclaw/pull/102033) Thanks @pgondhi987.
 - Agent-side `web_search` now sees the configured provider in the active runtime, so Gateway and channel sessions can keep using providers such as Brave without a restart. [#88684](https://github.com/openclaw/openclaw/pull/88684) Thanks @alexzhu0, @vincentkoc.
-- When an installed `fd` or `rg` binary is unusable, agent search can now install a working copy and recover instead of failing repeatedly. [#96361](https://github.com/openclaw/openclaw/pull/96361) Thanks @miorbnli.
 - Link understanding now keeps page fetching available for the slowest configured fallback and applies `tools.links.timeoutSeconds` consistently regardless of model order. [#100731](https://github.com/openclaw/openclaw/pull/100731) Thanks @aniruddhaadak80, @cxbasdev.
-- A failed `find` search now returns one contained tool error and stops its `fd` process instead of risking an agent crash or orphaned search. [#101158](https://github.com/openclaw/openclaw/pull/101158) Thanks @cxbasdev.
-- Tool Search now fails the affected call cleanly and terminates its unusable child when the diagnostic stream breaks, rather than risking a stranded request or Gateway crash. [#101295](https://github.com/openclaw/openclaw/pull/101295) Thanks @cxbasdev.
-- QMD command pipe failures now report a clean memory-operation error instead of taking down the memory host. [#101402](https://github.com/openclaw/openclaw/pull/101402) Thanks @wings1029.
-- Markdown beginning with text such as `---not` or `----` now remains ordinary content instead of being mistaken for frontmatter and stripped. [#101795](https://github.com/openclaw/openclaw/pull/101795) Thanks @nianjiuzst.
-- The agent `find` tool now reports an interrupted or failed directory search as an error instead of returning a partial match list as complete. [#99446](https://github.com/openclaw/openclaw/pull/99446) Thanks @zhangguiping-xydt.
 - Recovered `web_fetch` spill files now keep emoji intact and report the actual safely written length when a long page exceeds the inline limit. [#101312](https://github.com/openclaw/openclaw/pull/101312) Thanks @alix-007.
-- Long IDs and scopes no longer push `openclaw commitments` columns out of alignment, keeping the table readable at a glance. [#95923](https://github.com/openclaw/openclaw/pull/95923) Thanks @parveshsaini.
 - `web_fetch` now preserves emoji, mathematical symbols, extended Unicode, and intentionally escaped numeric entity text more faithfully. [#96268](https://github.com/openclaw/openclaw/pull/96268) Thanks @ly-wang19.
 - DuckDuckGo results now preserve intentional entity notation such as `&lt;` and `&#39;` instead of silently changing titles, snippets, or URLs. [#96348](https://github.com/openclaw/openclaw/pull/96348) Thanks @ly-wang19, @vincentkoc.
 - Canvas embed replies now retain their visible message text when a self-closing embed shortcode is followed by an extra closing marker. [#96449](https://github.com/openclaw/openclaw/pull/96449) Thanks @ly-wang19.
 - Bracketed labels in Markdown citations no longer make link understanding fetch display-only URLs that the user did not intend to retrieve. [#96476](https://github.com/openclaw/openclaw/pull/96476) Thanks @ly-wang19, @vincentkoc.
 - DuckDuckGo search pages containing malformed numeric HTML entities no longer crash parsing or inject broken Unicode into titles, URLs, and snippets, while valid emoji entities remain supported. [#96583](https://github.com/openclaw/openclaw/pull/96583) Thanks @llagy007, @weeli-009.
+
+##### Local and tool search
+
+- When an installed `fd` or `rg` binary is unusable, agent search can now install a working copy and recover instead of failing repeatedly. [#96361](https://github.com/openclaw/openclaw/pull/96361) Thanks @miorbnli.
+- A failed `find` search now returns one contained tool error and stops its `fd` process instead of risking an agent crash or orphaned search. [#101158](https://github.com/openclaw/openclaw/pull/101158) Thanks @cxbasdev.
+- Tool Search now fails the affected call cleanly and terminates its unusable child when the diagnostic stream breaks, rather than risking a stranded request or Gateway crash. [#101295](https://github.com/openclaw/openclaw/pull/101295) Thanks @cxbasdev.
+- QMD command pipe failures now report a clean memory-operation error instead of taking down the memory host. [#101402](https://github.com/openclaw/openclaw/pull/101402) Thanks @wings1029.
+- The agent `find` tool now reports an interrupted or failed directory search as an error instead of returning a partial match list as complete. [#99446](https://github.com/openclaw/openclaw/pull/99446) Thanks @zhangguiping-xydt.
+
+#### SDK, MCP, and tools
+
+Agents can read scanned PDFs with vision-capable models, work in isolated coding checkouts, and handle files, media, browser results, and execution failures with more usable output. [Browser control](https://docs.openclaw.ai/tools/browser-control) preserves pairing and download state more reliably, while parallel workspace operations are less likely to collide with one another or the user's current files.
+
+##### MCP, ACP, and tool protocols
+
 - Shortened tool descriptions in catalogs and `/tools verbose` no longer split emoji or other Unicode characters into garbled replacement symbols. [#98644](https://github.com/openclaw/openclaw/pull/98644) Thanks @zengwen-dt.
-
-#### SDK, MCP, and tool automation
-
-- Transient stdout or stderr read errors from `gog gmail watch serve` no longer crash OpenClaw while Gmail watch mode is running. [#100519](https://github.com/openclaw/openclaw/pull/100519) Thanks @cxbasdev.
 - `openclaw mcp serve` and bare `openclaw acp` now begin with clean machine-protocol output, preventing startup warnings from corrupting JSON-RPC for MCP and ACP clients. [#89997](https://github.com/openclaw/openclaw/pull/89997) Thanks @kenners22, @vincentkoc.
 - When a bundled MCP server stops mid-session, users now get a prompt server-specific disconnect message and can clear the dead session by refreshing the catalog. [#98738](https://github.com/openclaw/openclaw/pull/98738) Thanks @masatohoshino, @vincentkoc.
-- Natural-language corrections can now become the right pending Skill Workshop improvement after successful or failed turns without repeating old feedback, duplicating `/learn`, or replacing proposal context. [#100576](https://github.com/openclaw/openclaw/pull/100576) Thanks @vincentkoc.
 - Malformed draft-2020-12 tool schemas from an MCP server now produce an actionable setup error that identifies the external schema and retains the underlying failure. [#89619](https://github.com/openclaw/openclaw/pull/89619) Thanks @vincentkoc.
 - Prompt templates now preserve intentionally blank quoted arguments so later positional placeholders receive the correct values. [#96405](https://github.com/openclaw/openclaw/pull/96405) Thanks @lin-hongkuan.
 - OpenTelemetry latency dashboards now provide useful duration and context-size distributions for agent and harness work lasting well beyond 10 seconds, including multi-minute runs, without collector-side bucket customization. [#96592](https://github.com/openclaw/openclaw/pull/96592) Thanks @hcnode, @vincentkoc, @zhiling-chen-20230331.
 - MCP tools now receive optional null values correctly instead of having them changed into empty strings that can break valid calls. [#97212](https://github.com/openclaw/openclaw/pull/97212) Thanks @vincentkoc, @zw-xysk.
 - Successful Codex thread-goal reads now appear as successful in model context, transcripts, and diagnostics instead of being recorded as failed tool calls. [#98659](https://github.com/openclaw/openclaw/pull/98659) Thanks @yetval.
-- Skill Workshop approval prompts now include the proposal details needed to apply, reject, or quarantine a change, while unanswered requests stay safely pending and return a clear timeout message. [#100498](https://github.com/openclaw/openclaw/pull/100498)
-- When users say things like "next time" or "remember to," OpenClaw can now offer one reviewable Skill Workshop proposal without requiring autonomous capture or repeatedly prompting after dismissal. [#100692](https://github.com/openclaw/openclaw/pull/100692)
 - Message-tool calls with an invalid Gateway timeout now return an immediate validation error instead of appearing to stall. [#98652](https://github.com/openclaw/openclaw/pull/98652)
 - Invalid plugin approval requests now show the actual validation problem instead of misleading users with a Gateway-unavailable error. [#100337](https://github.com/openclaw/openclaw/pull/100337) Thanks @tzy-17.
-- Skill Workshop now explains when tool policy is hiding `skill_workshop` and shows the exact `allow` or `alsoAllow` change needed to enable manual review calls. [#100654](https://github.com/openclaw/openclaw/pull/100654) Thanks @wangwllu.
 - Oversized ClawHub packages, skills, ClawPacks, resolver archives, and GitHub-source downloads now stop with a clear size-limit error before they can exhaust Gateway memory. [#101176](https://github.com/openclaw/openclaw/pull/101176)
 - Automatic session rotation is less likely to strand the next conversation when a context-engine plugin immediately reads or checkpoints its transcript. [#101192](https://github.com/openclaw/openclaw/pull/101192)
 - Internal hook authors now receive a warning when a likely event-name typo would otherwise leave a hook silently inactive. [#99456](https://github.com/openclaw/openclaw/pull/99456) Thanks @masatohoshino.
 - Tool-using Anthropic-family requests can now fail over to OpenAI without a 400 error caused by an incompatible tool format. [#101443](https://github.com/openclaw/openclaw/pull/101443) Thanks @chrisbaker2000.
+
+##### Skill Workshop
+
+- Natural-language corrections can now become the right pending Skill Workshop improvement after successful or failed turns without repeating old feedback, duplicating `/learn`, or replacing proposal context. [#100576](https://github.com/openclaw/openclaw/pull/100576) Thanks @vincentkoc.
+- Skill Workshop approval prompts now include the proposal details needed to apply, reject, or quarantine a change, while unanswered requests stay safely pending and return a clear timeout message. [#100498](https://github.com/openclaw/openclaw/pull/100498)
+- When users say things like "next time" or "remember to," OpenClaw can now offer one reviewable Skill Workshop proposal without requiring autonomous capture or repeatedly prompting after dismissal. [#100692](https://github.com/openclaw/openclaw/pull/100692)
+- Skill Workshop now explains when tool policy is hiding `skill_workshop` and shows the exact `allow` or `alsoAllow` change needed to enable manual review calls. [#100654](https://github.com/openclaw/openclaw/pull/100654) Thanks @wangwllu.
+
+#### Documentation
+
+Official operating guidance now matches shipped commands, configuration, setup, status output, placeholders, and recovery behavior more closely. Generated documentation maps also preserve literal command parameters, reducing the chance that a reader follows an example whose identifiers were stripped or whose workflow no longer matches the product.
+
+##### Setup and operating guides
+
+- The CLI config documentation now clearly distinguishes normal JSON5 value parsing from `--strict-json`, which accepts standard JSON and rejects JSON5-only syntax. [#80981](https://github.com/openclaw/openclaw/pull/80981) Thanks @addu2612.
+- The macOS guide now gives users a clearer path from downloading the app through first-run setup, Gateway selection, and focused troubleshooting. [#97120](https://github.com/openclaw/openclaw/pull/97120) Thanks @romneyda.
+- OpenClaw's public docs now use shorter, task-first instructions with corrected commands, configuration names, defaults, provider behavior, and troubleshooting steps. [#100142](https://github.com/openclaw/openclaw/pull/100142)
+- Logbook users now have end-to-end guidance for setup, model routing, privacy choices, and troubleshooting missing capture or timeline results. [b6a7898](https://github.com/openclaw/openclaw/commit/b6a7898c7c7f43e4b984c6c62aaa685f6a206f33)
+- Safe-restart guidance now states that the default wait can end after `gateway.reload.deferralTimeoutMs` and explains how to configure an indefinite wait. [#95397](https://github.com/openclaw/openclaw/pull/95397) Thanks @zhangqueping.
+- The agent configuration guide now identifies the current models selected by the built-in `opus` and `gpt` aliases. [#96375](https://github.com/openclaw/openclaw/pull/96375) Thanks @niks999.
+- Docker operators now have an official path to install, authenticate, verify, and persist the `claude-cli` backend across container image upgrades. [#96380](https://github.com/openclaw/openclaw/pull/96380) Thanks @fffrank, @zaidazmi.
+- OpenClaw's Anthropic and Claude CLI documentation now reflects the current subscription-limit treatment for `claude -p` and related usage, with official references for billing and deployment decisions. [#96848](https://github.com/openclaw/openclaw/pull/96848) Thanks @fightingsleep, @tirion-p.
+- The public onboarding docs now cover eleven existing non-interactive flags for token auth, Cloudflare AI Gateway, daemon, UI, hooks, and token output. [#97753](https://github.com/openclaw/openclaw/pull/97753) Thanks @vincentkoc, @wm0018.
+- OpenClaw's mobile documentation now identifies the iOS and Android apps as official releases and provides consistent App Store, Google Play, and hosted iOS push-relay guidance. [#98843](https://github.com/openclaw/openclaw/pull/98843) Thanks @joshavant.
+- Official OpenClaw docs now help operators and plugin authors handle credentials safely, preflight cron jobs that use local-provider fallbacks, apply Talk timing defaults, configure MiniMax providers and models, and copy a complete minimal plugin package with the required dependency metadata. [#100182](https://github.com/openclaw/openclaw/pull/100182)
+- Android node operators now have an end-to-end guide for securely mirroring and controlling a remote device from macOS, including authorization, troubleshooting, and clean disconnection. [#100398](https://github.com/openclaw/openclaw/pull/100398)
+- The onboarding reference now explains that bare `openclaw` starts onboarding for a missing config, opens Crestodian for an invalid config, and launches the agent TUI for a valid config. [d9dbee7](https://github.com/openclaw/openclaw/commit/d9dbee7676fb4a7fcd4617e9fe3bd26f7adf4452)
+- ACP troubleshooting now names `PermissionPromptUnavailableError`, helping operators recognize a non-interactive permission failure and find the right configuration fix. [b3a74cc](https://github.com/openclaw/openclaw/commit/b3a74ccc3aef9d670994baee3b0039e4783d82a2)
+- The onboarding reference now gives accurate signal-cli, Gateway runtime, and channel allowlist guidance, including Windows limits and the IDs expected for direct messages. [aaaa803](https://github.com/openclaw/openclaw/commit/aaaa8030bf4f139d43717731fd3402e06b248d48)
+
+##### Channels and messaging guidance
+
+- Plugin and channel-status documentation now clarifies that a `MessageReceipt` or durable `sent` result proves platform acceptance, not display or read confirmation on a recipient's device. [#90063](https://github.com/openclaw/openclaw/pull/90063) Thanks @pdurlej.
+- The Discord setup guide now points users to the correct Developer settings section for enabling Developer Mode and copying required IDs. [#97336](https://github.com/openclaw/openclaw/pull/97336) Thanks @naseemm123.
+- The Discord setup guide now separates General Permissions from Text Permissions so bot access choices are easier to read correctly. [#97584](https://github.com/openclaw/openclaw/pull/97584) Thanks @slammajamma28.
+- Telegram's error-reply documentation now lists the supported policies and correct cooldown defaults, avoiding invalid `errorPolicy: "reply"` configurations. [#97635](https://github.com/openclaw/openclaw/pull/97635) Thanks @wm0018.
+- The Feishu documentation no longer suggests the rejected `dmPolicy: disabled` setting, reducing configuration failures copied from the guide. [#97640](https://github.com/openclaw/openclaw/pull/97640) Thanks @wm0018.
+- Matrix documentation now explains progress streaming, room-specific mention matching, per-room enablement, and bot-loop safeguards that operators can configure. [#98318](https://github.com/openclaw/openclaw/pull/98318) Thanks @vincentkoc, @wm0018.
+- Telegram channel documentation now correctly states that an unset streaming mode uses partial previews and explains how to choose final-only replies. [#98453](https://github.com/openclaw/openclaw/pull/98453) Thanks @solodmd.
+- The bundled `imsg` skill now guides agents toward the correct direct or group conversation, stable targets, least-privilege actions, and confirmation before visible or sensitive changes. [#100105](https://github.com/openclaw/openclaw/pull/100105) Thanks @omarshahine.
+
+##### Plugin and generated reference guidance
+
+- Plugin developers now receive clearer SDK deprecations and migration guidance for session-store and transcript-file helpers ahead of the planned SQLite transition. [#97494](https://github.com/openclaw/openclaw/pull/97494) Thanks @jalehman.
+- Plugin authors now get clearer packaging guidance for runtime dependencies, built artifacts, `npm-pack:` validation, and trusted official-plugin checks before publication. [#99962](https://github.com/openclaw/openclaw/pull/99962) Thanks @hxy91819.
+- Official plugin package examples now agree on the required `typebox` runtime and `openclaw` peer dependencies, reducing copy-and-paste setup failures. [#99973](https://github.com/openclaw/openclaw/pull/99973)
+- The Codex and WhatsApp plugin references now identify their tools contract, making supported plugin capabilities easier to match with OpenClaw workflows. [46ad3f9](https://github.com/openclaw/openclaw/commit/46ad3f9ae94cec1bfa94b14974a3d32b46921080) Thanks @vincentkoc.
+- Generated documentation navigation now preserves complete headings with command placeholders such as `&lt;id&gt;` and `&lt;deviceId&gt;` instead of hiding required arguments. [#99099](https://github.com/openclaw/openclaw/pull/99099) Thanks @hxy91819.
 
 ### Additional contributions
 

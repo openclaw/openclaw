@@ -8974,38 +8974,53 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: OpenClaw v2026.7.1 Release Notes (2026-07-13)
   - H2: Highlights
-  - H3: Control UI rework: chat, workspaces, usage, and everyday controls
-  - H3: Onboarding overhaul: guided setup and safer recovery
-  - H3: Native app chat continuity
-  - H3: Models and providers: GPT-5.6, Hy3, Meta, and more
+  - H3: Control UI overhaul: chat, sessions, workspaces, and usage
+  - H3: Easier setup from install to first chat
+  - H3: Official apps
+  - H4: Shared app improvements
+  - H4: iOS, iPadOS, and Apple Watch
+  - H4: Android
+  - H4: macOS
+  - H3: Models and providers
   - H4: GPT-5.6 and Codex
   - H4: Tencent Hy3
   - H4: Meta Model API and Muse Spark 1.1
   - H4: Claude models
   - H4: Other provider routes
-  - H3: Gateway crash-loop recovery
-  - H3: Scheduled work that wakes only when needed
-  - H3: Remote browser pairing and downloads
-  - H3: Workspace terminals across web and mobile
-  - H3: Session organization and goal continuity
-  - H3: Native polls in Apple Messages
-  - H2: Channels and Messaging
-  - H3: Additional channel and messaging improvements
-  - H2: Providers and Models
-  - H3: Additional provider and model reliability
-  - H2: Memory, Sessions, and State
-  - H3: Memory and session reliability
-  - H2: Gateway, Security, and Trust
-  - H3: Additional Gateway and agent reliability
-  - H3: Additional security and trust improvements
-  - H2: Clients and Interfaces
-  - H3: Additional client and interface improvements
-  - H2: Plugins and Packaging
-  - H3: Plugins, skills, and distribution
-  - H2: Docs and Admin Tools
-  - H3: CLI, installation, and admin workflows
-  - H3: Documentation and operating guidance
-  - H3: Additional tools and automation
+  - H3: Codex and connected coding agents
+  - H3: Telegram
+  - H3: Signal
+  - H3: Slack
+  - H3: Discord
+  - H3: WhatsApp
+  - H3: Apple Messages
+  - H3: Crash loops now stop for repair
+  - H3: Scheduled work, remote browser control, and workspace terminals
+  - H4: Scheduled work that wakes only when needed
+  - H4: Remote browser pairing and downloads
+  - H4: Workspace terminals in web and mobile
+  - H2: More channel improvements
+  - H3: More fixes across messaging channels
+  - H2: More model and provider improvements
+  - H3: Sign-in, model choice, media, and reliability
+  - H2: Memory and conversations
+  - H3: Recall, long chats, and session continuity
+  - H2: Agents, background work, and connections
+  - H3: Keeping work moving and replies delivered
+  - H2: Accounts, devices, and private data
+  - H3: Credentials, permissions, pairing, and file safeguards
+  - H2: Official app details
+  - H3: Shared app changes
+  - H3: More iOS, iPadOS, and Apple Watch changes
+  - H3: More Android changes
+  - H3: More macOS changes
+  - H3: Terminal UI and other clients
+  - H2: Skills, plugins, and installs
+  - H3: Skills, connected apps, packages, and repairs
+  - H2: Setup, maintenance, and tools
+  - H3: Command-line setup, updates, and administration
+  - H3: Documentation and operating guides
+  - H3: Browser, schedules, files, and coding tools
 
 ## releases/index.md
 
