@@ -6,12 +6,7 @@ import {
   readPluginPackageVersion,
   resolveAmbientNodeProxyAgent,
 } from "openclaw/plugin-sdk/extension-shared";
-import {
-  FEISHU_HTTP_TIMEOUT_ENV_VAR,
-  FEISHU_HTTP_TIMEOUT_MAX_MS,
-  FEISHU_HTTP_TIMEOUT_MS,
-  resolveConfiguredHttpTimeoutMs,
-} from "./client-timeout.js";
+import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { addFeishuTokenCacheClearer } from "./comment-shared.js";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
@@ -41,7 +36,7 @@ type FeishuClientSdk = Pick<
   | "WSClient"
 >;
 
-const feishuClientSdk: FeishuClientSdk = {
+const defaultFeishuClientSdk: FeishuClientSdk = {
   AppType: Lark.AppType,
   Client: Lark.Client,
   CTenantAccessToken: Lark.CTenantAccessToken,
@@ -51,6 +46,8 @@ const feishuClientSdk: FeishuClientSdk = {
   LoggerLevel: Lark.LoggerLevel,
   WSClient: Lark.WSClient,
 };
+
+let feishuClientSdk: FeishuClientSdk = defaultFeishuClientSdk;
 
 type RequestInterceptorApi = {
   use: (fn: (req: unknown) => unknown) => unknown;

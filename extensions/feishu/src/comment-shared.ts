@@ -93,11 +93,9 @@ function createFeishuApiError(
   return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
 }
 
-// Feishu message-API error codes that signal a transient rate limit; safe to retry with backoff.
-// 230020: per-chat rate limit (ext=chat rate limit) — confirmed by real concurrent load test.
-// 11232: tenant-level "create message service trigger rate limit" (100/min, 5/sec per app/bot).
-// Distinct from FEISHU_BACKOFF_CODES in typing.ts, which covers the reaction API (99991400+).
-const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020, 11232]);
+// Feishu token-invalid error codes that signal the cached tenant_access_token
+// has expired or been revoked. The SDK fetches a fresh token on retry after
+// cache invalidation.
 const FEISHU_TOKEN_INVALID_CODES = new Set([99991663, 99991664]);
 
 /** Cache-owning modules register their clearers at import time so

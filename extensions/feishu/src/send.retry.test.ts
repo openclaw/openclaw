@@ -6,7 +6,6 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { requestFeishuApi } from "./comment-shared.js";
 import {
   getFeishuSendRateLimitCode,
   getFeishuSendRateLimitCodeFromResponse,

@@ -313,7 +313,7 @@ export class FeishuStreamingSession {
 
     // Create card entity (with single token-invalid retry per #97287)
     let createData: { code: number; msg: string; data?: { card_id: string } };
-    let retriedCard = false;
+    let cardCreateRetries = 0;
     for (;;) {
       const { response: createRes, release: releaseCreate } = await fetchWithSsrFGuard({
         url: `${apiBase}/cardkit/v1/cards`,
@@ -343,21 +343,23 @@ export class FeishuStreamingSession {
       } finally {
         await releaseCreate();
       }
-      if (cd.code === 0 && cd.data?.card_id) {
-        cardId = cd.data.card_id;
+      if (createData.code === 0 && createData.data?.card_id) {
         break;
       }
       // Token-invalid → clear cache and retry once (#97287)
-      if ((cd.code === 99991663 || cd.code === 99991664) && attempts === 0) {
-        attempts = 1;
-        void attempts;
+      if (
+        (createData.code === 99991663 || createData.code === 99991664) &&
+        cardCreateRetries === 0
+      ) {
+        cardCreateRetries = 1;
+        void cardCreateRetries;
         clearFeishuTokenCache();
         continue;
       }
-      throw new Error(`Create card failed: ${cd.msg}`);
+      throw new Error(`Create card failed: ${createData.msg}`);
     }
-    const cardIdOut = cardId;
-    const cardContent = JSON.stringify({ type: "card", data: { card_id: cardIdOut } });
+    const cardId = createData.data.card_id;
+    const cardContent = JSON.stringify({ type: "card", data: { card_id: cardId } });
 
     // Prefer message.reply when we have a reply target — reply_in_thread
     // reliably routes streaming cards into Feishu topics, whereas
