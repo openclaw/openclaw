@@ -120,6 +120,7 @@ Skills own workflows; root owns hard policy and routing.
 - Agent tests default remote through Crabbox, including focused tests. Trusted maintainer code defaults to Blacksmith Testbox. Contributor/fork code remains untrusted unless a maintainer explicitly approves credentialed execution after review; an explicit owner/maintainer instruction to land named, reviewed PRs is that approval, so do not ask twice. Otherwise use secretless fork CI or sanitized direct AWS Crabbox, never a credential-hydrated Testbox. Sanitized AWS must launch an installed trusted Crabbox binary from a clean trusted `main` checkout and fetch only the remote PR via `--fresh-pr`; never execute a wrapper, config, or command from the untrusted local checkout. Before warmup, unset `CRABBOX_AWS_INSTANCE_PROFILE` and all `CRABBOX_TAILSCALE*` overrides; fail closed unless resolved `aws.instanceProfile` is empty. Force `--network public --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to report public networking with no Tailscale state before any script. Upload trusted `scripts/crabbox-untrusted-bootstrap.sh` from clean `main` alongside `--fresh-pr`; it proves the remote IMDSv2 IAM credentials endpoint returns 404, verifies the reviewed head SHA, unsets `NODE_OPTIONS`, installs pinned Node/pnpm, verifies the package-manager pin, isolates `HOME`, installs dependencies, then runs the requested test. Use a newly warmed lease bound to one reviewed head SHA, set `CRABBOX_ENV_ALLOW=CI`, and use `--no-hydrate`. Never reuse a trusted/previously hydrated lease or carry an untrusted lease across head revisions; stop and rewarm when the SHA changes. No repo `OPENCLAW_*` allowlist, existing auth profile, instance role, tailnet/LAN access, moving PR head, or ambient Node preload may reach untrusted execution. When a code task is likely to need tests, classify source trust, pre-warm the safe backend immediately, keep working while it hydrates, reuse trusted leases or same-SHA untrusted leases, then stop before handoff.
 - Test commands (run inside the selected remote box by default): `pnpm test <path-or-filter> [vitest args...]`, `pnpm test:changed`, `pnpm test:serial`, `pnpm test:coverage`; never raw `vitest`.
 - If raw Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch mode and will not exit on its own.
+- Vitest repetition: no `--repeat`; use a bounded shell loop around the focused repo test command.
 - Local agent test execution is opt-in: only when the user explicitly requests local proof or Testbox is unavailable and the fallback is reported. In a Codex worktree or linked/sparse checkout, the narrow local fallback is `node scripts/run-vitest.mjs <path-or-filter>`; never direct local `pnpm test*`.
 - Checks/lint in a normal source checkout: `pnpm check:changed` delegates to Crabbox/Testbox; lanes: `pnpm changed:lanes --json`; staged/path-scoped: `pnpm check:changed --staged` or `pnpm check:changed -- <files...>`; full `pnpm check`/`pnpm lint` only when required.
 - Checks in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm check*`; use `node scripts/crabbox-wrapper.mjs run ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed` so pnpm runs inside the selected remote box, not locally.
@@ -144,9 +145,12 @@ Skills own workflows; root owns hard policy and routing.
 - Crabbox request means real scenario proof: install/update/call/repro user path; not just copy tests and run them remotely.
 - Visual proof: use Crabbox, set up like a user, then screenshot-verify. No harness/bypass/shortcut unless explicitly asked.
 - Local agent work is limited to lightweight non-test checks such as `git diff --check`, targeted formatting, and cheap static probes. Tests and computationally intensive work default to the selected remote box.
-- In Codex or linked worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
+- Agent direct local `pnpm` can reconcile dependencies instead of running the requested script. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated work.
+- Direct Blacksmith lease: use `blacksmith testbox run`; Crabbox wrapper reuse needs a wrapper-created lease.
+- Dirty-sync generator proof: compare hashes before/after; `git diff` includes the synced patch.
 - Crabbox wrapper `stop` has no `--timing-json`; use `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <id>`.
 - Repo-native PR worktree may omit `node_modules`; prove remotely, then use `git commit --no-verify`, not `scripts/committer`.
+- Release-branch formatting: Testbox or existing binary; never local `pnpm exec` reconciliation.
 - Parallel agents share the checkout; never switch its branch while sibling work runs.
 - Testbox status: `blacksmith testbox status --id <tbx_id>`; no `--json` flag.
 - QA CLI `--output-dir` must be repo-relative.
@@ -170,14 +174,19 @@ Skills own workflows; root owns hard policy and routing.
 - PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
 - `gh pr view` takes the branch positionally; no `--head` flag.
 - zsh: quote `gh api` endpoints containing `?` or brackets; otherwise glob expansion corrupts the invocation.
+- Blacksmith Testbox status/stop: `--id <tbx_id>`; no status JSON flag.
+- Crabbox final timing JSON = proof complete; if portal sync hangs after it, interrupt wrapper only.
+- Sparse-sync temp checkout may claim kept Testbox; repo-path reuse needs `--reclaim`.
 - GitHub Actions: resolve workflow files from `.github/workflows` or API; never infer filenames from display names.
 - zsh: quote command globs; unmatched patterns abort before the tool runs.
 - zsh: don't use `path` as a variable; it rewrites `$PATH`.
 - `scripts/pr` artifacts: preserve template enum values; validate before prepare.
 - `scripts/pr` subcommands require a PR number; no subcommand `--help` placeholder.
 - `scripts/pr` review: checkout main baseline, then PR, before artifact validation.
+- Review artifacts: validate from PR-head mode; moving main invalidates main-baseline guard.
+- `scripts/pr` prepare/merge: `main` PRs only; non-main uses reviewed release-branch flow.
 - PR head changed: rerun `scripts/pr review-init`; checkout alone leaves stale guard SHA.
-- `rg`: options before `--`; use `--` before patterns starting with `-`.
+- `rg`: options/globs before `--`; `--` immediately before a leading-dash pattern only.
 - `gh --jq` is not standalone `jq`; pipe JSON to `jq` for variables or `--arg`.
 - `gh api --paginate '<endpoint>' | jq -s ...`; gh `--slurp` may emit nothing and forbids `--jq`/`--template`.
 - Main-bound workflow dispatch: resolve server `main` SHA immediately before dispatch; retry if identity fails after `main` advances.

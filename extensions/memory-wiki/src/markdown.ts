@@ -445,7 +445,7 @@ function maskMarkdownCode(markdown: string): string {
   return masked.join("");
 }
 
-export function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
+function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
   const withoutRelatedBlock = markdown.replace(RELATED_BLOCK_PATTERN, "");
   const searchable = maskMarkdownCode(withoutRelatedBlock);
   const links: string[] = [];

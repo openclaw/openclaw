@@ -231,7 +231,7 @@
   cursor: pointer;
 }
 
-.settings-row--toggle:has(input:disabled) {
+.settings-row--toggle:has(wa-switch[disabled]) {
   cursor: not-allowed;
 }
 
@@ -322,56 +322,23 @@ select.settings-select:not([multiple]) {
   cursor: pointer;
 }
 
-.settings-toggle input {
+.settings-control__sr-label {
   position: absolute;
-  opacity: 0;
-  pointer-events: none;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
-.settings-toggle__track {
-  position: relative;
-  width: 38px;
-  height: 22px;
-  background: color-mix(in srgb, var(--bg) 70%, var(--border) 30%);
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  border-radius: var(--radius-full);
-  transition:
-    background var(--duration-normal) var(--ease-out),
-    border-color var(--duration-normal) var(--ease-out);
-  flex-shrink: 0;
-}
-
-.settings-toggle__track::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  background: var(--muted);
-  border-radius: 50%;
-  transition:
-    transform var(--duration-normal) var(--ease-spring),
-    background var(--duration-normal) var(--ease-out);
-}
-
-.settings-toggle input:checked + .settings-toggle__track {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
-.settings-toggle input:checked + .settings-toggle__track::after {
-  transform: translateX(16px);
-  background: #fff;
-}
-
-.settings-toggle input:focus-visible + .settings-toggle__track {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
-}
-
-.settings-toggle input:disabled + .settings-toggle__track {
-  opacity: 0.45;
-  cursor: not-allowed;
+wa-switch.settings-toggle {
+  /* Web Awesome defaults to brand blue; settings controls follow the active scene. */
+  --wa-form-control-activated-color: var(--accent);
+  --wa-color-focus: var(--ring);
+  flex: none;
 }
 
 .settings-segmented {
@@ -383,6 +350,20 @@ select.settings-select:not([multiple]) {
   border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
   border-radius: var(--radius-md);
   padding: 2px;
+}
+
+wa-radio-group.settings-segmented::part(form-control-label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+wa-radio-group.settings-segmented::part(radios) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
 }
 
 .settings-segmented__btn {

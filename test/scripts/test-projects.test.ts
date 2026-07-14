@@ -4530,6 +4530,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
     expect(toolingTargets).toContain("test/scripts/test-group-report.test.ts");
     expect(toolingTargets).toContain("src/scripts/control-ui-i18n-report.test.ts");
+    expect(toolingTargets.some((target) => target.endsWith(".live.test.ts"))).toBe(false);
     expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
     expect(

@@ -1,6 +1,7 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -15,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
   acquireMaintenanceLock,
   classifyActions,
@@ -44,6 +45,7 @@ import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const script = path.join(repoRoot, ".agents/skills/openclaw-live-updater/scripts/update-main.mjs");
 const fixtureOrigins = new Map<string, string>();
+let fixtureTemplate: ReturnType<typeof initializeFixture> | undefined;
 
 function git(cwd: string, ...args: string[]) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -93,8 +95,7 @@ function maintainFixture(
   });
 }
 
-function makeFixture() {
-  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-")));
+function initializeFixture(root: string) {
   const origin = path.join(root, "origin.git");
   const seed = path.join(root, "seed");
   const mirror = path.join(root, "mirror");
@@ -107,12 +108,28 @@ function makeFixture() {
   writeFileSync(path.join(seed, ".gitignore"), "dist/\nnode_modules/\n");
   git(seed, "add", "README.md", ".gitignore");
   git(seed, "commit", "-m", "initial");
-  git(seed, "remote", "add", "origin", origin);
+  git(seed, "remote", "add", "origin", "../origin.git");
   git(seed, "push", "-u", "origin", "main");
   git(root, "--git-dir", origin, "symbolic-ref", "HEAD", "refs/heads/main");
   git(root, "clone", origin, mirror);
   const canonicalOrigin = "https://github.com/openclaw/openclaw.git";
   git(mirror, "remote", "set-url", "origin", canonicalOrigin);
+  return { root, mirror, origin, seed };
+}
+
+function makeFixture() {
+  if (!fixtureTemplate) {
+    throw new Error("fixture template is not initialized");
+  }
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-")));
+  const origin = path.join(root, "origin.git");
+  const seed = path.join(root, "seed");
+  const mirror = path.join(root, "mirror");
+  // Mutable refs and configs must stay isolated; copying one initialized repo
+  // set avoids rebuilding identical Git history for every test.
+  cpSync(fixtureTemplate.origin, origin, { recursive: true });
+  cpSync(fixtureTemplate.seed, seed, { recursive: true });
+  cpSync(fixtureTemplate.mirror, mirror, { recursive: true });
   fixtureOrigins.set(mirror, origin);
   fixtureOrigins.set(realpathSync(mirror), origin);
   return { root, mirror, origin, seed };
@@ -163,6 +180,18 @@ function fakeCommands(mirror: string) {
 }
 
 describe("openclaw live updater", () => {
+  beforeAll(() => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-template-")));
+    fixtureTemplate = initializeFixture(root);
+  });
+
+  afterAll(() => {
+    if (fixtureTemplate) {
+      rmSync(fixtureTemplate.root, { recursive: true, force: true });
+      fixtureTemplate = undefined;
+    }
+  });
+
   test("audits only error and warning logs emitted after Gateway restart", () => {
     const output = [
       { type: "meta", file: "/tmp/openclaw.log" },

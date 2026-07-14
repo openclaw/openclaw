@@ -1,11 +1,4 @@
-export {
-  buildClawHubTrustErrorDetails,
-  ClawHubTrustErrorCodes,
-  isClawHubTrustErrorCode,
-  readClawHubTrustErrorDetails,
-  type ClawHubTrustErrorCode,
-  type ClawHubTrustErrorDetails,
-} from "./clawhub-trust-error-details.js";
+export * from "./clawhub-trust-error-details.js";
 export { validateApprovalGetResult } from "./approval-result-validators.js";
 export { validateApprovalResolveResult } from "./approval-result-validators.js";
 import type { ValidationError } from "./validation-errors.js";
@@ -289,6 +282,7 @@ import {
   NodePresenceAliveReasonSchema,
   NodePresenceActivityPayloadSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeInvokeResultParamsSchema,
   NodeListParamsSchema,
@@ -601,6 +595,7 @@ export const validateSystemInfoResult = lazyCompile(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile(NodePendingAckParamsSchema);
 export const validateNodeDescribeParams = lazyCompile(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
+export const validateNodeInvokeInputEvent = lazyCompile(NodeInvokeInputEventSchema);
 export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
 export const validateNodeInvokeProgressParams = lazyCompile(NodeInvokeProgressParamsSchema);
 export const validateNodeEventParams = lazyCompile(NodeEventParamsSchema);
@@ -944,6 +939,7 @@ export {
   NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeEventResultSchema,
   NodePresenceAlivePayloadSchema,
@@ -1528,6 +1524,7 @@ export type {
   NodeSkillDescriptor,
   NodeSkillsUpdateParams,
   NodeInvokeParams,
+  NodeInvokeInputEvent,
   NodeInvokeProgressParams,
   NodeInvokeResultParams,
   NodeEventParams,

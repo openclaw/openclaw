@@ -991,6 +991,10 @@
       "types": "./dist/plugin-sdk/inline-image-data-url-runtime.d.ts",
       "default": "./dist/plugin-sdk/inline-image-data-url-runtime.js"
     },
+    "./plugin-sdk/node-host": {
+      "types": "./dist/plugin-sdk/node-host.d.ts",
+      "default": "./dist/plugin-sdk/node-host.js"
+    },
     "./plugin-sdk/response-limit-runtime": {
       "types": "./dist/plugin-sdk/response-limit-runtime.d.ts",
       "default": "./dist/plugin-sdk/response-limit-runtime.js"

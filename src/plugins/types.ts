@@ -152,6 +152,7 @@ import type {
   OpenClawPluginToolFactory,
   OpenClawPluginToolOptions,
 } from "./tool-types.js";
+import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
 import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
 
 type ModelProviderRequestTransportOverrides =
@@ -2305,35 +2306,11 @@ export type OpenClawPluginReloadRegistration = {
   noopPrefixes?: string[];
 };
 
-export type OpenClawPluginNodeHostCommandAvailabilityContext = {
-  /** Node-local configuration used to build this host's Gateway declaration. */
-  config: OpenClawConfig;
-  /** Node-host process environment. */
-  env: NodeJS.ProcessEnv;
-};
-
-export type OpenClawPluginNodeHostCommand = {
-  command: string;
-  cap?: string;
-  dangerous?: boolean;
-  /** Return false to omit this command and capability from the node declaration. */
-  isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
-  agentTool?: {
-    name: string;
-    description: string;
-    parameters?: Record<string, unknown>;
-    /**
-     * Platforms where this node-hosted agent tool should be allowlisted by
-     * default. Omit to require explicit `gateway.nodes.allowCommands`.
-     */
-    defaultPlatforms?: Array<"ios" | "android" | "macos" | "windows" | "linux" | "unknown">;
-    mcp?: {
-      server: string;
-      tool: string;
-    };
-  };
-  handle: (paramsJSON?: string | null) => Promise<string>;
-};
+export type {
+  OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeHostCommandAvailabilityContext,
+  OpenClawPluginNodeHostCommandIo,
+} from "./types.node-host.js";
 
 export type OpenClawPluginNodeInvokeTransportResult =
   | {

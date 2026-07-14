@@ -310,10 +310,6 @@ import {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   NodePresenceAlivePayloadSchema,
-  NodeInvokeParamsSchema,
-  NodeInvokeProgressParamsSchema,
-  NodeInvokeResultParamsSchema,
-  NodeInvokeRequestEventSchema,
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
   NodePairApproveParamsSchema,
@@ -355,6 +351,7 @@ import {
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
 } from "./plugins.js";
+import { NodeInvokeProtocolSchemas } from "./protocol-schemas-node-invoke.js";
 import { NodePresenceProtocolSchemas } from "./protocol-schemas-node-presence.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
@@ -587,9 +584,7 @@ export const ProtocolSchemas = {
   NodeSkillsUpdateParams: NodeSkillsUpdateParamsSchema,
   NodePendingAckParams: NodePendingAckParamsSchema,
   NodeDescribeParams: NodeDescribeParamsSchema,
-  NodeInvokeParams: NodeInvokeParamsSchema,
-  NodeInvokeProgressParams: NodeInvokeProgressParamsSchema,
-  NodeInvokeResultParams: NodeInvokeResultParamsSchema,
+  ...NodeInvokeProtocolSchemas,
   NodeEventParams: NodeEventParamsSchema,
   NodeEventResult: NodeEventResultSchema,
   NodePresenceAlivePayload: NodePresenceAlivePayloadSchema,
@@ -598,7 +593,6 @@ export const ProtocolSchemas = {
   NodePendingDrainResult: NodePendingDrainResultSchema,
   NodePendingEnqueueParams: NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResult: NodePendingEnqueueResultSchema,
-  NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
 
   // Push and secret-resolution payloads used by mobile/control integrations.
   PushTestParams: PushTestParamsSchema,

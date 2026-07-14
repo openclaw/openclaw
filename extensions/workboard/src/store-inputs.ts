@@ -4,6 +4,7 @@ import type {
   WorkboardOrchestrationSettings,
   WorkboardStatus,
   WorkboardWorkspace,
+  WorkboardWorkspaceAccess,
 } from "./types.js";
 
 type WorkboardCardInput = {
@@ -27,6 +28,8 @@ type WorkboardCardInput = {
   idempotencyKey?: unknown;
   skills?: unknown;
   workspace?: unknown;
+  /** Trusted mutation provenance; not accepted from public tool schemas. */
+  workspaceAccess?: unknown;
   maxRuntimeSeconds?: unknown;
   maxRetries?: unknown;
   scheduledAt?: unknown;
@@ -80,6 +83,16 @@ export type WorkboardClaimInput = {
   ownerId?: unknown;
   token?: unknown;
   ttlSeconds?: unknown;
+};
+export type WorkboardClaimOptions = {
+  /** Trusted dispatcher guard; never accepted from public tool or gateway input. */
+  expectedAuthority?: {
+    agentId?: string;
+    workspace?: WorkboardWorkspace;
+    workspaceAccess?: WorkboardWorkspaceAccess;
+  };
+  /** Trusted legacy-card adoption; applied only while expectedAuthority still matches. */
+  adoptWorkspaceAccess?: WorkboardWorkspaceAccess;
 };
 export type WorkboardHeartbeatInput = {
   token?: unknown;
