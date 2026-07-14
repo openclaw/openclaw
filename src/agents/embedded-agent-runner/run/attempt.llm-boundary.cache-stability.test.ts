@@ -595,4 +595,42 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     // ...and the room context is preserved in both (the strip does not touch it).
     expect(JSON.stringify(hist[0]?.content)).toContain("inbound_event_kind: room_event");
   });
+
+  it("keeps persisted group sender context byte-stable from active to historical replay", () => {
+    const activeGroupTurn = currentUserMsg("The launch is Friday", TS_TURN1);
+    const persistedGroupTurn = {
+      ...storedUserMsg("The launch is Friday", TS_TURN1),
+      __openclaw: {
+        senderId: "alice-id",
+        senderName: "Alice",
+        senderUsername: "alice",
+      },
+    } as AgentMsg;
+    const asCurrent = normalizeMessagesForLlmBoundary([activeGroupTurn], {
+      timezone: TZ,
+      currentUserTranscriptContext: {
+        runtimeMessage: activeGroupTurn,
+        transcriptMessage: persistedGroupTurn,
+      },
+    });
+    const asHistorical = normalizeMessagesForLlmBoundary(
+      [persistedGroupTurn, ASSISTANT_MSG, currentUserMsg("Who said that?", TS_TURN2)],
+      { timezone: TZ },
+    );
+
+    const currentContent = (asCurrent[0] as { content?: unknown } | undefined)?.content;
+    const historicalContent = (asHistorical[0] as { content?: unknown } | undefined)?.content;
+    expect(JSON.stringify(currentContent)).toBe(JSON.stringify(historicalContent));
+    expect(typeof currentContent).toBe("string");
+    expect(currentContent).toContain('"name": "Alice"');
+    expect(
+      normalizeMessagesForLlmBoundary(asCurrent, {
+        timezone: TZ,
+        currentUserTranscriptContext: {
+          runtimeMessage: activeGroupTurn,
+          transcriptMessage: persistedGroupTurn,
+        },
+      }),
+    ).toEqual(asCurrent);
+  });
 });

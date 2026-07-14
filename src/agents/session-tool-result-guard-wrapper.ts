@@ -57,6 +57,11 @@ export function guardSessionManager(
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
+    onUserMessagePreparingForPersistence?: (
+      message: Extract<AgentMessage, { role: "user" }>,
+      recorder: UserTurnTranscriptRecorder | undefined,
+      preparedMessage: PersistedUserTurnMessage | undefined,
+    ) => void;
     onUserMessageBlocked?: (message: Extract<AgentMessage, { role: "user" }>) => void;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
     withCompactionPersistence?: (
@@ -143,6 +148,13 @@ export function guardSessionManager(
       const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
       const runtimeContext = takeRuntimeUserTurnTranscriptContext(message);
       const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
+      if (message.role === "user") {
+        opts?.onUserMessagePreparingForPersistence?.(
+          message,
+          runtimeContext?.recorder,
+          prepared,
+        );
+      }
       const merged = mergePreparedUserTurnMessageForRuntime({
         runtimeMessage: withProvenance,
         ...(prepared ? { preparedMessage: prepared } : {}),

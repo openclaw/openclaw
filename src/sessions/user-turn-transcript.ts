@@ -657,6 +657,7 @@ export function createUserTurnTranscriptRecorder(
   return {
     message,
     resolveMessage: resolveMessageForPersistence,
+    getPersistedMessage: () => runtimePersistedMessage ?? persistedResult?.message,
     markSentToProvider: () => {
       sentToProvider = true;
     },

@@ -7,6 +7,7 @@ import {
   repairSessionFileIfNeeded,
 } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
@@ -82,6 +83,9 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   const preparedUserTurnMessage = attempt.skipPreparedUserTurnMessage
     ? undefined
     : await attempt.userTurnTranscriptRecorder?.resolveMessage();
+  let latestPersistedUserMessage: AgentMessage | undefined;
+  let latestRuntimeUserMessage: AgentMessage | undefined;
+  let latestUserTurnTranscriptRecorder = attempt.userTurnTranscriptRecorder;
   const sessionManager = guardSessionManager(SessionManager.open(attempt.sessionFile), {
     agentId: input.sessionAgentId,
     sessionKey: attempt.sessionKey,
@@ -100,7 +104,17 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     },
     withCompactionPersistence: (append, validateAppend) =>
       input.sessionLockController.withOwnedSessionFileWrite(append, validateAppend),
+    onUserMessagePreparingForPersistence: (message, recorder, preparedMessage) => {
+      latestRuntimeUserMessage = message;
+      latestPersistedUserMessage = undefined;
+      latestUserTurnTranscriptRecorder =
+        recorder ??
+        (preparedMessage === preparedUserTurnMessage
+          ? attempt.userTurnTranscriptRecorder
+          : undefined);
+    },
     onUserMessagePersisted: (message) => {
+      latestPersistedUserMessage = message;
       attempt.onUserMessagePersisted?.(message);
     },
     onUserMessageBlocked: () => {
@@ -164,8 +178,19 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       cwd: input.effectiveCwd,
     });
   });
+  // Bootstrap may repair or migrate transcript rows. Only user writes after
+  // preparation can be the active prompt source at the provider boundary.
+  latestPersistedUserMessage = undefined;
+  latestRuntimeUserMessage = undefined;
 
   return {
+    getLatestUserMessageContext: () => {
+      const transcriptMessage =
+        latestPersistedUserMessage ?? latestUserTurnTranscriptRecorder?.getPersistedMessage?.();
+      return latestRuntimeUserMessage && transcriptMessage
+        ? { runtimeMessage: latestRuntimeUserMessage, transcriptMessage }
+        : undefined;
+    },
     isOpenAIResponsesApi,
     preparedUserTurnMessage,
     sessionManager,

@@ -1,0 +1,147 @@
+import { formatUntrustedJsonBlock } from "../../../auto-reply/reply/untrusted-context.js";
+import type { AgentMessage } from "../../runtime/index.js";
+import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
+
+// Mirrors LEADING_TIMESTAMP_PREFIX_RE in strip-inbound-meta.ts so sender
+// projection never displaces or duplicates a cache-stable timestamp envelope.
+const LEADING_TIMESTAMP_ENVELOPE_RE =
+  /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
+
+export function splitLeadingTimestampEnvelope(text: string): {
+  body: string;
+  envelope: string;
+} {
+  const envelope = text.match(LEADING_TIMESTAMP_ENVELOPE_RE)?.[0] ?? "";
+  return { envelope, body: envelope ? text.slice(envelope.length) : text };
+}
+
+function normalizePersistedSenderValue(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.replaceAll("\u0000", "").trim();
+  return normalized || undefined;
+}
+
+function buildPersistedSenderContext(message: AgentMessage): string | undefined {
+  const openclaw = (message as unknown as Record<string, unknown>)["__openclaw"];
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    return undefined;
+  }
+  const meta = openclaw as Record<string, unknown>;
+  const sender = {
+    id: normalizePersistedSenderValue(meta["senderId"]),
+    name: normalizePersistedSenderValue(meta["senderName"]),
+    username: normalizePersistedSenderValue(meta["senderUsername"]),
+  };
+  if (Object.values(sender).every((value) => value === undefined)) {
+    return undefined;
+  }
+  return formatUntrustedJsonBlock("Conversation info (untrusted metadata):", { sender });
+}
+
+function prependContextToUserMessage(message: AgentMessage, context: string): AgentMessage {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    const { body, envelope } = splitLeadingTimestampEnvelope(content);
+    if (body === context || body.startsWith(`${context}\n\n`)) {
+      return message;
+    }
+    return {
+      ...message,
+      content: `${envelope}${body ? `${context}\n\n${body}` : context}`,
+    } as AgentMessage;
+  }
+  if (!Array.isArray(content)) {
+    return message;
+  }
+
+  const textIndex = content.findIndex((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const textBlock = block as { type?: unknown; text?: unknown };
+    return textBlock.type === "text" && typeof textBlock.text === "string";
+  });
+  if (textIndex === -1) {
+    return {
+      ...message,
+      content: [{ type: "text", text: context }, ...content],
+    } as AgentMessage;
+  }
+  const textBlock = content[textIndex] as { text: string };
+  const { body, envelope } = splitLeadingTimestampEnvelope(textBlock.text);
+  if (body === context || body.startsWith(`${context}\n\n`)) {
+    return message;
+  }
+  const nextContent = content.slice();
+  nextContent[textIndex] = {
+    ...textBlock,
+    text: `${envelope}${body ? `${context}\n\n${body}` : context}`,
+  };
+  return { ...message, content: nextContent } as AgentMessage;
+}
+
+export function projectPersistedSenderContext(
+  messages: AgentMessage[],
+  currentUserTranscriptMessage?: AgentMessage,
+): AgentMessage[] {
+  const activeUserMessageIndex = findActiveUserMessageIndex(messages);
+  let changed = false;
+  const nextMessages = messages.map((message, index) => {
+    if (message.role !== "user") {
+      return message;
+    }
+    // Group/channel persistence is the product boundary that opts into these
+    // existing sender fields. Project every turn, including the active one, so
+    // provider bytes stay stable when that same turn becomes historical.
+    const context = buildPersistedSenderContext(
+      index === activeUserMessageIndex && currentUserTranscriptMessage
+        ? currentUserTranscriptMessage
+        : message,
+    );
+    if (!context) {
+      return message;
+    }
+    const nextMessage = prependContextToUserMessage(message, context);
+    changed ||= nextMessage !== message;
+    return nextMessage;
+  });
+  return changed ? nextMessages : messages;
+}
+
+export function findActiveUserMessageIndex(messages: AgentMessage[]): number {
+  // A prompt turn may be followed by assistant tool-call scaffolding during
+  // retry reconstruction. A normal assistant reply means the latest user turn is
+  // historical, not the active prompt boundary.
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message) {
+      continue;
+    }
+    if (message.role === "user") {
+      return index;
+    }
+    if (message.role === "assistant" && !isToolCallAssistantMessage(message)) {
+      return -1;
+    }
+  }
+  return -1;
+}
+
+function isToolCallAssistantMessage(message: AgentMessage): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return isRunnerToolCallBlockType(type);
+  });
+}
