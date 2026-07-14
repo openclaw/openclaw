@@ -76,6 +76,20 @@ async function runSideEffect(params: {
   }
 }
 
+function runSynchronousSideEffect(params: {
+  context: GatewayRequestContext;
+  approvalKind: "exec" | "plugin";
+  run: () => void;
+}): void {
+  try {
+    params.run();
+  } catch (error) {
+    params.context.logGateway?.error?.(
+      `${params.approvalKind} approvals: unified resolve internal-subscriber failed: ${String(error)}`,
+    );
+  }
+}
+
 export async function publishAppliedApprovalResolution(params: {
   record: OperatorApprovalRecord;
   liveRecord: ExecApprovalRecord<ApprovalRequest>;
@@ -111,6 +125,15 @@ export async function publishAppliedApprovalResolution(params: {
         liveRecord: params.liveRecord,
       }),
   });
+  if (params.record.kind === "exec" || params.record.kind === "plugin") {
+    // Native approval routes are instance-local, so publish the canonical CAS
+    // winner directly instead of reconnecting to the Gateway over WebSocket.
+    runSynchronousSideEffect({
+      context: params.context,
+      approvalKind: params.record.kind,
+      run: () => params.context.approvalEvents?.publishResolved(params.record.kind, event),
+    });
+  }
   if (params.record.kind === "exec" && params.forwarder) {
     await runSideEffect({
       context: params.context,
