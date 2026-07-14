@@ -1274,6 +1274,7 @@ function createInternalDiagnosticMetadata(trusted: boolean): DiagnosticEventMeta
 
 type EmitDiagnosticEventOptions = {
   allowSecurityEvent?: boolean;
+  allowAISafetyEvent?: boolean;
   internal?: boolean;
   privateData?: DiagnosticEventPrivateData;
   trustedTraceContext?: boolean;
@@ -1295,9 +1296,10 @@ function emitDiagnosticEventWithTrust(
     return;
   }
   // AI safety taxonomy events carry operator-facing safety signals; drop them
-  // unless they arrived through a trusted emitter so untrusted plugin code
-  // cannot spoof safety findings at runtime (mirrors the security.event gate).
-  if (!trusted && event.type.startsWith("ai_safety.")) {
+  // unless they arrived through a trusted emitter or the manifest-authorized
+  // plugin path so untrusted plugin code cannot spoof safety findings at
+  // runtime (mirrors the security.event gate).
+  if (!trusted && options.allowAISafetyEvent !== true && event.type.startsWith("ai_safety.")) {
     return;
   }
 
@@ -1421,6 +1423,16 @@ export function emitTrustedDiagnosticEventWithPrivateData(
   privateData?: DiagnosticEventPrivateData,
 ) {
   emitDiagnosticEventWithTrust(event, true, { privateData });
+}
+
+/**
+ * Emits a manifest-authorized AI safety event with untrusted (external plugin)
+ * provenance. Only `emitPluginSafetyEvent` may call this after validating the
+ * plugin's declared `safetyEventTypes`; it is intentionally not exported from
+ * the plugin SDK so plugins cannot bypass manifest authorization.
+ */
+export function emitAuthorizedAISafetyDiagnosticEvent(event: DiagnosticAISafetyEventInput) {
+  emitDiagnosticEventWithTrust(event, false, { allowAISafetyEvent: true });
 }
 
 /** Emits a trusted canonical security event from core-owned enforcement boundaries. */

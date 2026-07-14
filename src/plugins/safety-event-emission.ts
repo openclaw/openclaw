@@ -6,7 +6,7 @@
 // established there and in security-events.ts.
 
 import {
-  emitDiagnosticEvent,
+  emitAuthorizedAISafetyDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   type DiagnosticEvalResultEvent,
   type DiagnosticExternalContentConsumedEvent,
@@ -108,7 +108,10 @@ export function emitPluginSafetyEvent(params: {
   if (trusted) {
     emitTrustedDiagnosticEvent(event);
   } else {
-    emitDiagnosticEvent(event);
+    // Manifest-authorized external plugin: emit with untrusted provenance so
+    // exporters can distinguish it from core-trusted emissions. The generic
+    // untrusted emitDiagnosticEvent() API rejects AI safety events entirely.
+    emitAuthorizedAISafetyDiagnosticEvent(event);
   }
 
   return { ok: true };

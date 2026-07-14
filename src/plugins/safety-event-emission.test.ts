@@ -1,7 +1,7 @@
 // Tests for plugin-emitted AI safety taxonomy events.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  emitDiagnosticEvent,
+  emitAuthorizedAISafetyDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
 } from "../infra/diagnostic-events.js";
@@ -12,12 +12,12 @@ vi.mock("../infra/diagnostic-events.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/diagnostic-events.js")>();
   return {
     ...actual,
-    emitDiagnosticEvent: vi.fn(),
+    emitAuthorizedAISafetyDiagnosticEvent: vi.fn(),
     emitTrustedDiagnosticEvent: vi.fn(),
   };
 });
 
-const emitDiagnosticEventMock = vi.mocked(emitDiagnosticEvent);
+const emitAuthorizedAISafetyDiagnosticEventMock = vi.mocked(emitAuthorizedAISafetyDiagnosticEvent);
 const emitTrustedDiagnosticEventMock = vi.mocked(emitTrustedDiagnosticEvent);
 
 const baseExternalContentEvent: AISafetyEventInput = {
@@ -46,7 +46,7 @@ const baseEvalEvent: AISafetyEventInput = {
 };
 
 beforeEach(() => {
-  emitDiagnosticEventMock.mockClear();
+  emitAuthorizedAISafetyDiagnosticEventMock.mockClear();
   emitTrustedDiagnosticEventMock.mockClear();
 });
 
@@ -60,7 +60,7 @@ describe("emitPluginSafetyEvent — trusted plugin", () => {
     expect(result).toEqual({ ok: true });
     expect(emitTrustedDiagnosticEventMock).toHaveBeenCalledOnce();
     expect(emitTrustedDiagnosticEventMock).toHaveBeenCalledWith(baseExternalContentEvent);
-    expect(emitDiagnosticEventMock).not.toHaveBeenCalled();
+    expect(emitAuthorizedAISafetyDiagnosticEventMock).not.toHaveBeenCalled();
   });
 
   it("trusted plugin can emit without declaredSafetyEventTypes", () => {
@@ -85,7 +85,7 @@ describe("emitPluginSafetyEvent — trusted plugin", () => {
 });
 
 describe("emitPluginSafetyEvent — non-trusted (external) plugin", () => {
-  it("emits via untrusted path when type is declared in manifest", () => {
+  it("emits via authorized untrusted-provenance path when type is declared in manifest", () => {
     const result = emitPluginSafetyEvent({
       pluginId: "third-party-plugin",
       event: baseExternalContentEvent,
@@ -93,8 +93,10 @@ describe("emitPluginSafetyEvent — non-trusted (external) plugin", () => {
       declaredSafetyEventTypes: ["ai_safety.external_content.consumed"],
     });
     expect(result).toEqual({ ok: true });
-    expect(emitDiagnosticEventMock).toHaveBeenCalledOnce();
-    expect(emitDiagnosticEventMock).toHaveBeenCalledWith(baseExternalContentEvent);
+    expect(emitAuthorizedAISafetyDiagnosticEventMock).toHaveBeenCalledOnce();
+    expect(emitAuthorizedAISafetyDiagnosticEventMock).toHaveBeenCalledWith(
+      baseExternalContentEvent,
+    );
     expect(emitTrustedDiagnosticEventMock).not.toHaveBeenCalled();
   });
 
@@ -109,7 +111,7 @@ describe("emitPluginSafetyEvent — non-trusted (external) plugin", () => {
       ok: false,
       reason: expect.stringContaining("ai_safety.external_content.consumed"),
     });
-    expect(emitDiagnosticEventMock).not.toHaveBeenCalled();
+    expect(emitAuthorizedAISafetyDiagnosticEventMock).not.toHaveBeenCalled();
     expect(emitTrustedDiagnosticEventMock).not.toHaveBeenCalled();
   });
 
@@ -121,7 +123,7 @@ describe("emitPluginSafetyEvent — non-trusted (external) plugin", () => {
       declaredSafetyEventTypes: [],
     });
     expect(result.ok).toBe(false);
-    expect(emitDiagnosticEventMock).not.toHaveBeenCalled();
+    expect(emitAuthorizedAISafetyDiagnosticEventMock).not.toHaveBeenCalled();
   });
 
   it("rejects when declaredSafetyEventTypes is absent", () => {
@@ -145,7 +147,7 @@ describe("emitPluginSafetyEvent — non-trusted (external) plugin", () => {
       ],
     });
     expect(result).toEqual({ ok: true });
-    expect(emitDiagnosticEventMock).toHaveBeenCalledOnce();
+    expect(emitAuthorizedAISafetyDiagnosticEventMock).toHaveBeenCalledOnce();
   });
 });
 
@@ -162,7 +164,7 @@ describe("emitPluginSafetyEvent — invalid event type", () => {
       reason: expect.stringContaining('must start with "ai_safety."'),
     });
     expect(emitTrustedDiagnosticEventMock).not.toHaveBeenCalled();
-    expect(emitDiagnosticEventMock).not.toHaveBeenCalled();
+    expect(emitAuthorizedAISafetyDiagnosticEventMock).not.toHaveBeenCalled();
   });
 
   it("rejects unknown ai_safety.* type not in taxonomy", () => {
