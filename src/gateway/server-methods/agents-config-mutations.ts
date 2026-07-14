@@ -11,6 +11,7 @@ import { mutateConfigFileWithRetry } from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { purgeAgentCronJobs } from "../../cron/store/purge-agent-cron-jobs.js";
 
 type AgentDeleteMutationResult = {
   workspaceDir: string;
@@ -117,6 +118,8 @@ export async function deleteAgentConfigEntry(params: { agentId: string }): Promi
       };
     },
   });
+  // Purge cron_jobs rows referencing the deleted agent so orphaned schedules do not linger.
+  purgeAgentCronJobs(params.agentId);
   return {
     nextConfig: committed.nextConfig,
     result: committed.result,

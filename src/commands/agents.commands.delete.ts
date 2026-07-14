@@ -12,6 +12,7 @@ import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions.js";
+import { purgeAgentCronJobs } from "../cron/store/purge-agent-cron-jobs.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
@@ -159,6 +160,7 @@ export async function agentsDeleteCommand(
 
   // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
   await purgeAgentSessionStoreEntries(cfg, agentId);
+  purgeAgentCronJobs(agentId);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   // Only trash the workspace if no other agent can depend on that path (#70890).
