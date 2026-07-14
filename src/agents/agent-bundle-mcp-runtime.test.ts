@@ -11,14 +11,13 @@ import {
   completeDeferredSessionMcpRuntimeRetirement,
   createBundleMcpJsonSchemaValidator,
   createSessionMcpRuntime,
+  testing,
 } from "./agent-bundle-mcp-runtime.js";
-import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
-  testing,
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
@@ -371,7 +370,7 @@ function makeRuntime(
 
 afterEach(async () => {
   cleanupTempDirs(tempDirs);
-  await cleanupBundleMcpHarness();
+  await testing.resetSessionMcpRuntimeManager();
 });
 
 describe("session MCP runtime", () => {

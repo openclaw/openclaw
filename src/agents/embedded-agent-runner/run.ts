@@ -4181,8 +4181,7 @@ async function runEmbeddedAgentInternal(
                     ? fingerprintResolvedProviderAuth(successfulApiKeyInfo)
                     : undefined;
           const authProfileOwnerFingerprint =
-            successfulProfileId &&
-            (!pluginHarnessOwnsTransport || successfulCredential?.type === "oauth")
+            successfulProfileId && successfulCredential !== undefined
               ? fingerprintAuthProfileOwnerShape({
                   profileId: successfulProfileId,
                   credential: successfulCredential,

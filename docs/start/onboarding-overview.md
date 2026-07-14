@@ -31,7 +31,8 @@ you the most control.
 
 The guided inference phase establishes only:
 
-1. **Model provider and auth** — detected access or a verified API key
+1. **Model provider and auth** — detected access or a verified provider sign-in,
+   API key, or token
 2. **Verified inference** — a real completion on the default agent's effective
    model
 
@@ -54,12 +55,15 @@ openclaw onboard
 ```
 
 The guided flow detects existing AI access, live-tests candidates in order,
-falls through on failure, and offers masked manual key entry. It saves the
-model and credential only after a passing completion, then starts Crestodian
-to configure the workspace, Gateway, channels, agents, plugins, and other
-optional features. There is no pre-inference Crestodian, skip-AI path, or
-in-flow classic handoff. Exit and run `openclaw onboard --classic` when you
-want the classic wizard instead.
+and falls through on failure. If detection is exhausted, it shows OpenAI,
+Anthropic, xAI (Grok), Google, and OpenRouter first. **More…** contains the
+remaining providers in provider groups, with regions, plans, and supported
+browser, device, API-key, or token methods in a second menu. It saves the model
+and credential only after a passing completion, then starts Crestodian to
+configure the workspace, Gateway, channels, agents, plugins, and other optional
+features. **Skip for now** exits without starting Crestodian. There is no
+in-flow classic handoff; exit and run `openclaw onboard --classic` when you want
+the classic wizard instead.
 
 After inference passes, Crestodian can hand channel setup to a masked terminal
 wizard. It does not open guided or classic provider setup; exit Crestodian and

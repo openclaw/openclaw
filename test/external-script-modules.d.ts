@@ -118,6 +118,12 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     hasCanonicalMainCommit: boolean,
     provenanceOverride?: number[],
   ): number[];
+  export function releasePullRequestReferencesToSuppress(
+    currentPullRequests: number[],
+    subject: string,
+    associatedPullRequests: number[],
+    hasProvenanceOverride: boolean,
+  ): number[];
   export function validateReleaseProvenanceOverrides(
     provenanceOverrides: Map<string, number[]>,
     nodes: Map<number, unknown>,
