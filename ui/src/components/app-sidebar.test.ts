@@ -494,11 +494,9 @@ describe("AppSidebar agent chip", () => {
       TWO_AGENTS,
     );
     const onNavigate = vi.fn();
-    const onOpenNewSession = vi.fn();
     sidebar.connected = true;
     sidebar.canPairDevice = true;
     sidebar.onNavigate = onNavigate;
-    sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-chip__name")?.textContent?.trim()).toBe("Molty");
@@ -547,20 +545,8 @@ describe("AppSidebar agent chip", () => {
       ...(reopenedMenu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? []),
     ];
     expect(agentRows).toHaveLength(2);
-    const newSessionItem = [
-      ...(reopenedMenu?.querySelectorAll<HTMLElement>(".sidebar-agent-menu__new") ?? []),
-    ].find((item) => item.textContent?.includes("research"));
-    expect(newSessionItem).toBeDefined();
-    reopenedMenu?.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: newSessionItem }, bubbles: true }),
-    );
-    await sidebar.updateComplete;
-    expect(onOpenNewSession).toHaveBeenCalledWith("research");
-    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
-    await sidebar.updateComplete;
-    const switchMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+    expect(reopenedMenu?.querySelector(".sidebar-agent-menu__new")).toBeNull();
+    const switchMenu = reopenedMenu;
     const researchRow = [
       ...(switchMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[type="checkbox"]') ?? []),
     ].find((row) => row.textContent?.includes("research"));
