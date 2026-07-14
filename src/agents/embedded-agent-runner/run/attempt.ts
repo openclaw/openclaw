@@ -1110,7 +1110,9 @@ export async function runEmbeddedAttempt(
               // A transform outcome redacts the session-recorded prompt too, so the
               // model-boundary swap in installModelPromptTransform (behind this call)
               // becomes a no-op and the redacted text is what persists (#redaction fix).
-              transcriptPrompt: beforeAgentRunTransformedPrompt ? modelBoundPrompt : promptForSession,
+              transcriptPrompt: beforeAgentRunTransformedPrompt
+                ? modelBoundPrompt
+                : promptForSession,
             });
           } else {
             releaseLeasedSteering(promptError ?? "prompt submission skipped");
