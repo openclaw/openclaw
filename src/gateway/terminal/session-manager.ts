@@ -53,7 +53,7 @@ export class TerminalSessionManager {
   private opening = 0;
 
   constructor(options: TerminalSessionManagerOptions) {
-    ensureTerminalUploadCleanup();
+    void ensureTerminalUploadCleanup();
     this.emit = options.emit;
     this.getBufferedAmount = options.getBufferedAmount ?? (() => undefined);
     this.spawn = options.spawn;

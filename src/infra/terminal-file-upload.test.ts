@@ -3,12 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MAX_TERMINAL_UPLOAD_BYTES } from "../../packages/gateway-protocol/src/terminal-upload-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  recoverTerminalUploadCleanup,
-  resolveTerminalUploadRoot,
-  sanitizeTerminalUploadName,
-  stageTerminalUpload,
-} from "./terminal-file-upload.js";
+import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -32,33 +27,36 @@ describe("terminal file upload", () => {
     }
   });
 
-  it("uses the user-profile ACL boundary instead of a configurable Windows temp directory", () => {
-    expect(
-      resolveTerminalUploadRoot({
-        platform: "win32",
-        homeDir: "C:\\Users\\operator",
-        tempDir: "C:\\SharedTemp",
-      }),
-    ).toBe(path.join("C:\\Users\\operator", ".openclaw", "tmp"));
-    expect(
-      resolveTerminalUploadRoot({
-        platform: "linux",
-        homeDir: "/home/operator",
-        tempDir: "/tmp",
-      }),
-    ).toBe("/tmp");
+  it("uses the user-profile ACL boundary instead of a configurable Windows temp directory", async () => {
+    const homeDir = tempDirs.make("openclaw-terminal-upload-windows-home-");
+    const sharedTemp = tempDirs.make("openclaw-terminal-upload-windows-shared-");
+
+    const result = await stageTerminalUpload(
+      { name: "report.pdf", contentBase64: "" },
+      { platform: "win32", homeDir, tempDir: sharedTemp },
+    );
+
+    expect(result.path.startsWith(path.join(homeDir, ".openclaw", "tmp"))).toBe(true);
+    expect(result.path.startsWith(sharedTemp)).toBe(false);
   });
 
-  it("normalizes hostile and oversized names", () => {
-    expect(sanitizeTerminalUploadName("..\\..\\secret\u0000.txt")).toBe("secret_.txt");
-    expect(sanitizeTerminalUploadName("report:<final>?!-%PATH%.pdf. ")).toBe(
-      "report__final___-_PATH_.pdf",
-    );
-    expect(sanitizeTerminalUploadName("CON.txt")).toBe("_CON.txt");
-    expect(
-      Buffer.byteLength(sanitizeTerminalUploadName("🦞".repeat(100)), "utf8"),
-    ).toBeLessThanOrEqual(180);
-    expect(sanitizeTerminalUploadName("..")).toBe("upload");
+  it("normalizes hostile and oversized names", async () => {
+    const root = tempDirs.make("openclaw-terminal-upload-name-test-");
+    const stagedName = async (name: string) =>
+      path.basename(
+        (
+          await stageTerminalUpload(
+            { name, contentBase64: "" },
+            { tempRoot: root, cleanupAfterMs: 60_000 },
+          )
+        ).path,
+      );
+
+    expect(await stagedName("..\\..\\secret\u0000.txt")).toBe("secret_.txt");
+    expect(await stagedName("report:<final>?!-%PATH%.pdf. ")).toBe("report__final___-_PATH_.pdf");
+    expect(await stagedName("CON.txt")).toBe("_CON.txt");
+    expect(Buffer.byteLength(await stagedName("🦞".repeat(100)), "utf8")).toBeLessThanOrEqual(180);
+    expect(await stagedName("..")).toBe("upload");
   });
 
   it("recovers expired upload directories after restart", async () => {
@@ -68,7 +66,7 @@ describe("terminal file upload", () => {
     await writeFile(path.join(directory, "report.pdf"), "stale");
     await utimes(directory, new Date(0), new Date(0));
 
-    await recoverTerminalUploadCleanup({ tempRoot: root, retentionMs: 1, nowMs: Date.now() });
+    await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: 1, nowMs: Date.now() });
 
     await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
   });

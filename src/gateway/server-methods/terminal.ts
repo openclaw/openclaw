@@ -11,7 +11,6 @@ import {
   errorShape,
   formatValidationErrors,
   type TerminalOpenParams,
-  type TerminalUploadParams,
   type TerminalUploadResult,
   validateTerminalAttachParams,
   validateTerminalCloseParams,
@@ -19,14 +18,10 @@ import {
   validateTerminalOpenParams,
   validateTerminalResizeParams,
   validateTerminalTextParams,
-  validateTerminalUploadParams,
   validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
-import {
-  isCanonicalTerminalUploadBase64,
-  type TerminalUploadFile,
-} from "../../infra/terminal-file-upload.js";
+import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { renderTerminalBufferText } from "../terminal/buffer-text.js";
@@ -38,6 +33,7 @@ import {
   authorizeTerminalNodeCommand,
   resolveTerminalOpenSpawnPlan,
 } from "./terminal-open-plan.js";
+import { terminalUploadHandlers } from "./terminal-upload.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: string): void {
@@ -123,6 +119,7 @@ function respondLaunchBlocked(
 
 /** Handlers for the operator terminal method family. */
 export const terminalHandlers: GatewayRequestHandlers = {
+  ...terminalUploadHandlers,
   "terminal.open": async (opts) => {
     const { params, respond, context } = opts;
     if (!validateTerminalOpenParams(params)) {
@@ -317,54 +314,6 @@ export const terminalHandlers: GatewayRequestHandlers = {
     }
     const ok = context.terminalSessions?.write(connId, p.sessionId, p.data) ?? false;
     respond(true, { ok });
-  },
-
-  "terminal.upload": async (opts) => {
-    const { params, respond, context } = opts;
-    if (!validateTerminalUploadParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.upload params: ${formatValidationErrors(validateTerminalUploadParams.errors)}`,
-      );
-      return;
-    }
-    const connId = requireConnId(opts);
-    if (!connId) {
-      return;
-    }
-    const p = params as TerminalUploadParams;
-    if (!isCanonicalTerminalUploadBase64(p.contentBase64)) {
-      invalid(respond, "invalid terminal.upload base64 content");
-      return;
-    }
-    if (!context.terminalSessions || !terminalEnabled(context)) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is not available"));
-      return;
-    }
-    try {
-      const result = await context.terminalSessions.upload(connId, p.sessionId, {
-        name: p.name,
-        contentBase64: p.contentBase64,
-      });
-      if (!result) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown terminal session "${p.sessionId}"`),
-        );
-        return;
-      }
-      respond(true, result);
-    } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          error instanceof Error ? error.message : "terminal upload failed",
-        ),
-      );
-    }
   },
 
   "terminal.resize": async (opts) => {

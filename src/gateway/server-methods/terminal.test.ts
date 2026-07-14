@@ -380,7 +380,8 @@ describe("terminal gateway policy", () => {
       }),
     });
     const node = { nodeId: "node-1", connId: "conn-node", commands: [command] };
-    const invoke = vi.fn((params: { onInvokeId?: (id: string) => void }) => {
+    const invoke = vi.fn((rawParams: unknown) => {
+      const params = rawParams as { onInvokeId?: (id: string) => void };
       params.onInvokeId?.("invoke-1");
       return Promise.resolve({ ok: true });
     });

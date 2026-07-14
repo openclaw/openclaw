@@ -217,7 +217,7 @@ export async function prepareNodeHostRuntime(params?: {
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
 }): Promise<PreparedNodeHostRuntime> {
-  ensureTerminalUploadCleanup();
+  void ensureTerminalUploadCleanup();
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
   await ensureNodeHostPluginRegistry({ config, env });

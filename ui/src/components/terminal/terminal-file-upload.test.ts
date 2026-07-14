@@ -1,11 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it } from "vitest";
-import {
-  encodeTerminalUpload,
-  MAX_TERMINAL_UPLOAD_BYTES,
-  quoteTerminalUploadPath,
-} from "./terminal-file-upload.ts";
+import { encodeTerminalUpload, quoteTerminalUploadPath } from "./terminal-file-upload.ts";
+
+const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
 
 describe("terminal file upload", () => {
   it("base64-encodes arbitrary browser files", async () => {

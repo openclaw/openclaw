@@ -365,6 +365,7 @@ enum class GatewayMethod(
   EnvironmentsDestroy("environments.destroy"),
   SessionsCatalogList("sessions.catalog.list"),
   SessionsCatalogRead("sessions.catalog.read"),
+  TerminalUpload("terminal.upload"),
   SessionsCatalogContinue("sessions.catalog.continue"),
   SessionsCatalogArchive("sessions.catalog.archive"),
   ApprovalGet("approval.get"),

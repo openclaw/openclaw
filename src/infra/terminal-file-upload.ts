@@ -16,12 +16,14 @@ const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu
 const cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let defaultCleanupStarted = false;
 
-/** Windows temp variables can point at a shared directory; inherit the user's profile ACL instead. */
-export function resolveTerminalUploadRoot(options?: {
+type TerminalUploadRootOptions = {
   platform?: NodeJS.Platform;
   homeDir?: string;
   tempDir?: string;
-}): string {
+};
+
+/** Windows temp variables can point at a shared directory; inherit the user's profile ACL instead. */
+function resolveTerminalUploadRoot(options?: TerminalUploadRootOptions): string {
   return (options?.platform ?? process.platform) === "win32"
     ? path.join(options?.homeDir ?? homedir(), ".openclaw", "tmp")
     : (options?.tempDir ?? tmpdir());
@@ -51,7 +53,7 @@ function truncateUtf8(value: string, maxBytes: number): string {
   return result;
 }
 
-export function sanitizeTerminalUploadName(name: string): string {
+function sanitizeTerminalUploadName(name: string): string {
   const basename = path.posix.basename(name.replaceAll("\\", "/"));
   const cleaned = Array.from(basename, (char) => {
     const codePoint = char.codePointAt(0) ?? 0;
@@ -150,7 +152,7 @@ function scheduleTerminalUploadCleanup(directory: string, afterMs: number): void
 }
 
 /** Restores cleanup timers for staged uploads left by a previous process. */
-export async function recoverTerminalUploadCleanup(options?: {
+async function recoverTerminalUploadCleanup(options?: {
   tempRoot?: string;
   retentionMs?: number;
   nowMs?: number;
@@ -196,25 +198,32 @@ export async function recoverTerminalUploadCleanup(options?: {
 }
 
 /** Starts one process-wide recovery scan; per-directory timers are unref'd. */
-export function ensureTerminalUploadCleanup(): void {
-  if (defaultCleanupStarted) {
-    return;
+export function ensureTerminalUploadCleanup(options?: {
+  tempRoot?: string;
+  retentionMs?: number;
+  nowMs?: number;
+}): Promise<void> {
+  if (!options) {
+    if (defaultCleanupStarted) {
+      return Promise.resolve();
+    }
+    defaultCleanupStarted = true;
   }
-  defaultCleanupStarted = true;
-  void recoverTerminalUploadCleanup();
+  return recoverTerminalUploadCleanup(options);
 }
 
 /** Stages one browser-selected file in a private, expiring temporary directory. */
 export async function stageTerminalUpload(
   file: TerminalUploadFile,
-  options?: { tempRoot?: string; cleanupAfterMs?: number },
+  options?: TerminalUploadRootOptions & { tempRoot?: string; cleanupAfterMs?: number },
 ): Promise<TerminalUploadResult> {
   if (!options?.tempRoot) {
-    ensureTerminalUploadCleanup();
+    void ensureTerminalUploadCleanup();
   }
   const bytes = decodeTerminalUpload(file.contentBase64);
-  const tempRoot = options?.tempRoot ?? resolveTerminalUploadRoot();
-  if (process.platform === "win32" && !options?.tempRoot) {
+  const platform = options?.platform ?? process.platform;
+  const tempRoot = options?.tempRoot ?? resolveTerminalUploadRoot(options);
+  if (platform === "win32" && !options?.tempRoot) {
     // The user profile supplies the restrictive DACL; this mode protects POSIX-compatible hosts.
     await mkdir(tempRoot, { recursive: true, mode: 0o700 });
   }

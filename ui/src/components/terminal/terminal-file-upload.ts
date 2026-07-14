@@ -1,6 +1,6 @@
 // Keep this client guard aligned with the gateway protocol's 16 MiB limit so
 // oversized files never expand into a WebSocket base64 payload.
-export const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
+const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
 
 export async function encodeTerminalUpload(file: File): Promise<string> {
   if (file.size > MAX_TERMINAL_UPLOAD_BYTES) {

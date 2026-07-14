@@ -48,7 +48,7 @@ export type TerminalSessionInfo = {
   createdAtMs: number;
 };
 
-export type TerminalUploadResult = { path: string; size: number };
+type TerminalUploadResult = { path: string; size: number };
 
 type TerminalExitInfo = {
   exitCode: number | null;
