@@ -82,17 +82,27 @@ import {
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
-let slackBoltInterop: SlackBoltResolvedExports | undefined;
+// Single-flight: cache the in-flight promise, not the resolved value, so
+// concurrent account startups (e.g. several accounts booting at once) share
+// one module resolution instead of racing the `undefined` check into several
+// parallel imports.
+let slackBoltInteropPromise: Promise<SlackBoltResolvedExports> | undefined;
 
-async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
-  if (!slackBoltInterop) {
-    const slackBoltModule = await import("@slack/bolt");
-    slackBoltInterop = resolveSlackBoltInterop({
-      defaultImport: slackBoltModule.default,
-      namespaceImport: slackBoltModule,
+function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
+  slackBoltInteropPromise ??= import("@slack/bolt")
+    .then((slackBoltModule) =>
+      resolveSlackBoltInterop({
+        defaultImport: slackBoltModule.default,
+        namespaceImport: slackBoltModule,
+      }),
+    )
+    .catch((err: unknown) => {
+      // Don't cache a rejected resolution permanently — the pre-single-flight
+      // code retried the import on the next call, so keep that behavior.
+      slackBoltInteropPromise = undefined;
+      throw err;
     });
-  }
-  return slackBoltInterop;
+  return slackBoltInteropPromise;
 }
 
 type SlackBoltAppBundle = ReturnType<typeof createSlackBoltApp>;
