@@ -3653,8 +3653,14 @@ describe("runGlobalPackageUpdateSteps", () => {
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
       const staleChunk = path.join(packageRoot, "dist", "install-abcdefghi.js");
+      const localImporter = path.join(packageRoot, "dist", "index.js");
       await writePackageRoot(packageRoot, "1.0.0");
       await fs.writeFile(staleChunk, 'import "./install.runtime-abcdefghi.js";\n', "utf8");
+      await fs.writeFile(
+        localImporter,
+        'const chunkHash = "abcdefghi";\nvoid import("./install-" + chunkHash + ".js");\n',
+        "utf8",
+      );
 
       const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
         if (name !== "global update") {
@@ -3701,11 +3707,13 @@ describe("runGlobalPackageUpdateSteps", () => {
       ]);
       expect(result.localOverrides?.status).toBe("preserved");
       expect(result.localOverrides?.added).toBe(1);
+      expect(result.localOverrides?.modified).toBe(1);
       expect(result.localOverrides?.applied).toBe(0);
       expect(result.localOverrides?.warnings).toEqual([
-        expect.stringContaining("were not automatically reapplied"),
+        expect.stringContaining("no local changes were reapplied"),
       ]);
       await expectPathMissing(staleChunk);
+      await expect(fs.readFile(localImporter, "utf8")).resolves.toBe("export {};\n");
       await expect(
         fs.readFile(
           path.join(
@@ -3718,17 +3726,31 @@ describe("runGlobalPackageUpdateSteps", () => {
         ),
       ).resolves.toBe('import "./install.runtime-abcdefghi.js";\n');
       await expect(
+        fs.readFile(
+          path.join(result.localOverrides?.recoveryDir ?? "", "files", "dist", "index.js"),
+          "utf8",
+        ),
+      ).resolves.toBe(
+        'const chunkHash = "abcdefghi";\nvoid import("./install-" + chunkHash + ".js");\n',
+      );
+      await expect(
         fs
           .readFile(path.join(result.localOverrides?.recoveryDir ?? "", "manifest.json"), "utf8")
           .then((content) => JSON.parse(content))
           .then((manifest) => manifest.changes),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          kind: "added",
-          path: "dist/install-abcdefghi.js",
-          reapply: false,
-        }),
-      ]);
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "added",
+            path: "dist/install-abcdefghi.js",
+            reapply: false,
+          }),
+          expect.objectContaining({
+            kind: "modified",
+            path: "dist/index.js",
+          }),
+        ]),
+      );
     });
   });
 
