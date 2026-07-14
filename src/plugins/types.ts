@@ -61,6 +61,11 @@ export type {
 } from "./host-hooks.js";
 export type { PluginLogger } from "./logger-types.js";
 export type { PluginConfigUiHint } from "./manifest-types.js";
+export type {
+  AISafetyEventEmitResult,
+  AISafetyEventInput,
+  AISafetyEventType,
+} from "./safety-event-emission.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
 export type {
   ProviderApplyConfigDefaultsContext,

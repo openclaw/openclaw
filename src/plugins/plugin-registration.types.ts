@@ -10,6 +10,7 @@ import type {
 } from "../infra/diagnostic-events.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { PluginLogger } from "./logger-types.js";
+import type { AISafetyEventEmitResult, AISafetyEventInput } from "./safety-event-emission.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 
@@ -263,6 +264,12 @@ export type OpenClawPluginServiceContext = {
       ) => void,
     ) => () => void;
   };
+  /**
+   * Emit an AI safety taxonomy event. Event types must be declared in the
+   * plugin manifest `safetyEventTypes` field for non-bundled plugins.
+   * Returns `{ ok: false, reason }` when the event is rejected by policy.
+   */
+  emitSafetyEvent?: (event: AISafetyEventInput) => AISafetyEventEmitResult;
 };
 
 /** Background service registered by a plugin during `register(api)`. */
