@@ -39,6 +39,7 @@ export type MeetingNodeHostOptions = {
   normalizeUrl(input: unknown): string;
   normalizeMeetingKey(url?: string): string | undefined;
   assertAudioAvailable(timeoutMs: number): void;
+  decodeAudioBase64?(base64: string, action: string): Buffer;
   browser: {
     application: string;
     buildProfileArgs(profile: string): string[];
@@ -237,7 +238,9 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     if (!session || session.closed) {
       throw new Error(`bridge is not open: ${bridgeId}`);
     }
-    const audio = Buffer.from(base64, "base64");
+    const audio = options.decodeAudioBase64
+      ? options.decodeAudioBase64(base64, "pushAudio")
+      : Buffer.from(base64, "base64");
     session.lastOutputAt = new Date().toISOString();
     session.lastOutputBytes += audio.byteLength;
     try {

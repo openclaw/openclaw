@@ -23,6 +23,7 @@ import {
   handleGoogleMeetRealtimeConsultToolCall,
   resolveGoogleMeetRealtimeTools,
 } from "../agent-consult.js";
+import { readGoogleMeetAudioBase64 } from "../audio-base64.js";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
 import {
   GOOGLE_MEET_SYSTEM_PROFILER_COMMAND,
@@ -588,6 +589,7 @@ export async function launchChromeMeetOnNode(params: {
       commandName: GOOGLE_MEET_NODE_COMMAND,
       logScope: GOOGLE_MEET_RUNTIME_PLATFORM.logScope,
       logPrefix: params.mode === "agent" ? "node agent" : "node",
+      decodeInputAudioBase64: readGoogleMeetAudioBase64,
     });
     const bindings = createGoogleMeetRealtimeEngineBindings(params);
     const engine =

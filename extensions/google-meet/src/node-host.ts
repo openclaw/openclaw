@@ -1,6 +1,7 @@
 // Google Meet injects device/URL labels into the shared node-side browser audio host.
 import { spawnSync } from "node:child_process";
 import { createMeetingNodeHost } from "openclaw/plugin-sdk/meeting-runtime";
+import { readGoogleMeetAudioBase64 } from "./audio-base64.js";
 import {
   DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND,
   DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
@@ -64,6 +65,7 @@ const googleMeetNodeHost = createMeetingNodeHost({
   normalizeUrl: (url) => GOOGLE_MEET_PLATFORM_ADAPTER.urls.validateAndNormalize(url),
   normalizeMeetingKey: normalizeMeetKey,
   assertAudioAvailable: assertBlackHoleAvailable,
+  decodeAudioBase64: readGoogleMeetAudioBase64,
   browser: {
     application: "Google Chrome",
     buildProfileArgs: (profile) => ["--args", `--profile-directory=${profile}`],

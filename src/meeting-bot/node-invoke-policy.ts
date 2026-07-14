@@ -19,6 +19,7 @@ export type MeetingBrowserNodePolicyOptions = {
   deniedCode: string;
   supportedModes: ReadonlySet<string>;
   normalizeUrl(input: unknown): string;
+  validateAudioBase64?(base64: string): boolean;
   start: MeetingBrowserNodeStartConfig;
 };
 
@@ -193,6 +194,12 @@ function buildForwardParams(
       }
       if (!base64) {
         return denyMissing(options, action, "base64");
+      }
+      if (options.validateAudioBase64 && !options.validateAudioBase64(base64)) {
+        return {
+          approved: false,
+          result: denied(options, "base64 must be a valid audio payload"),
+        };
       }
       forwarded.bridgeId = bridgeId;
       forwarded.base64 = base64;
