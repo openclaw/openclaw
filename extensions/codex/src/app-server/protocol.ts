@@ -264,7 +264,7 @@ type CodexThreadUnsubscribeParams = JsonObject & {
   threadId: string;
 };
 
-export type CodexTurnInterruptParams = JsonObject & {
+type CodexTurnInterruptParams = JsonObject & {
   threadId: string;
   turnId: string;
 };
