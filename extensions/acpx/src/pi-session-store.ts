@@ -9,7 +9,8 @@ const MAX_DISCOVERY_FILES = 10_000;
 const SUMMARY_SCAN_BATCH_SIZE = 100;
 const MAX_SUMMARY_CACHE_ENTRIES = 256;
 const MAX_SESSION_BYTES = 32 * 1024 * 1024;
-const MAX_SUMMARY_LINE_CHARS = 1024 * 1024;
+const MAX_SUMMARY_LINE_BYTES = 1024 * 1024;
+const APPEND_PROOF_EDGE_BYTES = 64 * 1024;
 const IO_CONCURRENCY = 8;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/u;
 
@@ -18,16 +19,28 @@ export type PiSessionSummary = SessionCatalogSession & { file: string };
 type PiFileCandidate = {
   file: string;
   storeRoot: string;
+  identity: string;
   mtimeMs: number;
   size: number;
 };
 
-type CachedSummary = PiFileCandidate & {
-  summary?: PiSessionSummary;
+type PiSummaryScanState = {
+  header?: Record<string, unknown>;
+  name?: string;
+  firstMessage?: string;
+  pending: Buffer;
+  discarding: boolean;
+  invalid: boolean;
 };
 
-// Pi owns session-file mutation. Cache entries are reused only while size and
-// mtime match, with a bounded process-local cache across lazy scan batches.
+type CachedSummary = PiFileCandidate & {
+  summary?: PiSessionSummary;
+  scanState: PiSummaryScanState;
+  appendProof: { head: Buffer; tail: Buffer };
+};
+
+// Pi owns session-file mutation. The bounded cache resumes append-only metadata
+// scans, avoiding a full reread every time an active transcript grows.
 const summaryCache = new Map<string, CachedSummary>();
 const threadFileCache = new Map<string, string>();
 
@@ -203,7 +216,13 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
     try {
       const stats = await fs.stat(file);
       return stats.isFile()
-        ? { file, storeRoot: root, mtimeMs: stats.mtimeMs, size: stats.size }
+        ? {
+            file,
+            storeRoot: root,
+            identity: `${String(stats.dev)}:${String(stats.ino)}:${String(stats.birthtimeMs)}`,
+            mtimeMs: stats.mtimeMs,
+            size: stats.size,
+          }
         : undefined;
     } catch {
       return undefined;
@@ -253,39 +272,114 @@ function timestampMs(value: unknown): number | undefined {
   return undefined;
 }
 
-async function* boundedJsonLines(file: string): AsyncGenerator<string> {
-  const stream = createReadStream(file, { encoding: "utf8" });
-  let buffer = "";
-  let discarding = false;
-  for await (const chunk of stream) {
-    const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    let start = 0;
-    while (start < text.length) {
-      const newline = text.indexOf("\n", start);
-      const end = newline >= 0 ? newline : text.length;
-      if (!discarding) {
-        const piece = text.slice(start, end);
-        if (buffer.length + piece.length <= MAX_SUMMARY_LINE_CHARS) {
-          buffer += piece;
-        } else {
-          buffer = "";
-          discarding = true;
-        }
-      }
+function processSummaryLine(state: PiSummaryScanState, line: Buffer): void {
+  const content = line.at(-1) === 0x0d ? line.subarray(0, -1) : line;
+  const entry = parsePiJsonLines(content.toString("utf8"))[0];
+  if (!entry) {
+    return;
+  }
+  if (!state.header) {
+    if (entry.type !== "session") {
+      state.invalid = true;
+      return;
+    }
+    state.header = entry;
+    return;
+  }
+  if (entry.type === "session_info") {
+    // Latest metadata wins, including an explicit empty-name clear.
+    state.name = optionalString(entry.name, 1_000);
+  } else if (
+    !state.firstMessage &&
+    entry.type === "message" &&
+    isRecord(entry.message) &&
+    entry.message.role === "user"
+  ) {
+    state.firstMessage = optionalString(textFromContent(entry.message.content), 1_000);
+  }
+}
+
+function appendSummaryBytes(state: PiSummaryScanState, bytes: Buffer): void {
+  if (state.discarding || bytes.length === 0) {
+    return;
+  }
+  if (state.pending.length + bytes.length > MAX_SUMMARY_LINE_BYTES) {
+    state.pending = Buffer.alloc(0);
+    state.discarding = true;
+    return;
+  }
+  state.pending =
+    state.pending.length === 0 ? Buffer.from(bytes) : Buffer.concat([state.pending, bytes]);
+}
+
+async function scanSummaryAppend(
+  candidate: PiFileCandidate,
+  start: number,
+  state: PiSummaryScanState,
+): Promise<void> {
+  if (start >= candidate.size || state.invalid) {
+    return;
+  }
+  const stream = createReadStream(candidate.file, { start, end: candidate.size - 1 });
+  for await (const value of stream) {
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    let offset = 0;
+    while (offset < chunk.length) {
+      const newline = chunk.indexOf(0x0a, offset);
+      const end = newline < 0 ? chunk.length : newline;
+      appendSummaryBytes(state, chunk.subarray(offset, end));
       if (newline < 0) {
         break;
       }
-      if (!discarding) {
-        yield buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer;
+      if (!state.discarding) {
+        processSummaryLine(state, state.pending);
       }
-      buffer = "";
-      discarding = false;
-      start = newline + 1;
+      state.pending = Buffer.alloc(0);
+      state.discarding = false;
+      if (state.invalid) {
+        return;
+      }
+      offset = newline + 1;
     }
   }
-  if (!discarding && buffer) {
-    yield buffer;
+}
+
+async function readAppendProof(
+  file: string,
+  size: number,
+): Promise<{ head: Buffer; tail: Buffer }> {
+  const length = Math.min(size, APPEND_PROOF_EDGE_BYTES);
+  if (length === 0) {
+    return { head: Buffer.alloc(0), tail: Buffer.alloc(0) };
   }
+  const handle = await fs.open(file, "r");
+  try {
+    const head = Buffer.alloc(length);
+    const tail = Buffer.alloc(length);
+    const [headRead, tailRead] = await Promise.all([
+      handle.read(head, 0, length, 0),
+      handle.read(tail, 0, length, size - length),
+    ]);
+    return {
+      head: head.subarray(0, headRead.bytesRead),
+      tail: tail.subarray(0, tailRead.bytesRead),
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function cachedPrefixIsUnchanged(candidate: PiFileCandidate, cached: CachedSummary) {
+  if (cached.identity !== candidate.identity || cached.size >= candidate.size) {
+    return false;
+  }
+  // Pi persists established sessions with appendFileSync. Its in-place rewrite
+  // paths (notably version migration) rewrite the header, so the head proof
+  // rejects them; the tail proof rejects truncation before later growth.
+  const current = await readAppendProof(candidate.file, cached.size);
+  return (
+    current.head.equals(cached.appendProof.head) && current.tail.equals(cached.appendProof.tail)
+  );
 }
 
 async function readPiSessionSummary(
@@ -298,34 +392,32 @@ async function readPiSessionSummary(
     return cached.summary;
   }
   let summary: PiSessionSummary | undefined;
+  let scanState: PiSummaryScanState;
+  let appendProof: CachedSummary["appendProof"];
   try {
-    let header: Record<string, unknown> | undefined;
-    let name: string | undefined;
-    let firstMessage: string | undefined;
-    for await (const line of boundedJsonLines(candidate.file)) {
-      const entry = parsePiJsonLines(line)[0];
-      if (!entry) {
-        continue;
-      }
-      if (!header) {
-        if (entry.type !== "session") {
-          break;
+    // Pi normally appends JSONL. Resume only when bounded edge proofs show the
+    // previously indexed prefix survived; rewrites rebuild from byte zero.
+    const resumable =
+      cached && (await cachedPrefixIsUnchanged(candidate, cached)) ? cached : undefined;
+    scanState = resumable
+      ? {
+          ...resumable.scanState,
+          pending: Buffer.from(resumable.scanState.pending),
         }
-        header = entry;
-        continue;
-      }
-      if (entry.type === "session_info") {
-        // Latest metadata wins, including an explicit empty-name clear.
-        name = optionalString(entry.name, 1_000);
-      } else if (
-        !firstMessage &&
-        entry.type === "message" &&
-        isRecord(entry.message) &&
-        entry.message.role === "user"
-      ) {
-        firstMessage = optionalString(textFromContent(entry.message.content), 1_000);
-      }
+      : {
+          pending: Buffer.alloc(0),
+          discarding: false,
+          invalid: false,
+        };
+    await scanSummaryAppend(candidate, resumable?.size ?? 0, scanState);
+    appendProof = await readAppendProof(candidate.file, candidate.size);
+    // A complete final record is valid without a newline. Project it from a
+    // clone so later appends can still finish the cached pending line once.
+    const projectedState = { ...scanState, pending: Buffer.from(scanState.pending) };
+    if (!projectedState.discarding && projectedState.pending.length > 0) {
+      processSummaryLine(projectedState, projectedState.pending);
     }
+    const { header, name, firstMessage } = projectedState;
     const threadId = header?.type === "session" ? optionalString(header.id, 256) : undefined;
     if (header && threadId && SESSION_ID_PATTERN.test(threadId)) {
       const cwd = optionalString(header.cwd, 4_096);
@@ -347,12 +439,14 @@ async function readPiSessionSummary(
       };
     }
   } catch {
-    summary = undefined;
+    // Permissions and concurrent file replacement are retryable. Preserve the
+    // last good index instead of poisoning future append scans.
+    return cached?.summary;
   }
   if (cached?.summary?.threadId && cached.summary.threadId !== summary?.threadId) {
     threadFileCache.delete(threadCacheKey(cached.storeRoot, cached.summary.threadId));
   }
-  cacheSummary(candidate.file, { ...candidate, summary });
+  cacheSummary(candidate.file, { ...candidate, summary, scanState, appendProof });
   if (summary) {
     threadFileCache.set(threadCacheKey(candidate.storeRoot, summary.threadId), candidate.file);
   }

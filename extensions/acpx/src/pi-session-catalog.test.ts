@@ -204,6 +204,16 @@ describe("Pi session catalog", () => {
         timestamp: "2026-07-13T10:00:04Z",
         message: { role: "custom", customType: "review", content: "visible note", display: true },
       },
+      {
+        type: "message",
+        timestamp: "2026-07-13T10:00:05Z",
+        message: {
+          role: "hookMessage",
+          customType: "legacy-review",
+          content: "legacy visible note",
+          display: true,
+        },
+      },
     ];
     await fs.writeFile(
       path.join(directory, "session.jsonl"),
@@ -217,6 +227,7 @@ describe("Pi session catalog", () => {
       ["toolCall", "bash\npwd"],
       ["toolResult", "/workspace"],
       ["other", "review\nvisible note"],
+      ["other", "legacy-review\nlegacy visible note"],
     ]);
   });
 
@@ -261,6 +272,77 @@ describe("Pi session catalog", () => {
       `${JSON.stringify({ type: "session_info", id: "clear", parentId: "a", timestamp: "2026-07-13T10:00:04Z", name: "" })}\n`,
     );
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBe("fallback title");
+  });
+
+  it("indexes final records without a trailing newline", async () => {
+    const directory = await createPiStore();
+    const file = path.join(directory, "session.jsonl");
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "pi-session",
+        timestamp: "2026-07-13T10:00:00Z",
+        cwd: "/workspace",
+      }),
+    );
+    expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.threadId).toBe("pi-session");
+
+    await fs.appendFile(
+      file,
+      `\n${JSON.stringify({
+        type: "session_info",
+        id: "name",
+        parentId: null,
+        timestamp: "2026-07-13T10:00:01Z",
+        name: "No final newline",
+      })}`,
+    );
+    expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBe(
+      "No final newline",
+    );
+  });
+
+  it("rebuilds metadata after a same-file replacement grows", async () => {
+    const directory = await createPiStore("old session");
+    const file = path.join(directory, "session.jsonl");
+    await listLocalPiSessionPage({ limit: 20 });
+
+    const entries = [
+      {
+        type: "session",
+        version: 3,
+        id: "pi-replaced-session",
+        timestamp: "2026-07-13T11:00:00Z",
+        cwd: "/workspace/replaced",
+      },
+      {
+        type: "message",
+        id: "replacement-user",
+        parentId: null,
+        timestamp: "2026-07-13T11:00:01Z",
+        message: { role: "user", content: `replacement ${"x".repeat(4_096)}` },
+      },
+      {
+        type: "session_info",
+        id: "replacement-name",
+        parentId: "replacement-user",
+        timestamp: "2026-07-13T11:00:02Z",
+        name: "Replacement session",
+      },
+    ];
+    await fs.writeFile(file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+    await expect(listLocalPiSessionPage({ limit: 20 })).resolves.toMatchObject({
+      sessions: [
+        expect.objectContaining({
+          threadId: "pi-replaced-session",
+          name: "Replacement session",
+          cwd: "/workspace/replaced",
+        }),
+      ],
+    });
   });
 
   it("does not reuse transcript paths after the configured store changes", async () => {
@@ -346,6 +428,19 @@ describe("Pi session catalog", () => {
         cwd: "/workspace",
       })}\n`,
     );
+    const middle = await fs.open(file, "r+");
+    await middle.truncate(2 * 1024 * 1024);
+    await middle.close();
+    await fs.appendFile(
+      file,
+      `\n${JSON.stringify({
+        type: "session_info",
+        id: "large-info",
+        parentId: null,
+        timestamp: "2026-07-13T10:00:01Z",
+        name: "Pi large session",
+      })}\n`,
+    );
     const handle = await fs.open(file, "r+");
     await handle.truncate(33 * 1024 * 1024);
     await handle.close();
@@ -354,11 +449,25 @@ describe("Pi session catalog", () => {
     process.env.HOME = homeDirectory;
 
     await expect(listLocalPiSessionPage({ limit: 20 })).resolves.toMatchObject({
-      sessions: [expect.objectContaining({ threadId: "pi-large-session" })],
+      sessions: [
+        expect.objectContaining({ threadId: "pi-large-session", name: "Pi large session" }),
+      ],
     });
     await expect(
       readLocalPiTranscriptPage({ threadId: "pi-large-session", limit: 20 }),
     ).rejects.toThrow("32 MiB read safety limit");
+
+    await fs.appendFile(
+      file,
+      `\n${JSON.stringify({
+        type: "session_info",
+        id: "large-clear",
+        parentId: "large-info",
+        timestamp: "2026-07-13T10:00:02Z",
+        name: "",
+      })}\n`,
+    );
+    expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBeUndefined();
   });
 
   it("auto-detects the store and honors the node-local Web UI switch", async () => {

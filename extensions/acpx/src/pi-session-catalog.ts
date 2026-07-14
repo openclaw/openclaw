@@ -293,7 +293,7 @@ function piMessageItems(entry: Record<string, unknown>): SessionCatalogTranscrip
       { ...common, type: "toolResult", text: [output, status].filter(Boolean).join("\n\n") },
     ];
   }
-  if (role === "custom") {
+  if (role === "custom" || role === "hookMessage") {
     if (message.display !== true) {
       return [];
     }
