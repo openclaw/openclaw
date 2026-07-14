@@ -6,9 +6,9 @@ import {
   type GhConfigDiscoveryInput,
 } from "./gh-config-discovery.js";
 
-type GhConfigDirMismatch = Extract<
-  ReturnType<typeof detectGhConfigDirMismatch>,
-  { kind: "mismatch" }
+type GhConfigDirMismatch = Omit<
+  Extract<ReturnType<typeof detectGhConfigDirMismatch>, { kind: "mismatch" }>,
+  "kind"
 >;
 
 function makeInput(overrides: Partial<GhConfigDiscoveryInput>): GhConfigDiscoveryInput {
