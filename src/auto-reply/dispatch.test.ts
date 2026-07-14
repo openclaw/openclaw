@@ -167,10 +167,7 @@ describe("withReplyDispatcher", () => {
         InputProvenance: { kind: "inter_session" as const, sourceTool: "sessions_send" },
       },
     ],
-    [
-      "a system event",
-      { InboundEventKind: "user_request" as const, Provider: "heartbeat" },
-    ],
+    ["a system event", { InboundEventKind: "user_request" as const, Provider: "heartbeat" }],
   ])("does not cancel a pending sleep for %s", async (_label, context) => {
     const sessionKey = "agent:main:signal:direct:u1";
     scheduleSessionSleep({ sessionKey, delayMs: 60_000, onWake: vi.fn() });

@@ -58,8 +58,9 @@ export const sleepHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const identity = client?.internal?.agentRuntimeIdentity;
-    if (!identity?.sessionKey || identity.sessionKey.trim() !== request.sessionKey) {
+    const caller = client;
+    const identity = caller?.internal?.agentRuntimeIdentity;
+    if (!caller || !identity?.sessionKey || identity.sessionKey.trim() !== request.sessionKey) {
       respond(
         false,
         undefined,
@@ -85,9 +86,9 @@ export const sleepHandlers: GatewayRequestHandlers = {
       idempotencyKey: `sleep:${wakeId}`,
     };
     const wakeClient: GatewayClient = {
-      ...client,
+      ...caller,
       internal: {
-        ...client.internal,
+        ...caller.internal,
         ...(request.toolsAllow ? { sleepToolsAllow: request.toolsAllow } : {}),
       },
     };

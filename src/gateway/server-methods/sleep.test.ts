@@ -82,10 +82,7 @@ describe("sleep.schedule", () => {
       sessionKey,
     );
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ ok: true, sessionKey }),
-    );
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true, sessionKey }));
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect(mocks.agentRunHandler).toHaveBeenCalledOnce();
