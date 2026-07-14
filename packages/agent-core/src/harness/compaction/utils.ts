@@ -1,5 +1,7 @@
 // Agent Core helper module supports utils behavior.
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+export { estimateStringChars };
 import type { Message } from "../../../../llm-core/src/index.js";
 import type { AgentMessage } from "../../types.js";
 
@@ -182,4 +184,21 @@ export function serializeConversation(messages: Message[]): string {
   }
 
   return parts.join("\n\n");
+}
+
+const IMAGE_BLOCK_CHARS = 4800;
+
+/** Count CJK-aware character length for compaction content blocks. */
+export function countCompactionContentBlockChars(
+  content: Array<{ type: string; content?: unknown; text?: string }>,
+): number {
+  let chars = 0;
+  for (const block of content) {
+    if (block.type === "image") {
+      chars += IMAGE_BLOCK_CHARS;
+    } else {
+      chars += estimateStringChars(getCompactionContentBlockText(block));
+    }
+  }
+  return chars;
 }

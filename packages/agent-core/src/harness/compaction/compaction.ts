@@ -1,5 +1,4 @@
 // Agent Core module implements compaction behavior.
-import { estimateStringChars, estimateTokensFromChars } from "@openclaw/normalization-core";
 import {
   resolveClaudeFable5ModelIdentity,
   type AssistantMessage,
@@ -34,11 +33,12 @@ import {
 } from "../types.js";
 import {
   computeFileLists,
+  countCompactionContentBlockChars,
   createFileOps,
+  estimateStringChars,
   extractFileOpsFromMessage,
   type FileOperations,
   formatFileOperations,
-  getCompactionContentBlockText,
   serializeConversation,
 } from "./utils.js";
 
@@ -252,22 +252,6 @@ export function shouldCompact(
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
-const IMAGE_BLOCK_CHARS = 4800;
-
-function countContentBlockChars(
-  content: Array<{ type: string; content?: unknown; text?: string }>,
-): number {
-  let chars = 0;
-  for (const block of content) {
-    if (block.type === "image") {
-      chars += IMAGE_BLOCK_CHARS;
-    } else {
-      chars += estimateStringChars(getCompactionContentBlockText(block));
-    }
-  }
-  return chars;
-}
-
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
   let chars = 0;
@@ -281,9 +265,9 @@ export function estimateTokens(message: AgentMessage): number {
       if (typeof content === "string") {
         chars = estimateStringChars(content);
       } else if (Array.isArray(content)) {
-        chars = countContentBlockChars(content);
+        chars = countCompactionContentBlockChars(content);
       }
-      break;
+      return Math.ceil(chars / 4);
     }
     case "assistant": {
       const assistant = harnessMessage;
@@ -296,28 +280,29 @@ export function estimateTokens(message: AgentMessage): number {
           chars += estimateStringChars(block.name + safeJsonStringify(block.arguments));
         }
       }
-      break;
+      return Math.ceil(chars / 4);
     }
     case "custom":
     case "toolResult": {
       if (typeof harnessMessage.content === "string") {
         chars = estimateStringChars(harnessMessage.content);
       } else {
-        chars = countContentBlockChars(harnessMessage.content);
+        chars = countCompactionContentBlockChars(harnessMessage.content);
       }
-      break;
+      return Math.ceil(chars / 4);
     }
     case "bashExecution": {
       chars = estimateStringChars(harnessMessage.command + harnessMessage.output);
-      break;
+      return Math.ceil(chars / 4);
     }
     case "branchSummary":
     case "compactionSummary": {
       chars = estimateStringChars(harnessMessage.summary);
-      break;
+      return Math.ceil(chars / 4);
     }
   }
-  return estimateTokensFromChars(chars);
+
+  return 0;
 }
 function findValidCutPoints(
   entries: SessionTreeEntry[],
