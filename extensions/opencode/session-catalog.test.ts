@@ -31,7 +31,10 @@ const temporaryDirectories: string[] = [];
 const originalPath = process.env.PATH;
 const originalUnrelatedEnv = process.env.CATALOG_UNRELATED_ENV;
 
-async function installFakeOpenCode(assistantText = "hi"): Promise<string> {
+async function installFakeOpenCode(
+  assistantText = "hi",
+  toolInput: Record<string, unknown> = { command: "pwd" },
+): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-opencode-catalog-"));
   temporaryDirectories.push(directory);
   const executable = path.join(directory, "opencode");
@@ -70,7 +73,7 @@ async function installFakeOpenCode(assistantText = "hi"): Promise<string> {
             id: "prt_tool",
             type: "tool",
             tool: "bash",
-            state: { status: "completed", input: { command: "pwd" }, output: "/workspace" },
+            state: { status: "completed", input: toolInput, output: "/workspace" },
           },
         ],
       },
@@ -195,6 +198,20 @@ describe("OpenCode session catalog", () => {
       const answer = transcript.items.find((item) => item.type === "agentMessage");
       expect(answer?.text?.endsWith("…")).toBe(true);
       expect(Buffer.byteLength(JSON.stringify(transcript), "utf8")).toBeLessThan(20 * 1024 * 1024);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not split surrogate pairs when truncating tool input",
+    async () => {
+      await installFakeOpenCode("hi", { value: `${"x".repeat(19_989)}😀tail` });
+      const transcript = await readLocalOpenCodeTranscriptPage({
+        threadId: "ses_test",
+        limit: 20,
+      });
+      const toolCall = transcript.items.find((item) => item.type === "toolCall");
+
+      expect(toolCall?.text).toBe(`bash\n{"value":"${"x".repeat(19_989)}…`);
     },
   );
 

@@ -28,7 +28,10 @@ const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalPath = process.env.PATH;
 
-async function createPiStore(assistantText = "hi"): Promise<string> {
+async function createPiStore(
+  assistantText = "hi",
+  toolArguments: Record<string, unknown> = { command: "pwd" },
+): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-catalog-"));
   temporaryDirectories.push(directory);
   process.env.PI_CODING_AGENT_SESSION_DIR = directory;
@@ -60,7 +63,7 @@ async function createPiStore(assistantText = "hi"): Promise<string> {
         content: [
           { type: "thinking", thinking: "thinking" },
           { type: "text", text: assistantText },
-          { type: "toolCall", id: "call-1", name: "bash", arguments: { command: "pwd" } },
+          { type: "toolCall", id: "call-1", name: "bash", arguments: toolArguments },
         ],
       },
     },
@@ -272,6 +275,14 @@ describe("Pi session catalog", () => {
     const answer = transcript.items.find((item) => item.type === "agentMessage");
     expect(answer?.text?.endsWith("…")).toBe(true);
     expect(Buffer.byteLength(JSON.stringify(transcript), "utf8")).toBeLessThan(20 * 1024 * 1024);
+  });
+
+  it("does not split surrogate pairs when truncating tool arguments", async () => {
+    await createPiStore("hi", { value: `${"x".repeat(19_989)}😀tail` });
+    const transcript = await readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 });
+    const toolCall = transcript.items.find((item) => item.type === "toolCall");
+
+    expect(toolCall?.text).toBe(`bash\n{"value":"${"x".repeat(19_989)}…`);
   });
 
   it("reads legacy linear sessions and visible extended messages", async () => {
