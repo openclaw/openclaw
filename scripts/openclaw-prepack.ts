@@ -3,6 +3,7 @@
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { writePackageDistInventory } from "./lib/package-dist-inventory.ts";
@@ -18,7 +19,10 @@ const requiredControlUiCompressionSuffixes = [".br", ".gz"] as const;
 const DEFAULT_PREPACK_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG";
 const PREPARED_RELEASE_ENV = "OPENCLAW_PREPACK_PREPARED";
-const EXTERNAL_WORKSPACE_PACKAGES_ENV = "OPENCLAW_PREPACK_EXTERNAL_WORKSPACE_PACKAGES";
+const OCM_INTERNAL_NPM_BIN_ENV = "OCM_INTERNAL_NPM_BIN";
+const OCM_WORKSPACE_DIRS_ENV = "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS";
+const OCM_ADAPTER_BASENAME = "ocm-npm-workspace-deps.mjs";
+const NPM_COMMAND_ENV = "npm_command";
 const SELF_CONTAINED_SOURCE_PACK_COMMAND =
   "node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog";
 
@@ -29,7 +33,34 @@ type PreparedFileReader = {
 
 type PackageManifest = {
   dependencies?: Record<string, unknown>;
+  name?: unknown;
 };
+
+function ocmExternalizesWorkspacePackage(packageName: string, env: NodeJS.ProcessEnv): boolean {
+  if (env[NPM_COMMAND_ENV] !== "pack") {
+    return false;
+  }
+  const adapterPath = env[OCM_INTERNAL_NPM_BIN_ENV]?.trim();
+  if (!adapterPath || path.basename(adapterPath) !== OCM_ADAPTER_BASENAME) {
+    return false;
+  }
+  const workspaceDirs = (env[OCM_WORKSPACE_DIRS_ENV] ?? "")
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  // OCM uses these same manifests to pack and install dependencies beside the root archive.
+  // Require the exact package here so unrelated ambient paths cannot bypass the plain-pack guard.
+  return workspaceDirs.some((workspaceDir) => {
+    try {
+      const manifest = JSON.parse(
+        readFileSync(path.join(workspaceDir, "package.json"), "utf8"),
+      ) as PackageManifest;
+      return manifest.name === packageName;
+    } catch {
+      return false;
+    }
+  });
+}
 
 function normalizeFiles(files: Iterable<string>): Set<string> {
   return new Set(Array.from(files, (file) => file.replace(/\\/g, "/")));
@@ -46,15 +77,7 @@ export function collectSourcePackWorkspaceDependencyErrors(
   if (typeof aiDependency !== "string" || !aiDependency.trim().startsWith("workspace:")) {
     return [];
   }
-  // OCM declares only packages that its adapter later packs and installs beside the root archive.
-  // Without that second half, allowing a workspace dependency here would produce a broken tarball.
-  const externalWorkspacePackages = new Set(
-    (env[EXTERNAL_WORKSPACE_PACKAGES_ENV] ?? "")
-      .split(",")
-      .map((name) => name.trim())
-      .filter(Boolean),
-  );
-  if (externalWorkspacePackages.has("@openclaw/ai")) {
+  if (ocmExternalizesWorkspacePackage("@openclaw/ai", env)) {
     return [];
   }
   return [

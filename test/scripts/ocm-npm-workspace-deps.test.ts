@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildInstallManifest,
   parseWorkspaceDependencyDirs,
-  readWorkspacePackageNames,
   resolveNpmEnvironment,
   resolveRuntimePackEnvironment,
   resolveRuntimePackPlan,
@@ -22,18 +21,8 @@ const adapterPath = fileURLToPath(
 describe("OCM npm workspace dependency adapter", () => {
   it("allows Unreleased notes only for non-publishing pack commands", () => {
     const env = { KEEP: "value" };
-    expect(resolveNpmEnvironment(["install"], [], env)).toBe(env);
-    expect(resolveNpmEnvironment(["pack", "--silent"], ["@openclaw/ai"], env)).toEqual({
-      KEEP: "value",
-      OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1",
-      OPENCLAW_PREPACK_EXTERNAL_WORKSPACE_PACKAGES: "@openclaw/ai",
-    });
-    expect(
-      resolveNpmEnvironment(["pack", "--silent"], [], {
-        ...env,
-        OPENCLAW_PREPACK_EXTERNAL_WORKSPACE_PACKAGES: "@openclaw/ai",
-      }),
-    ).toEqual({
+    expect(resolveNpmEnvironment(["install"], env)).toBe(env);
+    expect(resolveNpmEnvironment(["pack", "--silent"], env)).toEqual({
       KEEP: "value",
       OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1",
     });
@@ -95,18 +84,6 @@ describe("OCM npm workspace dependency adapter", () => {
     expect(
       parseWorkspaceDependencyDirs(["packages/ai", "extensions/example"].join(delimiter), "/repo"),
     ).toEqual(["/repo/packages/ai", "/repo/extensions/example"]);
-  });
-
-  it("reads the exact package names externalized by the adapter", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-ocm-package-names-"));
-    try {
-      const aiDir = join(root, "ai");
-      mkdirSync(aiDir);
-      writeFileSync(join(aiDir, "package.json"), '{"name":"@openclaw/ai"}\n');
-      expect(readWorkspacePackageNames([aiDir])).toEqual(["@openclaw/ai"]);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
   });
 
   it("replaces the root archive argument with a prepared install manifest", () => {
