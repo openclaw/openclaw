@@ -13,8 +13,8 @@ import {
   type GatewayActiveWorkSnapshot,
 } from "./gateway-active-work.js";
 
-export const GATEWAY_SUSPEND_TTL_MS = 2 * 60_000;
-export const GATEWAY_SUSPEND_RETRY_AFTER_MS = 20_000;
+const GATEWAY_SUSPEND_TTL_MS = 2 * 60_000;
+const GATEWAY_SUSPEND_RETRY_AFTER_MS = 20_000;
 const GATEWAY_SCHEDULER_RECOVERY_RETRY_MS = 1_000;
 
 type GatewaySchedulerRecoveryResult = {
@@ -23,17 +23,17 @@ type GatewaySchedulerRecoveryResult = {
   retryAfterMs: number;
 };
 
-export type GatewaySuspendPrepareResult =
+type GatewaySuspendPrepareResult =
   | GatewaySuspendPrepareWireResult
   | { status: "conflict"; expiresAtMs: number }
   | GatewaySchedulerRecoveryResult;
 
-export type GatewaySuspendStatusResult =
+type GatewaySuspendStatusResult =
   | GatewaySuspendStatusWireResult
   | { status: "conflict"; expiresAtMs: number }
   | GatewaySchedulerRecoveryResult;
 
-export type GatewaySuspendResumeResult =
+type GatewaySuspendResumeResult =
   | GatewaySuspendResumeWireResult
   | { ok: false; reason: "suspension-mismatch" }
   | { ok: false; reason: "scheduler-resume-failed"; retryAfterMs: number };
@@ -405,7 +405,7 @@ export function resumeGatewaySuspend(suspensionId: string): GatewaySuspendResume
   };
 }
 
-function resetGatewaySuspendCoordinator(reason: "lifecycle" | "test"): void {
+function resetGatewaySuspendCoordinator(): void {
   const current = COORDINATOR_STATE.current;
   const retired = COORDINATOR_STATE.retiredForLifecycleReset;
   COORDINATOR_STATE.current = null;
@@ -419,7 +419,7 @@ function resetGatewaySuspendCoordinator(reason: "lifecycle" | "test"): void {
     try {
       entry.resumeScheduling();
     } catch (err) {
-      entry.warn?.(`gateway scheduler resume failed during ${reason} reset: ${String(err)}`);
+      entry.warn?.(`gateway scheduler resume failed during lifecycle reset: ${String(err)}`);
     }
     entry.reopenAdmission();
   }
@@ -428,9 +428,5 @@ function resetGatewaySuspendCoordinator(reason: "lifecycle" | "test"): void {
 // An in-process restart rebuilds scheduler and admission ownership. Resume and
 // discard the old suspension first so paused work cannot leak across lifecycles.
 export function resetGatewaySuspendCoordinatorForLifecycleRestart(): void {
-  resetGatewaySuspendCoordinator("lifecycle");
-}
-
-export function resetGatewaySuspendCoordinatorForTest(): void {
-  resetGatewaySuspendCoordinator("test");
+  resetGatewaySuspendCoordinator();
 }

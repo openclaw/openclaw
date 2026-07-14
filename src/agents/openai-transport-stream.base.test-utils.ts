@@ -22,7 +22,6 @@ import {
   buildTransportAwareSimpleStreamFn,
   createBoundaryAwareStreamFnForModel,
   createOpenClawTransportStreamFnForModel,
-  isTransportAwareApiSupported,
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
@@ -1156,15 +1155,6 @@ describe("openai transport stream", () => {
     });
   });
 
-  it("reports the supported transport-aware APIs", () => {
-    expect(isTransportAwareApiSupported("openai-responses")).toBe(true);
-    expect(isTransportAwareApiSupported("openai-chatgpt-responses")).toBe(true);
-    expect(isTransportAwareApiSupported("openai-completions")).toBe(true);
-    expect(isTransportAwareApiSupported("azure-openai-responses")).toBe(true);
-    expect(isTransportAwareApiSupported("anthropic-messages")).toBe(true);
-    expect(isTransportAwareApiSupported("google-generative-ai")).toBe(true);
-  });
-
   it("builds boundary-aware stream shapers for supported default agent transports", () => {
     expect(
       createBoundaryAwareStreamFnForModel(
@@ -1406,3 +1396,4 @@ describe("openai transport stream", () => {
     expect(client.constructor.name).toBe("AzureOpenAI");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -240,8 +240,7 @@ function isSlackDirectRoutedThreadTurn(ctx: MsgContext): boolean {
   );
 }
 
-/** Resolves silent-reply conversation type for prompt instructions. */
-export function resolvePromptSilentReplyConversationType(params: {
+function resolvePromptSilentReplyConversationType(params: {
   ctx: Pick<
     MsgContext,
     "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "CommandTurn" | "SessionKey"
@@ -263,8 +262,7 @@ export function resolvePromptSilentReplyConversationType(params: {
   return undefined;
 }
 
-/** Rewrites system-event prompt context to the persisted session channel when available. */
-export function resolvePromptSessionContextForSystemEvent(params: {
+function resolvePromptSessionContextForSystemEvent(params: {
   sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
   ctx?: Pick<MsgContext, "Provider">;
@@ -349,8 +347,7 @@ export function resolvePromptSessionContextForSystemEvent(params: {
   return changed ? next : sessionCtx;
 }
 
-/** Builds the prompt hint that explains one-shot exec override settings. */
-export function buildExecOverridePromptHint(params: {
+function buildExecOverridePromptHint(params: {
   execOverrides?: ExecOverrides;
   elevatedLevel: ElevatedLevel;
   fullAccessAvailable?: boolean;
@@ -1519,7 +1516,7 @@ export async function runPreparedReply(
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     queuedLifecycle: opts?.queuedFollowupLifecycle,
-    onFollowupAdmissionWaitChange: opts?.onFollowupAdmissionWaitChange,
+    onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
@@ -1697,3 +1694,4 @@ export async function runPreparedReply(
     replyOperation: providedReplyOperation,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

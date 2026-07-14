@@ -735,3 +735,4 @@ export async function handleDiscordGuildAction(
       throw new Error(`Unknown action: ${action}`);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

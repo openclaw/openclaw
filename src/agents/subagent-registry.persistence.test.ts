@@ -8,14 +8,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import {
-  clearSessionStoreCacheForTest,
-  drainSessionStoreWriterQueuesForTest,
-} from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue, withEnv } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
@@ -230,8 +227,7 @@ describe("subagent registry persistence", () => {
   afterEach(async () => {
     testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
-    await drainSessionStoreWriterQueuesForTest();
-    clearSessionStoreCacheForTest();
+    await cleanupSessionStateForTest();
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       tempStateDir = null;
@@ -1135,3 +1131,4 @@ describe("subagent registry persistence", () => {
     expect(registryPath).toContain(path.join(os.tmpdir(), "openclaw-test-state"));
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

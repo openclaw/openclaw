@@ -11,7 +11,6 @@ import {
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
-  resetGatewaySuspendCoordinatorForTest,
   resumeGatewaySuspend,
 } from "./gateway-suspend-coordinator.js";
 import {
@@ -20,7 +19,6 @@ import {
   scheduleGatewaySigusr1Restart,
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
-  testing,
 } from "./restart.js";
 
 function inspectors(): GatewayActiveWorkInspectors {
@@ -46,12 +44,18 @@ function countSigusr1Emits(calls: readonly unknown[][]): number {
   return calls.filter((args) => args[0] === "SIGUSR1").length;
 }
 
+function resetGatewayLifecycleState(): void {
+  resetGatewaySuspendCoordinatorForLifecycleRestart();
+  resetGatewayRestartStateForInProcessRestart();
+}
+
 describe("scheduled restart during gateway suspension", () => {
   const sigusr1Handler = () => {};
 
   beforeEach(() => {
-    testing.resetSigusr1State();
-    resetGatewaySuspendCoordinatorForTest();
+    resetGatewayLifecycleState();
+    setGatewaySigusr1RestartPolicy({ allowExternal: false });
+    setPreRestartDeferralCheck(() => 0);
     resetGatewayWorkAdmission();
     vi.useFakeTimers();
     process.on("SIGUSR1", sigusr1Handler);
@@ -59,8 +63,9 @@ describe("scheduled restart during gateway suspension", () => {
 
   afterEach(() => {
     process.removeListener("SIGUSR1", sigusr1Handler);
-    testing.resetSigusr1State();
-    resetGatewaySuspendCoordinatorForTest();
+    resetGatewayLifecycleState();
+    setGatewaySigusr1RestartPolicy({ allowExternal: false });
+    setPreRestartDeferralCheck(() => 0);
     resetGatewayWorkAdmission();
     vi.useRealTimers();
     vi.restoreAllMocks();

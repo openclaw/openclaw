@@ -193,6 +193,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
       retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
       onLifecycleInterrupt,
+      onReplyAdmissionWaitChange: params.replyOptions?.onReplyAdmissionWaitChange,
     });
     if (
       admission.status === "skipped" &&
@@ -239,6 +240,7 @@ export function createDispatchReplyOperationCoordinator(params: {
           waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
           retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
           onLifecycleInterrupt,
+          onReplyAdmissionWaitChange: params.replyOptions?.onReplyAdmissionWaitChange,
         });
       }
     }
@@ -332,7 +334,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     const operationSignal =
       dispatchReplyOperation?.abortSignal ?? dispatchLifecycleAbortController?.signal;
     // The operation mirrors upstream aborts until the backend commits its
-    // terminal outcome, then keeps delivery alive after freezeAbort().
+    // terminal outcome, then keeps delivery alive during bounded finalization.
     const upstreamSignal = operationSignal ? undefined : params.replyOptions?.abortSignal;
     if (
       cachedDispatchAbortSignal &&

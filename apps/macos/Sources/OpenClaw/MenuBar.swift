@@ -99,6 +99,12 @@ struct OpenClawApp: App {
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         .windowResizability(.contentSize)
         .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Session") {
+                    DashboardManager.shared.dispatchNativeCommand(.newSession)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+            }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
                     self.openWindow(id: SettingsWindowOpener.windowID)
@@ -116,6 +122,13 @@ struct OpenClawApp: App {
                     DashboardManager.shared.navigateForward()
                 }
                 .keyboardShortcut("]", modifiers: .command)
+
+                Divider()
+
+                Button("Command Palette…") {
+                    DashboardManager.shared.dispatchNativeCommand(.commandPalette)
+                }
+                .keyboardShortcut("k", modifiers: .command)
             }
         }
         .onChange(of: self.isMenuPresented) { _, _ in
@@ -447,7 +460,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
         AppStateStore.shared.applyPeekabooBridgeHostState()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+            if !PostUpdateController.shared.startIfNeeded() {
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+            }
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            DashboardManager.shared.preloadIfConfigured()
         }
 
         #if DEBUG
@@ -535,14 +554,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func shouldOpenDashboardInsteadOfOnboarding(
         connectionMode: AppState.ConnectionMode,
         onboardingSeen: Bool,
-        crestodianResumePending: Bool,
+        systemAgentResumePending: Bool,
         gatewayConnected: Bool,
         configuredInferenceModel: String?) -> Bool
     {
         let model = configuredInferenceModel?.trimmingCharacters(in: .whitespacesAndNewlines)
         return connectionMode != .unconfigured &&
             !onboardingSeen &&
-            !crestodianResumePending &&
+            !systemAgentResumePending &&
             gatewayConnected &&
             model?.isEmpty == false
     }
@@ -575,7 +594,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func scheduleFirstRunOnboardingIfNeeded(gatewayConnected: Bool) async {
         let connectionMode = AppStateStore.shared.connectionMode
-        let expectedRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+        let expectedRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
         var configuredInferenceModel: String?
         if connectionMode != .unconfigured,
            !AppStateStore.shared.onboardingSeen,
@@ -586,7 +605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             // Bind inference discovery to the connected route. A socket without a
-            // default-agent model cannot run Crestodian and must stay in onboarding.
+            // default-agent model cannot run OpenClaw and must stay in onboarding.
             do {
                 configuredInferenceModel = try await GatewayConnection.shared.configuredInferenceModel(
                     ifCurrentRoute: route)
@@ -597,7 +616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             let gatewayRouteIsCurrent = await GatewayConnection.shared.isCurrentRoute(route)
-            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+            let currentRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
             guard Self.isCurrentFirstRunInferenceProbe(
                 expectedConnectionMode: connectionMode,
                 currentConnectionMode: AppStateStore.shared.connectionMode,
@@ -610,11 +629,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         let onboardingSeen = AppStateStore.shared.onboardingSeen
-        let crestodianResumePending = OnboardingCrestodianResumeStore.isPending(for: expectedRouteIdentity)
+        let systemAgentResumePending = OnboardingSystemAgentResumeStore.isPending(for: expectedRouteIdentity)
         let shouldOpenDashboard = Self.shouldOpenDashboardInsteadOfOnboarding(
             connectionMode: connectionMode,
             onboardingSeen: onboardingSeen,
-            crestodianResumePending: crestodianResumePending,
+            systemAgentResumePending: systemAgentResumePending,
             gatewayConnected: gatewayConnected,
             configuredInferenceModel: configuredInferenceModel)
         if connectionMode != .unconfigured, onboardingSeen || shouldOpenDashboard {
@@ -633,7 +652,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func scheduleFirstRunOnboardingRecovery() {
         self.scheduleFirstRunOnboardingPresentation(
             expectedConnectionMode: AppStateStore.shared.connectionMode,
-            expectedRouteIdentity: OnboardingCrestodianResumeStore.selectedRouteIdentity())
+            expectedRouteIdentity: OnboardingSystemAgentResumeStore.selectedRouteIdentity())
     }
 
     private func scheduleFirstRunOnboardingPresentation(
@@ -644,7 +663,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+            let currentRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
             guard Self.shouldPresentScheduledFirstRunOnboarding(
                 expectedConnectionMode: expectedConnectionMode,
                 currentConnectionMode: AppStateStore.shared.connectionMode,
@@ -785,6 +804,13 @@ func allowedSparkleChannels(forGatewayUpdateChannel channel: String?) -> Set<Str
 extension SparkleUpdaterController: SPUUpdaterDelegate {
     func allowedChannels(for _: SPUUpdater) -> Set<String> {
         allowedSparkleChannels(forGatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel())
+    }
+
+    func updater(_: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        guard let currentVersion = GatewayEnvironment.appVersionString() else { return }
+        PostAppUpdateReceiptStore.record(
+            fromVersion: currentVersion,
+            toVersion: item.displayVersionString)
     }
 }
 

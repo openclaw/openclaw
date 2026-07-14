@@ -3086,6 +3086,29 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(subscriptionParams.messageChannel).toBe("telegram");
   });
 
+  it("preserves source delivery reported by bridged tool lifecycle events", async () => {
+    const baseSubscribe = hoisted.subscribeEmbeddedAgentSessionMock.getMockImplementation();
+    if (!baseSubscribe) {
+      throw new Error("missing embedded subscription mock");
+    }
+    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation((params) => {
+      const subscription = baseSubscribe(params);
+      params.onDeliveredMessageToolOnlySourceReply?.();
+      return subscription;
+    });
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+  });
+
   it("skips maintenance when afterTurn fails", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async () => {
@@ -3469,6 +3492,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       content: "durable current turn",
       idempotencyKey: "restart-safe-run:user",
       timestamp: 1,
+      __openclaw: { senderId: "alice-id", senderName: "Alice" },
     };
     const recorder = createUserTurnTranscriptRecorder({
       message: admittedMessage,
@@ -3490,10 +3514,12 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       },
       createSession: () => {
         const session = createDefaultEmbeddedSession({ initialMessages: [admittedMessage] });
+        session.agent.convertToLlm = vi.fn(async (messages) => messages as never);
         const baseStreamFn = session.agent.streamFn;
         session.agent.streamFn = async (...args: unknown[]) => {
           const context = args[1] as { messages?: AgentMessage[] } | undefined;
-          submittedMessages = context?.messages ?? [];
+          submittedMessages =
+            ((await session.agent.convertToLlm?.(context?.messages ?? [])) as AgentMessage[]) ?? [];
           return await baseStreamFn?.(...args);
         };
         session.prompt = async (prompt, options) => {
@@ -3518,13 +3544,12 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       },
     });
 
-    expect(
-      submittedMessages.filter(
-        (message) =>
-          (message as { idempotencyKey?: unknown }).idempotencyKey ===
-          admittedMessage.idempotencyKey,
-      ),
-    ).toEqual([expect.objectContaining({ content: admittedMessage.content, role: "user" })]);
+    expect(submittedMessages.filter((message) => message.role === "user")).toEqual([
+      expect.objectContaining({
+        content: expect.stringContaining('"name": "Alice"'),
+        role: "user",
+      }),
+    ]);
   });
 
   it("passes context engines the message budget after reserve and rendered prompt pressure", async () => {
@@ -3743,3 +3768,4 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

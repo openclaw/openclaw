@@ -8,7 +8,7 @@ import {
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/session-binding-runtime";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import { createMatrixRoomMessageHandler, MatrixRetryableInboundError } from "./handler.js";
@@ -114,6 +114,10 @@ beforeEach(() => {
     };
   });
   resolveMatrixMentionsForBodyMock.mockClear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function createReactionHarness(params?: {
@@ -3168,6 +3172,7 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("uses resolved Matrix account progress maxLines for draft text", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3186,15 +3191,17 @@ describe("matrix monitor handler draft streaming", () => {
     await opts.onReplyStart?.();
     await opts.onItemEvent?.({ progressText: "first" });
     await opts.onItemEvent?.({ progressText: "second" });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toBe("- `second`");
     await finish();
+    vi.useRealTimers();
   });
 
   it("keeps truncated Matrix tool progress UTF-16 safe", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3211,15 +3218,17 @@ describe("matrix monitor handler draft streaming", () => {
     const progressText = `${progressPrefix}🎉tail`;
     await opts.onItemEvent?.({ progressText });
     await opts.onItemEvent?.({ progressText });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toBe(`- \`${progressPrefix}...\``);
     await finish();
+    vi.useRealTimers();
   });
 
   it("replaces recovered Matrix command progress instead of leaving stale failed text", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3245,10 +3254,10 @@ describe("matrix monitor handler draft streaming", () => {
       status: "failed",
       progressText: "run openclaw cron -> run jq (agent) failed",
     });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toContain("failed");
 
     await opts.onCommandOutput?.({
@@ -3273,9 +3282,11 @@ describe("matrix monitor handler draft streaming", () => {
     expect(recoveredEdit?.[2]).not.toContain("completed");
     expect(recoveredEdit?.[2]).not.toContain("failed");
     expect(recoveredEdit?.[2]).not.toContain("run openclaw cron -> run jq");
+    vi.useRealTimers();
   });
 
   it("replaces Matrix tool-start progress when command output completes", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3299,10 +3310,10 @@ describe("matrix monitor handler draft streaming", () => {
       phase: "update",
       args: { command: "npm install" },
     });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toContain("install dependencies");
 
     await opts.onItemEvent?.({
@@ -3330,9 +3341,11 @@ describe("matrix monitor handler draft streaming", () => {
     );
     expect(completedEdit).toBeUndefined();
     expect(singleTextMessageBody()).toContain("install dependencies");
+    vi.useRealTimers();
   });
 
   it("replaces Matrix patch progress when the patch summary completes", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3358,10 +3371,10 @@ describe("matrix monitor handler draft streaming", () => {
       phase: "update",
       progressText: "updating Matrix progress handling",
     });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toContain("updating Matrix progress handling");
 
     await opts.onPatchSummary?.({
@@ -3379,6 +3392,7 @@ describe("matrix monitor handler draft streaming", () => {
         eventId === "$draft1" && typeof body === "string" && body.includes("1 file modified"),
     );
     expect(patchEdit?.[2]).not.toContain("updating Matrix progress handling");
+    vi.useRealTimers();
   });
 
   it("keeps Matrix tool progress mentions inside code formatting", async () => {
@@ -4495,3 +4509,4 @@ describe("matrix monitor handler block streaming config", () => {
     expect(capturedDisableBlockStreaming).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

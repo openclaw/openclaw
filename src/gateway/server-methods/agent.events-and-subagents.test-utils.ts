@@ -9,7 +9,7 @@ import {
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import {
-  resetGatewaySuspendCoordinatorForTest,
+  resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -54,7 +54,7 @@ describe("gateway agent handler", () => {
 
   it("stops continuation release recovery after gateway generation rotation", async () => {
     vi.useFakeTimers();
-    resetGatewaySuspendCoordinatorForTest();
+    resetGatewaySuspendCoordinatorForLifecycleRestart();
     resetGatewayWorkAdmission();
     try {
       const { sessionKey, store } = setupCronContinuationReleaseFixture();
@@ -120,7 +120,7 @@ describe("gateway agent handler", () => {
         status: "running",
       });
     } finally {
-      resetGatewaySuspendCoordinatorForTest();
+      resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetGatewayWorkAdmission();
       vi.useRealTimers();
     }
@@ -1421,3 +1421,4 @@ describe("gateway agent handler", () => {
     expect(callArgs).not.toHaveProperty("bashElevated");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

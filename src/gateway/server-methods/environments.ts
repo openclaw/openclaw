@@ -98,6 +98,18 @@ function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironme
     return [];
   }
 }
+function listWorkerProfiles(context: GatewayRequestContext) {
+  if (!context.workerEnvironmentService || !context.workerPlacementDispatchService) {
+    return [];
+  }
+  const profiles = context.getRuntimeConfig().cloudWorkers?.profiles ?? {};
+  return Object.entries(profiles)
+    .flatMap(([id, profile]) => {
+      const providerId = typeof profile.provider === "string" ? profile.provider.trim() : "";
+      return id.trim() && providerId ? [{ id: id.trim(), providerId }] : [];
+    })
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+}
 async function respondWorkerMutation(
   respond: RespondFn,
   run: () => Promise<WorkerEnvironmentServiceRecord>,
@@ -129,7 +141,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       environments.push(
         ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),
       );
-      respond(true, { environments }, undefined);
+      const profiles = listWorkerProfiles(context);
+      respond(true, { environments, ...(profiles.length > 0 ? { profiles } : {}) }, undefined);
     });
   },
   "environments.status": async ({ params, respond, context }) => {

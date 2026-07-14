@@ -1692,3 +1692,4 @@ describe("createVideoGenerateTool", () => {
     expect(input.resolution).toBe("draft-large");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

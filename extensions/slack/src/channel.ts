@@ -948,3 +948,4 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
   },
   outbound: slackChannelOutbound,
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

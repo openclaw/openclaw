@@ -11,6 +11,7 @@ import {
   type GenerateContentResponse,
   type Part,
   type ThinkingConfig,
+  ThinkingLevel,
 } from "@google/genai";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -37,16 +38,7 @@ import { transformMessages } from "./transform-messages.js";
 
 type GoogleApiType = "google-generative-ai" | "google-vertex";
 
-/**
- * Thinking level for Gemini 3 models.
- * Mirrors Google's ThinkingLevel enum values.
- */
-export type GoogleThinkingLevel =
-  | "THINKING_LEVEL_UNSPECIFIED"
-  | "MINIMAL"
-  | "LOW"
-  | "MEDIUM"
-  | "HIGH";
+type GoogleThinkingLevel = `${ThinkingLevel}`;
 
 type GoogleToolChoice = "auto" | "none" | "any";
 
@@ -485,7 +477,6 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   context: Context,
   options: GoogleProviderOptions = {},
   configHooks?: {
-    mapThinkingLevel?: (level: GoogleThinkingLevel) => ThinkingConfig["thinkingLevel"];
     getDisabledThinkingConfig?: (model: Model<T>) => ThinkingConfig;
   },
 ): GenerateContentParameters {
@@ -523,9 +514,7 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   if (options.thinking?.enabled && model.reasoning) {
     const thinkingConfig: ThinkingConfig = { includeThoughts: true };
     if (options.thinking.level !== undefined) {
-      thinkingConfig.thinkingLevel = configHooks?.mapThinkingLevel
-        ? configHooks.mapThinkingLevel(options.thinking.level)
-        : (options.thinking.level as ThinkingConfig["thinkingLevel"]);
+      thinkingConfig.thinkingLevel = ThinkingLevel[options.thinking.level];
     } else if (options.thinking.budgetTokens !== undefined) {
       thinkingConfig.thinkingBudget = options.thinking.budgetTokens;
     }
@@ -595,25 +584,19 @@ export function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(
   model: Model<T>,
   config?: {
     includeGemma4?: boolean;
-    mapThinkingLevel?: (level: GoogleThinkingLevel) => ThinkingConfig["thinkingLevel"];
   },
 ): ThinkingConfig {
-  const mapThinkingLevel = (level: GoogleThinkingLevel): ThinkingConfig["thinkingLevel"] =>
-    config?.mapThinkingLevel
-      ? config.mapThinkingLevel(level)
-      : (level as ThinkingConfig["thinkingLevel"]);
-
   // Google docs: Gemini 3.1 Pro cannot disable thinking, and Gemini 3 Flash / Flash-Lite
   // do not support full thinking-off either. For Gemini 3 models, use the lowest supported
   // thinkingLevel without includeThoughts so hidden thinking remains invisible to OpenClaw.
   if (isGemini3ProModel(model)) {
-    return { thinkingLevel: mapThinkingLevel("LOW") };
+    return { thinkingLevel: ThinkingLevel.LOW };
   }
   if (isGemini3FlashModel(model)) {
-    return { thinkingLevel: mapThinkingLevel("MINIMAL") };
+    return { thinkingLevel: ThinkingLevel.MINIMAL };
   }
   if (config?.includeGemma4 && isGemma4Model(model)) {
-    return { thinkingLevel: mapThinkingLevel("MINIMAL") };
+    return { thinkingLevel: ThinkingLevel.MINIMAL };
   }
 
   // Gemini 2.x supports disabling via thinkingBudget = 0.
@@ -637,38 +620,38 @@ function getGoogleThinkingLevel<T extends GoogleApiType>(
   effort: ClampedGoogleThinkingLevel,
   model: Model<T>,
   config?: { includeGemma4?: boolean },
-): GoogleThinkingLevel {
+): ThinkingLevel {
   if (isGemini3ProModel(model)) {
     switch (effort) {
       case "minimal":
       case "low":
-        return "LOW";
+        return ThinkingLevel.LOW;
       case "medium":
       case "high":
-        return "HIGH";
+        return ThinkingLevel.HIGH;
     }
   }
   if (config?.includeGemma4 && isGemma4Model(model)) {
     switch (effort) {
       case "minimal":
       case "low":
-        return "MINIMAL";
+        return ThinkingLevel.MINIMAL;
       case "medium":
       case "high":
-        return "HIGH";
+        return ThinkingLevel.HIGH;
     }
   }
   switch (effort) {
     case "minimal":
-      return "MINIMAL";
+      return ThinkingLevel.MINIMAL;
     case "low":
-      return "LOW";
+      return ThinkingLevel.LOW;
     case "medium":
-      return "MEDIUM";
+      return ThinkingLevel.MEDIUM;
     case "high":
-      return "HIGH";
+      return ThinkingLevel.HIGH;
   }
-  return "HIGH";
+  return ThinkingLevel.HIGH;
 }
 
 function getGoogleBudget<T extends GoogleApiType>(
@@ -934,3 +917,4 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   });
   params.stream.end();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

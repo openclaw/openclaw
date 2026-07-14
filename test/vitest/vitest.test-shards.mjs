@@ -98,6 +98,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
+      "test/vitest/vitest.agents-core-isolated.config.ts",
       "test/vitest/vitest.agents-core.config.ts",
       "test/vitest/vitest.agents-embedded-agent.config.ts",
       "test/vitest/vitest.agents-support.config.ts",

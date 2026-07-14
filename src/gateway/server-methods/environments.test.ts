@@ -44,6 +44,19 @@ function mockContext(workerEnvironmentService?: TestWorkerService) {
       ],
     },
     workerEnvironmentService,
+    ...(workerEnvironmentService
+      ? {
+          workerPlacementDispatchService: { dispatch: vi.fn() },
+          getRuntimeConfig: () => ({
+            cloudWorkers: {
+              profiles: {
+                zeta: { provider: "static-ssh", settings: {} },
+                aws: { provider: "crabbox", settings: {} },
+              },
+            },
+          }),
+        }
+      : {}),
   };
 }
 
@@ -178,6 +191,10 @@ describe("environment gateway methods", () => {
 
     expect(ok).toBe(true);
     expect(payload).toMatchObject({
+      profiles: [
+        { id: "aws", providerId: "crabbox" },
+        { id: "zeta", providerId: "static-ssh" },
+      ],
       environments: [
         { id: "gateway", type: "local" },
         { id: "node:node-live", type: "node" },

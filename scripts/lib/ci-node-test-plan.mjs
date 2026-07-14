@@ -1,7 +1,9 @@
 // Builds CI node/Vitest shard plans from the full suite configuration.
 import { relative } from "node:path";
+import { agentsCoreIsolatedTestFiles } from "../../test/vitest/vitest.agents-paths.mjs";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
+import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { getUnitFastTestFilesForIncludePatterns } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { boundaryTestFiles } from "../../test/vitest/vitest.unit-paths.mjs";
 import { listTrackedTestFiles } from "./list-test-files.mjs";
@@ -34,7 +36,6 @@ const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
 const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
 const TOOLING_ISOLATED_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
-const TOOLING_ISOLATED_TEST_FILE = "test/scripts/openclaw-e2e-instance.test.ts";
 // The full matrix is capped at 28 jobs. Admit the consistently slow serial
 // shards first so short alphabetical groups cannot leave them on the tail.
 const FULL_NODE_TEST_ADMISSION_PRIORITY = new Map([
@@ -280,17 +281,18 @@ function resolveAgentCoreShardName(file) {
 }
 
 function createAgentCoreSplitShards() {
+  const isolatedTests = new Set(agentsCoreIsolatedTestFiles);
   const groups = new Map();
   for (const file of listTestFiles("src/agents")) {
     const name = relative("src/agents", file).replaceAll("\\", "/");
-    if (name.includes("/")) {
+    if (name.includes("/") || isolatedTests.has(file)) {
       continue;
     }
     const shardName = resolveAgentCoreShardName(file);
     groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
   }
 
-  return [
+  const sharedShards = [
     "agentic-agents-core-auth",
     "agentic-agents-core-models",
     "agentic-agents-core-tools",
@@ -305,6 +307,16 @@ function createAgentCoreSplitShards() {
       shardName,
     }))
     .filter((shard) => shard.includePatterns.length > 0);
+
+  return [
+    ...sharedShards,
+    {
+      configs: ["test/vitest/vitest.agents-core-isolated.config.ts"],
+      includePatterns: agentsCoreIsolatedTestFiles,
+      requiresDist: false,
+      shardName: "agentic-agents-core-isolated",
+    },
+  ];
 }
 
 const GATEWAY_SERVER_BACKED_HTTP_TESTS = new Set([
@@ -1045,7 +1057,7 @@ function listCompactToolingTestFiles() {
     ...boundaryTestFiles,
     ...unitFastFiles,
     TOOLING_DOCKER_TEST_FILE,
-    TOOLING_ISOLATED_TEST_FILE,
+    ...toolingIsolatedTestFiles,
   ]);
   return [...listTestFiles("test"), ...listTestFiles("src/scripts")].filter(
     (file) =>

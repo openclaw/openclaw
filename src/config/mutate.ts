@@ -43,6 +43,7 @@ import {
   resolveWriteEnvSnapshotForPath,
 } from "./io.write-prepare.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import type { ConfigMutationBase } from "./mutation-types.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveConfigPath } from "./paths.js";
 import {
@@ -63,9 +64,6 @@ import {
 } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
-
-/** Selects whether a mutation starts from runtime or source config shape. */
-export type ConfigMutationBase = "runtime" | "source";
 
 const CONFIG_MUTATION_LOCK_OPTIONS = {
   retries: {
@@ -1238,3 +1236,4 @@ export async function mutateConfigFileWithRetry<T = void>(params: {
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
