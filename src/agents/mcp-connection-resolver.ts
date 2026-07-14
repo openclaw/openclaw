@@ -189,6 +189,10 @@ function registerResolvedConnectionSecrets(connection: McpServerConnectionResolv
       registerSecretValueForRedaction(bareToken);
     }
   }
+  // The full resolved URL is itself credential material (session/signed paths,
+  // e.g. /sessions/<token>/mcp): transport connect errors from fetch/undici
+  // embed it verbatim, so exact-value registration must cover the whole string.
+  registerSecretValueForRedaction(connection.url);
   try {
     const url = new URL(connection.url);
     for (const queryValue of url.searchParams.values()) {

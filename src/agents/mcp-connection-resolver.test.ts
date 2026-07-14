@@ -82,6 +82,13 @@ describe("mcp connection resolver helpers", () => {
     expect(isSecretValueRegisteredForRedaction("Bearer test-auth-token")).toBe(true);
     expect(isSecretValueRegisteredForRedaction("test-auth-token")).toBe(true);
     expect(isSecretValueRegisteredForRedaction("placeholder-signature")).toBe(true);
+    // Full URL too: transport connect errors embed it verbatim (path-borne
+    // session tokens would otherwise leak through fetch/undici error strings).
+    expect(
+      isSecretValueRegisteredForRedaction(
+        "https://mcp.example.test/mail?sig=placeholder-signature",
+      ),
+    ).toBe(true);
     resetSecretRedactionRegistryForTest();
   });
 
