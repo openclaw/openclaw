@@ -232,6 +232,46 @@ async function createUnrelatedCanonicalMemoryIndex(
   }
 }
 
+async function seedCanonicalEmbeddingCacheConflict(agentPath: string): Promise<void> {
+  const db = new DatabaseSync(agentPath);
+  try {
+    db.prepare(
+      `INSERT INTO memory_embedding_cache (
+         provider, model, provider_key, hash, embedding, dims, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run("openai", "embed-model", "key", "chunk-hash", "[0,1,0]", 3, 41);
+  } finally {
+    db.close();
+  }
+}
+
+function readEmbeddingCacheRows(agentPath: string) {
+  const db = new DatabaseSync(agentPath);
+  try {
+    return db
+      .prepare(
+        `SELECT provider, model, provider_key, hash, embedding, dims, updated_at
+         FROM memory_embedding_cache
+         ORDER BY provider, model, provider_key, hash`,
+      )
+      .all();
+  } finally {
+    db.close();
+  }
+}
+
+function readDatabaseChecks(databasePath: string) {
+  const db = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return {
+      quickCheck: db.prepare("PRAGMA quick_check").all(),
+      integrityCheck: db.prepare("PRAGMA integrity_check").all(),
+    };
+  } finally {
+    db.close();
+  }
+}
+
 async function createCanonicalLegacyMemoryRowsWithFts(agentPath: string, ftsText: string) {
   await fs.mkdir(path.dirname(agentPath), { recursive: true });
   const db = new DatabaseSync(agentPath);
@@ -1400,6 +1440,60 @@ describe("memory-core doctor dreaming migration", () => {
     const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
     expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("keeps canonical embedding cache values while importing other legacy rows", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const archivedPath = `${legacyPath}.migrated`;
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    await createUnrelatedCanonicalMemoryIndex(agentPath);
+    await seedCanonicalEmbeddingCacheConflict(agentPath);
+
+    const migration = legacyMemoryIndexMigration();
+    const result = await migration.migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
+    ]);
+    expect(readMemoryRows(agentPath)).toEqual({
+      sources: [
+        { path: "MEMORY.md", source: "memory", hash: "file-hash" },
+        { path: "OTHER.md", source: "memory", hash: "canonical-other-file-hash" },
+      ],
+      chunks: [
+        { id: "canonical-other-chunk", text: "canonical unrelated memory" },
+        { id: "chunk-1", text: "remember this" },
+      ],
+      cache: [{ provider: "openai", hash: "chunk-hash" }],
+    });
+    expect(readEmbeddingCacheRows(agentPath)).toEqual([
+      {
+        provider: "openai",
+        model: "embed-model",
+        provider_key: "key",
+        hash: "chunk-hash",
+        embedding: "[0,1,0]",
+        dims: 3,
+        updated_at: 41,
+      },
+    ]);
+    expect(readDatabaseChecks(agentPath)).toEqual({
+      quickCheck: [{ quick_check: "ok" }],
+      integrityCheck: [{ integrity_check: "ok" }],
+    });
+    expect(readDatabaseChecks(archivedPath)).toEqual({
+      quickCheck: [{ quick_check: "ok" }],
+      integrityCheck: [{ integrity_check: "ok" }],
+    });
+
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
   });
 
   it("leaves legacy vector sidecars in place when vector dimensions conflict", async () => {

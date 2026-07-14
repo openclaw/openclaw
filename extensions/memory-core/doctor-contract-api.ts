@@ -500,6 +500,9 @@ function copyLegacyMemoryIndexRows(
       SELECT provider, model, provider_key, hash, embedding, dims, updated_at
       FROM ${schema}.embedding_cache;
     `);
+    // Cache rows are derived and keyed by their embedding inputs. If the
+    // canonical cache already has a key, keep its current value while still
+    // importing every non-conflicting legacy cache entry.
     assertLegacyRowsCopied(
       db,
       `SELECT COUNT(*) AS missing
@@ -510,9 +513,6 @@ function copyLegacyMemoryIndexRows(
            AND canonical.model = legacy.model
            AND canonical.provider_key = legacy.provider_key
            AND canonical.hash = legacy.hash
-           AND canonical.embedding IS legacy.embedding
-           AND canonical.dims IS legacy.dims
-           AND canonical.updated_at IS legacy.updated_at
        )`,
       "embedding_cache",
     );
