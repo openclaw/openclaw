@@ -752,6 +752,7 @@ describe("scoped vitest configs", () => {
     const providersTestConfig = requireTestConfig(defaultExtensionProvidersConfig);
     expect(providersTestConfig.dir).toBe(path.join(process.cwd(), "extensions"));
     expect(providersTestConfig.include).toEqual([
+      "aionly/**/*.test.ts",
       "amazon-bedrock/**/*.test.ts",
       "amazon-bedrock-mantle/**/*.test.ts",
       "anthropic/**/*.test.ts",
