@@ -109,9 +109,10 @@ new shared record, prefer the existing owner.
 
 ## Durable Core Boundary
 
-The beta 3 durable core is a local-first runtime substrate, not a product UI and
-not a general workflow engine. It records enough state to inspect, explain, and
-recover agent/session/task work without requiring external orchestration.
+The 2026.7.1 release durable core is a local-first runtime substrate, not a
+product UI and not a general workflow engine. It records enough state to
+inspect, explain, and recover agent/session/task work without requiring external
+orchestration.
 
 | Area             | Durable core owns                                                                    | Out of scope for durable core                                                            |
 | ---------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
@@ -176,7 +177,7 @@ handoff unless implementation work proves it directly.
 
 - No runtime code, schema, worker, CLI, Gateway, or transport changes from this
   docs-only RFC.
-- No default-on durable runtime behavior in beta 3.
+- No default-on durable runtime behavior in the 2026.7.1 release stack.
 - No product-specific task-card or Workboard policy in durable core.
 - No raw prompt, task, or tool-payload persistence by default.
 - No replay of side effects without idempotency, retention, and operation
