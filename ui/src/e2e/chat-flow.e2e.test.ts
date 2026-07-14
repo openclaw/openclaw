@@ -285,6 +285,13 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           splitEntry.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
         )
         .toBe(true);
+      await page.locator("openclaw-chat-pane").evaluate((pane) => {
+        (
+          globalThis as typeof globalThis & {
+            __classicChatPane?: Element;
+          }
+        ).__classicChatPane = pane;
+      });
       await splitEntry.click();
 
       // Each pane owns an in-flow header (title + workspace/split/close
@@ -292,6 +299,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       const headers = page.locator(".chat-pane__header");
       await expect.poll(() => panes.count()).toBe(2);
+      await expect
+        .poll(() =>
+          panes.first().evaluate(
+            (pane) =>
+              (
+                globalThis as typeof globalThis & {
+                  __classicChatPane?: Element;
+                }
+              ).__classicChatPane === pane,
+          ),
+        )
+        .toBe(true);
       await expect.poll(() => headers.count()).toBe(2);
       await expect
         .poll(async () => {
@@ -413,7 +432,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
       await gateway.emitChatFinal({ runId, text: "Harness verified." });
 
-      await page.getByText("Harness verified.").waitFor({ timeout: 10_000 });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Harness verified.")
+        .waitFor({ timeout: 10_000 });
 
       const spacedPairCommand = "/ pair qr";
       await page.locator(".agent-chat__composer-combobox textarea").fill(spacedPairCommand);
@@ -495,7 +517,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("chat.history")).length)
         .toBeGreaterThan(historyRequestsBefore);
-      await page.getByText(finalText, { exact: true }).waitFor();
+      await page.locator(".chat-thread-inner").getByText(finalText, { exact: true }).waitFor();
       await expect
         .poll(() =>
           page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).count(),
@@ -603,7 +625,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         runId: requireString(defaultParams.idempotencyKey, "default send idempotency key"),
         text: "Default shortcut received.",
       });
-      await page.getByText("Default shortcut received.").waitFor({ timeout: 10_000 });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Default shortcut received.")
+        .waitFor({ timeout: 10_000 });
 
       // The send shortcut moved to the Settings appearance page; picking it
       // there must apply to the chat composer after navigating back.
@@ -1049,11 +1074,15 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         text: "Visible progress from the targetless message tool.",
       });
       await page
+        .locator(".chat-thread-inner")
         .getByText("Visible progress from the targetless message tool.")
         .waitFor({ timeout: 10_000 });
 
       await gateway.emitChatFinal({ runId, text: "Visible automatic final reply." });
-      await page.getByText("Visible automatic final reply.").waitFor({ timeout: 10_000 });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Visible automatic final reply.")
+        .waitFor({ timeout: 10_000 });
       const bubbleTexts = await page.locator(".chat-thread .chat-bubble").allTextContents();
       for (const expectedText of [
         prompt,
@@ -1320,7 +1349,13 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await expect
         .poll(() => workbench.getAttribute("class"))
         .toContain("chat-workbench--dock-bottom");
-      expect(await page.locator(".chat-workspace-rail").isVisible()).toBe(true);
+      const workspaceRail = page.locator(".chat-workspace-rail");
+      await expect
+        .poll(async () => {
+          const box = await workspaceRail.boundingBox();
+          return Boolean(box && box.width > 0 && box.height > 0);
+        })
+        .toBe(true);
       expect(await page.locator(".chat-workspace-rail__dock").count()).toBe(0);
       expect(await page.locator(".chat-workspace-rail__grip").count()).toBe(0);
     } finally {
@@ -1825,7 +1860,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
-      await page.getByText("History race stayed visible.").waitFor({ timeout: 10_000 });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("History race stayed visible.")
+        .waitFor({ timeout: 10_000 });
       await page.locator(".agent-chat__composer-combobox textarea").fill("/");
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
@@ -1875,7 +1913,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
 
       await page.getByText(partialText).waitFor({ timeout: 10_000 });
-      await page.getByText("Error: gateway disconnected").waitFor({ timeout: 10_000 });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Error: gateway disconnected")
+        .waitFor({ timeout: 10_000 });
     } finally {
       await closeBrowserContext(context);
     }
@@ -2347,7 +2388,6 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const thread = page.locator(".chat-thread");
       await thread.hover();
       await page.mouse.wheel(0, -1_000_000);
-      await page.getByText(/^older retained message 1\n/).waitFor({ timeout: 10_000 });
       await expect
         .poll(() =>
           page
@@ -2359,6 +2399,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
             ),
         )
         .toBe(140);
+      // Prepending preserves the visible anchor. A renewed upward gesture
+      // reaches the newly loaded start instead of teleporting the reader.
+      await page.mouse.wheel(0, -1_000_000);
+      await page.getByText(/^older retained message 1\n/).waitFor({ timeout: 10_000 });
 
       await sessionA.click();
       await page.getByText(/^short session 2\n/).waitFor({ timeout: 10_000 });
@@ -3476,7 +3520,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await gateway.closeLatest(1006, "lost during tool call");
 
-      await page.getByText("Recovered from refreshed history.").waitFor({ timeout: 15_000 });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Recovered from refreshed history.")
+        .waitFor({ timeout: 15_000 });
       expect(await page.locator(".chat-queue").count()).toBe(0);
     } finally {
       await closeBrowserContext(context);
