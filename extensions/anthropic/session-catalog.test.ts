@@ -513,7 +513,7 @@ describe("Claude session catalog", () => {
         invocableCommands: commands.filter((command) => authorizedCommands.has(command)),
       },
     ];
-    const invoke = vi.fn(async ({ command }: { command: string }) => {
+    const invoke = vi.fn(async ({ command }: Parameters<PluginRuntime["nodes"]["invoke"]>[0]) => {
       if (command === CLAUDE_SESSIONS_LIST_COMMAND) {
         return {
           payloadJSON: JSON.stringify({
