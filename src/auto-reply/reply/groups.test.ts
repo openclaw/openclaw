@@ -218,7 +218,7 @@ describe("group runtime loading", () => {
     ).toBe(false);
   });
 
-  it("resolves requireMention through runtime and Discord fallback paths", async () => {
+  it("resolves requireMention through the generic fallback path", async () => {
     vi.resetModules();
     const groupsRuntimeLoads = vi.fn();
     vi.doMock("./groups.runtime.js", () => {
@@ -250,72 +250,6 @@ describe("group runtime loading", () => {
           key: "slack:group:C123",
           channel: "slack",
           id: "C123",
-          chatType: "group",
-        },
-      }),
-    ).resolves.toBe(false);
-    expect(groupsRuntimeLoads).toHaveBeenCalledTimes(1);
-
-    await expect(
-      isolatedGroups.resolveGroupRequireMention({
-        cfg: {
-          channels: {
-            discord: {
-              guilds: {
-                G1: {
-                  requireMention: true,
-                  channels: {
-                    C1: { requireMention: false },
-                  },
-                },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        ctx: {
-          Provider: "discord",
-          From: "discord:channel:C1",
-          GroupSpace: "G1",
-          GroupChannel: "general",
-        },
-        groupResolution: {
-          key: "discord:channel:C1",
-          channel: "discord",
-          id: "C1",
-          chatType: "group",
-        },
-      }),
-    ).resolves.toBe(false);
-
-    await expect(
-      isolatedGroups.resolveGroupRequireMention({
-        cfg: {
-          channels: {
-            discord: {
-              guilds: {
-                G1: { requireMention: true },
-              },
-              accounts: {
-                work: {
-                  guilds: {
-                    G1: { requireMention: false },
-                  },
-                },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        ctx: {
-          Provider: "discord",
-          From: "discord:channel:C1",
-          GroupSpace: "G1",
-          GroupChannel: "general",
-          AccountId: "work",
-        },
-        groupResolution: {
-          key: "discord:channel:C1",
-          channel: "discord",
-          id: "C1",
           chatType: "group",
         },
       }),

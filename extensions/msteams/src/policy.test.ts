@@ -197,5 +197,65 @@ describe("msteams policy", () => {
         }),
       ).toEqual({ allow: ["read"] });
     });
+
+    it("finds a channel across teams when no team matches", () => {
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg: {
+            channels: {
+              msteams: {
+                teams: {
+                  first: { channels: { other: { tools: { deny: ["other"] } } } },
+                  second: { channels: { target: { tools: { allow: ["cross-team"] } } } },
+                },
+              },
+            },
+          },
+          groupSpace: "missing-team",
+          groupId: "target",
+        }),
+      ).toEqual({ allow: ["cross-team"] });
+    });
+
+    it("falls from a fieldless channel entry to its team policy", () => {
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg: {
+            channels: {
+              msteams: {
+                teams: {
+                  team: {
+                    tools: { deny: ["team"] },
+                    channels: { channel: {} },
+                  },
+                },
+              },
+            },
+          },
+          groupSpace: "team",
+          groupId: "channel",
+        }),
+      ).toEqual({ deny: ["team"] });
+    });
+
+    it("keeps slash-bearing flat scope keys collision-free", () => {
+      const cfg = {
+        channels: {
+          msteams: {
+            teams: {
+              "a/channel:b": { tools: { allow: ["slash-team"] } },
+              a: { channels: { b: { tools: { allow: ["nested-channel"] } } } },
+            },
+          },
+        },
+      };
+
+      expect(resolveMSTeamsGroupToolPolicy({ cfg, groupSpace: "a/channel:b" })).toEqual({
+        allow: ["slash-team"],
+      });
+      expect(resolveMSTeamsGroupToolPolicy({ cfg, groupSpace: "a", groupId: "b" })).toEqual({
+        allow: ["nested-channel"],
+      });
+    });
   });
 });
