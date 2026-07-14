@@ -26,7 +26,7 @@ import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.
 import type { GatewayRequestHandlers } from "./types.js";
 
 /** Params for persisting a TUI-local `!`/`!!` shell command result, no agent turn involved. */
-export type InjectBashExecutionParams = {
+type InjectBashExecutionParams = {
   sessionKey: string;
   agentId?: string;
   command: string;
@@ -40,9 +40,7 @@ export type InjectBashExecutionParams = {
   getRuntimeConfig?: () => OpenClawConfig;
 };
 
-export type InjectBashExecutionResult =
-  | { ok: true; messageId: string }
-  | { ok: false; error: string };
+type InjectBashExecutionResult = { ok: true; messageId: string } | { ok: false; error: string };
 
 /**
  * Shared core for `chat.injectBashExecution`: session resolution, work admission, and
