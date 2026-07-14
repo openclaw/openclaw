@@ -1060,6 +1060,12 @@ extension DashboardWindowController {
     func webView(_ webView: WKWebView, didCommit _: WKNavigation!) {
         guard webView === self.webView else { return }
         self.hasLiveContent = false
+        // Swipe-back/⌘[ can leave the failure page through WKWebView history
+        // without a `load(_:)`; a committed http(s) document is a real
+        // dashboard again (the failure page itself commits as about:blank).
+        if webView.url?.scheme?.lowercased().hasPrefix("http") == true {
+            self.isShowingFailurePage = false
+        }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
