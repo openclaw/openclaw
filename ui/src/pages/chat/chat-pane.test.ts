@@ -22,10 +22,12 @@ import type { ChatPageHost } from "./chat-state.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
 
 type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
   active: boolean;
+  chatMessagesBySession?: ChatMessageCache;
   chatState: { attach: (state: ChatPageHost) => void };
   context: ApplicationContext;
   state: ChatPageHost;
@@ -43,13 +45,11 @@ type TestChatPane = HTMLElement & {
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
   catalogSession: SessionCatalogSession | null;
-  catalogItemMessage: (
-    item: SessionCatalogTranscriptItem,
-    index: number,
-  ) => Record<string, unknown> | null;
+  catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
   handleTranscriptHistoryIntent: (event: Event) => void;
   historyAutoLoadBlocked: boolean;
+  historyObserverArmed: boolean;
   transcriptScrollTop: number | null;
   syncHistoryObserver: () => void;
   loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
@@ -57,12 +57,6 @@ type TestChatPane = HTMLElement & {
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<void>;
   hasOlderMessages: () => boolean;
-  restoreHistoryAnchor: () => void;
-  pendingHistoryAnchor: {
-    sessionKey: string;
-    element: HTMLElement;
-    viewportTop: number;
-  } | null;
   loadingOlder: boolean;
   catalogCursor: string | undefined;
   olderCursorsSeen: Set<string>;
@@ -182,7 +176,9 @@ describe("chat pane initialization", () => {
   it("sets the pane route before attaching outbox projection", () => {
     const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
     const targetSessionKey = "agent:main:pane-b";
+    const sharedMessages = new Map();
     pane.sessionKey = targetSessionKey;
+    pane.chatMessagesBySession = sharedMessages;
     pane.context = {
       basePath: "",
       gateway: { snapshot: { hello: null } },
@@ -210,14 +206,17 @@ describe("chat pane initialization", () => {
     } as unknown as ApplicationContext;
     const stopAfterAttach = new Error("stop after attach");
     let attachedSessionKey: string | undefined;
+    let attachedMessages: ChatMessageCache | undefined;
     vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
       attachedSessionKey = state.sessionKey;
+      attachedMessages = state.chatMessagesBySession;
       throw stopAfterAttach;
     });
 
     try {
       expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
       expect(attachedSessionKey).toBe(targetSessionKey);
+      expect(attachedMessages).toBe(sharedMessages);
     } finally {
       pane.disconnectedCallback();
     }
@@ -523,7 +522,7 @@ describe("chat pane catalog session lifecycle", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
 
-    const message = pane.catalogItemMessage(item as SessionCatalogTranscriptItem, 0) as {
+    const message = pane.catalogItemMessage(item as SessionCatalogTranscriptItem) as {
       content: Array<{ text: string }>;
     };
 
@@ -535,13 +534,10 @@ describe("chat pane catalog session lifecycle", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
 
-    const message = pane.catalogItemMessage(
-      {
-        type: "toolResult",
-        raw: { aggregatedOutput: "x".repeat(5000) },
-      } as SessionCatalogTranscriptItem,
-      0,
-    ) as { content: Array<{ text: string }> };
+    const message = pane.catalogItemMessage({
+      type: "toolResult",
+      raw: { aggregatedOutput: "x".repeat(5000) },
+    } as SessionCatalogTranscriptItem) as { content: Array<{ text: string }> };
 
     // The 500-char preview cap keeps a single huge tool result from injecting
     // megabytes into one chat message; the "Tool result\n\n" prefix adds a bit.
@@ -553,7 +549,16 @@ describe("chat pane catalog session lifecycle", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
 
-    expect(pane.catalogItemMessage({ type: "other" }, 0)).toBeNull();
+    expect(pane.catalogItemMessage({ type: "other" })).toBeNull();
+  });
+
+  it("preserves provider order when catalog items omit timestamps", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+
+    expect(
+      pane.catalogItemMessage({ id: "u1", type: "userMessage", text: "older question" }),
+    ).not.toHaveProperty("timestamp");
   });
 
   it("exhausts pagination when an older read does not advance the cursor", async () => {
@@ -823,6 +828,47 @@ describe("chat pane native history pagination", () => {
     }
   });
 
+  it("reuses an unchanged armed history observer across pane updates", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
+    pane.historyObserverArmed = true;
+    const thread = document.createElement("div");
+    thread.className = "chat-thread";
+    Object.defineProperty(thread, "scrollHeight", { value: 400 });
+    Object.defineProperty(thread, "clientHeight", { value: 200 });
+    const sentinel = document.createElement("div");
+    sentinel.className = "chat-history-sentinel";
+    thread.append(sentinel);
+    pane.append(thread);
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    const construct = vi.fn();
+    class FakeIntersectionObserver {
+      constructor() {
+        construct();
+      }
+      disconnect() {
+        disconnect();
+      }
+      observe(target: Element) {
+        observe(target);
+      }
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    try {
+      pane.syncHistoryObserver();
+      pane.syncHistoryObserver();
+
+      expect(construct).toHaveBeenCalledOnce();
+      expect(observe).toHaveBeenCalledOnce();
+      expect(observe).toHaveBeenCalledWith(sentinel);
+      expect(disconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps multiple projected messages from the same transcript sequence", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
@@ -844,14 +890,16 @@ describe("chat pane native history pagination", () => {
   it("deduplicates projected catalog transcript records by catalog message id", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const current = pane.catalogItemMessage(
-      { id: "catalog-item-1", type: "userMessage", text: "newer projection" },
-      0,
-    );
-    const overlapping = pane.catalogItemMessage(
-      { id: "catalog-item-1", type: "userMessage", text: "older projection" },
-      1,
-    );
+    const current = pane.catalogItemMessage({
+      id: "catalog-item-1",
+      type: "userMessage",
+      text: "newer projection",
+    });
+    const overlapping = pane.catalogItemMessage({
+      id: "catalog-item-1",
+      type: "userMessage",
+      text: "older projection",
+    });
     if (!current || !overlapping) {
       throw new Error("expected catalog transcript projections");
     }
@@ -860,7 +908,7 @@ describe("chat pane native history pagination", () => {
     expect(pane.prependUniqueCatalogMessages([overlapping])).toEqual([current]);
   });
 
-  it("prepends a strictly older page, preserves the viewport, and exhausts", async () => {
+  it("prepends a strictly older page and exhausts", async () => {
     const request = vi.fn(async () => ({
       messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
       hasMore: false,
@@ -870,27 +918,6 @@ describe("chat pane native history pagination", () => {
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
-    const thread = document.createElement("div");
-    thread.className = "chat-thread";
-    thread.scrollTop = 40;
-    let rowTop = 20;
-    thread.getBoundingClientRect = () =>
-      ({ top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 }) as DOMRect;
-    const row = document.createElement("div");
-    row.dataset.chatRowKey = "row-3";
-    Object.defineProperty(row, "isConnected", { value: true });
-    row.getBoundingClientRect = () =>
-      ({
-        top: rowTop,
-        bottom: rowTop + 20,
-        left: 0,
-        right: 100,
-        width: 100,
-        height: 20,
-      }) as DOMRect;
-    thread.append(row);
-    pane.append(thread);
-
     await pane.loadOlderMessages();
 
     expect(request).toHaveBeenCalledWith("chat.history", {
@@ -900,14 +927,7 @@ describe("chat pane native history pagination", () => {
     });
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
     expect(state.chatHistoryPagination).toEqual({ hasMore: false, totalMessages: 4 });
-    expect(pane.pendingHistoryAnchor).toEqual({
-      sessionKey: state.sessionKey,
-      element: row,
-      viewportTop: 20,
-    });
-    rowTop = 320;
-    pane.restoreHistoryAnchor();
-    expect(thread.scrollTop).toBe(340);
+    expect(state.lastError).toBeNull();
     expect(pane.hasOlderMessages()).toBe(false);
 
     await pane.loadOlderMessages();
@@ -935,33 +955,6 @@ describe("chat pane native history pagination", () => {
     deferred.resolve({ messages: [], hasMore: false, totalMessages: 4 });
     await Promise.all([first, second]);
     expect(pane.loadingOlder).toBe(false);
-  });
-
-  it("does not double-correct when native scroll anchoring preserved the visible row", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const thread = document.createElement("div");
-    thread.className = "chat-thread";
-    thread.scrollTop = 40;
-    thread.getBoundingClientRect = () =>
-      ({ top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 }) as DOMRect;
-    const row = document.createElement("div");
-    row.dataset.chatRowKey = "row-3";
-    Object.defineProperty(row, "isConnected", { value: true });
-    row.getBoundingClientRect = () =>
-      ({ top: 20, bottom: 40, left: 0, right: 100, width: 100, height: 20 }) as DOMRect;
-    thread.append(row);
-    pane.append(thread);
-    pane.pendingHistoryAnchor = {
-      sessionKey: state.sessionKey,
-      element: row,
-      viewportTop: 20,
-    };
-
-    pane.restoreHistoryAnchor();
-
-    expect(thread.scrollTop).toBe(40);
-    expect(pane.pendingHistoryAnchor).toBeNull();
   });
 
   it("refreshes the tail instead of mixing an older page from a replacement session", async () => {

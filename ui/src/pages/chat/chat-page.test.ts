@@ -13,17 +13,20 @@ import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SplitDropZone } from "./split-drop-zone.ts";
 import { createSplitLayout, type ChatSplitLayout } from "./split-layout.ts";
 
 type RenderedPane = HTMLElement & {
   paneId: string;
+  chatMessagesBySession: ChatMessageCache;
   sessionKey: string;
   active: boolean;
   showPaneHeader: boolean;
   paneTitle: string;
   narrow: boolean;
   onOpenSplitView?: () => void;
+  onClosePane?: (paneId: string) => void;
 };
 
 type RenderedDivider = HTMLElement & { orientation: "horizontal" | "vertical" };
@@ -121,14 +124,49 @@ describe("chat page split layout host", () => {
 
     const panes = page.querySelectorAll<RenderedPane>("openclaw-chat-pane");
     expect(panes).toHaveLength(1);
-    expect(itemAt(panes, 0, "rendered pane").paneId).toBe("single");
+    expect(itemAt(panes, 0, "rendered pane").paneId).toBe("p1");
     expect(itemAt(panes, 0, "rendered pane").sessionKey).toBe("main");
     expect(itemAt(panes, 0, "rendered pane").active).toBe(true);
     expect(itemAt(panes, 0, "rendered pane").showPaneHeader).toBe(false);
+    expect(itemAt(panes, 0, "rendered pane").classList.contains("chat-split-view__pane")).toBe(
+      false,
+    );
     expect(page.querySelector("resizable-divider")).toBeNull();
     // The pane renders the opener in its floating toggle cluster; the page
     // only hands down the callback on wide single-pane layouts.
     expect(typeof itemAt(panes, 0, "rendered pane").onOpenSplitView).toBe("function");
+  });
+
+  it("retains the classic pane element while split view opens and closes", async () => {
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    await page.updateComplete;
+
+    const classicPane = itemAt(
+      page.querySelectorAll<RenderedPane>("openclaw-chat-pane"),
+      0,
+      "classic pane",
+    );
+    classicPane.onOpenSplitView?.();
+    await page.updateComplete;
+
+    const splitPanes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+    expect(splitPanes).toHaveLength(2);
+    expect(splitPanes[0]).toBe(classicPane);
+    expect(classicPane.classList.contains("chat-split-view__pane")).toBe(true);
+    const addedPane = itemAt(splitPanes, 1, "added split pane");
+    addedPane.onClosePane?.(addedPane.paneId);
+    await page.updateComplete;
+
+    const survivingPane = itemAt(
+      page.querySelectorAll<RenderedPane>("openclaw-chat-pane"),
+      0,
+      "surviving pane",
+    );
+    expect(survivingPane).toBe(classicPane);
+    expect(survivingPane.showPaneHeader).toBe(false);
+    expect(survivingPane.classList.contains("chat-split-view__pane")).toBe(false);
   });
 
   it("withholds the split-view opener on narrow single-pane viewports", async () => {
@@ -190,6 +228,7 @@ describe("chat page split layout host", () => {
     ).toBe(true);
     expect(panes.map((pane) => pane.showPaneHeader)).toEqual([true, true]);
     expect(panes.every((pane) => pane.onOpenSplitView === undefined)).toBe(true);
+    expect(panes[0]?.chatMessagesBySession).toBe(panes[1]?.chatMessagesBySession);
   });
 
   it("renders only the active pane from a preserved split on narrow viewports", async () => {

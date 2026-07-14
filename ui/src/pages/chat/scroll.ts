@@ -21,6 +21,7 @@ type ChatScrollHost = {
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll: boolean;
   chatProgrammaticScrollTarget: number;
+  chatScrollToEnd?: (options: { behavior?: ScrollBehavior }) => void;
 };
 
 function queryHost(host: Partial<ChatScrollHost>, selectors: string): Element | null {
@@ -140,12 +141,19 @@ export function scheduleCommittedChatScroll(
     const scrollTop = target.scrollHeight;
     host.chatProgrammaticScrollTarget = scrollTop;
     host.chatIsProgrammaticScroll = true;
-    if (typeof target.scrollTo === "function") {
+    if (host.chatScrollToEnd) {
+      host.chatScrollToEnd({ behavior: smoothEnabled ? "smooth" : "auto" });
+    } else if (typeof target.scrollTo === "function") {
       target.scrollTo({ top: scrollTop, behavior: smoothEnabled ? "smooth" : "auto" });
     } else {
       target.scrollTop = scrollTop;
     }
-    scheduleProgrammaticScrollGuardClear(host, generation, target, smoothEnabled);
+    scheduleProgrammaticScrollGuardClear(
+      host,
+      generation,
+      target,
+      smoothEnabled || Boolean(host.chatScrollToEnd),
+    );
     host.chatUserNearBottom = true;
     setNewMessagesBelow(host, false);
   });

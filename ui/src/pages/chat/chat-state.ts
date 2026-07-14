@@ -256,6 +256,7 @@ export type ChatPageHost = ChatHost &
     chatFollowLocked: boolean;
     chatIsProgrammaticScroll: boolean;
     chatProgrammaticScrollTarget: number;
+    chatScrollToEnd?: (options: { behavior?: ScrollBehavior }) => void;
     sidebarOpen: boolean;
     sidebarContent: SidebarContent | null;
     splitRatio: number;
@@ -1194,6 +1195,7 @@ export function createPageState(
   context: ApplicationContext,
   renderLifecycle: RenderLifecycle,
   page: ChatPageElement,
+  chatMessagesBySession: ChatMessageCache = new Map(),
 ): ChatPageHost {
   const settings = loadSettings();
   const identity = loadLocalUserIdentity();
@@ -1275,7 +1277,7 @@ export function createPageState(
     chatQueueByScope: {} as Record<string, ChatQueueItem[]>,
     chatComposerFallbackByScope: {} as Record<string, ChatComposerMemoryFallback>,
     chatSendingScopeKey: null,
-    chatMessagesBySession: new Map(),
+    chatMessagesBySession,
     eventLogBuffer: [] as unknown[],
     basePath: context.basePath,
     chatNewMessagesBelow: false,
@@ -1600,7 +1602,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private chatThreadResizeTargets:
     | {
         thread: Element;
-        content: Element;
       }
     | undefined;
   private pendingCreatedSessionComposer: PendingCreatedSessionComposer | null = null;
@@ -1807,25 +1808,19 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       return;
     }
     const thread = state.querySelector(".chat-thread");
-    const content = state.querySelector(".chat-thread-inner");
-    if (
-      thread &&
-      content &&
-      this.chatThreadResizeTargets?.thread === thread &&
-      this.chatThreadResizeTargets.content === content
-    ) {
+    if (thread && this.chatThreadResizeTargets?.thread === thread) {
       return;
     }
 
     this.chatThreadResizeObserver?.disconnect();
     this.chatThreadResizeObserver = null;
     this.chatThreadResizeTargets = undefined;
-    if (!thread || !content) {
+    if (!thread) {
       return;
     }
 
-    // Streamed markdown and mobile composer controls can finish sizing after
-    // Lit's update. Follow the rendered geometry so the viewport stays pinned.
+    // The transcript virtualizer owns row measurement and content-height
+    // correction. This observer only follows viewport-size changes.
     this.chatThreadResizeObserver = new ResizeObserver(() => {
       const currentState = this.stateValue;
       if (!currentState) {
@@ -1834,8 +1829,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       scheduleCommittedChatScroll(currentState, false, false, { source: "resize" });
     });
     this.chatThreadResizeObserver.observe(thread);
-    this.chatThreadResizeObserver.observe(content);
-    this.chatThreadResizeTargets = { thread, content };
+    this.chatThreadResizeTargets = { thread };
   }
 
   hostConnected() {

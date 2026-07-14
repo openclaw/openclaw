@@ -53,6 +53,7 @@ function createScrollHost(
     chatNewMessagesBelow: false,
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
+    chatScrollToEnd: undefined as ((options: { behavior?: ScrollBehavior }) => void) | undefined,
   };
 
   return { host, container };
@@ -208,6 +209,22 @@ describe("scheduleChatScroll", () => {
     await host.updateComplete;
 
     expect(container.scrollTop).toBe(container.scrollHeight);
+  });
+
+  it("delegates end scrolling to the transcript owner when available", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    const scrollToEnd = vi.fn();
+    host.chatScrollToEnd = scrollToEnd;
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(scrollToEnd).toHaveBeenCalledWith({ behavior: "auto" });
+    expect(container.scrollTop).toBe(1600);
   });
 
   it("does NOT scroll when user is scrolled up and no force", async () => {
