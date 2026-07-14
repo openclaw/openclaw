@@ -762,9 +762,10 @@ export async function runPreparedReply(
   const baseBodyFinal = isBareSessionReset
     ? (bareResetPromptState?.prompt ?? "")
     : stripPromptThinkingDirectives(baseBody);
-  const transcriptBaseBodyFinal = sourcePrompt.transcriptBody
-    ? stripPromptThinkingDirectives(sourcePrompt.transcriptBody)
-    : undefined;
+  const transcriptBaseBodyFinal =
+    sourcePrompt.transcriptBody !== undefined
+      ? stripPromptThinkingDirectives(sourcePrompt.transcriptBody)
+      : undefined;
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
     softResetTail.length > 0 ||

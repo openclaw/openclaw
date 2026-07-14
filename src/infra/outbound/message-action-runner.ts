@@ -1279,12 +1279,20 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     agentId,
   });
+  const policyThreadId = resolveAndApplyOutboundThreadId(params, {
+    cfg,
+    to,
+    accountId,
+    toolContext: input.toolContext,
+    resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
+  });
 
   const policySend = await resolveMessageActionDeliveryPolicy({
     actionParams: params,
     channel,
     to,
     accountId,
+    threadId: policyThreadId,
     sendPayload,
     input,
   });

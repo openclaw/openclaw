@@ -2836,6 +2836,43 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.currentInboundContext).toBeUndefined();
   });
 
+  it("preserves an explicitly empty transcript body under prompt replacement", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          sourcePromptPolicy: {
+            promptBody: "<read_only>media-only message</read_only>",
+            currentInboundContext: null,
+            suppressConversationContext: true,
+          },
+        },
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          Provider: "imessage",
+          Surface: "imessage",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "imessage",
+          Surface: "imessage",
+          ChatType: "direct",
+          MessageSid: "imsg-media-only",
+          SenderName: "Eric",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.commandBody).toBe("<read_only>media-only message</read_only>");
+    expect(call?.transcriptCommandBody).toBe("");
+    expect(call?.followupRun.transcriptPrompt).toBe("");
+  });
+
   it("keeps heartbeat prompts out of visible transcript prompt", async () => {
     const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
 

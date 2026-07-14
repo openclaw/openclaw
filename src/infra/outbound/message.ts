@@ -1,5 +1,4 @@
-// Outbound message entrypoint resolves channel/target, durable capability
-// requirements, payload plans, gateway fallback, and optional mirroring.
+// Resolves outbound targets, durable capabilities, payloads, gateway fallback, and mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
@@ -45,8 +44,7 @@ const loadMessageConfigRuntime = createLazyRuntimeModule(
   () => import("./message.config.runtime.js"),
 );
 
-// Keep config/runtime loading lazy so importing message helpers does not
-// bootstrap plugin registries or gateway clients.
+// Keep runtime loading lazy so message helpers do not bootstrap registries or gateway clients.
 const loadMessageGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );

@@ -149,17 +149,20 @@ export async function resolveSourcePolicy(params: {
     result?.promptBody !== undefined ||
     result?.currentInboundContext !== undefined ||
     result?.suppressConversationContext === true;
+  const existingPromptPolicy = params.replyOptions?.sourcePromptPolicy;
   const promptPolicy = hasPromptPolicy
     ? {
+        ...existingPromptPolicy,
         ...(result?.promptBody !== undefined ? { promptBody: result.promptBody } : {}),
         ...(result?.currentInboundContext !== undefined
           ? { currentInboundContext: result.currentInboundContext }
           : {}),
-        ...(result?.suppressConversationContext === true
+        ...(existingPromptPolicy?.suppressConversationContext === true ||
+        result?.suppressConversationContext === true
           ? { suppressConversationContext: true as const }
           : {}),
       }
-    : params.replyOptions?.sourcePromptPolicy;
+    : existingPromptPolicy;
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   return {
     chatType,

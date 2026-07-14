@@ -317,6 +317,52 @@ describe("source_policy hook", () => {
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps existing prompt restrictions when a hook only replaces the body", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "source_policy",
+    );
+    hookMocks.runner.runSourcePolicy.mockResolvedValue({
+      promptBody: "<read_only>wrapped once</read_only>",
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourcePromptPolicy).toEqual({
+        promptBody: "<read_only>wrapped once</read_only>",
+        currentInboundContext: null,
+        suppressConversationContext: true,
+      });
+      return { text: "private final reply" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Body: "original body",
+        BodyForAgent: "original body",
+        ChatType: "direct",
+        Provider: "imessage",
+        Surface: "imessage",
+        SessionKey: "test:session",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourcePromptPolicy: {
+          currentInboundContext: null,
+          suppressConversationContext: true,
+        },
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("sendPolicy deny — suppress delivery, not processing (#53328)", () => {

@@ -521,6 +521,49 @@ describe("runMessageAction plugin dispatch", () => {
     });
   });
 
+  it("includes the resolved destination thread in message action policy", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "sourcechat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "sourcechat",
+            label: "Source Chat",
+            blurb: "Source chat",
+            actions: ["send"],
+            gatewayActions: [],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction: vi.fn(async () => jsonResult({ ok: true })),
+          }),
+        },
+      ]),
+    );
+
+    await runMessageAction({
+      cfg: { channels: { sourcechat: { enabled: true } } } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "sourcechat",
+        to: "forum-room",
+        threadId: "topic-42",
+        message: "thread-scoped message",
+      },
+      dryRun: true,
+    });
+
+    expect(mocks.runOutboundDeliveryPolicyHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        destination: expect.objectContaining({
+          channel: "sourcechat",
+          to: "forum-room",
+          threadId: "topic-42",
+          path: "message_action",
+        }),
+      }),
+    );
+  });
+
   it("applies outbound delivery policy before internal source reply fallback", async () => {
     const handleAction = vi.fn(async ({ channel, params }: ChannelMessageActionContext) =>
       jsonResult({ ok: true, channel, to: params.to, message: params.message }),

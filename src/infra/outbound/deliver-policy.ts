@@ -1,7 +1,12 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { OutboundDeliveryResult, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
+import {
+  isOutboundDeliveryError,
+  OutboundDeliveryError,
+  type OutboundDeliveryResult,
+  type OutboundPayloadDeliveryOutcome,
+} from "./deliver-types.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver.js";
 import {
   MAX_OUTBOUND_DELIVERY_POLICY_REROUTES,
@@ -47,6 +52,48 @@ function remapOutcome(
   return { ...outcome, index };
 }
 
+type PlannedDelivery =
+  | { kind: "allowed"; index: number; payload: ReplyPayload }
+  | {
+      kind: "rerouted";
+      index: number;
+      payload: ReplyPayload;
+      channel: Exclude<ChannelId, "none">;
+      to: string;
+      accountId?: string;
+      threadId?: string | number;
+    };
+
+function wrapPolicyDeliveryError(params: {
+  error: unknown;
+  results: readonly OutboundDeliveryResult[];
+  completedOutcomes: readonly OutboundPayloadDeliveryOutcome[];
+  currentOutcomes: readonly OutboundPayloadDeliveryOutcome[];
+  remapErrorOutcome: (outcome: OutboundPayloadDeliveryOutcome) => OutboundPayloadDeliveryOutcome;
+}): OutboundDeliveryError {
+  if (isOutboundDeliveryError(params.error)) {
+    return new OutboundDeliveryError(params.error.message, {
+      cause: params.error.cause ?? params.error,
+      results: [...params.results, ...params.error.results],
+      payloadOutcomes: [
+        ...params.completedOutcomes,
+        ...(params.error.payloadOutcomes.length > 0
+          ? params.error.payloadOutcomes.map(params.remapErrorOutcome)
+          : params.currentOutcomes),
+      ],
+      stage: params.error.stage,
+    });
+  }
+  return new OutboundDeliveryError(
+    params.error instanceof Error ? params.error.message : String(params.error),
+    {
+      cause: params.error,
+      results: params.results,
+      payloadOutcomes: [...params.completedOutcomes, ...params.currentOutcomes],
+    },
+  );
+}
+
 /** Apply policy to a normalized durable-delivery batch before platform I/O. */
 export async function applyOutboundDeliveryPolicy(params: {
   delivery: DeliverOutboundPayloadsParams;
@@ -64,15 +111,7 @@ export async function applyOutboundDeliveryPolicy(params: {
     throw new Error("Outbound delivery policy reroute depth exceeded.");
   }
 
-  const allowed: Array<{ index: number; payload: ReplyPayload }> = [];
-  const rerouted: Array<{
-    index: number;
-    payload: ReplyPayload;
-    channel: Exclude<ChannelId, "none">;
-    to: string;
-    accountId?: string;
-    threadId?: string | number;
-  }> = [];
+  const plan: PlannedDelivery[] = [];
   let changed = false;
 
   for (const [index, payload] of delivery.payloads.entries()) {
@@ -103,7 +142,8 @@ export async function applyOutboundDeliveryPolicy(params: {
     }
     if (decision.decision === "reroute") {
       changed = true;
-      rerouted.push({
+      plan.push({
+        kind: "rerouted",
         index,
         payload: decision.payload,
         channel: decision.destination.channel as Exclude<ChannelId, "none">,
@@ -116,45 +156,76 @@ export async function applyOutboundDeliveryPolicy(params: {
       continue;
     }
     changed ||= decision.payload !== payload;
-    allowed.push({ index, payload: decision.payload });
+    plan.push({ kind: "allowed", index, payload: decision.payload });
   }
   if (!changed) {
     return null;
   }
 
   const results: OutboundDeliveryResult[] = [];
-  if (allowed.length > 0) {
-    results.push(
-      ...(await params.deliverAllowed({
-        ...delivery,
-        payloads: allowed.map((entry) => entry.payload),
-        onPayloadDeliveryOutcome: (outcome) => {
+  const completedOutcomes: OutboundPayloadDeliveryOutcome[] = [];
+  for (let cursor = 0; cursor < plan.length;) {
+    const entry = plan[cursor];
+    if (!entry) {
+      break;
+    }
+    const currentOutcomes: OutboundPayloadDeliveryOutcome[] = [];
+    let remapErrorOutcome = (outcome: OutboundPayloadDeliveryOutcome) => outcome;
+    try {
+      if (entry.kind === "allowed") {
+        const allowed: Array<Extract<PlannedDelivery, { kind: "allowed" }>> = [];
+        while (plan[cursor]?.kind === "allowed") {
+          allowed.push(plan[cursor] as Extract<PlannedDelivery, { kind: "allowed" }>);
+          cursor += 1;
+        }
+        remapErrorOutcome = (outcome) => {
           const original = allowed[outcome.index];
-          delivery.onPayloadDeliveryOutcome?.(
-            remapOutcome(outcome, original?.index ?? outcome.index),
-          );
-        },
-      })),
-    );
-  }
-  for (const reroute of rerouted) {
-    const { accountId: _accountId, threadId: _threadId, ...baseDelivery } = delivery;
-    void _accountId;
-    void _threadId;
-    results.push(
-      ...(await params.deliverRerouted({
-        ...baseDelivery,
-        channel: reroute.channel,
-        to: reroute.to,
-        ...(reroute.accountId ? { accountId: reroute.accountId } : {}),
-        ...(reroute.threadId !== undefined ? { threadId: reroute.threadId } : {}),
-        payloads: [reroute.payload],
-        deliveryPolicyDepth: policyDepth + 1,
-        onPayloadDeliveryOutcome: (outcome) => {
-          delivery.onPayloadDeliveryOutcome?.(remapOutcome(outcome, reroute.index));
-        },
-      })),
-    );
+          return remapOutcome(outcome, original?.index ?? outcome.index);
+        };
+        results.push(
+          ...(await params.deliverAllowed({
+            ...delivery,
+            payloads: allowed.map((allowedEntry) => allowedEntry.payload),
+            onPayloadDeliveryOutcome: (outcome) => {
+              const remapped = remapErrorOutcome(outcome);
+              currentOutcomes.push(remapped);
+              delivery.onPayloadDeliveryOutcome?.(remapped);
+            },
+          })),
+        );
+      } else {
+        cursor += 1;
+        remapErrorOutcome = (outcome) => remapOutcome(outcome, entry.index);
+        const { accountId: _accountId, threadId: _threadId, ...baseDelivery } = delivery;
+        void _accountId;
+        void _threadId;
+        results.push(
+          ...(await params.deliverRerouted({
+            ...baseDelivery,
+            channel: entry.channel,
+            to: entry.to,
+            ...(entry.accountId ? { accountId: entry.accountId } : {}),
+            ...(entry.threadId !== undefined ? { threadId: entry.threadId } : {}),
+            payloads: [entry.payload],
+            deliveryPolicyDepth: policyDepth + 1,
+            onPayloadDeliveryOutcome: (outcome) => {
+              const remapped = remapErrorOutcome(outcome);
+              currentOutcomes.push(remapped);
+              delivery.onPayloadDeliveryOutcome?.(remapped);
+            },
+          })),
+        );
+      }
+      completedOutcomes.push(...currentOutcomes);
+    } catch (error) {
+      throw wrapPolicyDeliveryError({
+        error,
+        results,
+        completedOutcomes,
+        currentOutcomes,
+        remapErrorOutcome,
+      });
+    }
   }
   return results;
 }
