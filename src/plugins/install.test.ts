@@ -4172,3 +4172,4 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     expectWarningIncludes(warnings, "Could not locate openclaw package root");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1157,3 +1157,4 @@ export function extractMessagingToolSendResult(
     threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

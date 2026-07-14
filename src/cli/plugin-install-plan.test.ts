@@ -3,11 +3,13 @@ import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import {
+  resolveCatalogOfficialExternalInstallPlan,
+  resolveCatalogOfficialExternalNpmPackageTrust,
+} from "../plugins/official-external-install-trust.js";
+import {
   resolveBundledInstallPlanForCatalogEntry,
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
-  resolveOfficialExternalInstallPlanBeforeNpm,
-  resolveOfficialExternalNpmPackageTrust,
 } from "./plugin-install-plan.js";
 
 describe("plugin install plan helpers", () => {
@@ -70,52 +72,19 @@ describe("plugin install plan helpers", () => {
   });
 
   it("resolves exact official external plugin ids before npm fallback", () => {
-    const findOfficialExternalPlugin = vi.fn().mockReturnValue({
-      pluginId: "brave",
-      npmSpec: "@openclaw/brave-plugin",
-      expectedIntegrity: "sha512-brave",
-    });
+    const result = resolveCatalogOfficialExternalInstallPlan("wecom-openclaw-plugin");
 
-    const result = resolveOfficialExternalInstallPlanBeforeNpm({
-      rawSpec: "brave",
-      findOfficialExternalPlugin,
-    });
-
-    expect(findOfficialExternalPlugin).toHaveBeenCalledWith("brave");
     expect(result).toEqual({
       source: "npm",
-      pluginId: "brave",
-      npmSpec: "@openclaw/brave-plugin",
-      expectedIntegrity: "sha512-brave",
+      pluginId: "wecom-openclaw-plugin",
+      npmSpec: "@wecom/wecom-openclaw-plugin@2026.5.7",
+      expectedIntegrity:
+        "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
     });
-  });
-
-  it("skips official external plan for explicit npm selectors", () => {
-    const findOfficialExternalPlugin = vi.fn();
-
-    expect(
-      resolveOfficialExternalInstallPlanBeforeNpm({
-        rawSpec: "brave@beta",
-        findOfficialExternalPlugin,
-      }),
-    ).toBeNull();
-    expect(
-      resolveOfficialExternalInstallPlanBeforeNpm({
-        rawSpec: "@openclaw/brave-plugin",
-        findOfficialExternalPlugin,
-      }),
-    ).toBeNull();
-    expect(findOfficialExternalPlugin).not.toHaveBeenCalled();
   });
 
   it("resolves ClawHub-only official external plugin ids before npm fallback", () => {
-    const result = resolveOfficialExternalInstallPlanBeforeNpm({
-      rawSpec: "sherpa-onnx-tts",
-      findOfficialExternalPlugin: vi.fn().mockReturnValue({
-        pluginId: "sherpa-onnx-tts",
-        clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
-      }),
-    });
+    const result = resolveCatalogOfficialExternalInstallPlan("sherpa-onnx-tts");
 
     expect(result).toEqual({
       source: "clawhub",
@@ -124,76 +93,37 @@ describe("plugin install plan helpers", () => {
     });
   });
 
-  it("keeps dual-source official external plugin ids on the existing npm pre-plan", () => {
-    const result = resolveOfficialExternalInstallPlanBeforeNpm({
-      rawSpec: "matrix",
-      findOfficialExternalPlugin: vi.fn().mockReturnValue({
-        pluginId: "matrix",
-        clawhubSpec: "clawhub:@openclaw/matrix",
-        npmSpec: "@openclaw/matrix",
-      }),
-    });
-
-    expect(result).toEqual({
-      source: "npm",
-      pluginId: "matrix",
-      npmSpec: "@openclaw/matrix",
-    });
-  });
-
-  it("skips official external plan without an install spec", () => {
-    const result = resolveOfficialExternalInstallPlanBeforeNpm({
-      rawSpec: "demo",
-      findOfficialExternalPlugin: vi.fn().mockReturnValue({
-        pluginId: "demo",
-      }),
-    });
-
-    expect(result).toBeNull();
+  it("skips official external plan for explicit npm selectors", () => {
+    expect(resolveCatalogOfficialExternalInstallPlan("wecom-openclaw-plugin@beta")).toBeNull();
+    expect(
+      resolveCatalogOfficialExternalInstallPlan("@wecom/wecom-openclaw-plugin@2026.5.7"),
+    ).toBeNull();
   });
 
   it("trusts exact official external npm packages without remapping the spec", () => {
-    const findOfficialExternalPackage = vi.fn().mockReturnValue({
-      pluginId: "discord",
-      npmSpec: "@openclaw/discord",
-    });
+    const result = resolveCatalogOfficialExternalNpmPackageTrust(
+      "@wecom/wecom-openclaw-plugin@2026.5.7",
+    );
 
-    const result = resolveOfficialExternalNpmPackageTrust({
-      npmSpec: "@openclaw/discord",
-      findOfficialExternalPackage,
-    });
-
-    expect(findOfficialExternalPackage).toHaveBeenCalledWith("@openclaw/discord");
     expect(result).toEqual({
-      pluginId: "discord",
+      pluginId: "wecom-openclaw-plugin",
+      expectedIntegrity:
+        "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
       trustedSourceLinkedOfficialInstall: true,
     });
   });
 
-  it("does not trust npm installs for ClawHub-only official external packages", () => {
-    const findOfficialExternalPackage = vi.fn().mockReturnValue({
-      pluginId: "sherpa-onnx-tts",
-      clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
-    });
+  it("does not trust npm package names outside the official external catalog", () => {
+    const result = resolveCatalogOfficialExternalNpmPackageTrust("@acme/outside@1.0.0");
 
-    const result = resolveOfficialExternalNpmPackageTrust({
-      npmSpec: "@openclaw/sherpa-onnx-tts",
-      findOfficialExternalPackage,
-    });
-
-    expect(findOfficialExternalPackage).toHaveBeenCalledWith("@openclaw/sherpa-onnx-tts");
     expect(result).toBeNull();
   });
 
-  it("does not trust npm package names outside the official external catalog", () => {
-    const findOfficialExternalPackage = vi.fn();
+  it("does not trust npm installs for ClawHub-only official external plugins", () => {
+    const result = resolveCatalogOfficialExternalNpmPackageTrust(
+      "@openclaw/sherpa-onnx-tts@2026.6.8",
+    );
 
-    const result = resolveOfficialExternalNpmPackageTrust({
-      npmSpec: "brave",
-      findOfficialExternalPackage,
-    });
-
-    expect(findOfficialExternalPackage).toHaveBeenCalledWith("brave");
     expect(result).toBeNull();
   });
 

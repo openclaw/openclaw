@@ -1717,3 +1717,4 @@ describe("gateway/node-registry", () => {
     expect(updated?.commands).toEqual(["device.info"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

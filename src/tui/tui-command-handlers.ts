@@ -161,7 +161,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
     await setSession("");
-    chatLog.addSystem(`agent set to ${state.currentAgentId}; use /crestodian to return`);
+    chatLog.addSystem(`agent set to ${state.currentAgentId}; use /openclaw to return`);
   };
 
   const closeOverlayAndRender = (handle: OverlayHandle) => {
@@ -490,13 +490,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem("Usage: /btw [side question]");
         }
         break;
-      case "crestodian":
+      case "openclaw":
         chatLog.addSystem(
-          args ? `returning to Crestodian with request: ${args}` : "returning to Crestodian",
+          args ? `returning to OpenClaw with request: ${args}` : "returning to OpenClaw",
         );
         requestExit({
-          exitReason: "return-to-crestodian",
-          ...(args ? { crestodianMessage: args } : {}),
+          exitReason: "return-to-system-agent",
+          ...(args ? { systemAgentMessage: args } : {}),
         });
         break;
       case "session":
@@ -967,3 +967,4 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     setAgent,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

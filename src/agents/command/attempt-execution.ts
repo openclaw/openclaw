@@ -1425,3 +1425,4 @@ export function emitAcpAssistantDelta(params: { runId: string; text: string; del
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

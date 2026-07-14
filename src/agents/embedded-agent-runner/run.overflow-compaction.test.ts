@@ -4072,3 +4072,4 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(mockedResolveFailoverStatus).toHaveBeenCalledWith("rate_limit");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

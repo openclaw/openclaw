@@ -2477,3 +2477,4 @@ function escapeMarkdownInline(value: string): string {
 }
 
 export const flushChatQueueForEvent = flushChatQueue;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

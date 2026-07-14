@@ -792,3 +792,4 @@ export async function backupVerifyCommand(
 export const testApi = {
   assertSqliteExtractionBudget,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

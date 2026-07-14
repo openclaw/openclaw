@@ -19,6 +19,7 @@ import {
 import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client-adapter.js";
 import {
+  isSignalSenderAllowed,
   looksLikeUuid,
   normalizeSignalAllowRecipient,
   resolveSignalPeerId,
@@ -59,7 +60,7 @@ describe("looksLikeUuid", () => {
 });
 
 describe("signal sender identity", () => {
-  it("prefers sourceNumber over sourceUuid", () => {
+  it("prefers sourceNumber over sourceUuid and keeps the uuid as an alias", () => {
     const sender = resolveSignalSender({
       sourceNumber: " +15550001111 ",
       sourceUuid: "123e4567-e89b-12d3-a456-426614174000",
@@ -68,6 +69,7 @@ describe("signal sender identity", () => {
       kind: "phone",
       raw: "+15550001111",
       e164: "+15550001111",
+      aliases: { uuid: "123e4567-e89b-12d3-a456-426614174000" },
     });
   });
 
@@ -101,6 +103,30 @@ describe("signal sender identity", () => {
     const sender = { kind: "uuid", raw: "123e4567-e89b-12d3-a456-426614174000" } as const;
     expect(resolveSignalRecipient(sender)).toBe("123e4567-e89b-12d3-a456-426614174000");
     expect(resolveSignalPeerId(sender)).toBe("uuid:123e4567-e89b-12d3-a456-426614174000");
+  });
+});
+
+describe("isSignalSenderAllowed", () => {
+  const uuid = "f4d0fe67-3b38-446d-828e-317c285ffa75";
+  const e164 = "+34688329273";
+
+  it("matches a phone-primary sender against a uuid allow entry via the alias", () => {
+    const sender = resolveSignalSender({ sourceNumber: e164, sourceUuid: uuid });
+    if (!sender) {
+      throw new Error("expected Signal sender");
+    }
+    expect(isSignalSenderAllowed(sender, [`uuid:${uuid}`])).toBe(true);
+  });
+
+  it("does not match unrelated allow entries even when an alias is present", () => {
+    const sender = resolveSignalSender({ sourceNumber: e164, sourceUuid: uuid });
+    if (!sender) {
+      throw new Error("expected Signal sender");
+    }
+    expect(isSignalSenderAllowed(sender, ["+15550009999"])).toBe(false);
+    expect(isSignalSenderAllowed(sender, ["uuid:00000000-0000-0000-0000-000000000000"])).toBe(
+      false,
+    );
   });
 });
 
@@ -1264,3 +1290,4 @@ describe("signal setup parsing", () => {
     expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

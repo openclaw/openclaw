@@ -631,54 +631,54 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/docker-build-helper.test.ts", "test/scripts/docker-e2e-plan.test.ts"],
       ],
       [
-        "scripts/e2e/crestodian-first-run-docker.sh",
+        "scripts/e2e/system-agent-first-run-docker.sh",
         [
           "test/scripts/docker-build-helper.test.ts",
           "test/scripts/docker-e2e-plan.test.ts",
-          "test/scripts/docker-e2e-crestodian.test.ts",
+          "test/scripts/docker-e2e-system-agent.test.ts",
         ],
       ],
       [
-        "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
+        "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts",
         [
-          "test/scripts/docker-e2e-crestodian.test.ts",
+          "test/scripts/docker-e2e-system-agent.test.ts",
           "src/cli/program/register.onboard.test.ts",
           "src/cli/run-main.test.ts",
           "src/cli/run-main.exit.test.ts",
-          "src/commands/crestodian-with-inference.test.ts",
-          "src/crestodian/assistant.configured.test.ts",
-          "src/crestodian/assistant.test.ts",
-          "src/crestodian/crestodian.test.ts",
-          "src/crestodian/operations.test.ts",
-          "src/crestodian/overview.test.ts",
-          "src/crestodian/setup-inference.test.ts",
-          "src/crestodian/audit.test.ts",
+          "src/commands/system-agent-with-inference.test.ts",
+          "src/system-agent/assistant.configured.test.ts",
+          "src/system-agent/assistant.test.ts",
+          "src/system-agent/system-agent.test.ts",
+          "src/system-agent/operations.test.ts",
+          "src/system-agent/overview.test.ts",
+          "src/system-agent/setup-inference.test.ts",
+          "src/system-agent/audit.test.ts",
         ],
       ],
       [
-        "scripts/e2e/crestodian-first-run-spec.json",
+        "scripts/e2e/system-agent-first-run-spec.json",
         [
-          "test/scripts/docker-e2e-crestodian.test.ts",
-          "src/crestodian/operations.test.ts",
-          "src/crestodian/audit.test.ts",
+          "test/scripts/docker-e2e-system-agent.test.ts",
+          "src/system-agent/operations.test.ts",
+          "src/system-agent/audit.test.ts",
         ],
       ],
       [
-        "scripts/e2e/crestodian-rescue-docker.sh",
+        "scripts/e2e/system-agent-rescue-docker.sh",
         [
           "test/scripts/docker-build-helper.test.ts",
           "test/scripts/docker-e2e-plan.test.ts",
-          "test/scripts/docker-e2e-crestodian.test.ts",
+          "test/scripts/docker-e2e-system-agent.test.ts",
         ],
       ],
       [
-        "scripts/e2e/crestodian-rescue-docker-client.ts",
+        "scripts/e2e/system-agent-rescue-docker-client.ts",
         [
-          "test/scripts/docker-e2e-crestodian.test.ts",
-          "src/crestodian/rescue-policy.test.ts",
-          "src/crestodian/rescue-message.test.ts",
-          "src/crestodian/operations.test.ts",
-          "src/crestodian/audit.test.ts",
+          "test/scripts/docker-e2e-system-agent.test.ts",
+          "src/system-agent/rescue-policy.test.ts",
+          "src/system-agent/rescue-message.test.ts",
+          "src/system-agent/operations.test.ts",
+          "src/system-agent/audit.test.ts",
         ],
       ],
       [
@@ -2643,13 +2643,13 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("routes Crestodian Docker E2E script targets instead of skipping changed tests", () => {
+  it("routes OpenClaw Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
-      "scripts/e2e/crestodian-first-run-docker.sh",
-      "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
-      "scripts/e2e/crestodian-first-run-spec.json",
-      "scripts/e2e/crestodian-rescue-docker.sh",
-      "scripts/e2e/crestodian-rescue-docker-client.ts",
+      "scripts/e2e/system-agent-first-run-docker.sh",
+      "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts",
+      "scripts/e2e/system-agent-first-run-spec.json",
+      "scripts/e2e/system-agent-rescue-docker.sh",
+      "scripts/e2e/system-agent-rescue-docker-client.ts",
     ];
 
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
@@ -2658,20 +2658,20 @@ describe("scripts/test-projects changed-target routing", () => {
       targets: [
         "test/scripts/docker-build-helper.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
-        "test/scripts/docker-e2e-crestodian.test.ts",
+        "test/scripts/docker-e2e-system-agent.test.ts",
         "src/cli/program/register.onboard.test.ts",
         "src/cli/run-main.test.ts",
         "src/cli/run-main.exit.test.ts",
-        "src/commands/crestodian-with-inference.test.ts",
-        "src/crestodian/assistant.configured.test.ts",
-        "src/crestodian/assistant.test.ts",
-        "src/crestodian/crestodian.test.ts",
-        "src/crestodian/operations.test.ts",
-        "src/crestodian/overview.test.ts",
-        "src/crestodian/setup-inference.test.ts",
-        "src/crestodian/audit.test.ts",
-        "src/crestodian/rescue-policy.test.ts",
-        "src/crestodian/rescue-message.test.ts",
+        "src/commands/system-agent-with-inference.test.ts",
+        "src/system-agent/assistant.configured.test.ts",
+        "src/system-agent/assistant.test.ts",
+        "src/system-agent/system-agent.test.ts",
+        "src/system-agent/operations.test.ts",
+        "src/system-agent/overview.test.ts",
+        "src/system-agent/setup-inference.test.ts",
+        "src/system-agent/audit.test.ts",
+        "src/system-agent/rescue-policy.test.ts",
+        "src/system-agent/rescue-message.test.ts",
       ],
     });
   });

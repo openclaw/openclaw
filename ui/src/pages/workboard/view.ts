@@ -7,7 +7,6 @@ import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
-import "../../components/web-awesome-select.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib/format.ts";
 import "../../styles/workboard.css";
@@ -55,13 +54,13 @@ import {
   matchesAgentScope,
   normalizeActiveAgentFilter,
 } from "./agent-filter.ts";
-
-type WorkboardSelectOption<Value extends string = string> = {
-  value: Value;
-  label: string;
-  description?: string;
-  disabled?: boolean;
-};
+import {
+  buildBoardFilterOptions,
+  matchesBoardFilter,
+  normalizeActiveBoardFilter,
+  WORKBOARD_ALL_BOARDS_FILTER,
+} from "./board-filter.ts";
+import { renderWorkboardSelect, type WorkboardSelectOption } from "./workboard-select.ts";
 
 type WorkboardProps = {
   host: object;
@@ -76,6 +75,7 @@ type WorkboardProps = {
   scopeAgentId?: string | null;
   showAgentFilter?: boolean;
   onOpenSession: (sessionKey: string) => void;
+  onBoardFilterChange?: (boardFilter: string) => void;
   onReloadConfig?: () => void;
   onRequestUpdate?: () => void;
 };
@@ -442,66 +442,6 @@ function isCardActionTarget(event: Event): boolean {
     : false;
 }
 
-function renderWorkboardSelect<Value extends string>(params: {
-  value: Value;
-  options: readonly WorkboardSelectOption<Value>[];
-  label: string;
-  onChange: (value: Value) => void;
-  requestUpdate?: () => void;
-  className?: string;
-  showLabel?: boolean;
-  disabled?: boolean;
-}) {
-  const select = html`
-    <wa-select
-      class="workboard-select ${params.className ?? ""}"
-      label=${params.label}
-      value=${params.value}
-      ?disabled=${params.disabled}
-      @change=${(event: Event) => {
-        const value = (event.currentTarget as HTMLElement & { value?: string }).value as
-          | Value
-          | undefined;
-        if (
-          value !== undefined &&
-          params.options.some((option) => option.value === value && !option.disabled)
-        ) {
-          params.onChange(value);
-          params.requestUpdate?.();
-        }
-      }}
-    >
-      ${params.options.map(
-        (option) => html`
-          <wa-option
-            class="workboard-select__option"
-            value=${option.value}
-            .label=${option.label}
-            ?selected=${option.value === params.value}
-            ?disabled=${option.disabled}
-          >
-            <span class="workboard-select__copy">
-              <span class="workboard-select__label">${option.label}</span>
-              ${option.description
-                ? html`<span class="workboard-select__description">${option.description}</span>`
-                : nothing}
-            </span>
-          </wa-option>
-        `,
-      )}
-    </wa-select>
-  `;
-  if (params.showLabel === false) {
-    return select;
-  }
-  return html`
-    <div class="workboard-field">
-      <span>${params.label}</span>
-      ${select}
-    </div>
-  `;
-}
-
 function engineDisplayName(engine: WorkboardExecutionEngine): string {
   return engine === "codex" ? t("workboard.engineOpenAI") : t("workboard.engineClaude");
 }
@@ -658,7 +598,6 @@ function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
   return {
     state,
     task,
-    session,
     busy,
     activeTask,
     live,
@@ -1889,7 +1828,8 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
     <article
       class="workboard-card priority-${card.priority} ${busy
         ? "workboard-card--busy"
-        : ""} ${archived ? "workboard-card--archived" : ""} ${healthHighlighted
+        : ""} ${archived ? "workboard-card--archived" : ""}
+      ${state.draggedCardId === card.id ? "workboard-card--dragging" : ""} ${healthHighlighted
         ? `workboard-card--health-highlight workboard-card--health-highlight-${state.activeHealthHighlight}`
         : ""} workboard-card--openable"
       role="button"
@@ -2060,9 +2000,12 @@ export function renderWorkboard(props: WorkboardProps) {
 
   const agentOptions = buildAgentFilterOptions(props.agentsList, state.cards);
   state.agentFilter = normalizeActiveAgentFilter(agentOptions, state.agentFilter);
+  const boardOptions = buildBoardFilterOptions(state.boards, state.cards);
+  const activeBoardFilter = normalizeActiveBoardFilter(boardOptions, state.boardFilter);
   const applyNonViewFilters = (cards: readonly WorkboardCard[]) =>
     cards
       .filter((card) => state.showArchived || !card.metadata?.archivedAt)
+      .filter((card) => matchesBoardFilter(card, activeBoardFilter))
       .filter((card) => matchesAgentScope(card, props.agentsList, props.scopeAgentId))
       .filter((card) => matchesAgentFilter(card, props.agentsList, state.agentFilter))
       .filter((card) =>
@@ -2104,6 +2047,7 @@ export function renderWorkboard(props: WorkboardProps) {
     state.query.trim() !== "" ||
     state.priorityFilter !== "all" ||
     state.agentFilter !== "all" ||
+    activeBoardFilter !== WORKBOARD_ALL_BOARDS_FILTER ||
     archivedCardsHidden;
   const showEmptyState = filtered.length === 0 && activeFiltering;
   const viewOptions: Array<WorkboardSelectOption<WorkboardUiState["viewPreset"]>> =
@@ -2176,6 +2120,20 @@ export function renderWorkboard(props: WorkboardProps) {
               className: "workboard-select--toolbar",
               showLabel: false,
             })}
+            ${boardOptions.length > 2
+              ? renderWorkboardSelect({
+                  value: activeBoardFilter,
+                  options: boardOptions,
+                  label: t("workboard.boardFilter"),
+                  onChange: (value) => {
+                    state.boardFilter = value;
+                    props.onBoardFilterChange?.(value);
+                  },
+                  requestUpdate: props.onRequestUpdate,
+                  className: "workboard-select--toolbar workboard-select--toolbar-board",
+                  showLabel: false,
+                })
+              : nothing}
             ${props.showAgentFilter !== false
               ? renderWorkboardSelect({
                   value: state.agentFilter,
@@ -2324,3 +2282,4 @@ export function renderWorkboard(props: WorkboardProps) {
     </section>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

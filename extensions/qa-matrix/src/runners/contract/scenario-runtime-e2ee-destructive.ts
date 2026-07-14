@@ -1729,3 +1729,4 @@ export async function runMatrixQaE2eeHistoryExistsBackupEmptyScenario(
 export const testing = {
   findMatrixQaCliAccountRoot,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

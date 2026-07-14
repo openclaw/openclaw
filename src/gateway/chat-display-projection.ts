@@ -1930,3 +1930,4 @@ export function projectChatDisplayMessage(
 ): Record<string, unknown> | undefined {
   return projectChatDisplayMessages([message], options)[0];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

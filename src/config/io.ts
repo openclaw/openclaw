@@ -157,8 +157,8 @@ export {
   setRuntimeConfigSnapshotRefreshHandlerState as setRuntimeConfigSnapshotRefreshHandler,
   registerManagedRuntimeConfigWriteOwner,
 };
+export { setAppliedRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 
-// Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
 export { MissingEnvVarError } from "./env-substitution.js";
 export { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
@@ -3251,3 +3251,4 @@ export async function writeConfigFile(
   }
   return { ...writeResult, persistedConfig: canonicalSourceConfig };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
