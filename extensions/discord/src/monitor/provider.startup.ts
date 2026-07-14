@@ -29,8 +29,11 @@ import {
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import {
   DiscordMessageListener,
+  DiscordPresenceGuildCreateListener,
+  DiscordPresenceGuildDeleteListener,
   DiscordInteractionListener,
   DiscordPresenceListener,
+  DiscordPresenceReadyListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
   DiscordThreadUpdateListener,
@@ -296,9 +299,25 @@ export function registerDiscordMonitorListeners(params: {
   );
 
   if (params.discordConfig.intents?.presence) {
+    const presenceListener = new DiscordPresenceListener({
+      cfg: params.cfg,
+      logger: params.logger,
+      accountId: params.accountId,
+      botUserId: params.botUserId,
+      guildEntries: params.guildEntries,
+    });
+    registerDiscordListener(params.client.listeners, presenceListener);
     registerDiscordListener(
       params.client.listeners,
-      new DiscordPresenceListener({ logger: params.logger, accountId: params.accountId }),
+      new DiscordPresenceGuildCreateListener(presenceListener),
+    );
+    registerDiscordListener(
+      params.client.listeners,
+      new DiscordPresenceGuildDeleteListener(presenceListener),
+    );
+    registerDiscordListener(
+      params.client.listeners,
+      new DiscordPresenceReadyListener(presenceListener),
     );
     params.runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
   }
