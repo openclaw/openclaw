@@ -42,7 +42,7 @@ export type RepairDreamingArtifactsResult = {
   clearedSessionCheckpointKeys?: number;
   warnings: string[];
 };
-export const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
+const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 export const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
 export const SESSION_INGESTION_RELATIVE_PATH = path.join(
   "memory",
@@ -50,11 +50,10 @@ export const SESSION_INGESTION_RELATIVE_PATH = path.join(
   "session-ingestion.json",
 );
 export const REPAIR_ARCHIVE_RELATIVE_DIR = path.join(".openclaw-repair", "dreaming");
-export const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
-export const DREAMING_NARRATIVE_PROMPT_PREFIX =
-  "Write a dream diary entry from these memory fragments";
-export const HEARTBEAT_PROMPT_TEXT = "[OpenClaw heartbeat poll]";
-export type CorpusSourceRef = {
+const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
+const DREAMING_NARRATIVE_PROMPT_PREFIX = "Write a dream diary entry from these memory fragments";
+const HEARTBEAT_PROMPT_TEXT = "[OpenClaw heartbeat poll]";
+type CorpusSourceRef = {
   agentId: string;
   sessionPath: string;
   lineNumber: number;
@@ -107,7 +106,7 @@ export function isSuspiciousSessionCorpusLine(line: string): boolean {
   );
 }
 
-export function parseSessionCorpusSourceRef(line: string): CorpusSourceRef | null {
+function parseSessionCorpusSourceRef(line: string): CorpusSourceRef | null {
   const match = line.match(/^\[([^/\]]+)\/(.+)#L(\d+)\]\s+/);
   if (!match) {
     return null;
@@ -123,7 +122,7 @@ export function parseSessionCorpusSourceRef(line: string): CorpusSourceRef | nul
   };
 }
 
-export function extractMessageText(content: unknown): string {
+function extractMessageText(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }
@@ -141,7 +140,7 @@ export function extractMessageText(content: unknown): string {
     .join("\n");
 }
 
-export function parseMessageRecord(rawLine: string): {
+function parseMessageRecord(rawLine: string): {
   role: string;
   text: string;
   provenanceKind?: string;
@@ -184,7 +183,7 @@ export function parseMessageRecord(rawLine: string): {
   };
 }
 
-export function isHeartbeatUserMessage(message: {
+function isHeartbeatUserMessage(message: {
   role: string;
   text: string;
   provenanceKind?: string;
@@ -198,7 +197,7 @@ export function isHeartbeatUserMessage(message: {
   return message.text.trim() === HEARTBEAT_PROMPT_TEXT;
 }
 
-export function isHeartbeatDerivedAssistantLine(lines: string[], source: CorpusSourceRef): boolean {
+function isHeartbeatDerivedAssistantLine(lines: string[], source: CorpusSourceRef): boolean {
   const assistantRaw = lines[source.lineNumber - 1];
   if (!assistantRaw) {
     return false;
@@ -225,7 +224,7 @@ export function isHeartbeatDerivedAssistantLine(lines: string[], source: CorpusS
   return false;
 }
 
-export async function resolveStorePathForAgent(
+async function resolveStorePathForAgent(
   workspaceRoot: string,
   agentId: string,
 ): Promise<string | undefined> {
@@ -246,7 +245,7 @@ export async function resolveStorePathForAgent(
   return undefined;
 }
 
-export async function loadTranscriptLinesFromSqlite(
+async function loadTranscriptLinesFromSqlite(
   agentId: string,
   sessionPath: string,
   workspaceRoot: string,
@@ -447,7 +446,7 @@ export function buildArchiveTimestamp(now: Date): string {
   return now.toISOString().replace(/[:.]/g, "-");
 }
 
-export async function ensureArchivablePath(targetPath: string): Promise<"file" | "dir" | null> {
+async function ensureArchivablePath(targetPath: string): Promise<"file" | "dir" | null> {
   const stat = await fs.lstat(targetPath).catch((err: unknown) => {
     if (extractErrorCode(err) === "ENOENT") {
       return null;
