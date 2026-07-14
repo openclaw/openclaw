@@ -355,6 +355,13 @@ export const id: TranslationMap = {
       approve: "Setujui",
       reject: "Tolak",
       remove: "Hapus",
+      removeName: "Hapus {name}",
+      removePromptTitle: "Hapus {name}?",
+      removePromptBody: "Perangkat ini harus dipasangkan kembali sebelum dapat terhubung kembali.",
+      removeStalePromptTitle: "Hapus {count} pemasangan usang?",
+      removeStalePromptTitleOne: "Hapus 1 pemasangan usang?",
+      removeStalePromptBody:
+        "Klien yang terdampak akan dipasangkan kembali secara otomatis pada koneksi berikutnya.",
       gateway: "gateway",
       unpaired: "tidak dipasangkan",
       unknownClient: "klien tidak dikenal",

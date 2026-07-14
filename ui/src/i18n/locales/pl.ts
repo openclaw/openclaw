@@ -357,6 +357,14 @@ export const pl: TranslationMap = {
       approve: "Zatwierdź",
       reject: "Odrzuć",
       remove: "Usuń",
+      removeName: "Usuń {name}",
+      removePromptTitle: "Usunąć {name}?",
+      removePromptBody:
+        "To urządzenie musi zostać ponownie sparowane, zanim będzie mogło ponownie się połączyć.",
+      removeStalePromptTitle: "Usunąć {count} nieaktywnych sparowań?",
+      removeStalePromptTitleOne: "Usunąć 1 nieaktywne sparowanie?",
+      removeStalePromptBody:
+        "Klienci, których to dotyczy, zostaną ponownie sparowani bez powiadomienia przy następnym połączeniu.",
       gateway: "gateway",
       unpaired: "niesparowane",
       unknownClient: "nieznany klient",

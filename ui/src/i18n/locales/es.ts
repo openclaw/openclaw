@@ -359,6 +359,13 @@ export const es: TranslationMap = {
       approve: "Aprobar",
       reject: "Rechazar",
       remove: "Eliminar",
+      removeName: "Eliminar {name}",
+      removePromptTitle: "¿Eliminar {name}?",
+      removePromptBody: "Este dispositivo deberá volver a emparejarse antes de poder reconectarse.",
+      removeStalePromptTitle: "¿Eliminar {count} emparejamientos obsoletos?",
+      removeStalePromptTitleOne: "¿Eliminar 1 emparejamiento obsoleto?",
+      removeStalePromptBody:
+        "Los clientes afectados volverán a emparejarse automáticamente en su próxima conexión.",
       gateway: "gateway",
       unpaired: "no emparejado",
       unknownClient: "cliente desconocido",

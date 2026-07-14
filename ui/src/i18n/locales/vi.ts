@@ -357,6 +357,13 @@ export const vi: TranslationMap = {
       approve: "Chấp thuận",
       reject: "Từ chối",
       remove: "Xóa",
+      removeName: "Xóa {name}",
+      removePromptTitle: "Xóa {name}?",
+      removePromptBody: "Thiết bị này phải ghép đôi lại trước khi có thể kết nối lại.",
+      removeStalePromptTitle: "Xóa {count} lượt ghép đôi không còn hoạt động?",
+      removeStalePromptTitleOne: "Xóa 1 lượt ghép đôi không còn hoạt động?",
+      removeStalePromptBody:
+        "Các máy khách bị ảnh hưởng sẽ tự động ghép đôi lại trong lần kết nối tiếp theo.",
       gateway: "gateway",
       unpaired: "chưa ghép nối",
       unknownClient: "máy khách không xác định",

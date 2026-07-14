@@ -362,6 +362,14 @@ export const fr: TranslationMap = {
       approve: "Approuver",
       reject: "Rejeter",
       remove: "Supprimer",
+      removeName: "Supprimer {name}",
+      removePromptTitle: "Supprimer {name} ?",
+      removePromptBody:
+        "Cet appareil devra être appairé à nouveau avant de pouvoir se reconnecter.",
+      removeStalePromptTitle: "Supprimer {count} appairages obsolètes ?",
+      removeStalePromptTitleOne: "Supprimer 1 appairage obsolète ?",
+      removeStalePromptBody:
+        "Les clients concernés se réappaireront silencieusement lors de leur prochaine connexion.",
       gateway: "gateway",
       unpaired: "non appairé",
       unknownClient: "client inconnu",

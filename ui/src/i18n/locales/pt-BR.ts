@@ -356,6 +356,14 @@ export const pt_BR: TranslationMap = {
       approve: "Aprovar",
       reject: "Rejeitar",
       remove: "Remover",
+      removeName: "Remover {name}",
+      removePromptTitle: "Remover {name}?",
+      removePromptBody:
+        "Este dispositivo deverá ser pareado novamente antes de poder se reconectar.",
+      removeStalePromptTitle: "Remover {count} pareamentos obsoletos?",
+      removeStalePromptTitleOne: "Remover 1 pareamento obsoleto?",
+      removeStalePromptBody:
+        "Os clientes afetados serão pareados novamente de forma silenciosa na próxima conexão.",
       gateway: "gateway",
       unpaired: "não pareado",
       unknownClient: "cliente desconhecido",

@@ -358,6 +358,14 @@ export const nl: TranslationMap = {
       approve: "Goedkeuren",
       reject: "Weigeren",
       remove: "Verwijderen",
+      removeName: "{name} verwijderen",
+      removePromptTitle: "{name} verwijderen?",
+      removePromptBody:
+        "Dit apparaat moet opnieuw worden gekoppeld voordat het opnieuw verbinding kan maken.",
+      removeStalePromptTitle: "{count} verouderde koppelingen verwijderen?",
+      removeStalePromptTitleOne: "1 verouderde koppeling verwijderen?",
+      removeStalePromptBody:
+        "Betrokken clients worden bij hun volgende verbinding automatisch opnieuw gekoppeld.",
       gateway: "gateway",
       unpaired: "niet-gekoppeld",
       unknownClient: "onbekende client",

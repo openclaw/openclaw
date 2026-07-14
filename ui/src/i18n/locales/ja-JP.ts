@@ -360,6 +360,13 @@ export const ja_JP: TranslationMap = {
       approve: "承認",
       reject: "拒否",
       remove: "削除",
+      removeName: "{name}を削除",
+      removePromptTitle: "{name}を削除しますか？",
+      removePromptBody: "このデバイスが再接続するには、再度ペアリングする必要があります。",
+      removeStalePromptTitle: "{count}件の古いペアリングを削除しますか？",
+      removeStalePromptTitleOne: "古いペアリング1件を削除しますか？",
+      removeStalePromptBody:
+        "影響を受けるクライアントは、次回接続時に自動的に再ペアリングされます。",
       gateway: "gateway",
       unpaired: "未ペアリング",
       unknownClient: "不明なクライアント",

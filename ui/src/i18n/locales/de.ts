@@ -361,6 +361,14 @@ export const de: TranslationMap = {
       approve: "Genehmigen",
       reject: "Ablehnen",
       remove: "Entfernen",
+      removeName: "{name} entfernen",
+      removePromptTitle: "{name} entfernen?",
+      removePromptBody:
+        "Dieses Gerät muss erneut gekoppelt werden, bevor es sich wieder verbinden kann.",
+      removeStalePromptTitle: "{count} veraltete Kopplungen entfernen?",
+      removeStalePromptTitleOne: "1 veraltete Kopplung entfernen?",
+      removeStalePromptBody:
+        "Betroffene Clients werden bei ihrer nächsten Verbindung automatisch erneut gekoppelt.",
       gateway: "Gateway",
       unpaired: "nicht gekoppelt",
       unknownClient: "unbekannter Client",

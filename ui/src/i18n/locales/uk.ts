@@ -356,6 +356,14 @@ export const uk: TranslationMap = {
       approve: "Схвалити",
       reject: "Відхилити",
       remove: "Видалити",
+      removeName: "Видалити {name}",
+      removePromptTitle: "Видалити {name}?",
+      removePromptBody:
+        "Цей пристрій потрібно буде знову спарувати, перш ніж він зможе повторно підключитися.",
+      removeStalePromptTitle: "Видалити {count} застарілих спарювань?",
+      removeStalePromptTitleOne: "Видалити 1 застаріле спарювання?",
+      removeStalePromptBody:
+        "Задіяні клієнти непомітно повторно спаряться під час наступного підключення.",
       gateway: "gateway",
       unpaired: "не з'єднано",
       unknownClient: "невідомий клієнт",

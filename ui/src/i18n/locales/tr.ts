@@ -357,6 +357,13 @@ export const tr: TranslationMap = {
       approve: "Onayla",
       reject: "Reddet",
       remove: "Kaldır",
+      removeName: "{name} cihazını kaldır",
+      removePromptTitle: "{name} kaldırılsın mı?",
+      removePromptBody: "Bu cihazın yeniden bağlanabilmesi için tekrar eşleştirilmesi gerekir.",
+      removeStalePromptTitle: "{count} eski eşleştirme kaldırılsın mı?",
+      removeStalePromptTitleOne: "1 eski eşleştirme kaldırılsın mı?",
+      removeStalePromptBody:
+        "Etkilenen istemciler bir sonraki bağlantılarında sessizce yeniden eşleştirilir.",
       gateway: "gateway",
       unpaired: "eşleştirilmemiş",
       unknownClient: "bilinmeyen istemci",

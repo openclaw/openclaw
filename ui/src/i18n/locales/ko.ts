@@ -353,6 +353,13 @@ export const ko: TranslationMap = {
       approve: "승인",
       reject: "거부",
       remove: "제거",
+      removeName: "{name} 제거",
+      removePromptTitle: "{name}을(를) 제거하시겠습니까?",
+      removePromptBody: "이 기기를 다시 연결하려면 먼저 페어링을 다시 해야 합니다.",
+      removeStalePromptTitle: "오래된 페어링 {count}개를 제거하시겠습니까?",
+      removeStalePromptTitleOne: "오래된 페어링 1개를 제거하시겠습니까?",
+      removeStalePromptBody:
+        "영향을 받는 클라이언트는 다음 연결 시 별도의 알림 없이 다시 페어링됩니다.",
       gateway: "gateway",
       unpaired: "페어링 안 됨",
       unknownClient: "알 수 없는 클라이언트",

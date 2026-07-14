@@ -359,6 +359,14 @@ export const it: TranslationMap = {
       approve: "Approva",
       reject: "Rifiuta",
       remove: "Rimuovi",
+      removeName: "Rimuovi {name}",
+      removePromptTitle: "Rimuovere {name}?",
+      removePromptBody:
+        "Questo dispositivo dovrà essere nuovamente associato prima di potersi riconnettere.",
+      removeStalePromptTitle: "Rimuovere {count} associazioni obsolete?",
+      removeStalePromptTitleOne: "Rimuovere 1 associazione obsoleta?",
+      removeStalePromptBody:
+        "I client interessati verranno nuovamente associati automaticamente alla connessione successiva.",
       gateway: "gateway",
       unpaired: "non associato",
       unknownClient: "client sconosciuto",

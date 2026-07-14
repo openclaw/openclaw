@@ -62,6 +62,9 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
 
 function renderNodesContainer(overrides: Partial<NodesProps>): HTMLDivElement {
   const container = document.createElement("div");
+  // Attach to the document: the removal-prompt dialog is a custom element and
+  // only upgrades (and renders its shadow DOM) once connected.
+  document.body.append(container);
   render(renderNodes(baseProps(overrides)), container);
   return container;
 }

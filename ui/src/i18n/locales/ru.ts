@@ -357,6 +357,14 @@ export const ru: TranslationMap = {
       approve: "Одобрить",
       reject: "Отклонить",
       remove: "Удалить",
+      removeName: "Удалить {name}",
+      removePromptTitle: "Удалить {name}?",
+      removePromptBody:
+        "Это устройство потребуется повторно сопрячь, прежде чем оно сможет снова подключиться.",
+      removeStalePromptTitle: "Удалить устаревшие сопряжения ({count})?",
+      removeStalePromptTitleOne: "Удалить 1 устаревшее сопряжение?",
+      removeStalePromptBody:
+        "Затронутые клиенты автоматически выполнят повторное сопряжение при следующем подключении.",
       gateway: "gateway",
       unpaired: "не связано",
       unknownClient: "неизвестный клиент",
