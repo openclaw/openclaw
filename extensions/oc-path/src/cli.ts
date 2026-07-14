@@ -32,7 +32,7 @@ import {
   type OcPath,
 } from "./oc-path/index.js";
 
-export type OutputRuntimeEnv = {
+type OutputRuntimeEnv = {
   writeStdout(value: string): void;
   error(value: string): void;
   exit(code: number): void;
@@ -215,7 +215,7 @@ function splitDiffLines(s: string): readonly string[] {
   return s === "" ? [] : s.split("\n");
 }
 
-export function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
+function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
   if (oldBytes === newBytes) {
     return "";
   }

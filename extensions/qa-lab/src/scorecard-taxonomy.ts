@@ -895,7 +895,7 @@ function collectEvidenceReportsForCoverageId(params: {
   });
 }
 
-export function buildQaScorecardTaxonomyReport(params: {
+function buildQaScorecardTaxonomyReport(params: {
   taxonomy: QaMaturityTaxonomy | null;
   taxonomyPath?: string | null;
   repoRoot?: string;

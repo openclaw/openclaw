@@ -33,7 +33,8 @@ import {
 import { resolveProviderEnvAuthEvidence } from "../../agents/model-auth-env.js";
 import {
   isKnownEnvApiKeyMarker,
-  listKnownNonSecretApiKeyMarkers,
+  isNonSecretApiKeyMarker,
+  NON_ENV_SECRETREF_MARKER,
 } from "../../agents/model-auth-markers.js";
 import {
   resolveProviderEntryApiKeyProfileReference,
@@ -451,7 +452,7 @@ function resolveProviderApiKeys(
           // Local no-auth placeholders (e.g. the ollama-local marker) resolve to
           // a usable value but represent no credential; do not advertise them as
           // a configured API key or the provider would render as static.
-          if (rawKey && listKnownNonSecretApiKeyMarkers().includes(rawKey)) {
+          if (rawKey && isNonSecretApiKeyMarker(rawKey, { includeEnvVarName: false })) {
             continue;
           }
           const envVar =
@@ -500,17 +501,17 @@ function resolveConfiguredProviders(
   const out = new Set<string>();
   const expectsOAuth = new Set<string>();
   for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
-    if (!id) {
-      continue;
-    }
     const normalized = normalizeProviderId(id);
     if (!normalized) {
       continue;
     }
-    // Only include providers whose configured auth mode is refreshable.
-    // `undefined` / "api-key" / "aws-sdk" are deliberately skipped.
+    const rawKey = typeof provider?.apiKey === "string" ? provider.apiKey.trim() : "";
+    const hasApiKey =
+      hasConfiguredSecretInput(provider?.apiKey, cfg.secrets?.defaults) &&
+      (rawKey === NON_ENV_SECRETREF_MARKER ||
+        !isNonSecretApiKeyMarker(rawKey, { includeEnvVarName: false }));
     const mode = provider?.auth;
-    if (mode !== "oauth" && mode !== "token") {
+    if (mode !== "oauth" && mode !== "token" && !hasApiKey) {
       continue;
     }
     if (apiKeys.has(normalized)) {
@@ -521,8 +522,7 @@ function resolveConfiguredProviders(
       expectsOAuth.add(normalized);
     }
   }
-  // auth.profiles entries explicitly opt into the refreshable set via
-  // `mode: oauth | token`. api_key profiles are excluded (no lifecycle).
+  // auth.profiles opt in via `mode: oauth | token`; API-key profiles have no lifecycle.
   for (const profile of Object.values(cfg.auth?.profiles ?? {})) {
     const provider = profile?.provider;
     const mode = profile?.mode;

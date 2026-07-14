@@ -13,12 +13,9 @@ import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/re
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin, { testing as googleMeetPluginTesting } from "./index.js";
-import {
-  extractGoogleMeetUriFromCalendarEvent,
-  findGoogleMeetCalendarEvent,
-  listGoogleMeetCalendarEvents,
-} from "./src/calendar.js";
-import { resolveGoogleMeetConfig, resolveGoogleMeetConfigWithEnv } from "./src/config.js";
+import { findGoogleMeetCalendarEvent, listGoogleMeetCalendarEvents } from "./src/calendar.js";
+import { resolveGoogleMeetConfig } from "./src/config.js";
+import { normalizeMeetUrl } from "./src/meet-url.js";
 import {
   buildGoogleMeetPreflightReport,
   createGoogleMeetSpace,
@@ -26,21 +23,20 @@ import {
   fetchGoogleMeetAttendance,
   fetchLatestGoogleMeetConferenceRecord,
   fetchGoogleMeetSpace,
-  normalizeGoogleMeetSpaceName,
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import { startNodeRealtimeAudioBridge } from "./src/realtime-node.js";
 import {
   convertGoogleMeetTtsAudioForBridge,
-  extendGoogleMeetOutputEchoSuppression,
   isGoogleMeetLikelyAssistantEchoTranscript,
   GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
+  recordGoogleMeetOutputActivity,
   resolveGoogleMeetRealtimeProvider,
   resolveGoogleMeetRealtimeTranscriptionProvider,
   startCommandAgentAudioBridge,
   startCommandRealtimeAudioBridge,
 } from "./src/realtime.js";
-import { GoogleMeetRuntime, normalizeMeetUrl } from "./src/runtime.js";
+import { GoogleMeetRuntime } from "./src/runtime.js";
 import {
   invokeGoogleMeetGatewayMethodForTest,
   noopLogger,
@@ -126,6 +122,33 @@ function setup(
   );
   googleMeetPluginTesting.setPlatformForTests(() => options?.registerPlatform ?? "darwin");
   return harness;
+}
+
+const GOOGLE_MEET_ENV_KEYS = [
+  "OPENCLAW_GOOGLE_MEET_CLIENT_ID",
+  "GOOGLE_MEET_CLIENT_ID",
+  "OPENCLAW_GOOGLE_MEET_CLIENT_SECRET",
+  "GOOGLE_MEET_CLIENT_SECRET",
+  "OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN",
+  "GOOGLE_MEET_REFRESH_TOKEN",
+  "OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN",
+  "GOOGLE_MEET_ACCESS_TOKEN",
+  "OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT",
+  "GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT",
+  "OPENCLAW_GOOGLE_MEET_DEFAULT_MEETING",
+  "GOOGLE_MEET_DEFAULT_MEETING",
+  "OPENCLAW_GOOGLE_MEET_PREVIEW_ACK",
+  "GOOGLE_MEET_PREVIEW_ACK",
+] as const;
+
+function resolveGoogleMeetConfigFromTestEnv(env: Record<string, string>) {
+  for (const key of GOOGLE_MEET_ENV_KEYS) {
+    vi.stubEnv(key, undefined);
+  }
+  for (const [key, value] of Object.entries(env)) {
+    vi.stubEnv(key, value);
+  }
+  return resolveGoogleMeetConfig({});
 }
 
 function jsonResponse(value: unknown): Response {
@@ -816,18 +839,15 @@ describe("google-meet plugin", () => {
   });
 
   it("uses env fallbacks for OAuth, preview, and default meeting values", () => {
-    const config = resolveGoogleMeetConfigWithEnv(
-      {},
-      {
-        OPENCLAW_GOOGLE_MEET_CLIENT_ID: "client-id",
-        GOOGLE_MEET_CLIENT_SECRET: "client-secret",
-        OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: "refresh-token",
-        GOOGLE_MEET_ACCESS_TOKEN: "access-token",
-        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: "123456",
-        GOOGLE_MEET_DEFAULT_MEETING: "https://meet.google.com/abc-defg-hij",
-        OPENCLAW_GOOGLE_MEET_PREVIEW_ACK: "true",
-      },
-    );
+    const config = resolveGoogleMeetConfigFromTestEnv({
+      OPENCLAW_GOOGLE_MEET_CLIENT_ID: "client-id",
+      GOOGLE_MEET_CLIENT_SECRET: "client-secret",
+      OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: "refresh-token",
+      GOOGLE_MEET_ACCESS_TOKEN: "access-token",
+      OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: "123456",
+      GOOGLE_MEET_DEFAULT_MEETING: "https://meet.google.com/abc-defg-hij",
+      OPENCLAW_GOOGLE_MEET_PREVIEW_ACK: "true",
+    });
     expect(config.defaults).toEqual({ meeting: "https://meet.google.com/abc-defg-hij" });
     expect(config.preview).toEqual({ enrollmentAcknowledged: true });
     expect(config.oauth).toEqual({
@@ -840,13 +860,10 @@ describe("google-meet plugin", () => {
   });
 
   it.each(["0x10", "1e3"])("ignores non-decimal env numeric fallbacks: %s", (expiresAt) => {
-    const config = resolveGoogleMeetConfigWithEnv(
-      {},
-      {
-        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN: "access-token",
-        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: expiresAt,
-      },
-    );
+    const config = resolveGoogleMeetConfigFromTestEnv({
+      OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN: "access-token",
+      OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: expiresAt,
+    });
 
     expect(config.oauth).toEqual({ accessToken: "access-token" });
   });
@@ -1010,32 +1027,31 @@ describe("google-meet plugin", () => {
     });
   });
 
-  it("normalizes Meet URLs, codes, and space names for the Meet API", () => {
-    expect(normalizeGoogleMeetSpaceName("spaces/abc-defg-hij")).toBe("spaces/abc-defg-hij");
-    expect(normalizeGoogleMeetSpaceName("abc-defg-hij")).toBe("spaces/abc-defg-hij");
-    expect(normalizeGoogleMeetSpaceName("https://meet.google.com/abc-defg-hij")).toBe(
-      "spaces/abc-defg-hij",
-    );
-    expect(() => normalizeGoogleMeetSpaceName("https://example.com/abc-defg-hij")).toThrow(
-      "meet.google.com",
-    );
+  it("normalizes Meet URLs, codes, and space names for the Meet API", async () => {
+    stubMeetArtifactsApi();
+    await expect(
+      fetchGoogleMeetSpace({ accessToken: "token", meeting: "spaces/abc-defg-hij" }),
+    ).resolves.toMatchObject({ name: "spaces/abc-defg-hij" });
+    await expect(
+      fetchGoogleMeetSpace({ accessToken: "token", meeting: "abc-defg-hij" }),
+    ).resolves.toMatchObject({ name: "spaces/abc-defg-hij" });
+    await expect(
+      fetchGoogleMeetSpace({
+        accessToken: "token",
+        meeting: "https://meet.google.com/abc-defg-hij",
+      }),
+    ).resolves.toMatchObject({ name: "spaces/abc-defg-hij" });
+    await expect(
+      fetchGoogleMeetSpace({
+        accessToken: "token",
+        meeting: "https://example.com/abc-defg-hij",
+      }),
+    ).rejects.toThrow("meet.google.com");
   });
 
   it("finds Google Meet links from Calendar events", async () => {
     const fetchMock = stubMeetArtifactsApi();
 
-    expect(
-      extractGoogleMeetUriFromCalendarEvent({
-        conferenceData: {
-          entryPoints: [
-            {
-              entryPointType: "video",
-              uri: "https://meet.google.com/abc-defg-hij",
-            },
-          ],
-        },
-      }),
-    ).toBe("https://meet.google.com/abc-defg-hij");
     const event = await findGoogleMeetCalendarEvent({
       accessToken: "token",
       now: new Date("2026-04-25T09:50:00Z"),
@@ -7141,14 +7157,22 @@ describe("google-meet plugin", () => {
   });
 
   it("tracks queued playback time when suppressing realtime input echo", () => {
-    const first = extendGoogleMeetOutputEchoSuppression({
+    const markPlaybackStarted = vi.fn();
+    const markAudio = vi.fn();
+    const tracker = {
+      markPlaybackStarted,
+      markAudio,
+    } as unknown as Parameters<typeof recordGoogleMeetOutputActivity>[0]["tracker"];
+    const first = recordGoogleMeetOutputActivity({
+      tracker,
       audio: Buffer.alloc(48_000),
       audioFormat: "pcm16-24khz",
       nowMs: 1_000,
       lastOutputPlayableUntilMs: 0,
       suppressInputUntilMs: 0,
     });
-    const second = extendGoogleMeetOutputEchoSuppression({
+    const second = recordGoogleMeetOutputActivity({
+      tracker,
       audio: Buffer.alloc(48_000),
       audioFormat: "pcm16-24khz",
       nowMs: 1_100,
@@ -7162,6 +7186,12 @@ describe("google-meet plugin", () => {
     expect(second.durationMs).toBe(1_000);
     expect(second.lastOutputPlayableUntilMs).toBe(3_000);
     expect(second.suppressInputUntilMs).toBe(6_000);
+    expect(markPlaybackStarted).toHaveBeenCalledTimes(2);
+    expect(markAudio).toHaveBeenNthCalledWith(1, {
+      audioMs: 1_000,
+      sourceAudioBytes: 48_000,
+      sinkAudioBytes: 48_000,
+    });
   });
 
   it("detects assistant transcript echoes before agent consult", () => {

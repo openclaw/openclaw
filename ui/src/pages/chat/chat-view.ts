@@ -21,13 +21,13 @@ import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
+import { handleChatAttachmentDrop } from "./components/chat-attachments.ts";
 import {
   renderBackgroundTasksRail,
   renderBackgroundTasksToggle,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
 import {
-  handleChatAttachmentDrop,
   isChatRunWorking,
   renderChatComposer,
   resetChatComposerState,

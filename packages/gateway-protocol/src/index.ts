@@ -1,33 +1,14 @@
-// Public gateway protocol entrypoint: wire types, schemas, and validators.
-export {
-  buildClawHubTrustErrorDetails,
-  ClawHubTrustErrorCodes,
-  isClawHubTrustErrorCode,
-  readClawHubTrustErrorDetails,
-  type ClawHubTrustErrorCode,
-  type ClawHubTrustErrorDetails,
-} from "./clawhub-trust-error-details.js";
+export * from "./clawhub-trust-error-details.js";
+export { validateApprovalGetResult } from "./approval-result-validators.js";
+export { validateApprovalResolveResult } from "./approval-result-validators.js";
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 import { lazyCompile } from "./protocol-validator.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
-export type {
-  SessionCatalog,
-  SessionCatalogCapabilities,
-  SessionCatalogDescriptor,
-  SessionCatalogHost,
-  SessionCatalogSession,
-  SessionCatalogTranscriptItem,
-  SessionsCatalogArchiveParams,
-  SessionsCatalogArchiveResult,
-  SessionsCatalogContinueParams,
-  SessionsCatalogContinueResult,
-  SessionsCatalogListParams,
-  SessionsCatalogListResult,
-  SessionsCatalogReadParams,
-  SessionsCatalogReadResult,
-} from "./schema/sessions-catalog.js";
+export * from "./schema/skill-history.js";
+export * from "./migration-api.js";
+export type * from "./public-session-catalog.js";
 import {
   AgentEventSchema,
   AuditActivityAgentRunV1Schema,
@@ -301,6 +282,7 @@ import {
   NodePresenceAliveReasonSchema,
   NodePresenceActivityPayloadSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeInvokeResultParamsSchema,
   NodeListParamsSchema,
@@ -613,6 +595,7 @@ export const validateSystemInfoResult = lazyCompile(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile(NodePendingAckParamsSchema);
 export const validateNodeDescribeParams = lazyCompile(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
+export const validateNodeInvokeInputEvent = lazyCompile(NodeInvokeInputEventSchema);
 export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
 export const validateNodeInvokeProgressParams = lazyCompile(NodeInvokeProgressParamsSchema);
 export const validateNodeEventParams = lazyCompile(NodeEventParamsSchema);
@@ -805,9 +788,7 @@ export const validateCancelledApprovalSnapshot = lazyCompile(CancelledApprovalSn
 export const validateApprovalSnapshot = lazyCompile(ApprovalSnapshotSchema);
 export const validateTerminalApprovalSnapshot = lazyCompile(TerminalApprovalSnapshotSchema);
 export const validateApprovalGetParams = lazyCompile(ApprovalGetParamsSchema);
-export const validateApprovalGetResult = lazyCompile(ApprovalGetResultSchema);
 export const validateApprovalResolveParams = lazyCompile(ApprovalResolveParamsSchema);
-export const validateApprovalResolveResult = lazyCompile(ApprovalResolveResultSchema);
 export const validateExecApprovalsGetParams = lazyCompile(ExecApprovalsGetParamsSchema);
 export const validateExecApprovalsSetParams = lazyCompile(ExecApprovalsSetParamsSchema);
 export const validateExecApprovalGetParams = lazyCompile(ExecApprovalGetParamsSchema);
@@ -958,6 +939,7 @@ export {
   NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeEventResultSchema,
   NodePresenceAlivePayloadSchema,
@@ -1542,6 +1524,7 @@ export type {
   NodeSkillDescriptor,
   NodeSkillsUpdateParams,
   NodeInvokeParams,
+  NodeInvokeInputEvent,
   NodeInvokeProgressParams,
   NodeInvokeResultParams,
   NodeEventParams,

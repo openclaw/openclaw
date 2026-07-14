@@ -5,6 +5,7 @@ import {
   sanitizeInboundSystemTags,
 } from "../../auto-reply/reply/inbound-text.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
+import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
 import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
@@ -142,6 +143,7 @@ export function createPluginRuntimeMediaMock(
 }
 
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
+  const runtimeContexts = createChannelRuntimeContextRegistry();
   const runEmbeddedAgentMock = vi.fn().mockResolvedValue({
     payloads: [],
     meta: {},
@@ -778,14 +780,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setMaxAgeBySessionKey"],
       },
       runtimeContexts: {
-        register: vi.fn(({ abortSignal }: { abortSignal?: AbortSignal }) => {
-          const lease = { dispose: vi.fn() };
-          abortSignal?.addEventListener("abort", lease.dispose, { once: true });
-          return lease;
-        }) as unknown as PluginRuntime["channel"]["runtimeContexts"]["register"],
-        get: vi.fn() as unknown as PluginRuntime["channel"]["runtimeContexts"]["get"],
-        watch: vi.fn(() =>
-          vi.fn(),
+        register: vi.fn(
+          runtimeContexts.register,
+        ) as unknown as PluginRuntime["channel"]["runtimeContexts"]["register"],
+        get: vi.fn(
+          runtimeContexts.get,
+        ) as unknown as PluginRuntime["channel"]["runtimeContexts"]["get"],
+        watch: vi.fn(
+          runtimeContexts.watch,
         ) as unknown as PluginRuntime["channel"]["runtimeContexts"]["watch"],
       },
       activity: {} as PluginRuntime["channel"]["activity"],
@@ -844,7 +846,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSession: vi.fn(),
       deleteSession: vi.fn(),
     },
+    sandbox: {
+      resolveWorkspaceAuthority: vi.fn(),
+      prepareWorkspaceAuthority: vi.fn(),
+    },
     worktrees: {
+      resolveCheckoutRoot: vi.fn(),
+      hasSelfContainedCheckoutMetadata: vi.fn(),
       create: vi.fn(),
       release: vi.fn(),
       removeIfLossless: vi.fn(),

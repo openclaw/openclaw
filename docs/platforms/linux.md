@@ -2,6 +2,7 @@
 summary: "Linux support + companion app status"
 read_when:
   - Looking for Linux companion app status
+  - Enabling camera, location, or notifications on a Linux node host
   - Planning platform coverage or contributions
   - Debugging Linux OOM kills or exit 137 on a VPS or container
 title: "Linux app"
@@ -21,14 +22,26 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - opens the Gateway-served Control UI with its resolved authentication URL
 - remains available from the system tray when its window is closed
 
-Hosted releases are not published yet. Build a `.deb` and AppImage from a source checkout:
+Stable releases built from `main` ship `.deb` and AppImage bundles as assets on the
+[GitHub release](https://github.com/openclaw/openclaw/releases) for the tag,
+named `OpenClaw-<version>-amd64.deb` and `OpenClaw-<version>-amd64.AppImage`,
+with a `SHA256SUMS.linux-app.txt` checksum file next to them. Download the
+`.deb` and install it with `sudo apt install ./OpenClaw-<version>-amd64.deb`,
+or mark the AppImage executable and run it directly. The AppImage runtime
+needs FUSE 2 (`sudo apt install libfuse2`, or `libfuse2t64` on Ubuntu 24.04+);
+without it, run the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.
+
+You can also build the same bundles from a source checkout:
 
 ```bash
 cd apps/linux/src-tauri
 pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
 ```
 
-The `Linux App` CI workflow also uploads the same bundles as the `openclaw-linux-companion` artifact for pull requests touching the app and for manual runs. See `apps/linux/README.md` in the repository for Linux build dependencies and development commands.
+The `Linux App` CI workflow uploads the same bundles as the
+`openclaw-linux-companion` artifact for pull requests touching the app and for
+manual runs. See `apps/linux/README.md` in the repository for Linux build
+dependencies and development commands.
 
 ## CLI and SSH alternative
 
@@ -43,6 +56,49 @@ The CLI remains the simplest option for a headless server, a VPS, or a remote Ga
 
 Full server guide: [Linux Server](/vps). Step-by-step VPS example:
 [exe.dev](/install/exe-dev).
+
+## Node capabilities
+
+The bundled Linux Node plugin gives the CLI `openclaw node` service device capabilities without requiring the desktop app. Commands are advertised to the Gateway only when their capability is enabled and the required local tool exists.
+
+| Capability                              | Default | Requirement                                                           |
+| --------------------------------------- | ------- | --------------------------------------------------------------------- |
+| Desktop notifications (`system.notify`) | On      | `notify-send` from libnotify and a desktop notification session       |
+| Camera photos and clips (`camera.*`)    | Off     | FFmpeg, V4L2 camera access, and PulseAudio or PipeWire for clip audio |
+| Location (`location.get`)               | Off     | GeoClue2 and its `where-am-i` demo                                    |
+
+Configure the plugin in `openclaw.json`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "linux-node": {
+        config: {
+          notify: { enabled: true },
+          camera: { enabled: true },
+          location: { enabled: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Restart the node service after changing these settings. Availability is determined once per process and the node advertisement is rebuilt on restart.
+
+The Gateway approves the node's command and capability surface separately from device pairing. On first start, or after enabling more capabilities, approve the pending surface:
+
+```bash
+openclaw nodes pending
+openclaw nodes approve <requestId>
+```
+
+A node can be connected and device-paired while its effective `caps` and `commands` remain empty until this approval completes.
+
+Camera devices must be readable by the service user, commonly through the `video` group. Camera clips use the default PulseAudio or PipeWire source when `includeAudio` is true; microphone audio exists only as that clip track, not as a standalone command. Location requires the node-service user to be permitted by the host's GeoClue policy.
+
+`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.allowCommands`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
 ## Install
 

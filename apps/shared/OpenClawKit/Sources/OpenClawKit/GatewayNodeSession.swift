@@ -12,6 +12,10 @@ private struct NodeInvokeRequestPayload: Codable {
     var idempotencyKey: String?
 }
 
+private struct NodeInvokeCancelPayload: Codable {
+    var invokeId: String
+}
+
 func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
     let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard !trimmed.isEmpty else { return nil }
@@ -48,6 +52,7 @@ func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
 public struct GatewayNodeSessionRoute: Sendable, Equatable {
     fileprivate let channelGeneration: UInt64
     fileprivate let admissionGeneration: UInt64
+    fileprivate let socketGeneration: UInt64
 }
 
 /// A route lease became stale before its request touched the channel. Unlike
@@ -164,6 +169,8 @@ public actor GatewayNodeSession {
     private var onConnected: (@Sendable () async -> Void)?
     private var onDisconnected: (@Sendable (String) async -> Void)?
     private var onInvoke: (@Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse)?
+    private var onInvokeInput: (@Sendable (NodeInvokeInputEvent) async -> Void)?
+    private var onInvokeCancel: (@Sendable (String) async -> Void)?
     private var onRouteInvalidated: (@Sendable () async -> Void)?
     private var hasEverConnected = false
     private var hasNotifiedConnected = false
@@ -334,6 +341,8 @@ public actor GatewayNodeSession {
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
+        onInvokeInput: (@Sendable (NodeInvokeInputEvent) async -> Void)? = nil,
+        onInvokeCancel: (@Sendable (String) async -> Void)? = nil,
         onRouteInvalidated: (@Sendable () async -> Void)? = nil) async throws
     {
         let nextOptionsKey = self.connectOptionsKey(connectOptions)
@@ -403,6 +412,8 @@ public actor GatewayNodeSession {
             self.onConnected = onConnected
             self.onDisconnected = onDisconnected
             self.onInvoke = onInvoke
+            self.onInvokeInput = onInvokeInput
+            self.onInvokeCancel = onInvokeCancel
             self.onRouteInvalidated = onRouteInvalidated
             self.activeURL = url
             self.activeCredentials = credentials
@@ -414,6 +425,8 @@ public actor GatewayNodeSession {
             self.onConnected = onConnected
             self.onDisconnected = onDisconnected
             self.onInvoke = onInvoke
+            self.onInvokeInput = onInvokeInput
+            self.onInvokeCancel = onInvokeCancel
             self.onRouteInvalidated = onRouteInvalidated
         }
 
@@ -457,6 +470,8 @@ public actor GatewayNodeSession {
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
+        onInvokeInput: (@Sendable (NodeInvokeInputEvent) async -> Void)? = nil,
+        onInvokeCancel: (@Sendable (String) async -> Void)? = nil,
         onRouteInvalidated: (@Sendable () async -> Void)? = nil) async throws
     {
         try await self.connect(
@@ -471,6 +486,8 @@ public actor GatewayNodeSession {
             onConnected: onConnected,
             onDisconnected: onDisconnected,
             onInvoke: onInvoke,
+            onInvokeInput: onInvokeInput,
+            onInvokeCancel: onInvokeCancel,
             onRouteInvalidated: onRouteInvalidated)
     }
 
@@ -506,6 +523,8 @@ public actor GatewayNodeSession {
         self.onConnected = nil
         self.onDisconnected = nil
         self.onInvoke = nil
+        self.onInvokeInput = nil
+        self.onInvokeCancel = nil
         self.onRouteInvalidated = nil
         self.activeSocketGeneration = nil
         self.lastRetiredSocketGeneration = nil
@@ -623,17 +642,25 @@ public actor GatewayNodeSession {
         return "\(host):\(port)"
     }
 
-    public func currentRoute(ifGatewayID expectedGatewayID: String? = nil) -> GatewayNodeSessionRoute? {
-        guard self.channel != nil else { return nil }
+    public func currentRoute(ifGatewayID expectedGatewayID: String? = nil) async -> GatewayNodeSessionRoute? {
+        guard let channel = self.channel else { return nil }
         if let expectedGatewayID {
             guard !expectedGatewayID.isEmpty,
                   let currentGatewayID = self.connectOptions?.deviceAuthGatewayID,
                   currentGatewayID.utf8.elementsEqual(expectedGatewayID.utf8)
             else { return nil }
         }
+        let channelGeneration = self.channelGeneration
+        let admissionGeneration = self.admissionGeneration
+        guard let socketGeneration = await channel.currentConnectionGeneration(),
+              self.channel === channel,
+              self.channelGeneration == channelGeneration,
+              self.admissionGeneration == admissionGeneration
+        else { return nil }
         return GatewayNodeSessionRoute(
-            channelGeneration: self.channelGeneration,
-            admissionGeneration: self.admissionGeneration)
+            channelGeneration: channelGeneration,
+            admissionGeneration: admissionGeneration,
+            socketGeneration: socketGeneration)
     }
 
     public func supportsServerCapability(
@@ -736,6 +763,13 @@ public actor GatewayNodeSession {
             ])
         }
 
+        if let expectedRoute {
+            return try await channel.request(
+                method: method,
+                params: params,
+                timeoutMs: timeoutMs,
+                ifCurrentConnectionGeneration: expectedRoute.socketGeneration)
+        }
         return try await channel.request(
             method: method,
             params: params,
@@ -976,6 +1010,26 @@ extension GatewayNodeSession {
         socketGeneration: UInt64) async
     {
         self.broadcastServerEvent(evt)
+        if evt.event == "node.invoke.input" {
+            guard let payload = evt.payload, let onInvokeInput else { return }
+            do {
+                let input: NodeInvokeInputEvent = try self.decodeEventPayload(from: payload)
+                await onInvokeInput(input)
+            } catch {
+                self.logger.error("node invoke input decode failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
+        if evt.event == "node.invoke.cancel" {
+            guard let payload = evt.payload, let onInvokeCancel else { return }
+            do {
+                let cancel: NodeInvokeCancelPayload = try self.decodeEventPayload(from: payload)
+                await onInvokeCancel(cancel.invokeId)
+            } catch {
+                self.logger.error("node invoke cancel decode failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
         guard evt.event == "node.invoke.request" else { return }
         self.logger.info("node invoke request received")
         guard let payload = evt.payload else { return }
@@ -991,7 +1045,8 @@ extension GatewayNodeSession {
             guard let onInvoke else { return }
             let route = GatewayNodeSessionRoute(
                 channelGeneration: channelGeneration,
-                admissionGeneration: admissionGeneration)
+                admissionGeneration: admissionGeneration,
+                socketGeneration: socketGeneration)
             let receiptScope = self.computerInvokeReceiptScope()
             // GatewayChannel waits for push handling before it rearms receive. Run device work
             // separately so a long invoke cannot starve heartbeats or later node requests.
@@ -1425,12 +1480,16 @@ extension GatewayNodeSession {
     }
 
     private func decodeInvokeRequest(from payload: OpenClawProtocol.AnyCodable) throws -> NodeInvokeRequestPayload {
+        try self.decodeEventPayload(from: payload)
+    }
+
+    private func decodeEventPayload<T: Decodable>(from payload: OpenClawProtocol.AnyCodable) throws -> T {
         do {
             let data = try encoder.encode(payload)
-            return try self.decoder.decode(NodeInvokeRequestPayload.self, from: data)
+            return try self.decoder.decode(T.self, from: data)
         } catch {
             if let raw = payload.value as? String, let data = raw.data(using: .utf8) {
-                return try self.decoder.decode(NodeInvokeRequestPayload.self, from: data)
+                return try self.decoder.decode(T.self, from: data)
             }
             throw error
         }

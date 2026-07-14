@@ -165,6 +165,12 @@ describe("oxlint config", () => {
 
     expect(config.overrides).toEqual([
       {
+        files: ["extensions/browser/src/browser/routes/*.ts"],
+        rules: {
+          "oxc/no-async-endpoint-handlers": "off",
+        },
+      },
+      {
         files: [
           "packages/markdown-core/**/*.ts",
           "packages/net-policy/**/*.ts",

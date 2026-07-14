@@ -90,6 +90,10 @@ vi.mock("../../agents/model-auth.js", () => ({
       : null;
   },
 }));
+vi.mock("../../agents/provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) =>
+    provider === "byteplus-plan" ? "byteplus" : provider,
+}));
 vi.mock("../../agents/model-selection.js", () => {
   const normalizeProviderId = (value: string) =>
     value.trim().toLowerCase() === "z.ai" || value.trim().toLowerCase() === "z-ai"
@@ -679,6 +683,96 @@ describe("buildProbeTargets reason codes", () => {
           expect.objectContaining({ source: "env", label: "env: ZAI_API_KEY", mode: "token" }),
         );
       },
+    );
+  });
+
+  it("keeps alias model selection while resolving profiles from the auth provider", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "byteplus:plan": {
+          type: "api_key",
+          provider: "byteplus",
+          key: "byteplus-plan-key",
+        },
+      },
+      order: { byteplus: ["byteplus:plan"] },
+    };
+    mockAllowedProfiles = ["byteplus:plan"];
+    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
+    loadModelCatalogMock.mockResolvedValueOnce([
+      { provider: "byteplus", id: "seed-2-0-mini", name: "BytePlus Standard" },
+      { provider: "byteplus-plan", id: "ark-code-latest", name: "BytePlus Plan" },
+    ]);
+
+    const plan = await buildProbeTargets({
+      cfg: {
+        models: {
+          providers: {
+            "byteplus-plan": {
+              baseUrl: "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+        auth: { order: { byteplus: ["byteplus:plan"] } },
+      } as OpenClawConfig,
+      providers: ["byteplus-plan"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.results).toStrictEqual([]);
+    expect(plan.targets).toStrictEqual([
+      {
+        label: "byteplus:plan",
+        mode: "api_key",
+        model: { provider: "byteplus-plan", model: "ark-code-latest" },
+        profileId: "byteplus:plan",
+        provider: "byteplus-plan",
+        source: "profile",
+      },
+    ]);
+  });
+
+  it("keeps profiles stored under the requested provider alias", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "byteplus-plan:saved": {
+          type: "api_key",
+          provider: "byteplus-plan",
+          key: "byteplus-plan-key",
+        },
+      },
+      order: { "byteplus-plan": ["byteplus-plan:saved"] },
+    };
+    mockAllowedProfiles = ["byteplus-plan:saved"];
+    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
+
+    const plan = await buildProbeTargets({
+      cfg: {} as OpenClawConfig,
+      providers: ["byteplus-plan"],
+      modelCandidates: ["byteplus-plan/ark-code-latest"],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.results).toStrictEqual([]);
+    expect(plan.targets).toContainEqual(
+      expect.objectContaining({
+        provider: "byteplus-plan",
+        profileId: "byteplus-plan:saved",
+        source: "profile",
+      }),
     );
   });
 

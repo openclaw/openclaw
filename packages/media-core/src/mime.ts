@@ -119,19 +119,8 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   } catch {
     // fall through to manual magic-byte sniffs
   }
-  return sniffKnownAudioMagic(buffer);
-}
-
-// Fallbacks for audio containers `file-type` doesn't recognize natively (e.g.
-// Apple's CAF, used by iMessage voice memos when produced by `afconvert`).
-// Without this the host-local-media validator drops these buffers as unknown
-// binary blobs because the sniff returns undefined, even though the file is
-// a valid audio container.
-function sniffKnownAudioMagic(buffer: Buffer): string | undefined {
-  if (buffer.byteLength >= 4 && buffer.toString("ascii", 0, 4) === "caff") {
-    return "audio/x-caf";
-  }
-  return undefined;
+  // Preserve iMessage CAF voice memos; file-type v22 does not detect them.
+  return buffer.toString("ascii", 0, 4) === "caff" ? "audio/x-caf" : undefined;
 }
 
 /** Extracts a lowercase extension from a local path or HTTP URL pathname. */
@@ -174,60 +163,23 @@ export function isAudioFileName(fileName?: string | null): boolean {
 }
 
 /** Detects the best MIME type from bytes, file path, and header metadata. */
-export function detectMime(opts: {
+export async function detectMime(opts: {
   buffer?: Buffer;
   headerMime?: string | null;
   filePath?: string;
 }): Promise<string | undefined> {
-  return detectMimeImpl(opts);
-}
-
-function isGenericMime(mime?: string): boolean {
-  if (!mime) {
-    return true;
-  }
-  const m = mime.toLowerCase();
-  return m === "application/octet-stream" || m === "application/zip";
-}
-
-function isImageMime(mime?: string): boolean {
-  return mediaKindFromMime(normalizeMimeType(mime)) === "image";
-}
-
-async function detectMimeImpl(opts: {
-  buffer?: Buffer;
-  headerMime?: string | null;
-  filePath?: string;
-}): Promise<string | undefined> {
-  const ext = getFileExtension(opts.filePath);
-  const extMime = ext ? MIME_BY_EXT[ext] : undefined;
-
+  const extMime = MIME_BY_EXT[getFileExtension(opts.filePath) ?? ""];
   const headerMime = normalizeMimeType(opts.headerMime);
   const sniffed = await sniffMime(opts.buffer);
-  const sniffedGenericContainer = sniffed && isGenericMime(sniffed);
-  const trustedExtMime = sniffedGenericContainer && isImageMime(extMime) ? undefined : extMime;
-  const trustedHeaderMime =
-    sniffedGenericContainer && isImageMime(headerMime) ? undefined : headerMime;
+  const sniffedGenericContainer =
+    sniffed === "application/octet-stream" || sniffed === "application/zip";
 
   // Prefer sniffed types, but don't let generic container types override a more
   // specific extension mapping (e.g. XLSX vs ZIP).
-  if (sniffed && (!isGenericMime(sniffed) || !trustedExtMime)) {
-    return sniffed;
+  if (sniffedGenericContainer && extMime && !extMime.startsWith("image/")) {
+    return extMime;
   }
-  if (trustedExtMime) {
-    return trustedExtMime;
-  }
-  if (trustedHeaderMime && !isGenericMime(trustedHeaderMime)) {
-    return trustedHeaderMime;
-  }
-  if (sniffed) {
-    return sniffed;
-  }
-  if (trustedHeaderMime) {
-    return trustedHeaderMime;
-  }
-
-  return undefined;
+  return sniffed ?? extMime ?? headerMime;
 }
 
 /** Returns the preferred file extension for a normalized or raw MIME string. */
