@@ -1,4 +1,3 @@
-// Defines the public plugin API and runtime extension contracts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type {
@@ -152,15 +151,15 @@ import type {
   OpenClawPluginToolFactory,
   OpenClawPluginToolOptions,
 } from "./tool-types.js";
+import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
 import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
-
 type ModelProviderRequestTransportOverrides =
   import("../agents/provider-request-config.js").ModelProviderRequestTransportOverrides;
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
-
 export type { PluginRuntime } from "./runtime/types.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
+export type * from "./types.mcp-connection.js";
 export type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -241,9 +240,7 @@ export type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
-
 export type { PluginLogger } from "./logger-types.js";
-
 export type { PluginKind } from "./plugin-kind.types.js";
 export type {
   ProviderExternalAuthProfile,
@@ -2305,35 +2302,11 @@ export type OpenClawPluginReloadRegistration = {
   noopPrefixes?: string[];
 };
 
-export type OpenClawPluginNodeHostCommandAvailabilityContext = {
-  /** Node-local configuration used to build this host's Gateway declaration. */
-  config: OpenClawConfig;
-  /** Node-host process environment. */
-  env: NodeJS.ProcessEnv;
-};
-
-export type OpenClawPluginNodeHostCommand = {
-  command: string;
-  cap?: string;
-  dangerous?: boolean;
-  /** Return false to omit this command and capability from the node declaration. */
-  isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
-  agentTool?: {
-    name: string;
-    description: string;
-    parameters?: Record<string, unknown>;
-    /**
-     * Platforms where this node-hosted agent tool should be allowlisted by
-     * default. Omit to require explicit `gateway.nodes.allowCommands`.
-     */
-    defaultPlatforms?: Array<"ios" | "android" | "macos" | "windows" | "linux" | "unknown">;
-    mcp?: {
-      server: string;
-      tool: string;
-    };
-  };
-  handle: (paramsJSON?: string | null) => Promise<string>;
-};
+export type {
+  OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeHostCommandAvailabilityContext,
+  OpenClawPluginNodeHostCommandIo,
+} from "./types.node-host.js";
 
 export type OpenClawPluginNodeInvokeTransportResult =
   | {
@@ -2467,6 +2440,7 @@ export type OpenClawPluginServiceContext = {
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
@@ -2788,6 +2762,9 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a plugin-owned resolver for browser-style hosted media URLs. */
   registerHostedMediaResolver: (resolver: OpenClawPluginHostedMediaResolver) => void;
+  /** Bind a declared MCP server's transport to the trusted message requester. */ registerMcpServerConnectionResolver: (
+    resolver: import("./types.mcp-connection.js").OpenClawPluginMcpServerConnectionResolver,
+  ) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
   /**

@@ -163,60 +163,23 @@ export function isAudioFileName(fileName?: string | null): boolean {
 }
 
 /** Detects the best MIME type from bytes, file path, and header metadata. */
-export function detectMime(opts: {
+export async function detectMime(opts: {
   buffer?: Buffer;
   headerMime?: string | null;
   filePath?: string;
 }): Promise<string | undefined> {
-  return detectMimeImpl(opts);
-}
-
-function isGenericMime(mime?: string): boolean {
-  if (!mime) {
-    return true;
-  }
-  const m = mime.toLowerCase();
-  return m === "application/octet-stream" || m === "application/zip";
-}
-
-function isImageMime(mime?: string): boolean {
-  return mediaKindFromMime(normalizeMimeType(mime)) === "image";
-}
-
-async function detectMimeImpl(opts: {
-  buffer?: Buffer;
-  headerMime?: string | null;
-  filePath?: string;
-}): Promise<string | undefined> {
-  const ext = getFileExtension(opts.filePath);
-  const extMime = ext ? MIME_BY_EXT[ext] : undefined;
-
+  const extMime = MIME_BY_EXT[getFileExtension(opts.filePath) ?? ""];
   const headerMime = normalizeMimeType(opts.headerMime);
   const sniffed = await sniffMime(opts.buffer);
-  const sniffedGenericContainer = sniffed && isGenericMime(sniffed);
-  const trustedExtMime = sniffedGenericContainer && isImageMime(extMime) ? undefined : extMime;
-  const trustedHeaderMime =
-    sniffedGenericContainer && isImageMime(headerMime) ? undefined : headerMime;
+  const sniffedGenericContainer =
+    sniffed === "application/octet-stream" || sniffed === "application/zip";
 
   // Prefer sniffed types, but don't let generic container types override a more
   // specific extension mapping (e.g. XLSX vs ZIP).
-  if (sniffed && (!isGenericMime(sniffed) || !trustedExtMime)) {
-    return sniffed;
+  if (sniffedGenericContainer && extMime && !extMime.startsWith("image/")) {
+    return extMime;
   }
-  if (trustedExtMime) {
-    return trustedExtMime;
-  }
-  if (trustedHeaderMime && !isGenericMime(trustedHeaderMime)) {
-    return trustedHeaderMime;
-  }
-  if (sniffed) {
-    return sniffed;
-  }
-  if (trustedHeaderMime) {
-    return trustedHeaderMime;
-  }
-
-  return undefined;
+  return sniffed ?? extMime ?? headerMime;
 }
 
 /** Returns the preferred file extension for a normalized or raw MIME string. */

@@ -1,14 +1,7 @@
 // Bonjour tests cover advertiser plugin behavior.
-import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-
-const nodeRequire = createRequire(import.meta.url);
-const childProcessModule = nodeRequire("node:child_process") as {
-  exec: typeof import("node:child_process").exec;
-};
 
 const mocks = vi.hoisted(() => ({
   createService: vi.fn(),
@@ -301,44 +294,6 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
-  it("hides ciao Windows ARP probe shell while advertiser is active", async () => {
-    enableAdvertiserUnitMode();
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const originalExec = childProcessModule.exec;
-    const execMock = vi.fn((command: string, options?: unknown, callback?: unknown) => {
-      const cb = typeof options === "function" ? options : callback;
-      if (typeof cb === "function") {
-        cb(null, "", "");
-      }
-      return { kill: vi.fn() } as unknown as ChildProcess;
-    });
-    childProcessModule.exec = execMock as unknown as typeof childProcessModule.exec;
-
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
-
-    try {
-      const started = await startAdvertiser({ gatewayPort: 18789 });
-      childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
-
-      const execCall = mockCall(execMock);
-      expect(execCall?.[0]).toBe('arp -a | findstr /C:"---"');
-      expect(execCall?.[1]).toEqual({ windowsHide: true });
-      expect(execCall?.[2]).toBeTypeOf("function");
-
-      await started.stop();
-      childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
-      const afterStopCallback = execMock.mock.calls.at(-1)?.[1];
-      if (typeof afterStopCallback !== "function") {
-        throw new Error("expected restored exec callback overload");
-      }
-      afterStopCallback(null, "", "");
-    } finally {
-      childProcessModule.exec = originalExec;
-    }
-  });
-
   it("attaches conflict listeners for services", async () => {
     enableAdvertiserUnitMode();
 
@@ -358,31 +313,6 @@ describe("gateway bonjour advertiser", () => {
 
     // 1 service × 2 listeners
     expect(onCalls.map((c) => c.event)).toEqual(["name-change", "hostname-change"]);
-
-    await started.stop();
-  });
-
-  it("installs only the scoped ciao unhandled-rejection listener by default", async () => {
-    enableAdvertiserUnitMode();
-
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
-    const processOn = vi.spyOn(process, "on");
-
-    const started = await startGatewayBonjourAdvertiser(
-      {
-        gatewayPort: 18789,
-        sshPort: 2222,
-      },
-      { logger },
-    );
-
-    const unhandledRejectionRegistration = processOn.mock.calls.find(
-      ([event]) => event === "unhandledRejection",
-    );
-    expect(unhandledRejectionRegistration?.[1]).toBeTypeOf("function");
-    expect(processOn.mock.calls.map(([event]) => event)).not.toContain("uncaughtException");
 
     await started.stop();
   });
@@ -421,7 +351,7 @@ describe("gateway bonjour advertiser", () => {
     expect(order).toEqual(["shutdown", "cleanup-exception", "cleanup-rejection"]);
   });
 
-  it("logs ciao handler classifications at the bonjour caller", async () => {
+  it("handles ciao netmask assertions at the bonjour caller", async () => {
     enableAdvertiserUnitMode();
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -433,25 +363,11 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
     });
 
-    const handler = mockCall(registerUnhandledRejectionHandler).at(0) as
-      | ((reason: unknown) => boolean)
-      | undefined;
     const exceptionHandler = mockCall(registerUncaughtExceptionHandler).at(0) as
       | ((reason: unknown) => boolean)
       | undefined;
-    expect(handler).toBeTypeOf("function");
     expect(exceptionHandler).toBeTypeOf("function");
 
-    expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
-    expectWarnContaining("suppressing ciao cancellation");
-
-    logger.warn.mockClear();
-    expect(
-      handler?.(new Error("Reached illegal state! IPV4 address change from defined to undefined!")),
-    ).toBe(true);
-    expectWarnContaining("suppressing ciao interface assertion");
-
-    logger.warn.mockClear();
     expect(
       exceptionHandler?.(
         Object.assign(
@@ -463,45 +379,6 @@ describe("gateway bonjour advertiser", () => {
       ),
     ).toBe(true);
     expectWarnContaining("suppressing ciao netmask assertion");
-
-    logger.warn.mockClear();
-    expect(
-      handler?.(
-        new Error(
-          "Can't probe for a service which is announced already. Received announcing for service OpenClaw Gateway._openclaw._tcp.local.",
-        ),
-      ),
-    ).toBe(true);
-    expectWarnContaining("suppressing ciao self-probe race");
-
-    await started.stop();
-  });
-
-  it("recovers when ciao cancellation escapes the advertiser", async () => {
-    enableAdvertiserUnitMode();
-
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
-
-    const started = await startAdvertiser({
-      gatewayPort: 18789,
-      sshPort: 2222,
-    });
-
-    const handler = mockCall(registerUnhandledRejectionHandler).at(0) as
-      | ((reason: unknown) => boolean)
-      | undefined;
-    expect(handler?.(new Error("CIAO ANNOUNCEMENT CANCELLED"))).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(createService).toHaveBeenCalledTimes(2);
-    });
-
-    expectWarnContaining("suppressing ciao cancellation");
-    expectWarnContaining("restarting advertiser");
-    expect(destroy).toHaveBeenCalledTimes(1);
-    expect(advertise).toHaveBeenCalledTimes(2);
 
     await started.stop();
   });

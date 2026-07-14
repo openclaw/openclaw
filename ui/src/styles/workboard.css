@@ -50,7 +50,6 @@
 
 .workboard-toolbar__filters,
 .workboard-toolbar__actions,
-.workboard-auto-refresh,
 .workboard-draft__meta,
 .workboard-template-strip,
 .workboard-card__actions,
@@ -71,17 +70,6 @@
 .workboard-toolbar__filters {
   flex: 1;
   min-width: 260px;
-}
-
-.workboard-auto-refresh {
-  gap: 6px;
-  color: var(--muted);
-  font-size: 0.75rem;
-  white-space: nowrap;
-}
-
-.workboard-auto-refresh select.input {
-  width: 82px;
 }
 
 .workboard-refresh-status {

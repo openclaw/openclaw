@@ -1,25 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  MAX_ATTACHMENT_BYTES,
-  MAX_CARD_ARTIFACTS,
-  MAX_CARD_ATTACHMENTS,
-  MAX_CARD_ATTEMPTS,
-  MAX_CARD_COMMENTS,
-  MAX_CARD_DIAGNOSTICS,
-  MAX_CARD_EVENTS,
-  MAX_CARD_LINKS,
-  MAX_CARD_METADATA_BYTES,
-  MAX_CARD_NOTIFICATIONS,
-  MAX_CARD_PROOF,
-  MAX_CARD_WORKER_LOGS,
-} from "./store-constants.js";
-import type {
-  WorkboardAttachmentInput,
-  WorkboardBoardInput,
-  WorkboardNotificationSubscribeInput,
-  WorkboardProofInput,
-} from "./store-inputs.js";
-import {
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
@@ -66,7 +46,28 @@ import {
   type WorkboardWorkerLog,
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
-} from "./types.js";
+} from "@openclaw/workboard-contract";
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_CARD_ARTIFACTS,
+  MAX_CARD_ATTACHMENTS,
+  MAX_CARD_ATTEMPTS,
+  MAX_CARD_COMMENTS,
+  MAX_CARD_DIAGNOSTICS,
+  MAX_CARD_EVENTS,
+  MAX_CARD_LINKS,
+  MAX_CARD_METADATA_BYTES,
+  MAX_CARD_NOTIFICATIONS,
+  MAX_CARD_PROOF,
+  MAX_CARD_WORKER_LOGS,
+} from "./store-constants.js";
+import type {
+  WorkboardAttachmentInput,
+  WorkboardBoardInput,
+  WorkboardNotificationSubscribeInput,
+  WorkboardProofInput,
+} from "./store-inputs.js";
+import { isAbsoluteWorkspacePath } from "./workspace-path.js";
 
 export function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -361,12 +362,6 @@ function normalizePositiveInteger(value: unknown, fieldName: string): number | u
   return Math.max(1, Math.trunc(value));
 }
 
-function isAbsoluteWorkspacePath(value: string): boolean {
-  return (
-    value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]+\\[^\\]+/.test(value)
-  );
-}
-
 function normalizeWorkspace(
   value: unknown,
   fallback?: WorkboardWorkspace,
@@ -460,6 +455,8 @@ export function normalizeAutomation(
   const workspace = Object.hasOwn(record, "workspace")
     ? normalizeWorkspace(record.workspace, fallback.workspace)
     : fallback.workspace;
+  // Raw metadata preserves host-issued authority but cannot mint or widen it.
+  const workspaceAccess = fallback.workspaceAccess;
   const next = removeUndefinedAutomationFields({
     ...(tenant ? { tenant } : {}),
     ...(boardId ? { boardId } : {}),
@@ -467,6 +464,7 @@ export function normalizeAutomation(
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(skills?.length ? { skills } : {}),
     ...(workspace ? { workspace } : {}),
+    ...(workspaceAccess ? { workspaceAccess } : {}),
     ...(maxRuntimeSeconds ? { maxRuntimeSeconds } : {}),
     ...(maxRetries ? { maxRetries } : {}),
     ...(scheduledAt ? { scheduledAt } : {}),
@@ -1188,6 +1186,7 @@ function removeUndefinedAutomationFields(automation: WorkboardAutomation): Workb
     "idempotencyKey",
     "skills",
     "workspace",
+    "workspaceAccess",
     "maxRuntimeSeconds",
     "maxRetries",
     "scheduledAt",

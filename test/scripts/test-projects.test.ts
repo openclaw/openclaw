@@ -2453,6 +2453,19 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes the bundled provider auth parity test to the isolated tooling shard", () => {
+    expect(
+      buildVitestRunPlans(["test/plugins/bundled-provider-auth-literal-parity.test.ts"]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.tooling-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/plugins/bundled-provider-auth-literal-parity.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes Docker E2E script targets to their owner tooling tests", () => {
     const targets = [
       "scripts/e2e/kitchen-sink-plugin-docker.sh",
@@ -4530,6 +4543,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
     expect(toolingTargets).toContain("test/scripts/test-group-report.test.ts");
     expect(toolingTargets).toContain("src/scripts/control-ui-i18n-report.test.ts");
+    expect(toolingTargets.some((target) => target.endsWith(".live.test.ts"))).toBe(false);
     expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
     expect(

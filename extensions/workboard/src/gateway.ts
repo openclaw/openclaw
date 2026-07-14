@@ -1,14 +1,19 @@
+import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 // Workboard plugin module implements gateway behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import {
   assertNoCursorAdvance,
   createWorkboardDispatchHandler,
   readId,
-  readPatch,
   respondError,
 } from "./gateway-helpers.js";
+import {
+  registerWorkboardWorkspaceBoardMethod,
+  registerWorkboardWorkspaceBulkMethod,
+  registerWorkboardWorkspaceCardMethods,
+  registerWorkboardWorkspaceWorkflowMethods,
+} from "./gateway-workspace-methods.js";
 import { WorkboardStore } from "./store.js";
-import { WORKBOARD_STATUSES, type WorkboardCard } from "./types.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
@@ -64,33 +69,7 @@ export function registerWorkboardGatewayMethods(params: {
     { scope: READ_SCOPE },
   );
 
-  api.registerGatewayMethod(
-    "workboard.cards.create",
-    async ({ params: requestParams, respond }) => {
-      try {
-        respond(true, { card: redactClaimToken(await store.create(requestParams)) });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
-    { scope: WRITE_SCOPE },
-  );
-
-  api.registerGatewayMethod(
-    "workboard.cards.update",
-    async ({ params: requestParams, respond }) => {
-      try {
-        respond(true, {
-          card: redactClaimToken(
-            await store.update(readId(requestParams), readPatch(requestParams)),
-          ),
-        });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
-    { scope: WRITE_SCOPE },
-  );
+  registerWorkboardWorkspaceCardMethods({ api, store, redactCard: redactClaimToken });
 
   api.registerGatewayMethod(
     "workboard.cards.move",
@@ -320,18 +299,7 @@ export function registerWorkboardGatewayMethods(params: {
     { scope: WRITE_SCOPE },
   );
 
-  api.registerGatewayMethod(
-    "workboard.cards.bulk",
-    async ({ params: requestParams, respond }) => {
-      try {
-        const result = await store.bulkUpdate(requestParams);
-        respond(true, { cards: result.cards.map(redactClaimToken) });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
-    { scope: WRITE_SCOPE },
-  );
+  registerWorkboardWorkspaceBulkMethod({ api, store, redactCard: redactClaimToken });
 
   api.registerGatewayMethod(
     "workboard.cards.diagnostics",
@@ -381,17 +349,7 @@ export function registerWorkboardGatewayMethods(params: {
     { scope: READ_SCOPE },
   );
 
-  api.registerGatewayMethod(
-    "workboard.boards.upsert",
-    async ({ params: requestParams, respond }) => {
-      try {
-        respond(true, { board: await store.upsertBoard(requestParams) });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
-    { scope: WRITE_SCOPE },
-  );
+  registerWorkboardWorkspaceBoardMethod({ api, store, redactCard: redactClaimToken });
 
   api.registerGatewayMethod(
     "workboard.boards.archive",
@@ -444,35 +402,7 @@ export function registerWorkboardGatewayMethods(params: {
     { scope: READ_SCOPE },
   );
 
-  api.registerGatewayMethod(
-    "workboard.cards.specify",
-    async ({ params: requestParams, respond }) => {
-      try {
-        respond(true, {
-          card: redactClaimToken(await store.specify(readId(requestParams), requestParams, null)),
-        });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
-    { scope: WRITE_SCOPE },
-  );
-
-  api.registerGatewayMethod(
-    "workboard.cards.decompose",
-    async ({ params: requestParams, respond }) => {
-      try {
-        const result = await store.decompose(readId(requestParams), requestParams, null);
-        respond(true, {
-          parent: redactClaimToken(result.parent),
-          children: result.children.map(redactClaimToken),
-        });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
-    { scope: WRITE_SCOPE },
-  );
+  registerWorkboardWorkspaceWorkflowMethods({ api, store, redactCard: redactClaimToken });
 
   api.registerGatewayMethod(
     "workboard.notifications.subscribe",

@@ -426,6 +426,10 @@ describe("package acceptance workflow", () => {
       workflowJob(STABLE_MAIN_CLOSEOUT_WORKFLOW, "verify"),
       "Verify release workflow evidence",
     );
+    const attachStep = workflowStep(
+      workflowJob(STABLE_MAIN_CLOSEOUT_WORKFLOW, "verify"),
+      "Attach immutable closeout evidence",
+    );
     const checksumIndex = workflow.indexOf(
       'sha256sum --strict --status -c "$evidence_checksum_asset"',
     );
@@ -446,7 +450,17 @@ describe("package acceptance workflow", () => {
     const rollbackDrillPushSkipIndex = workflow.indexOf(
       "Stable closeout skipped: rollback drill repository variables are missing",
     );
+    const evidenceScriptSyntax = spawnSync("bash", ["-n"], {
+      encoding: "utf8",
+      input: evidenceStep.run,
+    });
+    const attachScriptSyntax = spawnSync("bash", ["-n"], {
+      encoding: "utf8",
+      input: attachStep.run,
+    });
 
+    expect(evidenceScriptSyntax.status, evidenceScriptSyntax.stderr).toBe(0);
+    expect(attachScriptSyntax.status, attachScriptSyntax.stderr).toBe(0);
     expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
     expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
     expect(workflow).toContain('fallback_package_version="${BASH_REMATCH[1]}"');
@@ -533,6 +547,11 @@ describe("package acceptance workflow", () => {
       'awk -v asset="openclaw-${release_version}-stable-main-closeout.json"',
     );
     expect(workflow).toContain("attach_or_verify \\");
+    expect(attachStep.run).toContain('cp -- "$source_path" "$existing_dir/$asset_name"');
+    expect(attachStep.run).toContain(
+      '"$existing_dir/$asset_name#$asset_name" --repo "$GITHUB_REPOSITORY"',
+    );
+    expect(attachStep.run).not.toContain('"$source_path#$asset_name"');
     expect(workflow).toContain(
       "full_release_validation_run_attempt: ${{ steps.inputs.outputs.full_release_validation_run_attempt }}",
     );

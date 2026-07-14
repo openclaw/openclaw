@@ -69,6 +69,7 @@ import {
   createToolingDockerVitestConfig,
   toolingDockerTestFiles,
 } from "./vitest/vitest.tooling-docker.config.ts";
+import { toolingIsolatedTestFiles } from "./vitest/vitest.tooling-isolated-paths.mjs";
 import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isolated.config.ts";
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
@@ -1094,7 +1095,7 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultToolingConfig);
     expect(testConfig.include).toEqual(["test/**/*.test.ts", "src/scripts/**/*.test.ts"]);
     expect(testConfig.exclude).toEqual(expect.arrayContaining(toolingDockerTestFiles));
-    expect(testConfig.exclude).toContain("test/scripts/openclaw-e2e-instance.test.ts");
+    expect(testConfig.exclude).toEqual(expect.arrayContaining(toolingIsolatedTestFiles));
     expect(testConfig.include).not.toContain("src/config/doc-baseline.integration.test.ts");
   });
 
@@ -1104,9 +1105,9 @@ describe("scoped vitest configs", () => {
     expect(testConfig.fileParallelism).toBe(false);
   });
 
-  it("runs shell helper tooling tests isolated from shared mocks", () => {
+  it("runs state-sensitive tooling tests isolated from shared mocks", () => {
     const testConfig = requireTestConfig(createToolingIsolatedVitestConfig({}));
-    expect(testConfig.include).toEqual(["test/scripts/openclaw-e2e-instance.test.ts"]);
+    expect(testConfig.include).toEqual(toolingIsolatedTestFiles);
     expect(testConfig.isolate).toBe(true);
     expect(testConfig.runner).toBeUndefined();
   });

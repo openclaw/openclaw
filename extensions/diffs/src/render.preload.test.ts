@@ -2,8 +2,10 @@
 import { disposeHighlighter } from "@pierre/diffs";
 import * as diffsSsr from "@pierre/diffs/ssr";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_DIFFS_TOOL_DEFAULTS, resolveDiffImageRenderOptions } from "./config.js";
+import { resolveDiffImageRenderOptions, resolveDiffsPluginDefaults } from "./config.js";
 import { renderDiffDocument } from "./render.js";
+
+const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
 
 vi.mock("@pierre/diffs/ssr", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@pierre/diffs/ssr")>();

@@ -103,6 +103,23 @@ describe("ManagedWorktreeService", () => {
     expect(repeated).toEqual(created);
   });
 
+  it("does not remove a worktree owned by another caller", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "session-owned",
+      ownerKind: "session",
+      ownerId: "session-1",
+    });
+
+    await expect(
+      service.removeIfLosslessByPath(created.path, {
+        ownerKind: "workboard",
+        ownerId: "card-1",
+      }),
+    ).resolves.toBe(false);
+    await expect(fs.stat(created.path)).resolves.toBeDefined();
+  });
+
   it("lists repository branches default-first with deterministic ordering", async () => {
     await addRemote(root, repo);
     await git(repo, "branch", "feature-a");
@@ -434,6 +451,27 @@ describe("ManagedWorktreeService", () => {
     expect(
       (await fs.readFile(path.join(created.path, "setup-paths.txt"), "utf8")).split("\n"),
     ).toEqual([repo, created.path, ""]);
+  });
+
+  it("does not execute repository hooks or setup scripts when setup is disabled", async () => {
+    const hookMarker = path.join(root, "checkout-hook-ran");
+    const setupMarker = path.join(root, "setup-script-ran");
+    await fs.writeFile(
+      path.join(repo, ".git", "hooks", "post-checkout"),
+      `#!/bin/sh\nprintf ran > "${hookMarker}"\n`,
+      { mode: 0o755 },
+    );
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      `#!/bin/sh\nprintf ran > "${setupMarker}"\n`,
+      { mode: 0o755 },
+    );
+
+    await service.create({ repoRoot: repo, name: "no-repo-code", runSetupScript: false });
+
+    await expect(fs.access(hookMarker)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(setupMarker)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("removes the worktree and branch when setup fails", async () => {

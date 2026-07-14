@@ -24,7 +24,7 @@ type FleetContainerCommandResult = {
   code: number;
 };
 
-export type FleetContainerCommandExecutor = (
+type FleetContainerCommandExecutor = (
   runtime: FleetContainerRuntimeName,
   args: string[],
   options: FleetContainerCommandOptions,
@@ -46,7 +46,7 @@ const DELIBERATE_STREAM_STOP_SIGNALS = new Set<NodeJS.Signals>([
   "SIGPIPE",
 ]);
 
-export type FleetContainerStreamExecutor = (
+type FleetContainerStreamExecutor = (
   runtime: FleetContainerRuntimeName,
   args: string[],
   options: { redactValues: readonly string[] },

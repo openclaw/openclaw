@@ -56,12 +56,11 @@ function changeWorkboardSelect(select: Element | null | undefined, value: string
 }
 
 describe("renderWorkboard", () => {
-  it("hides the manual refresh button while auto-refresh is enabled", () => {
+  it("keeps manual recovery refresh visible while data is loading", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
     state.loading = true;
-    state.autoRefreshIntervalMs = 5000;
     const container = document.createElement("div");
 
     render(
@@ -77,10 +76,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(buttonByText(container, "Refresh")).toBeNull();
-    expect(container.querySelector(".workboard-toolbar__actions")?.textContent).not.toContain(
-      "Refreshing",
-    );
+    expect(buttonByText(container, "Refreshing")?.disabled).toBe(true);
   });
 
   it("renders lifecycle refresh errors without replacing generic errors", () => {
@@ -114,7 +110,6 @@ describe("renderWorkboard", () => {
     const state = getWorkboardState(host);
     state.loaded = true;
     state.loading = true;
-    state.autoRefreshIntervalMs = 5000;
     const container = document.createElement("div");
     const props: WorkboardRenderProps = {
       host,
@@ -137,7 +132,6 @@ describe("renderWorkboard", () => {
     expect(buttonByText(container, "Dispatch ready work")?.disabled).toBe(true);
 
     state.loading = false;
-    state.autoRefreshIntervalMs = 0;
     render(renderWorkboard(props), container);
 
     expect(buttonByText(container, "Refresh")?.disabled).toBe(true);
@@ -535,16 +529,22 @@ describe("renderWorkboard", () => {
         updatedAt: 1,
         metadata: {
           attempts: [{ id: "attempt-1", status: "failed", startedAt: 1 }],
-          claim: { ownerId: "agent-1", claimedAt: 1, lastHeartbeatAt: Date.now() },
+          claim: {
+            ownerId: "agent-1",
+            token: "[redacted]",
+            claimedAt: 1,
+            lastHeartbeatAt: Date.now(),
+          },
           diagnostics: [
             {
-              kind: "protocol_violation",
+              kind: "orphaned_session",
               severity: "warning",
               title: "Old diagnostic",
               detail: "Older detail.",
               firstSeenAt: 1,
               lastSeenAt: 1,
               count: 1,
+              actions: [],
             },
             {
               kind: "repeated_failures",
@@ -554,6 +554,7 @@ describe("renderWorkboard", () => {
               firstSeenAt: 1,
               lastSeenAt: 2,
               count: 1,
+              actions: [],
             },
           ],
           notifications: [{ id: "note-1", kind: "failed", createdAt: 1, message: "Needs proof." }],
@@ -600,13 +601,14 @@ describe("renderWorkboard", () => {
         metadata: {
           diagnostics: [
             {
-              kind: "protocol_violation",
+              kind: "orphaned_session",
               severity: "warning",
               title: `${"x".repeat(62)}🚀tail`,
               detail: "Boundary detail.",
               firstSeenAt: 1,
               lastSeenAt: 1,
               count: 1,
+              actions: [],
             },
           ],
         },
@@ -651,6 +653,7 @@ describe("renderWorkboard", () => {
         metadata: {
           claim: {
             ownerId: "agent-1",
+            token: "[redacted]",
             claimedAt: 1,
             lastHeartbeatAt: Date.now() - 42_000,
           },
