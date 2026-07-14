@@ -162,7 +162,6 @@ describe("guardSessionManager integration", () => {
     const nestedRuntime = { role: "user", content: "nested" } as AgentMessage;
     const correlations: Array<{ persisted: AgentMessage; runtime?: AgentMessage }> = [];
     let nested = false;
-    let appendMessage: ((message: AgentMessage) => void) | undefined;
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
@@ -171,7 +170,7 @@ describe("guardSessionManager integration", () => {
             const { message } = args[0] as { message: AgentMessage };
             if (!nested && message.role === "user" && message.content === "outer") {
               nested = true;
-              appendMessage?.(nestedRuntime);
+              appendMessage(nestedRuntime);
             }
             return undefined;
           },
@@ -183,7 +182,7 @@ describe("guardSessionManager integration", () => {
         correlations.push({ persisted, runtime });
       },
     });
-    appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
 
     appendMessage(outerRuntime);
 
