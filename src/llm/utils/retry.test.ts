@@ -35,6 +35,9 @@ describe("isRetryableAssistantError", () => {
   it("keeps concrete quota failures non-retryable", () => {
     expect(isRetryableAssistantError(errorMessage("429 insufficient_quota"))).toBe(false);
     expect(isRetryableAssistantError(errorMessage("Monthly usage limit reached"))).toBe(false);
+    expect(
+      isRetryableAssistantError(errorMessage("OpenAI API error (429): insufficient_quota")),
+    ).toBe(false);
   });
 
   it.each([
@@ -43,6 +46,7 @@ describe("isRetryableAssistantError", () => {
     "Image dimensions 1504x1504 exceed the maximum allowed size",
     "Image width 500 exceeds the maximum allowed size",
     "invalid api key sk-example502value",
+    "OpenAI API error (400): 400 Model Id [gpt-5.4-nano] not found",
   ])("does not retry permanent errors with status-code substrings: %s", (text) => {
     expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
   });
@@ -51,6 +55,9 @@ describe("isRetryableAssistantError", () => {
     "429 temporary provider response",
     "HTTP 500 temporary provider response",
     "503: temporary provider response",
+    "OpenAI API error (500): 500 The server had an error while processing your request.",
+    "Azure OpenAI API error (503): 503 temporary provider response",
+    "Mistral API error (504): upstream timeout",
   ])("retries explicit transient HTTP statuses: %s", (text) => {
     expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
   });

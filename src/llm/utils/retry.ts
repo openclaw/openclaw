@@ -58,6 +58,17 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "please retry your request",
 ]);
 
+const WRAPPED_PROVIDER_STATUS_RE = /^(?:OpenAI|Azure OpenAI|Mistral) API error \((\d{3})\):\s*/i;
+
+function extractWrappedProviderStatus(raw: string): number | undefined {
+  const match = raw.match(WRAPPED_PROVIDER_STATUS_RE);
+  if (!match) {
+    return undefined;
+  }
+  const status = Number(match[1]);
+  return Number.isInteger(status) ? status : undefined;
+}
+
 /** Classify transient provider/transport failures for outer retry policy. */
 export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (message.stopReason !== "error" || !message.errorMessage) {
@@ -67,7 +78,8 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage)) {
     return false;
   }
-  const status = extractLeadingHttpStatus(errorMessage)?.code;
+  const status =
+    extractLeadingHttpStatus(errorMessage)?.code ?? extractWrappedProviderStatus(errorMessage);
   if (status && status !== 429 && RETRYABLE_HTTP_STATUS_CODES.has(status)) {
     return true;
   }
