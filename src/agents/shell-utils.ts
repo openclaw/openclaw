@@ -81,6 +81,17 @@ export function getPosixShellArgs(shellPath: string): string[] {
   }
 }
 
+// Windows PowerShell (powershell.exe / pwsh.exe) does not accept POSIX-style
+// invocation flags. When a custom shell path points at a PowerShell binary we
+// must use the PowerShell CLI flags (-NoProfile -NonInteractive -Command)
+// instead of the POSIX default (-c), which PowerShell would reject.
+function isPowerShellShell(shellPath: string): boolean {
+  const base = path.basename(shellPath).toLowerCase();
+  return base === "pwsh.exe" || base === "powershell.exe" || base === "pwsh" || base === "powershell";
+}
+
+const WINDOWS_POWERSHELL_ARGS = ["-NoProfile", "-NonInteractive", "-Command"];
+
 export function resolveWindowsBashPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const candidates = [env.ProgramFiles, env["ProgramFiles(x86)"]]
     .filter((dir): dir is string => Boolean(dir?.trim()))
@@ -98,7 +109,9 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
     if (!fs.existsSync(customShellPath)) {
       throw new Error(`Custom shell path not found: ${customShellPath}`);
     }
-    return { shell: customShellPath, args: getPosixShellArgs(customShellPath) };
+    // A custom PowerShell path must use PowerShell CLI args, not POSIX args.
+    const args = isPowerShellShell(customShellPath) ? WINDOWS_POWERSHELL_ARGS : getPosixShellArgs(customShellPath);
+    return { shell: customShellPath, args };
   }
 
   if (process.platform === "win32") {
@@ -141,7 +154,9 @@ export function getBashShellConfig(customShellPath?: string): ShellConfig {
     if (!fs.existsSync(customShellPath)) {
       throw new Error(`Custom shell path not found: ${customShellPath}`);
     }
-    return { shell: customShellPath, args: getPosixShellArgs(customShellPath) };
+    // A custom PowerShell path must use PowerShell CLI args, not POSIX args.
+    const args = isPowerShellShell(customShellPath) ? WINDOWS_POWERSHELL_ARGS : getPosixShellArgs(customShellPath);
+    return { shell: customShellPath, args };
   }
 
   if (process.platform === "win32") {

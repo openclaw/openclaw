@@ -144,6 +144,36 @@ describe("getShellConfig", () => {
     expect(getShellConfig(shellPath)).toEqual({ shell: shellPath, args: ["-f", "-c"] });
   });
 
+  it("uses PowerShell CLI args for a custom pwsh.exe shell path", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "pwsh.exe" }]);
+    const shellPath = path.join(binDir, "pwsh.exe");
+
+    expect(getShellConfig(shellPath)).toEqual({
+      shell: shellPath,
+      args: ["-NoProfile", "-NonInteractive", "-Command"],
+    });
+  });
+
+  it("uses PowerShell CLI args for a custom powershell.exe shell path", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "powershell.exe" }]);
+    const shellPath = path.join(binDir, "powershell.exe");
+
+    expect(getShellConfig(shellPath)).toEqual({
+      shell: shellPath,
+      args: ["-NoProfile", "-NonInteractive", "-Command"],
+    });
+  });
+
+  it("uses PowerShell CLI args for a custom pwsh (no extension) shell path", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "pwsh" }]);
+    const shellPath = path.join(binDir, "pwsh");
+
+    expect(getShellConfig(shellPath)).toEqual({
+      shell: shellPath,
+      args: ["-NoProfile", "-NonInteractive", "-Command"],
+    });
+  });
+
   it("rejects a missing explicit custom shell path", () => {
     expect(() => getShellConfig(path.join(os.tmpdir(), "missing-openclaw-shell"))).toThrow(
       "Custom shell path not found",
