@@ -111,9 +111,9 @@ const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("unknown"),
   Type.Literal("not-requested"),
 ]);
-const NonBlankString = Type.String({ minLength: 1, pattern: "\\S" });
-const CronDeclarationKeySchema = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
-const CronDisplayNameSchema = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
+const NonBlankString = Type.String({ minLength: 1 });
+const CronDeclarationKeySchema = Type.String({ minLength: 1, maxLength: 200 });
+const CronDisplayNameSchema = Type.String({ minLength: 1, maxLength: 200 });
 const CronOwnerSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
