@@ -686,8 +686,7 @@ const CONTENT_HASHED_DIST_ARTIFACT_PATTERN = /-([A-Za-z0-9_]{8,})\.(?:cjs|css|js
 
 function isLikelyContentHashedDistArtifact(relativePath: string): boolean {
   const filename = path.posix.basename(normalizeDistPath(relativePath));
-  const hash = CONTENT_HASHED_DIST_ARTIFACT_PATTERN.exec(filename)?.[1] ?? "";
-  return hash.length > 0 && /[A-Z0-9_]/u.test(hash);
+  return CONTENT_HASHED_DIST_ARTIFACT_PATTERN.test(filename);
 }
 
 function resolveReferencedDistPath(params: {

@@ -3652,9 +3652,9 @@ describe("runGlobalPackageUpdateSteps", () => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
-      const staleChunk = path.join(packageRoot, "dist", "install-C_GuuNz6.js");
+      const staleChunk = path.join(packageRoot, "dist", "install-abcdefghi.js");
       await writePackageRoot(packageRoot, "1.0.0");
-      await fs.writeFile(staleChunk, 'import "./install.runtime-Xom5hOHq.js";\n', "utf8");
+      await fs.writeFile(staleChunk, 'import "./install.runtime-abcdefghi.js";\n', "utf8");
 
       const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
         if (name !== "global update") {
@@ -3712,11 +3712,11 @@ describe("runGlobalPackageUpdateSteps", () => {
             result.localOverrides?.recoveryDir ?? "",
             "files",
             "dist",
-            "install-C_GuuNz6.js",
+            "install-abcdefghi.js",
           ),
           "utf8",
         ),
-      ).resolves.toBe('import "./install.runtime-Xom5hOHq.js";\n');
+      ).resolves.toBe('import "./install.runtime-abcdefghi.js";\n');
       await expect(
         fs
           .readFile(path.join(result.localOverrides?.recoveryDir ?? "", "manifest.json"), "utf8")
@@ -3725,7 +3725,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       ).resolves.toEqual([
         expect.objectContaining({
           kind: "added",
-          path: "dist/install-C_GuuNz6.js",
+          path: "dist/install-abcdefghi.js",
           reapply: false,
         }),
       ]);
