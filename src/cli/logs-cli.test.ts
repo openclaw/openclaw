@@ -96,6 +96,21 @@ vi.mock("./gateway-rpc.js", async () => {
   };
 });
 
+vi.mock("../runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
+  return {
+    ...actual,
+    defaultRuntime: {
+      ...actual.defaultRuntime,
+      // Override exit to not throw after process.exit — tests mock process.exit
+      // so the unreachable throw in the real exit would escape unhandled.
+      exit: vi.fn((code: number) => {
+        process.exit(code);
+      }),
+    },
+  };
+});
+
 async function runLogsCli(argv: string[]) {
   await runRegisteredCli({
     register: registerLogsCli as (program: import("commander").Command) => void,

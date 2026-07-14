@@ -10,7 +10,6 @@ import {
 import { readConnectPairingRequiredMessage } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
-import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { createSafeStreamWriter } from "../../packages/terminal-core/src/stream-writer.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import {
@@ -26,6 +25,7 @@ import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
 import { formatTimestamp } from "../logging/timestamps.js";
+import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -683,8 +683,7 @@ export function registerLogsCli(program: Command) {
           emitJsonLine,
           errorLine,
         );
-        restoreTerminalState("logs follow error", { resumeStdinIfPaused: false });
-        process.exit(1);
+        defaultRuntime.exit(1);
         return;
       }
       if (followRetryAttempt > 0) {
