@@ -55,6 +55,21 @@ flowchart TD
 Conflicts stop startup and identify the later layer, config path, controlling
 layer, and reason.
 
+## Why OpenClaw owns composition
+
+The launcher owns each source file and its declared order. OpenClaw owns how
+those sources compose because OpenClaw also owns the config schema,
+plugin-aware validation, tool-policy interpretation, runtime snapshot, and
+mutation boundary. Keeping these decisions together gives every launcher the
+same conflict and security behavior without teaching core about host-specific
+roles.
+
+Use `$include` to structure one authored config document. Includes do not
+represent authority between independent sources, enforce monotonic tool-policy
+bounds, or make the resulting runtime immutable. Flattening sources in the
+launcher also erases their authority boundaries before OpenClaw can enforce
+them and requires the launcher to duplicate OpenClaw-specific validation.
+
 ## Native config handling
 
 Each layer remains an ordinary OpenClaw JSON5 document:
@@ -158,8 +173,11 @@ openclaw gateway \
 Layered V1 is deliberately startup-based and read-only:
 
 - `config.get` reports the composed source and effective runtime config.
-- Config persistence is blocked across Gateway RPCs and plugin/runtime config
-  writers while layered mode is active.
+- Config persistence targeting the layered Gateway's canonical config path is
+  blocked across Gateway RPCs and plugin/runtime config writers.
+- An unrelated config path remains writable. A separate process may edit the
+  canonical file, but that file is not the layered Gateway's effective config
+  and the change does not affect its startup snapshot.
 - `config.set`, `config.patch`, `config.apply`, and `config.openFile` reject the
   request rather than editing an unrelated canonical config file.
 - Canonical config file watching and last-known-good promotion are disabled.
