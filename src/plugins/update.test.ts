@@ -1604,6 +1604,105 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("reports official core-version drift when an exact npm pin is unchanged", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/codex",
+      version: "2026.6.11",
+      peerDependencies: { openclaw: ">=2026.6.11" },
+    });
+    fs.mkdirSync(path.join(installPath, "node_modules", "openclaw"), { recursive: true });
+    mockNpmViewMetadata({
+      name: "@openclaw/codex",
+      version: "2026.6.11",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "codex",
+        spec: "@openclaw/codex@2026.6.11",
+        installPath,
+        resolvedName: "@openclaw/codex",
+        resolvedVersion: "2026.6.11",
+        resolvedSpec: "@openclaw/codex@2026.6.11",
+        integrity: "sha512-same",
+        shasum: "same",
+      }),
+      pluginIds: ["codex"],
+      coreVersion: "2026.7.1-beta.5",
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "codex",
+        status: "unchanged",
+        currentVersion: "2026.6.11",
+        nextVersion: "2026.6.11",
+        message:
+          "codex is pinned to @openclaw/codex@2026.6.11 (installed 2026.6.11), which differs from OpenClaw 2026.7.1-beta.5. Pass `openclaw plugins update @openclaw/codex@2026.7.1-beta.5` to match this OpenClaw version.",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      caseName: "independently versioned official catalog plugins",
+      pluginId: "openclaw-plugin-yuanbao",
+      packageName: "openclaw-plugin-yuanbao",
+      version: "2.15.0",
+      coreVersion: "2026.7.1-beta.5",
+    },
+    {
+      caseName: "newer lockstep exact pins",
+      pluginId: "codex",
+      packageName: "@openclaw/codex",
+      version: "2026.8.1",
+      coreVersion: "2026.7.1-beta.5",
+    },
+  ])("keeps the normal up-to-date message for $caseName", async (fixture) => {
+    const installPath = createInstalledPackageDir({
+      name: fixture.packageName,
+      version: fixture.version,
+    });
+    fs.mkdirSync(path.join(installPath, "node_modules", "openclaw"), { recursive: true });
+    mockNpmViewMetadata({
+      name: fixture.packageName,
+      version: fixture.version,
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: fixture.pluginId,
+        spec: `${fixture.packageName}@${fixture.version}`,
+        installPath,
+        resolvedName: fixture.packageName,
+        resolvedVersion: fixture.version,
+        resolvedSpec: `${fixture.packageName}@${fixture.version}`,
+        integrity: "sha512-same",
+        shasum: "same",
+      }),
+      pluginIds: [fixture.pluginId],
+      coreVersion: fixture.coreVersion,
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: fixture.pluginId,
+        status: "unchanged",
+        currentVersion: fixture.version,
+        nextVersion: fixture.version,
+        message: `${fixture.pluginId} is up to date (${fixture.version}).`,
+      },
+    ]);
+  });
+
   it("repairs openclaw peer links after batch npm updates prune earlier plugin links", async () => {
     const plugins = [
       { pluginId: "brave", packageName: "@openclaw/brave-plugin" },
@@ -2314,6 +2413,106 @@ describe("updateNpmInstalledPlugins", () => {
       status: "unchanged",
       currentVersion: "2026.5.28",
       nextVersion: "2026.5.28",
+    });
+  });
+
+  it("reports official core-version drift for exact pinned npm dry-runs", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/codex",
+      version: "2026.6.11",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "codex",
+        targetDir: installPath,
+        version: "2026.6.11",
+        npmResolution: {
+          name: "@openclaw/codex",
+          version: "2026.6.11",
+          resolvedSpec: "@openclaw/codex@2026.6.11",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "codex",
+        spec: "@openclaw/codex@2026.6.11",
+        installPath,
+        resolvedName: "@openclaw/codex",
+        resolvedSpec: "@openclaw/codex@2026.6.11",
+        resolvedVersion: "2026.6.11",
+      }),
+      pluginIds: ["codex"],
+      dryRun: true,
+      coreVersion: "2026.7.1-beta.5",
+    });
+
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    expectRecordFields(result.outcomes[0], {
+      pluginId: "codex",
+      status: "unchanged",
+      currentVersion: "2026.6.11",
+      nextVersion: "2026.6.11",
+      message:
+        "codex is pinned to @openclaw/codex@2026.6.11 (installed 2026.6.11), which differs from OpenClaw 2026.7.1-beta.5. Pass `openclaw plugins update @openclaw/codex@2026.7.1-beta.5` to match this OpenClaw version.",
+    });
+  });
+
+  it.each([
+    {
+      caseName: "independently versioned official catalog plugins",
+      pluginId: "openclaw-plugin-yuanbao",
+      packageName: "openclaw-plugin-yuanbao",
+      version: "2.15.0",
+      coreVersion: "2026.7.1-beta.5",
+    },
+    {
+      caseName: "newer lockstep exact pins",
+      pluginId: "codex",
+      packageName: "@openclaw/codex",
+      version: "2026.8.1",
+      coreVersion: "2026.7.1-beta.5",
+    },
+  ])("keeps the dry-run up-to-date message for $caseName", async (fixture) => {
+    const installPath = createInstalledPackageDir({
+      name: fixture.packageName,
+      version: fixture.version,
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: fixture.pluginId,
+        targetDir: installPath,
+        version: fixture.version,
+        npmResolution: {
+          name: fixture.packageName,
+          version: fixture.version,
+          resolvedSpec: `${fixture.packageName}@${fixture.version}`,
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: fixture.pluginId,
+        spec: `${fixture.packageName}@${fixture.version}`,
+        installPath,
+        resolvedName: fixture.packageName,
+        resolvedSpec: `${fixture.packageName}@${fixture.version}`,
+        resolvedVersion: fixture.version,
+      }),
+      pluginIds: [fixture.pluginId],
+      dryRun: true,
+      coreVersion: fixture.coreVersion,
+    });
+
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    expectRecordFields(result.outcomes[0], {
+      pluginId: fixture.pluginId,
+      status: "unchanged",
+      currentVersion: fixture.version,
+      nextVersion: fixture.version,
+      message: `${fixture.pluginId} is up to date (${fixture.version}).`,
     });
   });
 

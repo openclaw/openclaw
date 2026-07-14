@@ -5,6 +5,7 @@ import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
+  isOfficialNpmSpecVersionLockstep,
   resolveTrustedSourceLinkedOfficialClawHubInstall,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
@@ -71,7 +72,7 @@ function shouldCompareOfficialInstallToGateway(params: {
 }): boolean {
   const officialNpmSpec = resolveTrustedSourceLinkedOfficialNpmSpec(params);
   if (officialNpmSpec) {
-    return parseRegistryNpmSpec(officialNpmSpec)?.selectorKind !== "exact-version";
+    return isOfficialNpmSpecVersionLockstep(officialNpmSpec);
   }
   const officialClawHubInstall = resolveTrustedSourceLinkedOfficialClawHubInstall(params);
   if (officialClawHubInstall) {
