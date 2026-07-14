@@ -1,4 +1,7 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentToolResult } from "../runtime/index.js";
+import { sanitizeToolResultImages } from "../tool-images.js";
 
 export type LoadedImageForTool = {
   buffer: Buffer;
@@ -25,10 +28,11 @@ export function buildImageToolReferenceDetails(
   };
 }
 
-export function buildNativeImageToolResult(
+export async function buildNativeImageToolResult(
   images: readonly LoadedImageForTool[],
-): AgentToolResult<unknown> {
-  return {
+  config?: OpenClawConfig,
+): Promise<AgentToolResult<unknown>> {
+  const result: AgentToolResult<unknown> = {
     content: [
       {
         type: "text",
@@ -46,4 +50,9 @@ export function buildNativeImageToolResult(
       media: { outbound: false },
     },
   };
+  return await sanitizeToolResultImages(
+    result,
+    "image:native",
+    resolveImageSanitizationLimits(config),
+  );
 }

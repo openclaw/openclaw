@@ -1738,6 +1738,8 @@ describe("image tool implicit imageModel config", () => {
         agents: {
           defaults: {
             model: { primary: "acme/vision-1" },
+            imageModel: { primary: "moondream" },
+            imageMaxDimensionPx: 32,
           },
         },
         models: {
@@ -1745,6 +1747,14 @@ describe("image tool implicit imageModel config", () => {
             acme: {
               baseUrl: "https://example.com",
               models: [makeModelDefinition("vision-1", ["text", "image"])],
+            },
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
             },
           },
         },
@@ -1775,7 +1785,7 @@ describe("image tool implicit imageModel config", () => {
 
       expect(content).toEqual([
         { type: "text", text: "Loaded 1 image for direct visual inspection." },
-        expect.objectContaining({ type: "image", mimeType: "image/png" }),
+        expect.objectContaining({ type: "image", mimeType: "image/jpeg" }),
       ]);
       expect((result as { details?: Record<string, unknown> }).details).toMatchObject({
         transport: "native",

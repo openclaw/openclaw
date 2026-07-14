@@ -246,8 +246,7 @@ export function resolveImageModelConfigForTool(params: {
   workspaceDir?: string;
   authStore?: AuthProfileStore;
 }): ImageModelConfig | null {
-  // Native-vision runs keep the tool as a loader for images discovered after prompt assembly.
-  // createImageTool routes those bytes to the active model instead of this fallback config.
+  // Native-vision runs route post-prompt image bytes to the active model, not fallback config.
   const explicit = coerceImageModelConfig(params.cfg);
   if (hasToolModelConfig(explicit)) {
     return resolveConfiguredImageModelRefs({
@@ -789,12 +788,13 @@ export function createImageTool(options?: {
     }
     return null;
   }
-  const explicitImageModelConfig = hasToolModelConfig(explicit)
-    ? resolveConfiguredImageModelRefs({
-        cfg: options?.config,
-        imageModelConfig: explicit,
-      })
-    : null;
+  const explicitImageModelConfig =
+    !modelHasVision && hasToolModelConfig(explicit)
+      ? resolveConfiguredImageModelRefs({
+          cfg: options?.config,
+          imageModelConfig: explicit,
+        })
+      : null;
   const shouldResolveAutoImageModel =
     !modelHasVision && !explicitImageModelConfig && !options?.deferAutoModelResolution;
   const resolvedImageModelConfig = shouldResolveAutoImageModel
@@ -1074,7 +1074,7 @@ export function createImageTool(options?: {
       }
 
       if (imageRoute.kind === "native") {
-        return buildNativeImageToolResult(loadedImages);
+        return await buildNativeImageToolResult(loadedImages, options?.config);
       }
 
       // Text-only runs delegate image understanding to the configured fallback model.
