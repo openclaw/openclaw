@@ -91,7 +91,7 @@ enum PostAppUpdateReceiptStore {
         now: Date = Date()) -> PostAppUpdateReceipt?
     {
         guard let currentVersion = normalized(currentVersion) else { return nil }
-        let previousVersion = normalized(defaults.string(forKey: lastLaunchedAppVersionKey))
+        let previousVersion = self.normalized(defaults.string(forKey: lastLaunchedAppVersionKey))
         let receipt: PostAppUpdateReceipt?
         if !onboardingSeen || !allowsUpdateWorkflow {
             // A receipt can arrive before first-run onboarding. Consume it here so
@@ -361,7 +361,8 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             guard let programArguments = GatewayLaunchAgentManager.launchdProgramArguments() else {
                 self.fail(
                     message: "The Gateway could not be checked.",
-                    details: "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.")
+                    details: "OpenClaw could not read the Gateway service ownership record. " +
+                        "Retry after checking the Gateway LaunchAgent.")
                 return
             }
             runtimeProgramArguments = programArguments
@@ -369,7 +370,8 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             guard let programArguments = NodeServiceManager.launchdProgramArguments() else {
                 self.fail(
                     message: "The Mac node could not be checked.",
-                    details: "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.")
+                    details: "OpenClaw could not read the node service ownership record. " +
+                        "Retry after checking the node LaunchAgent.")
                 return
             }
             runtimeProgramArguments = programArguments
@@ -401,7 +403,8 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         case let .incompatible(_, found, required) where ownsManagedRuntime:
             guard CLIInstallPrompter.isManagedUpgrade(found: found, required: required) else {
                 self.finishExternal(
-                    "The Mac app is updated. Gateway \(found) is newer than app \(required), so OpenClaw left it unchanged.")
+                    "The Mac app is updated. Gateway \(found) is newer than app \(required), " +
+                        "so OpenClaw left it unchanged.")
                 return
             }
             self.setGatewayUpdateIncomplete(true, receipt: receipt)
