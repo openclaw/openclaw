@@ -347,26 +347,67 @@ function hasDanglingSurrogate(value: string): boolean {
 }
 
 describe("formatSkillExperienceReviewTranscript", () => {
-  it("keeps first-message truncation UTF-16 safe at the 6 000-char boundary", () => {
-    // [user]\n is 7 chars; 5 992 padding chars reach position 5 999 where 😀 starts.
-    // Without UTF-16 safety, .slice(0, 6_000) would split the surrogate pair.
-    const content = "a".repeat(5_992) + "😀rest";
-    const messages = [{ role: "user", content }];
-    const transcript = formatSkillExperienceReviewTranscript(messages);
+  const EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS = 60_000;
+  // U+1F600 (😀) is a surrogate pair in UTF-16; a raw .slice() can split it.
+  const EMOJI = "😀";
+  // U+1F99E (🦞) is a surrogate pair in UTF-16.
+  const LOBSTER = "🦞";
 
+  it("keeps first-message truncation UTF-16 safe at the 6 000-char boundary", () => {
+    // renderMessage({role:"user", content: "a"×5_992 + 😀 + "rest"})
+    // → "[user]\n" + "a"×5_992 + 😀 + "rest"  (= 6_005 chars)
+    // 😀 occupies indices [5_999]=\uD83D (high) and [6_000]=\uDE00 (low).
+    // Old .slice(0, 6_000) → ends at index 5_999 = lone high surrogate \uD83D.
+    // A second message pushes full > 60_000, triggering the truncation branch.
+    const content = "a".repeat(5_992) + EMOJI + "rest";
+    const msgs = [
+      { role: "user", content },
+      { role: "user", content: "d".repeat(60_000) },
+    ];
+
+    // Pre-condition: old raw slice on the first rendered message would dangle
+    const renderHeader = "[user]\n";
+    const rendered0 = `${renderHeader}${content}`;
+    expect(rendered0.length).toBeGreaterThan(6_000);
+    const rawSlice = rendered0.slice(0, 6_000);
+    expect(rawSlice.charCodeAt(5_999)).toBe(0xd83d); // lone high surrogate
+    expect(hasDanglingSurrogate(rawSlice)).toBe(true);
+
+    // Production function must NOT produce a dangling surrogate
+    const transcript = formatSkillExperienceReviewTranscript(msgs);
     expect(hasDanglingSurrogate(transcript)).toBe(false);
   });
 
   it("keeps tail-end truncation UTF-16 safe for transcripts exceeding the limit", () => {
-    // Two long messages to trigger tail truncation (total > 60 000 chars).
-    const content = "b".repeat(35_000);
-    const messages = [
-      { role: "user", content: "a".repeat(5_992) + "🎉more" },
-      { role: "user", content: content + "🦞after" },
+    // rendered[0]: "[user]\nb"×20_000 → 20_007 plain ASCII chars
+    // first = truncateUtf16Safe(rendered[0], 6_000) → 6_000 chars
+    // tailBudget = 60_000 − 6_000 − 80 = 53_920
+    //
+    // rendered[1]: "[user]\n" + 🦞 + "z"×53_919 → 53_928 chars
+    //   🦞 occupies indices 7(\uD83E) and 8(\uDD9E) within rendered[1]
+    // full = 20_007 + 2 + 53_928 = 73_937
+    // tailStart = 73_937 − 53_920 = 20_017
+    //
+    // full[20_017] = rendered[1][8] = \uDD9E (🦞 low surrogate)
+    // → old .slice(20_017) starts with a lone low surrogate
+    const msgs = [
+      { role: "user", content: "b".repeat(20_000) },
+      { role: "user", content: LOBSTER + "z".repeat(53_919) },
     ];
-    const transcript = formatSkillExperienceReviewTranscript(messages);
 
-    expect(transcript.length).toBeLessThan(70_000);
+    // Pre-condition: old raw slice at tailStart would yield a dangling surrogate
+    const renderHeader = "[user]\n";
+    const r0 = `${renderHeader}${msgs[0]!.content as string}`;
+    const r1 = `${renderHeader}${msgs[1]!.content as string}`;
+    const full = `${r0}\n\n${r1}`;
+    const firstLen = 6_000; // truncateUtf16Safe on pure ASCII → exact 6_000
+    const tailBudget = EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS - firstLen - 80;
+    const tailStart = Math.max(0, full.length - tailBudget);
+    expect(full.charCodeAt(tailStart)).toBe(0xdd9e); // lone low surrogate
+    expect(hasDanglingSurrogate(full.slice(tailStart))).toBe(true);
+
+    // Production function must NOT produce a dangling surrogate
+    const transcript = formatSkillExperienceReviewTranscript(msgs);
     expect(hasDanglingSurrogate(transcript)).toBe(false);
   });
 });

@@ -2597,6 +2597,9 @@ function hasDanglingSurrogate(value: string): boolean {
   return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
 }
 
+const EMOJI = "😀";
+const LOBSTER = "🦞";
+
 describe("formatCliOutputError", () => {
   it("keeps session identity truncation UTF-16 safe near emoji boundaries", () => {
     const result = parseCliJsonl(
@@ -2613,9 +2616,15 @@ describe("formatCliOutputError", () => {
       "claude-cli",
     );
 
+    // Pre-condition: old normalizeCliContextValue (raw .slice(0,200))
+    // would split the surrogate pair at position 199-200.
+    const sessionId = "s".repeat(199) + EMOJI + "tail";
+    expect(sessionId.slice(0, 200).charCodeAt(199)).toBe(EMOJI.charCodeAt(0)); // lone high
+    expect(hasDanglingSurrogate(sessionId.slice(0, 200))).toBe(true);
+
     const error = formatCliOutputError(result!, {
-      runId: "r".repeat(199) + "🎉extra",
-      sessionId: "openclaw-" + "o".repeat(199) + "🦞end",
+      runId: "r".repeat(199) + EMOJI + "extra",
+      sessionId: "openclaw-" + "o".repeat(199) + LOBSTER + "end",
     });
 
     expect(hasDanglingSurrogate(error)).toBe(false);
