@@ -34,7 +34,7 @@ import {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.js";
-import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import { resolveSessionKey } from "../../config/sessions/session-key.js"; import { resolveSessionMarkState } from "../../config/sessions/session-mark-state.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import {
@@ -916,7 +916,7 @@ async function initSessionStateAttemptLocked(
     cliSessionIds: baseEntry?.cliSessionIds,
     cliSessionBindings: baseEntry?.cliSessionBindings,
     claudeCliSessionId: baseEntry?.claudeCliSessionId,
-    label: persistedLabel ?? baseEntry?.label,
+    label: persistedLabel ?? baseEntry?.label, ...resolveSessionMarkState(baseEntry),
     spawnedBy: persistedSpawnedBy ?? baseEntry?.spawnedBy,
     spawnedWorkspaceDir: persistedSpawnedWorkspaceDir ?? baseEntry?.spawnedWorkspaceDir,
     spawnedCwd: persistedSpawnedCwd ?? baseEntry?.spawnedCwd,

@@ -608,6 +608,37 @@ describe("initSessionState guarded initialization", () => {
     );
   });
 
+  it("preserves mark metadata during a normal session turn", async () => {
+    const storePath = await createStorePath("openclaw-session-init-mark-");
+    const sessionKey = "agent:main:web:mark";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "marked-session",
+        updatedAt: 100,
+        label: "🚧⠀Roadmap",
+        markLanguage: "english",
+        sessionMark: { symbol: "🚧", baseLabel: "Roadmap" },
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: { Body: "normal turn", SessionKey: sessionKey },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry).toMatchObject({
+      label: "🚧⠀Roadmap",
+      markLanguage: "english",
+      sessionMark: { symbol: "🚧", baseLabel: "Roadmap" },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      label: "🚧⠀Roadmap",
+      markLanguage: "english",
+      sessionMark: { symbol: "🚧", baseLabel: "Roadmap" },
+    });
+  });
+
   it("serializes concurrent initializers before reading the guarded snapshot", async () => {
     const storePath = await createStorePath("openclaw-session-init-race-");
     const sessionKey = "agent:main:telegram:chat:42";

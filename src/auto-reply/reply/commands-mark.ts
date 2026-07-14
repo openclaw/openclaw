@@ -51,15 +51,8 @@ function markText(language: MarkLanguage, chinese: string, english: string): str
   return language === MARK_LANGUAGE_ENGLISH ? english : chinese;
 }
 
-function stripMarkPrefix(label: string): string {
-  const separatorIndex = label.indexOf(MARK_SEPARATOR);
-  if (separatorIndex === -1) {
-    return label;
-  }
-  const symbol = label.slice(0, separatorIndex);
-  return MARK_PRESETS.some((preset) => preset.symbol === symbol)
-    ? label.slice(separatorIndex + MARK_SEPARATOR.length)
-    : label;
+function resolveUnmarkedLabel(entry: SessionEntry): string {
+  return entry.sessionMark?.baseLabel ?? normalizeOptionalString(entry.label) ?? "";
 }
 
 function matchMarkPreset(arg: string): MarkPreset | undefined {
@@ -161,14 +154,18 @@ export const handleMarkCommand: CommandHandler = async (params, allowTextCommand
       if (requestedLanguage) {
         entry.markLanguage = requestedLanguage;
       } else {
-        const base = stripMarkPrefix(normalizeOptionalString(entry.label) ?? "");
+        const base = resolveUnmarkedLabel(entry);
         if (isClear) {
-          if (base) {
-            entry.label = base;
-          } else {
-            delete entry.label;
+          if (entry.sessionMark) {
+            if (base) {
+              entry.label = base;
+            } else {
+              delete entry.label;
+            }
+            delete entry.sessionMark;
           }
         } else if (preset) {
+          entry.sessionMark = { symbol: preset.symbol, baseLabel: base };
           entry.label = `${preset.symbol}${MARK_SEPARATOR}${base}`;
         }
       }

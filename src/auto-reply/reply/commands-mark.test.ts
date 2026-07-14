@@ -110,19 +110,23 @@ describe("mark command", () => {
     expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
       label: `🚧${MARK_SEPARATOR}测试会话`,
       pinnedAt,
+      sessionMark: { symbol: "🚧", baseLabel: "测试会话" },
     });
 
     await runMark(storePath, "/mark 3");
     expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
       label: `🔥${MARK_SEPARATOR}测试会话`,
       pinnedAt,
+      sessionMark: { symbol: "🔥", baseLabel: "测试会话" },
     });
 
     await runMark(storePath, "/mark clear");
-    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+    const cleared = loadSessionEntry({ storePath, sessionKey });
+    expect(cleared).toMatchObject({
       label: "测试会话",
       pinnedAt,
     });
+    expect(cleared?.sessionMark).toBeUndefined();
   });
 
   it("switches reply language without changing the label or pinnedAt", async () => {
@@ -149,7 +153,7 @@ describe("mark command", () => {
     });
   });
 
-  it("does not strip arbitrary labels containing the separator", async () => {
+  it("preserves arbitrary separator labels when clearing or applying a mark", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry(
       { storePath, sessionKey },
@@ -160,6 +164,15 @@ describe("mark command", () => {
         pinnedAt,
       },
     );
+    await runMark(storePath, "/mark clear");
+    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe(`custom${MARK_SEPARATOR}name`);
+
+    await runMark(storePath, "/mark done");
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      label: `✅${MARK_SEPARATOR}custom${MARK_SEPARATOR}name`,
+      sessionMark: { symbol: "✅", baseLabel: `custom${MARK_SEPARATOR}name` },
+    });
+
     await runMark(storePath, "/mark clear");
     expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe(`custom${MARK_SEPARATOR}name`);
   });
