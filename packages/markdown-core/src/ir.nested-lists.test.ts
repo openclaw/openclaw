@@ -427,3 +427,24 @@ Paragraph after`;
     expect(result.text).not.toContain("\n\n\n");
   });
 });
+
+describe("ordered list start attribute", () => {
+  it("renders with default start=1 when start attribute is implicit", () => {
+    const result = markdownToIR("1. first\n2. second\n3. third");
+    expect(result.text).toBe("1. first\n2. second\n3. third");
+  });
+
+  it("renders with explicit start value from first item number", () => {
+    const result = markdownToIR("5. fifth\n6. sixth");
+    expect(result.text).toBe("5. fifth\n6. sixth");
+  });
+
+  it("does not produce NaN in output for any ordered list input", () => {
+    // Varied ordered list inputs should never contain the literal string "NaN"
+    const inputs = ["1. a\n2. b", "99. x\n100. y", "0. z\n1. w", "1. single"];
+    for (const input of inputs) {
+      const result = markdownToIR(input);
+      expect(result.text).not.toContain("NaN");
+    }
+  });
+});

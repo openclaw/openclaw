@@ -816,7 +816,8 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         if (state.env.listStack.length > 0) {
           appendNestedListSeparator(state);
         }
-        const start = Number(getAttr(token, "start") ?? "1");
+        const rawStart = Number(getAttr(token, "start") ?? "1");
+        const start = Number.isNaN(rawStart) ? 1 : rawStart;
         state.env.listStack.push({
           type: "ordered",
           index: start - 1,
