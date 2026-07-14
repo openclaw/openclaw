@@ -356,6 +356,8 @@ export function createSessionActions(context: SessionActionContext) {
         includeUnknown: selection.sessionKey === "unknown",
         agentId: listAgentId,
       });
+      // Agent-scoped list results may expand a legacy alias to its canonical key,
+      // but cannot move the selection to another agent.
       if (!isCurrentSessionSelection(selection)) {
         return;
       }

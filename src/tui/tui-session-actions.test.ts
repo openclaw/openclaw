@@ -1410,7 +1410,7 @@ describe("tui session actions", () => {
       messages: [],
     });
     const rememberSessionKey = vi.fn();
-    const state = createBaseState();
+    const state = createBaseState({ currentSessionKey: "main" });
 
     const { loadHistory: runLoadHistory } = createTestSessionActions({
       client: {
@@ -1424,6 +1424,7 @@ describe("tui session actions", () => {
     await runLoadHistory();
 
     expect(state.currentSessionId).toBe("session-main");
+    expect(state.currentSessionKey).toBe("agent:main:main");
     expect(rememberSessionKey).toHaveBeenCalledWith("agent:main:main");
   });
 
