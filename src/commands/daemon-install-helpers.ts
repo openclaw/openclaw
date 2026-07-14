@@ -463,7 +463,7 @@ const PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS = new Set([
 ]);
 
 /** Preserve safe operator-owned env vars from an existing service definition. */
-export function collectPreservedExistingServiceEnvVars(
+function collectPreservedExistingServiceEnvVars(
   existingEnvironment: Record<string, string | undefined> | undefined,
   managedServiceEnvKeys: Set<string>,
 ): Record<string, string | undefined> {
