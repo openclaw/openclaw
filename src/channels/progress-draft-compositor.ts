@@ -294,6 +294,9 @@ export function createChannelProgressDraftCompositor(params: {
     },
     markFinalReplyStarted() {
       finalReplyStarted = true;
+      // Final delivery must disarm the delayed start before async delivery work.
+      // Queued turns reopen the gate through beginNewTurn().
+      gate.cancel();
       clearPreambleExpiryTimer();
     },
     markFinalReplyDelivered() {

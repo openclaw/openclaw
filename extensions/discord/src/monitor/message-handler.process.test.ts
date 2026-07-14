@@ -2256,6 +2256,49 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.deleteCurrentMessage).not.toHaveBeenCalled();
   });
 
+  it("does not attach a progress receipt when final delivery starts before the delay", async () => {
+    vi.useFakeTimers();
+    const draftStream = createMockDraftStreamForTest();
+    let notifyLookupStarted: (() => void) | undefined;
+    let resolveTranscriptLookup: (() => void) | undefined;
+    const lookupStarted = new Promise<void>((resolve) => {
+      notifyLookupStarted = resolve;
+    });
+    const truncatedFinal =
+      "Here is the complete Discord answer with enough stable prefix text before truncation...";
+
+    getSessionEntry.mockReturnValue({ sessionId: "session-1" });
+    readLatestAssistantTextByIdentity.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveTranscriptLookup = () => resolve(undefined);
+          notifyLookupStarted?.();
+        }),
+    );
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
+      await params?.dispatcher.sendFinalReply({ text: truncatedFinal });
+      await lookupStarted;
+      await vi.advanceTimersByTimeAsync(5_000);
+      resolveTranscriptLookup?.();
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
+      discordConfig: { maxLinesPerMessage: 5 },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expectFreshFinalText(truncatedFinal);
+    expect(getDeliveredFinalTexts()[0]).not.toContain("\n-# ");
+  });
+
   it("streams Discord tool progress by default once the initial delay elapses", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();

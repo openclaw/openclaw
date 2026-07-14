@@ -106,6 +106,29 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(progress.beginNewTurn()).toBe(false);
   });
 
+  it("cancels a delayed draft when the final reply starts", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = vi.fn();
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update,
+      });
+
+      await progress.pushToolProgress("🛠️ Exec");
+      progress.markFinalReplyStarted();
+      await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
+
+      expect(progress.hasStarted).toBe(false);
+      expect(update).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not resurrect progress after suppression", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
