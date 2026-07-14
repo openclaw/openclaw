@@ -127,4 +127,38 @@ describe("system-event routing", () => {
       expect.objectContaining({ message: `Unknown or archived session "${sessionKey}"` }),
     );
   });
+
+  it("rejects wake requests mixed with node presence events", async () => {
+    const respond = vi.fn();
+    const sessionKey = "agent:main:main";
+    const request = {
+      params: {
+        text: "Node: Operator Mac",
+        deviceId: "device-1",
+        sessionKey,
+        wake: true,
+      },
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        incrementPresenceVersion: vi.fn(() => 1),
+        getHealthVersion: vi.fn(() => 1),
+        getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+      },
+    } as unknown as GatewayRequestHandlerOptions;
+
+    await expectDefined(
+      systemHandlers["system-event"],
+      'systemHandlers["system-event"] test invariant',
+    )(request);
+
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
+    expect(mocks.loadGatewaySessionRow).not.toHaveBeenCalled();
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "wake is not supported for node presence events" }),
+    );
+  });
 });

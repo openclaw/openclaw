@@ -139,6 +139,15 @@ export const systemHandlers: GatewayRequestHandlers = {
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
     const sessionKey = requestedSessionKey ?? resolveMainSessionKeyFromConfig();
     const wake = params.wake === true;
+    const isNodePresenceLine = text.startsWith("Node:");
+    if (wake && isNodePresenceLine) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "wake is not supported for node presence events"),
+      );
+      return;
+    }
     if (wake && requestedSessionKey) {
       const targetAgentId = normalizeAgentId(resolveAgentIdFromSessionKey(requestedSessionKey));
       const configuredAgentIds = listAgentIds(context.getRuntimeConfig()).map(normalizeAgentId);
@@ -208,7 +217,6 @@ export const systemHandlers: GatewayRequestHandlers = {
       scopes,
       tags,
     });
-    const isNodePresenceLine = text.startsWith("Node:");
     if (isNodePresenceLine) {
       // Node presence heartbeats are noisy; only enqueue user-visible system
       // events when routing context or meaningful node metadata changes.
