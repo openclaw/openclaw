@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Emits diagnostic model-call events around embedded-agent stream functions.
  */
@@ -35,7 +36,6 @@ import type {
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
 } from "../../../plugins/hook-types.js";
-import { truncateUtf16Safe } from "../../../utils.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../../usage.js";
 

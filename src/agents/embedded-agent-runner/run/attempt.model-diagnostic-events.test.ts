@@ -283,43 +283,37 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     });
   });
 
-  it("preserves Unicode boundaries in bounded provider timeline attributes", async () => {
-    // Given a model identifier whose emoji crosses the 256-code-unit timeline cap.
+  it("writes Unicode-safe bounded attributes to the provider timeline JSONL", async () => {
     const modelPrefix = "m".repeat(255);
-    async function* stream() {
-      yield { type: "text", text: "ok" };
-    }
-    const originalStream = stream() as unknown as AsyncIterable<unknown> & {
-      result: () => Promise<string>;
-    };
-    originalStream.result = async () => "kept";
-    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-      (() => originalStream) as unknown as StreamFn,
-      {
-        runId: "run-timeline-unicode-boundary",
-        provider: "openai",
-        model: `${modelPrefix}😀tail`,
-        api: "openai-responses",
-        transport: "http",
-        trace: createDiagnosticTraceContext(),
-        nextCallId: () => "call-timeline-unicode-boundary",
-      },
-    );
-
-    // When the production wrapper writes the provider.request JSONL event.
+    const exactBoundary = "b".repeat(256);
     const events = await collectProviderTimelineEvents(async () => {
-      const returned = wrapped(
-        {} as never,
-        {} as never,
-        {} as never,
-      ) as unknown as typeof originalStream;
-      await returned.result();
-      await drain(returned);
+      for (const [callId, model] of [
+        ["call-timeline-unicode-boundary", `${modelPrefix}😀tail`],
+        ["call-timeline-exact-boundary", exactBoundary],
+      ]) {
+        const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+          (() => undefined) as unknown as StreamFn,
+          {
+            runId: "run-timeline-unicode-boundary",
+            provider: "openai",
+            model,
+            trace: createDiagnosticTraceContext(),
+            nextCallId: () => callId,
+          },
+        );
+        wrapped({} as never, {} as never, {} as never);
+      }
     });
 
-    // Then the bounded model identifier ends before the emoji instead of splitting it.
-    expect(events).toHaveLength(1);
-    expect(events[0]?.attributes).toMatchObject({ model: modelPrefix });
+    expect(events).toHaveLength(2);
+    const splitBoundaryModel = readRecordField(events[0]!, "attributes", "attributes").model;
+    expect(splitBoundaryModel).toBe(modelPrefix);
+    expect(splitBoundaryModel).toHaveLength(255);
+    expect(splitBoundaryModel).not.toContain("�");
+    expect(splitBoundaryModel).not.toMatch(/[\uD800-\uDFFF]/u);
+    const exactBoundaryModel = readRecordField(events[1]!, "attributes", "attributes").model;
+    expect(exactBoundaryModel).toBe(exactBoundary);
+    expect(exactBoundaryModel).toHaveLength(256);
   });
 
   it("emits one failed provider timeline event for a thrown model call", async () => {
