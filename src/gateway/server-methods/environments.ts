@@ -14,6 +14,7 @@ import type { NodeListNode } from "../../shared/node-list-types.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
+import { formatForLog } from "../ws-log.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -206,7 +207,21 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     }
     await respondWorkerMutation(
       respond,
-      () => service.destroy(params.environmentId),
+      async () => {
+        const destroyed = await service.destroy(params.environmentId);
+        // Destruction is authoritative. Project the dead worker into its owning
+        // placement before returning, or immediate session deletion stays fenced.
+        try {
+          await context.workerPlacementDispatchService?.reconcileActive?.(params.environmentId);
+        } catch (error) {
+          // The provider mutation has committed. Keep its success authoritative;
+          // the periodic recovery sweep will retry this projection.
+          context.logGateway.warn(
+            `worker placement reconciliation after destroy failed: ${formatForLog(error)}`,
+          );
+        }
+        return destroyed;
+      },
       ["environment_not_found", "invalid_state"],
       "worker environment destruction failed",
     );
