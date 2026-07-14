@@ -65,6 +65,14 @@
       "destination": "/channels/matrix-migration"
     },
     {
+      "source": "/concepts/qa-matrix",
+      "destination": "/concepts/qa-e2e-automation#matrix-smoke-lanes"
+    },
+    {
+      "source": "/plugins/reference/qa-matrix",
+      "destination": "/plugins/reference/qa-lab"
+    },
+    {
       "source": "/concepts/openclaw-sdk",
       "destination": "/gateway/external-apps"
     },
