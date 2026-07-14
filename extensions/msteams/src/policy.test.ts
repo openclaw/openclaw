@@ -217,6 +217,46 @@ describe("msteams policy", () => {
       ).toEqual({ allow: ["cross-team"] });
     });
 
+    it("falls through a policy-less matched team to the cross-team scan", () => {
+      // A matched team without any applicable policy must not swallow another
+      // team's channel deny rules (legacy resolver parity).
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg: {
+            channels: {
+              msteams: {
+                teams: {
+                  "*": {},
+                  actual: { channels: { target: { tools: { deny: ["shell"] } } } },
+                },
+              },
+            },
+          },
+          groupSpace: "unknown-team",
+          groupId: "target",
+        }),
+      ).toEqual({ deny: ["shell"] });
+    });
+
+    it("does not scan across teams once a channel matched inside the selected team", () => {
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg: {
+            channels: {
+              msteams: {
+                teams: {
+                  mine: { channels: { target: {} } },
+                  other: { channels: { target: { tools: { deny: ["shell"] } } } },
+                },
+              },
+            },
+          },
+          groupSpace: "mine",
+          groupId: "target",
+        }),
+      ).toBeUndefined();
+    });
+
     it("falls from a fieldless channel entry to its team policy", () => {
       expect(
         resolveMSTeamsGroupToolPolicy({

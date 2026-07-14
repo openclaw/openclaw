@@ -86,13 +86,18 @@ function resolveMSTeamsToolPolicyScope(params: {
       ],
     };
   }
+  return { tree, path: [] };
+}
 
+function resolveMSTeamsCrossTeamScanScope(params: { cfg: MSTeamsConfig; groupId?: string | null }) {
+  const teams = params.cfg.teams ?? {};
+  const tree = buildMSTeamsToolPolicyTree(teams);
   const groupId = params.groupId?.trim();
   if (!groupId) {
     return { tree, path: [] };
   }
   const channelCandidates = buildChannelKeyCandidates(groupId);
-  // No team match: the first channel match in team insertion order owns the path.
+  // The first channel match in team insertion order owns the path.
   for (const [teamKey, team] of Object.entries(teams)) {
     const channelMatch = resolveChannelEntryMatchWithFallback({
       entries: team.channels ?? {},
@@ -187,13 +192,23 @@ export function resolveMSTeamsGroupToolPolicy(
     groupId: params.groupId,
   });
   // No messageProvider: channel-prefixed sender keys were historically dead here.
-  return resolveScopeToolsPolicy({
-    ...scope,
+  const senderScope = {
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
-  });
+  };
+  const resolved = resolveScopeToolsPolicy({ ...scope, ...senderScope });
+  if (resolved !== undefined) {
+    return resolved;
+  }
+  // Parity with the legacy resolver: a matched team that yields no policy falls
+  // through to the cross-team channel scan, but a matched CHANNEL never does.
+  if (scope.path.length > 1) {
+    return undefined;
+  }
+  const scanScope = resolveMSTeamsCrossTeamScanScope({ cfg, groupId: params.groupId });
+  return resolveScopeToolsPolicy({ ...scanScope, ...senderScope });
 }
 
 type MSTeamsReplyPolicy = {
