@@ -44,10 +44,11 @@ function requireAction(attachments: ButtonAttachments, index = 0): ButtonAction 
 }
 
 function generateInteractionToken(context: Record<string, unknown>, accountId?: string): string {
+  const actionId = typeof context.action_id === "string" ? context.action_id : "test";
   const attachments = buildButtonAttachments({
     callbackUrl: "https://gateway.example.com/mattermost/interactions/test",
     accountId,
-    buttons: [{ id: String(context.action_id ?? "test"), name: "Test", context }],
+    buttons: [{ id: actionId, name: "Test", context }],
   });
   return String(requireAction(attachments).integration.context["_token"]);
 }
