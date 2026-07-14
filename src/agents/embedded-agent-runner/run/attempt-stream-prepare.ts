@@ -32,9 +32,14 @@ import {
 import { log } from "../logger.js";
 import {
   clearActiveEmbeddedRun,
+  type EmbeddedAgentAbortReason,
   type EmbeddedAgentQueueHandle,
   setActiveEmbeddedRun,
 } from "../runs.js";
+import {
+  abortEmbeddedAttemptForStuckRecovery,
+  type EmbeddedAttemptAbortStatePort,
+} from "./attempt-abort.js";
 import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
@@ -60,7 +65,7 @@ type StreamRunState = {
 
 type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
   kind: "embedded";
-  cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
+  cancel: (reason?: EmbeddedAgentAbortReason) => void;
 };
 
 export function prepareEmbeddedAttemptStream(input: {
@@ -75,6 +80,11 @@ export function prepareEmbeddedAttemptStream(input: {
   isReplaySafeTool: (tool: Parameters<ToolSearchCatalogToolExecutor>[0]["tool"]) => boolean;
   runAbortController: AbortController;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
+  abortState: Pick<
+    EmbeddedAttemptAbortStatePort,
+    "markIdleTimedOut" | "markTimedOutDuringToolExecution"
+  >;
+  isModelCallActive: () => boolean;
   markExternalAbort: () => void;
   getRunState: () => StreamRunState;
   hasDeliveredSourceReply: () => boolean;
@@ -337,7 +347,18 @@ export function prepareEmbeddedAttemptStream(input: {
     }
   };
 
-  const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
+  const abortActiveRunExternally = (reason?: EmbeddedAgentAbortReason) => {
+    if (
+      reason === "stuck_recovery" &&
+      abortEmbeddedAttemptForStuckRecovery({
+        abortRun: input.abortRun,
+        modelCallActive: input.isModelCallActive(),
+        runId: attempt.runId,
+        state: input.abortState,
+      })
+    ) {
+      return;
+    }
     input.markExternalAbort();
     attempt.onAttemptAbort?.();
     input.abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);

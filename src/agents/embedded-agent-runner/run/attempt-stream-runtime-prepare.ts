@@ -10,6 +10,7 @@ import { abortable as abortableWithSignal } from "./abortable.js";
 import {
   type createEmbeddedAttemptExternalAbortController,
   createEmbeddedAttemptRunAbort,
+  type EmbeddedAttemptAbortStatePort,
 } from "./attempt-abort.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
@@ -40,9 +41,11 @@ type HistoryPhaseInput = Omit<HistoryInput, "activeSession" | "attempt" | "sessi
 type StreamPhaseInput = Omit<
   StreamInput,
   | "abortRun"
+  | "abortState"
   | "activeSession"
   | "attempt"
   | "getRunState"
+  | "isModelCallActive"
   | "markExternalAbort"
   | "onBlockReply"
   | "onBlockReplyFlush"
@@ -59,7 +62,7 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
   runAbortController: AbortController;
   externalAbortController: ExternalAbortController;
   abortActiveSession: Parameters<typeof createEmbeddedAttemptRunAbort>[0]["abortActiveSession"];
-  abortState: Parameters<typeof createEmbeddedAttemptRunAbort>[0]["state"];
+  abortState: EmbeddedAttemptAbortStatePort;
   trackPromptSettlePromise: (promise: Promise<void>) => Promise<void>;
   compactionTimeoutMs: number;
   guards: StreamGuardPhaseInput;
@@ -81,17 +84,18 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
 }) {
   const { activeSession, attempt, sessionManager } = input;
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
-  const { cacheObservabilityEnabled, promptCacheToolNames } = installEmbeddedAttemptStreamGuards({
-    ...input.guards,
-    attempt,
-    session: activeSession,
-    sessionManager,
-    sessionLockController: input.sessionLockController,
-    isYieldDetected: input.lifecycle.isYieldDetected,
-    onRejectedThinkingReplayRepaired: input.lifecycle.markRejectedThinkingReplayRepaired,
-    onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
-    abortSignal: input.runAbortController.signal,
-  });
+  const { cacheObservabilityEnabled, isModelCallActive, promptCacheToolNames } =
+    installEmbeddedAttemptStreamGuards({
+      ...input.guards,
+      attempt,
+      session: activeSession,
+      sessionManager,
+      sessionLockController: input.sessionLockController,
+      isYieldDetected: input.lifecycle.isYieldDetected,
+      onRejectedThinkingReplayRepaired: input.lifecycle.markRejectedThinkingReplayRepaired,
+      onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
+      abortSignal: input.runAbortController.signal,
+    });
   input.lifecycle.markStreamReady();
 
   let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
@@ -152,6 +156,8 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     activeSession,
     runAbortController: input.runAbortController,
     abortRun,
+    abortState: input.abortState,
+    isModelCallActive,
     markExternalAbort: input.lifecycle.markExternalAbort,
     getRunState: input.lifecycle.readRunState,
     onBlockReply,

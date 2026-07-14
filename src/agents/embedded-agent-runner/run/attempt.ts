@@ -122,6 +122,9 @@ export async function runEmbeddedAttempt(
     markExternalAbort: () => {
       executionState.externalAbort = true;
     },
+    markIdleTimedOut: () => {
+      executionState.idleTimedOut = true;
+    },
     markTimedOut: () => {
       executionState.timedOut = true;
     },

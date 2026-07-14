@@ -317,6 +317,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
     };
   }
   let diagnosticModelCallSeq = 0;
+  let activeModelCallsForStuckRecovery = 0;
   session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
     runId: attempt.runId,
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
@@ -338,6 +339,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
     nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
     onStarted: () => {
+      activeModelCallsForStuckRecovery += 1;
       attempt.onExecutionPhase?.({
         phase: "model_call_started",
         provider: attempt.provider,
@@ -345,9 +347,13 @@ export function installEmbeddedAttemptStreamGuards(input: {
         firstModelCallStarted: true,
       });
     },
+    onEnded: () => {
+      activeModelCallsForStuckRecovery = Math.max(0, activeModelCallsForStuckRecovery - 1);
+    },
   });
   return {
     cacheObservabilityEnabled,
+    isModelCallActive: () => activeModelCallsForStuckRecovery > 0,
     promptCacheToolNames,
   };
 }

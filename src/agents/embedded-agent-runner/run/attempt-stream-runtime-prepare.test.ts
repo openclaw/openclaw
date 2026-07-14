@@ -77,6 +77,7 @@ function createFixture(options: { aborted?: boolean } = {}) {
     setCompactionState: vi.fn(() => order.push("set-compaction-state")),
   };
   const markIdleTimedOut = vi.fn();
+  const isModelCallActive = vi.fn(() => true);
   const markStreamReady = vi.fn(() => order.push("stream-ready"));
   const setToolSearchCatalogExecutor = vi.fn(() => order.push("set-catalog"));
   const trackPromptSettlePromise = vi.fn((promise: Promise<void>) => promise);
@@ -90,6 +91,7 @@ function createFixture(options: { aborted?: boolean } = {}) {
     order.push("guards");
     return {
       cacheObservabilityEnabled: true,
+      isModelCallActive,
       promptCacheToolNames: new Set(["read"]),
     };
   });
@@ -157,6 +159,7 @@ function createFixture(options: { aborted?: boolean } = {}) {
     activeSession,
     externalAbortController,
     input,
+    isModelCallActive,
     markIdleTimedOut,
     order,
     runAbort,
@@ -204,6 +207,9 @@ describe("prepareEmbeddedAttemptStreamRuntime", () => {
     );
     expect(fixture.input.lifecycle.setToolSearchCatalogExecutor).toHaveBeenCalledWith(
       fixture.toolSearchCatalogExecutor,
+    );
+    expect(mocks.prepareStream).toHaveBeenCalledWith(
+      expect.objectContaining({ isModelCallActive: fixture.isModelCallActive }),
     );
     expect(fixture.externalAbortController.setCompactionState).toHaveBeenCalledWith({
       isPendingOrRetrying: fixture.subscription.isCompacting,

@@ -2,17 +2,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import {
+  abortEmbeddedAttemptForStuckRecovery,
   createEmbeddedAttemptExternalAbortController,
   createEmbeddedAttemptRunAbort,
   type EmbeddedAttemptAbortStatePort,
 } from "./attempt-abort.js";
 
 const mocks = vi.hoisted(() => ({
+  countActivePotentialSideEffectToolExecutions: vi.fn(() => 0),
   countActiveToolExecutions: vi.fn(() => 0),
   markActiveEmbeddedRunAbandoned: vi.fn(),
 }));
 
 vi.mock("../../embedded-agent-subscribe.handlers.tools.js", () => ({
+  countActivePotentialSideEffectToolExecutions: mocks.countActivePotentialSideEffectToolExecutions,
   countActiveToolExecutions: mocks.countActiveToolExecutions,
 }));
 
@@ -24,6 +27,7 @@ function createAbortState() {
   let timedOutDuringCompaction = false;
   const markAborted = vi.fn();
   const markExternalAbort = vi.fn();
+  const markIdleTimedOut = vi.fn();
   const markTimedOut = vi.fn();
   const markTimedOutDuringCompaction = vi.fn(() => {
     timedOutDuringCompaction = true;
@@ -34,6 +38,7 @@ function createAbortState() {
   const port: EmbeddedAttemptAbortStatePort = {
     markAborted,
     markExternalAbort,
+    markIdleTimedOut,
     markTimedOut,
     markTimedOutDuringCompaction,
     markTimedOutDuringToolExecution,
@@ -44,6 +49,7 @@ function createAbortState() {
     port,
     markAborted,
     markExternalAbort,
+    markIdleTimedOut,
     markTimedOut,
     markTimedOutDuringCompaction,
     markTimedOutDuringToolExecution,
@@ -52,8 +58,75 @@ function createAbortState() {
 }
 
 beforeEach(() => {
+  mocks.countActivePotentialSideEffectToolExecutions.mockReset().mockReturnValue(0);
   mocks.countActiveToolExecutions.mockReset().mockReturnValue(0);
   mocks.markActiveEmbeddedRunAbandoned.mockReset();
+});
+
+describe("abortEmbeddedAttemptForStuckRecovery", () => {
+  it("classifies active model stalls as idle timeouts", () => {
+    const abortRun = vi.fn();
+    const state = {
+      markIdleTimedOut: vi.fn(),
+      markTimedOutDuringToolExecution: vi.fn(),
+    };
+
+    expect(
+      abortEmbeddedAttemptForStuckRecovery({
+        abortRun,
+        modelCallActive: true,
+        runId: "run-model-stall",
+        state,
+      }),
+    ).toBe(true);
+
+    expect(state.markIdleTimedOut).toHaveBeenCalledOnce();
+    expect(state.markTimedOutDuringToolExecution).not.toHaveBeenCalled();
+    expect(abortRun).toHaveBeenCalledWith(true, expect.objectContaining({ name: "TimeoutError" }));
+  });
+
+  it("classifies side-effecting tool stalls before model retry", () => {
+    mocks.countActivePotentialSideEffectToolExecutions.mockReturnValue(1);
+    const abortRun = vi.fn();
+    const state = {
+      markIdleTimedOut: vi.fn(),
+      markTimedOutDuringToolExecution: vi.fn(),
+    };
+
+    expect(
+      abortEmbeddedAttemptForStuckRecovery({
+        abortRun,
+        modelCallActive: true,
+        runId: "run-tool-stall",
+        state,
+      }),
+    ).toBe(true);
+
+    expect(state.markIdleTimedOut).not.toHaveBeenCalled();
+    expect(state.markTimedOutDuringToolExecution).toHaveBeenCalledOnce();
+    expect(abortRun).toHaveBeenCalledWith(true, expect.objectContaining({ name: "TimeoutError" }));
+  });
+
+  it("leaves unknown phases on the external-abort path", () => {
+    const abortRun = vi.fn();
+    const state = {
+      markIdleTimedOut: vi.fn(),
+      markTimedOutDuringToolExecution: vi.fn(),
+    };
+
+    expect(
+      abortEmbeddedAttemptForStuckRecovery({
+        abortRun,
+        modelCallActive: false,
+        runId: "run-unknown-stall",
+        state,
+      }),
+    ).toBe(false);
+
+    expect(state.markIdleTimedOut).not.toHaveBeenCalled();
+    expect(state.markTimedOutDuringToolExecution).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
 });
 
 describe("createEmbeddedAttemptExternalAbortController", () => {

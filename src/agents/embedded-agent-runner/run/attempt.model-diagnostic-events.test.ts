@@ -165,6 +165,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       input: [{ role: "user", content: "secret prompt sk-test-secret-value" }],
       model: "gpt-5.4",
     };
+    const onStarted = vi.fn();
+    const onEnded = vi.fn();
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       ((
         model: Parameters<StreamFn>[0],
@@ -187,6 +189,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
           spanId: "00f067aa0ba902b7",
         }),
         nextCallId: () => "call-1",
+        onStarted,
+        onEnded,
       },
     );
 
@@ -205,6 +209,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       "model.call.started",
       "model.call.completed",
     ]);
+    expect(onStarted).toHaveBeenCalledOnce();
+    expect(onEnded).toHaveBeenCalledOnce();
     const startedEvent = getEvent(events, 0);
     expect(startedEvent.type).toBe("model.call.started");
     expect(startedEvent.runId).toBe("run-1");
