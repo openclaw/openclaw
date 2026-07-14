@@ -670,23 +670,6 @@ function isInvalidEncryptedContentError(error: unknown): boolean {
   );
 }
 
-function normalizeResponsesErrorEvent(event: Record<string, unknown>): {
-  code: string | undefined;
-  message: string | undefined;
-  status: number | undefined;
-} {
-  const nestedError = isRecord(event.error) ? event.error : undefined;
-  const flatCode = readResponseFailedString(event, "code").trim();
-  const nestedCode = readResponseFailedString(nestedError, "code").trim();
-  const flatMessage = readResponseFailedString(event, "message").trim();
-  const nestedMessage = readResponseFailedString(nestedError, "message").trim();
-  return {
-    code: flatCode || nestedCode || undefined,
-    message: flatMessage || nestedMessage || undefined,
-    status: typeof event.status === "number" ? event.status : undefined,
-  };
-}
-
 function stripEncryptedContentFields(value: unknown): { value: unknown; changed: boolean } {
   if (!value || typeof value !== "object") {
     return { value, changed: false };
@@ -718,18 +701,6 @@ function stripEncryptedContentFields(value: unknown): { value: unknown; changed:
 function dropResponsesRequestEncryptedReplayItems(
   params: OpenAIResponsesRequestParams,
 ): OpenAIResponsesRequestParams {
-  const hasEncryptedReplayItem = params.input.some((value) => {
-    const item = isRecord(value) ? value : undefined;
-    return (
-      (item?.type === "reasoning" || item?.type === "compaction") &&
-      typeof item.encrypted_content === "string" &&
-      item.encrypted_content.length > 0
-    );
-  });
-  if (!hasEncryptedReplayItem) {
-    return params;
-  }
-
   let changed = false;
   let droppedReasoningBeforeNextItem = false;
   const input: ResponseInput = [];
@@ -750,9 +721,9 @@ function dropResponsesRequestEncryptedReplayItems(
       "id" in item
     ) {
       const message = { ...item };
+      // Signed message ids are replayable only with their preceding reasoning item.
       delete message.id;
       input.push(message as ResponseInputItem);
-      changed = true;
     } else {
       input.push(value);
     }
@@ -919,16 +890,18 @@ async function runResponsesStreamWithEncryptedContentRetry(params: {
       await params.drain(responseStream);
       return;
     } catch (error) {
-      const retryRequest = dropResponsesRequestEncryptedReplayItems(request);
       // Every public reasoning/text/tool stream starts by appending a content block,
       // so an empty output is the boundary where retry cannot duplicate model output.
       if (
         retryUsed ||
         params.retrySignal?.aborted ||
         params.output.content.length > 0 ||
-        !isInvalidEncryptedContentError(error) ||
-        retryRequest === request
+        !isInvalidEncryptedContentError(error)
       ) {
+        throw error;
+      }
+      const retryRequest = dropResponsesRequestEncryptedReplayItems(request);
+      if (retryRequest === request) {
         throw error;
       }
       retryUsed = true;
@@ -1933,10 +1906,17 @@ async function processResponsesStream(
         output.stopReason = "toolUse";
       }
     } else if (type === "error") {
-      const failure = normalizeResponsesErrorEvent(event);
+      const nestedError = isRecord(event.error) ? event.error : undefined;
+      const code =
+        readResponseFailedString(event, "code").trim() ||
+        readResponseFailedString(nestedError, "code").trim();
+      const message =
+        readResponseFailedString(event, "message").trim() ||
+        readResponseFailedString(nestedError, "message").trim();
+      const status = typeof event.status === "number" ? event.status : undefined;
       throw Object.assign(
-        new Error(`Error Code ${failure.code || "unknown"}: ${failure.message || "Unknown error"}`),
-        { code: failure.code, status: failure.status },
+        new Error(`Error Code ${code || "unknown"}: ${message || "Unknown error"}`),
+        { code: code || undefined, status },
       );
     } else if (type === "response.failed") {
       const failure = normalizeResponsesFailedEvent(event, model);

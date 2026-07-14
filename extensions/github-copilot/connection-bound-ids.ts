@@ -3,10 +3,6 @@ import { createHash } from "node:crypto";
 
 type InputItem = Record<string, unknown> & { id?: unknown; type?: unknown };
 
-type CopilotReplaySanitizeOptions = {
-  stripEncryptedReasoning?: boolean;
-};
-
 function isInputItem(value: unknown): value is InputItem {
   return Boolean(value) && typeof value === "object";
 }
@@ -60,30 +56,10 @@ function normalizeCopilotReasoningId(item: InputItem): boolean {
   return false;
 }
 
-function stripPairedAssistantMessageIds(input: unknown[], droppedReasoning: Set<number>): boolean {
-  let changed = false;
-  for (const droppedIndex of droppedReasoning) {
-    let nextIndex = droppedIndex + 1;
-    while (droppedReasoning.has(nextIndex)) {
-      nextIndex += 1;
-    }
-    const next = input[nextIndex];
-    if (isAssistantMessage(next) && "id" in next) {
-      delete next.id;
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-function sanitizeCopilotEncryptedReasoning(
-  input: unknown[],
-  options: CopilotReplaySanitizeOptions,
-): boolean {
-  const droppedReasoning = new Set<number>();
+function sanitizeCopilotEncryptedReasoning(input: unknown[]): boolean {
   let changed = false;
 
-  for (let index = 0; index < input.length; index += 1) {
+  for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
     if (!isInputItem(item) || item.type !== "reasoning") {
       continue;
@@ -92,21 +68,18 @@ function sanitizeCopilotEncryptedReasoning(
     if (
       typeof item.encrypted_content !== "string" ||
       item.encrypted_content.length === 0 ||
-      !normalizeCopilotReasoningId(item) ||
-      options.stripEncryptedReasoning
+      !normalizeCopilotReasoningId(item)
     ) {
-      droppedReasoning.add(index);
+      input.splice(index, 1);
+      const next = input[index];
+      if (isAssistantMessage(next) && "id" in next) {
+        // Signed message ids are replayable only with their preceding reasoning item.
+        delete next.id;
+      }
       changed = true;
       continue;
     }
     changed ||= originalId !== undefined && item.id === undefined;
-  }
-
-  changed = stripPairedAssistantMessageIds(input, droppedReasoning) || changed;
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    if (droppedReasoning.has(index)) {
-      input.splice(index, 1);
-    }
   }
   return changed;
 }
@@ -141,10 +114,7 @@ export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolea
   return sanitizeCopilotReplayResponseIds(input);
 }
 
-export function sanitizeCopilotResponsePayload(
-  payload: unknown,
-  options: CopilotReplaySanitizeOptions = {},
-): boolean {
+export function rewriteCopilotResponsePayloadConnectionBoundIds(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") {
     return false;
   }
@@ -152,10 +122,6 @@ export function sanitizeCopilotResponsePayload(
   if (!Array.isArray(input)) {
     return false;
   }
-  const reasoningChanged = sanitizeCopilotEncryptedReasoning(input, options);
+  const reasoningChanged = sanitizeCopilotEncryptedReasoning(input);
   return sanitizeCopilotReplayResponseIds(input) || reasoningChanged;
-}
-
-export function rewriteCopilotResponsePayloadConnectionBoundIds(payload: unknown): boolean {
-  return sanitizeCopilotResponsePayload(payload);
 }

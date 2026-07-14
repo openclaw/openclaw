@@ -874,6 +874,12 @@ describe("openai transport stream", () => {
     ]);
     expect(params.input[0]).toHaveProperty("encrypted_content", "ciphertext");
     expect(params.input[1]).toHaveProperty("id", "msg_prior");
+
+    const idOnly = { ...params, input: [{ type: "reasoning", id: "rs_id_only", summary: [] }] };
+    expect(testing.dropResponsesRequestEncryptedReplayItems(idOnly as never)).toEqual({
+      ...idOnly,
+      input: [],
+    });
   });
 
   it("retries thinking_signature_invalid once without encrypted reasoning content", async () => {

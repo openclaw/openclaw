@@ -49,7 +49,7 @@ export function buildGithubCopilotReplayPolicy(modelId?: string) {
 }
 
 export function sanitizeGithubCopilotReplayHistory(ctx: ProviderSanitizeReplayHistoryContext) {
-  return isCopilotClaudeModel(ctx.modelId)
+  return isCopilotClaudeModel(ctx.modelId) || ctx.modelApi === "openai-responses"
     ? stripCopilotAssistantThinkingMessages(ctx.messages)
     : ctx.messages;
 }

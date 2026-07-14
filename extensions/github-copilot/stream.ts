@@ -7,13 +7,8 @@ import {
   applyAnthropicEphemeralCacheControlMarkers,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { sanitizeCopilotResponsePayload } from "./connection-bound-ids.js";
+import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
-
-const MAX_ACTIVE_COPILOT_SESSIONS = 32;
-// Provider wrappers are rebuilt each turn. Remember active sessions at module scope so
-// only the first request after process startup is treated as a cold resume.
-const activeCopilotSessions = new Set<string>();
 
 function containsCopilotContentType(value: unknown, type: string): boolean {
   if (Array.isArray(value)) {
@@ -62,40 +57,15 @@ export function buildCopilotDynamicHeaders(params: {
   };
 }
 
-function patchOnPayloadResult(
-  result: unknown,
-  originalPayload: unknown,
-  stripEncryptedReasoning: boolean,
-  sessionKey: string | undefined,
-): unknown {
+function patchOnPayloadResult(result: unknown, originalPayload: unknown): unknown {
   if (result && typeof result === "object" && "then" in result) {
     return Promise.resolve(result).then((next) => {
-      sanitizeCopilotResponsePayload(next === undefined ? originalPayload : next, {
-        stripEncryptedReasoning,
-      });
-      rememberActiveCopilotSession(sessionKey);
+      rewriteCopilotResponsePayloadConnectionBoundIds(next === undefined ? originalPayload : next);
       return next;
     });
   }
-  sanitizeCopilotResponsePayload(result === undefined ? originalPayload : result, {
-    stripEncryptedReasoning,
-  });
-  rememberActiveCopilotSession(sessionKey);
+  rewriteCopilotResponsePayloadConnectionBoundIds(result === undefined ? originalPayload : result);
   return result;
-}
-
-function rememberActiveCopilotSession(sessionKey: string | undefined): void {
-  if (!sessionKey) {
-    return;
-  }
-  activeCopilotSessions.delete(sessionKey);
-  activeCopilotSessions.add(sessionKey);
-  if (activeCopilotSessions.size > MAX_ACTIVE_COPILOT_SESSIONS) {
-    const oldest = activeCopilotSessions.values().next().value;
-    if (oldest !== undefined) {
-      activeCopilotSessions.delete(oldest);
-    }
-  }
 }
 
 function buildCopilotRequestHeaders(
@@ -155,20 +125,13 @@ export function wrapCopilotOpenAIResponsesStream(
       return underlying(model, context, options);
     }
 
-    const sessionKey = options?.sessionId?.trim() || undefined;
-    const stripEncryptedReasoning = !sessionKey || !activeCopilotSessions.has(sessionKey);
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
       headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
-        sanitizeCopilotResponsePayload(payload, { stripEncryptedReasoning });
-        return patchOnPayloadResult(
-          originalOnPayload?.(payload, payloadModel),
-          payload,
-          stripEncryptedReasoning,
-          sessionKey,
-        );
+        rewriteCopilotResponsePayloadConnectionBoundIds(payload);
+        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel), payload);
       },
     });
   };

@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   rewriteCopilotConnectionBoundResponseIds,
   rewriteCopilotResponsePayloadConnectionBoundIds,
-  sanitizeCopilotResponsePayload,
 } from "./connection-bound-ids.js";
 
 describe("github-copilot connection-bound response replay", () => {
@@ -38,7 +37,7 @@ describe("github-copilot connection-bound response replay", () => {
       ],
     };
 
-    expect(sanitizeCopilotResponsePayload(payload)).toBe(true);
+    expect(rewriteCopilotResponsePayloadConnectionBoundIds(payload)).toBe(true);
     expect(payload.input).toEqual([
       { id: "rs_exact", type: "reasoning", encrypted_content: "exact", summary: [] },
       { type: "reasoning", encrypted_content: "long", summary: [] },
@@ -65,7 +64,7 @@ describe("github-copilot connection-bound response replay", () => {
       ],
     };
 
-    expect(sanitizeCopilotResponsePayload(payload)).toBe(true);
+    expect(rewriteCopilotResponsePayloadConnectionBoundIds(payload)).toBe(true);
     expect(payload.input).toEqual([
       {
         type: "message",
@@ -93,7 +92,7 @@ describe("github-copilot connection-bound response replay", () => {
       ],
     };
 
-    expect(sanitizeCopilotResponsePayload(payload)).toBe(true);
+    expect(rewriteCopilotResponsePayloadConnectionBoundIds(payload)).toBe(true);
     expect(payload.input).toEqual([
       {
         type: "message",
@@ -101,22 +100,6 @@ describe("github-copilot connection-bound response replay", () => {
         content: [{ type: "output_text", text: "visible" }],
       },
     ]);
-  });
-
-  it("strips complete encrypted reasoning when requested", () => {
-    const payload = {
-      input: [
-        {
-          id: "rs_current",
-          type: "reasoning",
-          encrypted_content: "current",
-          summary: [],
-        },
-      ],
-    };
-
-    expect(sanitizeCopilotResponsePayload(payload, { stripEncryptedReasoning: true })).toBe(true);
-    expect(payload.input).toEqual([]);
   });
 
   it("patches response payload input arrays only", () => {

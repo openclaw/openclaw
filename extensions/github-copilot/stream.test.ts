@@ -166,7 +166,7 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(baseStreamFn.mock.calls).toEqual([[model, context, options]]);
   });
 
-  it("drops cold history, then preserves complete reasoning for an active session", () => {
+  it("sanitizes complete encrypted reasoning and adds Copilot headers", () => {
     const longReasoningId = Buffer.from(`reasoning-${"x".repeat(320)}`).toString("base64");
     const payloads: Array<{ input: Array<Record<string, unknown>> }> = [];
     const baseStreamFn = vi.fn((_model, _context, options) => {
@@ -197,7 +197,7 @@ describe("wrapCopilotAnthropicStream", () => {
       return { async *[Symbol.asyncIterator]() {} } as never;
     });
 
-    const createWrapped = () => requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
+    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
     const messages = [
       {
         role: "toolResult",
@@ -213,29 +213,22 @@ describe("wrapCopilotAnthropicStream", () => {
       id: "gpt-5.4",
     } as never;
     const context = { messages } as never;
-    const streamOptions = {
-      headers: { "X-Test": "1" },
-      sessionId: "session-cold-then-active",
-    };
-
-    void createWrapped()(model, context, streamOptions);
-    void createWrapped()(model, context, streamOptions);
+    void wrapped(model, context, { headers: { "X-Test": "1" } });
 
     const receivedOptions = requireFirstStreamOptions(baseStreamFn, "Copilot Responses stream");
     expect(receivedOptions.headers).toEqual({
       ...buildCopilotDynamicHeaders({ messages, hasImages: true }),
       "X-Test": "1",
     });
-    expect(payloads[0]?.input).toEqual([]);
-    expect(payloads[1]?.input).toHaveLength(2);
-    expect(payloads[1]?.input[0]).toMatchObject({
+    expect(payloads[0]?.input).toHaveLength(2);
+    expect(payloads[0]?.input[0]).toMatchObject({
       id: "rs_exact",
       encrypted_content: "exact-ciphertext",
     });
-    expect(payloads[1]?.input[1]).toMatchObject({
+    expect(payloads[0]?.input[1]).toMatchObject({
       encrypted_content: "idless-ciphertext",
     });
-    expect(payloads[1]?.input[1]).not.toHaveProperty("id");
+    expect(payloads[0]?.input[1]).not.toHaveProperty("id");
   });
 
   it("re-sanitizes payloads returned by an async hook", async () => {
@@ -245,21 +238,14 @@ describe("wrapCopilotAnthropicStream", () => {
       return { async *[Symbol.asyncIterator]() {} } as never;
     });
 
-    const createWrapped = () => requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
+    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
     const model = {
       provider: "github-copilot",
       api: "openai-responses",
       id: "gpt-5.4",
     } as never;
     const context = { messages: [{ role: "user", content: "hi" }] } as never;
-    const sessionId = "session-async-hook";
-
-    await createWrapped()(model, context, {
-      sessionId,
-      onPayload: async () => ({ input: [] }),
-    } as never);
-    await createWrapped()(model, context, {
-      sessionId,
+    await wrapped(model, context, {
       onPayload: async () => ({
         input: [
           {
@@ -285,48 +271,6 @@ describe("wrapCopilotAnthropicStream", () => {
         encrypted_content: "hook-ciphertext",
       }),
     ]);
-  });
-
-  it("bounds active-session cold-resume state", () => {
-    const sentPayloads: Array<{ input: Array<Record<string, unknown>> }> = [];
-    const baseStreamFn = vi.fn((_model, _context, options) => {
-      const payload = {
-        input: [
-          {
-            id: "rs_current",
-            type: "reasoning",
-            encrypted_content: "current-ciphertext",
-            summary: [],
-          },
-        ],
-      };
-      options?.onPayload?.(payload, _model);
-      sentPayloads.push(payload);
-      return { async *[Symbol.asyncIterator]() {} } as never;
-    });
-    const model = {
-      provider: "github-copilot",
-      api: "openai-responses",
-      id: "gpt-5.4",
-    } as never;
-    const context = {
-      messages: [{ role: "toolResult", content: [{ type: "text", text: "done" }] }],
-    } as never;
-    const invoke = (sessionId: string) => {
-      const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
-      void wrapped(model, context, { sessionId } as never);
-    };
-
-    invoke("session-bounded-target");
-    invoke("session-bounded-target");
-    for (let index = 0; index < 32; index += 1) {
-      invoke(`session-bounded-other-${index}`);
-    }
-    invoke("session-bounded-target");
-
-    expect(sentPayloads[0]?.input).toEqual([]);
-    expect(sentPayloads[1]?.input).toHaveLength(1);
-    expect(sentPayloads.at(-1)?.input).toEqual([]);
   });
 
   it("adds Copilot headers for Chat Completions models", () => {

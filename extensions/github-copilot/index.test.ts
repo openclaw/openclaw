@@ -170,7 +170,7 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
 }
 
 describe("github-copilot plugin", () => {
-  it("owns Claude replay thinking cleanup", () => {
+  it("owns cold-resume reasoning cleanup", () => {
     const provider = registerProviderWithPluginConfig({});
     const messages = [
       {
@@ -200,6 +200,19 @@ describe("github-copilot plugin", () => {
     expect(
       provider.sanitizeReplayHistory?.({
         modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+        messages,
+      } as never),
+    ).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "visible" }],
+      },
+    ]);
+    expect(
+      provider.sanitizeReplayHistory?.({
+        modelId: "gpt-5.4",
+        modelApi: "openai-completions",
         messages,
       } as never),
     ).toBe(messages);
