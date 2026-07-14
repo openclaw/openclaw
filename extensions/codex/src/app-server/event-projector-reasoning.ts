@@ -7,7 +7,7 @@ import {
 } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 
-export type ReasoningDeltaMethod = "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta";
+type ReasoningDeltaMethod = "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta";
 
 type ReasoningTextGroup = {
   itemId: string;

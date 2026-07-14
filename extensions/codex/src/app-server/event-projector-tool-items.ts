@@ -80,7 +80,7 @@ export function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | u
   return undefined;
 }
 
-export function webSearchToolArgs(item: CodexThreadItem): Record<string, unknown> {
+function webSearchToolArgs(item: CodexThreadItem): Record<string, unknown> {
   const action = isJsonObject(item.action) ? item.action : undefined;
   const actionType = action ? readNonEmptyString(action, "type") : undefined;
   const queries =
@@ -147,7 +147,7 @@ export function itemToolResult(item: CodexThreadItem): { result?: Record<string,
   return {};
 }
 
-export function webSearchToolResult(item: CodexThreadItem): Record<string, unknown> {
+function webSearchToolResult(item: CodexThreadItem): Record<string, unknown> {
   return sanitizeCodexAgentEventRecord({
     status: itemStatus(item),
     ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),

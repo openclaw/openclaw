@@ -720,12 +720,12 @@ describe("CodexAppServerEventProjector", () => {
     const mediaPersistence = new Promise<void>((resolve) => {
       resolveMedia = resolve;
     });
-    vi.spyOn(
+    const mediaProjection = (
       projector as unknown as {
-        recordRawGeneratedImageMedia(item: unknown): Promise<void>;
-      },
-      "recordRawGeneratedImageMedia",
-    ).mockReturnValue(mediaPersistence);
+        generatedMediaProjection: { recordRaw(item: unknown): Promise<void> };
+      }
+    ).generatedMediaProjection;
+    vi.spyOn(mediaProjection, "recordRaw").mockReturnValue(mediaPersistence);
 
     const pending = projector.handleNotification(
       forCurrentTurn("rawResponseItem/completed", {
@@ -1137,17 +1137,21 @@ describe("CodexAppServerEventProjector", () => {
       );
     }
 
-    const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<
-        string,
-        {
-          rawSignatures: Array<{ length: number; prefix: string }>;
-          streamedRawSignature?: { length: number; prefix: string };
-        }
-      >;
-    };
-    expect(echoState.toolProgressEchoesByItem.size).toBe(1);
-    const state = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo");
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<
+            string,
+            {
+              rawSignatures: Array<{ length: number; prefix: string }>;
+              streamedRawSignature?: { length: number; prefix: string };
+            }
+          >;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    expect(echoState.size).toBe(1);
+    const state = echoState.get("cmd-streamed-echo");
     // Stream owns one dedicated slot; FIFO stays empty for pure stream accumulation.
     expect(state?.rawSignatures).toEqual([]);
     const latestRaw = state?.streamedRawSignature;
@@ -1199,16 +1203,20 @@ describe("CodexAppServerEventProjector", () => {
         delta: rawOutput,
       }),
     );
-    const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<
-        string,
-        {
-          rawSignatures: Array<{ length: number; prefix: string }>;
-          streamedRawSignature?: { length: number; prefix: string };
-        }
-      >;
-    };
-    const state = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo-newline");
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<
+            string,
+            {
+              rawSignatures: Array<{ length: number; prefix: string }>;
+              streamedRawSignature?: { length: number; prefix: string };
+            }
+          >;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    const state = echoState.get("cmd-streamed-echo-newline");
     expect(state?.streamedRawSignature?.length).toBe(rawOutput.trim().length);
 
     await projector.handleNotification(
@@ -3877,15 +3885,14 @@ describe("CodexAppServerEventProjector", () => {
       );
     }
 
-    const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<
-        string,
-        {
-          streamedRawSignature?: { length: number; prefix: string };
-        }
-      >;
-    };
-    const state = echoState.toolProgressEchoesByItem.get("cmd-freeze-prefix");
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<string, { streamedRawSignature?: { length: number; prefix: string } }>;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    const state = echoState.get("cmd-freeze-prefix");
     expect(state?.streamedRawSignature).toBeDefined();
     expect(fullOutput.startsWith(state!.streamedRawSignature!.prefix)).toBe(true);
     expect(state!.streamedRawSignature!.length).toBe(fullOutput.length);
