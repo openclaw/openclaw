@@ -15,7 +15,7 @@
  * `resetFallbackSkipCacheForTest()`.
  */
 
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { modelKey } from "./model-selection-normalize.js";
 
 /**
