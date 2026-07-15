@@ -462,6 +462,53 @@ describe("normalizeCronJobCreate", () => {
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
+  it("filters non-string env values instead of silently deleting the entire env block", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "mixed env",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: {
+        kind: "command",
+        argv: ["sh", "-lc", "echo ok"],
+        env: { DEBUG: true, FOO: "bar", COUNT: 42, PATH: "/usr/bin" },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.env).toEqual({ FOO: "bar", PATH: "/usr/bin" });
+    expect(payload.env).not.toHaveProperty("DEBUG");
+    expect(payload.env).not.toHaveProperty("COUNT");
+  });
+
+  it("deletes the entire env block when every entry is non-string", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "all invalid env",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: {
+        kind: "command",
+        argv: ["sh", "-lc", "echo ok"],
+        env: { DEBUG: true, COUNT: 42 },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("env");
+  });
+
+  it("preserves env when it contains only valid string values", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "valid env",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: {
+        kind: "command",
+        argv: ["sh", "-lc", "echo ok"],
+        env: { FOO: "bar", PATH: "/usr/bin" },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.env).toEqual({ FOO: "bar", PATH: "/usr/bin" });
+  });
+
   it("preserves command argv argument bytes", () => {
     const normalized = normalizeCronJobCreate({
       name: "command exact argv",

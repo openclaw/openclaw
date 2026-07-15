@@ -63,9 +63,15 @@ function normalizeTrimmedStringRecord(value: unknown): Record<string, string> | 
     const key = normalizeOptionalString(rawKey);
     const val = typeof rawValue === "string" ? rawValue : undefined;
     if (!key || val === undefined) {
-      return undefined;
+      continue;
     }
     entries.push([key, val]);
+  }
+  if (entries.length === 0) {
+    // Preserve explicit empty-object patches (env: {}) so that a cron update
+    // that intentionally clears env is not silently discarded. When the input
+    // had keys but all were invalid, return undefined to trigger deletion.
+    return Object.keys(value as object).length === 0 ? {} : undefined;
   }
   return Object.fromEntries(entries);
 }
