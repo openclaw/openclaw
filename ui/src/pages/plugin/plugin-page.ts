@@ -92,8 +92,28 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     const frame = this.querySelector<HTMLIFrameElement>(".plugin-ui-entry-frame");
     const key = this.currentEntryPointKey();
     this.pluginUiBridge.sync(
-      frame && key ? { frame, key, pluginId: this.pluginId, src: this.entryPointFrameSrc } : null,
+      frame && key
+        ? {
+            frame,
+            key,
+            onReload: () => this.relaunchEntryPoint(key),
+            pluginId: this.pluginId,
+            src: this.entryPointFrameSrc,
+          }
+        : null,
     );
+  }
+
+  private relaunchEntryPoint(expectedKey: string) {
+    if (
+      this.currentEntryPointKey() !== expectedKey ||
+      this.entryPointLaunchToken ||
+      !this.gatewayConnected ||
+      !this.gatewayClient
+    ) {
+      return;
+    }
+    void this.launchEntryPoint(expectedKey, this.gatewayClient);
   }
 
   private tabKey(): string {

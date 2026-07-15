@@ -56,6 +56,63 @@ function createLogbookPage(): DeferredPluginPage {
 }
 
 describe("PluginPage", () => {
+  it("launches an in-app entry point after a cold route reconnects", async () => {
+    const request = vi.fn(async () => ({
+      ok: true,
+      path: "/plugins/handsfree?openclaw-entry=fresh-launch",
+      expiresInMs: 60_000,
+    }));
+    const snapshot: ApplicationGatewaySnapshot = {
+      client: null,
+      connected: false,
+      reconnecting: false,
+      hello: null,
+      assistantAgentId: null,
+      sessionKey: "agent:main:main",
+      lastError: null,
+      lastErrorCode: null,
+    };
+    let notify: (() => void) | undefined;
+    const page = document.createElement("openclaw-plugin-page") as PluginPage;
+    page.pluginId = "handsfree";
+    page.tabId = "settings";
+    page.entryPointPath = "/plugins/handsfree/";
+    page.entryPointLabel = "Handsfree";
+    (page as unknown as { context: ApplicationContext<RouteId> }).context = {
+      gateway: {
+        snapshot,
+        subscribe: (listener: () => void) => {
+          notify = listener;
+          return () => {
+            notify = undefined;
+          };
+        },
+      },
+      config: { current: { embedSandboxMode: "scripts" } },
+      sessions: { state: { result: { sessions: [], defaults: { contextTokens: 32_000 } } } },
+    } as unknown as ApplicationContext<RouteId>;
+
+    document.body.append(page);
+    try {
+      await page.updateComplete;
+      expect(request).not.toHaveBeenCalled();
+      expect(page.querySelector("iframe")).toBeNull();
+
+      snapshot.client = { request } as unknown as GatewayBrowserClient;
+      snapshot.connected = true;
+      notify?.();
+
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      await vi.waitFor(() =>
+        expect(page.querySelector("iframe")?.getAttribute("src")).toMatch(
+          /^\/plugins\/handsfree\?openclaw-entry=fresh-launch#openclaw-plugin-ui-bridge=/,
+        ),
+      );
+    } finally {
+      page.remove();
+    }
+  });
+
   it("stops a bundled view when its advertised descriptor disappears", async () => {
     const bundledView = deferred<TestBundledView>();
     const stop = vi.fn();
@@ -328,10 +385,11 @@ describe("PluginPage", () => {
     }
   });
 
-  it("launches an in-app entry point through the scoped gateway RPC", async () => {
+  it("launches an in-app entry point and relaunches it after the iframe reloads", async () => {
+    let launchCount = 0;
     const request = vi.fn(async () => ({
       ok: true,
-      path: "/plugins/notes?openclaw-entry=launch-token",
+      path: `/plugins/notes?openclaw-entry=launch-token-${++launchCount}`,
       expiresInMs: 60_000,
     }));
     const snapshot: ApplicationGatewaySnapshot = {
@@ -368,10 +426,36 @@ describe("PluginPage", () => {
       );
       await vi.waitFor(() =>
         expect(page.querySelector("iframe")?.getAttribute("src")).toMatch(
-          /^\/plugins\/notes\?openclaw-entry=launch-token#openclaw-plugin-ui-bridge=/,
+          /^\/plugins\/notes\?openclaw-entry=launch-token-1#openclaw-plugin-ui-bridge=/,
         ),
       );
       expect(page.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-scripts");
+
+      const frame = page.querySelector("iframe");
+      if (!frame?.contentWindow) {
+        throw new Error("expected launched iframe");
+      }
+      const bridgeToken = new URLSearchParams(new URL(frame.src).hash.slice(1)).get(
+        "openclaw-plugin-ui-bridge",
+      );
+      const channel = new MessageChannel();
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { v: 1, type: "openclaw.pluginUi.init", token: bridgeToken },
+          source: frame.contentWindow,
+          ports: [channel.port2],
+        }),
+      );
+      frame.dispatchEvent(new Event("load"));
+      frame.dispatchEvent(new Event("load"));
+
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() =>
+        expect(frame.getAttribute("src")).toMatch(
+          /^\/plugins\/notes\?openclaw-entry=launch-token-2#openclaw-plugin-ui-bridge=/,
+        ),
+      );
+      channel.port1.close();
     } finally {
       page.remove();
     }

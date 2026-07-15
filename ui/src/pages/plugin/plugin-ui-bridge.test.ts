@@ -196,4 +196,40 @@ describe("PluginUiBridgeController", () => {
     connected.childPort.close();
     replacement.port1.close();
   });
+
+  it("requests a fresh launch after the connected iframe reloads", () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    if (!frame.contentWindow) {
+      throw new Error("expected iframe window");
+    }
+    const onReload = vi.fn();
+    const bridge = new PluginUiBridgeController(vi.fn());
+    bridge.sync({
+      frame,
+      key: "notes/settings",
+      onReload,
+      pluginId: "notes",
+      src: "/plugins/notes?openclaw-entry=token",
+    });
+    const bridgeToken = new URLSearchParams(new URL(frame.src).hash.slice(1)).get(
+      "openclaw-plugin-ui-bridge",
+    );
+    const channel = new MessageChannel();
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { v: 1, type: "openclaw.pluginUi.init", token: bridgeToken },
+        source: frame.contentWindow,
+        ports: [channel.port2],
+      }),
+    );
+
+    frame.dispatchEvent(new Event("load"));
+    expect(onReload).not.toHaveBeenCalled();
+    frame.dispatchEvent(new Event("load"));
+    expect(onReload).toHaveBeenCalledOnce();
+
+    bridge.clear();
+    channel.port1.close();
+  });
 });

@@ -20,6 +20,7 @@ type PluginUiRequestMessage = {
 type PluginUiBridgeTarget = {
   frame: HTMLIFrameElement;
   key: string;
+  onReload?: () => void;
   pluginId: string;
   src: string;
 };
@@ -160,6 +161,8 @@ export class PluginUiBridgeController {
   private target: PluginUiBridgeTarget | null = null;
   private port: MessagePort | null = null;
   private bootstrapHandler: ((event: MessageEvent) => void) | null = null;
+  private loadHandler: (() => void) | null = null;
+  private initialLoadObserved = false;
 
   constructor(private readonly fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis)) {}
 
@@ -177,6 +180,18 @@ export class PluginUiBridgeController {
       return;
     }
     this.target = target;
+    this.loadHandler = () => {
+      if (this.target !== target) {
+        return;
+      }
+      if (!this.initialLoadObserved) {
+        this.initialLoadObserved = true;
+        return;
+      }
+      if (this.port) {
+        target.onReload?.();
+      }
+    };
     const bridgeToken = generateUUID();
     this.bootstrapHandler = (event: MessageEvent) => {
       const data = asRecord(event.data);
@@ -222,15 +237,21 @@ export class PluginUiBridgeController {
     const launchUrl = new URL(target.src, window.location.origin);
     launchUrl.hash = new URLSearchParams({ "openclaw-plugin-ui-bridge": bridgeToken }).toString();
     target.frame.src = `${launchUrl.pathname}${launchUrl.search}${launchUrl.hash}`;
+    target.frame.addEventListener("load", this.loadHandler);
   }
 
   clear() {
     if (this.bootstrapHandler) {
       window.removeEventListener("message", this.bootstrapHandler);
     }
+    if (this.target && this.loadHandler) {
+      this.target.frame.removeEventListener("load", this.loadHandler);
+    }
     this.port?.close();
     this.target = null;
     this.port = null;
     this.bootstrapHandler = null;
+    this.loadHandler = null;
+    this.initialLoadObserved = false;
   }
 }
