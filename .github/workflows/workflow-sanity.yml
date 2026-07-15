@@ -198,12 +198,13 @@ jobs:
           mapfile -d '' -t workflow_files < <(
             find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z
           )
+          lint_cpu="$(awk '/Cpus_allowed_list/ { print $2 }' /proc/self/status | cut -d, -f1 | cut -d- -f1)"
           lint_workflow() {
             local exit_code workflow_file="$1"
             for attempt in 1 2; do
               echo "actionlint ${workflow_file} (attempt ${attempt}/2)"
               set +e
-              timeout --foreground 30s actionlint "${workflow_file}"
+              timeout --foreground 30s taskset --cpu-list "${lint_cpu}" actionlint "${workflow_file}"
               exit_code=$?
               set -e
               if [[ "${exit_code}" -eq 0 ]]; then
@@ -216,7 +217,7 @@ jobs:
             done
           }
           for workflow_file in "${workflow_files[@]}"; do
-            # Bound each external process so a runner stall reports the exact workflow.
+            # actionlint sizes subprocess fan-out from CPU affinity, so keep each file single-core.
             lint_workflow "${workflow_file}"
           done
 
