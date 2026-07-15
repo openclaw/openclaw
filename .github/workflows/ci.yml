@@ -540,16 +540,18 @@ jobs:
               console.warn(`Changed Node test planning failed; using compact full suite: ${error}`);
             }
           }
-          // Targeted (narrow-diff) PRs skip the heavy packaging lanes unless the
-          // diff touches surfaces those lanes exist to prove: test-only diffs
-          // cannot change dist bytes, and QA smoke re-proves packaging/scenario
-          // surfaces that unit shards plus build smokes already cover elsewhere.
+          // Heavy packaging lanes run only when the diff touches surfaces they
+          // exist to prove: test-only diffs cannot change dist bytes, and QA
+          // smoke only sees changes on its scenario surface or inside the
+          // packaged CLI's import graph. QA gating is diff-based, so it also
+          // applies when test targeting fell back to the full compact suite.
           const changedScopeHasBuildImpact =
             changedNodeTestShards === null ||
             typeof changedNodeTestPlan.hasBuildArtifactAffectingChange !== "function" ||
             changedNodeTestPlan.hasBuildArtifactAffectingChange(changedPaths);
           const changedScopeHasQaImpact =
-            changedNodeTestShards === null ||
+            changedPaths === null ||
+            eventName !== "pull_request" ||
             typeof changedNodeTestPlan.hasQaSmokeAffectingChange !== "function" ||
             changedNodeTestPlan.hasQaSmokeAffectingChange(changedPaths);
           const runBuildArtifacts = runNodeFull && changedScopeHasBuildImpact;
@@ -1851,12 +1853,15 @@ jobs:
           - check_name: check-additional-boundaries-a
             group: boundaries
             boundary_shard: 1/4
-            # This shard runs ~4min on 8 vCPU and regularly owns the PR wall
-            # clock; extra cores shorten it for similar billed core-minutes.
-            runner: blacksmith-16vcpu-ubuntu-2404
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-boundaries-bcd
             group: boundaries
             boundary_shard: 2/4,3/4,4/4
+            runner: blacksmith-8vcpu-ubuntu-2404
+          # Prompt snapshot regeneration runs real embedded-agent turns (~2min)
+          # and used to own the boundaries-a wall clock; keep it in its own lane.
+          - check_name: check-prompt-snapshots
+            group: prompt-snapshots
             runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
@@ -1969,6 +1974,12 @@ jobs:
           case "$ADDITIONAL_CHECK_GROUP" in
             boundaries)
               node scripts/run-additional-boundary-checks.mjs
+              ;;
+            prompt-snapshots)
+              # No presence fallback: the boundary runner previously invoked
+              # this unconditionally, and silent success would drop snapshot
+              # drift coverage.
+              run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
               ;;
             session-accessor-boundary)
               if [ ! -f scripts/check-session-accessor-boundary.mjs ]; then
