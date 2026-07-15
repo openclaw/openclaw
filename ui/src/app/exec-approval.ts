@@ -106,7 +106,7 @@ function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefin
   return decisions.length > 0 ? decisions : undefined;
 }
 
-export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
+function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
   }
@@ -160,7 +160,7 @@ export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolve
   };
 }
 
-export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequest | null {
+function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
   }
@@ -201,7 +201,7 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
   };
 }
 
-export function parseSystemAgentApprovalRequested(payload: unknown): ExecApprovalRequest | null {
+function parseSystemAgentApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
   }

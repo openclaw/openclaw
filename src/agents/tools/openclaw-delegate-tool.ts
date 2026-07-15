@@ -24,7 +24,7 @@ function stableDelegationSessionId(sessionKey: string | undefined): string {
     : `delegate-${randomUUID()}`;
 }
 
-export function createOpenClawDelegateTool(options?: {
+function createOpenClawDelegateTool(options?: {
   requesterAgentId?: string;
   agentSessionKey?: string;
   turnSourceChannel?: string;
