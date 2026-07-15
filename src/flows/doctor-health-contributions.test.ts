@@ -1447,6 +1447,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
       cfg,
+      doctorOnlyStateMigrations: true,
       crossStateDirImports: false,
     });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
@@ -1471,6 +1472,7 @@ describe("doctor health contributions", () => {
     await contribution.run(directRepairContext);
     expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
       cfg: {},
+      doctorOnlyStateMigrations: true,
       crossStateDirImports: true,
     });
 
@@ -1484,6 +1486,7 @@ describe("doctor health contributions", () => {
     });
     expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
       cfg: {},
+      doctorOnlyStateMigrations: true,
       crossStateDirImports: true,
     });
 
@@ -1494,6 +1497,7 @@ describe("doctor health contributions", () => {
     await contribution.run(automatedRepairContext);
     expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
       cfg: {},
+      doctorOnlyStateMigrations: true,
       crossStateDirImports: false,
     });
   });

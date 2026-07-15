@@ -172,6 +172,19 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("flags runtime writes to the retired TUI last-session store", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "tui", "last-session.json"), "{}\\n");
+      `,
+      "src/tui/last-session-writer.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
   it("flags legacy paths with dynamic agent id segments", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
