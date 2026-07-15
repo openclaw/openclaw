@@ -173,6 +173,23 @@ describe("execCommand", () => {
     expect(result.stderr).toBe("stderr-😀-complete");
   });
 
+  it("flushes incomplete UTF-8 sequences when the process exits", async () => {
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp");
+    child.stdout.emit("data", Buffer.from([0xe2, 0x82]));
+    child.stderr.emit("data", Buffer.from([0xf0, 0x9f, 0x98]));
+    wait.resolve(0);
+
+    const result = await resultPromise;
+    expect(result.stdout).toBe("�");
+    expect(result.stderr).toBe("�");
+  });
+
   it("fails instead of silently truncating default exec output", async () => {
     const child = createStubChild();
     const wait = createDeferred<number | null>();
