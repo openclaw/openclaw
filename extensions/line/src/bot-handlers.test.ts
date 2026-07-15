@@ -1113,6 +1113,7 @@ describe("handleLineWebhookEvents", () => {
         id: "m-command-dm",
         type: "text",
         text: "please check /status",
+        quoteToken: "test-token-placeholder",
       },
       source: { type: "user", userId: "user-dm" },
       webhookEventId: "evt-command-dm",
