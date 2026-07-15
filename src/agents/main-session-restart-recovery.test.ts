@@ -1051,6 +1051,50 @@ describe("main-session-restart-recovery", () => {
     expect(settled?.restartRecoveryDeliverySourceRunId).toBeUndefined();
   });
 
+  it("settles a reused recovery RPC after its dispatch wait times out", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+    vi.mocked(callGateway)
+      .mockRejectedValueOnce(new Error("gateway request timeout for agent"))
+      .mockResolvedValueOnce({
+        runId: "recovery-run",
+        status: "ok",
+        endedAt: Date.now(),
+      });
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+
+    expect(firstGatewayParams().idempotencyKey).toBe("recovery-run");
+    expect(vi.mocked(callGateway).mock.calls[1]?.[0]).toMatchObject({
+      method: "agent.wait",
+      params: { runId: "recovery-run", timeoutMs: 0 },
+    });
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      abortedLastRun: false,
+      restartRecoveryTerminalRunIds: ["control-ui-run"],
+      status: "done",
+    });
+  });
+
   it("does not deliver restart recovery when session send policy denies sends", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {

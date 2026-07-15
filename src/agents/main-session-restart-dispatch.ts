@@ -206,6 +206,7 @@ export async function resumeMainSession(params: {
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
   const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
   const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));
+  let dispatchOutcomeUnknown = false;
   try {
     // Persist one stable RPC id before dispatch. A transport rejection is
     // ambiguous; retries must reuse this id so accepted work cannot duplicate.
@@ -268,10 +269,14 @@ export async function resumeMainSession(params: {
     if (params.forceRestartSafeTools) {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
     }
+    // Once dispatch starts, any rejection is ambiguous because the stable RPC
+    // may still have been accepted; a successful return resolves that ambiguity.
+    dispatchOutcomeUnknown = true;
     const dispatchResult = await params.gatewayRuntime.dispatchAgent<{
       runId: string;
       status?: unknown;
     }>(agentParams, 10_000);
+    dispatchOutcomeUnknown = false;
     let terminalStatus = normalizeRestartRecoveryTerminalStatus(dispatchResult.status);
     if (!terminalStatus && reusingRecoveryRunId && dispatchResult.status === "accepted") {
       terminalStatus = await probeRestartRecoveryTerminalStatus(
@@ -295,11 +300,7 @@ export async function resumeMainSession(params: {
     );
     return true;
   } catch (error) {
-    if (
-      reusingRecoveryRunId &&
-      error instanceof Error &&
-      error.name === "GatewayClientRequestError"
-    ) {
+    if (reusingRecoveryRunId && dispatchOutcomeUnknown) {
       const terminalStatus = await probeRestartRecoveryTerminalStatus(
         recoveryRunId,
         params.gatewayRuntime,
