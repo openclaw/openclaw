@@ -2282,8 +2282,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     setupSingleAttemptFallback();
     setupSessionTouchStore();
     const sessionStore = state.sessionStoreMock as Record<string, SessionEntry>;
-    const claimedEntry = sessionStore["agent:main:main"];
-    expectDefined(claimedEntry);
+    const claimedEntry = expectDefined(
+      sessionStore["agent:main:main"],
+      "preclaimed restart recovery session",
+    );
     claimedEntry.restartRecoveryDeliveryRunId = "session-1";
     const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
       typeof makeSuccessResult
