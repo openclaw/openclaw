@@ -110,6 +110,10 @@ import {
   resolveLegacyTaskRunsSidecarPath,
 } from "./state-migrations.storage.js";
 import {
+  detectLegacySubagentRegistry,
+  migrateLegacySubagentRegistry,
+} from "./state-migrations.subagent-registry.js";
+import {
   detectLegacyTuiLastSessions,
   migrateLegacyTuiLastSessions,
 } from "./state-migrations.tui-last-session.js";
@@ -410,6 +414,10 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const subagentRegistry = detectLegacySubagentRegistry({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const rescuePending = detectLegacyRescuePending({
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
@@ -574,6 +582,9 @@ export async function detectLegacyStateMigrations(params: {
   if (nodeHost.hasLegacy) {
     preview.push("- Node-host config: legacy node.json → shared SQLite state");
   }
+  if (subagentRegistry.hasLegacy) {
+    preview.push("- Subagent runs: discard retired transient subagents/runs.json state");
+  }
   if (rescuePending.hasLegacy) {
     preview.push("- System-agent rescue approvals: discard retired pending JSON capabilities");
   }
@@ -667,6 +678,7 @@ export async function detectLegacyStateMigrations(params: {
     managedOutgoingImages,
     webPush,
     nodeHost,
+    subagentRegistry,
     rescuePending,
     channelPairing,
     execApprovals,
@@ -868,6 +880,11 @@ export async function runLegacyStateMigrations(params: {
     env,
     stateDir: detected.stateDir,
   });
+  const subagentRegistry = await migrateLegacySubagentRegistry({
+    detected: detected.subagentRegistry,
+    env,
+    stateDir: detected.stateDir,
+  });
   const rescuePending = discardLegacyRescuePending({
     detected: detected.rescuePending,
     stateDir: detected.stateDir,
@@ -907,6 +924,7 @@ export async function runLegacyStateMigrations(params: {
     managedOutgoingImages,
     webPush,
     nodeHost,
+    subagentRegistry,
     pluginPlans,
   ]);
   return {
@@ -927,6 +945,7 @@ export async function runLegacyStateMigrations(params: {
       ...managedOutgoingImages.changes,
       ...webPush.changes,
       ...nodeHost.changes,
+      ...subagentRegistry.changes,
       ...rescuePending.changes,
       ...channelPairing.changes,
       ...execApprovals.changes,
@@ -955,6 +974,7 @@ export async function runLegacyStateMigrations(params: {
       ...managedOutgoingImages.warnings,
       ...webPush.warnings,
       ...nodeHost.warnings,
+      ...subagentRegistry.warnings,
       ...rescuePending.warnings,
       ...channelPairing.warnings,
       ...execApprovals.warnings,

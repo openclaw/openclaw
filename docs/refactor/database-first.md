@@ -397,7 +397,11 @@ The branch already has a real shared SQLite base:
   tables are rebuilt under their canonical names.
 - Subagent run recovery state now lives in typed shared `subagent_runs` rows
   with indexed child, requester, and controller session keys. The old
-  `subagents/runs.json` file is doctor migration input only.
+  `subagents/runs.json` file is Doctor cleanup input only. Its run entries are
+  transient recovery state, so Doctor records the retirement receipt and
+  discards the file without importing it. Because a file cannot prove whether
+  its entries are live or stale after SQLite rows have been pruned, operators
+  must let file-era active runs settle before upgrading across this boundary.
 - Current conversation bindings now live in typed shared
   `current_conversation_bindings` rows keyed by normalized conversation id, with
   target agent/session columns, conversation kind, status, expiry, and metadata
@@ -1367,8 +1371,11 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   OpenClaw temp root. They are recreated as needed and are not backup or
   migration inputs.
 - Subagent run registry persistence uses typed shared `subagent_runs` rows. The
-  old `subagents/runs.json` path is now only a doctor migration input, and
-  runtime helper names no longer describe the state layer as disk-backed.
+  old `subagents/runs.json` path is now only a Doctor cleanup input. Doctor
+  claims it under the state maintenance lock, records the discard decision in
+  SQLite, and removes it without importing transient run state. No runtime JSON
+  reader, writer, cache, or fallback remains; cross-version recovery of file-only
+  in-flight runs is intentionally unsupported at this retirement boundary.
   Runtime tests no longer create invalid or empty `runs.json` fixtures to prove
   registry behavior; they seed/read SQLite rows directly.
 - Backup stages the state directory before archiving, copies non-database files,
