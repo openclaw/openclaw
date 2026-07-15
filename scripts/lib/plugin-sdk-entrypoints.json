@@ -201,7 +201,6 @@
   "channel-location",
   "channel-mention-gating",
   "channel-lifecycle",
-  "channel-ingress",
   "channel-ingress-runtime",
   "channel-message",
   "channel-message-runtime",
