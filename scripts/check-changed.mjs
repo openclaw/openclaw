@@ -212,21 +212,26 @@ function changedCheckDiffRefsReady({ base, head, cwd = process.cwd() }) {
   return true;
 }
 
-export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
+export function buildChangedCheckCrabboxArgs(argv = [], options = {}, env = process.env) {
   const delegatedArgv = buildDelegatedChangedCheckArgv(argv, options);
+  const providerArgs = isTruthyEnvFlag(env.OPENCLAW_TESTBOX)
+    ? [
+        "--provider",
+        "blacksmith-testbox",
+        "--blacksmith-org",
+        "openclaw",
+        "--blacksmith-workflow",
+        ".github/workflows/ci-check-testbox.yml",
+        "--blacksmith-job",
+        "check",
+        "--blacksmith-ref",
+        "main",
+      ]
+    : [];
   return [
     "crabbox:run",
     "--",
-    "--provider",
-    "blacksmith-testbox",
-    "--blacksmith-org",
-    "openclaw",
-    "--blacksmith-workflow",
-    ".github/workflows/ci-check-testbox.yml",
-    "--blacksmith-job",
-    "check",
-    "--blacksmith-ref",
-    "main",
+    ...providerArgs,
     "--idle-timeout",
     "90m",
     "--ttl",
@@ -353,10 +358,13 @@ export function createShrinkwrapGuardCommand(paths) {
 }
 
 async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
-  console.error("[check:changed] delegating to Blacksmith Testbox via `pnpm crabbox:run`.");
+  const destination = isTruthyEnvFlag(env.OPENCLAW_TESTBOX)
+    ? "to Blacksmith Testbox"
+    : "via `pnpm crabbox:run`";
+  console.error(`[check:changed] delegating ${destination}.`);
   return await runManagedCommand({
     bin: "pnpm",
-    args: buildChangedCheckCrabboxArgs(argv),
+    args: buildChangedCheckCrabboxArgs(argv, {}, env),
     env,
   });
 }

@@ -37,7 +37,11 @@ export function shouldDelegateChangedCheckToCrabbox(
   env?: NodeJS.ProcessEnv,
   options?: { cwd?: string; result?: ChangedLaneResult; diffRefsReady?: boolean },
 ): boolean;
-export function buildChangedCheckCrabboxArgs(argv?: string[], options?: { cwd?: string }): string[];
+export function buildChangedCheckCrabboxArgs(
+  argv?: string[],
+  options?: { cwd?: string },
+  env?: NodeJS.ProcessEnv,
+): string[];
 export function shouldRunShrinkwrapGuard(paths: string[]): boolean;
 export function shouldRunPromptSnapshotCheck(paths: string[]): boolean;
 export function shouldRunPromptSnapshotOwnerTest(paths: string[]): boolean;

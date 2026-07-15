@@ -329,7 +329,7 @@ describe("scripts/changed-lanes", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
+    expect(result.stderr).toContain("delegating via `pnpm crabbox:run`");
   });
 
   it("rejects unknown changed lane options before treating them as paths", () => {
@@ -1103,16 +1103,6 @@ describe("scripts/changed-lanes", () => {
     expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
       "crabbox:run",
       "--",
-      "--provider",
-      "blacksmith-testbox",
-      "--blacksmith-org",
-      "openclaw",
-      "--blacksmith-workflow",
-      ".github/workflows/ci-check-testbox.yml",
-      "--blacksmith-job",
-      "check",
-      "--blacksmith-ref",
-      "main",
       "--idle-timeout",
       "90m",
       "--ttl",
@@ -1131,6 +1121,40 @@ describe("scripts/changed-lanes", () => {
       "origin/main",
       "--head",
       "HEAD",
+    ]);
+  });
+
+  it("honors configured providers unless Testbox proof is explicitly required", () => {
+    const configuredArgs = buildChangedCheckCrabboxArgs(
+      [],
+      {},
+      {
+        CRABBOX_PROVIDER: "local-container",
+      },
+    );
+    expect(configuredArgs).not.toContain("--provider");
+
+    const testboxArgs = buildChangedCheckCrabboxArgs(
+      [],
+      {},
+      {
+        CRABBOX_PROVIDER: "local-container",
+        OPENCLAW_TESTBOX: "1",
+      },
+    );
+    expect(testboxArgs.slice(0, 12)).toEqual([
+      "crabbox:run",
+      "--",
+      "--provider",
+      "blacksmith-testbox",
+      "--blacksmith-org",
+      "openclaw",
+      "--blacksmith-workflow",
+      ".github/workflows/ci-check-testbox.yml",
+      "--blacksmith-job",
+      "check",
+      "--blacksmith-ref",
+      "main",
     ]);
   });
 

@@ -284,11 +284,14 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 
 ## Follow PR review and landing hygiene
 
-- At the start of code-changing or landing work that will need tests or heavy
-  proof, classify source trust and pre-warm the safe backend through `$crabbox`
-  in the background. Trusted maintainer code defaults to Blacksmith Testbox;
-  contributor/fork code stays untrusted unless a maintainer explicitly approves
-  credentialed execution after review; it uses secretless fork CI or
+- For code-changing or landing work that will need heavy proof,
+  classify source trust before choosing a backend. Acquire the eligible backend
+  lazily when the first heavy command is ready. Eligible trusted maintainer work
+  honors an explicit user provider, then `CRABBOX_PROVIDER`, then the
+  repository's Blacksmith Testbox fallback; source-trust, platform, and proof
+  requirements override preference. Contributor/fork code stays untrusted
+  unless a maintainer explicitly approves credentialed execution after review;
+  it uses secretless fork CI or
   sanitized direct AWS Crabbox with `CRABBOX_ENV_ALLOW=CI`,
   `--no-hydrate`, and a fresh temporary remote `HOME`, never the
   credential-hydrated Testbox workflow or a previously hydrated lease. Launch
@@ -301,9 +304,9 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   code. Force public networking, disable and
   unset inherited Tailscale/exit-node settings, and fail closed unless
   `crabbox inspect` reports no Tailscale state before any script. Rewarm after
-  any head change. Continue
-  review/editing while it hydrates, sync every run, reuse the lease, then stop
-  it before handoff. Skip warmup for read-only triage and docs-only work.
+  any head change. Continue review/editing while the acquired backend hydrates,
+  sync every run, reuse the lease, then stop it before handoff. Read-only triage
+  and docs-only work do not need a backend.
 - Never mention release-note bookkeeping in review-only output. It is landing
   or release-generation mechanics, not a correctness finding.
 - If bot review conversations exist on your PR, address them and resolve them yourself once fixed.
