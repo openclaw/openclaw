@@ -2188,6 +2188,80 @@ describe("main-session-restart-recovery", () => {
     ).toBeUndefined();
   });
 
+  it("reconciles a receipt delivered during a restart-recovery continuation", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:discord:direct:123";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryBeforeAgentReplyState: "continue",
+        restartRecoveryDeliveryReceiptState: "delivered-terminal",
+        restartRecoveryDeliveryToolCallId: "message-call-recovered",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "discord-message-1",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing", idempotencyKey: "discord-message-1" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "starting" }],
+      },
+      {
+        role: "user",
+        content: "[System] continue after restart",
+        idempotencyKey: "recovery-1:user",
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "message-call-recovered",
+            name: "message",
+            arguments: { action: "send", message: "delivered answer" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "done",
+      abortedLastRun: false,
+      restartRecoveryTerminalRunIds: ["discord-message-1"],
+    });
+    const transcript = (await loadTranscriptEvents({
+      sessionId: "main-session",
+      sessionKey,
+      storePath,
+    })) as Array<{ message?: Record<string, unknown> }>;
+    expect(
+      transcript
+        .map((event) => event.message)
+        .some(
+          (message) =>
+            message?.idempotencyKey ===
+            "restart-recovery:message-tool-result:discord-message-1:message-call-recovered",
+        ),
+    ).toBe(true);
+  });
+
   it.each([
     {
       label: "empty restart-abort artifact",

@@ -16,7 +16,10 @@ import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  buildRunUserTurnIdempotencyKey,
+  createUserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -169,7 +172,7 @@ export function startAgentRunExecution(params: {
               input: {
                 text: params.effectiveTranscriptInputText,
                 timestamp: Date.now(),
-                idempotencyKey: `${params.runId}:user`,
+                idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
                 ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
               },
               target: () => {

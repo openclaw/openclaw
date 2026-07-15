@@ -47,6 +47,7 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
 } from "../sessions/session-lifecycle-admission.js";
+import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 import {
@@ -405,22 +406,26 @@ function getMessageRole(message: unknown): string | undefined {
   return typeof role === "string" ? role : undefined;
 }
 
-function findSourceTurnRange(
-  messages: readonly unknown[],
-  sourceTurnId: string,
-): { startIndex: number; endIndex: number } | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
+function findSourceTurnRange(params: {
+  continuationRunId?: string;
+  messages: readonly unknown[];
+  sourceTurnId: string;
+}): { startIndex: number; endIndex: number } | undefined {
+  const continuationTurnId = params.continuationRunId
+    ? buildRunUserTurnIdempotencyKey(params.continuationRunId)
+    : undefined;
+  for (let index = params.messages.length - 1; index >= 0; index -= 1) {
+    const message = params.messages[index];
     if (
       getMessageRole(message) === "user" &&
       message &&
       typeof message === "object" &&
       normalizeOptionalString((message as { idempotencyKey?: unknown }).idempotencyKey) ===
-        sourceTurnId
+        params.sourceTurnId
     ) {
-      let endIndex = messages.length;
-      for (let nextIndex = index + 1; nextIndex < messages.length; nextIndex += 1) {
-        const nextMessage = messages[nextIndex];
+      let endIndex = params.messages.length;
+      for (let nextIndex = index + 1; nextIndex < params.messages.length; nextIndex += 1) {
+        const nextMessage = params.messages[nextIndex];
         if (getMessageRole(nextMessage) !== "user") {
           continue;
         }
@@ -428,8 +433,13 @@ function findSourceTurnRange(
           nextMessage && typeof nextMessage === "object"
             ? normalizeOptionalString((nextMessage as { idempotencyKey?: unknown }).idempotencyKey)
             : undefined;
-        // Late media is a second persisted user message for the same logical source turn.
-        if (nextIdempotencyKey === `${sourceTurnId}:late-media`) {
+        // Late media and the exact restart continuation extend the same logical source turn.
+        if (
+          nextIdempotencyKey === `${params.sourceTurnId}:late-media` ||
+          nextIdempotencyKey === continuationTurnId ||
+          (continuationTurnId !== undefined &&
+            nextIdempotencyKey === `${continuationTurnId}:late-media`)
+        ) {
           continue;
         }
         endIndex = nextIndex;
@@ -1011,7 +1021,11 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   };
   const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
   const sourceTurnRange = sourceTurnId
-    ? findSourceTurnRange(params.messages, sourceTurnId)
+    ? findSourceTurnRange({
+        continuationRunId: expectedRecoveryRunId,
+        messages: params.messages,
+        sourceTurnId,
+      })
     : undefined;
   const toolCallId = normalizeOptionalString(params.toolCallId);
   if (toolCallId && (!sourceTurnId || sourceTurnRange === undefined)) {
@@ -1557,7 +1571,11 @@ async function recoverStore(params: {
       if (
         resumePolicy.reason !== "handled-silent" &&
         (!expectedRecoverySourceRunId ||
-          !findSourceTurnRange(messages, expectedRecoverySourceRunId))
+          !findSourceTurnRange({
+            continuationRunId: normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
+            messages,
+            sourceTurnId: expectedRecoverySourceRunId,
+          }))
       ) {
         const disposition = await failUnresumableMainSession({
           cfg: params.cfg,
