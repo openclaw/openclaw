@@ -32,6 +32,12 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   "unauthorized",
   "forbidden",
   "access denied",
+  // Claude Code CLI logged-out result text ("Not logged in · Please run
+  // /login", verbatim on v2.1.206); without this the claude-cli backend's
+  // logged-out state classifies as "unknown" and users get the generic
+  // failure copy instead of a re-auth hint (#103773).
+  "not logged in",
+  /please run \/login/i,
   "insufficient permissions",
   "insufficient permission",
   /missing scopes?:/i,

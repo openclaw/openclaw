@@ -47,13 +47,16 @@ export class OAuthRefreshFailureError extends Error {
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 // Matches the error surfaced via FailoverError when the `claude` subprocess
-// has an expired/invalid OAuth token.  The message always includes the
-// "claude-cli" provider prefix (injected by the failover layer) and the
-// literal 401 status plus Anthropic's "Invalid authentication credentials"
-// phrase, so the pattern is narrow enough to avoid false-positives from
-// unrelated provider 401 failures.
+// has an expired/invalid OAuth token or no login at all.  The message always
+// includes the "claude-cli" provider prefix (injected by the failover layer)
+// plus one of the CLI's auth-failure phrases: "Failed to authenticate" /
+// "401 Invalid authentication credentials" for expired tokens, or
+// "Not logged in · Please run /login" when the CLI session was logged out
+// (verbatim `-p --output-format json` result text on Claude Code v2.1.206),
+// so the pattern is narrow enough to avoid false-positives from unrelated
+// provider 401 failures.
 const CLAUDE_CLI_AUTH_FAILURE_RE =
-  /\bclaude-cli\b.+?\b(failed to authenticate|401\s+invalid authentication credentials)\b/is;
+  /\bclaude-cli\b.+?(\bfailed to authenticate\b|\b401\s+invalid authentication credentials\b|\bnot logged in\b.{0,20}\bplease run \/login\b)/is;
 
 function isClaudeCliExpiredOAuthMessage(message: string): boolean {
   return CLAUDE_CLI_AUTH_FAILURE_RE.test(message);
@@ -85,7 +88,9 @@ function isStructuredClaudeCliExpiredOAuthFailure(err: unknown): boolean {
   const combined = `${message}\n${rawError}`;
   const lower = combined.toLowerCase();
   return (
-    lower.includes("failed to authenticate") || lower.includes("invalid authentication credentials")
+    lower.includes("failed to authenticate") ||
+    lower.includes("invalid authentication credentials") ||
+    lower.includes("not logged in")
   );
 }
 
@@ -155,6 +160,11 @@ export function classifyOAuthRefreshFailureReason(
   if (lower.includes("expired or revoked") || lower.includes("revoked")) {
     return "revoked";
   }
+  if (lower.includes("not logged in")) {
+    // The claude subprocess emits "Not logged in · Please run /login" when its
+    // CLI session was logged out entirely (as opposed to an expired token).
+    return "sign_in_again";
+  }
   if (isClaudeCliExpiredOAuthMessage(message)) {
     // The claude subprocess emits "401 Invalid authentication credentials"
     // when its stored OAuth token has expired.  Map this to "revoked" so the
@@ -182,9 +192,12 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
   let candidate = err;
   while (candidate && typeof candidate === "object") {
     if (isStructuredClaudeCliExpiredOAuthFailure(candidate)) {
+      const message = candidate instanceof Error ? candidate.message : "";
       return {
         provider: "claude-cli",
-        reason: "revoked",
+        // Logged-out ("Not logged in") classifies as sign_in_again; expired
+        // tokens keep the historical "revoked" reason.
+        reason: classifyOAuthRefreshFailureReason(message) ?? "revoked",
       };
     }
     if (candidate instanceof OAuthRefreshFailureError) {

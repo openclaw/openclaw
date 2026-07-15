@@ -52,6 +52,12 @@ describe("Z.ai vendor error codes (#48988)", () => {
       expect(raw.length).toBeGreaterThan(512);
       expect(isBillingErrorMessage(raw)).toBe(true);
     });
+
+    it("classifies the Claude CLI logged-out result text as auth", () => {
+      // Verbatim `-p --output-format json` result text on Claude Code v2.1.206
+      // when the CLI session is logged out (#103773).
+      expect(isAuthErrorMessage("Not logged in · Please run /login")).toBe(true);
+    });
   });
 
   describe("error 1113 — wrong endpoint or invalid credentials", () => {
