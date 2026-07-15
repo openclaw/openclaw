@@ -10,7 +10,7 @@ export type RestartRecoveryTerminalDeliveryScope = {
 };
 
 function hasExactActiveClaim(
-  entry: SessionEntry | undefined,
+  entry: SessionEntry | null | undefined,
   scope: RestartRecoveryTerminalDeliveryScope,
 ): entry is SessionEntry {
   return (

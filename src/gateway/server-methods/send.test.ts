@@ -11,6 +11,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -21,8 +22,12 @@ type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").re
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
-  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
-  beginRestartRecoveryTerminalDelivery: vi.fn(async () => "started" as const),
+  appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
+    async () => ({ ok: true, sessionFile: "x", messageId: "message-x" }),
+  ),
+  beginRestartRecoveryTerminalDelivery: vi.fn<() => Promise<"started" | "blocked" | "stale">>(
+    async () => "started",
+  ),
   cancelRestartRecoveryTerminalDelivery: vi.fn(async () => "cleared" as const),
   completeRestartRecoveryTerminalDelivery: vi.fn(async () => "recorded" as const),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
@@ -2248,12 +2253,26 @@ describe("gateway send mirroring", () => {
       }),
     );
     expect(
-      expectDefined(mocks.beginRestartRecoveryTerminalDelivery.mock.invocationCallOrder[0]),
-    ).toBeLessThan(expectDefined(mocks.dispatchChannelMessageAction.mock.invocationCallOrder[0]));
-    expect(
-      expectDefined(mocks.dispatchChannelMessageAction.mock.invocationCallOrder[0]),
+      expectDefined(
+        mocks.beginRestartRecoveryTerminalDelivery.mock.invocationCallOrder[0],
+        "expected terminal intent order",
+      ),
     ).toBeLessThan(
-      expectDefined(mocks.completeRestartRecoveryTerminalDelivery.mock.invocationCallOrder[0]),
+      expectDefined(
+        mocks.dispatchChannelMessageAction.mock.invocationCallOrder[0],
+        "expected provider dispatch order",
+      ),
+    );
+    expect(
+      expectDefined(
+        mocks.dispatchChannelMessageAction.mock.invocationCallOrder[0],
+        "expected provider dispatch order",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        mocks.completeRestartRecoveryTerminalDelivery.mock.invocationCallOrder[0],
+        "expected terminal completion order",
+      ),
     );
   });
 
@@ -2798,7 +2817,7 @@ describe("gateway send mirroring", () => {
         handleAction: async () => jsonResult({ ok: true, messageId: "tg-async-1" }),
       },
     };
-    const mirrorDeferred = createDeferred<{ ok: boolean; sessionFile: string }>();
+    const mirrorDeferred = createDeferred<SessionTranscriptAppendResult>();
     mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
@@ -2841,7 +2860,7 @@ describe("gateway send mirroring", () => {
     });
     expect(respond).not.toHaveBeenCalled();
 
-    mirrorDeferred.resolve({ ok: true, sessionFile: "x" });
+    mirrorDeferred.resolve({ ok: true, sessionFile: "x", messageId: "message-async" });
     await request;
 
     expect(firstRespondCall(respond)[0]).toBe(true);
@@ -2869,7 +2888,7 @@ describe("gateway send mirroring", () => {
         handleAction: async () => jsonResult({ ok: true, messageId: "tg-ordered" }),
       },
     };
-    const firstMirrorDeferred = createDeferred<{ ok: boolean; sessionFile: string }>();
+    const firstMirrorDeferred = createDeferred<SessionTranscriptAppendResult>();
     mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
@@ -2880,7 +2899,7 @@ describe("gateway send mirroring", () => {
     );
     mocks.appendAssistantMessageToSessionTranscript
       .mockReturnValueOnce(firstMirrorDeferred.promise)
-      .mockResolvedValueOnce({ ok: true, sessionFile: "x" });
+      .mockResolvedValueOnce({ ok: true, sessionFile: "x", messageId: "message-second" });
 
     const firstRespond = vi.fn();
     const secondRespond = vi.fn();
@@ -2945,7 +2964,7 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({ text: "first visible reply" }),
     );
 
-    firstMirrorDeferred.resolve({ ok: true, sessionFile: "x" });
+    firstMirrorDeferred.resolve({ ok: true, sessionFile: "x", messageId: "message-first" });
     await first;
     await second;
 

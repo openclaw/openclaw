@@ -57,6 +57,7 @@ import {
   getToolResult,
   runMessageAction,
   type MessageActionRunResult,
+  type MessageActionRunnerGateway,
 } from "../../infra/outbound/message-action-runner.js";
 import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import {
@@ -1584,7 +1585,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       // Gateway request. Keep their authority operation-local by dispatching
       // channel actions in-process instead of laundering it through a new
       // backend connection.
-      const gateway =
+      const gateway: MessageActionRunnerGateway | undefined =
         options?.conversationReadOrigin === "direct-operator"
           ? undefined
           : {

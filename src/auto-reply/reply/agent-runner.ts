@@ -1611,14 +1611,16 @@ export async function runReplyAgent(params: {
     },
     sameChannelThreadRequired: restartRecoverySameChannelThreadRequired,
     sourceTurnId: restartRecoverySourceTurnId,
-    sourceReplyDeliveryMode: resolveSourceReplyPolicy({
-      cfg,
-      sessionCtx,
-      sessionEntry: activeSessionEntry,
-      sessionKey,
-      runtimePolicySessionKey,
-      opts,
-    }).sourceReplyDeliveryMode,
+    sourceReplyDeliveryMode: sessionKey
+      ? resolveSourceReplyPolicy({
+          cfg,
+          sessionCtx,
+          sessionEntry: activeSessionEntry,
+          sessionKey,
+          runtimePolicySessionKey,
+          opts,
+        }).sourceReplyDeliveryMode
+      : opts?.sourceReplyDeliveryMode,
     ...(storePath ? { storePath } : {}),
   });
   type SessionResetOptions = {
