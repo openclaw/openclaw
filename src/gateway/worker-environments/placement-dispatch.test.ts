@@ -653,6 +653,35 @@ describe("worker placement dispatch", () => {
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
+  it("limits requested runtime reconciliation to one environment", async () => {
+    const harness = createHarness(placementStore);
+    harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentDestroyed();
+    harness.log.length = 0;
+
+    await harness.service.reconcileActive("worker-other");
+
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
+    expect(harness.log).toEqual(["environment:reconcile"]);
+
+    await harness.service.reconcileActive(harness.ready.environmentId);
+
+    expect(harness.placements.current()).toMatchObject({ state: "reclaimed" });
+  });
+
+  it("does not retry unrelated failed teardown during requested reconciliation", async () => {
+    const harness = createHarness(placementStore, { failAt: "sync", destroyFails: true });
+    await expect(harness.service.dispatch(REQUEST)).rejects.toThrow("sync failed");
+    harness.log.length = 0;
+    vi.mocked(harness.environments.destroy).mockClear();
+
+    await harness.service.reconcileActive("worker-other");
+
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
+    expect(harness.log).toEqual(["environment:reconcile"]);
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
+
   it("fences a turn admitted immediately before runtime drain", async () => {
     const harness = createHarness(placementStore, { claimOnDrain: true });
     harness.placements.seedActive(harness.attached.ownerEpoch);

@@ -624,6 +624,31 @@ describe("gateway/node-registry", () => {
     }
   });
 
+  it("forwards the agent session that owns a stateful node invoke", async () => {
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 0,
+      sessionKey: "agent:main:canvas",
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as {
+      payload?: { id?: string; sessionKey?: string };
+    };
+
+    expect(request.payload?.sessionKey).toBe("agent:main:canvas");
+    expect(
+      registry.handleInvokeResult({
+        id: request.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+      }),
+    ).toBe(true);
+    await expect(invoke).resolves.toMatchObject({ ok: true });
+  });
+
   it("rejects zero-timeout invokes when the node disconnects", async () => {
     const registry = createNodeRegistry();
     registerNode(registry);

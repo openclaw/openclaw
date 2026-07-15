@@ -118,7 +118,10 @@ import {
 } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
+import {
+  isSlackDirectRoutedThreadTurn,
+  resolveRoutedDeliveryThreadId,
+} from "./routed-delivery-thread.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
@@ -226,18 +229,6 @@ async function updateRoomEventAmbientTranscriptWatermark(params: {
     timestampMs: params.sessionCtx.AmbientTranscriptTimestampMs,
     expectedSessionId: params.expectedSessionId,
   });
-}
-
-function isSlackDirectRoutedThreadTurn(ctx: MsgContext): boolean {
-  if (normalizeChatType(ctx.ChatType) !== "direct") {
-    return false;
-  }
-  if (ctx.MessageThreadId == null && ctx.TransportThreadId == null) {
-    return false;
-  }
-  return [ctx.Provider, ctx.Surface, ctx.OriginatingChannel].some(
-    (value) => normalizeOptionalString(value)?.toLowerCase() === "slack",
-  );
 }
 
 function resolvePromptSilentReplyConversationType(params: {
@@ -1516,7 +1507,7 @@ export async function runPreparedReply(
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     queuedLifecycle: opts?.queuedFollowupLifecycle,
-    onFollowupAdmissionWaitChange: opts?.onFollowupAdmissionWaitChange,
+    onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
