@@ -82,24 +82,15 @@ async function loadBootFile(
 
   // Resolve symlinks so BOOT.md can be a readable symlink to a regular file
   // while keeping directory/permission/size-limit failures surfaced to the
-  // operator. Broken symlinks are treated as failures, not missing.
+  // operator. A realpath ENOENT (missing BOOT.md or a dangling symlink) keeps
+  // the established readFile ENOENT contract: treat as missing, not failure.
   let resolvedPath: string;
   try {
     resolvedPath = await fs.realpath(bootPath);
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code === "ENOENT") {
-      // Distinguish a genuinely missing BOOT.md from a broken symlink or path
-      // race: if lstat sees the path, realpath failed for a real reason.
-      try {
-        await fs.lstat(bootPath);
-      } catch (lstatErr) {
-        const lstatAnyErr = lstatErr as { code?: string };
-        if (lstatAnyErr.code === "ENOENT") {
-          return { status: "missing" };
-        }
-        throw lstatErr;
-      }
+      return { status: "missing" };
     }
     throw err;
   }

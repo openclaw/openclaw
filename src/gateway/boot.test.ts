@@ -214,6 +214,24 @@ describe("runBootOnce", () => {
       expect(call.message).toContain("Say hello.");
     });
   });
+
+  it("skips when BOOT.md is a dangling symlink", async () => {
+    if (process.platform === "win32") {
+      // Symlink support in unit tests is not guaranteed on Windows CI runners.
+      return;
+    }
+    await withBootWorkspace({ bootContent: "" }, async (workspaceDir) => {
+      const bootPath = path.join(workspaceDir, "BOOT.md");
+      const targetPath = path.join(workspaceDir, "MISSING_BOOT.md");
+      await fs.rm(bootPath, { force: true });
+      await fs.symlink(targetPath, bootPath);
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "skipped",
+        reason: "missing",
+      });
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
   it.each([
     { title: "empty", content: "   \n", reason: "empty" as const },
     { title: "whitespace-only", content: "\n\t ", reason: "empty" as const },
