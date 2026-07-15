@@ -63,6 +63,7 @@ import {
   type NormalizedUsage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { getSharedClaudeAppServerClient, type ClaudeAppServerClient } from "./client.js";
 import { resolveClaudeAppServerConfig, type ResolvedClaudeAppServerConfig } from "./config.js";
@@ -223,7 +224,12 @@ export async function runClaudeAppServerAttempt(
       excludeNames: cfg.dynamicTools.excludeNames,
       hookContext: sharedHookContext,
     });
-    unregisterServerRequest = registerToolCallHandler(client, bridge, turnIdentity);
+    unregisterServerRequest = registerToolCallHandler(client, bridge, turnIdentity, {
+      agentId: sharedHookContext.agentId,
+      runId: sharedHookContext.runId,
+      sessionId: sharedHookContext.sessionId,
+      sessionKey: sharedHookContext.sessionKey,
+    });
     // Register a parallel handler for native-tool approval requests
     // (item/commandExecution/requestApproval, item/fileChange/requestApproval)
     // so the SDK's claude_code preset tools (Bash/Read/Edit/etc.) go through
@@ -807,10 +813,12 @@ function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
 
 // ─── Server-request handler registration ────────────────────────────────────
 
-function registerToolCallHandler(
+/** Exported for unit testing (see run-attempt.diagnostics.test.ts). */
+export function registerToolCallHandler(
   client: ClaudeAppServerClient,
   bridge: ClaudeDynamicToolBridge,
   turnIdentity: { threadId?: string; turnId?: string },
+  identity: { agentId?: string; runId?: string; sessionId?: string; sessionKey?: string },
 ): () => void {
   return client.onServerRequest(async (req) => {
     if (req.method !== "item/tool/call") {
@@ -839,8 +847,48 @@ function registerToolCallHandler(
     if (call.turnId !== turnIdentity.turnId) {
       return undefined;
     }
-    const response = await bridge.handleToolCall(call);
-    return response as unknown as JsonValue;
+    // Feed the gateway's stalled-session watchdog (src/logging/diagnostic-run-activity.ts
+    // touches lastProgressAt on tool.execution.*). Without this, a turn doing many
+    // sequential dynamic tool calls with little/no intervening assistant text never
+    // refreshes its progress marker past the initial embedded_run:started touch, making
+    // a genuinely busy turn indistinguishable from a hang (openclaw-7f5).
+    const startedAt = Date.now();
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.started",
+      agentId: identity.agentId,
+      runId: identity.runId,
+      sessionId: identity.sessionId,
+      sessionKey: identity.sessionKey,
+      toolName: call.tool,
+      toolCallId: call.callId,
+    });
+    try {
+      const response = await bridge.handleToolCall(call);
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.completed",
+        agentId: identity.agentId,
+        runId: identity.runId,
+        sessionId: identity.sessionId,
+        sessionKey: identity.sessionKey,
+        toolName: call.tool,
+        toolCallId: call.callId,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      });
+      return response as unknown as JsonValue;
+    } catch (error) {
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.error",
+        agentId: identity.agentId,
+        runId: identity.runId,
+        sessionId: identity.sessionId,
+        sessionKey: identity.sessionKey,
+        toolName: call.tool,
+        toolCallId: call.callId,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        errorCategory: "claude_dynamic_tool_error",
+      });
+      throw error;
+    }
   });
 }
 
@@ -1056,178 +1104,218 @@ async function runTurn(
   // runTurn keeps the promise + idle timer + unsubscribe lifecycle only.
   const projector = new ClaudeAppServerEventProjector(turnId, acc, params, hookContext);
 
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let unsubscribe: () => void = () => {};
-    let unsubscribeExit: () => void = () => {};
-    let idleTimer: ReturnType<typeof setTimeout> | null = null;
-    // Codex-consistent progress watch (createClaudeProgressWatch): advances only on
-    // REAL activity, suppresses itself while turn items are in flight, and fires a
-    // no-progress stall before the hard ceiling. Assigned after cleanup/reject are in
-    // scope; cleanup() disposes it.
-    let progressWatch: ClaudeProgressWatch | null = null;
+  // Feed the gateway's stalled-session watchdog for the whole turn (model call +
+  // tool loop), in addition to the tool.execution.* events registerToolCallHandler
+  // emits per dynamic tool call. Turns with no dynamic tool calls at all (pure
+  // reasoning/text) would otherwise never refresh the progress marker past the
+  // initial embedded_run:started touch (openclaw-7f5).
+  const modelCallStartedAt = Date.now();
+  emitTrustedDiagnosticEvent({
+    type: "model.call.started",
+    runId: params.runId,
+    callId: turnId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    provider: params.provider,
+    model: params.modelId,
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let unsubscribe: () => void = () => {};
+      let unsubscribeExit: () => void = () => {};
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      // Codex-consistent progress watch (createClaudeProgressWatch): advances only on
+      // REAL activity, suppresses itself while turn items are in flight, and fires a
+      // no-progress stall before the hard ceiling. Assigned after cleanup/reject are in
+      // scope; cleanup() disposes it.
+      let progressWatch: ClaudeProgressWatch | null = null;
 
-    // Mirrors `turn/progress {kind:"subagentActivity"}` into a real OpenClaw
-    // task record — see subagent-task-mirror.ts. Only available when the host
-    // supplied a task-runtime scope (absent for e.g. cron/one-shot runs with
-    // no sessionKey); best-effort visibility, never gates turn execution.
-    const subagentTaskMirror = params.agentHarnessTaskRuntimeScope
-      ? new ClaudeNativeSubagentTaskMirror(
-          { threadId, turnId, agentId: hookContext.agentId },
-          createAgentHarnessTaskRuntime({
-            runtime: "subagent",
-            taskKind: "claude-native",
-            scope: params.agentHarnessTaskRuntimeScope,
-            runIdPrefix: "claude-subagent:",
-          }),
-        )
-      : null;
+      // Mirrors `turn/progress {kind:"subagentActivity"}` into a real OpenClaw
+      // task record — see subagent-task-mirror.ts. Only available when the host
+      // supplied a task-runtime scope (absent for e.g. cron/one-shot runs with
+      // no sessionKey); best-effort visibility, never gates turn execution.
+      const subagentTaskMirror = params.agentHarnessTaskRuntimeScope
+        ? new ClaudeNativeSubagentTaskMirror(
+            { threadId, turnId, agentId: hookContext.agentId },
+            createAgentHarnessTaskRuntime({
+              runtime: "subagent",
+              taskKind: "claude-native",
+              scope: params.agentHarnessTaskRuntimeScope,
+              runIdPrefix: "claude-subagent:",
+            }),
+          )
+        : null;
 
-    const cleanup = (subagentOutcome: "succeeded" | "failed" | "cancelled" = "cancelled") => {
-      if (idleTimer) {
-        clearTimeout(idleTimer);
-      }
-      idleTimer = null;
-      progressWatch?.dispose();
-      ac.signal.removeEventListener("abort", onAbort);
-      unsubscribe();
-      unsubscribeExit();
-      subagentTaskMirror?.finalize(subagentOutcome);
-    };
-    const onAbort = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      projector.markSettled();
-      cleanup("cancelled");
-      client.request("turn/interrupt", { threadId, turnId }).catch(() => {});
-      reject(new Error("Turn aborted"));
-    };
-    ac.signal.addEventListener("abort", onAbort, { once: true });
-
-    const resetIdleTimer = () => {
-      if (idleTimer) {
-        clearTimeout(idleTimer);
-      }
-      idleTimer = setTimeout(() => {
+      const cleanup = (subagentOutcome: "succeeded" | "failed" | "cancelled" = "cancelled") => {
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+        }
+        idleTimer = null;
+        progressWatch?.dispose();
+        ac.signal.removeEventListener("abort", onAbort);
+        unsubscribe();
+        unsubscribeExit();
+        subagentTaskMirror?.finalize(subagentOutcome);
+      };
+      const onAbort = () => {
         if (settled) {
           return;
         }
         settled = true;
         projector.markSettled();
-        cleanup();
+        cleanup("cancelled");
         client.request("turn/interrupt", { threadId, turnId }).catch(() => {});
-        reject(new IdleTimeoutError(`Claude turn idle for ${cfg.appServer.turnIdleTimeoutMs}ms`));
-      }, cfg.appServer.turnIdleTimeoutMs);
-      idleTimer.unref?.();
-    };
+        reject(new Error("Turn aborted"));
+      };
+      ac.signal.addEventListener("abort", onAbort, { once: true });
 
-    progressWatch = createClaudeProgressWatch({
-      timeoutMs: cfg.appServer.progressIdleTimeoutMs,
-      subagentTimeoutMs: cfg.appServer.subagentProgressIdleTimeoutMs,
-      isSettled: () => settled,
-      onStall: ({ idleMs, openItems }) => {
+      const resetIdleTimer = () => {
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+        }
+        idleTimer = setTimeout(() => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          projector.markSettled();
+          cleanup();
+          client.request("turn/interrupt", { threadId, turnId }).catch(() => {});
+          reject(new IdleTimeoutError(`Claude turn idle for ${cfg.appServer.turnIdleTimeoutMs}ms`));
+        }, cfg.appServer.turnIdleTimeoutMs);
+        idleTimer.unref?.();
+      };
+
+      progressWatch = createClaudeProgressWatch({
+        timeoutMs: cfg.appServer.progressIdleTimeoutMs,
+        subagentTimeoutMs: cfg.appServer.subagentProgressIdleTimeoutMs,
+        isSettled: () => settled,
+        onStall: ({ idleMs, openItems }) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          projector.markSettled();
+          cleanup();
+          embeddedAgentLog.warn("claude-bridge: turn made no progress; tearing down", {
+            sessionId: params.sessionId,
+            turnId,
+            progressIdleTimeoutMs: cfg.appServer.progressIdleTimeoutMs,
+            openItems,
+            idleMs,
+          });
+          client.request("turn/interrupt", { threadId, turnId }).catch(() => {});
+          reject(
+            new IdleTimeoutError(
+              `Claude turn made no progress for ${cfg.appServer.progressIdleTimeoutMs}ms with no work in flight`,
+            ),
+          );
+        },
+      });
+
+      // If the shared bridge child dies (crash or forced restart) mid-turn, fail
+      // fast with the real exit cause instead of waiting out the idle watchdog and
+      // reporting a misleading "model idle timeout". A plain Error here (not
+      // IdleTimeoutError) so the catch maps it to promptError, not idleTimedOut.
+      unsubscribeExit = client.onExit((error) => {
         if (settled) {
           return;
         }
         settled = true;
         projector.markSettled();
-        cleanup();
-        embeddedAgentLog.warn("claude-bridge: turn made no progress; tearing down", {
-          sessionId: params.sessionId,
-          turnId,
-          progressIdleTimeoutMs: cfg.appServer.progressIdleTimeoutMs,
-          openItems,
-          idleMs,
-        });
-        client.request("turn/interrupt", { threadId, turnId }).catch(() => {});
-        reject(
-          new IdleTimeoutError(
-            `Claude turn made no progress for ${cfg.appServer.progressIdleTimeoutMs}ms with no work in flight`,
-          ),
-        );
-      },
-    });
+        cleanup("failed");
+        reject(new Error(`Claude bridge exited mid-turn: ${error.message}`));
+      });
 
-    // If the shared bridge child dies (crash or forced restart) mid-turn, fail
-    // fast with the real exit cause instead of waiting out the idle watchdog and
-    // reporting a misleading "model idle timeout". A plain Error here (not
-    // IdleTimeoutError) so the catch maps it to promptError, not idleTimedOut.
-    unsubscribeExit = client.onExit((error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      projector.markSettled();
-      cleanup("failed");
-      reject(new Error(`Claude bridge exited mid-turn: ${error.message}`));
-    });
-
-    unsubscribe = client.onNotification((notif) => {
-      // Reset idle timer only for notifications matching THIS turn — stray
-      // notifications for other turns on the shared client shouldn't extend
-      // our deadline.
-      if (projector.matchesTurn(notif)) {
-        resetIdleTimer();
-        // Advance the progress watch on REAL activity only. The bridge's periodic
-        // keepalive (turn/progress {kind:"heartbeat"}) must NOT count as progress, or
-        // a hung turn would never be torn down before the hard ceiling. Track open
-        // turn items so the watch suppresses itself while a tool/subagent is running.
-        if (notif.method === "turn/progress") {
-          const kind = (notif.params as { kind?: unknown } | undefined)?.kind;
-          if (kind === "subagentActivity") {
-            subagentTaskMirror?.noteActivity();
+      unsubscribe = client.onNotification((notif) => {
+        // Reset idle timer only for notifications matching THIS turn — stray
+        // notifications for other turns on the shared client shouldn't extend
+        // our deadline.
+        if (projector.matchesTurn(notif)) {
+          resetIdleTimer();
+          // Advance the progress watch on REAL activity only. The bridge's periodic
+          // keepalive (turn/progress {kind:"heartbeat"}) must NOT count as progress, or
+          // a hung turn would never be torn down before the hard ceiling. Track open
+          // turn items so the watch suppresses itself while a tool/subagent is running.
+          if (notif.method === "turn/progress") {
+            const kind = (notif.params as { kind?: unknown } | undefined)?.kind;
+            if (kind === "subagentActivity") {
+              subagentTaskMirror?.noteActivity();
+            } else {
+              progressWatch?.noteProgress();
+              // Real (non-heartbeat, non-subagentActivity) progress means any
+              // subagent that was silently running has finished — see
+              // subagent-task-mirror.ts.
+              if (kind !== "heartbeat") subagentTaskMirror?.finalize("succeeded");
+            }
+          } else if (notif.method === "item/started") {
+            progressWatch?.noteItemStarted();
+            subagentTaskMirror?.finalize("succeeded");
+          } else if (notif.method === "item/completed") {
+            progressWatch?.noteItemCompleted();
+            subagentTaskMirror?.finalize("succeeded");
+            // If the completed item is a native subagent (Agent/Task), its real
+            // execution begins NOW and runs silently on this SDK version — engage
+            // the wider subagent budget until the next genuine progress note. This
+            // is the consumer-side belt-and-suspenders; bridge >= 0.2.16 also
+            // emits `subagentActivity` progress that keeps the watch alive
+            // directly, making this a no-op widening in the common case.
+            const completedItem = (notif.params as { item?: Record<string, unknown> } | undefined)
+              ?.item;
+            if (completedItem) {
+              const itemName = extractItemName(completedItem);
+              if (itemName && NATIVE_SUBAGENT_TOOL_NAMES.has(itemName)) {
+                progressWatch?.noteSubagentDispatched();
+              }
+            }
           } else {
             progressWatch?.noteProgress();
-            // Real (non-heartbeat, non-subagentActivity) progress means any
-            // subagent that was silently running has finished — see
-            // subagent-task-mirror.ts.
-            if (kind !== "heartbeat") subagentTaskMirror?.finalize("succeeded");
+            subagentTaskMirror?.finalize("succeeded");
           }
-        } else if (notif.method === "item/started") {
-          progressWatch?.noteItemStarted();
-          subagentTaskMirror?.finalize("succeeded");
-        } else if (notif.method === "item/completed") {
-          progressWatch?.noteItemCompleted();
-          subagentTaskMirror?.finalize("succeeded");
-          // If the completed item is a native subagent (Agent/Task), its real
-          // execution begins NOW and runs silently on this SDK version — engage
-          // the wider subagent budget until the next genuine progress note. This
-          // is the consumer-side belt-and-suspenders; bridge >= 0.2.16 also
-          // emits `subagentActivity` progress that keeps the watch alive
-          // directly, making this a no-op widening in the common case.
-          const completedItem = (notif.params as { item?: Record<string, unknown> } | undefined)
-            ?.item;
-          if (completedItem) {
-            const itemName = extractItemName(completedItem);
-            if (itemName && NATIVE_SUBAGENT_TOOL_NAMES.has(itemName)) {
-              progressWatch?.noteSubagentDispatched();
-            }
-          }
-        } else {
-          progressWatch?.noteProgress();
-          subagentTaskMirror?.finalize("succeeded");
         }
-      }
-      const outcome = projector.processNotification(notif);
-      if (!outcome) {
-        return;
-      }
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup(outcome.kind === "failed" ? "failed" : "succeeded");
-      if (outcome.kind === "failed") {
-        reject(outcome.error);
-      } else {
-        resolve();
-      }
+        const outcome = projector.processNotification(notif);
+        if (!outcome) {
+          return;
+        }
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup(outcome.kind === "failed" ? "failed" : "succeeded");
+        if (outcome.kind === "failed") {
+          reject(outcome.error);
+        } else {
+          resolve();
+        }
+      });
+      resetIdleTimer();
+      progressWatch.arm();
     });
-    resetIdleTimer();
-    progressWatch.arm();
-  });
+    emitTrustedDiagnosticEvent({
+      type: "model.call.completed",
+      runId: params.runId,
+      callId: turnId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      provider: params.provider,
+      model: params.modelId,
+      durationMs: Math.max(0, Date.now() - modelCallStartedAt),
+    });
+  } catch (error) {
+    emitTrustedDiagnosticEvent({
+      type: "model.call.error",
+      runId: params.runId,
+      callId: turnId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      provider: params.provider,
+      model: params.modelId,
+      durationMs: Math.max(0, Date.now() - modelCallStartedAt),
+      errorCategory: "claude_turn_error",
+    });
+    throw error;
+  }
 
   projector.finalize();
   return acc;
