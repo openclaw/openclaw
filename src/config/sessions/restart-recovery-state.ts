@@ -315,7 +315,7 @@ export function normalizeRestartRecoveryEntryFields(
   );
 }
 
-export function mergeRestartRecoveryTerminalDeliveryEvidence(
+function mergeRestartRecoveryTerminalDeliveryEvidence(
   current: unknown,
   appended: unknown,
 ): RestartRecoveryTerminalDeliveryEvidence[] | undefined {

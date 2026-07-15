@@ -267,7 +267,7 @@ function startPendingSessionDeliveryRuntime(params: {
       }
       const logRecovery = params.log.child("session-delivery-recovery");
       stopRuntime = startSessionDeliveryRuntime({
-        deliver: (entry, context) =>
+        deliver: (entry, context = {}) =>
           deliverQueuedSessionDelivery({
             deps: params.deps,
             entry,

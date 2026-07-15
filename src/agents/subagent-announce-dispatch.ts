@@ -6,7 +6,7 @@
  */
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
 /** Stable reasons an announcement delivery can fail without throwing. */
-export type SubagentAnnounceDeliveryFailureReason =
+type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
   | "completion_handoff_unavailable"
   | "generated_media_missing"

@@ -1,5 +1,5 @@
 // Persists queued session deliveries for retry and recovery.
-import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { SourceReplyDeliveryMode } from "../auto-reply/source-reply-delivery-mode.types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { sha256Hex } from "./crypto-digest.js";

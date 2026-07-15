@@ -1,7 +1,6 @@
 /**
  * Extracts visible delivery evidence from embedded-agent run results.
  */
-import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
 import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
 
 /**
@@ -235,64 +234,6 @@ export function collectMessagingToolDeliveredMediaUrls(
     }
   }
   return Array.from(urls);
-}
-
-type DeliveryEvidenceTarget = {
-  channel?: string;
-  accountId?: string;
-  to?: string;
-  threadId?: string | number;
-};
-
-function normalizeDeliveryEvidenceThreadId(value: unknown): string | undefined {
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  return typeof value === "number" && Number.isFinite(value) ? String(value) : undefined;
-}
-
-function matchingMessagingToolTargets(
-  result: Pick<AgentDeliveryEvidence, "messagingToolSentTargets">,
-  deliveryTarget: DeliveryEvidenceTarget,
-): Record<string, unknown>[] {
-  if (!Array.isArray(result.messagingToolSentTargets)) {
-    return [];
-  }
-  return result.messagingToolSentTargets.flatMap((target) => {
-    if (!target || typeof target !== "object" || Array.isArray(target)) {
-      return [];
-    }
-    const record = target as Record<string, unknown>;
-    const normalizedTarget = {
-      provider: typeof record.provider === "string" ? record.provider : undefined,
-      accountId: typeof record.accountId === "string" ? record.accountId : undefined,
-      to: typeof record.to === "string" ? record.to : undefined,
-      threadId: normalizeDeliveryEvidenceThreadId(record.threadId),
-      threadImplicit: record.threadImplicit === true,
-      threadSuppressed: record.threadSuppressed === true,
-    };
-    return sourceDeliveryTargetsMatch(normalizedTarget, deliveryTarget) ? [record] : [];
-  });
-}
-
-/** Collect messaging-tool media proven sent to the exact queued route. */
-export function collectMessagingToolDeliveredMediaUrlsForTarget(
-  result: Pick<AgentDeliveryEvidence, "messagingToolSentTargets">,
-  deliveryTarget: DeliveryEvidenceTarget,
-): string[] {
-  return collectMessagingToolDeliveredMediaUrls({
-    messagingToolSentTargets: matchingMessagingToolTargets(result, deliveryTarget),
-  });
-}
-
-/** Check visible message-tool evidence only for the exact queued route. */
-export function hasVisibleCommittedMessagingToolDeliveryEvidenceForTarget(
-  result: Pick<AgentDeliveryEvidence, "messagingToolSentTargets">,
-  deliveryTarget: DeliveryEvidenceTarget,
-): boolean {
-  return hasVisibleCommittedMessagingToolDeliveryEvidence({
-    messagingToolSentTargets: matchingMessagingToolTargets(result, deliveryTarget),
-  });
 }
 
 function collectPayloadOutcomeMediaUrls(

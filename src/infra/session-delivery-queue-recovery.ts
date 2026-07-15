@@ -40,7 +40,7 @@ type SessionDeliveryRecoverySummary = {
 
 export type DeliverSessionDeliveryFn = (
   entry: QueuedSessionDelivery,
-  context: { stateDir?: string },
+  context?: { stateDir?: string },
 ) => Promise<void>;
 export type SettleSessionDeliveryFn = (
   entry: QueuedSessionDelivery,

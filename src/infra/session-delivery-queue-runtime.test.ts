@@ -6,8 +6,8 @@ import {
   schedulePendingSessionDeliveries,
   scheduleSessionDelivery,
   startSessionDeliveryRuntime,
-  testing,
 } from "./session-delivery-queue-runtime.js";
+import { testing } from "./session-delivery-queue-runtime.test-support.js";
 import {
   drainPendingSessionDeliveries,
   enqueueClaimedSessionDelivery,

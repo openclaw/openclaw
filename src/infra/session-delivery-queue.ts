@@ -2,7 +2,6 @@
 // modules, callers import the stable aggregate API from here.
 export {
   advanceSessionDeliveryAgentRun,
-  completeSessionDelivery,
   deferSessionDelivery,
   enqueueClaimedSessionDelivery,
   enqueueSessionDelivery,
@@ -11,10 +10,8 @@ export {
   loadPendingSessionDelivery,
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
-  moveSessionDeliveryToFailed,
   releaseSessionDeliveryClaim,
   SessionDeliveryDeadLetteredError,
-  SessionDeliveryAttemptStartError,
   SessionDeliveryDeferredError,
   SessionDeliveryRetryChargedError,
   SessionDeliverySafeRetryError,
@@ -23,7 +20,6 @@ export type {
   QueuedSessionDelivery,
   QueuedSessionDeliveryPayload,
   SessionDeliveryRoute,
-  SessionDeliverySettledOutcome,
 } from "./session-delivery-queue-storage.js";
 export {
   drainPendingSessionDeliveries,

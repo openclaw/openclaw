@@ -18,14 +18,6 @@ import type { DeliveryContext } from "../utils/delivery-context.js";
 
 const log = createSubsystemLogger("agents/generated-media-direct-delivery-wake");
 
-type GeneratedMediaDirectDeliveryWakeDeps = {
-  enqueueSystemEvent: typeof enqueueSystemEvent;
-  requestHeartbeat: typeof requestHeartbeat;
-};
-
-const defaultDeps: GeneratedMediaDirectDeliveryWakeDeps = { enqueueSystemEvent, requestHeartbeat };
-let deps: GeneratedMediaDirectDeliveryWakeDeps = defaultDeps;
-
 function buildDirectDeliveryWakeText(mediaLabel: string, status: "ok" | "error"): string {
   if (status === "error") {
     return [
@@ -59,7 +51,7 @@ export function wakeSessionForGeneratedMediaDirectDelivery(params: {
       channel: params.deliveryContext?.channel,
       accountId: params.deliveryContext?.accountId,
     });
-    deps.enqueueSystemEvent(buildDirectDeliveryWakeText(params.mediaLabel, params.status), {
+    enqueueSystemEvent(buildDirectDeliveryWakeText(params.mediaLabel, params.status), {
       sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
       contextKey: params.contextKey,
       deliveryContext: params.deliveryContext,
@@ -67,7 +59,7 @@ export function wakeSessionForGeneratedMediaDirectDelivery(params: {
     if (isSubagentSessionKey(sessionKey)) {
       return;
     }
-    deps.requestHeartbeat(
+    requestHeartbeat(
       scopedHeartbeatWakeOptionsForPolicy(
         sessionKey,
         {
@@ -86,9 +78,3 @@ export function wakeSessionForGeneratedMediaDirectDelivery(params: {
     });
   }
 }
-
-export const testing = {
-  setDepsForTest(overrides?: Partial<GeneratedMediaDirectDeliveryWakeDeps>) {
-    deps = overrides ? { ...defaultDeps, ...overrides } : defaultDeps;
-  },
-};

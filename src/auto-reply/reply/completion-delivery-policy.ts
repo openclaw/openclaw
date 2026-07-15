@@ -3,12 +3,12 @@ import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import type { SourceReplyDeliveryMode } from "../source-reply-delivery-mode.types.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
 type CompletionChatType = ChatType | "unknown";
 
-export type DurableCompletionDeliveryMode = "automatic" | "host_owned";
+type DurableCompletionDeliveryMode = "automatic" | "host_owned";
 
 type CompletionDeliverySessionEntry = {
   chatType?: string | null;

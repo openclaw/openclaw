@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   collectAutomaticDeliveredMediaUrls,
   collectDeliveredMediaUrls,
-  collectMessagingToolDeliveredMediaUrlsForTarget,
   hasCompleteAutomaticMediaDeliveryOutcomeEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
   hasUnaccountedMessagingToolAggregateEvidence,
@@ -166,24 +165,6 @@ describe("collectDeliveredMediaUrls attachment recursion", () => {
 });
 
 describe("queued delivery evidence", () => {
-  it("matches numeric messaging-tool thread IDs against the queued route", () => {
-    expect(
-      collectMessagingToolDeliveredMediaUrlsForTarget(
-        {
-          messagingToolSentTargets: [
-            {
-              provider: "telegram",
-              to: "chat:123",
-              threadId: 42,
-              mediaUrls: ["/tmp/proof.png"],
-            },
-          ],
-        },
-        { channel: "telegram", to: "chat:123", threadId: 42 },
-      ),
-    ).toEqual(["/tmp/proof.png"]);
-  });
-
   it("requires exact per-payload evidence before retrying a partial media send", () => {
     const payloads = [{ text: "sent" }, { mediaUrls: ["/tmp/proof.png"] }];
     expect(

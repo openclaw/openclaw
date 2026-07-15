@@ -1,17 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  testing,
-  wakeSessionForGeneratedMediaDirectDelivery,
-} from "./generated-media-direct-delivery-wake.js";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
+import { wakeSessionForGeneratedMediaDirectDelivery } from "./generated-media-direct-delivery-wake.js";
 
-afterEach(() => testing.setDepsForTest());
+const { enqueueSystemEvent, requestHeartbeat } = vi.hoisted(() => ({
+  enqueueSystemEvent: vi.fn(() => true),
+  requestHeartbeat: vi.fn(),
+}));
+
+vi.mock("../infra/system-events.js", () => ({ enqueueSystemEvent }));
+vi.mock("../infra/heartbeat-wake.js", async () =>
+  mergeMockedModule(
+    await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+      "../infra/heartbeat-wake.js",
+    ),
+    () => ({ requestHeartbeat }),
+  ),
+);
+
+afterEach(() => {
+  enqueueSystemEvent.mockReset();
+  enqueueSystemEvent.mockReturnValue(true);
+  requestHeartbeat.mockReset();
+});
 
 describe("wakeSessionForGeneratedMediaDirectDelivery", () => {
   it("continues the owning session after emergency direct delivery", () => {
-    const enqueueSystemEvent = vi.fn(() => true);
-    const requestHeartbeat = vi.fn();
-    testing.setDepsForTest({ enqueueSystemEvent, requestHeartbeat });
-
     wakeSessionForGeneratedMediaDirectDelivery({
       sessionKey: "agent:main:discord:channel:123",
       mediaLabel: "image",
@@ -33,10 +46,8 @@ describe("wakeSessionForGeneratedMediaDirectDelivery", () => {
   });
 
   it("never throws when the emergency wake cannot be queued", () => {
-    testing.setDepsForTest({
-      enqueueSystemEvent: vi.fn(() => {
-        throw new Error("queue unavailable");
-      }),
+    enqueueSystemEvent.mockImplementation(() => {
+      throw new Error("queue unavailable");
     });
 
     expect(() =>
