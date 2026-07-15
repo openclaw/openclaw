@@ -2,8 +2,6 @@
 // New entries fail CI. After deleting dead code, run `pnpm deadcode:exports:update`.
 // Do not add entries to avoid fixing new findings.
 export const KNIP_UNUSED_EXPORT_BASELINE = [
-  "src/acp/control-plane/active-turns.ts: resetAcpActiveTurnsForTests",
-  "src/acp/runtime/registry.ts: AcpRuntimeBackend",
   "src/agents/agent-hooks/compaction-safeguard.ts: testing",
   "src/agents/agent-tools.before-tool-call.ts: BeforeToolCallBlockedError",
   "src/agents/agent-tools.before-tool-call.ts: testing",
