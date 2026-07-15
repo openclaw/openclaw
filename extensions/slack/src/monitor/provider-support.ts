@@ -2,6 +2,7 @@
 import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
+import type { SlackIdentityHealth } from "./enterprise-install.js";
 import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
 
 type SlackAppConstructor = typeof import("@slack/bolt").App;
@@ -188,28 +189,15 @@ export function resolveSlackBoltInterop(params: {
 
 export function publishSlackConnectedStatus(
   setStatus?: (next: Record<string, unknown>) => void,
-  options?: { degraded?: boolean; error?: string },
+  identityHealth: SlackIdentityHealth = { healthState: "healthy", lastError: null },
 ) {
   if (!setStatus) {
     return;
   }
-  const now = Date.now();
-  if (options?.degraded) {
-    // Socket/HTTP may be up while auth.test failed or bot identity is missing.
-    // Keep connected=true for transport liveness, but never advertise healthy.
-    setStatus({
-      connected: true,
-      lastConnectedAt: now,
-      healthState: "degraded",
-      lastError: options.error ?? "slack auth identity unavailable",
-    });
-    return;
-  }
   setStatus({
     connected: true,
-    lastConnectedAt: now,
-    healthState: "healthy",
-    lastError: null,
+    lastConnectedAt: Date.now(),
+    ...identityHealth,
   });
 }
 
