@@ -566,7 +566,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         ref: "${{ needs.preflight.outputs.checkout_revision }}",
         shared_image_artifact_namespace: "plugin-prerelease",
         shared_image_policy: "no-push-artifact",
-        targeted_docker_lane_group_size: 4,
+        targeted_docker_lane_group_size: 2,
       },
     });
     expect(dockerSuite.secrets).toBeUndefined();
