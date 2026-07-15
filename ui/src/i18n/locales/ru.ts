@@ -1623,6 +1623,8 @@ export const ru: TranslationMap = {
     attachSession: "Подключиться к сеансу",
     attachFailed: "Не удалось подключиться к сеансу терминала",
     starting: "Starting terminal…",
+    connecting: "Подключение к сеансу…",
+    connectionTimedOut: "Не удалось подключиться к сеансу в течение 30 секунд.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

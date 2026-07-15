@@ -1602,6 +1602,8 @@ export const hi: TranslationMap = {
     attachSession: "सत्र संलग्न करें",
     attachFailed: "टर्मिनल सत्र संलग्न नहीं किया जा सका",
     starting: "Starting terminal…",
+    connecting: "सत्र से कनेक्ट किया जा रहा है…",
+    connectionTimedOut: "सत्र 30 सेकंड के भीतर कनेक्ट नहीं हुआ।",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

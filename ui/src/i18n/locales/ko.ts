@@ -1606,6 +1606,8 @@ export const ko: TranslationMap = {
     attachSession: "세션 연결",
     attachFailed: "터미널 세션을 연결할 수 없습니다",
     starting: "Starting terminal…",
+    connecting: "세션에 연결하는 중…",
+    connectionTimedOut: "30초 이내에 세션에 연결하지 못했습니다.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

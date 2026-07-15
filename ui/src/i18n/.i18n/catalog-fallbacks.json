@@ -1,50 +1,5 @@
 {
-  "fallbacks": {
-    "terminal.connecting": [
-      "ar",
-      "de",
-      "es",
-      "fa",
-      "fr",
-      "hi",
-      "id",
-      "it",
-      "ja-JP",
-      "ko",
-      "nl",
-      "pl",
-      "pt-BR",
-      "ru",
-      "th",
-      "tr",
-      "uk",
-      "vi",
-      "zh-CN",
-      "zh-TW"
-    ],
-    "terminal.connectionTimedOut": [
-      "ar",
-      "de",
-      "es",
-      "fa",
-      "fr",
-      "hi",
-      "id",
-      "it",
-      "ja-JP",
-      "ko",
-      "nl",
-      "pl",
-      "pt-BR",
-      "ru",
-      "th",
-      "tr",
-      "uk",
-      "vi",
-      "zh-CN",
-      "zh-TW"
-    ]
-  },
+  "fallbacks": {},
   "sourceHash": "dc6d0f7bdb69960a5b9d54c5743445b89b0689913b3f962829f8490dede56d2c",
   "version": 1
 }

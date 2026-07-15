@@ -20,6 +20,7 @@ import {
   validateTerminalTextParams,
   validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
@@ -74,15 +75,11 @@ function createTerminalOpenDeadline(): TerminalOpenDeadline {
   };
 }
 
-function terminalOpenRejection(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
 function expireTerminalOpenDeadline(deadline: TerminalOpenDeadline): Error {
   if (!deadline.controller.signal.aborted) {
     deadline.controller.abort(new TerminalOpenDeadlineError());
   }
-  return terminalOpenRejection(deadline.controller.signal.reason);
+  return toErrorObject(deadline.controller.signal.reason, "Terminal open timed out");
 }
 
 async function waitForTerminalOpenDeadline<T>(
@@ -112,7 +109,7 @@ async function waitForTerminalOpenDeadline<T>(
       }
       clearTimeout(timer);
       deadline.controller.signal.removeEventListener("abort", onAbort);
-      reject(terminalOpenRejection(error));
+      reject(toErrorObject(error, "Terminal open failed"));
       return;
     }
     void promise.then(
@@ -132,7 +129,7 @@ async function waitForTerminalOpenDeadline<T>(
         }
         clearTimeout(timer);
         deadline.controller.signal.removeEventListener("abort", onAbort);
-        reject(terminalOpenRejection(error));
+        reject(toErrorObject(error, "Terminal open failed"));
       },
     );
   });
