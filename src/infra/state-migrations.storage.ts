@@ -11,6 +11,7 @@ import {
 } from "../plugins/installed-plugin-index.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { fileExists, safeReadDir } from "./state-migrations.fs.js";
 import {
   insertTaskDeliveryRowSql,
@@ -282,6 +283,141 @@ function readLegacyEmbeddedInstallRecords(parsed: unknown): Record<string, unkno
     }
   }
   return Object.keys(records).length > 0 ? records : null;
+}
+
+export function legacyInstalledPluginIndexMatches(
+  current: InstalledPluginIndex,
+  legacy: InstalledPluginIndex,
+): boolean {
+  return (
+    JSON.stringify(current.installRecords) === JSON.stringify(legacy.installRecords) &&
+    JSON.stringify(current.plugins) === JSON.stringify(legacy.plugins) &&
+    JSON.stringify(current.diagnostics) === JSON.stringify(legacy.diagnostics)
+  );
+}
+
+function readInstallRecordField(
+  record: InstalledPluginIndex["installRecords"][string],
+  key: string,
+): unknown {
+  return (record as Partial<Record<string, unknown>>)[key];
+}
+
+function readInstallRecordStringField(
+  record: InstalledPluginIndex["installRecords"][string],
+  key: string,
+): string | undefined {
+  const value = readInstallRecordField(record, key);
+  return typeof value === "string" ? value : undefined;
+}
+
+function legacyInstallRecordHasCurrentResolvedIdentity(params: {
+  currentRecord: InstalledPluginIndex["installRecords"][string];
+  legacyRecord: InstalledPluginIndex["installRecords"][string];
+}): boolean {
+  const { currentRecord, legacyRecord } = params;
+  const currentResolvedSpec = readInstallRecordStringField(currentRecord, "resolvedSpec");
+  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
+  if (legacySpec) {
+    return currentResolvedSpec === legacySpec;
+  }
+  const legacyResolvedSpec = readInstallRecordStringField(legacyRecord, "resolvedSpec");
+  return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
+}
+
+function readAuthoritativeCurrentNpmIdentity(
+  record: InstalledPluginIndex["installRecords"][string],
+): { name: string; version: string } | null {
+  const resolvedName = readInstallRecordStringField(record, "resolvedName");
+  const resolvedVersion = readInstallRecordStringField(record, "resolvedVersion");
+  if (resolvedName && resolvedVersion) {
+    return { name: resolvedName, version: resolvedVersion };
+  }
+  const resolvedSpec = readInstallRecordStringField(record, "resolvedSpec");
+  const parsed = resolvedSpec ? parseRegistryNpmSpec(resolvedSpec) : null;
+  if (parsed?.selectorKind === "exact-version" && parsed.selector) {
+    return { name: parsed.name, version: parsed.selector };
+  }
+  return null;
+}
+
+function legacyNpmInstallRecordSupersededByCurrent(params: {
+  currentRecord: InstalledPluginIndex["installRecords"][string];
+  legacyRecord: InstalledPluginIndex["installRecords"][string];
+}): boolean {
+  const { currentRecord, legacyRecord } = params;
+  if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
+    return false;
+  }
+  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
+  const legacyParsedSpec = legacySpec ? parseRegistryNpmSpec(legacySpec) : null;
+  if (legacyParsedSpec?.selectorKind !== "exact-version") {
+    return false;
+  }
+  const currentIdentity = readAuthoritativeCurrentNpmIdentity(currentRecord);
+  return Boolean(
+    currentIdentity &&
+    legacyParsedSpec.selector &&
+    currentIdentity.name === legacyParsedSpec.name &&
+    currentIdentity.version === legacyParsedSpec.selector,
+  );
+}
+
+function legacyInstallRecordCoveredByCurrent(
+  currentRecord: InstalledPluginIndex["installRecords"][string],
+  legacyRecord: InstalledPluginIndex["installRecords"][string],
+): boolean {
+  if (currentRecord.source !== legacyRecord.source) {
+    return false;
+  }
+  if (legacyNpmInstallRecordSupersededByCurrent({ currentRecord, legacyRecord })) {
+    return true;
+  }
+  for (const key of Object.keys(legacyRecord).toSorted()) {
+    const currentValue = readInstallRecordField(currentRecord, key);
+    if (currentValue === readInstallRecordField(legacyRecord, key)) {
+      continue;
+    }
+    if (
+      key === "spec" &&
+      legacyInstallRecordHasCurrentResolvedIdentity({ currentRecord, legacyRecord })
+    ) {
+      continue;
+    }
+    if ((key === "resolvedAt" || key === "installedAt") && typeof currentValue === "string") {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+export function mergeLegacyInstalledPluginIndexRecords(
+  current: InstalledPluginIndex,
+  legacy: InstalledPluginIndex,
+): { merged: InstalledPluginIndex; addedCount: number; conflicts: string[] } {
+  const installRecords = { ...current.installRecords };
+  const conflicts: string[] = [];
+  let addedCount = 0;
+  for (const [pluginId, legacyRecord] of Object.entries(legacy.installRecords)) {
+    const currentRecord = installRecords[pluginId];
+    if (!currentRecord) {
+      installRecords[pluginId] = legacyRecord;
+      addedCount += 1;
+      continue;
+    }
+    if (!legacyInstallRecordCoveredByCurrent(currentRecord, legacyRecord)) {
+      conflicts.push(pluginId);
+    }
+  }
+  return {
+    merged: {
+      ...current,
+      installRecords,
+    },
+    addedCount,
+    conflicts,
+  };
 }
 
 export function archiveLegacyInstalledPluginIndex(params: {

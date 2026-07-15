@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { hashJson } from "../plugins/installed-plugin-index-hash.js";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
@@ -108,7 +109,7 @@ describe("legacy state dir auto-migration", () => {
     });
   });
 
-  it("archives the legacy plugin install index when SQLite already has a ledger", async () => {
+  it("reports conflicting plugin install metadata as a notice from the early state-dir pass", async () => {
     await withStateDirFixture(async (root) => {
       const stateDir = path.join(root, "custom-state");
       const sourcePath = path.join(stateDir, "plugins", "installs.json");
@@ -123,7 +124,28 @@ describe("legacy state dir auto-migration", () => {
           installRecords: {
             demo: { source: "npm", spec: "demo@latest", version: "1.0.0" },
           },
-          plugins: [],
+          plugins: [
+            {
+              pluginId: "demo",
+              installRecordHash: hashJson({
+                source: "npm",
+                spec: "demo@latest",
+                version: "1.0.0",
+              }),
+              manifestPath: "/plugins/demo/openclaw.plugin.json",
+              manifestHash: "test",
+              rootDir: "/plugins/demo",
+              origin: "global",
+              enabled: false,
+              startup: {
+                sidecar: false,
+                memory: false,
+                deferConfiguredChannelFullLoadUntilAfterListen: false,
+                agentHarnesses: [],
+              },
+              compat: [],
+            },
+          ],
           diagnostics: [],
         },
         { stateDir },
@@ -145,7 +167,9 @@ describe("legacy state dir auto-migration", () => {
       });
 
       expect(result.warnings).toStrictEqual([]);
-      expect(result.notices).toBeUndefined();
+      expect(result.notices).toStrictEqual([
+        "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
+      ]);
       expect(result.skipped).toBe(false);
       expect(fs.existsSync(sourcePath)).toBe(false);
       expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
