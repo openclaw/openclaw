@@ -435,7 +435,7 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(
  * Resolve `Authorization: Bearer ...` headers for Google Vertex calls.
  *
  * We try the hand-rolled `authorized_user` refresh path first (preserves the
- * existing fetchImpl test seam and the OpenClaw upstream behaviour); when the
+ * existing fetchImpl test seam and the OpenClaw upstream behavior); when the
  * configured ADC source is anything other than `authorized_user` (the common
  * production cases on GKE: Workload Identity, Workload Identity Federation,
  * service-account JSON keys), we hand off to `google-auth-library` which
