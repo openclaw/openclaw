@@ -499,6 +499,30 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("rejects unsupported read actions before conversation authorization", async () => {
+      await expect(
+        runMessageAction({
+          cfg: {
+            channels: {
+              actionhub: {
+                enabled: true,
+              },
+            },
+          } as OpenClawConfig,
+          action: "react",
+          params: {
+            channel: "actionhub",
+            target: "other-conversation",
+            messageId: "om_123",
+            emoji: "eyes",
+          },
+          conversationReadOrigin: "delegated",
+          dryRun: false,
+        }),
+      ).rejects.toThrow("Message action react not supported for channel actionhub.");
+      expect(handleAction).not.toHaveBeenCalled();
+    });
+
     it("routes execution context ids into plugin handleAction", async () => {
       const stateDir = path.join("/tmp", "openclaw-plugin-dispatch-media-roots");
       const expectedWorkspaceRoot = path.resolve(stateDir, "workspace-alpha");
