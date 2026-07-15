@@ -271,15 +271,15 @@ function renderCatalogSessionRow(
   liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
   params: SessionCatalogGroupsParams,
 ) {
+  const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
+  const timestamp =
+    typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
+      ? rawTimestamp * 1000
+      : rawTimestamp;
   const adoptedRow = session.openClawSessionKey
     ? liveRowsByKey.get(session.openClawSessionKey)
     : undefined;
   if (adoptedRow) {
-    const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
-    const timestamp =
-      typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
-        ? rawTimestamp * 1000
-        : rawTimestamp;
     const label = session.name || session.threadId;
     return params.renderLiveRow(adoptedRow, {
       label,
@@ -296,11 +296,6 @@ function renderCatalogSessionRow(
   const search = searchForSession(key);
   const href = `${pathForRoute("chat", params.basePath)}${search}`;
   const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
-  const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
-  const timestamp =
-    typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
-      ? rawTimestamp * 1000
-      : rawTimestamp;
   const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;
   const openTerminal = () => params.onOpenTerminal(catalogKey);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
