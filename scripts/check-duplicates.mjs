@@ -8,6 +8,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const jscpdBin = path.join(repoRoot, "node_modules", "jscpd", "bin", "jscpd");
 
 const targets = [
+  ".github/actions",
   "src",
   "extensions",
   "examples",
