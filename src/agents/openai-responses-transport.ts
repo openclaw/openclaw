@@ -2653,7 +2653,6 @@ export const responsesTesting = {
   prepareOpenAIResponsesReasoningItemForReplay,
   resolveAzureOpenAIApiVersion,
   runResponsesStreamWithEncryptedContentRetry,
-  dropResponsesRequestEncryptedReplayItems,
   tagOpenAIResponsesReasoningReplayItem,
   summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,

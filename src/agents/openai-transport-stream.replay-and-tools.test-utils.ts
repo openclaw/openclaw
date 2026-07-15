@@ -32,6 +32,16 @@ function createEncryptedReplayRequest() {
         content: [{ type: "output_text", text: "visible answer" }],
       },
       {
+        type: "compaction",
+        id: "cmp_prior",
+        encrypted_content: "compaction-ciphertext",
+      },
+      {
+        type: "reasoning",
+        id: "rs_id_only",
+        summary: [],
+      },
+      {
         type: "function_call",
         id: "fc_prior",
         call_id: "call_abc",
@@ -816,72 +826,6 @@ describe("openai transport stream", () => {
     expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
   });
 
-  it("drops encrypted replay items and their paired assistant message id", () => {
-    const params = {
-      model: "gpt-5.5",
-      stream: true,
-      input: [
-        {
-          type: "reasoning",
-          id: "rs_prior",
-          encrypted_content: "ciphertext",
-          summary: [{ type: "summary_text", text: "checked" }],
-        },
-        {
-          type: "message",
-          id: "msg_prior",
-          role: "assistant",
-          content: [{ type: "output_text", text: "visible answer" }],
-        },
-        {
-          type: "compaction",
-          id: "cmp_prior",
-          encrypted_content: "compaction-ciphertext",
-        },
-        {
-          type: "reasoning",
-          id: "rs_summary_only",
-          summary: [],
-        },
-        {
-          type: "function_call",
-          id: "fc_prior",
-          call_id: "call_abc",
-          name: "price_lookup",
-          arguments: "{}",
-        },
-        {
-          type: "function_call_output",
-          call_id: "call_abc",
-          output: "$83.95",
-        },
-      ],
-    };
-
-    const stripped = testing.dropResponsesRequestEncryptedReplayItems(
-      params as never,
-    ) as typeof params;
-
-    expect(stripped).not.toBe(params);
-    expect(stripped.input).toEqual([
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "visible answer" }],
-      },
-      params.input[4],
-      params.input[5],
-    ]);
-    expect(params.input[0]).toHaveProperty("encrypted_content", "ciphertext");
-    expect(params.input[1]).toHaveProperty("id", "msg_prior");
-
-    const idOnly = { ...params, input: [{ type: "reasoning", id: "rs_id_only", summary: [] }] };
-    expect(testing.dropResponsesRequestEncryptedReplayItems(idOnly as never)).toEqual({
-      ...idOnly,
-      input: [],
-    });
-  });
-
   it("retries thinking_signature_invalid once without encrypted reasoning content", async () => {
     const request = createEncryptedReplayRequest();
     const model = makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" });
@@ -929,11 +873,13 @@ describe("openai transport stream", () => {
           role: "assistant",
           content: [{ type: "output_text", text: "visible answer" }],
         },
-        request.input[2],
-        request.input[3],
+        request.input[4],
+        request.input[5],
       ],
     });
+    expect(create.mock.calls[1]?.[0]).not.toBe(request);
     expect(request.input[0]).toHaveProperty("encrypted_content", "ciphertext");
+    expect(request.input[1]).toHaveProperty("id", "msg_prior");
     expect(output.responseId).toBe("resp_recovered");
   });
 
@@ -1001,8 +947,8 @@ describe("openai transport stream", () => {
           role: "assistant",
           content: [{ type: "output_text", text: "visible answer" }],
         },
-        request.input[2],
-        request.input[3],
+        request.input[4],
+        request.input[5],
       ],
     });
     expect(output.responseId).toBe("resp_recovered");

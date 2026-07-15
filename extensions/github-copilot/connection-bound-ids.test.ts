@@ -1,24 +1,28 @@
 // Github Copilot tests cover connection-bound response replay.
 import { describe, expect, it } from "vitest";
-import {
-  rewriteCopilotConnectionBoundResponseIds,
-  rewriteCopilotResponsePayloadConnectionBoundIds,
-} from "./connection-bound-ids.js";
+import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
 
 describe("github-copilot connection-bound response replay", () => {
   it("preserves existing ID normalization behavior", () => {
     const functionCallId = Buffer.from(`function-call-${"y".repeat(20)}`).toString("base64");
     const messageId = Buffer.from(`message-${"z".repeat(24)}`).toString("base64");
-    const input = [
-      { id: "rs_existing", type: "reasoning" },
-      { id: "msg_existing", type: "message" },
-      { id: "fc_existing", type: "function_call" },
-      { id: functionCallId, type: "function_call" },
-      { id: messageId, type: "message" },
-    ];
+    const payload = {
+      input: [
+        {
+          id: "rs_existing",
+          type: "reasoning",
+          encrypted_content: "ciphertext",
+          summary: [],
+        },
+        { id: "msg_existing", type: "message" },
+        { id: "fc_existing", type: "function_call" },
+        { id: functionCallId, type: "function_call" },
+        { id: messageId, type: "message" },
+      ],
+    };
 
-    expect(rewriteCopilotConnectionBoundResponseIds(input)).toBe(true);
-    expect(input.map((item) => item.id)).toEqual([
+    expect(rewriteCopilotResponsePayloadConnectionBoundIds(payload)).toBe(true);
+    expect(payload.input.map((item) => item.id)).toEqual([
       "rs_existing",
       "msg_existing",
       "fc_existing",

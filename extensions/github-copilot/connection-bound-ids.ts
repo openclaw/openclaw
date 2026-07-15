@@ -30,12 +30,10 @@ function deriveReplacementId(type: string | undefined, originalId: string): stri
   return `${prefix}_${hex}`;
 }
 
-function isValidReasoningReplayId(id: unknown): id is string {
-  return typeof id === "string" && id.length > 0 && id.length <= 64;
-}
-
 function isValidNativeReasoningReplayId(id: unknown): id is string {
-  return isValidReasoningReplayId(id) && /^rs_[A-Za-z0-9_-]+$/.test(id);
+  return (
+    typeof id === "string" && id.length > 0 && id.length <= 64 && /^rs_[A-Za-z0-9_-]+$/.test(id)
+  );
 }
 
 function normalizeCopilotReasoningId(item: InputItem): boolean {
@@ -56,14 +54,23 @@ function normalizeCopilotReasoningId(item: InputItem): boolean {
   return false;
 }
 
-function sanitizeCopilotEncryptedReasoning(input: unknown[]): boolean {
+function rewriteCopilotConnectionBoundResponseIds(input: unknown[]): boolean {
   let changed = false;
 
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
-    if (!isInputItem(item) || item.type !== "reasoning") {
+    if (!isInputItem(item)) {
       continue;
     }
+    if (item.type !== "reasoning") {
+      const id = item.id;
+      if (typeof id === "string" && id.length > 0 && looksLikeConnectionBoundId(id)) {
+        item.id = deriveReplacementId(typeof item.type === "string" ? item.type : undefined, id);
+        changed = true;
+      }
+      continue;
+    }
+
     const originalId = item.id;
     if (
       typeof item.encrypted_content !== "string" ||
@@ -84,36 +91,6 @@ function sanitizeCopilotEncryptedReasoning(input: unknown[]): boolean {
   return changed;
 }
 
-export function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
-  if (!Array.isArray(input)) {
-    return false;
-  }
-  let changed = false;
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    if (!isInputItem(item)) {
-      continue;
-    }
-    const id = item.id;
-    if (item.type === "reasoning") {
-      if (id !== undefined && !isValidReasoningReplayId(id)) {
-        input.splice(index, 1);
-        changed = true;
-      }
-      continue;
-    }
-    if (typeof id === "string" && id.length > 0 && looksLikeConnectionBoundId(id)) {
-      item.id = deriveReplacementId(typeof item.type === "string" ? item.type : undefined, id);
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolean {
-  return sanitizeCopilotReplayResponseIds(input);
-}
-
 export function rewriteCopilotResponsePayloadConnectionBoundIds(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") {
     return false;
@@ -122,6 +99,5 @@ export function rewriteCopilotResponsePayloadConnectionBoundIds(payload: unknown
   if (!Array.isArray(input)) {
     return false;
   }
-  const reasoningChanged = sanitizeCopilotEncryptedReasoning(input);
-  return sanitizeCopilotReplayResponseIds(input) || reasoningChanged;
+  return rewriteCopilotConnectionBoundResponseIds(input);
 }
