@@ -20,6 +20,7 @@ export class ClawPackageInstallError extends Error {
 type PackageInstallerDeps = {
   installSkill?: typeof installSkillFromClawHub;
   installPlugin?: typeof runPluginInstallCommand;
+  preflightPlugin?: typeof preflightPluginInstall;
   persistPackageRef?: typeof persistClawPackageRef;
 };
 
@@ -58,19 +59,22 @@ export async function preflightClawPackage(pkg: ClawPackage): Promise<ClawPackag
     return {
       ok: false,
       code: "skill_package_preflight_unavailable",
-      message: `Skill  cannot be preflighted until the skill lifecycle exposes a read-only preflight.`,
+      message: `Skill ${pkg.ref}@${pkg.version} cannot be preflighted until the skill lifecycle exposes a read-only preflight.`,
     };
   }
   const result = await preflightPluginInstall({
     clawhubPackage: pkg.ref,
-    rawSpec: `clawhub:`,
+    rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
     expectedVersion: pkg.version,
   });
   if (!result.ok) {
     return {
       ok: false,
       code: result.code,
-      message: `Plugin  conflicts with installed version .`,
+      message:
+        result.code === "plugin_version_conflict"
+          ? `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${result.installedVersion}.`
+          : result.error,
     };
   }
   return { ok: true, action: result.action };
@@ -87,6 +91,7 @@ export async function installClawPackages(
   const deps = options.deps ?? {};
   const installSkill = deps.installSkill ?? installSkillFromClawHub;
   const installPlugin = deps.installPlugin ?? runPluginInstallCommand;
+  const preflightPlugin = deps.preflightPlugin ?? preflightPluginInstall;
   const persistPackageRef = deps.persistPackageRef ?? persistClawPackageRef;
   const runtime = options.runtime ?? defaultRuntime;
   const installedPackages: PersistedClawPackageRef[] = [];
@@ -108,12 +113,28 @@ export async function installClawPackages(
           throw new Error(result.error);
         }
       } else {
-        await installPlugin({
-          raw: `clawhub:${pkg.ref}@${pkg.version}`,
-          opts: {},
-          invalidateRuntimeCache: false,
-          runtime: installerRuntime(runtime),
+        // Recheck at mutation time so a concurrent install cannot make the dry-run
+        // decision stale. Exact reuse gains a Claw reference but never reinstalls.
+        const preflight = await preflightPlugin({
+          clawhubPackage: pkg.ref,
+          rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
+          expectedVersion: pkg.version,
         });
+        if (!preflight.ok) {
+          throw new Error(
+            preflight.code === "plugin_version_conflict"
+              ? `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${preflight.installedVersion}.`
+              : preflight.error,
+          );
+        }
+        if (preflight.action === "install") {
+          await installPlugin({
+            raw: `clawhub:${pkg.ref}@${pkg.version}`,
+            opts: {},
+            invalidateRuntimeCache: false,
+            runtime: installerRuntime(runtime),
+          });
+        }
       }
       installedPackages.push(persistPackageRef(plan, pkg, options));
     } catch (error) {

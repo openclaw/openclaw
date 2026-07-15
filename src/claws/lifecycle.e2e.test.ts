@@ -98,12 +98,11 @@ describe("claws lifecycle cli e2e", () => {
         packageActions: 2,
         mcpServerActions: 1,
         cronJobActions: 1,
-        blockedActions: 2,
+        blockedActions: 1,
       },
-      blockers: [
-        { code: "package_install_unavailable", phase: "plan" },
-        { code: "package_install_unavailable", phase: "plan" },
-      ],
+      blockers: expect.arrayContaining([
+        expect.objectContaining({ code: "skill_package_preflight_unavailable" }),
+      ])
     });
     expect(result.code).toBe(1);
   });
@@ -212,7 +211,7 @@ describe("claws lifecycle cli e2e", () => {
     expect(parseJson(result.stdout)).toMatchObject({
       schemaVersion: "openclaw.clawAddPlan.v1",
       blockers: expect.arrayContaining([
-        expect.objectContaining({ code: "package_install_unavailable" }),
+        expect.objectContaining({ code: "skill_package_preflight_unavailable" }),
       ]),
     });
   });
