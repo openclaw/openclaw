@@ -420,6 +420,7 @@ describe("startGatewayPostAttachRuntime", () => {
       cfg: { hooks: { internal: { enabled: false } } },
       gatewayRuntime: expect.any(Object),
     });
+    expect(hoisted.scheduleSubagentOrphanRecovery).toHaveBeenCalledWith();
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });

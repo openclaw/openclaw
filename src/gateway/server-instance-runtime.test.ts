@@ -6,6 +6,7 @@ import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
+import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 
 function createContext(): GatewayRequestContext {
   return {
@@ -41,6 +42,7 @@ describe("createGatewayInstanceRuntime", () => {
       getMethodRegistry: () => registry,
       isDispatchAvailable: () => available,
     });
+    expect(getGatewayRecoveryRuntime()).toBe(runtime.recovery);
 
     await expect(runtime.recovery.dispatchAgent({ message: "test" })).rejects.toThrow(
       "Gateway instance dispatch unavailable",
@@ -60,6 +62,7 @@ describe("createGatewayInstanceRuntime", () => {
     });
 
     runtime.close();
+    expect(getGatewayRecoveryRuntime()).toBeUndefined();
     await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toThrow(
       "Gateway instance dispatch unavailable",
     );
@@ -77,6 +80,7 @@ describe("createGatewayInstanceRuntime", () => {
       getMethodRegistry: () => registry,
       isDispatchAvailable: () => true,
     });
+    expect(getGatewayRecoveryRuntime()).toBe(second.recovery);
     const onRequested = vi.fn();
     const unsubscribe = first.nativeApprovals.subscribe({
       eventKinds: new Set(["exec"]),
@@ -110,7 +114,9 @@ describe("createGatewayInstanceRuntime", () => {
     expect(first.approvalEvents.publishRequested("exec", request)).toBe(0);
     expect(declined).not.toHaveBeenCalled();
     first.close();
+    expect(getGatewayRecoveryRuntime()).toBe(second.recovery);
     second.close();
+    expect(getGatewayRecoveryRuntime()).toBeUndefined();
   });
 
   it("rejects methods outside each closed internal principal", async () => {
@@ -126,6 +132,7 @@ describe("createGatewayInstanceRuntime", () => {
     await expect(runtime.nativeApprovals.requestRoute("config.get" as "send", {})).rejects.toThrow(
       "internal principal cannot dispatch config.get",
     );
+    runtime.close();
   });
 
   it("preserves a trusted approval resolver display name", async () => {
@@ -146,6 +153,7 @@ describe("createGatewayInstanceRuntime", () => {
         { clientDisplayName: "Telegram approval (owner)" },
       ),
     ).resolves.toEqual({ displayName: "Telegram approval (owner)" });
+    runtime.close();
   });
 
   it("preserves the Gateway client's approval request deadline", async () => {

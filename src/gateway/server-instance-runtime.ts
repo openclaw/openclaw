@@ -13,9 +13,13 @@ import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-r
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
-import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
+import type {
+  GatewayInstanceRuntime,
+  GatewayRecoveryRuntime,
+} from "./server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { registerGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 
 type GatewayInstanceRuntimeOptions = {
   getContext: () => GatewayRequestContext;
@@ -61,6 +65,34 @@ export function createGatewayInstanceRuntime(
   const approvalMethods = new Set<GatewayNativeApprovalMethod>(GATEWAY_NATIVE_APPROVAL_METHODS);
   const approvalRouteClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
   const approvalRouteMethods = new Set(["send"]);
+
+  const recovery: GatewayRecoveryRuntime = {
+    dispatchAgent: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
+      await dispatch<T>({
+        allowedMethods: recoveryMethods,
+        client: recoveryClient,
+        method: "agent",
+        payload,
+        timeoutMs,
+      }),
+    waitForAgent: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
+      await dispatch<T>({
+        allowedMethods: recoveryMethods,
+        client: recoveryClient,
+        method: "agent.wait",
+        payload,
+        timeoutMs,
+      }),
+    sendRecoveryNotice: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
+      await dispatch<T>({
+        allowedMethods: recoveryNoticeMethods,
+        client: recoveryClient,
+        method: "message.action",
+        payload,
+        timeoutMs,
+      }),
+  };
+  const releaseRecoveryRuntime = registerGatewayRecoveryRuntime(recovery);
 
   const publish = (
     kind: GatewayApprovalEventKind,
@@ -148,34 +180,10 @@ export function createGatewayInstanceRuntime(
         };
       },
     },
-    recovery: {
-      dispatchAgent: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
-        await dispatch<T>({
-          allowedMethods: recoveryMethods,
-          client: recoveryClient,
-          method: "agent",
-          payload,
-          timeoutMs,
-        }),
-      waitForAgent: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
-        await dispatch<T>({
-          allowedMethods: recoveryMethods,
-          client: recoveryClient,
-          method: "agent.wait",
-          payload,
-          timeoutMs,
-        }),
-      sendRecoveryNotice: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
-        await dispatch<T>({
-          allowedMethods: recoveryNoticeMethods,
-          client: recoveryClient,
-          method: "message.action",
-          payload,
-          timeoutMs,
-        }),
-    },
+    recovery,
     close: () => {
       closed = true;
+      releaseRecoveryRuntime();
       approvalSubscribers.clear();
       routeCoordinator.close();
     },

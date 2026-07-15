@@ -910,16 +910,6 @@ export async function startGatewaySidecars(params: {
     },
   });
 
-  schedulePostReadySidecarTask({
-    startupTrace: params.startupTrace,
-    name: "sidecars.subagent-recovery",
-    log: params.log,
-    run: async () => {
-      const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
-      scheduleSubagentOrphanRecovery();
-    },
-  });
-
   if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
     postReadySidecars.push(
       schedulePostReadySidecarTask({
@@ -1327,6 +1317,12 @@ export async function startGatewayPostAttachRuntime(
           });
         } catch (err) {
           params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
+        }
+        try {
+          const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
+          scheduleSubagentOrphanRecovery();
+        } catch (err) {
+          params.log.warn(`subagent restart recovery failed to schedule: ${String(err)}`);
         }
         // Capture the orphan-recovery cutoff before new startup-gated agent
         // work can create sessions that the recovery scan must leave alone.
