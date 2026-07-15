@@ -1,5 +1,6 @@
 /** Runtime-loaded channel target helpers used by cron delivery resolution. */
 import type { ChannelId } from "../../channels/plugins/types.public.js";
+import { listRouteBindings } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import {
@@ -10,6 +11,8 @@ import {
   resolveChannelTarget,
   type ResolvedMessagingTarget,
 } from "../../infra/outbound/target-resolver.js";
+import { resolveNormalizedRouteBindingMatch } from "../../routing/binding-scope.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 export { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 export { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 export { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
@@ -77,4 +80,22 @@ export function channelCanResolveOutboundSessionRoute(params: {
       allowBootstrap: true,
     })?.messaging?.resolveOutboundSessionRoute,
   );
+}
+
+/** Returns the set of normalized account IDs bound to an agent across all channels. */
+export function resolveAgentBoundAccountIds(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Set<string> {
+  const boundIds = new Set<string>();
+  for (const binding of listRouteBindings(params.cfg)) {
+    const resolved = resolveNormalizedRouteBindingMatch(binding);
+    if (!resolved) {
+      continue;
+    }
+    if (resolved.agentId === normalizeAgentId(params.agentId)) {
+      boundIds.add(resolved.accountId);
+    }
+  }
+  return boundIds;
 }

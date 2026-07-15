@@ -1483,7 +1483,7 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe("1008013");
   });
 
-  it("explicit delivery.accountId overrides session-derived accountId", async () => {
+  it("rejects foreign delivery.accountId not bound to the owning agent", async () => {
     setLastSessionEntry({
       sessionId: "sess-5",
       lastChannel: "forum",
@@ -1497,8 +1497,9 @@ describe("resolveDeliveryTarget", () => {
       accountId: "bot-b",
     });
 
+    // Foreign accountId is not bound to the agent — falls back to session-derived.
     expect(result.ok).toBe(true);
-    expect(result.accountId).toBe("bot-b");
+    expect(result.accountId).toBe("default");
   });
 
   it("strips :topic: suffix from telegram targets when threadId is resolved", async () => {
@@ -1595,7 +1596,7 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe("42");
   });
 
-  it("explicit delivery.accountId overrides bindings-derived accountId", async () => {
+  it("rejects foreign delivery.accountId not bound to the owning agent, falls back to binding", async () => {
     setMainSessionEntry(undefined);
     const cfg = makeCfg({
       bindings: [{ agentId: AGENT_ID, match: { channel: "forum", accountId: "bound" } }],
@@ -1607,8 +1608,26 @@ describe("resolveDeliveryTarget", () => {
       accountId: "explicit",
     });
 
+    // Foreign accountId is not bound to the agent — falls back to agent's bound account.
     expect(result.ok).toBe(true);
-    expect(result.accountId).toBe("explicit");
+    expect(result.accountId).toBe("bound");
+  });
+
+  it("accepts delivery.accountId when it is bound to the owning agent", async () => {
+    setMainSessionEntry(undefined);
+    const cfg = makeCfg({
+      bindings: [{ agentId: AGENT_ID, match: { channel: "forum", accountId: "my-account" } }],
+    });
+
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      accountId: "my-account",
+    });
+
+    // Explicit accountId matches the agent's binding — accepted.
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe("my-account");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

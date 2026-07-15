@@ -233,22 +233,35 @@ export async function resolveDeliveryTarget(
   // Prefer an explicit accountId from the job's delivery config (set via
   // --account on cron add/edit). Fall back to the session's lastAccountId,
   // then to the agent's bound account from bindings config.
+  // Only accept the explicit accountId when it is actually bound to the
+  // job's owning agent — a foreign account must never override the agent's
+  // own bindings even when set explicitly on the delivery payload.
   const explicitAccountId =
     typeof jobPayload.accountId === "string" && jobPayload.accountId.trim()
       ? jobPayload.accountId.trim()
       : undefined;
-  let accountId = explicitAccountId ?? resolved.accountId;
+  let accountId: string | undefined;
+  if (explicitAccountId) {
+    // Only accept the explicit accountId when it is actually bound to the
+    // job's owning agent — a foreign account must never override the agent's
+    // own bindings even when set explicitly on the delivery payload.
+    const boundIds = deliveryTargetRuntime.resolveAgentBoundAccountIds({
+      cfg,
+      agentId,
+    });
+    const normalizedExplicit = normalizeAccountId(explicitAccountId);
+    if (boundIds.has(normalizedExplicit)) {
+      accountId = explicitAccountId;
+    }
+    // Foreign accountId: silently discard and fall through to bound resolution.
+  }
+  accountId = accountId ?? resolved.accountId;
   if (!accountId && channel) {
     accountId = deliveryTargetRuntime.resolveFirstBoundAccountId({
       cfg,
       channelId: channel,
       agentId,
     });
-  }
-
-  // job.delivery.accountId takes highest precedence — explicitly set by the job author.
-  if (jobPayload.accountId) {
-    accountId = jobPayload.accountId;
   }
 
   if (!channel) {
