@@ -749,6 +749,7 @@ final class SkillsSettingsModel {
     var statusMessage: String?
     private var hasLoaded = false
     private var busySkills: Set<String> = []
+    private var pendingForcedRefresh = false
     private let loadSkillsStatus: () async throws -> SkillsStatusReport
 
     init() {
@@ -773,15 +774,32 @@ final class SkillsSettingsModel {
     }
 
     func refreshAfterLocalNodeReconnect() async {
+        if self.isLoading {
+            self.pendingForcedRefresh = true
+            return
+        }
         guard self.hasLoaded else { return }
         await self.refresh(force: true)
     }
 
     func refresh(force: Bool = false) async {
-        guard !self.isLoading else { return }
+        if self.isLoading {
+            if force {
+                self.pendingForcedRefresh = true
+            }
+            return
+        }
         if self.hasLoaded, !force {
             return
         }
+        await self.runRefresh()
+        while self.pendingForcedRefresh {
+            self.pendingForcedRefresh = false
+            await self.runRefresh()
+        }
+    }
+
+    private func runRefresh() async {
         self.isLoading = true
         self.error = nil
         do {

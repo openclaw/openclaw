@@ -197,6 +197,58 @@ struct SkillsSettingsSmokeTests {
         #expect(model.skills.first?.missing.bins == [])
     }
 
+    @Test func `local node reconnect queues refresh during initial skills load`() async throws {
+        var firstLoad: CheckedContinuation<SkillsStatusReport, Never>?
+        var loadCount = 0
+        let model = SkillsSettingsModel {
+            loadCount += 1
+            if loadCount == 1 {
+                return await withCheckedContinuation { continuation in
+                    firstLoad = continuation
+                }
+            }
+            return makeSkillsStatusReport([
+                makeSkillStatus(
+                    name: "Paprika",
+                    description: "Ready after node reconnect",
+                    source: "openclaw-workspace",
+                    filePath: "/tmp/skills/paprika",
+                    skillKey: "paprika",
+                    emoji: "P",
+                    eligible: true,
+                    requirements: SkillRequirements(bins: ["paprika"], env: [], config: []),
+                    missing: SkillMissing(bins: [], env: [], config: [])),
+            ])
+        }
+
+        let initialRefresh = Task { await model.refreshIfNeeded() }
+        while firstLoad == nil {
+            await Task.yield()
+        }
+
+        await model.refreshAfterLocalNodeReconnect()
+
+        #expect(loadCount == 1)
+
+        firstLoad?.resume(returning: makeSkillsStatusReport([
+            makeSkillStatus(
+                name: "Paprika",
+                description: "Missing local binary",
+                source: "openclaw-workspace",
+                filePath: "/tmp/skills/paprika",
+                skillKey: "paprika",
+                emoji: "P",
+                eligible: false,
+                requirements: SkillRequirements(bins: ["paprika"], env: [], config: []),
+                missing: SkillMissing(bins: ["paprika"], env: [], config: [])),
+        ]))
+        await initialRefresh.value
+
+        #expect(loadCount == 2)
+        #expect(model.skills.first?.eligible == true)
+        #expect(model.skills.first?.missing.bins == [])
+    }
+
     @Test func `local node reconnect does not duplicate initial skills load`() async throws {
         var loadCount = 0
         let model = SkillsSettingsModel {
