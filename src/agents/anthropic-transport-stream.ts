@@ -54,7 +54,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { toErrorObject } from "../infra/errors.js";
 import { readResponseTextSnippet } from "../infra/http-body.js";
-import { parseRetryAfterSeconds } from "./provider-transport-fetch.js";
 import type {
   AssistantMessageDiagnostic,
   Context,
@@ -62,8 +61,8 @@ import type {
   SimpleStreamOptions,
   ThinkingLevel,
 } from "../llm/types.js";
-import "../llm/ai-transport-host.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
+import "../llm/ai-transport-host.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -73,6 +72,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
+import { parseRetryAfterSeconds } from "./provider-transport-fetch.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
