@@ -2819,23 +2819,24 @@ describe("cron tool", () => {
   });
 
   it("retries cap derivation after a concurrent cron job update", async () => {
+    const conflict = Object.assign(
+      new Error("cron job definition no longer matches the loaded version"),
+      {
+        name: "GatewayClientRequestError",
+        details: {
+          code: "CRON_JOB_CHANGED",
+          expectedConfigRevision: "sha256:first",
+          actualConfigRevision: "sha256:second",
+        },
+      },
+    );
     callGatewayMock
       .mockResolvedValueOnce({
         id: "job-race",
         configRevision: "sha256:first",
         payload: { kind: "agentTurn", message: "hello", toolsAllow: ["read"] },
       })
-      .mockRejectedValueOnce(
-        new GatewayClientRequestError({
-          code: "INVALID_REQUEST",
-          message: "cron job definition no longer matches the loaded version",
-          details: {
-            code: "CRON_JOB_CHANGED",
-            expectedConfigRevision: "sha256:first",
-            actualConfigRevision: "sha256:second",
-          },
-        }),
-      )
+      .mockRejectedValueOnce(conflict)
       .mockResolvedValueOnce({
         id: "job-race",
         configRevision: "sha256:second",
