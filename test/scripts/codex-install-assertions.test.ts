@@ -265,8 +265,16 @@ function createLegacyCodexNpmPluginLiveFixture(root: string) {
   const fixture = createCodexNpmPluginLiveFixture(root);
   const stateDir = path.join(root, "state");
   rmSync(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"));
+  rmSync(path.join(stateDir, "state", "openclaw.sqlite"));
   const sessionFile = path.join(stateDir, "agents", "main", "sessions", "session.jsonl");
   writeJson(sessionFile, { type: "message" });
+  writeJson(`${sessionFile}.codex-app-server.json`, {
+    schemaVersion: 2,
+    threadId: "thread-codex-npm-live",
+    cwd: stateDir,
+    model: "gpt-5.4",
+    modelProvider: "codex",
+  });
   writeJson(path.join(stateDir, "agents", "main", "sessions", "sessions.json"), {
     "agent:main:codex-npm-plugin-live": {
       sessionId: fixture.sessionId,
@@ -367,7 +375,7 @@ describe("Codex install helpers", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("accepts the explicit frozen-target JSON session contract", () => {
+  it("accepts the explicit frozen-target JSON session and sidecar binding contract", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-live-legacy-");
     const fixture = createLegacyCodexNpmPluginLiveFixture(root);
 
