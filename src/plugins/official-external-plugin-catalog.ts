@@ -726,7 +726,13 @@ function isHostedCatalogSignedFeedRollback(params: {
   if (params.candidate.sequence > params.current.sequence) {
     return false;
   }
-  return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);
+  const candidateTime = Date.parse(params.candidate.generatedAt);
+  const currentTime = Date.parse(params.current.generatedAt);
+  if (Number.isNaN(candidateTime) || Number.isNaN(currentTime)) {
+    // If either timestamp is invalid, conservatively treat as rollback.
+    return true;
+  }
+  return candidateTime < currentTime;
 }
 
 function assertSnapshotMatchesRequestValidators(params: {
