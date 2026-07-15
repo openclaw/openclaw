@@ -936,9 +936,27 @@ describe("message tool secret scoping", () => {
 
   it("carries terminal source-reply intent outside provider params", async () => {
     mockSendResult();
+    const sessionKey = "agent:main:telegram:direct:123";
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-source-reply",
+      sessionId: "session-source-reply",
+      sessionKey,
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "123",
+        currentSourceTurnId: "source-turn-1",
+      },
+    });
+    mintedTurnCapabilities.push(turnCapability);
     const tool = createMessageTool({
       getRuntimeConfig: mocks.getRuntimeConfig,
       runMessageAction: mocks.runMessageAction as never,
+      agentId: "main",
+      agentSessionKey: sessionKey,
+      runId: "run-source-reply",
+      sessionId: "session-source-reply",
+      messageActionTurnCapability: turnCapability,
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
@@ -961,6 +979,50 @@ describe("message tool secret scoping", () => {
     expect(terminal?.sourceReplyToolCallId).toBe("message_terminal");
     expect(progress?.params).not.toHaveProperty("final");
     expect(terminal?.params).not.toHaveProperty("final");
+  });
+
+  it("keeps source-less message-tool-only sends outside terminal reconciliation", async () => {
+    mockSendResult();
+    const sessionKey = "agent:main:telegram:direct:scheduled";
+    const sourceLessCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-source-less",
+      sessionId: "session-source-less",
+      sessionKey,
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "scheduled",
+      },
+    });
+    mintedTurnCapabilities.push(sourceLessCapability);
+    const createSourceLessTool = (messageActionTurnCapability?: string) =>
+      createMessageTool({
+        getRuntimeConfig: mocks.getRuntimeConfig,
+        runMessageAction: mocks.runMessageAction as never,
+        agentId: "main",
+        agentSessionKey: sessionKey,
+        runId: "run-source-less",
+        sessionId: "session-source-less",
+        messageActionTurnCapability,
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+
+    await createSourceLessTool().execute("message-scheduled", {
+      action: "send",
+      message: "scheduled update",
+      to: "scheduled",
+    });
+    await createSourceLessTool(sourceLessCapability).execute("message-room-event", {
+      action: "send",
+      message: "ambient update",
+      to: "scheduled",
+    });
+
+    for (const [input] of mocks.runMessageAction.mock.calls) {
+      expect(input.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(input.sourceReplyFinal).toBeUndefined();
+      expect(input.sourceReplyToolCallId).toBeUndefined();
+    }
   });
 
   it("uses delivery params to avoid collisions across distinct sends", async () => {

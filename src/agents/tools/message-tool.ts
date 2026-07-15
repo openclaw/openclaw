@@ -1657,6 +1657,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const actionParams = actionIdempotencyKey
         ? { ...params, idempotencyKey: actionIdempotencyKey }
         : params;
+      const hasExactSourceTurn =
+        action === "send" &&
+        sourceReplySinkDeliveryMode === "message_tool_only" &&
+        normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
       let result: MessageActionRunResult;
       try {
         result = await runMessageActionForTool({
@@ -1680,11 +1684,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,
           sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
-          sourceReplyFinal:
-            action === "send" && sourceReplySinkDeliveryMode === "message_tool_only"
-              ? (requestedSourceReplyFinal ?? true)
-              : undefined,
-          sourceReplyToolCallId: toolCallId,
+          // Only an admitted channel source can arm terminal restart reconciliation.
+          // Source-less scheduled and ambient sends remain ordinary message actions.
+          sourceReplyFinal: hasExactSourceTurn ? (requestedSourceReplyFinal ?? true) : undefined,
+          sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
           inboundEventKind: options?.inboundEventKind,
           inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,
           abortSignal: signal,
