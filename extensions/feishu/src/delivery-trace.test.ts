@@ -20,12 +20,10 @@ import type { ReplyPayload } from "./reply-dispatcher-runtime-api.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type RecordedWireCall = Parameters<WireRecorder["recordWireCall"]>[0];
-type CreateFeishuReplyDispatcher = typeof import(
-  "./reply-dispatcher.js"
-)["createFeishuReplyDispatcher"];
-type StreamingStartBackoffMap = typeof import(
-  "./reply-dispatcher-state.js"
-)["streamingStartBackoffUntilByAccount"];
+type CreateFeishuReplyDispatcher =
+  typeof import("./reply-dispatcher.js").createFeishuReplyDispatcher;
+type StreamingStartBackoffMap =
+  typeof import("./reply-dispatcher-state.js").streamingStartBackoffUntilByAccount;
 
 type FeishuDispatcherOptions = {
   onReplyStart?: () => Promise<void> | void;
