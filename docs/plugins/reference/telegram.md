@@ -20,4 +20,4 @@ channels: telegram
 
 ## Related docs
 
-- [telegram](/channels/telegram)
+- [Telegram](/channels/telegram)

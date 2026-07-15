@@ -460,7 +460,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
         AppStateStore.shared.applyPeekabooBridgeHostState()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+            if !PostUpdateController.shared.startIfNeeded() {
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+            }
         }
         Task {
             try? await Task.sleep(for: .seconds(2))
@@ -802,6 +804,13 @@ func allowedSparkleChannels(forGatewayUpdateChannel channel: String?) -> Set<Str
 extension SparkleUpdaterController: SPUUpdaterDelegate {
     func allowedChannels(for _: SPUUpdater) -> Set<String> {
         allowedSparkleChannels(forGatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel())
+    }
+
+    func updater(_: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        guard let currentVersion = GatewayEnvironment.appVersionString() else { return }
+        PostAppUpdateReceiptStore.record(
+            fromVersion: currentVersion,
+            toVersion: item.displayVersionString)
     }
 }
 

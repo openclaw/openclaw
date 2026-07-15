@@ -123,8 +123,16 @@ export function parseArgs(argv) {
       continue;
     }
     if (arg === "--") {
-      for (const extra of argv.slice(i + 1)) {
-        const assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
+      const extras = argv.slice(i + 1);
+      for (let extraIndex = 0; extraIndex < extras.length; extraIndex += 1) {
+        const extra = extras[extraIndex];
+        let assignment;
+        if (extra === "-f") {
+          assignment = readOptionValue(extras, extraIndex, extra);
+          extraIndex += 1;
+        } else {
+          assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
+        }
         const [key, ...valueParts] = assignment.split("=");
         if (!key || valueParts.length === 0) {
           throw new Error(`Unsupported extra argument after --: ${extra}`);
