@@ -208,7 +208,12 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     await respondWorkerMutation(
       respond,
       async () => {
-        const destroyed = await service.destroyUnattached(params.environmentId);
+        if (params.force) {
+          context.workerPlacementDispatchService?.forceAbandonEnvironment(params.environmentId);
+        }
+        const destroyed = params.force
+          ? await service.destroy(params.environmentId)
+          : await service.destroyUnattached(params.environmentId);
         // Destruction is authoritative. Project the dead worker into its owning
         // placement before returning, or immediate session deletion stays fenced.
         try {

@@ -3,8 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -15,85 +13,19 @@ import type {
   WorkerDispatchEnvironmentService,
   WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
-import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import {
-  createWorkerSessionPlacementStore,
-  type WorkerSessionPlacementRecord,
-} from "./placement-store.js";
-import { workerEnvironmentIdForIdempotencyKey } from "./service.js";
+  BUNDLE_HASH,
+  createDispatchEnvironmentFixtures,
+  type DispatchStage,
+  MANIFEST_REF,
+  type PlacementStore,
+  REQUEST,
+  seedActivePlacement,
+  seedStartingPlacement,
+} from "./placement-dispatch-test-fixtures.js";
+import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
-
-type WorkerDispatchRequest = Parameters<
-  ReturnType<typeof createWorkerPlacementDispatchService>["dispatch"]
->[0];
-
-const BUNDLE_HASH = "a".repeat(64);
-const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
-const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
-const REQUEST: WorkerDispatchRequest = {
-  sessionId: "session-1",
-  sessionKey: "agent:main:session-1",
-  agentId: "main",
-  profileId: "development",
-};
-
-type PlacementStore = ReturnType<typeof createWorkerSessionPlacementStore>;
-type DispatchEnvironmentRecord = Awaited<ReturnType<WorkerDispatchEnvironmentService["create"]>>;
-type DispatchStage =
-  | "barrier"
-  | "workspace"
-  | "create"
-  | "tunnel:ready"
-  | "sync"
-  | "attach"
-  | "tunnel:attached"
-  | "activation";
-
-function seedStartingPlacement(
-  store: PlacementStore,
-  environmentId: string,
-): WorkerSessionPlacementRecord {
-  let current = store.startDispatch(REQUEST);
-  current = store.transition({
-    sessionId: REQUEST.sessionId,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: current.generation,
-    patch: { environmentId },
-  });
-  current = store.transition({
-    sessionId: REQUEST.sessionId,
-    from: "provisioning",
-    to: "syncing",
-    expectedGeneration: current.generation,
-    patch: { workerBundleHash: BUNDLE_HASH },
-  });
-  current = store.transition({
-    sessionId: REQUEST.sessionId,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: current.generation,
-    patch: {
-      workspaceBaseManifestRef: MANIFEST_REF,
-      remoteWorkspaceDir: "/worker/workspace",
-    },
-  });
-  return current;
-}
-
-function seedActivePlacement(
-  store: PlacementStore,
-  params: { environmentId: string; ownerEpoch: number },
-): WorkerSessionPlacementRecord {
-  const current = seedStartingPlacement(store, params.environmentId);
-  return store.transition({
-    sessionId: REQUEST.sessionId,
-    from: "starting",
-    to: "active",
-    expectedGeneration: current.generation,
-    patch: { activeOwnerEpoch: params.ownerEpoch },
-  });
-}
 
 function createHarness(
   placementStore: PlacementStore,
@@ -126,8 +58,8 @@ function createHarness(
     listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
-    completeWorkspaceResultAndReleaseTurn: (claim, options) =>
-      placementStore.completeWorkspaceResultAndReleaseTurn(claim, options),
+    completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) =>
+      placementStore.completeWorkspaceResultAndReleaseTurn(claim, completionOptions),
     abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
     releaseTurn: (claim) => placementStore.releaseTurn(claim),
     updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
@@ -191,63 +123,9 @@ function createHarness(
       return placementStore.adoptActive(params);
     },
   };
-  const environmentId = workerEnvironmentIdForIdempotencyKey(
-    `session-dispatch:${REQUEST.sessionId}:1`,
-  );
-  const profileSnapshot: WorkerProfile = {
-    settings: { region: "test" },
-  };
-  const bootstrapReceipt: WorkerAdmissionHandshake = {
-    bundleHash: BUNDLE_HASH,
-    openclawVersion: "2026.7.2",
-    protocolFeatures: [],
-  };
-  const sshEndpoint: WorkerSshEndpoint = {
-    host: "worker.example.test",
-    port: 22,
-    user: "worker",
-    hostKey: HOST_KEY,
-    keyRef: { source: "file", provider: "worker-keys", id: "/key" },
-  };
-  const environmentBase = {
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot,
-    provisionOperationId: "provision-1",
-    bootstrapReceipt,
-    teardownTerminalState: null,
-    lastError: null,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    stateChangedAtMs: 1,
-    idleSinceAtMs: null,
-    destroyRequestedAtMs: null,
-    leaseId: "lease-1",
-    sshEndpoint,
-  };
-  const ready = {
-    ...environmentBase,
-    state: "ready",
-    ownerEpoch: 1,
-    attachedSessionIds: [],
-    tunnelStatus: "connected",
-  } satisfies DispatchEnvironmentRecord;
-  const attached = {
-    ...environmentBase,
-    state: "attached",
-    ownerEpoch: 2,
-    attachedSessionIds: [REQUEST.sessionId],
-    tunnelStatus: "connected",
-  } satisfies DispatchEnvironmentRecord;
+  const { attached, destroyedEnvironment, environmentId, ready } =
+    createDispatchEnvironmentFixtures();
   let currentEnvironment: ReturnType<WorkerDispatchEnvironmentService["get"]> = ready;
-  const destroyedEnvironment = (ownerEpoch: number): DispatchEnvironmentRecord => ({
-    ...environmentBase,
-    state: "destroyed",
-    ownerEpoch,
-    attachedSessionIds: [],
-    tunnelStatus: "stopped",
-  });
   const tunnelHandle = (ownerEpoch: number): WorkerTunnelHandle => ({
     environmentId: ready.environmentId,
     ownerEpoch,
@@ -473,9 +351,9 @@ describe("worker placement dispatch", () => {
       "tunnel:attached",
       "workspace:quiesce",
       "workspace:reconcile",
+      "workspace:verify-local",
       "workspace:verify",
       "workspace:lease",
-      "workspace:verify-local",
       "teardown:destroy",
       "teardown:stop",
       "placement:reclaimed",

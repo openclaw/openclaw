@@ -454,9 +454,9 @@ async function executeWorkerTurn(params: {
       if (!manifestAccepted) {
         throw new Error("Cloud worker workspace reconciliation was not durably accepted");
       }
+      await reconciliation.verifyLocalStable();
       await reconciliation.verifyStable();
       await quiescence.assertActive();
-      await reconciliation.verifyLocalStable();
       params.placements.acceptWorkspaceResult(params.turnClaim);
       await quiescence.resume();
       resumed = true;

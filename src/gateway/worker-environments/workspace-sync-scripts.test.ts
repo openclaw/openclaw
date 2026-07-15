@@ -119,15 +119,15 @@ describe("remote workspace quiescence scripts", () => {
   it("proves the lease is active and renews its watchdog deadline", async () => {
     const input = await fixture();
     const nonce = await quiesce(input);
-    const path = leasePath(input.home, input.workspace, nonce);
-    const before = JSON.parse(await fs.readFile(path, "utf8")) as {
+    const leaseFile = leasePath(input.home, input.workspace, nonce);
+    const before = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
       expiresAtMs: number;
       watchdog: { pid: number; start: string };
     };
 
     await renew(input, nonce);
 
-    const after = JSON.parse(await fs.readFile(path, "utf8")) as {
+    const after = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
       expiresAtMs: number;
       watchdog: { pid: number; start: string };
     };

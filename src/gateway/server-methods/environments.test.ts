@@ -32,6 +32,7 @@ type TestWorkerService = {
 function mockContext(
   workerEnvironmentService?: TestWorkerService,
   reconcileActive: (environmentId?: string) => Promise<void> = vi.fn(async () => {}),
+  forceAbandonEnvironment: (environmentId: string) => void = vi.fn(),
 ) {
   return {
     logGateway: {
@@ -53,7 +54,11 @@ function mockContext(
     workerEnvironmentService,
     ...(workerEnvironmentService
       ? {
-          workerPlacementDispatchService: { dispatch: vi.fn(), reconcileActive },
+          workerPlacementDispatchService: {
+            dispatch: vi.fn(),
+            forceAbandonEnvironment,
+            reconcileActive,
+          },
           getRuntimeConfig: () => ({
             cloudWorkers: {
               profiles: {
@@ -115,13 +120,14 @@ async function callEnvironmentMethod(
   options: {
     service?: TestWorkerService;
     reconcileActive?: (environmentId?: string) => Promise<void>;
+    forceAbandonEnvironment?: (environmentId: string) => void;
   } = {},
 ) {
   const respond = vi.fn();
   await environmentsHandlers[method]?.({
     params: params as Record<string, unknown>,
     respond,
-    context: mockContext(options.service, options.reconcileActive),
+    context: mockContext(options.service, options.reconcileActive, options.forceAbandonEnvironment),
   } as never);
   const call = respond.mock.calls.at(0);
   if (call === undefined) {
@@ -449,6 +455,23 @@ describe("environment gateway methods", () => {
       code: ErrorCodes.INVALID_REQUEST,
       message: "Attached cloud workers must be stopped through sessions.reclaim",
     });
+  });
+
+  it("durably abandons placement ownership before forced destruction", async () => {
+    const service = workerService();
+    const forceAbandonEnvironment = vi.fn();
+
+    const [ok, payload] = await callEnvironmentMethod(
+      "environments.destroy",
+      { environmentId: "worker-1", force: true },
+      { service, forceAbandonEnvironment },
+    );
+
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ worker: { state: "destroyed" } });
+    expect(forceAbandonEnvironment).toHaveBeenCalledExactlyOnceWith("worker-1");
+    expect(forceAbandonEnvironment).toHaveBeenCalledBefore(service.destroy);
+    expect(service.destroyUnattached).not.toHaveBeenCalled();
   });
 
   it("reconciles active placements before returning destroyed worker state", async () => {

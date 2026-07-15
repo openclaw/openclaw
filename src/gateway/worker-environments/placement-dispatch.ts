@@ -7,6 +7,7 @@ import {
   type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
+import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementReclaimRequest,
@@ -249,9 +250,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           if (!accepted) {
             throw new Error("Cloud worker stop did not commit its reconciled workspace");
           }
+          await reconciliation.verifyLocalStable();
           await reconciliation.verifyStable();
           await quiescence.assertActive();
-          await reconciliation.verifyLocalStable();
           await environments.destroy(current.environmentId);
           destroyed = true;
         } finally {
@@ -304,6 +305,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
 
   return {
     dispatch,
+    forceAbandonEnvironment: (environmentId: string) =>
+      forceAbandonWorkerEnvironment(placements, environmentId),
     reclaim,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,

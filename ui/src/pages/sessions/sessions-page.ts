@@ -1077,11 +1077,9 @@ class SessionsPage extends OpenClawLightDomElement {
         .disabled=${this.loading}
         .forkDisabled=${row.modelSelectionLocked === true}
         .archiveAllowed=${archiveAllowed}
-        .cloudWorkerStopAllowed=${Boolean(
-          isStoppableCloudWorkerPlacement(row.placement) &&
-          row.hasActiveRun !== true &&
-          isGatewayMethodAdvertised(gateway, "sessions.reclaim") === true,
-        )}
+        .cloudWorkerStopAllowed=${isStoppableCloudWorkerPlacement(row.placement) &&
+        row.hasActiveRun !== true &&
+        isGatewayMethodAdvertised(gateway, "sessions.reclaim") === true}
         .groups=${this.knownCategories()}
         .canOpenChat=${row.kind !== "global"}
         .work=${this.sessionMenuWork}

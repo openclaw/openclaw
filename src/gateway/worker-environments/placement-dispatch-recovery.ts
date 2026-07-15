@@ -165,9 +165,9 @@ export function createPlacementRecoveryActions(deps: {
               abort: () => placements.abortWorkspaceReconciliation(owner),
             },
           });
+          await reconciliation.verifyLocalStable();
           await reconciliation.verifyStable();
           await quiescence.assertActive();
-          await reconciliation.verifyLocalStable();
           placements.acceptWorkspaceResult(turnClaim);
           if (sameGatewayInstance) {
             await quiescence.resume();
