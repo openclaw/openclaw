@@ -235,6 +235,25 @@ describe("task-flow-registry audit", () => {
     });
   });
 
+  it("does not flag retained terminal blocked flows after their task is pruned", () => {
+    const now = 60 * 60_000;
+    const flow: TaskFlowRecord = {
+      flowId: "flow-terminal-blocked",
+      syncMode: "task_mirrored",
+      ownerKey: "agent:main:main",
+      revision: 0,
+      status: "blocked",
+      notifyPolicy: "done_only",
+      goal: "Historical blocked task",
+      blockedTaskId: "task-pruned",
+      createdAt: 1,
+      updatedAt: 100,
+      endedAt: 100,
+    };
+
+    expect(listTaskFlowAuditFindings({ flows: [flow], now })).toStrictEqual([]);
+  });
+
   it("reports cancel-stuck before maintenance finalizes the flow", async () => {
     await withTaskFlowAuditStateDir(async () => {
       const flow = createManagedTaskFlow({

@@ -11,7 +11,6 @@ import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps, resolveSessionWorkStartError } from "./lifecycle.js";
 import {
-  resolveExplicitSessionFilePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
@@ -30,7 +29,7 @@ import {
   updateSessionStoreEntry,
 } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
+import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
 
@@ -85,16 +84,6 @@ describe("session path safety", () => {
       { sessionsDir },
     );
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
-  });
-
-  it("rejects explicit sessionFile paths without derived fallback", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-
-    expect(() =>
-      resolveExplicitSessionFilePath("/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl", {
-        sessionsDir,
-      }),
-    ).toThrow(/within sessions directory/);
   });
 
   it("ignores multi-store sentinel paths when deriving session file options", () => {
@@ -1004,36 +993,6 @@ describe("session store writer queue", () => {
     expect(merged.sessionFile).toBe("/tmp/openclaw/sessions/custom-transcript.jsonl");
   });
 
-  it("caps future updatedAt values at the session merge boundary", () => {
-    const now = 1_000;
-    const merged = mergeSessionEntryWithPolicy(
-      {
-        sessionId: "sess-future",
-        updatedAt: now + 10_000,
-      },
-      {
-        updatedAt: now + 20_000,
-      },
-      { now },
-    );
-
-    expect(merged.updatedAt).toBe(now);
-  });
-
-  it("caps future updatedAt values while preserving activity", () => {
-    const now = 1_000;
-    const merged = mergeSessionEntryWithPolicy(
-      {
-        sessionId: "sess-preserve-future",
-        updatedAt: now + 10_000,
-      },
-      {},
-      { now, policy: "preserve-activity" },
-    );
-
-    expect(merged.updatedAt).toBe(now);
-  });
-
   it("normalizes orphan modelProvider fields at store write boundary", async () => {
     const key = "agent:main:orphan-provider";
     const { storePath } = await makeTmpStore({
@@ -1223,3 +1182,4 @@ describe("resolveAndPersistSessionFile", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

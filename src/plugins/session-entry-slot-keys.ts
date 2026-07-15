@@ -76,6 +76,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "modelOverrideSource",
   "modelOverrideFallbackOriginProvider",
   "modelOverrideFallbackOriginModel",
+  "modelFallback",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -145,6 +146,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "skillsSnapshot",
   "systemPromptReport",
   "pluginDebugEntries",
+  "hookExternalContentSource",
   "acp",
   "quotaSuspension",
 ] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;

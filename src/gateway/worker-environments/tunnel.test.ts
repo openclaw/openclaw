@@ -134,7 +134,10 @@ function localWorkspaceRunner(remoteHome: string) {
         return await runCommandWithTimeout(localArgv, options);
       }
       if (argv[0] === "ssh") {
-        if (options.input?.includes("unsafe worker tunnel directory")) {
+        if (
+          typeof options.input === "string" &&
+          options.input.includes("unsafe worker tunnel directory")
+        ) {
           return success();
         }
         const remoteCommand = argv.at(-1);
@@ -228,7 +231,10 @@ describe("worker tunnel manager", () => {
       if (argv.includes("--verify")) {
         return success(`${commit}\n`);
       }
-      if (options.input?.includes("unsafe worker workspace directory")) {
+      if (
+        typeof options.input === "string" &&
+        options.input.includes("unsafe worker workspace directory")
+      ) {
         return success(`${remoteWorkspaceDir}\n`);
       }
       if (argv.at(-1)?.includes("worker workspace symlink escapes")) {
@@ -286,7 +292,10 @@ describe("worker tunnel manager", () => {
       if (argv[0] === "rsync") {
         return { ...success("", "transfer denied"), code: 23 };
       }
-      if (options.input?.includes("unsafe worker workspace directory")) {
+      if (
+        typeof options.input === "string" &&
+        options.input.includes("unsafe worker workspace directory")
+      ) {
         return success(`${remoteWorkspaceDir}\n`);
       }
       return undefined;

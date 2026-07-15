@@ -92,7 +92,7 @@ const QQBotAccountSchema = z
   })
   .passthrough();
 
-export const QQBotConfigSchema = QQBotAccountSchema.extend({
+const QQBotConfigSchema = QQBotAccountSchema.extend({
   stt: QQBotSttSchema,
   accounts: z.object({}).catchall(QQBotAccountSchema.passthrough()).optional(),
   defaultAccount: z.string().optional(),

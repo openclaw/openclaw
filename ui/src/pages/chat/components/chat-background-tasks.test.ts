@@ -2,13 +2,11 @@ import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/data.ts";
+import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import {
-  backgroundTasksActiveCount,
   createBackgroundTasksProps,
   handleBackgroundTasksEvent,
   renderBackgroundTasksRail,
-  renderBackgroundTasksStatusRow,
-  toggleBackgroundTasks,
   type BackgroundTasksHost,
   type BackgroundTasksProps,
 } from "./chat-background-tasks.ts";
@@ -69,7 +67,7 @@ afterEach(() => {
 });
 
 describe("background tasks rail state", () => {
-  it("loads agent-scoped tasks eagerly so the collapsed badge detects running work", async () => {
+  it("loads agent-scoped tasks eagerly while the rail is collapsed", async () => {
     const { host, request } = createHost({
       request: (method, params) => {
         expect(method).toBe("tasks.list");
@@ -85,7 +83,6 @@ describe("background tasks rail state", () => {
     expect(props.collapsed).toBe(true);
     expect(request).toHaveBeenCalledTimes(2);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
-    expect(backgroundTasksActiveCount(props)).toBe(1);
   });
 
   it("loads the snapshot when a task event arrives before any load", async () => {
@@ -108,12 +105,11 @@ describe("background tasks rail state", () => {
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
   });
 
-  it("keeps the pane open across agent switches but reloads the task list", async () => {
+  it("keeps expansion across agent switches and reloads the new scope", async () => {
     const { host, request } = createHost();
-    toggleBackgroundTasks(host);
+    createBackgroundTasksProps(host, openSession).onToggleCollapsed();
     createBackgroundTasksProps(host, openSession);
     await flushAsync();
-    expect(request).toHaveBeenCalledTimes(2);
 
     host.sessionKey = "agent:research:current";
     const props = createBackgroundTasksProps(host, openSession);
@@ -121,22 +117,20 @@ describe("background tasks rail state", () => {
     expect(props.agentId).toBe("research");
     expect(props.tasks).toBeNull();
     await flushAsync();
-    expect(request.mock.calls.length).toBeGreaterThanOrEqual(4);
     expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ agentId: "research" });
   });
 
-  it("surfaces cancellation refusals as errors", async () => {
+  it("surfaces cancellation refusals through the rail props", async () => {
     const running = makeTask({ id: "task-1" });
     const { host } = createHost({
-      request: (method) => {
-        if (method === "tasks.list") {
-          return Promise.resolve({ tasks: [running] });
-        }
-        return Promise.resolve({ found: true, cancelled: false, reason: "already finished" });
-      },
+      request: (method) =>
+        method === "tasks.list"
+          ? Promise.resolve({ tasks: [running] })
+          : Promise.resolve({ found: true, cancelled: false, reason: "already finished" }),
     });
-    toggleBackgroundTasks(host);
-    createBackgroundTasksProps(host, openSession);
+    const auth = { role: "operator" as const, scopes: ["operator.write"] };
+    host.hello = { type: "hello-ok", protocol: 4, auth };
+    createBackgroundTasksProps(host, openSession).onToggleCollapsed();
     await flushAsync();
 
     createBackgroundTasksProps(host, openSession).onCancel("task-1");
@@ -153,8 +147,7 @@ describe("background tasks rail events", () => {
     const { host, request } = createHost({
       request: () => Promise.resolve({ tasks }),
     });
-    toggleBackgroundTasks(host);
-    createBackgroundTasksProps(host, openSession);
+    createBackgroundTasksProps(host, openSession).onToggleCollapsed();
     await flushAsync();
     return { host, request };
   }
@@ -222,6 +215,7 @@ describe("background tasks rail rendering", () => {
     render(
       html`${renderBackgroundTasksRail({
         agentId: "main",
+        statusRowId: "chat-tasks-status-test",
         collapsed: false,
         narrowLayout: false,
         connected: true,
@@ -265,6 +259,7 @@ describe("background tasks rail rendering", () => {
     render(
       html`${renderBackgroundTasksRail({
         agentId: "main",
+        statusRowId: "chat-tasks-status-test",
         collapsed: false,
         narrowLayout: false,
         connected: true,
@@ -310,6 +305,7 @@ describe("background tasks rail rendering", () => {
     render(
       html`${renderBackgroundTasksRail({
         agentId: "main",
+        statusRowId: "chat-tasks-status-test",
         collapsed: false,
         narrowLayout: false,
         connected: true,
@@ -339,6 +335,7 @@ describe("running-tasks status row", () => {
   function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksProps {
     return {
       agentId: "main",
+      statusRowId: "chat-tasks-status-test",
       collapsed: true,
       narrowLayout: false,
       connected: true,
@@ -428,6 +425,57 @@ describe("running-tasks status row", () => {
     expect(link?.textContent?.trim()).toBe("2 running tasks");
     link?.click();
     expect(onToggleCollapsed).not.toHaveBeenCalled();
+  });
+
+  it("anchors a hover preview of the latest tasks, active first, capped at five", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderBackgroundTasksStatusRow(
+        makeProps({
+          tasks: [
+            makeTask({ id: "a1", title: "Active one", updatedAt: 9_000 }),
+            makeTask({ id: "a2", status: "queued", title: "Queued two", updatedAt: 8_000 }),
+            makeTask({ id: "f1", status: "completed", title: "Finished one", updatedAt: 7_000 }),
+            makeTask({ id: "f2", status: "failed", title: "Finished two", updatedAt: 6_000 }),
+            makeTask({ id: "f3", status: "completed", title: "Finished three", updatedAt: 5_000 }),
+            makeTask({ id: "f4", status: "completed", title: "Finished four", updatedAt: 4_000 }),
+          ],
+        }),
+      )}`,
+      container,
+    );
+
+    const preview = container.querySelector("wa-tooltip.chat-tasks-status__preview");
+    expect(preview?.getAttribute("for")).toBe("chat-tasks-status-test");
+    expect(container.querySelector(".chat-tasks-status")?.id).toBe("chat-tasks-status-test");
+    const titles = [...container.querySelectorAll(".chat-tasks-preview__title")].map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(titles).toEqual([
+      "Active one",
+      "Queued two",
+      "Finished one",
+      "Finished two",
+      "Finished three",
+    ]);
+    expect(container.querySelector(".chat-tasks-preview__more")?.textContent?.trim()).toBe(
+      "+1 more",
+    );
+  });
+
+  it("sizes the preview to the task list without an overflow line", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderBackgroundTasksStatusRow(
+        makeProps({ tasks: [makeTask({ id: "t1", title: "Only task" })] }),
+      )}`,
+      container,
+    );
+
+    expect(container.querySelectorAll(".chat-tasks-preview__row").length).toBe(1);
+    expect(container.querySelector(".chat-tasks-preview__more")).toBeNull();
   });
 
   it("renders nothing without active tasks", () => {

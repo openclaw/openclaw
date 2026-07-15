@@ -7,6 +7,7 @@ import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.isReady
 import ai.openclaw.app.requiresSetup
+import ai.openclaw.app.takeUtf16Safe
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -1228,7 +1229,7 @@ private fun userFacingVoiceAttentionStatus(status: String): String {
   if (lower.contains("microphone permission required")) {
     return nativeString("Microphone permission is required.")
   }
-  return if (normalized.length <= 90) normalized else "${normalized.take(87)}..."
+  return if (normalized.length <= 90) normalized else "${normalized.takeUtf16Safe(87)}..."
 }
 
 private fun String.isVoiceGatewayReady(): Boolean {

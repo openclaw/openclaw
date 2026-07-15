@@ -22,6 +22,7 @@ export const ModelChoiceSchema = closedObject({
   available: Type.Optional(Type.Boolean()),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
+  apiKeySupported: Type.Optional(Type.Boolean()),
   input: Type.Optional(
     Type.Array(
       Type.Union([
@@ -192,6 +193,7 @@ export const AgentsFilesSetResultSchema = closedObject({
 
 /** Model catalog request with optional visibility scope. */
 export const ModelsListParamsSchema = closedObject({
+  includeProviderCapabilities: Type.Optional(Type.Boolean()),
   view: Type.Optional(
     Type.Union([
       Type.Literal("default"),
@@ -205,6 +207,42 @@ export const ModelsListParamsSchema = closedObject({
 /** Model catalog result. */
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+});
+
+/** Runs a bounded live credential probe for one model provider. */
+export const ModelsProbeParamsSchema = closedObject({
+  provider: NonEmptyString,
+  profileId: Type.Optional(NonEmptyString),
+  timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+});
+
+export const AuthProbeStatusSchema = Type.Union([
+  Type.Literal("ok"),
+  Type.Literal("auth"),
+  Type.Literal("rate_limit"),
+  Type.Literal("billing"),
+  Type.Literal("timeout"),
+  Type.Literal("format"),
+  Type.Literal("unknown"),
+  Type.Literal("no_model"),
+]);
+
+/** Secret-free result for one provider credential target. */
+export const ModelsProbeTargetResultSchema = closedObject({
+  profileId: Type.Optional(NonEmptyString),
+  label: NonEmptyString,
+  status: AuthProbeStatusSchema,
+  latencyMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  error: Type.Optional(Type.String()),
+});
+
+/** Provider-level live probe rollup plus per-credential results. */
+export const ModelsProbeResultSchema = closedObject({
+  provider: NonEmptyString,
+  status: AuthProbeStatusSchema,
+  latencyMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  error: Type.Optional(Type.String()),
+  results: Type.Array(ModelsProbeTargetResultSchema),
 });
 
 /** Reads installed skill status, optionally for a selected agent. */
@@ -873,6 +911,10 @@ export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelChoice = Static<typeof ModelChoiceSchema>;
 export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;
+export type AuthProbeStatus = Static<typeof AuthProbeStatusSchema>;
+export type ModelsProbeParams = Static<typeof ModelsProbeParamsSchema>;
+export type ModelsProbeTargetResult = Static<typeof ModelsProbeTargetResultSchema>;
+export type ModelsProbeResult = Static<typeof ModelsProbeResultSchema>;
 export type SkillsStatusParams = Static<typeof SkillsStatusParamsSchema>;
 export type ToolsCatalogParams = Static<typeof ToolsCatalogParamsSchema>;
 export type ToolCatalogProfile = Static<typeof ToolCatalogProfileSchema>;
@@ -921,3 +963,4 @@ export type SkillsUploadChunkParams = Static<typeof SkillsUploadChunkParamsSchem
 export type SkillsUploadCommitParams = Static<typeof SkillsUploadCommitParamsSchema>;
 export type SkillsInstallParams = Static<typeof SkillsInstallParamsSchema>;
 export type SkillsUpdateParams = Static<typeof SkillsUpdateParamsSchema>;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

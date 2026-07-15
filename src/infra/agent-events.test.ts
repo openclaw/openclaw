@@ -16,7 +16,6 @@ import {
   registerAgentRunContext,
   releaseAgentRunContext,
   resetAgentEventsForTest,
-  resetAgentRunContextForTest,
   rotateAgentEventLifecycleGeneration,
   sweepStaleRunContexts,
   withAgentRunLifecycleGeneration,
@@ -541,7 +540,6 @@ describe("agent-events sequencing", () => {
   });
 
   test("omits sessionKey for non-lifecycle runs hidden from Control UI", () => {
-    resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden", {
       sessionKey: "session-quietchat",
       isControlUiVisible: false,
@@ -563,7 +561,6 @@ describe("agent-events sequencing", () => {
   });
 
   test("preserves sessionKey for lifecycle events hidden from Control UI", () => {
-    resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden-lifecycle", {
       sessionKey: "session-quietchat",
       isControlUiVisible: false,
@@ -585,7 +582,6 @@ describe("agent-events sequencing", () => {
   });
 
   test("falls back to registered sessionKey for hidden lifecycle events", () => {
-    resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden-lifecycle-context", {
       sessionKey: "session-quietchat-context",
       isControlUiVisible: false,
@@ -626,7 +622,6 @@ describe("agent-events sequencing", () => {
   });
 
   test("merges later run context updates into existing runs", () => {
-    resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", {
       sessionKey: "session-main",
       isControlUiVisible: true,
@@ -646,7 +641,6 @@ describe("agent-events sequencing", () => {
   });
 
   test("falls back to registered sessionKey when event sessionKey is blank", () => {
-    resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", { sessionKey: "session-main" });
 
     let receivedSessionKey: string | undefined;

@@ -18,7 +18,7 @@ import { validateRequestedSkillSlug } from "./archive-install.js";
 const SKILL_UPLOAD_TTL_MS = 60 * 60 * 1000;
 const MAX_SKILL_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
 const MAX_SKILL_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_SKILL_UPLOAD_CHUNK_BYTES / 3) * 4;
-export const MAX_ACTIVE_SKILL_UPLOADS = 32;
+const MAX_ACTIVE_SKILL_UPLOADS = 32;
 const SKILL_UPLOAD_IDEMPOTENCY_KEY_MAX_LENGTH = 2048;
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
@@ -361,7 +361,7 @@ async function readCommittedRecord(
   return record;
 }
 
-export function createSkillUploadStore(options?: {
+function createSkillUploadStore(options?: {
   rootDir?: string;
   now?: () => number;
   ttlMs?: number;
@@ -608,3 +608,9 @@ export function createSkillUploadStore(options?: {
 }
 
 export const defaultSkillUploadStore = createSkillUploadStore();
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.skillUploadStoreTestApi")] = {
+    createSkillUploadStore,
+  };
+}

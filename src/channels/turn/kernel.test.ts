@@ -16,7 +16,6 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
-  resetDiagnosticTraceContextForTest,
 } from "../../infra/diagnostic-trace-context.js";
 import { logMessageProcessed } from "../../logging/diagnostic.js";
 import { getChildLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
@@ -192,7 +191,6 @@ describe("channel turn kernel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetDiagnosticEventsForTest();
-    resetDiagnosticTraceContextForTest();
     resetLogger();
     setLoggerOverride({ level: "info" });
     resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
@@ -1506,3 +1504,4 @@ describe("channel turn kernel", () => {
     expect(finalizedResult.routeSessionKey).toBe("agent:main:test:peer");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

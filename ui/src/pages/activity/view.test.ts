@@ -92,7 +92,7 @@ describe("renderActivity", () => {
 
     expect(container.querySelector(".activity-page__title")).toBeNull();
     expect(container.querySelector(".activity-page__subtitle")).toBeNull();
-    expect(container.querySelector(".activity-toolbar__count")?.textContent?.trim()).toBe("1 of 1");
+    expect(container.querySelector(".activity-count")?.textContent?.trim()).toBe("1 of 1");
   });
 
   it("normalizes rounded minute durations that would otherwise show 60 seconds", async () => {

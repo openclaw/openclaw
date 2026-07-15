@@ -25,6 +25,7 @@ export function installRuntimeTaskDeliveryMock(): void {
     sendMessage: runtimeTaskMocks.sendMessageMock,
   });
   setTaskRegistryControlRuntimeForTests({
+    cancelActiveCronTaskRun: () => false,
     getAcpSessionManager: () => ({
       cancelSession: runtimeTaskMocks.cancelSessionMock,
     }),

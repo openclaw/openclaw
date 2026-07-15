@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -18,11 +20,6 @@ import {
   type WorkerSessionPlacementRecord,
 } from "./placement-store.js";
 import { workerEnvironmentIdForIdempotencyKey } from "./service.js";
-import type {
-  WorkerEnvironmentBootstrapReceipt,
-  WorkerEnvironmentProfileSnapshot,
-  WorkerEnvironmentSshEndpoint,
-} from "./store.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
 
 type WorkerDispatchRequest = Parameters<
@@ -153,15 +150,15 @@ function createHarness(
   const environmentId = workerEnvironmentIdForIdempotencyKey(
     `session-dispatch:${REQUEST.sessionId}:1`,
   );
-  const profileSnapshot: WorkerEnvironmentProfileSnapshot = {
+  const profileSnapshot: WorkerProfile = {
     settings: { region: "test" },
   };
-  const bootstrapReceipt: WorkerEnvironmentBootstrapReceipt = {
+  const bootstrapReceipt: WorkerAdmissionHandshake = {
     bundleHash: BUNDLE_HASH,
     openclawVersion: "2026.7.2",
     protocolFeatures: [],
   };
-  const sshEndpoint: WorkerEnvironmentSshEndpoint = {
+  const sshEndpoint: WorkerSshEndpoint = {
     host: "worker.example.test",
     port: 22,
     user: "worker",
@@ -653,6 +650,35 @@ describe("worker placement dispatch", () => {
       "placement:reconciling",
       "placement:reclaimed",
     ]);
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
+
+  it("limits requested runtime reconciliation to one environment", async () => {
+    const harness = createHarness(placementStore);
+    harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentDestroyed();
+    harness.log.length = 0;
+
+    await harness.service.reconcileActive("worker-other");
+
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
+    expect(harness.log).toEqual(["environment:reconcile"]);
+
+    await harness.service.reconcileActive(harness.ready.environmentId);
+
+    expect(harness.placements.current()).toMatchObject({ state: "reclaimed" });
+  });
+
+  it("does not retry unrelated failed teardown during requested reconciliation", async () => {
+    const harness = createHarness(placementStore, { failAt: "sync", destroyFails: true });
+    await expect(harness.service.dispatch(REQUEST)).rejects.toThrow("sync failed");
+    harness.log.length = 0;
+    vi.mocked(harness.environments.destroy).mockClear();
+
+    await harness.service.reconcileActive("worker-other");
+
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
+    expect(harness.log).toEqual(["environment:reconcile"]);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 

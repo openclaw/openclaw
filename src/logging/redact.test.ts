@@ -15,10 +15,8 @@ import {
   redactToolPayloadTextWithConfig,
   resolveRedactOptions,
 } from "./redact.js";
-import {
-  registerSecretValueForRedaction,
-  resetSecretRedactionRegistryForTest,
-} from "./secret-redaction-registry.js";
+import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
 
 const defaults = getDefaultRedactPatterns();
 let tempDirs: string[] = [];
@@ -1395,3 +1393,4 @@ describe("redactSensitiveLines", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

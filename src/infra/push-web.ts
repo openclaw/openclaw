@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { PushSubscription, VapidKeys } from "web-push";
 import { resolveStateDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { sha256HexPrefix } from "./crypto-digest.js";
@@ -9,10 +10,8 @@ import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
 // --- Types ---
 
-type WebPushSubscription = {
+type WebPushSubscription = PushSubscription & {
   subscriptionId: string;
-  endpoint: string;
-  keys: { p256dh: string; auth: string };
   createdAtMs: number;
   updatedAtMs: number;
 };
@@ -21,11 +20,7 @@ type WebPushRegistrationState = {
   subscriptionsByEndpointHash: Record<string, WebPushSubscription>;
 };
 
-type VapidKeyPair = {
-  publicKey: string;
-  privateKey: string;
-  subject: string;
-};
+type VapidKeyPair = VapidKeys & { subject: string };
 
 type WebPushSendResult = {
   ok: boolean;
@@ -189,7 +184,7 @@ export async function registerWebPushSubscription(
   });
 }
 
-export async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
+async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
   const state = await loadState(baseDir);
   return Object.values(state.subscriptionsByEndpointHash);
 }

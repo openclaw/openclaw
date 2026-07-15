@@ -105,7 +105,7 @@ const deferredSessionSuspension = new AsyncLocalStorage<{
   onDeferred?: (params: SessionSuspensionParams) => void;
 }>();
 
-export type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
+type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
 type SessionSuspensionTarget =
   | { mode: "defer"; defer: (params: SessionSuspensionParams) => void }
   | { mode: "suspend" };

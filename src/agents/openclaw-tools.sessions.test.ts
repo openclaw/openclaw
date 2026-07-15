@@ -42,7 +42,7 @@ import {
   testing as embeddedRunsTesting,
   setActiveEmbeddedRun,
 } from "./embedded-agent-runner/runs.js";
-import { testing as agentStepTesting } from "./tools/agent-step.js";
+import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { testing as sessionsResolutionTesting } from "./tools/sessions-resolution.js";
@@ -2268,3 +2268,4 @@ describe("sessions tools", () => {
     expect(sendParams.threadId).toBe("99");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

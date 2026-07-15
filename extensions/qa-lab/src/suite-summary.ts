@@ -116,7 +116,7 @@ export function countQaSuiteFailedScenarios(
   return failed;
 }
 
-export function countQaSuiteFailedOrSkippedScenarios(
+function countQaSuiteFailedOrSkippedScenarios(
   scenarios: ReadonlyArray<QaSuiteScenarioStatus>,
 ): number {
   let blocking = 0;
@@ -128,7 +128,7 @@ export function countQaSuiteFailedOrSkippedScenarios(
   return blocking;
 }
 
-export function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): number | null {
+function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): number | null {
   if (!summary || typeof summary !== "object") {
     return null;
   }
@@ -161,9 +161,7 @@ export function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): num
   return countedFailures;
 }
 
-export function readQaSuiteFailedOrSkippedScenarioCountFromSummary(
-  summary: unknown,
-): number | null {
+function readQaSuiteFailedOrSkippedScenarioCountFromSummary(summary: unknown): number | null {
   if (!summary || typeof summary !== "object") {
     return null;
   }

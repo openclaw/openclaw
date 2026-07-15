@@ -157,7 +157,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       );
       const stores = openStores(stateDir, keys);
       const reviews = new ReviewApprovalStore(stateDir);
-      const friends = new ReefFriendManager(ctx.account.config, transport);
+      const friends = new ReefFriendManager(ctx.account.config, transport, stateDir);
       const pairing = createChannelPairingController({
         core: runtime,
         channel: "reef",

@@ -187,12 +187,12 @@ function composerControlsHtml() {
   return `
     <div class="agent-chat__composer-controls">
       <div class="chat-view-menu-wrapper">
-        <button class="chat-view-menu-trigger" type="button" aria-label="View">
-          ${iconSvg()}
-        </button>
-        <div class="chat-view-menu" role="menu" aria-label="View">
-          <button class="chat-view-menu__item" role="menuitemcheckbox">Reasoning</button>
-        </div>
+        <wa-dropdown class="chat-view-menu" aria-label="View">
+          <button slot="trigger" class="chat-view-menu-trigger" type="button" aria-label="View">
+            ${iconSvg()}
+          </button>
+          <wa-dropdown-item class="chat-view-menu__item" type="checkbox">Reasoning</wa-dropdown-item>
+        </wa-dropdown>
       </div>
       <div class="chat-composer-model-control">
         <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
@@ -246,9 +246,9 @@ function chatHeaderControlsHtml(hidden = false) {
   `;
 }
 
-function chatHtml(opts: ChatFixtureOptions = {}) {
+function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
   return `
-    <div class="shell shell--chat" data-chat-responsive-fixture>
+    <div class="shell shell--chat${mobileNavLayout ? " shell--mobile-nav" : ""}" data-chat-responsive-fixture>
       <header class="topbar">
         <div class="topnav-shell">
           <div class="topnav-shell__actions">
@@ -421,7 +421,7 @@ async function openFixture(width: number, height: number, opts: ChatFixtureOptio
   const page = await openBrowserPage(width, height);
   try {
     await page.setContent(
-      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts)}</body></html>`,
+      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts, width <= 1100)}</body></html>`,
     );
     return page;
   } catch (error) {
@@ -1466,6 +1466,59 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("keeps crowded task sections independently scrollable in the side rail", async () => {
+    const page = await openBrowserPage(1000, 700);
+    try {
+      const taskRows = Array.from(
+        { length: 10 },
+        (_, index) => `<div class="chat-tasks-rail__task">Task ${index + 1}</div>`,
+      ).join("");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div style="width: 760px; height: 320px; display: flex;">
+            <div class="chat-workbench chat-workbench--tasks-open chat-workbench--workspace-collapsed">
+              <div class="chat-workbench__main">thread</div>
+              <aside class="chat-tasks-rail">
+                <div class="chat-tasks-rail__scroll">
+                  <section class="chat-tasks-rail__section">
+                    <div class="chat-tasks-rail__section-title">Running</div>
+                    <div class="chat-tasks-rail__list">${taskRows}</div>
+                  </section>
+                  <section class="chat-tasks-rail__section">
+                    <div class="chat-tasks-rail__section-title">Finished</div>
+                    <div class="chat-tasks-rail__list">${taskRows}</div>
+                  </section>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const sections = await page.$$eval(".chat-tasks-rail__section", (nodes) =>
+        nodes.map((node) => {
+          const section = node as HTMLElement;
+          section.scrollTop = 100;
+          return {
+            clientHeight: section.clientHeight,
+            overflowY: getComputedStyle(section).overflowY,
+            scrollHeight: section.scrollHeight,
+            scrollTop: section.scrollTop,
+          };
+        }),
+      );
+
+      expect(sections).toHaveLength(2);
+      for (const section of sections) {
+        expect(section.overflowY).toBe("auto");
+        expect(section.scrollHeight).toBeGreaterThan(section.clientHeight);
+        expect(section.scrollTop).toBeGreaterThan(0);
+      }
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("docks the tasks rail as a full-width bottom strip in a narrow pane", async () => {
     const page = await openBrowserPage(1200, 700);
     try {
@@ -1770,10 +1823,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
         await modelTrigger.click();
         await page.locator(".chat-view-menu").evaluate((node) => {
-          node.classList.add("chat-view-menu--open");
+          node.setAttribute("open", "");
         });
 
-        const settingsMenu = await getRect(page, ".chat-view-menu--open");
+        const settingsMenu = await getRect(page, ".chat-view-menu[open]");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
         expect(settingsMenu.right).toBeLessThanOrEqual(width);
         expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
@@ -1794,10 +1847,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const page = await openFixture(width, height);
       try {
         await page.locator(".chat-view-menu").evaluate((node) => {
-          node.classList.add("chat-view-menu--open");
+          node.setAttribute("open", "");
         });
 
-        const settingsMenu = await getRect(page, ".chat-view-menu--open");
+        const settingsMenu = await getRect(page, ".chat-view-menu[open]");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
         expect(settingsMenu.right).toBeLessThanOrEqual(width);
         expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
@@ -2009,3 +2062,4 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

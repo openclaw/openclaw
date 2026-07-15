@@ -1424,3 +1424,4 @@ describe("before_tool_call hook integration for client tools", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -177,6 +177,26 @@ CREATE TABLE IF NOT EXISTS session_watch_cursors (
 CREATE INDEX IF NOT EXISTS idx_session_watch_cursors_target
   ON session_watch_cursors(target_session_key);
 
+CREATE TABLE IF NOT EXISTS session_upstream_links (
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  catalog_id TEXT NOT NULL,
+  host_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  upstream_kind TEXT NOT NULL,
+  upstream_ref_json TEXT,
+  last_marker_json TEXT,
+  last_scanned_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  -- (session_key, agent_id) composite identity: under session.scope="global" agents
+  -- share bare keys; a key-only row would let one agent overwrite another's upstream.
+  PRIMARY KEY (session_key, agent_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_upstream_links_catalog_id
+  ON session_upstream_links(catalog_id);
+
 CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
   bundle_key TEXT NOT NULL PRIMARY KEY,
   reason TEXT NOT NULL,
@@ -228,7 +248,7 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
   resolution_ref TEXT NOT NULL CHECK (
     length(resolution_ref) = 43 AND resolution_ref NOT GLOB '*[^A-Za-z0-9_-]*'
   ),
-  kind TEXT NOT NULL CHECK (kind IN ('exec', 'plugin')),
+  kind TEXT NOT NULL CHECK (kind IN ('exec', 'plugin', 'system-agent')),
   status TEXT NOT NULL CHECK (status IN ('pending', 'allowed', 'denied', 'expired', 'cancelled')),
   presentation_json TEXT NOT NULL,
   requested_by_device_id TEXT,
@@ -522,11 +542,13 @@ CREATE INDEX IF NOT EXISTS idx_agent_model_catalogs_agent_dir
 CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   attachment_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
+  agent_id TEXT,
   message_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT,
   retention_class TEXT,
   alt TEXT NOT NULL,
+  original_media_root TEXT NOT NULL,
   original_media_id TEXT NOT NULL,
   original_media_subdir TEXT NOT NULL,
   original_content_type TEXT NOT NULL,
@@ -534,7 +556,8 @@ CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   original_height INTEGER,
   original_size_bytes INTEGER,
   original_filename TEXT,
-  record_json TEXT NOT NULL
+  record_json TEXT NOT NULL,
+  cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))
 );
 
 CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_session
@@ -542,6 +565,13 @@ CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_session
 
 CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_message
   ON managed_outgoing_image_records(session_key, message_id, attachment_id)
+  WHERE message_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_agent_session
+  ON managed_outgoing_image_records(session_key, agent_id, created_at DESC, attachment_id);
+
+CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_agent_message
+  ON managed_outgoing_image_records(session_key, agent_id, message_id, attachment_id)
   WHERE message_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS channel_pairing_requests (
@@ -1103,41 +1133,11 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status_due
 CREATE INDEX IF NOT EXISTS idx_commitments_scope_dedupe
   ON commitments(agent_id, session_key, channel, dedupe_key, status);
 
-CREATE TABLE IF NOT EXISTS cron_run_logs (
-  store_key TEXT NOT NULL,
-  job_id TEXT NOT NULL,
-  seq INTEGER NOT NULL,
-  ts INTEGER NOT NULL,
-  status TEXT,
-  error TEXT,
-  summary TEXT,
-  diagnostics_summary TEXT,
-  delivery_status TEXT,
-  delivery_error TEXT,
-  delivered INTEGER,
-  session_id TEXT,
-  session_key TEXT,
-  run_id TEXT,
-  run_at_ms INTEGER,
-  duration_ms INTEGER,
-  next_run_at_ms INTEGER,
-  model TEXT,
-  provider TEXT,
-  total_tokens INTEGER,
-  entry_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (store_key, job_id, seq)
-);
+CREATE INDEX IF NOT EXISTS idx_commitments_agent_due
+  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
 
-CREATE INDEX IF NOT EXISTS idx_cron_run_logs_store_ts
-  ON cron_run_logs(store_key, ts DESC, seq DESC);
-
-CREATE INDEX IF NOT EXISTS idx_cron_run_logs_job_status
-  ON cron_run_logs(store_key, job_id, status, ts DESC, seq DESC);
-
-CREATE INDEX IF NOT EXISTS idx_cron_run_logs_delivery
-  ON cron_run_logs(store_key, delivery_status, ts DESC, seq DESC)
-  WHERE delivery_status IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_commitments_agent_sent
+  ON commitments(agent_id, status, sent_at_ms, session_key);
 
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
@@ -1312,7 +1312,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
   error TEXT,
   progress_summary TEXT,
   terminal_summary TEXT,
-  terminal_outcome TEXT
+  terminal_outcome TEXT,
+  detail_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_task_runs_run_id ON task_runs(run_id);
@@ -1323,6 +1324,10 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_a
 CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);
+CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_source_ended
+  ON task_runs(runtime, source_id, ended_at, created_at, task_id);
+CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_ended
+  ON task_runs(runtime, ended_at, created_at, task_id);
 
 CREATE TABLE IF NOT EXISTS subagent_runs (
   run_id TEXT NOT NULL PRIMARY KEY,

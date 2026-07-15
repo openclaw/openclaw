@@ -135,7 +135,11 @@ async function ensureSandboxWorkspaceLayout(params: {
   };
 }
 
-function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: string }) {
+function resolveSandboxSession(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
     return null;
@@ -143,6 +147,7 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
 
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
+    agentId: params.agentId,
     sessionKey: rawSessionKey,
   });
   if (!runtime.sandboxed) {
@@ -155,7 +160,9 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
 
 export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
+  agentId?: string;
   execOverrides?: ExecPolicyOverrides;
+  requireCurrentConfig?: boolean;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
@@ -209,6 +216,9 @@ export async function resolveSandboxContext(params: {
     agentWorkspaceDir,
     skillsWorkspaceDir,
     cfg: resolvedCfg,
+    ...(params.requireCurrentConfig !== undefined
+      ? { requireCurrentConfig: params.requireCurrentConfig }
+      : {}),
   });
   await updateRegistry({
     containerName: backend.runtimeId,
