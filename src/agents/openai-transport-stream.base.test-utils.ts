@@ -432,20 +432,20 @@ describe("openai transport stream", () => {
       streamChunks([
         {
           type: "response.output_item.added",
-          item: { type: "message", id: "msg_1", phase: "final_answer" },
+          item: { type: "message", id: "msg_cumulative", phase: "final_answer" },
         },
         { type: "response.output_text.delta", delta: snapshot1 },
-        { type: "response.output_item.done", item: messageItem("msg_1", snapshot1) },
+        { type: "response.output_item.done", item: messageItem("msg_cumulative", snapshot1) },
         {
           type: "response.output_item.added",
-          item: { type: "message", id: "msg_2", phase: "final_answer" },
+          item: { type: "message", id: "msg_cumulative", phase: "final_answer" },
         },
-        { type: "response.output_item.done", item: messageItem("msg_2", snapshot2) },
+        { type: "response.output_item.done", item: messageItem("msg_cumulative", snapshot2) },
         {
           type: "response.output_item.added",
-          item: { type: "message", id: "msg_3", phase: "final_answer" },
+          item: { type: "message", id: "msg_cumulative", phase: "final_answer" },
         },
-        { type: "response.output_item.done", item: messageItem("msg_3", snapshot3) },
+        { type: "response.output_item.done", item: messageItem("msg_cumulative", snapshot3) },
         {
           type: "response.completed",
           response: { id: "resp-snapshots", status: "completed" },
@@ -474,7 +474,7 @@ describe("openai transport stream", () => {
       {
         type: "text",
         text: snapshot3,
-        textSignature: '{"v":1,"id":"msg_3","phase":"final_answer"}',
+        textSignature: '{"v":1,"id":"msg_cumulative","phase":"final_answer"}',
       },
     ]);
     // Balanced lifecycle: one text_start, all events on index 0, and each
@@ -490,10 +490,10 @@ describe("openai transport stream", () => {
       ["text_end", 0],
     ]);
     expect(textBlockSignatures).toEqual([
-      ["text_start", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
-      ["text_end", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
-      ["text_end", 0, '{"v":1,"id":"msg_2","phase":"final_answer"}'],
-      ["text_end", 0, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
+      ["text_start", 0, '{"v":1,"id":"msg_cumulative","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_cumulative","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_cumulative","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_cumulative","phase":"final_answer"}'],
     ]);
   });
 
@@ -643,13 +643,13 @@ describe("openai transport stream", () => {
             output: [
               {
                 type: "message",
-                id: "msg_1",
+                id: "msg_cumulative",
                 role: "assistant",
                 content: [{ type: "output_text", text: "The answer" }],
               },
               {
                 type: "message",
-                id: "msg_2",
+                id: "msg_cumulative",
                 role: "assistant",
                 content: [{ type: "output_text", text: "The answer is 42." }],
               },
@@ -668,13 +668,13 @@ describe("openai transport stream", () => {
       model,
     );
 
-    // msg_2 strictly extends msg_1 and collapses into it; msg_3 shrinks back
+    // Same-item cumulative snapshots collapse into one; msg_3 shrinks back
     // and is an independently identified message, so it stays a real block.
     expect(output.content).toEqual([
       {
         type: "text",
         text: "The answer is 42.",
-        textSignature: '{"v":1,"id":"msg_2"}',
+        textSignature: '{"v":1,"id":"msg_cumulative"}',
       },
       {
         type: "text",
