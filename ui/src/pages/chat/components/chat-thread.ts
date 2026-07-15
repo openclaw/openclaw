@@ -1,7 +1,7 @@
 // Chat-owned message thread presentation and thread-local interaction state.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { VirtualizerController } from "@tanstack/lit-virtual";
-import { defaultRangeExtractor } from "@tanstack/virtual-core";
+import { defaultRangeExtractor, observeElementRect } from "@tanstack/virtual-core";
 import {
   html,
   nothing,
@@ -176,6 +176,20 @@ function initialTranscriptRect(host: ReactiveControllerHost) {
   };
 }
 
+function transcriptScrollMargin(element: Element | null): number {
+  if (!(element instanceof HTMLElement) || typeof getComputedStyle !== "function") {
+    return 0;
+  }
+  const margin = Number.parseFloat(getComputedStyle(element).paddingTop);
+  return Number.isFinite(margin) ? margin : 0;
+}
+
+function initialTranscriptScrollMargin(host: ReactiveControllerHost): number {
+  return host instanceof HTMLElement
+    ? transcriptScrollMargin(host.querySelector(".chat-thread"))
+    : 0;
+}
+
 class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private readonly controllers = new Set<ReactiveController>();
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
@@ -195,8 +209,14 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
       getItemKey: () => "",
       initialRect: initialTranscriptRect(host),
       initialOffset: Number.MAX_SAFE_INTEGER,
+      scrollMargin: initialTranscriptScrollMargin(host),
       anchorTo: "end",
       followOnAppend: false,
+      observeElementRect: (instance, callback) =>
+        observeElementRect(instance, (rect) => {
+          this.syncScrollMargin(instance.scrollElement);
+          callback(rect);
+        }),
       rangeExtractor: (range) => {
         const indexes = defaultRangeExtractor(range);
         const focused =
@@ -293,7 +313,9 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
                     ? "chat-virtual-row--first"
                     : ""}"
                   style=${styleMap({
-                    transform: `translateY(${virtualRow.start}px)`,
+                    transform: `translateY(${
+                      virtualRow.start - virtualizer.options.scrollMargin
+                    }px)`,
                   })}
                   data-index=${String(virtualRow.index)}
                   data-virtual-row-key=${row.key}
@@ -367,6 +389,18 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
       ...virtualizer.options,
       count: keys.length,
       getItemKey: (index) => keys[index] ?? `missing:${index}`,
+    });
+  }
+
+  private syncScrollMargin(scrollElement: HTMLDivElement | null): void {
+    const scrollMargin = transcriptScrollMargin(scrollElement);
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    if (scrollMargin === virtualizer.options.scrollMargin) {
+      return;
+    }
+    virtualizer.setOptions({
+      ...virtualizer.options,
+      scrollMargin,
     });
   }
 }
