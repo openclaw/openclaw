@@ -164,7 +164,7 @@ export function markdownToTelegramHtml(
   const telegramHtml = renderSupportedTelegramHtml(html);
   // Apply file reference wrapping if requested (for chunked rendering)
   if (options.wrapFileRefs !== false) {
-    return wrapFileReferencesInHtml(telegramHtml);
+    return wrapMarkdownFileReferencesInHtml(telegramHtml);
   }
   return telegramHtml;
 }
@@ -502,15 +502,21 @@ function wrapSegmentFileRefs(
   );
 }
 
-export function wrapFileReferencesInHtml(html: string): string {
+export function wrapFileReferencesInHtml(
+  html: string,
+  options: { deLinkifyAutoLinkedAnchors?: boolean } = {},
+): string {
   // Safety-net: de-linkify auto-generated anchors where href="http://<label>" (defense in depth for textMode: "html")
   AUTO_LINKED_ANCHOR_PATTERN.lastIndex = 0;
-  const deLinkified = html.replace(AUTO_LINKED_ANCHOR_PATTERN, (_match, label: string) => {
-    if (!isAutoLinkedFileRef(`http://${label}`, label)) {
-      return _match;
-    }
-    return `<code>${escapeHtml(label)}</code>`;
-  });
+  const deLinkified =
+    options.deLinkifyAutoLinkedAnchors === false
+      ? html
+      : html.replace(AUTO_LINKED_ANCHOR_PATTERN, (_match, label: string) => {
+          if (!isAutoLinkedFileRef(`http://${label}`, label)) {
+            return _match;
+          }
+          return `<code>${escapeHtml(label)}</code>`;
+        });
 
   // Track nesting depth for tags that should not be modified
   let codeDepth = 0;
@@ -549,6 +555,13 @@ export function wrapFileReferencesInHtml(html: string): string {
   result += wrapSegmentFileRefs(remainingText, codeDepth, preDepth, anchorDepth);
 
   return result;
+}
+
+function wrapMarkdownFileReferencesInHtml(html: string): string {
+  // Markdown IR already distinguishes authored links from linkify output. The
+  // renderer suppresses only the latter, so do not infer provenance again from
+  // the rendered anchor and accidentally remove an authored file-style link.
+  return wrapFileReferencesInHtml(html, { deLinkifyAutoLinkedAnchors: false });
 }
 
 export function renderTelegramHtmlText(
@@ -873,7 +886,7 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
 }
 
 function renderTelegramChunkHtml(ir: MarkdownIR): string {
-  return wrapFileReferencesInHtml(renderSupportedTelegramHtml(renderTelegramHtml(ir)));
+  return wrapMarkdownFileReferencesInHtml(renderSupportedTelegramHtml(renderTelegramHtml(ir)));
 }
 
 function renderTelegramChunksWithinHtmlLimit(

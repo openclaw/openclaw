@@ -33,6 +33,12 @@ export type RenderLink = {
   close: string;
 };
 
+type MarkdownLinkOrigin = "authored" | "linkify";
+
+function getMarkdownLinkOrigin(link: MarkdownLinkSpan): MarkdownLinkOrigin {
+  return isAutoLinkedMarkdownLink(link) ? "linkify" : "authored";
+}
+
 /** Renderer hooks for converting Markdown IR into a marker-based target format. */
 export type RenderOptions = {
   styleMarkers: RenderStyleMap;
@@ -41,7 +47,7 @@ export type RenderOptions = {
   buildLink?: (
     link: MarkdownLinkSpan,
     text: string,
-    context: { origin: "authored" | "linkify" },
+    context: { origin: MarkdownLinkOrigin },
   ) => RenderLink | null;
 };
 
@@ -275,9 +281,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
       if (link.start === link.end) {
         continue;
       }
-      const rendered = options.buildLink(link, text, {
-        origin: isAutoLinkedMarkdownLink(link) ? "linkify" : "authored",
-      });
+      const rendered = options.buildLink(link, text, { origin: getMarkdownLinkOrigin(link) });
       if (!rendered) {
         continue;
       }

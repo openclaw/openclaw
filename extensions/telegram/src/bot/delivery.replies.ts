@@ -154,6 +154,7 @@ function buildChunkTextResolver(params: {
         chunks.push({
           html: wrapFileReferencesInHtml(
             markdownToTelegramHtml(chunk, { tableMode: params.tableMode, wrapFileRefs: false }),
+            { deLinkifyAutoLinkedAnchors: false },
           ),
           text: chunk,
         });
