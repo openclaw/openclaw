@@ -1,6 +1,6 @@
 export type CapabilityTransport = "local" | "gateway";
 
-export type CapabilityMetadata = {
+type CapabilityMetadata = {
   id: string;
   description: string;
   transports: Array<CapabilityTransport>;
