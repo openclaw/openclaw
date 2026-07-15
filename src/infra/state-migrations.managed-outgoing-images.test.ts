@@ -19,12 +19,15 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-s
 import {
   detectLegacyManagedOutgoingImages,
   migrateLegacyManagedOutgoingImages,
-  resolveLegacyManagedOutgoingImageRecordsDir,
 } from "./state-migrations.managed-outgoing-images.js";
 
 type LegacyRecord = Omit<ManagedImageRecord, "original"> & {
   original: Omit<ManagedImageRecord["original"], "mediaId" | "mediaSubdir"> & { path: string };
 };
+
+function resolveLegacyManagedOutgoingImageRecordsDir(stateDir: string): string {
+  return path.join(stateDir, "media", "outgoing", "records");
+}
 
 function attachmentId(index: number): string {
   return `${String(index).padStart(8, "0")}-1111-4111-8111-111111111111`;

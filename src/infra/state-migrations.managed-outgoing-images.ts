@@ -63,7 +63,7 @@ type ClaimedLegacySource = {
   parsed: ParsedLegacyRecord;
 };
 
-export function resolveLegacyManagedOutgoingImageRecordsDir(stateDir: string): string {
+function resolveLegacyManagedOutgoingImageRecordsDir(stateDir: string): string {
   return path.join(stateDir, "media", "outgoing", "records");
 }
 

@@ -14,7 +14,7 @@ import {
 
 export const MANAGED_OUTGOING_ORIGINALS_SUBDIR = "outgoing/originals";
 
-export type ManagedImageRecordVariant = {
+type ManagedImageRecordVariant = {
   mediaId: string;
   mediaSubdir: string;
   contentType: string;
@@ -24,7 +24,7 @@ export type ManagedImageRecordVariant = {
   filename: string | null;
 };
 
-export type ManagedImageRetentionClass = "transient" | "history";
+type ManagedImageRetentionClass = "transient" | "history";
 
 export type ManagedImageRecord = {
   attachmentId: string;
@@ -42,13 +42,13 @@ export type ManagedImageRecordDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "managed_outgoing_image_records"
 >;
-export type ManagedImageRecordRow = Selectable<
+type ManagedImageRecordRow = Selectable<
   ManagedImageRecordDatabase["managed_outgoing_image_records"]
 >;
-export type ManagedImageRecordInsert = Insertable<
+type ManagedImageRecordInsert = Insertable<
   ManagedImageRecordDatabase["managed_outgoing_image_records"]
 >;
-export type ManagedImageRecordEntry = {
+type ManagedImageRecordEntry = {
   record: ManagedImageRecord;
   cleanupPending: boolean;
 };
