@@ -1,8 +1,6 @@
 // File Transfer plugin module implements dir fetch behavior.
 import crypto from "node:crypto";
-import path from "node:path";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
-import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   classifyFsSafeReadError,
   readAbsolutePath,
@@ -99,7 +97,8 @@ async function listTarEntries(tarBuffer: Buffer): Promise<string[] | null> {
     .toString("utf8")
     .split("\n")
     .map((line) => line.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, ""))
-    .filter((line) => line.length > 0);
+    .filter((line) => line.length > 0)
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 type TarArchiveResult = Buffer | "TOO_LARGE" | "TIMEOUT" | "ERROR";
@@ -129,30 +128,6 @@ async function createTarArchive(
   return result.termination === "exit" && result.code === 0 ? result.stdout : "ERROR";
 }
 
-async function listTreeEntries(root: string, maxEntries: number): Promise<string[] | "TOO_MANY"> {
-  const results: string[] = [];
-  const rootHandle = await fsRoot(root);
-  async function visit(relativeDir: string): Promise<boolean> {
-    const entries = await rootHandle.list(relativeDir, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
-      const rel = path.posix.join(relativeDir === "." ? "" : relativeDir, entry.name);
-      results.push(rel);
-      if (results.length > maxEntries) {
-        return false;
-      }
-      if (entry.isDirectory) {
-        const ok = await visit(rel);
-        if (!ok) {
-          return false;
-        }
-      }
-    }
-    return true;
-  }
-  return (await visit(".")) ? results : "TOO_MANY";
-}
-
 export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchResult> {
   const requestedPath = readAbsolutePath(params.path);
   if (typeof requestedPath !== "string") {
@@ -180,44 +155,58 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   }
 
   if (preflightOnly) {
-    const withinBudget = await preflightDu(canonical, maxBytes);
-    if (!withinBudget) {
+    const tarBuffer = await createTarArchive(canonical, maxBytes);
+    if (tarBuffer === "TOO_LARGE") {
       return {
         ok: false,
         code: "TREE_TOO_LARGE",
-        message: `directory tree exceeds estimated size limit (${maxBytes} bytes raw)`,
+        message: `tarball exceeded ${maxBytes} byte limit during preflight`,
         canonicalPath: canonical,
       };
     }
-    try {
-      const entries = await listTreeEntries(canonical, 5000);
-      if (entries === "TOO_MANY") {
-        return {
-          ok: false,
-          code: "TREE_TOO_LARGE",
-          message: "directory tree exceeds 5000 entries during preflight",
-          canonicalPath: canonical,
-        };
-      }
-      return {
-        ok: true,
-        path: canonical,
-        tarBase64: "",
-        tarBytes: 0,
-        sha256: "",
-        fileCount: entries.length,
-        entries,
-        preflightOnly: true,
-      };
-    } catch (err) {
-      const code = classifyFsError(err);
+    if (tarBuffer === "TIMEOUT") {
       return {
         ok: false,
-        code,
-        message: `preflight readdir failed: ${String(err)}`,
+        code: "READ_ERROR",
+        message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
         canonicalPath: canonical,
       };
     }
+    if (tarBuffer === "ERROR") {
+      return {
+        ok: false,
+        code: "READ_ERROR",
+        message: "tar command failed",
+        canonicalPath: canonical,
+      };
+    }
+    const entries = await listTarEntries(tarBuffer);
+    if (entries === null) {
+      return {
+        ok: false,
+        code: "READ_ERROR",
+        message: "tar entry listing failed",
+        canonicalPath: canonical,
+      };
+    }
+    if (entries.length > 5000) {
+      return {
+        ok: false,
+        code: "TREE_TOO_LARGE",
+        message: "directory tree exceeds 5000 entries during preflight",
+        canonicalPath: canonical,
+      };
+    }
+    return {
+      ok: true,
+      path: canonical,
+      tarBase64: "",
+      tarBytes: 0,
+      sha256: "",
+      fileCount: entries.length,
+      entries,
+      preflightOnly: true,
+    };
   }
 
   // Preflight size check using du
