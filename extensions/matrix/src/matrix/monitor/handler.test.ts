@@ -3812,6 +3812,38 @@ describe("matrix monitor handler draft streaming", () => {
     }
   });
 
+  it("starts fresh progress drafts for queued followups after the primary final", async () => {
+    vi.useFakeTimers();
+    try {
+      const { dispatch } = createStreamingHarness({
+        streaming: "progress",
+        previewToolProgressEnabled: true,
+      });
+      const { deliver, opts, finish } = await dispatch();
+
+      await opts.onToolStart?.({ name: "read_file" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+
+      await deliver({ text: "Primary answer" }, { kind: "final" });
+
+      sendSingleTextMessageMatrixMock.mockClear();
+      sendSingleTextMessageMatrixMock.mockResolvedValue({ messageId: "$draft2", roomId: "!room" });
+
+      await opts.onQueuedFollowupAdmitted?.();
+      await opts.onToolStart?.({ name: "exec" });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(singleTextMessageBody()).toMatch(/`🛠️ Exec`$/);
+      await finish();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resets draft block offsets on assistant message start", async () => {
     const { dispatch } = createStreamingHarness();
     const { deliver, opts, finish } = await dispatch();

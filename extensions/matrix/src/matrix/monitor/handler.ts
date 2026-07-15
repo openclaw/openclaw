@@ -2054,7 +2054,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         pendingDraftBoundaries.length = 0;
         latestQueuedDraftBoundaryOffsets.clear();
         currentDraftReplyToId = draftReplyToId;
-        progressDraftGate.cancel();
+        progressDraftGate.reset();
         resetPreviewToolProgress();
       };
 
