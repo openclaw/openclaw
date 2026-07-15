@@ -29,7 +29,7 @@ describe("addIgnoreRules", () => {
     expect(ig.ignores("src/main.ts")).toBe(false);
   });
 
-  it("silently skips an oversized ignore file instead of buffering it", () => {
+  it("parses a large ignore file under the byte cap", () => {
     const huge = "ignored-file\n".repeat(200_000); // ~2.4 MB, under 4 MB cap
     fs.writeFileSync(path.join(tempDir, ".gitignore"), huge, "utf-8");
 
