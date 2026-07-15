@@ -123,10 +123,9 @@ describe("gateway network client", () => {
         });
       }
       bodySignal = init?.signal;
-      return {
-        status: 200,
-        json: () => rejectWhenAborted(bodySignal),
-      } as Response;
+      const response = new Response(null, { status: 200 });
+      vi.spyOn(response, "json").mockImplementation(() => rejectWhenAborted(bodySignal));
+      return response;
     });
 
     const startedAt = Date.now();
