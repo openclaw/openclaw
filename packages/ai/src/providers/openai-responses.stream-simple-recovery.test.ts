@@ -109,7 +109,7 @@ async function withLoopbackServer(handler: Handler): Promise<{
   close: () => Promise<void>;
 }> {
   const requests: CapturedRequest[] = [];
-  const server = createServer(async (request, response) => {
+  const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
     try {
       requests.push({ path: request.url ?? "", body: await readJsonBody(request) });
       await handler(request, response, requests);
@@ -117,6 +117,9 @@ async function withLoopbackServer(handler: Handler): Promise<{
       response.writeHead(500, { "content-type": "text/plain" });
       response.end(error instanceof Error ? error.message : String(error));
     }
+  };
+  const server = createServer((request, response) => {
+    void handleRequest(request, response);
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve());
