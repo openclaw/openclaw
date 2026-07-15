@@ -5,7 +5,7 @@
  */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getGatewayNativeApprovalRuntime } from "../../infra/approval-gateway-resolver.js";
+import { getGatewayNativeApprovalRuntime } from "../../infra/approval-gateway-runtime-context.js";
 import { hasActiveApprovalNativeRouteRuntime } from "../../infra/approval-native-route-coordinator.js";
 import { getChannelPlugin, normalizeChannelId } from "./registry.js";
 

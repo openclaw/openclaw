@@ -4,7 +4,6 @@ import type {
   ChannelApprovalNativeAdapter,
 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayNativeApprovalRuntime } from "../gateway/server-instance-runtime.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
@@ -313,7 +312,6 @@ type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
   clientDisplayName: string;
   cfg: OpenClawConfig;
   gatewayUrl?: string;
-  gatewayRuntime?: GatewayNativeApprovalRuntime;
   eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
   channel?: string;
   channelLabel?: string;
@@ -417,7 +415,6 @@ export function createChannelApprovalHandler<
     clientDisplayName: adapter.runtime.clientDisplayName,
     cfg: adapter.runtime.cfg,
     gatewayUrl: adapter.runtime.gatewayUrl,
-    gatewayRuntime: adapter.runtime.gatewayRuntime,
     eventKinds: adapter.runtime.eventKinds,
     channel: adapter.runtime.channel,
     channelLabel: adapter.runtime.channelLabel,
@@ -451,7 +448,6 @@ export async function createChannelApprovalHandlerFromCapability(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   gatewayUrl?: string;
-  gatewayRuntime?: GatewayNativeApprovalRuntime;
   context?: unknown;
   nowMs?: () => number;
 }): Promise<ChannelApprovalHandler | null> {
@@ -478,7 +474,6 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       cfg: params.cfg,
       accountId: params.accountId,
       gatewayUrl: params.gatewayUrl,
-      gatewayRuntime: params.gatewayRuntime,
       eventKinds: nativeRuntime.eventKinds,
       nativeAdapter: params.capability?.native as ChannelApprovalNativeAdapter | null,
       ...(nativeRuntime.resolveApprovalKind

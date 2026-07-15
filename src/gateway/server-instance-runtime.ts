@@ -1,40 +1,21 @@
-import {
-  createApprovalNativeRouteCoordinator,
-  type ApprovalNativeRouteCoordinator,
-} from "../infra/approval-native-route-coordinator.js";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "../infra/plugin-approvals.js";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
+import type {
+  GatewayApprovalEventKind,
+  GatewayApprovalEventSubscriber,
+  GatewayApprovalRequest,
+  GatewayApprovalResolved,
+  GatewayNativeApprovalRuntime,
+} from "../infra/approval-gateway-runtime.types.js";
+import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
-type ApprovalEventKind = "exec" | "plugin";
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
-
-export type GatewayApprovalEventSubscriber = {
-  eventKinds: ReadonlySet<ApprovalEventKind>;
-  shouldHandle: (request: ApprovalRequest) => boolean;
-  onRequested: (request: ApprovalRequest) => void;
-  onResolved: (resolved: ApprovalResolved) => void;
-};
-
 export type GatewayApprovalEventPublisher = {
-  publishRequested: (kind: ApprovalEventKind, request: unknown) => number;
-  publishResolved: (kind: ApprovalEventKind, resolved: unknown) => void;
-};
-
-export type GatewayNativeApprovalRuntime = {
-  request: <T = unknown>(
-    method: string,
-    params: Record<string, unknown>,
-    options?: { clientDisplayName?: string },
-  ) => Promise<T>;
-  requestRoute: <T = unknown>(method: "send", params: Record<string, unknown>) => Promise<T>;
-  routeCoordinator: ApprovalNativeRouteCoordinator;
-  subscribe: (subscriber: GatewayApprovalEventSubscriber) => () => void;
+  publishRequested: (kind: GatewayApprovalEventKind, request: unknown) => number;
+  publishResolved: (kind: GatewayApprovalEventKind, resolved: unknown) => void;
 };
 
 export type GatewayRecoveryRuntime = {
@@ -106,7 +87,7 @@ export function createGatewayInstanceRuntime(
   const approvalRouteMethods = new Set(["send"]);
 
   const publish = (
-    kind: ApprovalEventKind,
+    kind: GatewayApprovalEventKind,
     callback: (subscriber: GatewayApprovalEventSubscriber) => void,
     shouldDeliver?: (subscriber: GatewayApprovalEventSubscriber) => boolean,
   ): number => {
@@ -136,11 +117,11 @@ export function createGatewayInstanceRuntime(
       publishRequested: (kind, request) =>
         publish(
           kind,
-          (subscriber) => subscriber.onRequested(request as ApprovalRequest),
-          (subscriber) => subscriber.shouldHandle(request as ApprovalRequest),
+          (subscriber) => subscriber.onRequested(request as GatewayApprovalRequest),
+          (subscriber) => subscriber.shouldHandle(request as GatewayApprovalRequest),
         ),
       publishResolved: (kind, resolved) => {
-        publish(kind, (subscriber) => subscriber.onResolved(resolved as ApprovalResolved));
+        publish(kind, (subscriber) => subscriber.onResolved(resolved as GatewayApprovalResolved));
       },
     },
     nativeApprovals: {
@@ -165,6 +146,7 @@ export function createGatewayInstanceRuntime(
             : approvalClient,
           method,
           payload,
+          timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
         }),
       requestRoute: async <T>(method: "send", payload: Record<string, unknown>) =>
         await dispatch<T>({
@@ -172,6 +154,7 @@ export function createGatewayInstanceRuntime(
           client: approvalRouteClient,
           method,
           payload,
+          timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
         }),
       routeCoordinator,
       subscribe: (subscriber) => {

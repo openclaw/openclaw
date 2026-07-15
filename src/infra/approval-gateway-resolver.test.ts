@@ -1,10 +1,8 @@
 // Covers approval resolution over the gateway client.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayNativeApprovalRuntime } from "../gateway/server-instance-runtime.js";
-import {
-  resolveApprovalOverGateway,
-  withGatewayNativeApprovalRuntime,
-} from "./approval-gateway-resolver.js";
+import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
+import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
+import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
 
 const hoisted = vi.hoisted(() => ({
   withOperatorApprovalsGatewayClient: vi.fn(),

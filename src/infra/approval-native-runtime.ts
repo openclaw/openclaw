@@ -2,6 +2,7 @@
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/approval-native.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import {
   resolveChannelNativeApprovalDeliveryPlan,
   type ChannelApprovalNativePlannedTarget,
@@ -194,19 +195,20 @@ export function createChannelNativeApprovalRuntime<
   const handledEventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(
     adapter.eventKinds ?? ["exec"],
   );
+  const gatewayRuntime = getGatewayNativeApprovalRuntime();
   const createRouteReporter =
-    adapter.gatewayRuntime?.routeCoordinator.createReporter ?? createApprovalNativeRouteReporter;
+    gatewayRuntime?.routeCoordinator.createReporter ?? createApprovalNativeRouteReporter;
   const routeReporter = createRouteReporter({
     handledKinds: handledEventKinds,
     channel: adapter.channel,
     channelLabel: adapter.channelLabel,
     accountId: adapter.accountId,
     requestGateway: async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
-      if (adapter.gatewayRuntime) {
+      if (gatewayRuntime) {
         if (method !== "send") {
           throw new Error(`native approval route cannot dispatch ${method}`);
         }
-        return await adapter.gatewayRuntime.requestRoute<T>(method, params);
+        return await gatewayRuntime.requestRoute<T>(method, params);
       }
       const { callGatewayLeastPrivilege } = await import("../gateway/call.js");
       return await callGatewayLeastPrivilege<T>({
@@ -225,7 +227,6 @@ export function createChannelNativeApprovalRuntime<
     clientDisplayName: adapter.clientDisplayName,
     cfg: adapter.cfg,
     gatewayUrl: adapter.gatewayUrl,
-    gatewayRuntime: adapter.gatewayRuntime,
     eventKinds: adapter.eventKinds,
     isConfigured: adapter.isConfigured,
     shouldHandle: (request) => {

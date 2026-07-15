@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
@@ -144,5 +145,37 @@ describe("createGatewayInstanceRuntime", () => {
         { clientDisplayName: "Telegram approval (owner)" },
       ),
     ).resolves.toEqual({ displayName: "Telegram approval (owner)" });
+  });
+
+  it("preserves the Gateway client's approval request deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const runtime = createGatewayInstanceRuntime({
+        getContext: createContext,
+        getMethodRegistry: () =>
+          createRegistry({
+            send: async () => {
+              markStarted();
+              await new Promise<never>(() => {});
+            },
+          }),
+        isDispatchAvailable: () => true,
+      });
+
+      const request = runtime.nativeApprovals.requestRoute("send", { message: "test" });
+      const error = request.catch((value: unknown) => value);
+      await started;
+      await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+      const caught = await error;
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toContain("gateway request timeout for send");
+      runtime.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

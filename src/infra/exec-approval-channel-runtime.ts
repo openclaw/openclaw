@@ -5,8 +5,8 @@ import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-re
 import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { isApprovalMethod } from "../gateway/method-scopes.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
-import type { GatewayNativeApprovalRuntime } from "../gateway/server-instance-runtime.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import { formatErrorMessage } from "./errors.js";
 import type {
   ExecApprovalChannelRuntime,
@@ -23,6 +23,10 @@ export type {
 
 type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
+
+type ApprovalReplayClient = {
+  request: <T = unknown>(method: string, params: Record<string, unknown>) => Promise<T>;
+};
 
 /** Error raised when the gateway pauses approval reconnects after a terminal startup failure. */
 export class ExecApprovalChannelRuntimeTerminalStartError extends Error {
@@ -89,9 +93,10 @@ export function createExecApprovalChannelRuntime<
   const log = createSubsystemLogger(adapter.label);
   const nowMs = adapter.nowMs ?? Date.now;
   const eventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(adapter.eventKinds ?? ["exec"]);
+  const configuredGatewayRuntime = getGatewayNativeApprovalRuntime();
   const pending = new Map<string, PendingApprovalEntry<TPending, TRequest, TResolved>>();
   let gatewayClient: GatewayClient | null = null;
-  let gatewayRuntime: GatewayNativeApprovalRuntime | null = null;
+  let gatewayRuntime: typeof configuredGatewayRuntime;
   let unsubscribeGatewayRuntime: (() => void) | null = null;
   let started = false;
   let shouldRun = false;
@@ -251,7 +256,7 @@ export function createExecApprovalChannelRuntime<
   };
 
   const replayPendingApprovals = async (
-    client: Pick<GatewayClient, "request">,
+    client: ApprovalReplayClient,
     externalClient?: GatewayClient,
   ): Promise<void> => {
     try {
@@ -279,7 +284,7 @@ export function createExecApprovalChannelRuntime<
   };
 
   const startPendingApprovalReplay = (
-    client: Pick<GatewayClient, "request">,
+    client: ApprovalReplayClient,
     externalClient?: GatewayClient,
   ): void => {
     const promise = replayPendingApprovals(client, externalClient)
@@ -320,9 +325,9 @@ export function createExecApprovalChannelRuntime<
           return;
         }
 
-        if (adapter.gatewayRuntime) {
+        if (configuredGatewayRuntime) {
           await adapter.beforeGatewayClientStart?.();
-          gatewayRuntime = adapter.gatewayRuntime;
+          gatewayRuntime = configuredGatewayRuntime;
           // Subscribe before replay so a request created during the list calls is not lost.
           unsubscribeGatewayRuntime = gatewayRuntime.subscribe({
             eventKinds,
@@ -344,7 +349,7 @@ export function createExecApprovalChannelRuntime<
           if (!shouldRun) {
             unsubscribeGatewayRuntime();
             unsubscribeGatewayRuntime = null;
-            gatewayRuntime = null;
+            gatewayRuntime = undefined;
             return;
           }
           started = true;
@@ -446,7 +451,7 @@ export function createExecApprovalChannelRuntime<
       started = false;
       unsubscribeGatewayRuntime?.();
       unsubscribeGatewayRuntime = null;
-      gatewayRuntime = null;
+      gatewayRuntime = undefined;
       gatewayClient?.stop();
       gatewayClient = null;
       await waitForPendingApprovalReplay();
@@ -475,7 +480,9 @@ export function createExecApprovalChannelRuntime<
         );
       }
       if (gatewayRuntime) {
-        return await gatewayRuntime.request<T>(method, params);
+        return await gatewayRuntime.request<T>(method, params, {
+          clientDisplayName: adapter.clientDisplayName,
+        });
       }
       if (!gatewayClient) {
         throw new Error(`${adapter.label}: gateway client not connected`);

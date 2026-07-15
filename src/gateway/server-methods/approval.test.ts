@@ -878,7 +878,7 @@ describe("unified approval handlers", () => {
       new Set(["approval-client"]),
       { dropIfSlow: true },
     );
-    expect(context.approvalEvents.publishResolved).toHaveBeenCalledWith(
+    expect(context.approvalEvents!.publishResolved).toHaveBeenCalledWith(
       "plugin",
       expect.objectContaining({
         id: pending.record.id,
@@ -978,7 +978,7 @@ describe("unified approval handlers", () => {
     expect(context.logGateway.error).toHaveBeenCalledWith(
       expect.stringContaining("exec approvals: unified resolve forwarder failed"),
     );
-    expect(context.approvalEvents.publishResolved).toHaveBeenCalledWith(
+    expect(context.approvalEvents!.publishResolved).toHaveBeenCalledWith(
       "exec",
       expect.objectContaining({ id: pending.record.id, decision: "deny" }),
     );

@@ -3,7 +3,8 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
-import { getGatewayNativeApprovalRuntime } from "../infra/approval-gateway-resolver.js";
+import { getGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
+import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import {
   createSubsystemLogger,
   runtimeForLogger,
@@ -15,7 +16,6 @@ import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { GatewayNativeApprovalRuntime } from "./server-instance-runtime.js";
 
 const hoisted = vi.hoisted(() => ({
   startChannelApprovalHandlerBootstrap: vi.fn(async () => async () => {}),

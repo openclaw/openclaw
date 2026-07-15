@@ -67,6 +67,48 @@ describe("createApprovalNativeRouteReporter", () => {
     second.close();
   });
 
+  it("cannot revive routes or notices after the owning Gateway closes", async () => {
+    vi.useFakeTimers();
+    const coordinator = createApprovalNativeRouteCoordinator();
+    const requestGateway = createGatewayRequestMock();
+    const reporter = coordinator.createReporter({
+      handledKinds: new Set(["exec"]),
+      channel: "telegram",
+      accountId: "default",
+      requestGateway,
+    });
+    const request = {
+      id: "approval-after-close",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat:123",
+      },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    } as const;
+
+    reporter.start();
+    coordinator.close();
+    reporter.start();
+    reporter.observeRequest({ approvalKind: "exec", request });
+    await reporter.reportSkipped({ approvalKind: "exec", request });
+
+    const lateReporter = coordinator.createReporter({
+      handledKinds: new Set(["exec"]),
+      channel: "telegram",
+      accountId: "default",
+      requestGateway,
+    });
+    lateReporter.start();
+    lateReporter.observeRequest({ approvalKind: "exec", request });
+    await lateReporter.reportSkipped({ approvalKind: "exec", request });
+
+    expect(coordinator.hasActiveRuntime({ approvalKind: "exec", channel: "telegram" })).toBe(false);
+    expect(requestGateway).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("caps route-notice cleanup timers to five minutes", () => {
     vi.useFakeTimers();
     try {

@@ -65,6 +65,7 @@ type ApprovalNativeRouteCoordinatorState = {
   activeRuntimes: Map<string, ApprovalRouteRuntimeRecord>;
   pendingNotices: Map<string, PendingApprovalRouteNotice>;
   runtimeSeq: number;
+  closed: boolean;
 };
 
 function createApprovalNativeRouteCoordinatorState(): ApprovalNativeRouteCoordinatorState {
@@ -72,6 +73,7 @@ function createApprovalNativeRouteCoordinatorState(): ApprovalNativeRouteCoordin
     activeRuntimes: new Map(),
     pendingNotices: new Map(),
     runtimeSeq: 0,
+    closed: false,
   };
 }
 
@@ -392,7 +394,7 @@ function createApprovalNativeRouteReporterForState(
     deliveryPlan: ChannelApprovalNativeDeliveryPlan;
     deliveredTargets: readonly ChannelApprovalNativePlannedTarget[];
   }): Promise<void> => {
-    if (!registered || !params.handledKinds.has(payload.approvalKind)) {
+    if (state.closed || !registered || !params.handledKinds.has(payload.approvalKind)) {
       return;
     }
     const entry =
@@ -419,7 +421,7 @@ function createApprovalNativeRouteReporterForState(
 
   return {
     observeRequest(payload: { approvalKind: ChannelApprovalKind; request: ApprovalRequest }): void {
-      if (!registered || !params.handledKinds.has(payload.approvalKind)) {
+      if (state.closed || !registered || !params.handledKinds.has(payload.approvalKind)) {
         return;
       }
       const entry =
@@ -435,7 +437,7 @@ function createApprovalNativeRouteReporterForState(
       state.pendingNotices.set(payload.request.id, entry);
     },
     start(): void {
-      if (registered) {
+      if (state.closed || registered) {
         return;
       }
       state.activeRuntimes.set(runtimeId, {
@@ -502,6 +504,9 @@ export function createApprovalNativeRouteCoordinator(): ApprovalNativeRouteCoord
     createReporter: (params) => createApprovalNativeRouteReporterForState(state, params),
     hasActiveRuntime: (params) => hasActiveApprovalNativeRouteRuntimeForState(state, params),
     close: () => {
+      // Closing retires this Gateway-owned coordinator permanently. Delayed channel
+      // startup must not repopulate routes belonging to the retired instance.
+      state.closed = true;
       for (const approvalId of Array.from(state.pendingNotices.keys())) {
         clearPendingApprovalRouteNotice(state, approvalId);
       }

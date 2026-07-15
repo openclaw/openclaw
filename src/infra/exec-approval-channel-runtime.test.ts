@@ -1,8 +1,9 @@
 // Covers gateway-backed approval channel runtime behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import type { GatewayNativeApprovalRuntime } from "../gateway/server-instance-runtime.js";
 import { createDeferred } from "../test-utils/deferred.js";
+import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
+import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
@@ -335,24 +336,26 @@ describe("createExecApprovalChannelRuntime", () => {
     });
     const shouldHandle = vi.fn(() => true);
     const deliverRequested = vi.fn(async (approval: ExecApprovalRequest) => [{ id: approval.id }]);
-    const runtime = createExecApprovalChannelRuntime({
-      label: "test/exec-approvals",
-      clientDisplayName: "Test Exec Approvals",
-      cfg: {} as never,
-      gatewayRuntime: {
-        request: request as GatewayNativeApprovalRuntime["request"],
-        requestRoute: vi.fn(),
-        routeCoordinator: {} as never,
-        subscribe: (nextSubscriber) => {
-          subscriber = nextSubscriber as typeof subscriber;
-          return unsubscribe;
-        },
+    const gatewayRuntime: GatewayNativeApprovalRuntime = {
+      request: request as GatewayNativeApprovalRuntime["request"],
+      requestRoute: vi.fn(),
+      routeCoordinator: {} as never,
+      subscribe: (nextSubscriber) => {
+        subscriber = nextSubscriber as typeof subscriber;
+        return unsubscribe;
       },
-      isConfigured: () => true,
-      shouldHandle,
-      deliverRequested,
-      finalizeResolved: async () => undefined,
-    });
+    };
+    const runtime = withGatewayNativeApprovalRuntime(gatewayRuntime, () =>
+      createExecApprovalChannelRuntime({
+        label: "test/exec-approvals",
+        clientDisplayName: "Test Exec Approvals",
+        cfg: {} as never,
+        isConfigured: () => true,
+        shouldHandle,
+        deliverRequested,
+        finalizeResolved: async () => undefined,
+      }),
+    );
 
     await runtime.start();
     const approval = createExecReplayRequest("overlap");
@@ -362,6 +365,13 @@ describe("createExecApprovalChannelRuntime", () => {
     replay.resolve([approval]);
     await vi.waitFor(() => expect(deliverRequested).toHaveBeenCalledTimes(1));
     expect(shouldHandle).toHaveBeenCalledTimes(1);
+
+    await runtime.request("exec.approval.list", {});
+    expect(request).toHaveBeenLastCalledWith(
+      "exec.approval.list",
+      {},
+      { clientDisplayName: "Test Exec Approvals" },
+    );
 
     expect(mockCreateOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
     await runtime.stop();

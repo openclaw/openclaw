@@ -1,6 +1,5 @@
 // Defines channel-native approval runtime contracts.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayNativeApprovalRuntime } from "../gateway/server-instance-runtime.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
@@ -20,8 +19,6 @@ export type ExecApprovalChannelRuntimeAdapter<
   clientDisplayName: string;
   cfg: OpenClawConfig;
   gatewayUrl?: string;
-  /** Instance-owned transport used by Gateway-created channel runtimes. */
-  gatewayRuntime?: GatewayNativeApprovalRuntime;
   /** Defaults to exec-only; include plugin when the adapter can handle plugin approvals. */
   eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
   isConfigured: () => boolean;
