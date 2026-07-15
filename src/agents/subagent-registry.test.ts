@@ -11,6 +11,7 @@ import type {
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
 } from "../config/sessions/session-accessor.js";
+import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { registerGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import {
@@ -623,7 +624,7 @@ describe("subagent registry seam flow", () => {
     const waitForAgent = vi.fn(async () => ({ status: "pending" }));
     const release = registerGatewayRecoveryRuntime({
       dispatchAgent: vi.fn(),
-      waitForAgent,
+      waitForAgent: waitForAgent as GatewayRecoveryRuntime["waitForAgent"],
       sendRecoveryNotice: vi.fn(),
     });
 
