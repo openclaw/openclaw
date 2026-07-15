@@ -385,9 +385,6 @@ importers:
 
   extensions/agentmail:
     dependencies:
-      '@haraka/email-address':
-        specifier: 3.1.6
-        version: 3.1.6
       agentmail:
         specifier: 0.5.16
         version: 0.5.16
@@ -3185,10 +3182,6 @@ packages:
 
   '@hapi/hoek@9.3.0':
     resolution: {integrity: sha512-/c6rf4UJlmHlC9b5BaNvzAcFv7HZ2QHaV0D4/HNlBdvFnvQq8RI4kYdhyPCl7Xj+oWvTWQ8ujhqS53LIgAe6KQ==}
-
-  '@haraka/email-address@3.1.6':
-    resolution: {integrity: sha512-albuxbQSCI8x/67zgo0kUUUyxsrTV6irss2f21Kfjgb+T8RJXU5SzScJYwhR86zYpQFfrSF3bkzKV/dc8pOAPw==}
-    engines: {node: '>=22'}
 
   '@homebridge/ciao@1.3.9':
     resolution: {integrity: sha512-TMy9zy173jDOpnFXDqL3BPIQn5lfcAkSsivYQatCCakoHk4fLGd7QjfAaNGYE3Ox+/ZI6Lq0e1gGcz1qdw/IbA==}
@@ -9506,8 +9499,6 @@ snapshots:
       '@hapi/hoek': 9.3.0
 
   '@hapi/hoek@9.3.0': {}
-
-  '@haraka/email-address@3.1.6': {}
 
   '@homebridge/ciao@1.3.9':
     dependencies:

@@ -104,7 +104,7 @@ Webhook and WebSocket events share a digest of account ID, inbox ID, and message
 
 The community `openclaw-agentmail` package was not suitable as the official implementation: it is WebSocket-only, treats an empty allowlist as open, replies to all recipients, has no durable SQLite ingress, and targets an older AgentMail/OpenClaw SDK generation. `openclaw-agentmail-listener` emits raw WebSocket system events and explicitly is not a channel. The official plugin therefore uses the current pinned AgentMail SDK and OpenClaw channel contracts instead of adopting either implementation.
 
-The plugin uses `@haraka/email-address` for RFC 5322/6532 mailbox parsing. It is maintained by the Haraka project, has no runtime dependencies, and avoids unsafe custom parsing of display-name mailbox syntax. All AgentMail-specific dependencies remain inside the separately published plugin.
+The pinned AgentMail SDK documents `from` as either `sender@example.com` or `Display Name <sender@example.com>`. The plugin parses only those forms with a small dependency-free, fail-closed parser. Lists, groups, control characters, quoted local parts, internationalized addresses, and malformed or ambiguous input are rejected instead of being authorized. All AgentMail-specific dependencies remain inside the separately published plugin.
 
 ## Troubleshooting
 

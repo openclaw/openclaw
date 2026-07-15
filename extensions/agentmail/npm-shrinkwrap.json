@@ -8,7 +8,6 @@
       "name": "@openclaw/agentmail",
       "version": "2026.7.2",
       "dependencies": {
-        "@haraka/email-address": "3.1.6",
         "agentmail": "0.5.16",
         "svix": "1.96.1",
         "zod": "4.4.3"
@@ -20,15 +19,6 @@
         "openclaw": {
           "optional": true
         }
-      }
-    },
-    "node_modules/@haraka/email-address": {
-      "version": "3.1.6",
-      "resolved": "https://registry.npmjs.org/@haraka/email-address/-/email-address-3.1.6.tgz",
-      "integrity": "sha512-albuxbQSCI8x/67zgo0kUUUyxsrTV6irss2f21Kfjgb+T8RJXU5SzScJYwhR86zYpQFfrSF3bkzKV/dc8pOAPw==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=22"
       }
     },
     "node_modules/@stablelib/base64": {

@@ -2,16 +2,48 @@ import { describe, expect, it } from "vitest";
 import { isAgentMailSenderAllowed, parseSingleFromMailbox } from "./mailbox.js";
 
 describe("AgentMail mailbox authorization", () => {
-  it("parses one display-name mailbox and normalizes its address", () => {
+  it("parses the two AgentMail-documented From forms", () => {
+    expect(parseSingleFromMailbox("Sender+tag@Example.COM")).toEqual({
+      address: "sender+tag@example.com",
+    });
     expect(parseSingleFromMailbox("Example Sender <Sender@Example.COM>")).toEqual({
       address: "sender@example.com",
       name: "Example Sender",
     });
+    expect(parseSingleFromMailbox('"Sender, Example" <sender@example.com>')).toEqual({
+      address: "sender@example.com",
+      name: "Sender, Example",
+    });
+    expect(parseSingleFromMailbox('"Sender \\"Example\\"" <sender@example.com>')).toEqual({
+      address: "sender@example.com",
+      name: 'Sender "Example"',
+    });
   });
 
-  it("rejects ambiguous From lists and groups", () => {
-    expect(parseSingleFromMailbox("one@example.com, two@example.com")).toBeNull();
-    expect(parseSingleFromMailbox("Team: one@example.com;")).toBeNull();
+  it.each([
+    "",
+    "one@example.com, two@example.com",
+    "Team: one@example.com;",
+    "sender@example.com\r\nBcc: victim@example.com",
+    "Sender <sender@example.com",
+    "Sender sender@example.com>",
+    "Sender <sender@example.com><other@example.com>",
+    "<sender@example.com>",
+    "Sender <sender@example.com> trailing",
+    "allowed@good.com <attacker@evil.com>",
+    "Sender, Example <sender@example.com>",
+    "sender@@example.com",
+    "sender @example.com",
+    ".sender@example.com",
+    "sender.@example.com",
+    "send..er@example.com",
+    "sender@localhost",
+    "sender@-example.com",
+    "sender@example_domain.com",
+    '\"sender\"@example.com',
+    "séndér@example.com",
+  ])("rejects unsupported or ambiguous From value %j", (value) => {
+    expect(parseSingleFromMailbox(value)).toBeNull();
   });
 
   it("denies empty allowlists and opens only through an explicit wildcard", () => {

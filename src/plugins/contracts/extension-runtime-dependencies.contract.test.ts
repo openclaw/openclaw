@@ -256,7 +256,7 @@ function isDiscordPackageDependency(dependencyName: string): boolean {
   );
 }
 
-const AGENTMAIL_RUNTIME_DEPENDENCIES = ["@haraka/email-address", "agentmail", "svix"] as const;
+const AGENTMAIL_RUNTIME_DEPENDENCIES = ["agentmail", "svix"] as const;
 
 function agentMailDependencyVersions(manifest: PackageManifest): Record<string, string> {
   return Object.fromEntries(
@@ -300,7 +300,6 @@ describe("AgentMail dependency ownership", () => {
     expect(
       agentMailDependencyVersions(readPackageManifest("extensions/agentmail/package.json")),
     ).toStrictEqual({
-      "@haraka/email-address": "3.1.6",
       agentmail: "0.5.16",
       svix: "1.96.1",
     });
