@@ -86,6 +86,11 @@ const MIME_BY_EXT: Record<string, string> = {
   ".yml": "application/yaml",
 };
 
+const AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME: Readonly<Record<string, string>> = {
+  "audio/mp4": "video/mp4",
+  "audio/webm": "video/webm",
+};
+
 /** Normalizes MIME strings by dropping parameters, lowercasing, and folding APNG to PNG. */
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
@@ -180,13 +185,9 @@ export async function detectMime(opts: {
     sniffedGenericContainer && extMime && !extMime.startsWith("image/")
       ? extMime
       : (sniffed ?? extMime);
-  // Container sniffers commonly default WebM/MP4/Ogg to video without parsing tracks.
-  // Preserve a concrete audio hint only when the container subtype itself agrees.
-  if (
-    headerMime?.startsWith("audio/") &&
-    inferred?.startsWith("video/") &&
-    headerMime.slice("audio/".length) === inferred.slice("video/".length)
-  ) {
+  // file-type defaults these containers to video without parsing their tracks.
+  // Preserve a concrete audio hint only for those documented ambiguous results.
+  if (headerMime && AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[headerMime] === inferred) {
     return headerMime;
   }
   return inferred ?? headerMime;

@@ -151,6 +151,15 @@ describe("mime detection", () => {
     });
   });
 
+  it("does not let conflicting audio metadata override MPEG video bytes", async () => {
+    const mpegProgramStream = Buffer.from([0x00, 0x00, 0x01, 0xba, 0x00, 0x00, 0x00, 0x00]);
+
+    await expectDetectedMime({
+      input: { buffer: mpegProgramStream, headerMime: "audio/mpeg" },
+      expected: "video/mpeg",
+    });
+  });
+
   it("detects HTML files by extension (no magic bytes)", async () => {
     const buf = Buffer.from("<!DOCTYPE html><html><body>test</body></html>");
     const mime = await detectMime({ buffer: buf, filePath: "/tmp/report.html" });
