@@ -30571,7 +30571,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 104,
+      "line": 106,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "New Session",
       "surface": "apple",
@@ -30579,7 +30579,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 110,
+      "line": 112,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Settings...",
       "surface": "apple",
@@ -30587,7 +30587,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 117,
+      "line": 119,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Back",
       "surface": "apple",
@@ -30595,7 +30595,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 122,
+      "line": 124,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Forward",
       "surface": "apple",
@@ -30603,7 +30603,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 129,
+      "line": 131,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Command Palette…",
       "surface": "apple",
@@ -30611,7 +30611,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 147,
+      "line": 149,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw - Voice Wake live meter active",
       "surface": "apple",
@@ -30619,7 +30619,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 148,
+      "line": 150,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -30627,7 +30627,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 460,
+      "line": 462,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Close Canvas",
       "surface": "apple",
@@ -30635,7 +30635,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 460,
+      "line": 462,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Open Canvas",
       "surface": "apple",
