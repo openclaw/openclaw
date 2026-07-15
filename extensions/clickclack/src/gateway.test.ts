@@ -573,6 +573,7 @@ describe("ClickClack gateway", () => {
       message: 'ClickClack ws message failed: {"code":"ECONNRESET","retryable":true}',
       cause: rejection,
     });
+    expect(socket.close).toHaveBeenCalledOnce();
     expect(ctx.setStatus).toHaveBeenLastCalledWith({
       accountId: "default",
       running: false,
