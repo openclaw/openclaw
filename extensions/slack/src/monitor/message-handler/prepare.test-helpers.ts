@@ -28,6 +28,9 @@ export function createInboundSlackTestContext(params: {
     accountId: "default",
     botToken: "token",
     app: params.app ?? ({ client: params.appClient ?? {} } as App),
+    // Source reads ctx.client (per-account WebClient), not ctx.app.client;
+    // reuse the same mock so existing appClient assertions keep observing it.
+    client: (params.app?.client ?? params.appClient ?? {}) as App["client"],
     runtime: {} as RuntimeEnv,
     channelRuntime: params.channelRuntime ?? createPluginRuntimeMock().channel,
     botUserId: "B1",

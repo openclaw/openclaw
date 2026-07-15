@@ -65,6 +65,8 @@ function createContext(overrides?: {
     app: {
       client: {},
     },
+    // Source reads ctx.client (per-account WebClient), not ctx.app.client.
+    client: {},
     runtime: {},
     markMessageSeen: (channel: string | undefined, ts: string | undefined) =>
       overrides?.markMessageSeen?.(channel, ts) ?? false,

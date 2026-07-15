@@ -113,6 +113,8 @@ function createTestHandler(
       botUserId: params.botUserId ?? "U_BOT",
       channelHistories: params.channelHistories ?? new Map(),
       app: { client: {} },
+      // Source reads ctx.client (per-account WebClient), not ctx.app.client.
+      client: {},
       runtime: {},
       markMessageSeen: seenMessages["markMessageSeen"],
       rememberSlackChannelType: () => {},

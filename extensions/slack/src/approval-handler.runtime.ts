@@ -1,8 +1,6 @@
 // Slack plugin module implements approval handler behavior.
-import type { App } from "@slack/bolt";
-import type { Block, KnownBlock } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import type {
-  ChannelApprovalCapabilityHandlerContext,
   ExecApprovalExpiredView,
   ExecApprovalPendingView,
   ExecApprovalResolvedView,
@@ -16,10 +14,10 @@ import type {
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalPresentationFromActionDescriptors } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveHandlerContext, resolveSlackApprovalClient } from "./approval-handler.context.js";
 import {
   isSlackAnyNativeApprovalClientEnabled,
   shouldHandleSlackNativeApprovalRequest,
@@ -50,27 +48,6 @@ type SlackPluginApprovalView =
 const SLACK_CONTEXT_ELEMENTS_MAX = 10;
 const SLACK_CHAT_UPDATE_TEXT_LIMIT = 4000;
 const SLACK_TEXT_OBJECT_MAX = 3000;
-
-type SlackExecApprovalConfig = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>["execApprovals"]
->;
-
-type SlackApprovalHandlerContext = {
-  app: App;
-  config: SlackExecApprovalConfig;
-};
-
-function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext): {
-  accountId: string;
-  context: SlackApprovalHandlerContext;
-} | null {
-  const context = params.context as SlackApprovalHandlerContext | undefined;
-  const accountId = normalizeOptionalString(params.accountId) ?? "";
-  if (!context?.app || !accountId) {
-    return null;
-  }
-  return { accountId, context };
-}
 
 function truncateSlackMrkdwn(text: string, maxChars: number): string {
   const limit = Math.max(0, Math.floor(maxChars));
@@ -408,14 +385,14 @@ function buildSlackExpiredBlocks(view: ExpiredApprovalView): SlackBlock[] {
 }
 
 async function updateMessage(params: {
-  app: App;
+  client: WebClient;
   channelId: string;
   messageTs: string;
   text: string;
   blocks: SlackBlock[];
 }): Promise<void> {
   try {
-    await params.app.client.chat.update({
+    await params.client.chat.update({
       channel: params.channelId,
       ts: params.messageTs,
       text: truncateSlackText(params.text, SLACK_CHAT_UPDATE_TEXT_LIMIT),
@@ -496,7 +473,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
         accountId: resolved.accountId,
         threadTs: preparedTarget.threadTs,
         blocks: pendingPayload.blocks,
-        client: resolved.context.app.client,
+        client: resolveSlackApprovalClient(resolved.context),
       });
       return {
         channelId: message.channelId,
@@ -510,7 +487,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       }
       const nextPayload = payload;
       await updateMessage({
-        app: resolved.context.app,
+        client: resolveSlackApprovalClient(resolved.context),
         channelId: entry.channelId,
         messageTs: entry.messageTs,
         text: nextPayload.text,

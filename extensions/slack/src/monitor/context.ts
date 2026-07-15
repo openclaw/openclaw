@@ -1,5 +1,6 @@
 // Slack plugin module implements context behavior.
 import type { App } from "@slack/bolt";
+import type { WebClient } from "@slack/web-api";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
@@ -29,6 +30,7 @@ import type { SlackChannelConfigEntries } from "./channel-config.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { normalizeSlackChannelType } from "./channel-type.js";
 import { resolveSessionKey } from "./config.runtime.js";
+import { createSlackShouldDropMismatchedEvent } from "./context-account-client.js";
 import type { SlackInstallationIdentity } from "./enterprise-install.js";
 import type { SlackEventScope } from "./event-scope.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
@@ -115,6 +117,14 @@ export type SlackMonitorContext = {
   accountId: string;
   botToken: string;
   app: App;
+  // Per-account Web API client bound to this account's own bot token. When a
+  // Slack app is shared across multiple accounts (same app token, multiple
+  // workspace installs on one Socket Mode connection), `app` is the shared
+  // Bolt App instance and `app.client` defaults to whichever account created
+  // it. All outbound Web API calls made on behalf of THIS account must go
+  // through `client`, never `app.client`, so they always authenticate as this
+  // account's own bot identity regardless of which account owns the app.
+  client: WebClient;
   runtime: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
 
@@ -225,8 +235,19 @@ export function createSlackMonitorContext(params: {
   accountId: string;
   botToken: string;
   app: App;
+  client: WebClient;
   runtime: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
+  // This account's own stop signal. Bolt has no listener-removal API, so when
+  // one account of a shared-App group is stopped individually its handlers
+  // stay registered on the shared App; shouldDropMismatchedSlackEvent uses
+  // this signal to drop everything once the account has been aborted.
+  accountAbortSignal?: AbortSignal;
+  // True when this account shares its Bolt App / Socket Mode connection with
+  // sibling accounts on the same app token. In that mode an unknown teamId
+  // must fail closed (drop all events) instead of falling through leniently,
+  // or the account would process BOTH workspaces' traffic.
+  isSharedSocketGroup?: boolean;
 
   botUserId: string;
   botId?: string;
@@ -513,7 +534,7 @@ export function createSlackMonitorContext(params: {
       return cached.info;
     }
     try {
-      const info = await (eventScope?.client ?? params.app.client).conversations.info({
+      const info = await (eventScope?.client ?? params.client).conversations.info({
         token: params.botToken,
         channel: channelId,
       });
@@ -551,7 +572,7 @@ export function createSlackMonitorContext(params: {
       return cached;
     }
     try {
-      const info = await (eventScope?.client ?? params.app.client).users.info({
+      const info = await (eventScope?.client ?? params.client).users.info({
         token: params.botToken,
         user: userId,
       });
@@ -576,7 +597,7 @@ export function createSlackMonitorContext(params: {
       return;
     }
     try {
-      await (p.eventScope?.client ?? params.app.client).assistant.threads.setStatus({
+      await (p.eventScope?.client ?? params.client).assistant.threads.setStatus({
         token: params.botToken,
         channel_id: p.channelId,
         thread_ts: p.threadTs,
@@ -605,7 +626,7 @@ export function createSlackMonitorContext(params: {
       return false;
     }
     try {
-      await params.app.client.assistant.threads.setSuggestedPrompts({
+      await params.client.assistant.threads.setSuggestedPrompts({
         token: params.botToken,
         channel_id: p.channelId,
         thread_ts: p.threadTs,
@@ -710,41 +731,20 @@ export function createSlackMonitorContext(params: {
     return true;
   };
 
-  const shouldDropMismatchedSlackEvent = (body: unknown) => {
-    if (!body || typeof body !== "object") {
-      return false;
-    }
-    const raw = body as {
-      api_app_id?: unknown;
-      team_id?: unknown;
-      team?: { id?: unknown };
-    };
-    const incomingApiAppId = typeof raw.api_app_id === "string" ? raw.api_app_id : "";
-    const incomingTeamId =
-      typeof raw.team_id === "string"
-        ? raw.team_id
-        : typeof raw.team?.id === "string"
-          ? raw.team.id
-          : "";
-
-    if (params.apiAppId && incomingApiAppId && incomingApiAppId !== params.apiAppId) {
-      logVerbose(
-        `slack: drop event with api_app_id=${incomingApiAppId} (expected ${params.apiAppId})`,
-      );
-      return true;
-    }
-    if (params.teamId && incomingTeamId && incomingTeamId !== params.teamId) {
-      logVerbose(`slack: drop event with team_id=${incomingTeamId} (expected ${params.teamId})`);
-      return true;
-    }
-    return false;
-  };
+  const shouldDropMismatchedSlackEvent = createSlackShouldDropMismatchedEvent({
+    accountId: params.accountId,
+    accountAbortSignal: params.accountAbortSignal,
+    isSharedSocketGroup: params.isSharedSocketGroup,
+    teamId: params.teamId,
+    apiAppId: params.apiAppId,
+  });
 
   return {
     cfg: params.cfg,
     accountId: params.accountId,
     botToken: params.botToken,
     app: params.app,
+    client: params.client,
     runtime: params.runtime,
     channelRuntime: params.channelRuntime,
     botUserId: params.botUserId,

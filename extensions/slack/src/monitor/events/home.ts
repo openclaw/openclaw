@@ -62,7 +62,7 @@ export function registerSlackHomeEvents(params: {
           return;
         }
 
-        await ctx.app.client.views.publish({
+        await ctx.client.views.publish({
           token: ctx.botToken,
           user_id: payload.user,
           view: buildSlackHomeView(slashCommandName),

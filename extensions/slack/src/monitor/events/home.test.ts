@@ -20,6 +20,10 @@ function createHomeContext(params?: {
   (harness.ctx.app as unknown as { client: { views: { publish: typeof publish } } }).client = {
     views: { publish },
   };
+  // Source reads ctx.client (per-account WebClient), not ctx.app.client.
+  (harness.ctx as unknown as { client: { views: { publish: typeof publish } } }).client = {
+    views: { publish },
+  };
   registerSlackHomeEvents({
     ctx: harness.ctx,
     slashCommandName: params?.slashCommandName,

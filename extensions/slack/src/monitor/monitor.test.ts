@@ -1,5 +1,6 @@
 // Slack tests cover monitor plugin behavior.
 import type { App } from "@slack/bolt";
+import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
@@ -194,6 +195,7 @@ const baseParams = () => ({
   accountId: "default",
   botToken: "token",
   app: { client: {} } as App,
+  client: {} as WebClient,
   runtime: {} as RuntimeEnv,
   botUserId: "B1",
   botId: "B1",

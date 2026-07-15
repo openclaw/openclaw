@@ -266,6 +266,11 @@ function createContext(overrides?: {
     );
   const ctx = {
     app,
+    // Source now reads ctx.client (a per-account WebClient) instead of
+    // ctx.app.client so shared-app accounts always call out with their own
+    // token; point it at the same mock so assertions on app.client.* still
+    // observe the calls the code under test makes.
+    client: app.client,
     accountId: "default",
     cfg: overrides?.cfg ?? {
       channels: {

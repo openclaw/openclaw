@@ -50,9 +50,7 @@ export async function resolveSlackDmHistoryContext(params: {
   }
 
   try {
-    const response = (await (
-      params.eventScope?.client ?? params.ctx.app.client
-    ).conversations.history({
+    const response = (await (params.eventScope?.client ?? params.ctx.client).conversations.history({
       token: params.ctx.botToken,
       channel: params.channelId,
       ...(params.currentMessageTs ? { latest: params.currentMessageTs, inclusive: true } : {}),

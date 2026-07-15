@@ -159,6 +159,30 @@ export function isNonRecoverableSlackAuthError(error: unknown): boolean {
   return SLACK_AUTH_ERROR_RE.test(formatUnknownError(error, ""));
 }
 
+export function formatSlackSocketReconnectMessage(params: {
+  event: string;
+  attempt: number;
+  delayMs: number;
+  error?: unknown;
+}) {
+  const suffix = params.error ? ` (${formatUnknownError(params.error)})` : "";
+  return `slack socket disconnected (${params.event}); reconnecting in ${Math.round(params.delayMs / 1000)}s (attempt ${params.attempt}/∞)${suffix}`;
+}
+
+export function formatSlackSocketStartRetryMessage(params: {
+  attempt: number;
+  delayMs: number;
+  error: unknown;
+  sdkContext?: string;
+}) {
+  const reason = formatUnknownError(
+    params.error,
+    "Slack Socket Mode start failed without error detail",
+  );
+  const sdkContext = params.sdkContext?.trim() ? `; last SDK log: ${params.sdkContext.trim()}` : "";
+  return `slack socket mode failed to start; retry ${params.attempt}/∞ in ${Math.round(params.delayMs / 1000)}s reason="${reason}${sdkContext}"`;
+}
+
 export function formatUnknownError(error: unknown, fallback = NO_ERROR_DETAIL): string {
   return formatSlackError(error, fallback);
 }

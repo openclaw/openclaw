@@ -241,7 +241,7 @@ export async function resolveSlackThreadContextData(params: {
       const { resolveSlackMedia } = await loadSlackMediaModule();
       threadStarterMedia = await resolveSlackMedia({
         files: starter.files,
-        client: params.eventScope?.client ?? params.ctx.app.client,
+        client: params.eventScope?.client ?? params.ctx.client,
         token: params.ctx.botToken,
         maxBytes: params.ctx.mediaMaxBytes,
       });
@@ -281,7 +281,7 @@ export async function resolveSlackThreadContextData(params: {
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,
       threadTs: params.threadTs,
-      client: params.eventScope?.client ?? params.ctx.app.client,
+      client: params.eventScope?.client ?? params.ctx.client,
       currentMessageTs: params.message.ts,
       limit: threadInitialHistoryLimit,
     });
