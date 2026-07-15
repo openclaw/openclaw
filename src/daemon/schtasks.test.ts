@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import iconv from "iconv-lite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { encodeWindowsLauncherScript } from "./launcher-encoding.js";
 import {
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
@@ -17,14 +17,6 @@ const schtasksResponses = vi.hoisted(
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: async () => schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" },
 }));
-
-// Pin code page detection to GBK so ANSI launcher decoding stays host-independent.
-vi.mock("../infra/windows-encoding.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/windows-encoding.js")>(
-    "../infra/windows-encoding.js",
-  );
-  return { ...actual, resolveWindowsSystemEncoding: () => "gbk" };
-});
 
 beforeEach(() => {
   schtasksResponses.length = 0;
@@ -229,7 +221,12 @@ describe("readScheduledTaskCommand", () => {
         await fs.writeFile(
           scriptPath,
           options.scriptEncoding === "gbk"
-            ? iconv.encode(script, "gbk")
+            ? // Production bytes for a code-page install: marker line + GBK body.
+              encodeWindowsLauncherScript({
+                format: "cmd",
+                content: script,
+                windowsEncoding: "gbk",
+              })
             : Buffer.from(script, "utf8"),
         );
       }
@@ -271,7 +268,7 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 
-  it("reads ANSI scripts with CJK paths under a CJK code page (#107416)", async () => {
+  it("reads marked ANSI scripts with CJK paths under a CJK code page (#107416)", async () => {
     await withScheduledTaskScript(
       {
         scriptLines: ["@echo off", 'cd /d "C:\\Users\\苗振\\.openclaw"', "node gateway.js"],
@@ -282,6 +279,25 @@ describe("readScheduledTaskCommand", () => {
         expect(result).toEqual({
           programArguments: ["node", "gateway.js"],
           workingDirectory: "C:\\Users\\苗振\\.openclaw",
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("reads back GBK launchers whose bytes are also valid UTF-8 (隆) without corruption", async () => {
+    // GBK "隆" is C2 A1, which UTF-8 accepts as "¡"; the marker keeps readback
+    // from sniffing these bytes as UTF-8 and parsing a corrupted path.
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'cd /d "C:\\Users\\隆\\.openclaw"', "node gateway.js"],
+        scriptEncoding: "gbk",
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          workingDirectory: "C:\\Users\\隆\\.openclaw",
           sourcePath: resolveTaskScriptPath(env),
         });
       },

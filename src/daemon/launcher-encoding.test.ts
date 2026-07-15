@@ -17,6 +17,8 @@ vi.mock("../infra/windows-encoding.js", async () => {
 
 const CJK_SCRIPT_PATH = "C:\\Users\\苗振\\.openclaw\\gateway.cmd";
 const REPLACEMENT_CHAR = String.fromCharCode(0xfffd);
+const GBK_MARKER = "@rem openclaw-launcher-encoding=gbk\r\n";
+const EUC_KR_MARKER = "@rem openclaw-launcher-encoding=euc-kr\r\n";
 
 beforeEach(() => {
   resolveWindowsSystemEncodingMock.mockReset();
@@ -51,7 +53,7 @@ describe("encodeWindowsLauncherScript", () => {
     expect(encoded.equals(Buffer.from(content, "utf8"))).toBe(true);
   });
 
-  it("encodes non-ASCII cmd scripts with the CJK system code page", () => {
+  it("encodes non-ASCII cmd scripts with a marker line plus CJK code page bytes", () => {
     const content = `@echo off\r\ncd /d "C:\\Users\\苗振\\.openclaw"\r\nnode gateway.js\r\n`;
     const encoded = encodeWindowsLauncherScript({
       format: "cmd",
@@ -60,8 +62,48 @@ describe("encodeWindowsLauncherScript", () => {
     });
 
     expect(encoded.equals(Buffer.from(content, "utf8"))).toBe(false);
-    expect(encoded.equals(iconv.encode(content, "gbk"))).toBe(true);
-    expect(decodeWindowsLauncherScript({ buffer: encoded, windowsEncoding: "gbk" })).toBe(content);
+    expect(encoded.equals(iconv.encode(GBK_MARKER + content, "gbk"))).toBe(true);
+    expect(decodeWindowsLauncherScript({ buffer: encoded })).toBe(content);
+  });
+
+  it("round-trips cmd content whose GBK bytes are also valid UTF-8 (隆 -> C2 A1 -> ¡)", () => {
+    // Verify the trap on this iconv build: valid UTF-8, wrong string, no U+FFFD.
+    const collisionBytes = iconv.encode("隆", "gbk");
+    expect(collisionBytes.toString("utf8")).not.toBe("隆");
+    expect(collisionBytes.toString("utf8")).not.toContain(REPLACEMENT_CHAR);
+
+    const content = `@echo off\r\ncd /d "C:\\Users\\隆\\.openclaw"\r\nnode gateway.js\r\n`;
+    const encoded = encodeWindowsLauncherScript({
+      format: "cmd",
+      content,
+      windowsEncoding: "gbk",
+    });
+
+    expect(encoded.equals(iconv.encode(GBK_MARKER + content, "gbk"))).toBe(true);
+    // Locks the regression: a raw UTF-8 readback of these bytes decodes
+    // cleanly (no replacement char) yet corrupts the path — the pre-marker bug.
+    expect(encoded.toString("utf8")).not.toContain(REPLACEMENT_CHAR);
+    expect(encoded.toString("utf8")).not.toContain("隆");
+    expect(decodeWindowsLauncherScript({ buffer: encoded })).toBe(content);
+  });
+
+  it("encodes cp949 extension syllables that Node ICU's euc-kr decoder rejects", () => {
+    // Windows code page 949 is cp949/UHC; "똠" (8C 63) is a UHC extension syllable
+    // iconv encodes and round-trips, but new TextDecoder("euc-kr") cannot decode
+    // (KS X 1001 only). The guard must verify euc-kr with iconv, not ICU.
+    const extensionBytes = iconv.encode("똠", "euc-kr");
+    expect(iconv.decode(extensionBytes, "euc-kr")).toBe("똠");
+    expect(new TextDecoder("euc-kr").decode(extensionBytes)).not.toBe("똠");
+
+    const content = `@echo off\r\ncd /d "C:\\Users\\똠이\\.openclaw"\r\nnode gateway.js\r\n`;
+    const encoded = encodeWindowsLauncherScript({
+      format: "cmd",
+      content,
+      windowsEncoding: "euc-kr",
+    });
+
+    expect(encoded.equals(iconv.encode(EUC_KR_MARKER + content, "euc-kr"))).toBe(true);
+    expect(decodeWindowsLauncherScript({ buffer: encoded })).toBe(content);
   });
 
   it("falls back to UTF-8 when no system code page is available", () => {
@@ -91,7 +133,7 @@ describe("encodeWindowsLauncherScript", () => {
     const content = `@echo off\r\ncd /d "C:\\Users\\苗振"\r\n`;
     const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
 
-    expect(encoded.equals(iconv.encode(content, "gbk"))).toBe(true);
+    expect(encoded.equals(iconv.encode(GBK_MARKER + content, "gbk"))).toBe(true);
   });
 
   it("fails the install instead of writing unrepresentable cmd content", () => {
@@ -111,29 +153,33 @@ describe("decodeWindowsLauncherScript", () => {
     expect(decodeWindowsLauncherScript({ buffer })).toBe(content);
   });
 
-  it("prefers valid UTF-8 over the system code page for legacy scripts", () => {
+  it("decodes unmarked legacy UTF-8 scripts with CJK paths", () => {
     const content = `@echo off\r\ncd /d "C:\\Users\\苗振\\.openclaw"\r\nnode gateway.js\r\n`;
     const buffer = Buffer.from(content, "utf8");
 
-    expect(decodeWindowsLauncherScript({ buffer, windowsEncoding: "gbk" })).toBe(content);
+    expect(decodeWindowsLauncherScript({ buffer })).toBe(content);
   });
 
-  it("decodes ANSI scripts with the system code page", () => {
-    // GBK bytes for 你好, mirroring src/infra/windows-encoding.test.ts fixtures.
-    const buffer = Buffer.concat([
-      Buffer.from("@echo off\r\nrem ", "utf8"),
-      Buffer.from([0xc4, 0xe3, 0xba, 0xc3]),
-    ]);
+  it("decodes marked code-page scripts with the recorded encoding", () => {
+    const content = "@echo off\r\nrem 你好\r\n";
+    const buffer = iconv.encode(GBK_MARKER + content, "gbk");
 
-    expect(decodeWindowsLauncherScript({ buffer, windowsEncoding: "gbk" })).toBe(
-      "@echo off\r\nrem 你好",
-    );
+    expect(decodeWindowsLauncherScript({ buffer })).toBe(content);
   });
 
-  it("degrades to UTF-8 replacement output when no code page is available", () => {
+  it("falls back to UTF-8 for marker labels iconv cannot decode", () => {
+    const content = "@rem openclaw-launcher-encoding=bogus\r\nnode gateway.js\r\n";
+    const buffer = Buffer.from(content, "utf8");
+
+    expect(decodeWindowsLauncherScript({ buffer })).toBe(content);
+  });
+
+  it("degrades unmarked non-UTF-8 bytes to UTF-8 replacement output", () => {
+    // Unmarked code-page files were never produced by a shipped release (the
+    // code-page writer ships together with the marker), so deterministic UTF-8
+    // is the correct total behavior for everything without a marker.
     const buffer = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
 
-    const decoded = decodeWindowsLauncherScript({ buffer, windowsEncoding: null });
-    expect(decoded).toContain(REPLACEMENT_CHAR);
+    expect(decodeWindowsLauncherScript({ buffer })).toContain(REPLACEMENT_CHAR);
   });
 });

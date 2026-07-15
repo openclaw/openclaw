@@ -1,9 +1,6 @@
 /** Encodes and decodes generated Windows launcher scripts (gateway.cmd / gateway.vbs). */
 import iconv from "iconv-lite";
-import {
-  decodeWindowsTextFileBuffer,
-  resolveWindowsSystemEncoding,
-} from "../infra/windows-encoding.js";
+import { resolveWindowsSystemEncoding } from "../infra/windows-encoding.js";
 
 type WindowsLauncherScriptFormat = "cmd" | "vbs";
 
@@ -21,6 +18,13 @@ const CMD_CONSOLE_SAFE_ENCODINGS = new Set([
   "gb18030",
   "windows-874",
 ]);
+
+// Code-page cmd launchers record their encoding in this ASCII comment line so
+// readback never has to guess: some code-page byte sequences are also valid
+// UTF-8 (GBK "隆" is C2 A1, which UTF-8 reads as "¡"), so content sniffing
+// silently corrupts paths.
+const LAUNCHER_ENCODING_MARKER_PREFIX = "@rem openclaw-launcher-encoding=";
+const LAUNCHER_ENCODING_MARKER_RE = /^@rem openclaw-launcher-encoding=(\S+)\s*$/;
 
 function isAsciiOnly(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
@@ -55,11 +59,22 @@ export function encodeWindowsLauncherScript(params: {
   if (!encoding || !CMD_CONSOLE_SAFE_ENCODINGS.has(encoding) || !iconv.encodingExists(encoding)) {
     return Buffer.from(params.content, "utf8");
   }
-  const encoded = iconv.encode(params.content, encoding);
+  // Generated launcher scripts are CRLF-terminated throughout; the marker is
+  // ASCII, so it encodes byte-identically in every safe code page.
+  const marked = `${LAUNCHER_ENCODING_MARKER_PREFIX}${encoding}\r\n${params.content}`;
+  const encoded = iconv.encode(marked, encoding);
   // iconv-lite substitutes "?" for unmappable characters, which would silently
-  // corrupt paths; verify with the same decoder the read path uses and fail the
-  // install before any launcher file is written.
-  if (new TextDecoder(encoding).decode(encoded) !== params.content) {
+  // corrupt paths; verify the round-trip and fail the install before any
+  // launcher file is written. Node ICU's euc-kr decoder is KS X 1001 only, but
+  // Windows code page 949 is cp949/UHC, so ICU false-rejects the ~8,800 UHC
+  // extension syllables cmd.exe reads fine — verify euc-kr with iconv's own
+  // cp949 decode instead. The other five labels match Windows in ICU, which
+  // also flags best-fit hazards (shift_jis ¥ -> 0x5C) iconv's decode would miss.
+  const decoded =
+    encoding === "euc-kr"
+      ? iconv.decode(encoded, encoding)
+      : new TextDecoder(encoding).decode(encoded);
+  if (decoded !== marked) {
     throw new Error(
       `Windows ${params.format} launcher script contains characters that cannot be represented in the Windows system code page (${encoding}); cmd.exe would misread the script. Remove those characters or switch Windows to UTF-8 (code page 65001).`,
     );
@@ -67,27 +82,27 @@ export function encodeWindowsLauncherScript(params: {
   return encoded;
 }
 
-/** Decodes launcher scripts written by any OpenClaw version (UTF-16 LE BOM, UTF-8, or ANSI). */
-export function decodeWindowsLauncherScript(params: {
-  buffer: Buffer;
-  windowsEncoding?: string | null;
-}): string {
-  if (params.buffer.length >= 2 && params.buffer[0] === 0xff && params.buffer[1] === 0xfe) {
-    return params.buffer.subarray(2).toString("utf16le");
+/** Decodes launcher scripts written by any OpenClaw version (UTF-16 LE BOM, marked code page, or UTF-8). */
+export function decodeWindowsLauncherScript(params: { buffer: Buffer }): string {
+  const { buffer } = params;
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return buffer.subarray(2).toString("utf16le");
   }
-  // Valid UTF-8 first: covers ASCII and pre-fix UTF-8 installs without paying
-  // for code page detection on frequent readScheduledTaskCommand polls.
-  const utf8 = params.buffer.toString("utf8");
-  if (!utf8.includes("\uFFFD")) {
-    return utf8;
+  // The marker line is pure ASCII and no CMD_CONSOLE_SAFE_ENCODINGS multibyte
+  // sequence contains 0x0A, so the first newline in a marked file is exactly
+  // the marker terminator. latin1 (not "ascii", which masks the high bit and
+  // could alias garbage bytes into the prefix) keeps the byte-level read exact.
+  const newlineIndex = buffer.indexOf(0x0a);
+  if (newlineIndex !== -1) {
+    const marker = LAUNCHER_ENCODING_MARKER_RE.exec(
+      buffer.subarray(0, newlineIndex).toString("latin1"),
+    );
+    // encodingExists guards hand-edited marker labels so a bad label degrades
+    // to the UTF-8 fallback instead of iconv.decode throwing mid-poll.
+    if (marker?.[1] && iconv.encodingExists(marker[1])) {
+      return iconv.decode(buffer.subarray(newlineIndex + 1), marker[1]);
+    }
   }
-  const encoding =
-    params.windowsEncoding !== undefined ? params.windowsEncoding : resolveWindowsSystemEncoding();
-  // Launcher files are Windows artifacts no matter which host runs this code,
-  // so pin the platform instead of letting the decoder no-op off-Windows.
-  return decodeWindowsTextFileBuffer({
-    buffer: params.buffer,
-    platform: "win32",
-    windowsEncoding: encoding ?? "utf-8",
-  });
+  // No marker: ASCII scripts and pre-marker legacy UTF-8 installs.
+  return buffer.toString("utf8");
 }
