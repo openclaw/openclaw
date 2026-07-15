@@ -107,6 +107,17 @@ function normalizePathForComparison(value, pathApi, platform) {
   return platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
+function isStableAbsolutePath(value, pathApi, platform) {
+  if (!pathApi.isAbsolute(value)) {
+    return false;
+  }
+  if (platform !== "win32") {
+    return true;
+  }
+  const root = pathApi.parse(value).root;
+  return root !== "\\" && root !== "/";
+}
+
 function stripBunLifecyclePathPrefix(pathEntries, cwd, pathApi, platform) {
   const expectedPrefix = [];
   let directory = pathApi.resolve(cwd);
@@ -154,8 +165,9 @@ export function probePackageCliNodeRuntime(options = {}) {
   }
 
   for (const entry of pathEntries) {
-    if (!entry || !pathApi.isAbsolute(entry)) {
-      // Relative PATH entries resolve against each future CLI invocation's cwd.
+    if (!entry || !isStableAbsolutePath(entry, pathApi, platform)) {
+      // Relative paths, including Windows root-relative paths, resolve against
+      // each future CLI invocation's cwd or drive.
       // No preinstall probe can safely approve the Node they may select later.
       return null;
     }

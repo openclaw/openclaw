@@ -324,6 +324,28 @@ describe("install runtime enforcement", () => {
     },
   );
 
+  it.each(["\\tools", "/tools"])(
+    "fails closed before a Windows root-relative PATH component %j",
+    (relativeEntry) => {
+      const run = vi.fn();
+      expect(
+        probePackageCliNodeRuntime({
+          cwd: "C:\\work\\openclaw",
+          pathEnv: [
+            "C:\\work\\openclaw\\node_modules\\.bin",
+            "C:\\work\\node_modules\\.bin",
+            "C:\\node_modules\\.bin",
+            relativeEntry,
+            "C:\\node",
+          ].join(";"),
+          platform: "win32",
+          run,
+        }),
+      ).toBeNull();
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
   it("removes NODE_OPTIONS case-insensitively from a Windows probe", () => {
     let childEnv: NodeJS.ProcessEnv | undefined;
     expect(
