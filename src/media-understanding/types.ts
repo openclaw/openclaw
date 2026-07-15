@@ -29,6 +29,8 @@ export type MediaUnderstandingOutput = {
   text: string;
   provider: string;
   model?: string;
+  requestedBackend?: string;
+  observedBackend?: string;
 };
 
 type MediaUnderstandingDecisionOutcome =
@@ -42,6 +44,8 @@ type MediaUnderstandingDecisionOutcome =
 export type MediaUnderstandingModelDecision = {
   provider?: string;
   model?: string;
+  requestedBackend?: string;
+  observedBackend?: string;
   type: "provider" | "cli";
   outcome: "success" | "skipped" | "failed";
   reason?: string;
@@ -223,7 +227,7 @@ export type StructuredExtractionResult = {
   contentType?: "json" | "text";
 };
 
-export type MediaUnderstandingDocumentModelDefaults = {
+type MediaUnderstandingDocumentModelDefaults = {
   textExtraction?: string;
   image?: string | false;
 };

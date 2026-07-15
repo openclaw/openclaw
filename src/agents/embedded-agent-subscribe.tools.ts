@@ -1,6 +1,5 @@
-/**
- * Sanitizes, extracts, and classifies embedded-agent tool execution results.
- */
+/** Sanitizes, extracts, and classifies embedded-agent tool execution results. */
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -14,7 +13,11 @@ import type { ChannelMessageActionName } from "../channels/plugins/types.public.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
-import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
+import {
+  redactSecrets,
+  redactSensitiveFieldValue,
+  redactToolPayloadText,
+} from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { isMessagingToolTargetEvidenceAction } from "./embedded-agent-messaging.js";
@@ -33,6 +36,7 @@ export { isToolResultError };
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
+const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const TOOL_DENIAL_ERROR_CODES = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
 const OPAQUE_STRUCTURED_RESULT_FIELDS = new Set(["encrypted_content", "encrypted_stdout"]);
 const SENSITIVE_STRUCTURED_HEADER_FIELDS = new Set([
@@ -49,6 +53,34 @@ function truncateToolText(text: string): string {
     return text;
   }
   return `${truncateUtf16Safe(text, TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
+}
+
+export function truncateLiveExecOutput(text: string): string {
+  if (text.length <= LIVE_EXEC_OUTPUT_MAX_CHARS) {
+    return text;
+  }
+  return `${truncateUtf16Safe(text, LIVE_EXEC_OUTPUT_MAX_CHARS)}\n...(live output truncated)...`;
+}
+
+export function capLiveExecResult(result: unknown): unknown {
+  const details = readToolResultDetails(result);
+  if (!details || typeof details.status !== "string" || typeof details.aggregated !== "string") {
+    return result;
+  }
+  const aggregated = truncateLiveExecOutput(details.aggregated);
+  if (aggregated === details.aggregated) {
+    return result;
+  }
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return result;
+  }
+  return {
+    ...(result as Record<string, unknown>),
+    details: {
+      ...details,
+      aggregated,
+    },
+  };
 }
 
 function normalizeToolErrorText(text: string): string | undefined {
@@ -234,7 +266,7 @@ export function sanitizeToolResult(result: unknown): unknown {
     return redactToolPayloadText(result);
   }
   if (Array.isArray(result)) {
-    return redactStringsDeep(result);
+    return redactSecrets(result);
   }
   if (!result || typeof result !== "object") {
     return result;
@@ -252,7 +284,8 @@ export function sanitizeToolResult(result: unknown): unknown {
       const entry = item as Record<string, unknown>;
       if (readStringValue(entry.type) === "image") {
         const data = readStringValue(entry.data);
-        const bytes = data ? data.length : undefined;
+        const existingBytes = typeof entry.bytes === "number" ? entry.bytes : undefined;
+        const bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);
         const cleaned = { ...entry };
         delete cleaned.data;
         return Object.assign({}, cleaned, { bytes, omitted: true });
@@ -262,7 +295,7 @@ export function sanitizeToolResult(result: unknown): unknown {
   }
   // Deep-redact the entire result so any top-level or nested string is
   // protected, not just `details` and text content blocks.
-  const baseline = redactStringsDeep(preCleaned) as Record<string, unknown>;
+  const baseline = redactSecrets(preCleaned);
   const out: Record<string, unknown> = { ...baseline };
   const content = Array.isArray(baseline.content) ? baseline.content : null;
   if (content) {
@@ -280,9 +313,12 @@ export function sanitizeToolResult(result: unknown): unknown {
   return out;
 }
 
+const INLINE_DATA_URI_VALUE_PATTERN =
+  /^data:(?:[a-z][a-z0-9.+-]*\/[a-z0-9.+-]+)?(?:;[a-z0-9.+-]+(?:=[^,;"'\s]+)?)*,/i;
+
 function redactInlineDataUriValue(value: string): string {
   const trimmed = value.trimStart();
-  if (!trimmed.toLowerCase().startsWith("data:")) {
+  if (!INLINE_DATA_URI_VALUE_PATTERN.test(trimmed)) {
     return value;
   }
   return `[inline data URI: ${value.length} chars]`;
@@ -384,6 +420,10 @@ function resolveToolResultContentBlocks(result: object): unknown[] {
 }
 
 export function extractToolResultText(result: unknown): string | undefined {
+  if (typeof result === "string") {
+    const trimmed = redactToolPayloadText(redactInlineDataUriValue(result)).trim();
+    return trimmed ? truncateToolText(trimmed) : undefined;
+  }
   if (!result || typeof result !== "object") {
     return undefined;
   }
@@ -575,6 +615,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "session_status",
   "sessions_history",
   "sessions_list",
+  "sessions_search",
   "sessions_send",
   "sessions_spawn",
   "subagents",
@@ -1116,3 +1157,4 @@ export function extractMessagingToolSendResult(
     threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,5 +1,5 @@
 // Npm Telegram Live tests cover npm telegram live script behavior.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -130,6 +130,22 @@ describe("package Telegram live Docker E2E", () => {
     );
   });
 
+  it("installs prepared root and companion tarballs through an exact local registry", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR");
+    expect(script).toContain('package_source_kind="prepared-package-set"');
+    expect(script).toContain('package_install_source="openclaw@$(read_package_version');
+    expect(script).toContain('-v "$resolved_package_dir:/package-under-test:ro"');
+    expect(script).toContain(
+      '-v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-npm-registry-server.mjs:ro"',
+    );
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_SET");
+    expect(script).toContain("node /tmp/openclaw-npm-registry-server.mjs");
+    expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
+    expect(script).toContain('export NPM_CONFIG_REGISTRY="$registry_url"');
+  });
+
   it("keeps live Docker artifacts isolated by default", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
@@ -162,6 +178,22 @@ describe("package Telegram live Docker E2E", () => {
         repoRoot,
       ),
     ).toBe(".artifacts/custom");
+  });
+
+  it("keeps the installed OpenClaw command as the package SUT", async () => {
+    const prefix = mkTempRoot();
+    const command = path.join(prefix, "bin", "openclaw");
+    mkdirSync(path.dirname(command), { recursive: true });
+    writeFileSync(command, "#!/bin/sh\n");
+
+    await expect(
+      testing.resolveTrustedOpenClawCommand(command, {
+        NPM_CONFIG_PREFIX: prefix,
+      }),
+    ).resolves.toEqual({
+      executablePath: command,
+      usePackagedPlugins: true,
+    });
   });
 
   it("mounts configured output paths before entering the container", () => {

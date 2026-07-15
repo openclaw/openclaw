@@ -41,6 +41,7 @@ import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-cont
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -301,6 +302,7 @@ async function deliverQueuedSessionDelivery(params: {
       ChatType: route.chatType,
       CommandAuthorized: true,
       GatewayClientScopes: ["operator.admin"],
+      GatewayClientCaps: [],
       ReplyToId: route.replyToId,
       OriginatingChannel: route.channel,
       OriginatingTo: route.to,
@@ -467,9 +469,11 @@ async function loadRestartSentinelStartupTask(params: {
       const attempt = params.attempt ?? 0;
       if (attempt < CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS) {
         const timer = setTimeout(() => {
-          void scheduleRestartSentinelWakeAttempt({
-            deps: params.deps,
-            attempt: attempt + 1,
+          void runWithGatewayIndependentRootWorkAdmission(async () => {
+            await scheduleRestartSentinelWakeAttempt({
+              deps: params.deps,
+              attempt: attempt + 1,
+            });
           }).catch((err: unknown) => {
             log.warn(`restart sentinel pending update retry failed: ${formatErrorMessage(err)}`);
           });

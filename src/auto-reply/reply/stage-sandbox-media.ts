@@ -1,11 +1,11 @@
 // Stages inbound media into sandbox workspaces before agent execution.
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { assertSandboxPath } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
@@ -17,11 +17,12 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 
 const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
-export const SCP_STDERR_TAIL_CHARS = 16_384;
+const SCP_STDERR_TAIL_CHARS = 16_384;
 
 // `staged` maps every absolute source path that was copied into the sandbox
 // (or remote cache) to its rewritten ctx path. Callers like chat.send's
@@ -107,9 +108,10 @@ export async function stageSandboxMedia(params: {
       continue;
     }
     const stageIntoSandboxMediaDir = Boolean(sandbox);
-    const relativeDest = stageIntoSandboxMediaDir || hostWorkspaceStagingDir
-      ? path.join(hostWorkspaceStagingDir ?? path.join("media", "inbound"), fileName)
-      : fileName;
+    const relativeDest =
+      stageIntoSandboxMediaDir || hostWorkspaceStagingDir
+        ? path.join(hostWorkspaceStagingDir ?? path.join("media", "inbound"), fileName)
+        : fileName;
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
 
     try {
@@ -366,39 +368,30 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
   if (!safeRemotePath) {
     throw new Error("invalid remote path for SCP");
   }
-  return new Promise((resolve, reject) => {
-    const child = spawn(
+  const result = await runCommandWithTimeout(
+    [
       "scp",
-      [
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=yes",
-        "--",
-        `${safeRemoteHost}:${safeRemotePath}`,
-        localPath,
-      ],
-      { stdio: ["ignore", "ignore", "pipe"] },
-    );
-
-    let stderr = "";
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk) => {
-      stderr = appendScpStderrTail(stderr, chunk);
-    });
-
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`scp failed (${code}): ${stderr.trim()}`));
-      }
-    });
-  });
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=yes",
+      "--",
+      `${safeRemoteHost}:${safeRemotePath}`,
+      localPath,
+    ],
+    {
+      // Four UTF-8 bytes per code point preserves enough data for the existing
+      // UTF-16 diagnostic tail contract without retaining unbounded stderr.
+      maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
+    },
+  );
+  if (result.code !== 0) {
+    const stderr = appendScpStderrTail("", result.stderr).trim();
+    throw new Error(`scp failed (${result.code}): ${stderr}`);
+  }
 }
 
-export function appendScpStderrTail(
+function appendScpStderrTail(
   current: string,
   chunk: string,
   maxChars = SCP_STDERR_TAIL_CHARS,
@@ -407,5 +400,7 @@ export function appendScpStderrTail(
   if (combined.length <= maxChars) {
     return combined;
   }
-  return combined.slice(-maxChars);
+  return sliceUtf16Safe(combined, Math.max(0, combined.length - maxChars));
 }
+
+export const testing = { scpFile } as const;

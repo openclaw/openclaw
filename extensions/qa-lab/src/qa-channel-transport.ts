@@ -5,11 +5,17 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { getQaProvider } from "./providers/index.js";
-import { QaStateBackedTransportAdapter } from "./qa-transport.js";
+import {
+  QaStateBackedTransportAdapter,
+  waitForQaTransportOutboundSequence,
+} from "./qa-transport.js";
 import type {
   QaTransportActionName,
   QaTransportGatewayConfig,
   QaTransportGatewayClient,
+  QaTransportNativeCommandInput,
+  QaTransportOutboundSequenceMatch,
+  QaTransportPolicy,
   QaTransportReportParams,
 } from "./qa-transport.js";
 import { qaChannelPlugin } from "./runtime-api.js";
@@ -78,7 +84,9 @@ async function waitForQaChannelReady(params: {
 
 export function createQaChannelGatewayConfig(params: {
   baseUrl: string;
+  transportPolicy?: QaTransportPolicy;
 }): QaTransportGatewayConfig {
+  const senderAllowlist = params.transportPolicy?.senderAllowlist;
   return {
     channels: {
       [QA_CHANNEL_ID]: {
@@ -86,7 +94,22 @@ export function createQaChannelGatewayConfig(params: {
         baseUrl: params.baseUrl,
         botUserId: "openclaw",
         botDisplayName: "OpenClaw QA",
-        allowFrom: ["*"],
+        allowFrom: senderAllowlist ? [...senderAllowlist] : ["*"],
+        ...(senderAllowlist
+          ? {
+              groupPolicy: "allowlist" as const,
+              groupAllowFrom: [...senderAllowlist],
+            }
+          : {}),
+        ...(params.transportPolicy?.requireGroupMention
+          ? {
+              groups: {
+                "*": {
+                  requireMention: true,
+                },
+              },
+            }
+          : {}),
         pollTimeoutMs: 250,
       },
     },
@@ -129,27 +152,46 @@ async function handleQaChannelAction(params: {
 }
 
 class QaChannelTransport extends QaStateBackedTransportAdapter {
-  constructor(state: QaBusState) {
+  readonly #transportPolicy?: QaTransportPolicy;
+
+  constructor(state: QaBusState, transportPolicy?: QaTransportPolicy) {
     super({
       id: QA_CHANNEL_ID,
       label: "qa-channel + qa-lab bus",
       accountId: QA_CHANNEL_ACCOUNT_ID,
       requiredPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+      supportedActions: ["delete", "edit", "react", "thread-create"],
       state,
     });
+    this.#transportPolicy = transportPolicy;
   }
 
-  createGatewayConfig = createQaChannelGatewayConfig;
+  createGatewayConfig = ({ baseUrl }: { baseUrl: string }) =>
+    createQaChannelGatewayConfig({ baseUrl, transportPolicy: this.#transportPolicy });
   waitReady = waitForQaChannelReady;
   buildAgentDelivery = ({ target }: { target: string }) => ({
     channel: QA_CHANNEL_ID,
     replyChannel: QA_CHANNEL_ID,
     replyTo: target,
   });
+  async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
+    const { command, ...message } = input;
+    await this.sendInbound({
+      ...message,
+      text: `/${command}`,
+      nativeCommand: { name: command },
+    });
+  }
+  async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {
+    return await waitForQaTransportOutboundSequence({
+      input,
+      readEvents: () => this.state.getSnapshot().events,
+    });
+  }
   handleAction = handleQaChannelAction;
   createReportNotes = createQaChannelReportNotes;
 }
 
-export function createQaChannelTransport(state: QaBusState) {
-  return new QaChannelTransport(state);
+export function createQaChannelTransport(state: QaBusState, transportPolicy?: QaTransportPolicy) {
+  return new QaChannelTransport(state, transportPolicy);
 }

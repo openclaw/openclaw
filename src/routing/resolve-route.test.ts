@@ -116,6 +116,24 @@ describe("resolveAgentRoute", () => {
     });
   });
 
+  test("uses the configured main session key for shared direct routes", () => {
+    const route = resolveRoute({
+      cfg: { session: { dmScope: "main", mainKey: "work" } },
+      channel: "whatsapp",
+      accountId: null,
+      peer: { kind: "direct", id: "+15551234567" },
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "main",
+      accountId: "default",
+      sessionKey: "agent:main:work",
+      lastRoutePolicy: "main",
+      matchedBy: "default",
+    });
+    expect(route.mainSessionKey).toBe("agent:main:work");
+  });
+
   test.each([
     { dmScope: "per-peer" as const, expected: "agent:main:direct:+15551234567" },
     {
@@ -1259,3 +1277,4 @@ describe("binding evaluation cache scalability", () => {
     expect(defaultRoute.matchedBy).toBe("default");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

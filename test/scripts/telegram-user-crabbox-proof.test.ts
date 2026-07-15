@@ -131,18 +131,22 @@ describe("telegram user Crabbox proof log polling", () => {
     ).toBe(4096);
   });
 
-  it("rejects loose and out-of-range proof ports before remote setup", () => {
-    const looseGatewayPort = runProofCli(["--gateway-port", "1e3", "--dry-run"]);
-    expect(looseGatewayPort.status).toBe(1);
-    expect(looseGatewayPort.stderr).toContain("--gateway-port must be a positive integer.");
-
-    const highGatewayPort = runProofCli(["--gateway-port", "65536", "--dry-run"]);
-    expect(highGatewayPort.status).toBe(1);
-    expect(highGatewayPort.stderr).toContain("--gateway-port must be a TCP port from 1 to 65535.");
-
-    const highMockPort = runProofCli(["--mock-port", "65536", "--dry-run"]);
-    expect(highMockPort.status).toBe(1);
-    expect(highMockPort.stderr).toContain("--mock-port must be a TCP port from 1 to 65535.");
+  it.each([
+    ["loose gateway", "--gateway-port", "1e3", "--gateway-port must be a positive integer."],
+    [
+      "out-of-range gateway",
+      "--gateway-port",
+      "65536",
+      "--gateway-port must be a TCP port from 1 to 65535.",
+    ],
+    [
+      "out-of-range mock",
+      "--mock-port",
+      "65536",
+      "--mock-port must be a TCP port from 1 to 65535.",
+    ],
+  ])("rejects %s proof ports before remote setup", (_label, flag, value, message) => {
+    expect(() => parseArgs([flag, value, "--dry-run"])).toThrow(message);
   });
 
   it("rejects short flags as proof option values before dry-run planning", () => {
@@ -286,7 +290,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const stagedDir = stageFullSessionArtifacts(outputDir);
 
     expect(stagedDir).toBe(publishDir);
-    expect(fs.readdirSync(stagedDir).sort()).toEqual([
+    expect(fs.readdirSync(stagedDir).toSorted()).toEqual([
       "probe-2026-06-20T16-47-48-123Z.json",
       "probe.json",
       "status.json",
@@ -608,9 +612,16 @@ setInterval(() => {}, 1000);
       stdio: "ignore",
     });
     try {
-      await waitFor(() => fs.existsSync(descendantPidPath));
-      descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
-      expect(isProcessAlive(descendantPid)).toBe(true);
+      await waitFor(() => {
+        if (!fs.existsSync(descendantPidPath)) {
+          return false;
+        }
+        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        return (
+          Number.isInteger(descendantPid) && descendantPid > 1 && isProcessAlive(descendantPid)
+        );
+      });
+      expect(Number.isInteger(descendantPid)).toBe(true);
       await waitFor(() => fs.existsSync(commandSettledPath));
       if (!runner.pid) {
         throw new Error("runner did not start");
@@ -680,6 +691,8 @@ process.exit(2);
           }),
           drainUpdates: async () => ({
             drained: 0,
+            pendingAfter: undefined,
+            pendingBefore: undefined,
             webhookUrlSet: false,
           }),
         },
@@ -743,6 +756,8 @@ process.exit(2);
             }),
             drainUpdates: async () => ({
               drained: 0,
+              pendingAfter: undefined,
+              pendingBefore: undefined,
               webhookUrlSet: false,
             }),
             waitForOutputReady: async (child, _pattern, output, label) => {
@@ -846,7 +861,7 @@ fs.writeFileSync(${JSON.stringify(recorderExitPath)}, "exited");
             startDelayMs: 0,
             target: "linux",
           }),
-          delay(2_000).then(() => {
+          delay(500).then(() => {
             throw new Error("recordProbeVideo hung after the recorder had already exited");
           }),
         ]),

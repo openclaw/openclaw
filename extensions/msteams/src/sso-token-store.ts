@@ -33,9 +33,9 @@ export type MSTeamsSsoStoredToken = {
   updatedAt: string;
 };
 
-export type MSTeamsSsoTokenStore = {
+type MSTeamsSsoTokenStore = {
   get(params: { connectionName: string; userId: string }): Promise<MSTeamsSsoStoredToken | null>;
-  save(token: MSTeamsSsoStoredToken): Promise<void>;
+  save(value: MSTeamsSsoStoredToken): Promise<void>;
   remove(params: { connectionName: string; userId: string }): Promise<boolean>;
 };
 
@@ -45,7 +45,7 @@ type SsoStoreData = {
   tokens: Record<string, MSTeamsSsoStoredToken>;
 };
 
-export type MSTeamsSsoStoreData = SsoStoreData;
+type MSTeamsSsoStoreData = SsoStoreData;
 
 export const MSTEAMS_SSO_TOKENS_LEGACY_FILENAME = "msteams-sso-tokens.json";
 export const MSTEAMS_SSO_TOKENS_NAMESPACE = "sso-tokens";

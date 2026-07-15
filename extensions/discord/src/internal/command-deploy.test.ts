@@ -3,13 +3,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
+import {
+  ApplicationCommandType,
+  type APIApplicationCommand,
+  type APIApplicationCommandOption,
+} from "discord-api-types/v10";
 import { describe, expect, test, vi } from "vitest";
-import { DiscordCommandDeployer, testing } from "./command-deploy.js";
+import { commandsEqual } from "./command-comparison.js";
+import { DiscordCommandDeployer } from "./command-deploy.js";
 import { BaseCommand } from "./commands.js";
 import type { RequestClient } from "./rest.js";
-
-const { commandsEqual } = testing;
 
 /**
  * Regression tests for Discord slash-command reconcile/deploy equality.
@@ -68,7 +71,7 @@ describe("commandsEqual", () => {
           name_localizations: null,
           description: "Skill name",
           description_localizations: null,
-        } as any,
+        } as APIApplicationCommandOption,
       ],
     });
     const desired = desiredFromLocal({
@@ -81,7 +84,9 @@ describe("commandsEqual", () => {
     const current = currentFromDiscord({
       name: "skill",
       description: "Run a skill.",
-      options: [{ type: 3, name: "name", description: "Skill name" } as any],
+      options: [
+        { type: 3, name: "name", description: "Skill name" } as APIApplicationCommandOption,
+      ],
     });
     const desired = desiredFromLocal({
       name: "skill",
@@ -95,7 +100,9 @@ describe("commandsEqual", () => {
     const current = currentFromDiscord({
       name: "skill",
       description: "Run a skill.",
-      options: [{ type: 3, name: "name", description: "Skill name" } as any],
+      options: [
+        { type: 3, name: "name", description: "Skill name" } as APIApplicationCommandOption,
+      ],
     });
     const desired = desiredFromLocal({
       name: "skill",
@@ -154,7 +161,7 @@ describe("commandsEqual", () => {
           name: "name",
           description: "Skill name",
           description_localizations: { "zh-CN": "技能名称。直接输入。" },
-        } as any,
+        } as APIApplicationCommandOption,
       ],
     });
     const desired = desiredFromLocal({

@@ -5,6 +5,7 @@ import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
@@ -27,7 +28,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { buildIrcAllowlistCandidates, normalizeIrcAllowEntry } from "./normalize.js";
-import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
+import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
@@ -42,13 +43,21 @@ const ircIngressIdentity = defineStableChannelIngressIdentity({
   normalizeSubject: normalizeLowercaseStringOrEmpty,
   sensitivity: "pii",
   aliases: [
-    ...["irc-id-nick-user", "irc-id-nick-host"].map((key) => ({
-      key,
+    {
+      key: "irc-id-nick-user",
+      kind: "stable-id" as const,
+      normalizeEntry: normalizeIrcNickUserEntry,
+      normalizeSubject: normalizeLowercaseStringOrEmpty,
+      dangerous: true,
+      sensitivity: "pii" as const,
+    },
+    {
+      key: "irc-id-nick-host",
       kind: "stable-id" as const,
       normalizeEntry: () => null,
       normalizeSubject: normalizeLowercaseStringOrEmpty,
       sensitivity: "pii" as const,
-    })),
+    },
     {
       key: "irc-nick",
       kind: IRC_NICK_KIND,
@@ -69,9 +78,25 @@ function isBareNick(value: string): boolean {
   return !value.includes("!") && !value.includes("@");
 }
 
+function hasVerifiedHost(value: string): boolean {
+  return value.includes("@");
+}
+
+function isHostlessNickUser(value: string): boolean {
+  return value.includes("!") && !value.includes("@");
+}
+
 function normalizeIrcStableEntry(value: string): string | null {
   const normalized = normalizeIrcAllowEntry(value);
-  if (!normalized || normalized === "*" || isBareNick(normalized)) {
+  if (!normalized || normalized === "*" || !hasVerifiedHost(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function normalizeIrcNickUserEntry(value: string): string | null {
+  const normalized = normalizeIrcAllowEntry(value);
+  if (!normalized || normalized === "*" || !isHostlessNickUser(normalized)) {
     return null;
   }
   return normalized;
@@ -91,14 +116,12 @@ function hasEntries(entries: Array<string | number> | undefined): boolean {
 
 function createIrcIngressSubject(message: IrcInboundMessage) {
   const candidates = buildIrcAllowlistCandidates(message, { allowNameMatching: true });
-  const stableCandidates = candidates.filter((candidate) => !isBareNick(candidate));
+  const stableCandidates = candidates.filter((candidate) => hasVerifiedHost(candidate));
   const nick = normalizeLowercaseStringOrEmpty(message.senderNick);
   return {
     stableId: stableCandidates[stableCandidates.length - 1] ?? nick,
     aliases: {
-      "irc-id-nick-user": stableCandidates.find(
-        (candidate) => candidate.includes("!") && !candidate.includes("@"),
-      ),
+      "irc-id-nick-user": candidates.find((candidate) => isHostlessNickUser(candidate)),
       "irc-id-nick-host": stableCandidates.find(
         (candidate) => !candidate.includes("!") && candidate.includes("@"),
       ),
@@ -230,10 +253,7 @@ export async function handleIrcInbound(params: {
     core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes) ||
     (explicitMentionRegex ? explicitMentionRegex.test(rawBody) : false);
   const requireMention = message.isGroup
-    ? resolveIrcRequireMention({
-        groupConfig: groupMatch.groupConfig,
-        wildcardConfig: groupMatch.wildcardConfig,
-      })
+    ? resolveIrcGroupRequireMention({ groups: account.config.groups, target: message.target })
     : false;
   const routeGroupAllowFrom = normalizeStringEntries(
     groupMatch.groupConfig?.allowFrom?.length
@@ -372,6 +392,7 @@ export async function handleIrcInbound(params: {
   });
 
   const groupSystemPrompt = normalizeOptionalString(groupMatch.groupConfig?.systemPrompt);
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
@@ -427,9 +448,7 @@ export async function handleIrcInbound(params: {
     replyOptions: {
       skillFilter: groupMatch.groupConfig?.skills,
       disableBlockStreaming:
-        typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
+        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
     },
     record: {
       onRecordError: (err) => {

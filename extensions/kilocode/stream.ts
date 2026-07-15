@@ -56,7 +56,7 @@ function resolveKilocodeThinkingLevel(ctx: ProviderWrapStreamFnContext): ThinkLe
   return ctx.thinkingLevel;
 }
 
-export function createKilocodeStreamWrapper(
+function createKilocodeStreamWrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
   thinkingLevel?: ThinkLevel,
 ): ProviderWrapStreamFnContext["streamFn"] {

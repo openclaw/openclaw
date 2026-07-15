@@ -26,7 +26,7 @@
     "gateway.http.endpoints.*.*.urlAllowlist.*",
     "gateway.http.endpoints.*.enabled",
     "gateway.mode",
-    "gateway.remote.enabled",
+    "gateway.nodes.denyCommands.*",
     "gateway.tailscale.mode",
     "gateway.tailscale.preserveFunnel",
     "logging.redactSensitive",
@@ -380,13 +380,6 @@
       "reason": "Policy observes whether Gateway remote mode is enabled.",
     },
     {
-      "pattern": "gateway.remote.enabled",
-      "status": "observed",
-      "area": "gateway",
-      "policy": "gateway.remote.allow",
-      "reason": "Policy observes explicit remote Gateway enablement.",
-    },
-    {
       "pattern": "gateway.http.endpoints.*.enabled",
       "status": "observed",
       "area": "gateway",
@@ -406,6 +399,13 @@
       "area": "gateway",
       "policy": "gateway.http.requireUrlAllowlists",
       "reason": "Policy observes URL-fetch allowlists on Gateway HTTP inputs.",
+    },
+    {
+      "pattern": "gateway.nodes.denyCommands.*",
+      "status": "observed",
+      "area": "gateway",
+      "policy": "gateway.nodes.denyCommands",
+      "reason": "Policy observes denied node commands so privileged node command surfaces can be denied by policy.",
     },
     {
       "pattern": "mcp.servers.*.command",

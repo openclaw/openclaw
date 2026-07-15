@@ -16,25 +16,34 @@ import {
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
+import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
-import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import {
   readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
-} from "./session-binding.js";
-import { createCodexTestModel } from "./test-support.js";
+} from "./session-binding.test-helpers.js";
+import {
+  adaptCodexTestClientFactory,
+  createCodexTestModel,
+  type CodexTestAppServerClientFactory,
+} from "./test-support.js";
+
+const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 
 let tempDir: string;
-let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
+let codexAppServerClientFactoryForTest: CodexTestAppServerClientFactory | undefined;
 
-type RunCodexAppServerAttemptOptions = NonNullable<
-  Parameters<typeof runCodexAppServerAttemptImpl>[1]
+type RunCodexAppServerAttemptOptions = Omit<
+  NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>,
+  "bindingStore"
 >;
 
-function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
+function setCodexAppServerClientFactoryForTest(factory: CodexTestAppServerClientFactory): void {
   codexAppServerClientFactoryForTest = factory;
 }
 
@@ -46,14 +55,20 @@ function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: RunCodexAppServerAttemptOptions = {},
 ) {
-  const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
-  return runCodexAppServerAttemptImpl(
-    params,
-    clientFactory ? { ...options, clientFactory } : options,
-  );
+  const clientFactory =
+    options.clientFactory ??
+    (codexAppServerClientFactoryForTest
+      ? adaptCodexTestClientFactory(codexAppServerClientFactoryForTest)
+      : undefined);
+  return runCodexAppServerAttemptImpl(params, {
+    ...options,
+    bindingStore: testCodexAppServerBindingStore,
+    ...(clientFactory ? { clientFactory } : {}),
+  });
 }
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
+  registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -71,6 +86,31 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
   } as EmbeddedRunAttemptParams;
+}
+
+function createSqliteParams(workspaceDir: string, storeName: string): EmbeddedRunAttemptParams {
+  const sessionId = "session-1";
+  const sessionKey = "agent:main:session-1";
+  const storePath = path.join(tempDir, `${storeName}.sqlite`);
+  const sessionFile = formatSqliteSessionFileMarker({
+    agentId: "main",
+    sessionId,
+    storePath,
+  });
+  const params = createParams(sessionFile, workspaceDir);
+  params.sessionTarget = {
+    agentId: "main",
+    sessionId,
+    sessionKey,
+    storePath,
+  };
+  const message = userMessage("hello", Date.now());
+  params.userTurnTranscriptRecorder = {
+    message,
+    resolveMessage: async () => message,
+    markRuntimePersisted() {},
+  } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+  return params;
 }
 
 const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
@@ -203,7 +243,14 @@ function createStartedThreadHarness(
   requestImpl: (method: string, params: unknown) => Promise<unknown> = async () => undefined,
 ) {
   const requests: Array<{ method: string; params: unknown }> = [];
-  let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+  const notificationHandlers = new Set<
+    (notification: CodexServerNotification) => Promise<void> | void
+  >();
+  const notify = async (notification: CodexServerNotification) => {
+    await Promise.all(
+      [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
+    );
+  };
   const request = vi.fn(async (method: string, params?: unknown) => {
     requests.push({ method, params });
     const override = await requestImpl(method, params);
@@ -224,11 +271,14 @@ function createStartedThreadHarness(
       ({
         ...mockClientRuntimeMethods(),
         request,
-        addNotificationHandler: (handler: typeof notify) => {
-          notify = handler;
-          return () => undefined;
+        addNotificationHandler: (
+          handler: (notification: CodexServerNotification) => Promise<void> | void,
+        ) => {
+          notificationHandlers.add(handler);
+          return () => notificationHandlers.delete(handler);
         },
         addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
       }) as never,
   );
 
@@ -349,6 +399,7 @@ function getRequestInputTextAt(
 
 describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-context-engine-"));
   });
 
@@ -1482,6 +1533,73 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(savedBinding?.contextEngine?.projection).toBeUndefined();
   });
 
+  it("returns a replay-safe recovery result when the executable owner changes during overflow retry", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("pre-compaction context", Date.now()) as never,
+    );
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint:
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-before",
+        },
+      },
+    });
+    const contextEngine = createContextEngine({
+      assemble: async ({ messages, prompt }) => ({
+        messages: [...messages, userMessage(prompt ?? "", 11)],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
+      }),
+    });
+    const harness = createStartedThreadHarness(async (method, requestParams) => {
+      const request = requireRecord(requestParams, `${method} params`);
+      if (method === "thread/resume") {
+        return threadStartResult("thread-old");
+      }
+      if (method === "turn/start" && request.threadId === "thread-old") {
+        throw new Error("Codex ran out of room in the model's context window");
+      }
+      if (method === "thread/start") {
+        throw Object.assign(new Error("managed executable selection changed during startup"), {
+          code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
+        });
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 400_000;
+
+    const result = await runCodexAppServerAttempt(params);
+
+    expect(result.promptError).toContain("codex app-server client is closed");
+    expect(result.codexAppServerFailure).toEqual({
+      kind: "client_closed_before_turn_completed",
+      transport: "stdio",
+      threadId: "thread-old",
+      replaySafe: true,
+    });
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/resume",
+      "turn/start",
+      "thread/start",
+      "thread/unsubscribe",
+    ]);
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+  });
+
   it("preserves a newer context-engine binding when a stale resumed thread overflows", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1824,54 +1942,73 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
   });
 
-  it("calls afterTurn with the mirrored transcript and runs turn maintenance", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const afterTurn = vi.fn(
-      async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
-    );
-    const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
-    const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.contextEngine = contextEngine;
-    params.contextTokenBudget = 111;
-    params.requestedModelId = "gpt-5.4-codex-primary";
-    params.fallbackReason = "provider_unavailable";
-    params.degradedReason = "context_overflow";
+  it.each([
+    {
+      name: "commitment-only",
+      trigger: "heartbeat",
+      bootstrapContextRunKind: "commitment-only",
+    },
+    {
+      name: "Gateway-routed heartbeat",
+      trigger: "user",
+      bootstrapContextRunKind: "heartbeat",
+    },
+  ] as const)(
+    "keeps $name turns heartbeat-classified through afterTurn maintenance",
+    async (testCase) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const afterTurn = vi.fn(
+        async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
+      );
+      const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+      const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
+      const harness = createStartedThreadHarness();
+      const params = createSqliteParams(
+        workspaceDir,
+        `heartbeat-${testCase.bootstrapContextRunKind}`,
+      );
+      params.contextEngine = contextEngine;
+      params.trigger = testCase.trigger;
+      params.bootstrapContextRunKind = testCase.bootstrapContextRunKind;
+      params.contextTokenBudget = 111;
+      params.requestedModelId = "gpt-5.4-codex-primary";
+      params.fallbackReason = "provider_unavailable";
+      params.degradedReason = "context_overflow";
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.completeTurn();
-    await run;
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.completeTurn();
+      await run;
 
-    expect(afterTurn).toHaveBeenCalledTimes(1);
-    const afterTurnCall = requireFirstCallArg(afterTurn, "afterTurn") as Parameters<
-      NonNullable<ContextEngine["afterTurn"]>
-    >[0];
-    expect(afterTurnCall.sessionId).toBe("session-1");
-    expect(afterTurnCall.sessionKey).toBe("agent:main:session-1");
-    expect(afterTurnCall.prePromptMessageCount).toBe(0);
-    expect(afterTurnCall.tokenBudget).toBe(111);
-    expect(afterTurnCall.runtimeSettings).toMatchObject({
-      runtime: { mode: "degraded" },
-      model: {
-        requested: "gpt-5.4-codex-primary",
-        resolved: "gpt-5.4-codex",
-      },
-      diagnostics: {
-        fallbackReason: "provider_unavailable",
-        degradedReason: "context_overflow",
-      },
-    });
-    expect(afterTurnCall.messages.some((message) => message.role === "user")).toBe(true);
-    expect(afterTurnCall.messages.some((message) => message.role === "assistant")).toBe(true);
-    expect(maintain).toHaveBeenCalledTimes(1);
-    const maintainCall = requireFirstCallArg(maintain, "maintain") as Parameters<
-      NonNullable<ContextEngine["maintain"]>
-    >[0];
-    expect(maintainCall.runtimeSettings).toBe(afterTurnCall.runtimeSettings);
-  });
+      expect(afterTurn).toHaveBeenCalledTimes(1);
+      const afterTurnCall = requireFirstCallArg(afterTurn, "afterTurn") as Parameters<
+        NonNullable<ContextEngine["afterTurn"]>
+      >[0];
+      expect(afterTurnCall.sessionId).toBe("session-1");
+      expect(afterTurnCall.sessionKey).toBe("agent:main:session-1");
+      expect(afterTurnCall.prePromptMessageCount).toBe(0);
+      expect(afterTurnCall.tokenBudget).toBe(111);
+      expect(afterTurnCall.isHeartbeat).toBe(true);
+      expect(afterTurnCall.runtimeSettings).toMatchObject({
+        runtime: { mode: "degraded" },
+        model: {
+          requested: "gpt-5.4-codex-primary",
+          resolved: "gpt-5.4-codex",
+        },
+        diagnostics: {
+          fallbackReason: "provider_unavailable",
+          degradedReason: "context_overflow",
+        },
+      });
+      expect(afterTurnCall.messages.some((message) => message.role === "user")).toBe(true);
+      expect(afterTurnCall.messages.some((message) => message.role === "assistant")).toBe(true);
+      expect(maintain).toHaveBeenCalledTimes(1);
+      const maintainCall = requireFirstCallArg(maintain, "maintain") as Parameters<
+        NonNullable<ContextEngine["maintain"]>
+      >[0];
+      expect(maintainCall.runtimeSettings).toBe(afterTurnCall.runtimeSettings);
+    },
+  );
 
   it("reloads mirrored history after bootstrap mutates the session transcript", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -1948,7 +2085,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   it("falls back to ingestBatch and skips turn maintenance on prompt failure", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const ingestBatch = vi.fn(async () => ({ ingestedCount: 2 }));
     const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
@@ -1959,7 +2095,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       bootstrap: undefined,
     });
     const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createSqliteParams(workspaceDir, "prompt-failure");
     params.contextEngine = contextEngine;
 
     const run = runCodexAppServerAttempt(params);
@@ -1985,3 +2121,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

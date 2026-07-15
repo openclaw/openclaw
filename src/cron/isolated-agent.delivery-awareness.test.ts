@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
@@ -49,6 +49,22 @@ async function runAnnounceTurn(params: {
 }
 
 describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
+  beforeAll(async () => {
+    setupIsolatedAgentTurnMocks();
+    resetCompletedDirectCronDeliveriesForTests();
+    resetSystemEventsForTest();
+    await withTempCronHome(async (home) => {
+      const storePath = await writeDefaultAgentSessionStoreEntries({});
+      mockAgentPayloads([{ text: "warm runtime" }]);
+      await runAnnounceTurn({
+        home,
+        storePath,
+        sessionKey: "cron:warm-runtime",
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+    });
+  });
+
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();
     resetCompletedDirectCronDeliveriesForTests();

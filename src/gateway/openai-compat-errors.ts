@@ -3,7 +3,7 @@
 import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 
-export type OpenAiCompatError = {
+type OpenAiCompatError = {
   status: number;
   error: {
     message: string;
@@ -16,6 +16,7 @@ const ERROR_TYPE_BY_REASON: Partial<Record<FailoverReason, string>> = {
   auth: "authentication_error",
   auth_permanent: "permission_error",
   billing: "insufficient_quota",
+  context_overflow: "invalid_request_error",
   format: "invalid_request_error",
   model_not_found: "invalid_request_error",
   overloaded: "api_error",
