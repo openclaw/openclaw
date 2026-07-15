@@ -1,7 +1,10 @@
+import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { TaskSummary } from "../../lib/tasks/data.ts";
 import "./tasks-page.ts";
+import { renderTasks } from "./view.ts";
 
 type TasksPageTestElement = HTMLElement & {
   context: ApplicationContext;
@@ -78,6 +81,42 @@ function createContext(
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+});
+
+describe("Tasks view cancellation rendering", () => {
+  it("renders cancellation state by taskId when the row id differs", () => {
+    const task: TaskSummary = {
+      id: "row-id",
+      taskId: "cancel-id",
+      status: "running",
+      runtime: "subagent",
+      title: "Map codebase",
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderTasks({
+        basePath: "",
+        connected: true,
+        canCancel: true,
+        loading: false,
+        error: null,
+        tasks: [task],
+        cancellingTaskIds: new Set(["cancel-id"]),
+        onCancel: () => {},
+        onNavigateToChat: () => {},
+      })}`,
+      container,
+    );
+
+    const cancel = container.querySelector<HTMLButtonElement>(
+      '[data-task-id="row-id"] button[aria-label="Cancel Map codebase"]',
+    );
+    expect(cancel?.disabled).toBe(true);
+    expect(cancel?.textContent?.trim()).toBe("Cancelling…");
+  });
 });
 
 describe("TasksPage cancellation lifecycle", () => {
