@@ -211,6 +211,22 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
   runtimeAuthStoreSnapshotRevisions.clear();
 }
 
+/** Clears one runtime auth-profile snapshot without disturbing other active agents. */
+export function clearRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
+  const key = resolveRuntimeStoreKey(agentDir);
+  const store = runtimeAuthStoreSnapshots.get(key);
+  if (!store) {
+    return false;
+  }
+  if (Object.keys(store.profiles).length > 0) {
+    runtimeAuthStoreCredentialsRevision += 1;
+  }
+  runtimeAuthStoreSnapshotsRevision += 1;
+  runtimeAuthStoreSnapshots.delete(key);
+  runtimeAuthStoreSnapshotRevisions.delete(key);
+  return true;
+}
+
 /** Stores a cloned runtime auth profile snapshot for an agent dir. */
 export function setRuntimeAuthProfileStoreSnapshot(
   store: RuntimeAuthProfileStore,

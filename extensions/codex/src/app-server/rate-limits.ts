@@ -774,3 +774,4 @@ function normalizeText(value: string | null | undefined): string | undefined {
   const text = value?.trim();
   return text ? text : undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

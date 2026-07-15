@@ -155,7 +155,7 @@ function assertNoFailureReplies(
   }
 }
 
-export function createFailureAwareTransportWaitForCondition(state: QaTransportState) {
+function createFailureAwareTransportWaitForCondition(state: QaTransportState) {
   return async function waitForTransportCondition<T>(
     check: () => T | Promise<T | null | undefined> | null | undefined,
     timeoutMs = 15_000,

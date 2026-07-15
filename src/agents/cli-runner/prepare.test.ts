@@ -39,7 +39,7 @@ import { resetContextWindowCacheForTest } from "../context.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
-import type { CrestodianToolOptions } from "../tools/crestodian-tool.js";
+import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
   prepareCliRunContext,
@@ -500,7 +500,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   it("honors an explicit auth agent directory independently of session identity", async () => {
     const { dir, sessionFile } = createSessionFile();
     const modelOwnerAgentDir = path.join(dir, "ops-agent");
-    const crestodianAgentDir = path.join(dir, "crestodian-agent");
+    const systemAgentDir = path.join(dir, "openclaw-agent");
     const prepareExecution = vi.fn(async () => undefined);
     fs.mkdirSync(modelOwnerAgentDir, { recursive: true });
     cliBackendsTesting.setDepsForTest({
@@ -525,8 +525,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     try {
       const context = await prepareCliRunContext({
         sessionId: "session-test",
-        sessionKey: "agent:crestodian:main",
-        agentId: "crestodian",
+        sessionKey: "agent:openclaw:main",
+        agentId: "openclaw",
         sessionFile,
         workspaceDir: dir,
         agentDir: modelOwnerAgentDir,
@@ -540,7 +540,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           agents: {
             list: [
               { id: "ops", default: true, agentDir: modelOwnerAgentDir },
-              { id: "crestodian", agentDir: crestodianAgentDir },
+              { id: "openclaw", agentDir: systemAgentDir },
             ],
           },
         },
@@ -3561,7 +3561,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("serves only the crestodian MCP server for ring-zero runs", async () => {
+  it("serves only the openclaw MCP server for ring-zero runs", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
@@ -3601,7 +3601,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         ],
       });
 
-      const params: RunCliAgentParams & { crestodianTool: CrestodianToolOptions } = {
+      const params: RunCliAgentParams & { systemAgentTool: SystemAgentToolOptions } = {
         sessionId: "session-test",
         sessionFile,
         workspaceDir: dir,
@@ -3609,12 +3609,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         provider: "claude-cli",
         model: "test-model",
         timeoutMs: 1_000,
-        runId: "run-test-crestodian-mcp",
+        runId: "run-test-openclaw-mcp",
         config: createCliBackendConfig(),
-        crestodianTool: { surface: "cli" },
+        systemAgentTool: { surface: "cli" },
         cliToolAvailability: {
           native: [],
-          mcp: ["mcp__openclaw__crestodian"],
+          mcp: ["mcp__openclaw__openclaw"],
         },
       };
       const context = await prepareCliRunContext(params);
@@ -3632,7 +3632,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(resolveExecutionArgs).not.toHaveBeenCalled();
       expect(context.params.cliToolAvailability).toEqual({
         native: [],
-        mcp: ["mcp__openclaw__crestodian"],
+        mcp: ["mcp__openclaw__openclaw"],
       });
       const mcpConfigPath = expectDefined(
         args[args.indexOf("--mcp-config") + 1],
@@ -3643,8 +3643,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       };
       expect(Object.keys(raw.mcpServers ?? {})).toEqual(["openclaw"]);
       expect(raw.mcpServers?.openclaw?.env).toMatchObject({
-        OPENCLAW_TOOLS_MCP_TOOLS: "crestodian",
-        OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE: "cli",
+        OPENCLAW_TOOLS_MCP_TOOLS: "openclaw",
+        OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE: "cli",
       });
 
       await context.preparedBackend.cleanup?.();
@@ -3969,14 +3969,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       const context = await prepareCliRunContext({
         sessionId: "session-test",
-        sessionKey: "agent:crestodian:main",
+        sessionKey: "agent:openclaw:main",
         sessionFile,
         workspaceDir: dir,
         prompt: "approve the proposal",
         provider: "claude-cli",
         model: "opus",
         timeoutMs: 1_000,
-        runId: "run-crestodian-process-per-turn",
+        runId: "run-openclaw-process-per-turn",
         cliSessionBinding: { sessionId: "native-claude-sid" },
         config: createCliBackendConfig(),
         disableCliLiveSession: true,
@@ -4818,3 +4818,4 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

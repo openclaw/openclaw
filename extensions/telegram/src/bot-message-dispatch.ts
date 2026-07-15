@@ -20,7 +20,6 @@ import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
   type ChannelProgressDraftLine,
-  type ChannelProgressDraftCompositorLine,
   createChannelProgressDraftCompositor,
   isChannelProgressDraftWorkToolName,
   resolveChannelStreamingBlockEnabled,
@@ -123,6 +122,10 @@ import {
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
+  formatTelegramProgressLine,
+  renderTelegramProgressDraftPreview,
+} from "./progress-draft-preview.js";
+import {
   createTelegramProgressSummaryTracker,
   formatTelegramProgressSummaryLine,
 } from "./progress-summary.js";
@@ -138,11 +141,7 @@ import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
-import {
-  buildTelegramRichHtml,
-  buildTelegramRichMarkdown,
-  TELEGRAM_RICH_TEXT_LIMIT,
-} from "./rich-message.js";
+import { buildTelegramRichMarkdown, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { editMessageTelegram } from "./send.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
@@ -153,14 +152,10 @@ import {
   endTelegramReplyFence,
   isTelegramReplyFenceSuperseded,
   releaseTelegramReplyFenceAbortController,
-  resetTelegramReplyFenceForTests,
   resolveTelegramReplyFenceKey,
   shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
-import { clipTelegramProgressText } from "./truncate.js";
-
-export { resetTelegramReplyFenceForTests };
 
 // Telegram sendChatAction can fail transiently; keep the tolerance scoped to this transport.
 const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
@@ -393,22 +388,6 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
-function sanitizeProgressMarkdownText(text: string): string {
-  return text.replaceAll("`", "'");
-}
-
-function formatProgressAsMarkdownCode(text: string): string {
-  const clipped = clipTelegramProgressText(text);
-  return `\`${sanitizeProgressMarkdownText(clipped)}\``;
-}
-
-function formatTelegramProgressLine(text: string): string {
-  const trimmed = text.trim();
-  return trimmed.startsWith("_") && trimmed.endsWith("_")
-    ? trimmed
-    : formatProgressAsMarkdownCode(text);
-}
-
 function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgressDraftLine {
   const label = `Thinking… (~${Math.round(progressTokens)} tokens)`;
   const text = `🧠 ${label}`;
@@ -419,95 +398,6 @@ function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgr
     label,
     text,
     prefix: false,
-  };
-}
-
-function escapeTelegramProgressHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function renderTelegramProgressStringLine(text: string): string {
-  // Reasoning/commentary lanes carry model-authored markdown (e.g. `**bold**`,
-  // inline `` `code` ``, `_italic_` reasoning behind a 🧠/💬 marker). Render it
-  // through renderTelegramHtmlText — the parse_mode=HTML-safe converter — NOT
-  // markdownToTelegramRichHtml, whose rich-only block output (<h2> from a
-  // setext heading, <hr>, lists) makes Telegram reject the edit and drops the
-  // whole preview to unformatted plain text. Callers convert ONE line at a
-  // time, which also keeps block markdown from forming (`---` under a
-  // paragraph is a setext heading only when they share a document).
-  const trimmed = text.trim();
-  // Clip INSIDE a whole-line `_…_` wrapper (the reasoning-lane contract, marker
-  // optional): clipping the assembled line chops the closing underscore, which
-  // silently degrades every long reasoning line from italic to plain text.
-  const italic = trimmed.match(/^(\S+ )?_(.*)_$/u);
-  const clipped = italic
-    ? `${italic[1] ?? ""}_${clipTelegramProgressText(italic[2] ?? "")}_`
-    : clipTelegramProgressText(trimmed);
-  return renderTelegramHtmlText(clipped);
-}
-
-function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): string {
-  if (typeof line === "string") {
-    return line.split(/\r?\n/u).map(renderTelegramProgressStringLine).filter(Boolean).join("<br>");
-  }
-  if (!line.icon && line.label === "Commentary") {
-    // Commentary is model prose behind a 💬 marker: render its markdown (plain
-    // unless the model emphasized) via the shared converter — distinct from the
-    // 🧠 italic reasoning lane, mirroring Discord. Multi-line notes keep their
-    // line structure (Discord parity); converting per line also prevents block
-    // markdown (setext headings) from forming across lines.
-    return line.text
-      .split(/\r?\n/u)
-      .map(renderTelegramProgressStringLine)
-      .filter(Boolean)
-      .join("<br>");
-  }
-  const label = [line.icon, line.label].filter(Boolean).join(" ");
-  const parts = [`<b>${escapeTelegramProgressHtml(label)}</b>`];
-  const detail = line.detail && line.detail !== line.label ? line.detail : undefined;
-  if (detail) {
-    parts.push(`<code>${escapeTelegramProgressHtml(clipTelegramProgressText(detail))}</code>`);
-  } else {
-    const text = line.text.trim();
-    if (text && text !== label) {
-      // Generic item payload (e.g. an "Update" line) keeps the monospace payload
-      // styling shared with tool details; only the reasoning/commentary lanes
-      // carry model markdown that needs converting.
-      parts.push(`<code>${escapeTelegramProgressHtml(clipTelegramProgressText(text))}</code>`);
-    }
-  }
-  if (line.status && line.status !== "completed" && line.status !== line.detail) {
-    parts.push(`<i>${escapeTelegramProgressHtml(line.status)}</i>`);
-  }
-  return parts.join(" ");
-}
-
-function renderTelegramProgressDraftPreview(
-  text: string,
-  lines: readonly ChannelProgressDraftCompositorLine[],
-  richMessages: boolean,
-): TelegramDraftPreview {
-  const trimmed = text.trimEnd();
-  const renderedLines = lines.map(renderTelegramProgressLine).filter(Boolean);
-  const textLines = trimmed
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const heading = textLines.length > renderedLines.length ? textLines[0] : undefined;
-  const htmlParts = heading
-    ? [`<b>${escapeTelegramProgressHtml(heading)}</b>`, ...renderedLines]
-    : renderedLines;
-  const html = htmlParts.join("<br>");
-  if (!richMessages) {
-    return { text: html, parseMode: "HTML" };
-  }
-  return {
-    text: trimmed,
-    richMessage: buildTelegramRichHtml(html, { skipEntityDetection: true }),
   };
 }
 
@@ -1129,7 +1019,12 @@ export const dispatchTelegramMessage = async ({
     mode: streamMode,
     active: Boolean(answerLane.stream),
     seed: progressSeed,
-    formatLine: formatTelegramProgressLine,
+    formatLine: (text) => {
+      // Status headlines carry model Markdown. Tool lines keep their compact
+      // code formatting when no headline owns the status slot. Read compositor
+      // state at render time so the first preamble renders as a headline.
+      return progressDraft.hasStatusHeadline ? text : formatTelegramProgressLine(text);
+    },
     reasoningGate: streamReasoningInProgressDraft,
     // Distinguish the streamed lanes in the window the way Discord does: 🧠
     // reasoning (italic, default) vs 💬 commentary (plain). Without these the
@@ -1148,6 +1043,7 @@ export const dispatchTelegramMessage = async ({
           streamText,
           options?.lines ?? [],
           telegramCfg.richMessages === true,
+          progressDraft.hasStatusHeadline,
         ),
       );
       if (options?.flush) {
@@ -2756,6 +2652,8 @@ export const dispatchTelegramMessage = async ({
                   },
                   commentaryProgressEnabled:
                     streamMode === "progress" ? progressDraft.commentaryProgressEnabled : undefined,
+                  progressPreambleEnabled:
+                    streamMode === "progress" && answerLane.stream ? true : undefined,
                   reasoningPayloadsEnabled: durableReasoningPayloadsEnabled,
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
@@ -2816,12 +2714,24 @@ export const dispatchTelegramMessage = async ({
                         // the collapse summary — it did not stream to the window.
                         return;
                       }
-                      // Window path: the note renders to the progress window, so
-                      // tally it for the collapse bar (counted per-burst, D3).
-                      progressSummary.noteCommentary(payload.itemId, payload.progressText);
-                      await progressDraft.pushCommentaryProgress(payload.progressText, {
-                        itemId: payload.itemId,
-                      });
+                      if (streamMode === "progress") {
+                        await progressDraft.pushPreambleHeadline(payload.progressText, {
+                          itemId: payload.itemId,
+                        });
+                      }
+                      if (streamMode === "progress" && progressDraft.commentaryProgressEnabled) {
+                        const accepted = await progressDraft.pushCommentaryProgress(
+                          payload.progressText,
+                          {
+                            itemId: payload.itemId,
+                          },
+                        );
+                        // Only accepted opt-in commentary contributes receipt notes;
+                        // the always-on headline is display state, not a second lane.
+                        if (accepted) {
+                          progressSummary.noteCommentary(payload.itemId, payload.progressText);
+                        }
+                      }
                       return;
                     }
                     await pushStreamToolProgress(
@@ -3194,3 +3104,4 @@ export const dispatchTelegramMessage = async ({
   }
   return { kind: "completed" };
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

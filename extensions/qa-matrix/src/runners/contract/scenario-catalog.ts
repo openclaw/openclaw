@@ -1,7 +1,6 @@
 // Qa Matrix plugin module implements scenario catalog behavior.
 import type { QaProviderModeInput } from "../../run-config.js";
 import {
-  collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "../../shared/live-transport-scenarios.js";
@@ -115,7 +114,6 @@ type MatrixQaProfile =
 export const MATRIX_QA_BLOCK_ROOM_KEY = "block";
 export const MATRIX_QA_BOT_DM_ROOM_KEY = "bot-dm";
 export const MATRIX_QA_DRIVER_DM_ROOM_KEY = "driver-dm";
-export const MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY = "driver-dm-shared";
 const MATRIX_QA_E2EE_ROOM_KEY = "e2ee";
 export const MATRIX_QA_E2EE_VERIFICATION_DM_ROOM_KEY = "e2ee-verification-dm";
 export const MATRIX_QA_HOMESERVER_ROOM_KEY = "homeserver";
@@ -1047,11 +1045,6 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
 ];
 
-export const MATRIX_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
-  alwaysOnStandardScenarioIds: ["canary"],
-  scenarios: MATRIX_QA_SCENARIOS,
-});
-
 const MATRIX_QA_PROFILE_NAMES: readonly MatrixQaProfile[] = [
   "all",
   "fast",
@@ -1163,11 +1156,6 @@ export function findMatrixQaScenarios(ids?: string[], profile?: string) {
   });
 }
 
-export const matrixQaProfileTesting = {
-  getMatrixQaProfileScenarioIds,
-  normalizeMatrixQaProfile,
-};
-
 export function buildMatrixQaTopologyForScenarios(params: {
   defaultRoomName: string;
   scenarios: MatrixQaScenarioDefinition[];
@@ -1189,3 +1177,4 @@ export function resolveMatrixQaScenarioRoomId(
   }
   return findMatrixQaProvisionedRoom(context.topology, roomKey).roomId;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

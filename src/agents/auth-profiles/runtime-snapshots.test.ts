@@ -6,6 +6,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  clearRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -117,6 +118,26 @@ describe("runtime auth profile snapshots", () => {
       expect(structuredCloneSpy).not.toHaveBeenCalled();
     } finally {
       structuredCloneSpy.mockRestore();
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
+  it("clears one agent snapshot without disturbing other stores", () => {
+    const firstAgentDir = "/tmp/openclaw-auth-runtime-snapshot-first";
+    const secondAgentDir = "/tmp/openclaw-auth-runtime-snapshot-second";
+    try {
+      setRuntimeAuthProfileStoreSnapshot(createStore("main"));
+      setRuntimeAuthProfileStoreSnapshot(createStore("first"), firstAgentDir);
+      setRuntimeAuthProfileStoreSnapshot(createStore("second"), secondAgentDir);
+
+      expect(clearRuntimeAuthProfileStoreSnapshot(firstAgentDir)).toBe(true);
+      expect(getRuntimeAuthProfileStoreSnapshot(firstAgentDir)).toBeUndefined();
+      expectOpenAICodexSnapshotCredential(getRuntimeAuthProfileStoreSnapshot(), { access: "main" });
+      expectOpenAICodexSnapshotCredential(getRuntimeAuthProfileStoreSnapshot(secondAgentDir), {
+        access: "second",
+      });
+      expect(clearRuntimeAuthProfileStoreSnapshot(firstAgentDir)).toBe(false);
+    } finally {
       clearRuntimeAuthProfileStoreSnapshots();
     }
   });

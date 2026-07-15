@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import reefChannelEntry from "../index.js";
 import { generateIdentity } from "../protocol/index.js";
-import { registerReefCommands } from "./commands.js";
 import { autonomyBudget, ReefChannelConfigSchema } from "./config-schema.js";
 import { setActiveReef } from "./runtime.js";
 
@@ -51,7 +51,8 @@ describe("Reef configuration boundary", () => {
 
   it("keeps config mutation off the agent message surface and gates owner commands", async () => {
     const registerCommand = vi.fn();
-    registerReefCommands({ registerCommand } as never);
+    // tool-discovery registration runs only registerFull, which owns /reef.
+    reefChannelEntry.register({ registrationMode: "tool-discovery", registerCommand } as never);
     expect(registerCommand).toHaveBeenCalledOnce();
     const command = registerCommand.mock.calls[0]![0];
     expect(command).toMatchObject({ name: "reef", requireAuth: true });

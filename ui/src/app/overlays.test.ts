@@ -242,6 +242,32 @@ describe("application approval overlays", () => {
 });
 
 describe("application update overlays", () => {
+  it("drains config writes after suspending and before issuing update.run", async () => {
+    const order: string[] = [];
+    const request = vi.fn<RequestFn>().mockImplementation(async (method) => {
+      order.push(method);
+      return { ok: true, result: { status: "ok", after: { version: "2.0.0" } } };
+    });
+    const harness = createGatewayHarness(client(request));
+    let updateRunningWhenDrained = false;
+    const overlays = createApplicationOverlays(harness.gateway, {
+      drainConfigWrites: async () => {
+        order.push("drain");
+        updateRunningWhenDrained = overlays.snapshot.updateRunning;
+        await Promise.resolve();
+      },
+    });
+
+    await overlays.runUpdate();
+
+    expect(order.filter((entry) => entry === "drain" || entry === "update.run")).toEqual([
+      "drain",
+      "update.run",
+    ]);
+    // Suspension publishes first so no NEW write can start while draining.
+    expect(updateRunningWhenDrained).toBe(true);
+  });
+
   it("surfaces a coalesced restart while reconnect verification remains active", async () => {
     const request = vi.fn<RequestFn>().mockResolvedValue({
       ok: true,

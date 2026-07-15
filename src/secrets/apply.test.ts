@@ -1609,3 +1609,4 @@ describe("secrets apply", () => {
     expect(nextConfig.plugins?.entries?.vault).toEqual({ enabled: true });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

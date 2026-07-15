@@ -58,6 +58,27 @@ export const WorkerAdmissionHandshakeSchema = closedObject({
   }),
 });
 
+const WorkerConnectAdmissionCommonProperties = {
+  environmentId: WorkerIdentifierSchema,
+  credential: WorkerCredentialSchema,
+  ownerEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  rpcSetVersion: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  handshake: WorkerAdmissionHandshakeSchema,
+};
+
+const WorkerConnectAdmissionSchema = Type.Union([
+  closedObject({
+    ...WorkerConnectAdmissionCommonProperties,
+    sessionId: Type.Null(),
+    runId: Type.Null(),
+  }),
+  closedObject({
+    ...WorkerConnectAdmissionCommonProperties,
+    sessionId: WorkerIdentifierSchema,
+    runId: WorkerIdentifierSchema,
+  }),
+]);
+
 /** Dedicated first-frame payload accepted only on the worker ingress. */
 export const WorkerConnectParamsSchema = closedObject({
   minProtocol: Type.Integer({ minimum: 1 }),
@@ -69,14 +90,7 @@ export const WorkerConnectParamsSchema = closedObject({
     mode: Type.Literal(GATEWAY_CLIENT_MODES.WORKER),
   }),
   role: Type.Literal("worker"),
-  admission: closedObject({
-    environmentId: WorkerIdentifierSchema,
-    credential: WorkerCredentialSchema,
-    sessionId: Type.Union([WorkerIdentifierSchema, Type.Null()]),
-    ownerEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-    rpcSetVersion: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
-    handshake: WorkerAdmissionHandshakeSchema,
-  }),
+  admission: WorkerConnectAdmissionSchema,
 });
 
 export const WorkerConnectRequestFrameSchema = closedObject({
@@ -94,6 +108,7 @@ export const WorkerAdmissionFailureReasonSchema = Type.Union([
   Type.Literal("bundle-mismatch"),
   Type.Literal("version-mismatch"),
   Type.Literal("session-mismatch"),
+  Type.Literal("placement-mismatch"),
   Type.Literal("owner-epoch-mismatch"),
   Type.Literal("rpc-set-mismatch"),
   Type.Literal("protocol-features-mismatch"),

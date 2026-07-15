@@ -1320,3 +1320,4 @@ function formatCodexErrorMessage(params: JsonObject, rateLimits: JsonValue | und
     "Codex /btw side thread failed.";
   return new Error(formatErrorMessage(message));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

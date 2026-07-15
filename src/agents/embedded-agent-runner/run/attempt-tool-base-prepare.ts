@@ -168,6 +168,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     skillsSnapshot: params.skillsSnapshot,
     sandboxToolPolicy: params.sandbox?.tools,
     runtimeToolAllowlist: effectiveToolsAllow,
+    runtimePluginToolGrant: attempt.runtimePluginToolGrant,
   });
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,
@@ -249,9 +250,11 @@ export function prepareEmbeddedAttemptToolBase(params: {
           modelProvider: attempt.provider,
           modelId: attempt.modelId,
           skillWorkshop: {
+            env: attempt.skillWorkshopProposalEnv,
             proposalOnly: attempt.skillWorkshopProposalOnly,
             origin: attempt.skillWorkshopOrigin,
             proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
+            proposalReviewCompletion: attempt.skillWorkshopProposalReviewCompletion,
           },
           modelCompat: extractModelCompat(attempt.model),
           modelApi: attempt.model.api,

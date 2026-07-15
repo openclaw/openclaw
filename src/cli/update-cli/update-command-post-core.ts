@@ -1,5 +1,5 @@
 // Post-core plugin finalization, fresh-process handoff, and control-plane sentinel updates.
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -48,6 +48,7 @@ import {
   loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
+import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { printResult } from "./progress.js";
@@ -336,11 +337,10 @@ export async function readPostCorePluginInstallRecordsFile(
 }
 
 async function execFileStdout(file: string, args: string[]): Promise<string | undefined> {
-  return await new Promise((resolve) => {
-    execFile(file, args, { timeout: 1000, windowsHide: true }, (error, stdout) => {
-      resolve(error ? undefined : stdout);
-    });
-  });
+  return await runExec(file, args, { logOutput: false, timeoutMs: 1000 }).then(
+    ({ stdout }) => stdout,
+    () => undefined,
+  );
 }
 
 async function readProcessStartTimeMs(pid: number): Promise<number | undefined> {

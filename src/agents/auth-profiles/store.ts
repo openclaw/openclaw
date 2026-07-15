@@ -33,6 +33,7 @@ import {
   mergeOAuthFileIntoStore,
 } from "./persisted.js";
 import {
+  clearRuntimeAuthProfileStoreSnapshot as clearRuntimeAuthProfileStoreSnapshotImpl,
   clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
   getRuntimeAuthProfileStoreSnapshot as getRuntimeAuthProfileStoreSnapshotImpl,
   getRuntimeAuthProfileStoreSnapshotRevision,
@@ -1178,6 +1179,11 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
   clearRuntimeAuthProfileStoreSnapshotsImpl();
 }
 
+/** Clear one runtime auth-profile snapshot. */
+export function clearRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
+  return clearRuntimeAuthProfileStoreSnapshotImpl(agentDir);
+}
+
 function saveAuthProfileStoreInTransaction(
   store: AuthProfileStore,
   agentDir: string | undefined,
@@ -1314,7 +1320,7 @@ export function saveAuthProfileStore(
   publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);
 }
 
-export type AuthProfileStorePersistenceSnapshot = {
+type AuthProfileStorePersistenceSnapshot = {
   credentialsRaw: unknown;
   stateRaw: unknown;
   runtimeCaptured: boolean;
@@ -1334,7 +1340,7 @@ export type AuthProfileStorePersistenceSnapshot = {
   }>;
 };
 
-export type CommittedAuthProfileStoreSave = {
+type CommittedAuthProfileStoreSave = {
   owned: AuthProfileStorePersistenceSnapshot;
   publishRuntimeSnapshots: () => boolean;
 };
@@ -1704,3 +1710,4 @@ export function restoreAuthProfileStorePersistenceSnapshot(
   });
   publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

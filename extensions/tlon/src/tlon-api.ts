@@ -335,13 +335,8 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
     throw new Error("No storage credentials configured");
   }
 
-  const endpoint = new URL(prefixEndpoint(credentials.endpoint));
   const client = new S3Client({
-    endpoint: {
-      protocol: endpoint.protocol.slice(0, -1) as "http" | "https",
-      hostname: endpoint.host,
-      path: endpoint.pathname || "/",
-    },
+    endpoint: prefixEndpoint(credentials.endpoint),
     region: storageConfig.region || "us-east-1",
     credentials: {
       accessKeyId: credentials.accessKeyId,
@@ -366,7 +361,6 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
 
   const signedUrl = await getSignedUrl(client, command, {
     expiresIn: 3600,
-    signableHeaders: new Set(Object.keys(headers)),
   });
 
   let release: (() => Promise<void>) | undefined;

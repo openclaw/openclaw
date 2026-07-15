@@ -330,6 +330,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       messaging: {
         targetPrefixes: ["discord"],
+        directTargetStyle: "user-prefixed",
+        targetIdComparison: "lowercase",
         normalizeTarget: normalizeDiscordMessagingTarget,
         resolveInboundConversation: ({
           from,
@@ -789,3 +791,4 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         }),
     },
   });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

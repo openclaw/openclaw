@@ -1,7 +1,19 @@
 // Qa Matrix tests cover e2ee client plugin behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { testing } from "./e2ee-client.js";
+import {
+  MATRIX_QA_E2EE_SYNC_FILTER,
+  buildMatrixQaE2eeStoragePaths,
+  shouldRecordMatrixQaObservedEventUpdate,
+} from "./e2ee-client-internals.js";
+import { findMatrixQaObservedEventMatch } from "./events.js";
+
+const testing = {
+  MATRIX_QA_E2EE_SYNC_FILTER,
+  buildMatrixQaE2eeStoragePaths,
+  findMatrixQaObservedEventMatch,
+  shouldRecordMatrixQaObservedEventUpdate,
+};
 
 describe("matrix qa e2ee client storage", () => {
   it("filters receipt noise without suppressing room state or timeline events", () => {

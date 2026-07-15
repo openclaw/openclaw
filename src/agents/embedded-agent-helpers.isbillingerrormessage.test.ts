@@ -1698,3 +1698,4 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(classifyFailoverReason(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe("timeout");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -34,7 +34,7 @@ type ApplicationStatusBanner = {
   text: string;
 };
 
-export type ApplicationOverlaySnapshot = {
+type ApplicationOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
   updateReconciliationPending: boolean;
@@ -204,7 +204,14 @@ type UpdateVerificationWait = {
   resolve: (active: boolean) => void;
 };
 
-export function createApplicationOverlays(gateway: ApplicationGateway): ApplicationOverlays {
+export function createApplicationOverlays(
+  gateway: ApplicationGateway,
+  hooks: {
+    /** Barrier awaited after update-running is published and before update.run
+     * is issued, so in-flight config writes cannot overlap the install. */
+    drainConfigWrites?: () => Promise<void>;
+  } = {},
+): ApplicationOverlays {
   let snapshot: ApplicationOverlaySnapshot = {
     updateAvailable: null,
     updateRunning: false,
@@ -544,6 +551,13 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       snapshot = { ...snapshot, updateRunning: true, updateStatusBanner: null };
       publish();
       try {
+        // updateRunning above suspends NEW config writes (bootstrap syncs it
+        // into the runtime-config capability); this barrier drains writes
+        // already in flight so none can commit or restart mid-install.
+        await hooks.drainConfigWrites?.();
+        if (disposed || generation !== updateRunGeneration) {
+          return;
+        }
         const response = await client.request<UpdateRunResponse>("update.run", {});
         if (
           disposed ||

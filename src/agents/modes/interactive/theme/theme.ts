@@ -102,7 +102,7 @@ type ThemeJson = Static<typeof ThemeJsonSchema>;
 
 const validateThemeJson = Compile(ThemeJsonSchema);
 
-export type ThemeColor =
+type ThemeColor =
   | "accent"
   | "border"
   | "borderAccent"
@@ -149,7 +149,7 @@ export type ThemeColor =
   | "thinkingXhigh"
   | "bashMode";
 
-export type ThemeBg =
+type ThemeBg =
   | "selectedBg"
   | "userMessageBg"
   | "customMessageBg"
@@ -855,3 +855,4 @@ export function getLanguageFromPath(filePath: string): string | undefined {
 
   return extToLang[ext];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

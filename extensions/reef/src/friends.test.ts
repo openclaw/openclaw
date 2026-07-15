@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
@@ -61,6 +64,61 @@ describe("ReefFriendManager pairing", () => {
       keyEpoch: 1,
       safetyNumberChanged: false,
     });
+  });
+
+  it("adopts a friendship this claw requested once the peer accepts, without local pairing approval", async () => {
+    const accepted = relayFriend("alice", "active");
+    const relay = {
+      ...transport(accepted),
+      requestFriend: vi.fn(async () => ({ status: "pending" })),
+    };
+    const cfg = ReefChannelConfigSchema.parse({ handle: "me" });
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "reef-friends-"));
+    const manager = new ReefFriendManager(cfg, relay as unknown as ReefTransportClient, stateDir);
+
+    await manager.request("alice");
+    await expect(manager.reconcileApproved([])).resolves.toEqual(["alice"]);
+    expect(relay.respondFriend).not.toHaveBeenCalled();
+    expect(cfg.friends.alice).toMatchObject({
+      autonomy: "bounded",
+      ed25519PublicKey: accepted.ed25519_pub,
+      keyEpoch: 1,
+      safetyNumberChanged: false,
+    });
+
+    // A crash before the adopted pin is persisted must not lose authorization:
+    // a rebooted manager with an empty config re-adopts from the durable marker.
+    const rebooted = new ReefFriendManager(
+      ReefChannelConfigSchema.parse({ handle: "me" }),
+      relay as unknown as ReefTransportClient,
+      stateDir,
+    );
+    await expect(rebooted.reconcileApproved([])).resolves.toEqual(["alice"]);
+
+    // Once the pin is visible from persisted config, the marker is consumed;
+    // afterwards a fresh config no longer auto-adopts.
+    await expect(manager.reconcileApproved([])).resolves.toEqual([]);
+    const postConsume = new ReefFriendManager(
+      ReefChannelConfigSchema.parse({ handle: "me" }),
+      relay as unknown as ReefTransportClient,
+      stateDir,
+    );
+    await expect(postConsume.reconcileApproved([])).resolves.toEqual([]);
+    expect(postConsume.config.friends).toEqual({});
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("fails closed on active relay records without a locally recorded outbound request", async () => {
+    const accepted = relayFriend("alice", "active");
+    accepted.initiated_by = "me";
+    const relay = transport(accepted);
+    const cfg = ReefChannelConfigSchema.parse({ handle: "me" });
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "reef-friends-"));
+    const manager = new ReefFriendManager(cfg, relay as unknown as ReefTransportClient, stateDir);
+
+    await expect(manager.reconcileApproved([])).resolves.toEqual([]);
+    expect(cfg.friends).toEqual({});
+    fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
   it("halts on a safety-number change and requires a later reapproval before repinning", async () => {

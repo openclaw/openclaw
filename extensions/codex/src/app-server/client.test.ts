@@ -131,6 +131,33 @@ describe("CodexAppServerClient", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("recovers large app-server messages split by raw newlines inside JSON strings", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const notifications: unknown[] = [];
+    harness.client.addNotificationHandler((notification) => {
+      notifications.push(notification);
+    });
+    const largePrefix = "x".repeat(1_100_000);
+
+    harness.process.stdout.write(
+      '{"method":"item/commandExecution/outputDelta","params":{"delta":"' +
+        largePrefix +
+        "\n" +
+        'second"}}\n',
+    );
+
+    await vi.waitFor(() => expect(notifications).toHaveLength(1));
+    expect(notifications).toEqual([
+      {
+        method: "item/commandExecution/outputDelta",
+        params: { delta: largePrefix + "\nsecond" },
+      },
+    ]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("preserves JSON-RPC error codes", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);

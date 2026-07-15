@@ -16,7 +16,7 @@ import { callGateway } from "../gateway/call.js";
 import {
   getAgentEventLifecycleGeneration,
   registerAgentRunContext,
-  resetAgentRunContextForTest,
+  resetAgentEventsForTest,
 } from "../infra/agent-events.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -69,7 +69,7 @@ let tmpDir: string;
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  resetAgentRunContextForTest();
+  resetAgentEventsForTest();
   resetGatewayWorkAdmission();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-main-restart-recovery-"));
 });
@@ -2943,3 +2943,4 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

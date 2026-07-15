@@ -149,26 +149,30 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: Double(requestTimeoutMs))
     }
 
-    public static func patchSessionModel(
-        sessionKey: String,
-        agentID: String?,
-        model: String?) -> OpenClawChatGatewayRequest
-    {
-        var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID)
-        params["model"] = model.map(AnyCodable.init) ?? AnyCodable(NSNull())
-        return OpenClawChatGatewayRequest(
-            method: "sessions.patch",
-            params: params,
-            timeoutMs: self.mutationTimeoutMs)
-    }
-
     public static func patchSessionPreferences(
         sessionKey: String,
         agentID: String?,
         thinkingLevel: String?? = nil,
         verboseLevel: String?? = nil) -> OpenClawChatGatewayRequest
     {
+        self.patchSessionSettings(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            thinkingLevel: thinkingLevel,
+            verboseLevel: verboseLevel)
+    }
+
+    public static func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        model: String?? = nil,
+        thinkingLevel: String?? = nil,
+        verboseLevel: String?? = nil) -> OpenClawChatGatewayRequest
+    {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID)
+        if let model {
+            params["model"] = model.map(AnyCodable.init) ?? AnyCodable(NSNull())
+        }
         if let thinkingLevel {
             params["thinkingLevel"] = thinkingLevel.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }

@@ -76,6 +76,43 @@ function normalizeOptionalText(value?: string | null): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+export function normalizeExplicitChatSendOrigin(
+  params: ChatSendExplicitOrigin,
+): { ok: true; value?: ChatSendExplicitOrigin } | { ok: false; error: string } {
+  const originatingChannel = normalizeOptionalText(params.originatingChannel);
+  const originatingTo = normalizeOptionalText(params.originatingTo);
+  const accountId = normalizeOptionalText(params.accountId);
+  const messageThreadId = normalizeOptionalText(params.messageThreadId);
+  const hasAnyExplicitOriginField = Boolean(
+    originatingChannel || originatingTo || accountId || messageThreadId,
+  );
+  if (!hasAnyExplicitOriginField) {
+    return { ok: true };
+  }
+  const normalizedChannel = normalizeMessageChannel(originatingChannel);
+  if (!normalizedChannel) {
+    return {
+      ok: false,
+      error: "originatingChannel is required when using originating route fields",
+    };
+  }
+  if (!originatingTo) {
+    return {
+      ok: false,
+      error: "originatingTo is required when using originating route fields",
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      originatingChannel: normalizedChannel,
+      originatingTo,
+      ...(accountId ? { accountId } : {}),
+      ...(messageThreadId ? { messageThreadId } : {}),
+    },
+  };
+}
+
 export function validateChatSelectedAgent(params: {
   cfg: OpenClawConfig;
   requestedSessionKey: string;

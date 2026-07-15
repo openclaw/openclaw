@@ -490,8 +490,8 @@ async function acquireSharedCodexAppServerClient(
   const acquireStartedAt = Date.now();
   const timeoutMs = options?.timeoutMs ?? 0;
   const context = await withCodexAppServerAcquireDeadline(
-    resolveCodexAppServerClientStartContext(options),
     timeoutMs,
+    resolveCodexAppServerClientStartContext(options),
     options?.abandonSignal,
   );
   const {
@@ -585,13 +585,13 @@ async function acquireSharedCodexAppServerClient(
     }));
   try {
     await withCodexAppServerAcquireDeadline(
-      startup.initialized,
       remainingTimeoutMs,
+      startup.initialized,
       options?.abandonSignal,
     );
     const client = await withCodexAppServerAcquireDeadline(
-      startup.ready,
       timeoutMs,
+      startup.ready,
       options?.abandonSignal,
       "codex app-server authentication timed out",
     );
@@ -623,8 +623,8 @@ async function acquireSharedCodexAppServerClient(
 }
 
 async function withCodexAppServerAcquireDeadline<T>(
+  timeoutMs: number, // First: fail before the caller starts its promise argument.
   promise: Promise<T>,
-  timeoutMs: number,
   signal?: AbortSignal,
   timeoutMessage = "codex app-server initialize timed out",
 ): Promise<T> {
@@ -725,8 +725,8 @@ export async function createIsolatedCodexAppServerClient(
     requestedStartOptions,
     startOptions,
   } = await withCodexAppServerAcquireDeadline(
-    resolveCodexAppServerClientStartContext(options),
     timeoutMs,
+    resolveCodexAppServerClientStartContext(options),
     options?.abandonSignal,
   );
   return await startInitializedCodexAppServerClient({
@@ -799,16 +799,16 @@ async function startInitializedCodexAppServerClient(params: {
     }
     const client = CodexAppServerClient.start(startOptions);
     params.onStartedClient?.(client);
-    const initialize = client.initialize();
+    let initialize: Promise<void> | undefined;
     try {
       await withCodexAppServerAcquireDeadline(
-        initialize,
         resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
+        (initialize = client.initialize()),
         params.abandonSignal,
       );
     } catch (error) {
       client.close();
-      void initialize.catch(() => undefined);
+      void initialize?.catch(() => undefined);
       if (shouldTryManagedFallbackStartOption(error, startOptions, index, startOptionsCandidates)) {
         continue;
       }
@@ -853,6 +853,7 @@ async function startInitializedCodexAppServerClient(params: {
 
     try {
       await withCodexAppServerAcquireDeadline(
+        resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
         applyCodexAppServerAuthProfile({
           client,
           agentDir: params.agentDir,
@@ -862,7 +863,6 @@ async function startInitializedCodexAppServerClient(params: {
           config: params.config,
           ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
         }),
-        resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
         params.abandonSignal,
       );
       const nativeCommand =
@@ -1237,3 +1237,4 @@ function collectSharedClients(state: SharedCodexAppServerClientState): CodexAppS
     ),
   ];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

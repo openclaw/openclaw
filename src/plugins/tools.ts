@@ -42,6 +42,7 @@ import {
   type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
+import { isPluginToolAllowed } from "./tool-grant-allowlist.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
 /** MCP bridge metadata attached to plugin tools surfaced through agent tool lists. */
@@ -352,8 +353,7 @@ function isOptionalToolAllowed(params: {
   if (params.allowlist.has("*")) {
     return true;
   }
-  const toolName = normalizeToolName(params.toolName);
-  if (params.allowlist.has(toolName)) {
+  if (isPluginToolAllowed(params.allowlist, params.pluginId, params.toolName)) {
     return true;
   }
   const pluginKey = normalizeToolName(params.pluginId);
@@ -381,7 +381,7 @@ function isOptionalToolEntryPotentiallyAllowed(params: {
   if (params.names.length === 0) {
     return true;
   }
-  return params.names.some((name) => params.allowlist.has(normalizeToolName(name)));
+  return params.names.some((name) => isPluginToolAllowed(params.allowlist, params.pluginId, name));
 }
 
 function readPluginToolName(tool: unknown): string {
@@ -563,7 +563,7 @@ function listManifestToolNamesForAllowlist(params: {
     return [...params.toolNames];
   }
   const matchedToolNames = params.toolNames.filter((name) =>
-    params.allowlist.has(normalizeToolName(name)),
+    isPluginToolAllowed(params.allowlist, params.pluginId, name),
   );
   if (!allowlistIncludesDefaultPluginTools(params.allowlist)) {
     return matchedToolNames;
@@ -1562,3 +1562,4 @@ export function resolvePluginTools(params: {
 
   return tools;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

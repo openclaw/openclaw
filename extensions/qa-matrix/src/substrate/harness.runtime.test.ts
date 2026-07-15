@@ -4,8 +4,27 @@ import os from "node:os";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { testing, startMatrixQaHarness, writeMatrixQaHarnessFiles } from "./harness.runtime.js";
+import {
+  MATRIX_QA_CLEANUP_TIMEOUT_MS,
+  MATRIX_QA_DEFAULT_PORT,
+  MATRIX_QA_SERVICE,
+  buildVersionsUrl,
+  isMatrixVersionsReachable,
+  waitForReachableMatrixBaseUrl,
+  writeMatrixQaHarnessFiles,
+} from "./harness.runtime-internals.js";
+import { startMatrixQaHarness } from "./harness.runtime.js";
 import type { MatrixQaRecordingProxy } from "./recording-proxy.js";
+
+const testing = {
+  MATRIX_QA_CLEANUP_TIMEOUT_MS,
+  MATRIX_QA_DEFAULT_PORT,
+  MATRIX_QA_SERVICE,
+  buildVersionsUrl,
+  isMatrixVersionsReachable,
+  waitForReachableMatrixBaseUrl,
+  writeMatrixQaHarnessFiles,
+};
 
 type MatrixQaHarnessDeps = Parameters<typeof startMatrixQaHarness>[1];
 type MatrixQaHarnessResult = Awaited<ReturnType<typeof startMatrixQaHarness>>;
@@ -73,7 +92,7 @@ describe("matrix harness runtime", () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
 
     try {
-      const result = await writeMatrixQaHarnessFiles({
+      const result = await testing.writeMatrixQaHarnessFiles({
         outputDir,
         homeserverPort: 28008,
         registrationToken: "secret-token",
@@ -88,14 +107,14 @@ describe("matrix harness runtime", () => {
         composeFile: string;
       };
 
-      expect(compose).toContain(`image: ${testing.MATRIX_QA_DEFAULT_IMAGE}`);
+      expect(compose).toContain("image: ghcr.io/matrix-construct/tuwunel:v1.5.1");
       expect(compose).toContain('      - "127.0.0.1:28008:8008"');
       expect(compose).toContain('TUWUNEL_ALLOW_ENCRYPTION: "true"');
       expect(compose).toContain('TUWUNEL_ALLOW_REGISTRATION: "true"');
       expect(compose).toContain('TUWUNEL_REGISTRATION_TOKEN: "secret-token"');
       expect(compose).toContain('TUWUNEL_SERVER_NAME: "matrix-qa.test"');
       expect(manifest).toEqual({
-        image: testing.MATRIX_QA_DEFAULT_IMAGE,
+        image: "ghcr.io/matrix-construct/tuwunel:v1.5.1",
         serverName: "matrix-qa.test",
         homeserverPort: 28008,
         composeFile: path.join(outputDir, "docker-compose.matrix-qa.yml"),

@@ -17,6 +17,7 @@ import { getConfigValueAtPath } from "../config/config-paths.js";
 import {
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigAppliedHash,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
@@ -24,10 +25,10 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
+import type { GatewayRestartIntent } from "../infra/restart-intent.js";
 import {
   deferGatewayRestartUntilIdle,
   type GatewayRestartEmitter,
-  type GatewayRestartIntent,
   type RestartDeferralHandle,
   resolveGatewayRestartDeferralTimeoutMs,
   setGatewaySigusr1RestartPolicy,
@@ -47,8 +48,13 @@ import {
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import { formatActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
 import { isRecord } from "../utils.js";
+import { createAppliedConfigHashPublisher } from "./applied-config-hash-publisher.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
+import {
+  reloadPlanNeedsRecovery,
+  shouldRefreshContextWindowCache,
+} from "./config-reload-recovery.js";
 import {
   startGatewayConfigReloader,
   type GatewayConfigReloadTransactionOwnership,
@@ -262,33 +268,6 @@ function resetPreparedModelRuntimeStateForHotReload(): void {
   markGatewayModelCatalogStaleForReload();
 }
 
-function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolean {
-  return (
-    plan.reloadPlugins ||
-    plan.changedPaths.some(
-      (path) =>
-        path === "models" ||
-        path.startsWith("models.") ||
-        path === "agents" ||
-        path === "agents.defaults" ||
-        path === "agents.list" ||
-        path.startsWith("agents.list.") ||
-        path === "agents.defaults.workspace" ||
-        path.startsWith("agents.defaults.workspace."),
-    )
-  );
-}
-
-function hasIrreversibleHotReloadWork(plan: GatewayReloadPlan): boolean {
-  return (
-    plan.restartCron ||
-    plan.restartHealthMonitor ||
-    plan.restartGmailWatcher ||
-    plan.reloadPlugins ||
-    plan.restartChannels.size > 0
-  );
-}
-
 function assertIrreversibleReloadPlanHasRecoveryOwner(
   plan: GatewayReloadPlan,
   restartRecoveryAvailable: boolean | undefined,
@@ -302,7 +281,7 @@ function assertIrreversibleReloadPlanHasRecoveryOwner(
   // These plans retire a live service or plugin generation before replacement
   // can be proven. Context cache refresh also needs recovery because it can
   // reject after runtime publication; simple in-place updates stay atomic.
-  if (hasIrreversibleHotReloadWork(plan) || shouldRefreshContextWindowCache(plan)) {
+  if (reloadPlanNeedsRecovery(plan)) {
     throw new GatewayReloadRequiresRecoveryOwnerError("irreversible hot reload");
   }
 }
@@ -1207,6 +1186,14 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     supersedeRestartRequest();
   };
 
+  const appliedConfigHashPublisher = createAppliedConfigHashPublisher({
+    hasPendingRestart: () =>
+      restartRequestDetails !== null ||
+      pausedRestartDebt !== null ||
+      conservativeRestartDebt !== null,
+    publish: setRuntimeConfigAppliedHash,
+  });
+
   const scheduleRestartEmissionRetry = (retry: {
     reason: string;
     intent?: GatewayRestartIntent;
@@ -1531,6 +1518,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   return {
     applyHotReload,
     acceptRestartConfig,
+    ...appliedConfigHashPublisher,
     beginGatewayRestartLifecycle,
     pauseGatewayRestartForConfigCandidate,
     publishAcceptedRestartTarget,
@@ -1584,7 +1572,9 @@ export function startManagedGatewayConfigReloader(
     acceptRestartConfig,
     beginGatewayRestartLifecycle,
     pauseGatewayRestartForConfigCandidate,
+    publishAppliedConfigHash,
     publishAcceptedRestartTarget,
+    publishDeferredAppliedConfigHash,
     recordAcceptedRestartTarget,
     requestGatewayRestart,
     restoreConservativeRestartDebt,
@@ -1621,7 +1611,6 @@ export function startManagedGatewayConfigReloader(
         channelManager: params.channelManager,
       }),
   });
-
   const runManagedRestart = async (
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
@@ -1819,6 +1808,7 @@ export function startManagedGatewayConfigReloader(
           params.acceptTerminalConfig({
             retireRejectedRestart: acceptedRestart.retireRejectedRestart,
           });
+          publishDeferredAppliedConfigHash();
           return undefined;
         }
         if (acceptedRestart.debt) {
@@ -1858,6 +1848,7 @@ export function startManagedGatewayConfigReloader(
         params.acceptTerminalConfig({
           retireRejectedRestart: acceptedRestart.retireRejectedRestart && !lateConservativeDebt,
         });
+        publishDeferredAppliedConfigHash();
         return rollbackSource;
       } catch (error) {
         if (lateConservativeDebt) {
@@ -1869,6 +1860,7 @@ export function startManagedGatewayConfigReloader(
       }
     },
     onConfigApplied: (_plan, nextConfig) => params.commitTerminalConfig(nextConfig),
+    onConfigRevisionApplied: publishAppliedConfigHash,
     onEffectiveConfigUnchanged: async (nextConfig, transactionOwnership, sourceConfig) => {
       if (!transactionOwnership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
@@ -2244,3 +2236,4 @@ export function startManagedGatewayConfigReloader(
     hotReloadStatus: configReloader.hotReloadStatus,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

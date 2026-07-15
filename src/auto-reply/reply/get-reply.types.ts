@@ -19,13 +19,17 @@ type InternalReplySessionOptions = {
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
-  /** Marks queued follow-up admission waits on an older owner's delivery barrier. */
-  onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
+  /** Marks when this reply is waiting to own its session's reply lane. */
+  onReplyAdmissionWaitChange?: (waiting: boolean) => void;
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &
   InternalReplySessionOptions &
   ReplyOptionsWithHeartbeatRunScope;
+
+export function shouldBridgeCliPreambleEvents(opts: InternalGetReplyOptions | undefined): boolean {
+  return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;
+}
 
 /** Reply resolver signature used by dispatchers and tests for dependency injection. */
 export type GetReplyFromConfig = (

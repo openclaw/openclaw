@@ -3512,3 +3512,4 @@ describe("native hook relay command builder", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -126,7 +126,10 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                 </div>
 
                 <div class="device-pair-setup__meta">
-                  <span class="pill">${setup.auth}</span>
+                  <span class="settings-status settings-status--accent">
+                    <span class="settings-status__dot"></span>
+                    ${setup.auth}
+                  </span>
                   <div class="device-pair-setup__gateways">
                     ${gatewayUrls.map(
                       (gatewayUrl) => html`

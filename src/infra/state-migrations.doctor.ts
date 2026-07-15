@@ -48,6 +48,7 @@ import {
   migrateLegacyAgentDir,
   migrateLegacySessions,
 } from "./state-migrations.legacy-sessions.js";
+import { mergeNotices } from "./state-migrations.messages.js";
 import {
   migrateLegacyInstalledPluginIndex,
   migrateLegacyPluginStateSidecar,
@@ -57,12 +58,10 @@ import {
   migrateLegacyConfigHealth,
   migrateLegacyCurrentConversationBindings,
   migrateLegacyPluginBindingApprovals,
-  migrateLegacyUpdateCheckState,
   migrateLegacyVoiceWakeSettings,
   resolveLegacyConfigHealthPath,
   resolveLegacyCurrentConversationBindingsPath,
   resolveLegacyPluginBindingApprovalsPath,
-  resolveLegacyUpdateCheckPath,
   resolveLegacyVoiceWakeRoutingPath,
   resolveLegacyVoiceWakeTriggersPath,
 } from "./state-migrations.runtime-state.js";
@@ -94,12 +93,20 @@ import {
   resolveLegacyPluginStateSidecarPath,
   resolveLegacyTaskRunsSidecarPath,
 } from "./state-migrations.storage.js";
+import {
+  detectLegacyTuiLastSessions,
+  migrateLegacyTuiLastSessions,
+} from "./state-migrations.tui-last-session.js";
 import type {
   DetectedPluginDoctorStateMigrationPlan,
   LegacyStateDetection,
   MigrationLogger,
   MigrationMessages,
 } from "./state-migrations.types.js";
+import {
+  migrateLegacyUpdateCheckState,
+  resolveLegacyUpdateCheckPath,
+} from "./state-migrations.update-check.js";
 
 let autoMigrateChecked = false;
 
@@ -199,6 +206,7 @@ export async function detectLegacyStateMigrations(params: {
   pluginSessionStoreAgentIds?: readonly string[];
   sessionStoreOwnership?: SessionStoreOwnership;
   crossStateDirImports?: boolean;
+  doctorOnlyStateMigrations?: boolean;
 }): Promise<LegacyStateDetection> {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
@@ -365,6 +373,10 @@ export async function detectLegacyStateMigrations(params: {
     sourcePath: resolveLegacyCurrentConversationBindingsPath(stateDir),
   };
   const hasCurrentConversationBindings = fileExists(currentConversationBindings.sourcePath);
+  const tuiLastSessions = detectLegacyTuiLastSessions({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const configuredChannels = Object.entries(params.cfg.channels ?? {});
   const configuredAccountIds = Object.fromEntries(
     configuredChannels.map(([channelId, value]) => {
@@ -510,6 +522,9 @@ export async function detectLegacyStateMigrations(params: {
   if (hasCurrentConversationBindings) {
     preview.push("- Current-conversation bindings: legacy JSON file → shared SQLite state");
   }
+  if (tuiLastSessions.hasLegacy) {
+    preview.push("- TUI last-session pointers: legacy JSON file → shared SQLite state");
+  }
   if (channelPairing.hasLegacy) {
     preview.push("- Channel pairing state: legacy JSON files → shared SQLite state");
   }
@@ -595,6 +610,7 @@ export async function detectLegacyStateMigrations(params: {
       ...currentConversationBindings,
       hasLegacy: hasCurrentConversationBindings,
     },
+    tuiLastSessions,
     channelPairing,
     execApprovals,
     warnings: pluginPlanWarnings,
@@ -773,6 +789,10 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.currentConversationBindings,
     stateDir: detected.stateDir,
   });
+  const tuiLastSessions = migrateLegacyTuiLastSessions({
+    detected: detected.tuiLastSessions,
+    stateDir: detected.stateDir,
+  });
   const channelPairing = migrateLegacyChannelPairingState({
     detected: detected.channelPairing,
     env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
@@ -800,6 +820,7 @@ export async function runLegacyStateMigrations(params: {
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
   );
+  const notices = mergeNotices([pluginInstallIndex, updateCheck, tuiLastSessions, pluginPlans]);
   return {
     changes: [
       ...stateSchema.changes,
@@ -813,6 +834,7 @@ export async function runLegacyStateMigrations(params: {
       ...configHealth.changes,
       ...pluginBindingApprovals.changes,
       ...currentConversationBindings.changes,
+      ...tuiLastSessions.changes,
       ...channelPairing.changes,
       ...execApprovals.changes,
       ...preSessionChannelPlans.changes,
@@ -835,6 +857,7 @@ export async function runLegacyStateMigrations(params: {
       ...configHealth.warnings,
       ...pluginBindingApprovals.warnings,
       ...currentConversationBindings.warnings,
+      ...tuiLastSessions.warnings,
       ...channelPairing.warnings,
       ...execApprovals.warnings,
       ...preSessionChannelPlans.warnings,
@@ -844,9 +867,7 @@ export async function runLegacyStateMigrations(params: {
       ...agentDir.warnings,
       ...channelPlans.warnings,
     ],
-    ...(pluginPlans.notices && pluginPlans.notices.length > 0
-      ? { notices: [...pluginPlans.notices] }
-      : {}),
+    ...(notices.length > 0 ? { notices } : {}),
   };
 }
 
@@ -1051,11 +1072,8 @@ export async function autoMigrateLegacyState(params: {
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
     ];
-    const notices = [
-      ...(stateDirResult.notices ?? []),
-      ...detected.notices,
-      ...(pluginPlans.notices ?? []),
-    ];
+    const noticeSources = [stateDirResult, detected, pluginInstallIndex, updateCheck, pluginPlans];
+    const notices = mergeNotices(noticeSources);
     logMigrationResults(changes, warnings, notices);
     return {
       migrated:
@@ -1242,11 +1260,8 @@ export async function autoMigrateLegacyState(params: {
     ...agentDir.warnings,
     ...channelPlans.warnings,
   ];
-  const notices = [
-    ...(stateDirResult.notices ?? []),
-    ...detected.notices,
-    ...(pluginPlans.notices ?? []),
-  ];
+  const noticeSources = [stateDirResult, detected, pluginInstallIndex, updateCheck, pluginPlans];
+  const notices = mergeNotices(noticeSources);
 
   logMigrationResults(changes, warnings, notices);
 
@@ -1258,3 +1273,4 @@ export async function autoMigrateLegacyState(params: {
     ...(notices.length > 0 ? { notices } : {}),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

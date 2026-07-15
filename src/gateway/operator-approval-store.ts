@@ -1220,3 +1220,4 @@ export function pruneTerminalOperatorApprovals(params: {
     return Number(result.numAffectedRows ?? 0n);
   }, params.databaseOptions);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

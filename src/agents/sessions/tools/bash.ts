@@ -28,10 +28,6 @@ const bashSchema = Type.Object({
   command: Type.String({ description: "Bash command." }),
   timeout: Type.Optional(Type.Number({ description: "Optional timeout seconds; default none." })),
 });
-export type { BashToolDetails, BashToolInput } from "./tool-contracts.js";
-
-export type { BashOperations } from "./bash-operations.js";
-
 export function resolveBashTimeoutMs(timeoutSeconds: unknown): number | undefined {
   if (
     typeof timeoutSeconds !== "number" ||

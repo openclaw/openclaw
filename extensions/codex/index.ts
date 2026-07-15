@@ -98,14 +98,18 @@ export default definePluginEntry({
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
     });
-    codexSessionCatalogRuntime.register({
-      api,
-      bindingStore,
-      control: sessionCatalogControl,
-      getRuntimeConfig: resolveCurrentConfig,
-    });
-    for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
-      api.registerNodeHostCommand(command);
+    const sessionCatalogEnabled =
+      readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
+    if (sessionCatalogEnabled) {
+      codexSessionCatalogRuntime.register({
+        api,
+        bindingStore,
+        control: sessionCatalogControl,
+        getRuntimeConfig: resolveCurrentConfig,
+      });
+      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
+        api.registerNodeHostCommand(command);
+      }
     }
     for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
       api.registerNodeInvokePolicy(policy);
@@ -276,6 +280,20 @@ export default definePluginEntry({
         return;
       }
       const sessionKey = event.sessionKey ?? ctx.sessionKey;
+      // A cross-key handoff (dashboard "New Chat", a fork) fires session_end on
+      // the parent only to start an INDEPENDENT child session under a different
+      // key; that child owns its own Codex thread binding (a Codex fork is a new
+      // thread, not a transfer of the parent's). Retiring the parent's still-live
+      // binding here would strand it, so skip when the successor provably lives
+      // under a different session key. The only cross-key emitter (gateway child
+      // creation) keeps the parent row live; same-key rollovers omit or repeat
+      // the key and still retire, as do unknown-current-key ends (no provable
+      // handoff) and later idle/daily/deleted ends. See #106778.
+      const endedSessionKey = sessionKey?.trim();
+      const nextSessionKey = event.nextSessionKey?.trim();
+      if (endedSessionKey && nextSessionKey && nextSessionKey !== endedSessionKey) {
+        return;
+      }
       const config = resolveCurrentConfig();
       const { sessionBindingIdentity } = await import("./src/app-server/session-binding.js");
       await bindingStore.retireSessionGeneration(

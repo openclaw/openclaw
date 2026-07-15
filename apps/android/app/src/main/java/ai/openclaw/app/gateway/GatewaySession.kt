@@ -221,6 +221,18 @@ class GatewaySession(
     val error: ErrorShape?,
   )
 
+  /** One ready physical WebSocket captured before queued work starts waiting. */
+  internal class RequestLease internal constructor(
+    val endpointStableId: String,
+    private val requestImpl: suspend (method: String, paramsJson: String?, timeoutMs: Long) -> String,
+  ) {
+    suspend fun request(
+      method: String,
+      paramsJson: String?,
+      timeoutMs: Long = 15_000,
+    ): String = requestImpl(method, paramsJson, timeoutMs)
+  }
+
   private val json =
     Json {
       ignoreUnknownKeys = true
@@ -365,6 +377,9 @@ class GatewaySession(
 
   internal fun isReady(): Boolean = readyConnection() != null
 
+  /** Current physical connection identity, including events sent during connect publication. */
+  internal fun currentEndpointStableId(): String? = currentConnection?.endpoint?.stableId
+
   /** Sends a best-effort node.event and returns false instead of throwing on failure. */
   suspend fun sendNodeEvent(
     event: String,
@@ -399,6 +414,9 @@ class GatewaySession(
       NodeEventSendOutcome.COMPLETED
     } catch (_: GatewayRequestNotEnqueued) {
       NodeEventSendOutcome.DISCONNECTED
+    } catch (err: CancellationException) {
+      // Voice/audio ownership takeover must cancel before a stale node event dispatches.
+      throw err
     } catch (err: Throwable) {
       Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
       NodeEventSendOutcome.FAILED
@@ -471,12 +489,30 @@ class GatewaySession(
     throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
   }
 
+  /** Captures the current physical connection; requests never resolve a replacement socket. */
+  internal fun captureRequestLease(expectedEndpointStableId: String? = null): RequestLease? {
+    val conn = readyConnection(expectedEndpointStableId) ?: return null
+    return RequestLease(endpointStableId = conn.endpoint.stableId) { method, paramsJson, timeoutMs ->
+      val res = requestDetailed(conn, method, paramsJson, timeoutMs)
+      if (!res.ok) {
+        throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+      }
+      res.payloadJson ?: ""
+    }
+  }
+
   /** Sends an RPC request and returns the structured success/error payload. */
   suspend fun requestDetailed(
     method: String,
     paramsJson: String?,
     timeoutMs: Long = 15_000,
-  ): RpcResult = requestDetailed(expectedEndpointStableId = null, method, paramsJson, timeoutMs)
+  ): RpcResult =
+    requestDetailed(
+      expectedEndpointStableId = null,
+      method,
+      paramsJson,
+      timeoutMs,
+    )
 
   private suspend fun requestDetailed(
     expectedEndpointStableId: String?,
@@ -485,12 +521,26 @@ class GatewaySession(
     timeoutMs: Long,
   ): RpcResult {
     val conn = readyConnection(expectedEndpointStableId) ?: throw GatewayRequestNotEnqueued("not connected")
+    return requestDetailed(conn, method, paramsJson, timeoutMs)
+  }
+
+  private suspend fun requestDetailed(
+    conn: Connection,
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long,
+  ): RpcResult {
     val params =
       if (paramsJson.isNullOrBlank()) {
         null
       } else {
         json.parseToJsonElement(paramsJson)
       }
+    // Readiness and identity are checked after parsing, immediately before enqueue.
+    // A later reconnect can only close this exact socket, never retarget the lease.
+    if (currentConnection !== conn || !conn.isReady()) {
+      throw GatewayRequestNotEnqueued("gateway request lease changed")
+    }
     val res = conn.request(method, params, timeoutMs)
     return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
@@ -1207,6 +1257,8 @@ class GatewaySession(
         }
         return
       }
+      // Retired sockets can still drain queued frames after reconnect. Never let them mutate current state.
+      if (currentConnection !== this) return
       if (event == GatewayEvent.NodeInvokeRequest.rawValue && payloadJson != null && onInvoke != null) {
         handleInvokeEvent(payloadJson)
         return

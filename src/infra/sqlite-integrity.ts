@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
-export type SqliteIntegrityChecks = {
+type SqliteIntegrityChecks = {
   integrityCheck: "ok";
   quickCheck: "ok";
 };

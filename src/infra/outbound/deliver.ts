@@ -19,7 +19,6 @@ import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load
 import type {
   ChannelDeliveryCapabilities,
   ChannelOutboundAdapter,
-  ChannelOutboundContext,
   ChannelOutboundPayloadContext,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
@@ -84,6 +83,7 @@ import {
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import {
+  assertStableMediaFanout,
   planOutboundMediaMessageUnits,
   planOutboundTextMessageUnits,
   type OutboundMessageSendOverrides,
@@ -109,7 +109,6 @@ import type { OutboundChannel } from "./targets.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
-export { normalizeOutboundPayloads } from "./payloads.js";
 export type { OutboundSendDeps } from "./send-deps.js";
 
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
@@ -199,7 +198,6 @@ type ChannelHandler = {
   ) => Promise<OutboundDeliveryResult>;
 };
 
-type ChannelMessageLifecycleContext = ChannelMessageSendAttemptContext;
 type PlatformSendRoute = {
   replyToId?: string | null;
   threadId?: string | number | null;
@@ -221,6 +219,7 @@ type ChannelHandlerParams = {
   silent?: boolean;
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
+  conversationReadOrigin?: "delegated" | "direct-operator";
   deliveryQueueId?: string;
   requiredUnknownSendReconciliation?: boolean;
   onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
@@ -269,7 +268,7 @@ async function runChannelMessageSendWithLifecycle<
   TResult extends ChannelMessageSendResult,
 >(params: {
   lifecycle?: ChannelMessageSendLifecycleAdapter;
-  ctx: ChannelMessageLifecycleContext;
+  ctx: ChannelMessageSendAttemptContext;
   send: () => Promise<TResult>;
 }): Promise<{ result: TResult; afterCommit?: OutboundDeliveryCommitHook }> {
   if (!params.lifecycle) {
@@ -407,13 +406,7 @@ function createPluginHandler(
         await params.onDeliveryResult?.(normalizeChannelMessageSendResult(params.channel, result));
       }
     : undefined;
-  const resolveCtx = (overrides?: {
-    replyToId?: string | null;
-    replyToIdSource?: "explicit" | "implicit";
-    threadId?: string | number | null;
-    audioAsVoice?: boolean;
-    formatting?: OutboundDeliveryFormattingOptions;
-  }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
+  const resolveCtx = (overrides?: OutboundMessageSendOverrides) => ({
     ...baseCtx,
     replyToId: overrides && "replyToId" in overrides ? overrides.replyToId : baseCtx.replyToId,
     replyToIdSource:
@@ -422,14 +415,13 @@ function createPluginHandler(
         : baseCtx.replyToIdSource,
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
+    deliveryPartIndex: overrides?.deliveryPartIndex,
     formatting:
       overrides && "formatting" in overrides
         ? { ...baseCtx.formatting, ...overrides.formatting }
         : baseCtx.formatting,
   });
-  const buildTargetRef = (overrides?: {
-    threadId?: string | number | null;
-  }): ChannelOutboundTargetRef => ({
+  const buildTargetRef = (overrides?: OutboundMessageSendOverrides): ChannelOutboundTargetRef => ({
     channel: params.channel,
     to: params.to,
     accountId: params.accountId ?? undefined,
@@ -635,31 +627,29 @@ function normalizeChannelMessageSendResult(
   };
 }
 
-function createChannelOutboundContextBase(
-  params: ChannelHandlerParams,
-): Omit<ChannelOutboundContext, "text" | "mediaUrl"> {
-  return {
-    cfg: params.cfg,
-    to: params.to,
-    accountId: params.accountId,
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
-    formatting: params.formatting,
-    threadId: params.threadId,
-    identity: params.identity,
-    gifPlayback: params.gifPlayback,
-    forceDocument: params.forceDocument,
-    deps: params.deps,
-    silent: params.silent,
-    mediaAccess: params.mediaAccess,
-    mediaLocalRoots: params.mediaAccess?.localRoots,
-    mediaReadFile: params.mediaAccess?.readFile,
-    gatewayClientScopes: params.gatewayClientScopes,
-    deliveryQueueId: params.deliveryQueueId,
-    onPlatformSendDispatch: params.onPlatformSendDispatch,
-    onDeliveryResult: params.onDeliveryResult,
-  };
-}
+const createChannelOutboundContextBase = (params: ChannelHandlerParams) => ({
+  cfg: params.cfg,
+  to: params.to,
+  accountId: params.accountId,
+  replyToId: params.replyToId,
+  replyToIdSource: undefined,
+  replyToMode: params.replyToMode,
+  formatting: params.formatting,
+  threadId: params.threadId,
+  identity: params.identity,
+  gifPlayback: params.gifPlayback,
+  forceDocument: params.forceDocument,
+  deps: params.deps,
+  silent: params.silent,
+  mediaAccess: params.mediaAccess,
+  mediaLocalRoots: params.mediaAccess?.localRoots,
+  mediaReadFile: params.mediaAccess?.readFile,
+  gatewayClientScopes: params.gatewayClientScopes,
+  conversationReadOrigin: params.conversationReadOrigin,
+  deliveryQueueId: params.deliveryQueueId,
+  onPlatformSendDispatch: params.onPlatformSendDispatch,
+  onDeliveryResult: params.onDeliveryResult,
+});
 
 const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
 
@@ -761,6 +751,7 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  conversationReadOrigin?: "delegated" | "direct-operator";
 };
 
 /**
@@ -1392,6 +1383,7 @@ export async function deliverOutboundPayloadsInternal(
     ? createRenderedMessageBatchPlan(queuePayloads)
     : renderedBatchPlan;
 
+  // Invocation authority is not queued; recovery must re-enter delegated after restart.
   // Write-ahead delivery queue: persist before sending, remove after success.
   const queueId = params.skipQueue
     ? null
@@ -1987,6 +1979,7 @@ async function deliverOutboundPayloadsCore(
       silent: params.silent,
       mediaAccess: resolveMediaAccess(mediaSources),
       gatewayClientScopes: params.gatewayClientScopes,
+      conversationReadOrigin: params.conversationReadOrigin,
       deliveryQueueId: params.deliveryQueueId,
       requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
       onPlatformSendStart: params.onPlatformSendStart,
@@ -2123,6 +2116,7 @@ async function deliverOutboundPayloadsCore(
   for (const { index: payloadIndex, payload } of normalizedPayloads) {
     const payloadResultStartIndex = results.length;
     let payloadSummary = buildPayloadSummary(payload);
+    const originalMediaCount = payloadSummary.mediaUrls.length;
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
     let deliveryStartedAt = 0;
     let deliveryStarted = false;
@@ -2244,7 +2238,9 @@ async function deliverOutboundPayloadsCore(
         );
         continue;
       }
-      payloadSummary = buildPayloadSummary(effectivePayload);
+      const effectivePayloadSummary = buildPayloadSummary(effectivePayload);
+      assertStableMediaFanout(params, payloadIndex, originalMediaCount, effectivePayloadSummary);
+      payloadSummary = effectivePayloadSummary;
       const deliveryHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
       const effectiveDeliveryKind = deliveryKindForPayload(effectivePayload, payloadSummary);
       effectiveDeliveryKinds.set(payloadIndex, effectiveDeliveryKind);
@@ -2570,3 +2566,4 @@ async function deliverOutboundPayloadsCore(
 
   return results;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

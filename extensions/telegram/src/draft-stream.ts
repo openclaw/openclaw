@@ -93,7 +93,7 @@ export type TelegramDraftStream = {
   sendMayHaveLanded?: () => boolean;
 };
 
-export type TelegramDraftMessageSnapshot = {
+type TelegramDraftMessageSnapshot = {
   text: string;
   sourceText: string;
   sourceTextMode?: "html" | "markdown";
@@ -912,3 +912,4 @@ export function createTelegramDraftStream(params: {
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

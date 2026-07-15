@@ -911,9 +911,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "cron.webhook": "Cron Legacy Webhook (Deprecated)",
   "cron.webhookToken": "Cron Webhook Bearer Token",
   "cron.sessionRetention": "Cron Session Retention",
-  "cron.runLog": "Cron Run Log Pruning",
-  "cron.runLog.maxBytes": "Cron Run Log Max Bytes",
-  "cron.runLog.keepLines": "Cron Run Log Keep Lines",
   worktrees: "Worktrees",
   "worktrees.cleanup": "Worktree Cleanup Limits",
   "worktrees.cleanup.maxCount": "Max Worktrees",
@@ -1134,3 +1131,4 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

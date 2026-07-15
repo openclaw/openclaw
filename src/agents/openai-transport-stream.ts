@@ -32,4 +32,3 @@ export const testing = {
   ...responsesTesting,
   ...completionsTesting,
 };
-export { testing as __testing };

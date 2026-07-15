@@ -46,8 +46,10 @@ Worker mode does not start channels, Gateway HTTP surfaces, or plugin auto-start
 beyond the assigned session toolset. It uses a throwaway state directory and has
 no standing provider or forge credentials.
 
-Worker-to-worker session dispatch is not exposed in this mode. Agent dispatch
-and placement remain gateway-owned milestone-3 surfaces.
+Worker-to-worker session dispatch is not exposed in this mode. Placement and
+dispatch remain gateway-owned: an operator can dispatch an existing local,
+managed-worktree session through the Gateway, while a worker process cannot
+dispatch itself or another worker.
 
 The prepared assignment carries the transcript context, accepted base leaf,
 commit sequence, and live-event cursor. On a tunnel reconnect, the process

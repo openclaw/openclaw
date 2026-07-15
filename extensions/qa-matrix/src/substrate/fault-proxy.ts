@@ -82,7 +82,7 @@ export type MatrixQaFaultProxyHit = {
   ruleId: string;
 };
 
-export type MatrixQaFaultProxy = {
+type MatrixQaFaultProxy = {
   baseUrl: string;
   hits(): MatrixQaFaultProxyHit[];
   stop(): Promise<void>;

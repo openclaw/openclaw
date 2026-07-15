@@ -200,6 +200,16 @@ try {
     readNpmInventory();
   } else if (install === "bundle") {
     walk("dist");
+    // Vendored workspace packages ship inside the bundle and are part of its hash;
+    // node_modules is installed after verification and never walked here.
+    const vendorPath = path.join(root, "vendor");
+    const vendorStats = fs.existsSync(vendorPath) ? fs.lstatSync(vendorPath) : undefined;
+    if (vendorStats) {
+      if (vendorStats.isSymbolicLink() || !vendorStats.isDirectory()) {
+        fail("unsafe worker vendor directory");
+      }
+      walk("vendor");
+    }
   } else {
     fail("invalid worker install channel");
   }
@@ -464,6 +474,15 @@ esac
 if ! node -e '${VERIFY_INSTALL_JS}' "$staging" "$hash" "$install"; then
   printf '%s\n' 'worker install content does not match the expected bundle hash' >&2
   exit 2
+fi
+# Materialize production dependencies only after the pristine bundle passed its
+# integrity check; npm install writes node_modules the hash intentionally excludes.
+if [ "$install" = bundle ]; then
+  if ! command -v npm >/dev/null 2>&1; then
+    printf '%s\n' '${NPM_MISSING_MARKER}' >&2
+    exit ${NPM_MISSING_EXIT_CODE}
+  fi
+  OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 npm install --prefix "$staging" --ignore-scripts --omit=dev --no-audit --no-fund >&2
 fi
 printf '%s\n' "$receipt_json" > "$staging/${BOOTSTRAP_RECEIPT}"
 chmod 600 "$staging/${BOOTSTRAP_RECEIPT}"
@@ -764,3 +783,4 @@ export async function bootstrapWorker(
     await prepared.dispose();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

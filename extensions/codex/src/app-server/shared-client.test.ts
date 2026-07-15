@@ -820,6 +820,22 @@ describe("shared Codex app-server client", () => {
     finishAuth();
   });
 
+  it("does not start isolated auth after the total startup deadline elapsed", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    const clientPromise = createIsolatedCodexAppServerClient({ timeoutMs: 100 });
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
+    now = 101;
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
+
+    await expect(clientPromise).rejects.toThrow("codex app-server initialize timed out");
+    expect(mocks.applyCodexAppServerAuthProfile).not.toHaveBeenCalled();
+    expect(harness.process.stdin.destroyed).toBe(true);
+  });
+
   it("passes the selected auth profile through the bridge helper", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
@@ -1855,3 +1871,4 @@ function rawDataToText(data: RawData): string {
   }
   return Buffer.from(data).toString("utf8");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

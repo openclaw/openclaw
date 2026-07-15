@@ -2520,3 +2520,4 @@ describe("EmbeddedTuiBackend", () => {
     expect(defaultRuntime.error).toBe(originalRuntimeError);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

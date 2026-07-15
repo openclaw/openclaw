@@ -9,7 +9,9 @@ import { isCloudflareOrHtmlErrorPage } from "../shared/assistant-error-format.js
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
+  isOverloadedErrorMessage,
   isRateLimitErrorMessage,
+  isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./embedded-agent-helpers/failover-matches.js";
 import { isAnthropicBillingError, isApiKeyRateLimitError } from "./live-auth-keys.js";
@@ -84,6 +86,8 @@ export function isLiveProviderUnavailableDrift(error: unknown): boolean {
   const htmlCandidate = raw.trim().replace(/^error:\s*/i, "");
   const msg = normalizeLowercaseStringOrEmpty(raw);
   return (
+    isOverloadedErrorMessage(raw) ||
+    isServerErrorMessage(raw) ||
     isRawHtmlProviderErrorPage(htmlCandidate) ||
     isCloudflareOrHtmlErrorPage(raw) ||
     isCloudflareOrHtmlErrorPage(htmlCandidate) ||
