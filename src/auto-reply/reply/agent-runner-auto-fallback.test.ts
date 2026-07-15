@@ -71,6 +71,57 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
     });
   });
 
+  it("preserves an identically reselected persisted fallback generation", async () => {
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5.4",
+    };
+    const staleAutoEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: probe.fallbackProvider,
+      modelOverride: probe.fallbackModel,
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: probe.provider,
+      modelOverrideFallbackOriginModel: probe.model,
+    };
+    const newerAutoEntry: SessionEntry = {
+      ...staleAutoEntry,
+      updatedAt: 2,
+    };
+    const activeSessionStore = { main: staleAutoEntry };
+    state.updateSessionEntryMock.mockImplementationOnce(
+      async (_scope: unknown, update: (entry: SessionEntry) => unknown) => {
+        expect(await update(newerAutoEntry)).toBeNull();
+        return null;
+      },
+    );
+
+    await clearRecoveredAutoFallbackPrimaryProbeSelection({
+      run: {
+        provider: probe.provider,
+        model: probe.model,
+        autoFallbackPrimaryProbe: probe,
+      } as FollowupRun["run"],
+      provider: probe.provider,
+      model: probe.model,
+      sessionKey: "main",
+      activeSessionStore,
+      getActiveSessionEntry: () => staleAutoEntry,
+      storePath: "/tmp/sessions.sqlite",
+    });
+
+    expect(activeSessionStore.main).toBe(newerAutoEntry);
+    expect(activeSessionStore.main).toMatchObject({
+      providerOverride: probe.fallbackProvider,
+      modelOverride: probe.fallbackModel,
+      modelOverrideSource: "auto",
+      updatedAt: 2,
+    });
+  });
+
   it("keeps a newer local selection installed while persistence is pending", async () => {
     const probe = {
       provider: "anthropic",

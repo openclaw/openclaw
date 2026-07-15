@@ -122,7 +122,11 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
     { storePath: params.storePath, sessionKey: params.sessionKey },
     (persistedEntry) => {
       comparedEntry = persistedEntry;
-      if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
+      if (
+        persistedEntry.sessionId !== activeSessionEntryBeforeUpdate.sessionId ||
+        persistedEntry.updatedAt !== activeSessionEntryBeforeUpdate.updatedAt ||
+        !entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)
+      ) {
         return null;
       }
       const shouldClearAuthProfile =
