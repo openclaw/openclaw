@@ -184,8 +184,8 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       compact: true,
     });
 
-    expect(compact).toHaveLength(16);
-    expect(compact.filter((shard) => !shard.requiresDist)).toHaveLength(15);
+    expect(compact).toHaveLength(15);
+    expect(compact.filter((shard) => !shard.requiresDist)).toHaveLength(14);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
     expect(
