@@ -1,4 +1,4 @@
-﻿// Workspace skill loading helpers discover and load skills from workspace directories.
+// Workspace skill loading helpers discover and load skills from workspace directories.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +15,7 @@ import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { buildBehaviorPolicyPrompt, resolveBehaviorRules } from "../../security/behavior-policy.js";
 import { CONFIG_DIR, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import {
   resolveEffectiveAgentSkillFilter,
@@ -39,7 +40,6 @@ import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontma
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
-import { buildBehaviorPolicyPrompt, resolveBehaviorRules } from "../../security/behavior-policy.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths, tryRealpath } from "./symlink-targets.js";
@@ -1405,7 +1405,10 @@ function buildRenderedSkillsPrompt(params: {
       ? formatSkillsCompact(params.skills, {
           descriptionMaxChars: params.format.descriptionMaxChars,
         })
-      : formatSkillsForPrompt(params.skills, buildBehaviorPolicyPrompt(resolveBehaviorRules(params.config)) || undefined);
+      : formatSkillsForPrompt(
+          params.skills,
+          buildBehaviorPolicyPrompt(resolveBehaviorRules(params.config)) || undefined,
+        );
   return [params.remoteNote, limitNote, catalog].filter(Boolean).join("\n");
 }
 
@@ -1440,7 +1443,6 @@ function applySkillsPromptLimits(params: {
       format: { kind: "compact", descriptionMaxChars },
     }).length <= limits.maxSkillsPromptChars;
 
-  if (!fitsFull(skillsForPrompt)) {
   if (!fitsFull(skillsForPrompt)) {
     // Identity coverage takes priority over descriptions. Find the same largest
     // name/location/version prefix as the previous compact format before using

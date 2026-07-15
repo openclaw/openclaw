@@ -1,13 +1,7 @@
-﻿/**
+/**
  * System prompt construction and project context loading
  */
 
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildBehaviorPolicyPrompt, resolveBehaviorRules } from "../../security/behavior-policy.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildBehaviorPolicyPrompt, resolveBehaviorRules } from "../../security/behavior-policy.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildBehaviorPolicyPrompt, resolveBehaviorRules } from "../../security/behavior-policy.js";
 import { formatSkillsForPrompt, type Skill } from "../../skills/loading/session.js";
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
 import { buildPromisedWorkPromptSection } from "../promised-work-prompt.js";
@@ -186,6 +180,3 @@ Embedded agent documentation (read only when the user asks about the embedded ag
 
   return prompt;
 }
-
-
-

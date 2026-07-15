@@ -1,15 +1,15 @@
-﻿import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
 import { parseFrontmatter } from "../../agents/utils/frontmatter.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
+import { buildBehaviorPolicyPrompt, resolveBehaviorRules } from "../../security/behavior-policy.js";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
-import { buildBehaviorPolicyPrompt, resolveBehaviorRules } from "../../security/behavior-policy.js";
 import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
@@ -293,9 +293,12 @@ function loadSkillFromFile(
  * Skills with disableModelInvocation=true are excluded from the prompt
  * (they can only be invoked explicitly via /skill:name commands).
  */
-export function formatSkillsForPrompt(skills: Skill[], config?: import("../../config/types.openclaw.js").OpenClawConfig): string {
+export function formatSkillsForPrompt(
+  skills: Skill[],
+  config?: import("../../config/types.openclaw.js").OpenClawConfig,
+): string {
   const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
-  const behaviorPrompt = buildBehaviorPolicyPrompt(resolveBehaviorRules(config as any));
+  const behaviorPrompt = buildBehaviorPolicyPrompt(resolveBehaviorRules(config));
   return formatSkillContractForPrompt(visibleSkills, behaviorPrompt || undefined);
 }
 
@@ -436,6 +439,3 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
     diagnostics: [...allDiagnostics, ...collisionDiagnostics],
   };
 }
-
-
-
