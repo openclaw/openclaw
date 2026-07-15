@@ -3,7 +3,8 @@ import { createHmac } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../channels/chat-type.js";
-import type { ChannelId, ChannelThreadingToolContext } from "../channels/plugins/types.public.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
 import { ensureExecApprovalsSnapshot, loadExecApprovalsAsync } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -93,7 +94,7 @@ function decodeMessageActionContext(
     const candidate = rawToolContext?.[key];
     return typeof candidate === "boolean" ? candidate : undefined;
   };
-  const toolContext: ChannelThreadingToolContext | undefined = rawToolContext
+  const toolContext: InternalChannelThreadingToolContext | undefined = rawToolContext
     ? ({
         currentChannelId: normalizeOptionalString(rawToolContext.currentChannelId),
         currentChatType,
@@ -118,7 +119,7 @@ function decodeMessageActionContext(
             : undefined,
         sameChannelThreadRequired: readOptionalBoolean("sameChannelThreadRequired"),
         skipCrossContextDecoration: readOptionalBoolean("skipCrossContextDecoration"),
-      } satisfies ChannelThreadingToolContext)
+      } satisfies InternalChannelThreadingToolContext)
     : undefined;
   return {
     expiresAtMs: value.expiresAtMs,

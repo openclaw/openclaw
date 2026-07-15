@@ -6,11 +6,9 @@ import {
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type {
-  ChannelId,
-  ChannelThreadingToolContext,
-} from "../../channels/plugins/types.public.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
+import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import {
   getAgentRuntimeCommandSecretTargetIds,
@@ -114,7 +112,7 @@ export function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
   config: OpenClawConfig | undefined;
   hasRepliedRef: { value: boolean } | undefined;
-}): ChannelThreadingToolContext {
+}): InternalChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
   const isRestartSentinelContinuation =
     sessionCtx.InputProvenance?.kind === "internal_system" &&

@@ -7,10 +7,8 @@ import {
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type {
-  ChannelId,
-  ChannelThreadingToolContext,
-} from "../../channels/plugins/types.public.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
+import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
@@ -23,7 +21,7 @@ type SourceReplyTranscriptMirrorParams = {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
-  toolContext?: ChannelThreadingToolContext;
+  toolContext?: InternalChannelThreadingToolContext;
   idempotencyKey?: string;
   sourceReplyFinal?: boolean;
   deliveredPayload?: unknown;
@@ -140,7 +138,7 @@ function hasExplicitDeliveryFailure(payload: unknown): boolean {
 }
 
 function resolveCurrentSourceTurnId(
-  toolContext: ChannelThreadingToolContext | undefined,
+  toolContext: InternalChannelThreadingToolContext | undefined,
 ): string | undefined {
   return normalizeOptionalString(toolContext?.currentSourceTurnId);
 }

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ChannelThreadingToolContext } from "../channels/plugins/types.public.js";
+import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isDeliverableMessageChannel,
@@ -16,7 +16,7 @@ export type AgentRuntimeMessageActionContext = {
   sessionId?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
-  toolContext?: ChannelThreadingToolContext;
+  toolContext?: InternalChannelThreadingToolContext;
 };
 
 type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
@@ -40,8 +40,8 @@ function resolveTtlMs(value: number | undefined): number {
 }
 
 function copyToolContext(
-  context: ChannelThreadingToolContext | undefined,
-): ChannelThreadingToolContext | undefined {
+  context: InternalChannelThreadingToolContext | undefined,
+): InternalChannelThreadingToolContext | undefined {
   if (!context) {
     return undefined;
   }
@@ -92,7 +92,7 @@ export function mintMessageActionTurnCapability(params: {
   sessionId?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
-  toolContext?: ChannelThreadingToolContext;
+  toolContext?: InternalChannelThreadingToolContext;
   ttlMs?: number;
   nowMs?: number;
 }): string {

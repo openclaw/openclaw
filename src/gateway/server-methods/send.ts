@@ -19,6 +19,7 @@ import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
+import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
   getRuntimeConfigSnapshot,
@@ -84,7 +85,7 @@ function resolveTrustedMessageActionToolContext(params: {
 }):
   | {
       ok: true;
-      toolContext: ChannelThreadingToolContext | undefined;
+      toolContext: InternalChannelThreadingToolContext | undefined;
       requesterAccountId: string | undefined;
       requesterSenderId: string | undefined;
     }
