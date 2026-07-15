@@ -844,11 +844,12 @@ async function resolvePnpmIsolatedGlobalPackage(params: {
   const requestedPackageRoot = params.pkgRoot ? path.resolve(params.pkgRoot) : null;
   const requestedOwnerRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(params.pkgRoot);
   const globalRoot = params.globalRoot?.trim();
-  const canonicalOwnerMatches = requestedOwnerRoot
-    ? Boolean(globalRoot) &&
-      path.resolve(await tryRealpath(requestedOwnerRoot)) ===
-        path.resolve(await tryRealpath(globalRoot))
-    : false;
+  const canonicalRequestedOwnerRoot = requestedOwnerRoot
+    ? path.resolve(await tryRealpath(requestedOwnerRoot))
+    : null;
+  const canonicalGlobalRoot = globalRoot ? path.resolve(await tryRealpath(globalRoot)) : null;
+  const canonicalOwnerMatches =
+    canonicalRequestedOwnerRoot !== null && canonicalRequestedOwnerRoot === canonicalGlobalRoot;
   const requestedInstallOwner =
     requestedPackageRoot && canonicalOwnerMatches
       ? await resolvePnpmIsolatedInstallOwner(requestedPackageRoot)
@@ -1084,6 +1085,17 @@ export async function resolveGlobalInstallTarget(params: {
   const pnpmIsolatedLayoutVersion =
     pnpmIsolatedPackage?.layoutVersion ??
     resolvePnpmIsolatedLayoutVersion(verifiedPnpmIsolatedGlobalRoot);
+  const fallbackPackageRoot = targetGlobalRoot
+    ? resolvePackageRootFromGlobalRoot({
+        globalRoot: targetGlobalRoot,
+        packageName: params.packageName,
+      })
+    : null;
+  const packageRoot =
+    command.manager === "pnpm"
+      ? (pnpmIsolatedPackage?.packageRoot ??
+        (verifiedPnpmIsolatedGlobalRoot && params.pkgRoot ? params.pkgRoot : fallbackPackageRoot))
+      : fallbackPackageRoot;
   // Preserve metadata-backed pnpm ownership when the invoking project link is gone.
   // The update preflight must reject that orphan instead of falling through to npm.
   return {
@@ -1096,17 +1108,7 @@ export async function resolveGlobalInstallTarget(params: {
         }
       : {}),
     globalRoot: targetGlobalRoot,
-    packageRoot:
-      (command.manager === "pnpm"
-        ? (pnpmIsolatedPackage?.packageRoot ??
-          (verifiedPnpmIsolatedGlobalRoot ? (params.pkgRoot ?? null) : null))
-        : null) ??
-      (targetGlobalRoot
-        ? resolvePackageRootFromGlobalRoot({
-            globalRoot: targetGlobalRoot,
-            packageName: params.packageName,
-          })
-        : null),
+    packageRoot,
     ...(honoredPackageRootGlobalRoot &&
     targetGlobalRoot === honoredPackageRootGlobalRoot &&
     honoredDirectNpmRoot
