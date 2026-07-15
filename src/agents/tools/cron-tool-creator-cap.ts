@@ -13,7 +13,7 @@ type NormalizedCronCreatorTool = {
   pluginId?: string;
 };
 
-export type CronJobUpdatePatchPlan =
+type CronJobUpdatePatchPlan =
   | { kind: "ready"; patch: Record<string, unknown> }
   | { kind: "needs-current-job" };
 
