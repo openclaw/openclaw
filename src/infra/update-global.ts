@@ -754,7 +754,13 @@ async function resolveGlobalRoot(
     return null;
   }
   const root = res.stdout.trim();
-  return root || null;
+  if (!root || root.includes("***")) {
+    // npm >= 11 redacts UUID-like path segments in stdout to literal "***".
+    // Trusting a poisoned path creates a literal "***" directory tree and leaves
+    // the live install stale, so treat it as an unresolved probe and fall back.
+    return null;
+  }
+  return root;
 }
 
 /**
