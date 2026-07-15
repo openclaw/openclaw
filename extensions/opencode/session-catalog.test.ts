@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { EventEmitter } from "node:events";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -45,6 +46,7 @@ import {
 
 const temporaryDirectories: string[] = [];
 const originalPath = process.env.PATH;
+const originalPathExt = process.env.PATHEXT;
 const originalUnrelatedEnv = process.env.CATALOG_UNRELATED_ENV;
 
 function captureOpenCodeSessionRegistrations(pluginConfig: unknown = {}) {
@@ -136,7 +138,14 @@ if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && arg
 
 afterEach(async () => {
   nodeHostMocks.runNodePtyCommand.mockClear();
+  vi.doUnmock("node:child_process");
+  vi.resetModules();
   process.env.PATH = originalPath;
+  if (originalPathExt === undefined) {
+    delete process.env.PATHEXT;
+  } else {
+    process.env.PATHEXT = originalPathExt;
+  }
   if (originalUnrelatedEnv === undefined) {
     delete process.env.CATALOG_UNRELATED_ENV;
   } else {
@@ -546,6 +555,39 @@ describe("OpenCode session catalog", () => {
     await expect(catalog!.read({ hostId: "node:node-1", threadId: "ses_remote" })).rejects.toThrow(
       "invalid transcript page",
     );
+  });
+
+  it("rejects local session listing when the OpenCode stdout stream fails", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-opencode-stream-"));
+    temporaryDirectories.push(directory);
+    const executableName = process.platform === "win32" ? "opencode.js" : "opencode";
+    await fs.writeFile(path.join(directory, executableName), "");
+    process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
+    if (process.platform === "win32") {
+      process.env.PATHEXT = `.JS;${originalPathExt ?? ".EXE;.CMD;.BAT;.COM"}`;
+    }
+
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const child = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+      kill: vi.fn(),
+    });
+    const spawn = vi.fn(() => child);
+    vi.resetModules();
+    vi.doMock("node:child_process", () => ({ spawn }));
+    const { listLocalOpenCodeSessionPage: listWithMockedSpawn } = await import(
+      "./session-catalog.js"
+    );
+
+    const listing = listWithMockedSpawn({ limit: 20 });
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+    stdout.emit("error", new Error("stdout EPIPE"));
+    child.emit("close", 0);
+
+    await expect(listing).rejects.toThrow("OpenCode stdout stream failed: stdout EPIPE");
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   });
 
   it("fans out paired-node listing instead of blocking later hosts", async () => {
