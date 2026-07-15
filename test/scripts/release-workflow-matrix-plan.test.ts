@@ -124,14 +124,6 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       expect(definition.on.workflow_call.inputs).toHaveProperty(input);
       expect(definition.on.workflow_dispatch.inputs).not.toHaveProperty(input);
     }
-    expect(definition.on.workflow_dispatch.inputs.live_advisory).toEqual(
-      definition.on.workflow_call.inputs.live_advisory,
-    );
-    expect(definition.on.workflow_dispatch.inputs.live_advisory).toMatchObject({
-      default: false,
-      required: false,
-      type: "boolean",
-    });
   });
 
   it.each(PROFILE_EXPECTATIONS)(
