@@ -1,4 +1,4 @@
-import { mapChannelIngressDecisionToTurnAdmission } from "openclaw/plugin-sdk/channel-ingress";
+import { mapChannelIngressDecisionToTurnAdmission } from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Whatsapp plugin module implements access control behavior.
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -189,7 +189,9 @@ export async function checkInboundAccessControl(params: {
     resolvedAccountId: policy.account.accountId,
     admission: buildWhatsAppInboundAdmission({
       policy,
-      ingress: access.ingress,
+      access,
+      // Pairing and other access side effects return above without an admission.
+      // Accepted messages reach this boundary before any local side effect occurs.
       turnAdmission: mapChannelIngressDecisionToTurnAdmission(access.ingress, { kind: "none" }),
       isGroup: params.group,
       conversationId,

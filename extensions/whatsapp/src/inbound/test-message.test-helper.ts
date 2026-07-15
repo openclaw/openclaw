@@ -16,13 +16,23 @@ type WhatsAppInboundPlatform = WebInboundCallbackMessage["platform"];
 type TestWhatsAppInboundAdmissionOverrides = Partial<
   Omit<
     WhatsAppInboundAdmission,
-    "account" | "conversation" | "sender" | "ingress" | "turnAdmission"
+    | "account"
+    | "conversation"
+    | "sender"
+    | "ingress"
+    | "senderAccess"
+    | "commandAccess"
+    | "activationAccess"
+    | "turnAdmission"
   >
 > & {
   account?: Partial<WhatsAppInboundAdmission["account"]>;
   conversation?: Partial<WhatsAppInboundAdmission["conversation"]>;
   sender?: Partial<WhatsAppInboundAdmission["sender"]>;
   ingress?: Partial<WhatsAppInboundAdmission["ingress"]>;
+  senderAccess?: Partial<WhatsAppInboundAdmission["senderAccess"]>;
+  commandAccess?: Partial<WhatsAppInboundAdmission["commandAccess"]>;
+  activationAccess?: Partial<WhatsAppInboundAdmission["activationAccess"]>;
   turnAdmission?: WhatsAppInboundAdmission["turnAdmission"];
 };
 
@@ -93,6 +103,27 @@ export function createTestWhatsAppInboundAdmission(
       isSamePhone: overrides.sender?.isSamePhone ?? false,
     },
     ingress,
+    senderAccess: {
+      allowed: true,
+      decision: "allow",
+      reasonCode: "dm_policy_allowlisted",
+      providerMissingFallbackApplied: false,
+      ...overrides.senderAccess,
+    },
+    commandAccess: {
+      requested: false,
+      authorized: false,
+      shouldBlockControlCommand: false,
+      reasonCode: "command_authorized",
+      ...overrides.commandAccess,
+    },
+    activationAccess: {
+      ran: true,
+      allowed: true,
+      shouldSkip: false,
+      reasonCode: "activation_allowed",
+      ...overrides.activationAccess,
+    },
     turnAdmission,
   };
 }

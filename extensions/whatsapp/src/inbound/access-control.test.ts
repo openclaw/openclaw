@@ -152,7 +152,7 @@ describe("checkInboundAccessControl admission contract", () => {
     expect("admission" in result).toBe(false);
   });
 
-  it("returns the SDK turn admission with only redacted ingress facts", async () => {
+  it("adds the SDK turn admission while preserving shipped redacted access projections", async () => {
     const cfg = {
       channels: {
         whatsapp: {
@@ -207,6 +207,24 @@ describe("checkInboundAccessControl admission contract", () => {
         decision: "allow",
         reasonCode: "activation_allowed",
       },
+      senderAccess: {
+        allowed: true,
+        decision: "allow",
+        providerMissingFallbackApplied: false,
+        reasonCode: "dm_policy_allowlisted",
+      },
+      commandAccess: {
+        requested: false,
+        authorized: false,
+        shouldBlockControlCommand: false,
+        reasonCode: "command_authorized",
+      },
+      activationAccess: {
+        ran: true,
+        allowed: true,
+        shouldSkip: false,
+        reasonCode: "activation_allowed",
+      },
       turnAdmission: {
         kind: "dispatch",
         reason: "activation_allowed",
@@ -214,9 +232,8 @@ describe("checkInboundAccessControl admission contract", () => {
     });
     expect(result.admission.account).not.toHaveProperty("authDir");
     expect(result.admission.conversation).not.toHaveProperty("requireMention");
-    expect(result.admission).not.toHaveProperty("senderAccess");
-    expect(result.admission).not.toHaveProperty("commandAccess");
-    expect(result.admission).not.toHaveProperty("activationAccess");
+    expect(result.admission.senderAccess).not.toHaveProperty("effectiveAllowFrom");
+    expect(result.admission.senderAccess).not.toHaveProperty("effectiveGroupAllowFrom");
     expect(JSON.stringify(result.admission)).not.toContain("effectiveAllowFrom");
     expect(JSON.stringify(result.admission)).not.toContain("effectiveGroupAllowFrom");
     expect(JSON.stringify(result.admission)).not.toContain("+15557778888");

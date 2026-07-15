@@ -74,6 +74,21 @@ Deprecated third-party SDK helpers may rebuild older shapes internally. New
 bundled receive paths should not translate modern results back into local
 DTOs.
 
+## Turn admission
+
+After plugin-owned ingress side effects finish, map the decision into the turn
+kernel through the same modern runtime subpath:
+
+```ts
+import {
+  mapChannelIngressDecisionToTurnAdmission,
+  type ChannelIngressSideEffectResult,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+
+const sideEffect = { kind: "none" } satisfies ChannelIngressSideEffectResult;
+const turnAdmission = mapChannelIngressDecisionToTurnAdmission(result.ingress, sideEffect);
+```
+
 ## Access groups
 
 `accessGroup:<name>` entries stay redacted. Core resolves static
