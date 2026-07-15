@@ -11,14 +11,12 @@ import {
 } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
-import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import {
-  buildCommandsMessage,
-  buildCommandsMessagePaginated,
-  buildHelpMessage,
   buildStatusMessage as buildStatusMessageRaw,
-} from "./status.js";
-import type { buildStatusMessage as BuildStatusMessage } from "./status.js";
+  type buildStatusMessage as BuildStatusMessage,
+} from "../status/status-message.js";
+import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
+import { buildCommandsMessage, buildCommandsMessagePaginated, buildHelpMessage } from "./status.js";
 
 const buildStatusMessage: typeof BuildStatusMessage = (args) =>
   buildStatusMessageRaw({
@@ -109,6 +107,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
+        sessionStartedAt: 1 * 60 * 60_000 + 46 * 60_000,
         inputTokens: 1200,
         outputTokens: 800,
         totalTokens: 16_000,
@@ -127,7 +126,7 @@ describe("buildStatusMessage", () => {
       pluginHealthLine: "🔌 Plugins: OK",
       modelAuth: "api-key",
       subagentsLine: "🤖 Subagents: 1\n- active run",
-      now: 10 * 60_000, // 10 minutes later
+      now: 4 * 60 * 60_000, // 4 hours after epoch
     });
     const normalized = normalizeTestText(text);
 
@@ -140,7 +139,8 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Context: 16k/32k (50%)");
     expect(normalized).toContain("Compactions: 2");
     expect(normalized).toContain("Session: agent:main:main");
-    expect(normalized).toContain("updated 10m ago");
+    expect(normalized).toContain("duration 2h 14m");
+    expect(normalized).toContain("updated 4h ago");
     expect(normalized).toContain("Execution: direct");
     expect(normalized).toContain("Runtime: OpenClaw Default");
     expect(normalized).not.toContain("Runner:");
@@ -1527,6 +1527,37 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Media: image ok (openai/gpt-5.4) · audio skipped (maxBytes)");
   });
 
+  it("distinguishes observed local STT backends from requested backends", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6" },
+      sessionEntry: { sessionId: "media-local-stt", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      queue: { mode: "none" },
+      mediaDecisions: [
+        {
+          capability: "audio",
+          outcome: "success",
+          attachments: [
+            {
+              attachmentIndex: 0,
+              attempts: [],
+              chosen: {
+                type: "cli",
+                provider: "whisper-cli",
+                model: "whisper-cli",
+                requestedBackend: "device:0",
+                observedBackend: "metal",
+                outcome: "success",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalizeTestText(text)).toContain("Media: audio ok (whisper-cli observed=metal)");
+  });
+
   it("includes failed media understanding decisions with the surfaced reason", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-6" },
@@ -1730,7 +1761,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Session selected: google/gemini-3.1-flash-lite");
+    expect(normalized).toContain("Model: google/gemini-3.1-flash-lite");
     expect(normalized).not.toContain("Fallbacks:");
   });
 
@@ -1763,7 +1794,7 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Model: google-antigravity/claude-sonnet-4-6");
   });
 
-  it("warns when the session-selected model differs from the configured default", () => {
+  it("renders session-selected model overrides compactly", () => {
     const text = buildStatusMessage({
       agent: {
         model: "zhipu/glm-4.5-air",
@@ -1783,14 +1814,14 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Configured default: zhipu/glm-4.5-air");
-    expect(normalized).toContain("Session selected: deepseek/deepseek-v4-flash");
-    expect(normalized).toContain("Reason: session override");
-    expect(normalized).toContain(
-      "This session is pinned to deepseek/deepseek-v4-flash; config primary zhipu/glm-4.5-air will apply to new/unpinned sessions.",
-    );
-    expect(normalized).toContain("Clear with: /model default");
-    expect(normalized).toContain(
+    expect(normalized).toContain("Model: deepseek/deepseek-v4-flash");
+    expect(normalized).toContain("pinned session; config primary zhipu/glm-4.5-air");
+    expect(normalized).toContain("clear /model default");
+    expect(normalized).not.toContain("Configured default:");
+    expect(normalized).not.toContain("Session selected:");
+    expect(normalized).not.toContain("Reason: session override");
+    expect(normalized).not.toContain("This session is pinned");
+    expect(normalized).not.toContain(
       "Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
     );
   });
@@ -2702,7 +2733,7 @@ describe("buildHelpMessage", () => {
   });
 
   it("includes /fast in help output", () => {
-    expect(buildHelpMessage()).toContain("/fast status|on|off|default");
+    expect(buildHelpMessage()).toContain("/fast status|auto|on|off|default");
   });
 
   it("includes raw trace mode in help output", () => {
@@ -2754,3 +2785,4 @@ describe("buildCommandsMessagePaginated", () => {
     expect(pluginPage.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

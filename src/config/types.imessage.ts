@@ -3,7 +3,6 @@
  * Root fields apply to the default account; `accounts` entries override them per account.
  */
 import type {
-  BlockStreamingCoalesceConfig,
   ChannelDeliveryStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
@@ -30,6 +29,7 @@ export type IMessageActionConfig = {
   removeParticipant?: boolean;
   leaveGroup?: boolean;
   sendAttachment?: boolean;
+  polls?: boolean;
 };
 
 /** Inbound tapback notification policy. */
@@ -97,13 +97,8 @@ export type IMessageAccountConfig = {
   probeTimeoutMs?: number;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
   /** Structured streaming + chunking settings. */
   streaming?: ChannelDeliveryStreamingConfig;
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** When private API is available, mark inbound chats read before dispatch (default: true). */
   sendReadReceipts?: boolean;
   /**
@@ -116,10 +111,11 @@ export type IMessageAccountConfig = {
   /**
    * Merge consecutive same-sender DM rows from `chat.db` into a single agent
    * turn, so Apple's split-send (`<command> <URL>` arriving as two separate
-   * rows ~0.8-2.0 s apart) lands as one merged message. DM-only — group chats
+   * rows several seconds apart) lands as one merged message. DM-only — group chats
    * keep instant per-message dispatch. Widens the default inbound debounce
-   * window to 2500 ms when enabled without an explicit
-   * `messages.inbound.byChannel.imessage`. Default: `false`.
+   * window to 7000 ms when enabled without an explicit
+   * `messages.inbound.byChannel.imessage` or global
+   * `messages.inbound.debounceMs`. Default: `false`.
    */
   coalesceSameSenderDms?: boolean;
   groups?: Record<

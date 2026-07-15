@@ -47,6 +47,7 @@ type DrainResult = {
 const DEFAULT_STATUS_ITEM_ID = "baseline-status";
 const DEFAULT_STATUS_PRIORITY: NodePendingWorkPriority = "default";
 const DEFAULT_PRIORITY: NodePendingWorkPriority = "normal";
+const DEFAULT_PENDING_WORK_TTL_MS = 24 * 60 * 60_000;
 const DEFAULT_MAX_ITEMS = 4;
 const MAX_ITEMS = 10;
 const PRIORITY_RANK: Record<NodePendingWorkPriority, number> = {
@@ -121,11 +122,12 @@ function makeBaselineStatusItem(nowMs: number): NodePendingWorkItem {
   };
 }
 
-function resolvePendingWorkExpiresAtMs(expiresInMs: unknown, nowMs: number): number | null {
-  if (typeof expiresInMs !== "number" || !Number.isFinite(expiresInMs)) {
-    return null;
-  }
-  return resolveExpiresAtMsFromDurationMs(Math.max(1_000, Math.trunc(expiresInMs)), { nowMs }) ?? 0;
+function resolvePendingWorkExpiresAtMs(expiresInMs: unknown, nowMs: number): number {
+  const ttlMs =
+    typeof expiresInMs === "number" && Number.isFinite(expiresInMs)
+      ? Math.max(1_000, Math.trunc(expiresInMs))
+      : DEFAULT_PENDING_WORK_TTL_MS;
+  return resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs }) ?? 0;
 }
 
 export function enqueueNodePendingWork(params: {
@@ -199,14 +201,4 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
     items,
     hasMore: explicitItems.length > explicitReturnedCount || (includeBaseline && !baselineIncluded),
   };
-}
-
-/** Clears all pending work state for tests. */
-export function resetNodePendingWorkForTests() {
-  stateByNodeId.clear();
-}
-
-/** Returns the number of node queues retained in memory for tests. */
-export function getNodePendingWorkStateCountForTests(): number {
-  return stateByNodeId.size;
 }

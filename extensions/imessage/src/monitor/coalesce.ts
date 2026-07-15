@@ -1,10 +1,12 @@
-// Imessage plugin module implements coalesce behavior.
+// Imessage plugin module implements the same-sender inbound debounce merge.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { IMessagePayload } from "./types.js";
 
-// Keep the coalescing contract narrow (caps, ID tracking, reply-context
-// preference) so a future SDK lift into `openclaw/plugin-sdk/channel-inbound`
-// is a mechanical extraction instead of a behavioral redesign. Apple's
-// split-send pipeline is the behavior this protects.
+// Keep the merge contract narrow (caps, ID tracking, reply-context preference)
+// so a future SDK lift into `openclaw/plugin-sdk/channel-inbound` is a
+// mechanical extraction instead of a behavioral redesign. Apple's URL-preview
+// split-send pipeline is the iMessage-only behavior this still protects.
 
 /**
  * Bounds on the merged output when multiple inbound iMessage payloads are
@@ -13,65 +15,70 @@ import type { IMessagePayload } from "./types.js";
  * prompt past a safe ceiling. Every source GUID still surfaces via
  * `coalescedMessageGuids` so a future replay path can recognize duplicates.
  */
-export const MAX_COALESCED_TEXT_CHARS = 4000;
-export const MAX_COALESCED_ATTACHMENTS = 20;
-export const MAX_COALESCED_ENTRIES = 10;
-export const IMESSAGE_URL_BALLOON_BUNDLE_ID = "com.apple.messages.URLBalloonProvider";
+const MAX_COALESCED_TEXT_CHARS = 4000;
+const MAX_COALESCED_ATTACHMENTS = 20;
+const MAX_COALESCED_ENTRIES = 10;
+const IMESSAGE_URL_BALLOON_BUNDLE_ID = "com.apple.messages.URLBalloonProvider";
 
 export function hasIMessageUrlBalloonBundleID(payload: IMessagePayload): boolean {
   return payload.balloon_bundle_id === IMESSAGE_URL_BALLOON_BUNDLE_ID;
 }
 
-// imsg only emits `balloon_bundle_id` for rows that actually carry a balloon
-// (the nil case is omitted on the wire), so a present, non-empty value is the
-// signal that this build exposes balloon metadata at all.
+function isSingleUrlToken(text: string): boolean {
+  if (/\s/.test(text)) {
+    return false;
+  }
+  if (/^www\.[^\s.]+\.[^\s]+$/i.test(text)) {
+    return true;
+  }
+  try {
+    const url = new URL(text);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export function isStandaloneIMessageUrlPreviewPayload(payload: IMessagePayload): boolean {
+  if (!hasIMessageUrlBalloonBundleID(payload)) {
+    return false;
+  }
+  const text = (payload.text ?? "").trim();
+  return text.length === 0 || isSingleUrlToken(text);
+}
+
+// imsg omits `balloon_bundle_id` for non-balloon rows, so a present value is
+// the session signal that this bridge build exposes structural balloon
+// metadata. Once latched, missing URL metadata is meaningful.
 export function hasIMessageBalloonMetadata(payload: IMessagePayload): boolean {
   return typeof payload.balloon_bundle_id === "string" && payload.balloon_bundle_id.length > 0;
 }
 
 /**
- * Decide whether a debounced same-sender bucket should merge into one turn.
+ * Decide whether a debounced same-sender iMessage bucket should merge.
  *
- * `buildEmitsBalloonMetadata` is a session-level capability latch: once any
- * inbound row from this imsg build has carried balloon metadata, absence of a
- * URL marker is meaningful (the row genuinely is not a URL split-send), so we
- * can keep ordinary buffered DMs separate. It must be session-scoped, not
- * per-bucket: imsg omits `balloon_bundle_id` on the wire for non-balloon rows,
- * so a bucket of plain text rows looks identical on old and new builds.
+ * URL-preview rows are merged with their preceding command row so Apple's
+ * command+URL split-send still reaches the agent as one turn. Once a bridge
+ * session has emitted balloon metadata, ordinary same-sender DMs without the
+ * URL marker flush separately instead of being collapsed.
  */
 export function shouldCombineIMessagePayloadBucket(
   payloads: readonly IMessagePayload[],
   buildEmitsBalloonMetadata: boolean,
 ): boolean {
-  // Precise path: a real Apple URL-preview split-send carries the URL-balloon
-  // marker on the preview row — merge it into one turn.
   if (payloads.some(hasIMessageUrlBalloonBundleID)) {
     return true;
   }
-  // Metadata-capable build (observed earlier this session or in this bucket):
-  // the missing URL marker is trustworthy, so keep ordinary buffered DMs as
-  // separate turns. This is the precision the structural gate exists for.
   if (buildEmitsBalloonMetadata || payloads.some(hasIMessageBalloonMetadata)) {
     return false;
   }
-  // Back-compat (remove once imsg coalesces split-sends upstream — see
-  // openclaw/imsg#141, tracked by #91243): a build that has never emitted any
-  // balloon metadata cannot structurally tell a `Dump <url>` split-send from
-  // separate sends. Preserve the pre-metadata merge so split-send users do not
-  // regress to two turns on a released imsg that lacks the field.
-  //
-  // This never merges more than the shipped behavior already did: with
-  // `coalesceSameSenderDms` enabled, `main` debounces every same-sender DM and
-  // merges each multi-entry bucket unconditionally. So an unlatched session
-  // (old build, or a metadata-capable build before its first balloon row) is
-  // identical to today, not a new regression. Flushing these buckets instead
-  // would re-break old-imsg split-sends — the very case this guards. Fully
-  // closing the pre-latch window needs an imsg-advertised capability flag, which
-  // is part of the upstream #141 work.
+  // Older imsg builds expose no balloon metadata, so a command+URL split-send
+  // is indistinguishable from two ordinary text rows. Keep the internal fallback
+  // until imsg advertises upstream coalescing for that exact shape.
   return true;
 }
 
-export type CoalescedIMessagePayload = IMessagePayload & {
+type CoalescedIMessagePayload = IMessagePayload & {
   /**
    * Source GUIDs folded into this merged payload, in arrival order. Includes
    * GUIDs from entries that were dropped by the entry cap so downstream
@@ -86,9 +93,8 @@ export type CoalescedIMessagePayload = IMessagePayload & {
 
 /**
  * Combine consecutive same-sender iMessage payloads into a single payload for
- * downstream dispatch. Used when the debouncer flushes a bucket containing
- * more than one event — e.g. Apple's split-send for `Dump https://example.com`
- * arriving as two separate `chat.db` rows ~0.8-2.0 s apart.
+ * downstream dispatch. Used for Apple's URL-preview split-send, and for the
+ * general inbound debounce (`messages.inbound`, off by default) when configured.
  *
  * The first payload anchors the merged shape (preserving its GUID for reply
  * threading). Text is concatenated with deduplication, attachments are merged
@@ -99,12 +105,12 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
   if (payloads.length === 0) {
     throw new Error("combineIMessagePayloads: cannot combine empty payloads");
   }
+  const first = expectDefined(payloads[0], "first iMessage payload to coalesce");
   if (payloads.length === 1) {
-    return payloads[0];
+    return first;
   }
 
-  const first = payloads[0];
-  const last = payloads[payloads.length - 1];
+  const last = expectDefined(payloads.at(-1), "last iMessage payload to coalesce");
 
   // Cap entries: keep first (preserves command/context) + most recent
   // (preserves latest payload) when a flood exceeds the cap.
@@ -132,7 +138,7 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
   }
   let combinedText = textParts.join(" ");
   if (combinedText.length > MAX_COALESCED_TEXT_CHARS) {
-    combinedText = `${combinedText.slice(0, MAX_COALESCED_TEXT_CHARS)}…[truncated]`;
+    combinedText = `${sliceUtf16Safe(combinedText, 0, MAX_COALESCED_TEXT_CHARS)}…[truncated]`;
   }
 
   // Merge attachments across bounded entries, capped to keep downstream media

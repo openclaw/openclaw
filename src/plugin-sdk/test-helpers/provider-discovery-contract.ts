@@ -170,6 +170,12 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
         ensureAuthProfileStore: ensureAuthProfileStoreMock,
         listProfilesForProvider: listProfilesForProviderMock,
         normalizeApiKeyInput: (value: unknown) => (typeof value === "string" ? value.trim() : ""),
+        normalizeGithubCopilotDomain: (raw: unknown) => {
+          const trimmed = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+          return trimmed === "github.com" || /^[a-z0-9-]+\.ghe\.com$/.test(trimmed)
+            ? trimmed
+            : "github.com";
+        },
         normalizeOptionalSecretInput: (value: unknown) =>
           typeof value === "string" && value.trim() ? value.trim() : undefined,
         resolveNonEnvSecretRefApiKeyMarker: (source: unknown) =>
@@ -906,3 +912,4 @@ export function describeCloudflareAiGatewayProviderDiscoveryContract(
     });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -33,6 +33,7 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "qa-lab",
   "qa-matrix",
   "qqbot",
+  "reef",
   "tlon",
   "tokenjuice",
   "webhooks",
@@ -43,6 +44,14 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
 ] as const;
 
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
+  [bundledPluginFile({
+    rootDir: ROOT_DIR,
+    pluginId: "diagnostics-otel",
+    relativePath: "runtime-api.ts",
+  })]: [
+    'export { createDiagnosticsOtelService } from "./src/service.js";',
+    'export type { OpenClawPluginServiceContext } from "./api.js";',
+  ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "discord", relativePath: "runtime-api.ts" })]: [
     'export { discordMessageActions, handleDiscordAction, isDiscordModerationAction, readDiscordChannelCreateParams, readDiscordChannelEditParams, readDiscordChannelMoveParams, readDiscordModerationCommand, readDiscordParentIdParam, requiredGuildPermissionForModerationAction, type DiscordModerationAction, type DiscordModerationCommand } from "./runtime-api.actions.js";',
     'export { auditDiscordChannelPermissions, collectDiscordAuditChannelIds, fetchDiscordApplicationId, fetchDiscordApplicationSummary, listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive, parseApplicationIdFromToken, probeDiscord, resolveDiscordChannelAllowlist, resolveDiscordPrivilegedIntentsFromFlags, resolveDiscordUserAllowlist, setDiscordRuntime, type DiscordApplicationSummary, type DiscordChannelResolution, type DiscordPrivilegedIntentsSummary, type DiscordPrivilegedIntentStatus, type DiscordProbe, type DiscordUserResolution } from "./runtime-api.lookup.js";',
@@ -78,7 +87,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   })]: [
     'export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";',
     'export { createActionGate, jsonResult, readNumberParam, readReactionParams, readStringParam } from "openclaw/plugin-sdk/channel-actions";',
-    'export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";',
+    'export { buildChannelConfigSchema, GoogleChatConfigSchema } from "./config-api.js";',
     'export type { ChannelMessageActionAdapter, ChannelMessageActionName, ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";',
     'export { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";',
     'export { createAccountStatusSink, runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-outbound";',
@@ -87,11 +96,8 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";',
     'export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";',
     'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
-    'export { GoogleChatConfigSchema } from "openclaw/plugin-sdk/bundled-channel-config-schema";',
     'export { GROUP_POLICY_BLOCKED_LABEL, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";',
     'export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";',
-    'export { readRemoteMediaBuffer, resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";',
-    'export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";',
     'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
     'export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
     'export type { GoogleChatAccountConfig, GoogleChatConfig } from "openclaw/plugin-sdk/config-contracts";',
@@ -142,7 +148,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { requiresExplicitMatrixDefaultAccount, resolveMatrixDefaultOrOnlyAccountId } from "./src/account-selection.js";',
     'export { findMatrixAccountEntry, resolveConfiguredMatrixAccountIds, resolveMatrixChannelConfig } from "./src/account-selection.js";',
     'export { getMatrixScopedEnvVarNames, listMatrixEnvAccountIds, resolveMatrixEnvAccountToken } from "./src/env-vars.js";',
-    'export { hashMatrixAccessToken, resolveMatrixAccountStorageRoot, resolveMatrixCredentialsDir, resolveMatrixCredentialsFilename, resolveMatrixCredentialsPath, resolveMatrixHomeserverKey, resolveMatrixLegacyFlatStoragePaths, resolveMatrixLegacyFlatStoreRoot, sanitizeMatrixPathSegment } from "./src/storage-paths.js";',
+    'export { hashMatrixAccessToken, resolveMatrixAccountStorageRoot, resolveMatrixCredentialsDir, resolveMatrixCredentialsFilename, resolveMatrixCredentialsPath, resolveMatrixHomeserverKey, sanitizeMatrixPathSegment } from "./src/storage-paths.js";',
     'export { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./src/matrix/deps.js";',
     'export { assertHttpUrlTargetsPrivateNetwork, closeDispatcher, createPinnedDispatcher, resolvePinnedHostnameWithPolicy, ssrfPolicyFromDangerouslyAllowPrivateNetwork, ssrfPolicyFromAllowPrivateNetwork, type LookupFn, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";',
     'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingMaxAgeBySessionKey } from "./src/matrix/thread-bindings-shared.js";',
@@ -353,6 +359,22 @@ describe("runtime api guardrails", () => {
         `${pluginId} runtime api should use generic sdk subpaths or local exports`,
       ).not.toContain(`'openclaw/plugin-sdk/${pluginId}'`);
     }
+  });
+
+  it("keeps the composed hook-runner registry internal", () => {
+    const pluginRuntime = readFileSync(resolve(ROOT_DIR, "plugin-sdk/plugin-runtime.ts"), "utf8");
+    const hookRunnerGlobal = readFileSync(
+      resolve(ROOT_DIR, "plugins/hook-runner-global.ts"),
+      "utf8",
+    );
+    const hookRegistryTypes = readFileSync(
+      resolve(ROOT_DIR, "plugins/hook-registry.types.ts"),
+      "utf8",
+    );
+
+    expect(pluginRuntime).toContain('export * from "../plugins/hook-runner-global.js";');
+    expect(hookRunnerGlobal).not.toContain("getGlobalHookRunnerRegistry");
+    expect(hookRegistryTypes).not.toContain("trustedToolPolicies");
   });
 
   it("keeps Slack's narrow runtime-setter entrypoint pinned to a single export", () => {

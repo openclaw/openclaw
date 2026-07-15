@@ -1,3 +1,4 @@
+import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
 // Discord provider module implements model/runtime integration.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -90,8 +91,6 @@ let discordProviderSessionRuntimePromise: Promise<DiscordProviderSessionRuntimeM
 let fetchDiscordApplicationIdForTesting: typeof fetchDiscordApplicationId | undefined;
 let createDiscordNativeCommandForTesting: typeof createDiscordNativeCommand | undefined;
 let runDiscordGatewayLifecycleForTesting: typeof runDiscordGatewayLifecycle | undefined;
-let createDiscordGatewayPluginForTesting: typeof createDiscordGatewayPlugin | undefined;
-let createDiscordGatewaySupervisorForTesting: typeof createDiscordGatewaySupervisor | undefined;
 let loadDiscordVoiceRuntimeForTesting: (() => Promise<DiscordVoiceRuntimeModule>) | undefined;
 let loadDiscordProviderSessionRuntimeForTesting:
   | (() => Promise<DiscordProviderSessionRuntimeModule>)
@@ -397,6 +396,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
   try {
+    if (nativeEnabled && commandSpecs.some((command) => command.name === "think")) {
+      // Autocomplete cannot defer. Warm opportunistically before interactions begin,
+      // but never let provider discovery block Discord startup.
+      void loadModelCatalog({ config: cfg });
+    }
     const { commands, components, modals } = createDiscordProviderInteractionSurface({
       cfg,
       discordConfig: discordCfg,
@@ -437,9 +441,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       discordConfig: discordCfg,
       runtime,
       createClient: createClientForTesting ?? ((...args) => new Client(...args)),
-      createGatewayPlugin: createDiscordGatewayPluginForTesting ?? createDiscordGatewayPlugin,
-      createGatewaySupervisor:
-        createDiscordGatewaySupervisorForTesting ?? createDiscordGatewaySupervisor,
+      createGatewayPlugin: createDiscordGatewayPlugin,
+      createGatewaySupervisor: createDiscordGatewaySupervisor,
       createAutoPresenceController: createDiscordAutoPresenceController,
       isDisallowedIntentsError: isDiscordDisallowedIntentsError,
     });
@@ -496,9 +499,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         }),
     });
     let voiceManager: DiscordVoiceManager | null = null;
-
     if (voiceEnabled) {
       const {
+        DiscordVoiceGuildCreateListener,
         DiscordVoiceManager,
         DiscordVoiceReadyListener,
         DiscordVoiceResumedListener,
@@ -518,11 +521,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         manager: voiceManager,
       });
       voiceManagerRef.current = voiceManager;
+      registerDiscordListener(client.listeners, new DiscordVoiceGuildCreateListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceResumedListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
     }
-
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
       cfg,
       discordConfig: discordCfg,
@@ -643,12 +646,6 @@ export const testing = {
   setRunDiscordGatewayLifecycle(mock?: typeof runDiscordGatewayLifecycle) {
     runDiscordGatewayLifecycleForTesting = mock;
   },
-  setCreateDiscordGatewayPlugin(mock?: typeof createDiscordGatewayPlugin) {
-    createDiscordGatewayPluginForTesting = mock;
-  },
-  setCreateDiscordGatewaySupervisor(mock?: typeof createDiscordGatewaySupervisor) {
-    createDiscordGatewaySupervisorForTesting = mock;
-  },
   setLoadDiscordVoiceRuntime(mock?: () => Promise<DiscordVoiceRuntimeModule>) {
     loadDiscordVoiceRuntimeForTesting = mock;
   },
@@ -689,6 +686,3 @@ export const testing = {
     shouldLogVerboseForTesting = mock;
   },
 };
-
-export const resolveDiscordRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
-export { testing as __testing };

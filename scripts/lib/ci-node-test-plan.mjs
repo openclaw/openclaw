@@ -2,6 +2,9 @@
 import { relative } from "node:path";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
+import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
+import { getUnitFastTestFilesForIncludePatterns } from "../../test/vitest/vitest.unit-fast-paths.mjs";
+import { boundaryTestFiles } from "../../test/vitest/vitest.unit-paths.mjs";
 import { listTrackedTestFiles } from "./list-test-files.mjs";
 
 const EXCLUDED_FULL_SUITE_SHARDS = new Set([
@@ -12,6 +15,51 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
+const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
+// Startup-core transforms the broad gateway graph before its assertions run.
+// Keep enough CPU here to avoid spending minutes in Vitest imports on 4 vCPU.
+const GATEWAY_STARTUP_CORE_RUNNER = DEFAULT_NODE_TEST_RUNNER;
+// This cold gateway graph can stall after warming Vitest's module cache; its
+// retry completes in seconds, so do not spend the global five-minute timeout.
+const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
+  OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000",
+};
+const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
+// PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
+// Keep runner classes and subprocess isolation intact while bounding each combined job.
+const COMPACT_NODE_TEST_JOB_WEIGHT = 256;
+const COMPACT_NODE_TEST_JOB_GROUPS = 10;
+const COMPACT_TOOLING_NODE_TEST_GROUPS = 3;
+const COMPACT_WHOLE_NODE_TEST_JOB_GROUPS = 8;
+const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
+const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
+const TOOLING_ISOLATED_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
+// The full matrix is capped at 28 jobs. Admit the consistently slow serial
+// shards first so short alphabetical groups cannot leave them on the tail.
+const FULL_NODE_TEST_ADMISSION_PRIORITY = new Map([
+  ["core-tooling", 0],
+  ["auto-reply-reply-commands", 1],
+]);
+// Commands and cron run non-isolated, so keep their split shards as separate
+// processes. Combining their include lists can retain test state across groups.
+const BUNDLEABLE_NODE_TEST_CONFIGS = new Set(["test/vitest/vitest.infra.config.ts"]);
+const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
+  "agentic-agents-core-auth",
+  "agentic-agents-core-models",
+  "agentic-agents-core-runtime",
+  "agentic-agents-core-subagents",
+  "agentic-agents-embedded",
+  "agentic-agents-support",
+  "agentic-agents-core-runner",
+  "agentic-agents-core-tools",
+  "agentic-control-plane-startup-core",
+  "agentic-gateway-core",
+  "agentic-gateway-methods",
+  "auto-reply-reply-dispatch",
+  "core-runtime-media-ui",
+  "core-unit-fast",
+]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir) {
   return listTrackedTestFiles(rootDir);
@@ -408,9 +456,16 @@ function createGatewayServerSplitShards() {
   ]
     .map((shardName) => ({
       configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      env:
+        shardName === "agentic-control-plane-startup-health-runtime"
+          ? GATEWAY_STARTUP_HEALTH_RUNTIME_ENV
+          : undefined,
       includePatterns: groups.get(shardName) ?? [],
       requiresDist: false,
-      runner: "blacksmith-4vcpu-ubuntu-2404",
+      runner:
+        shardName === "agentic-control-plane-startup-core"
+          ? GATEWAY_STARTUP_CORE_RUNNER
+          : BUNDLED_NODE_TEST_RUNNER,
       shardName,
     }))
     .filter((shard) => shard.includePatterns.length > 0);
@@ -772,6 +827,15 @@ const SPLIT_NODE_SHARDS = new Map([
         runner: "blacksmith-4vcpu-ubuntu-2404",
       },
       {
+        shardName: "core-runtime-tui-pty",
+        configs: ["test/vitest/vitest.tui-pty.config.ts"],
+        env: {
+          OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+        },
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+      },
+      {
         shardName: "core-runtime-media-ui",
         configs: [
           "test/vitest/vitest.media.config.ts",
@@ -917,6 +981,7 @@ export function createNodeTestShards(options = {}) {
             checkName: formatNodeTestShardCheckName(splitShard.shardName),
             shardName: splitShard.shardName,
             configs: splitConfigs,
+            ...(splitShard.env ? { env: splitShard.env } : {}),
             ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
             runner: splitShard.runner ?? DEFAULT_NODE_TEST_RUNNER,
             requiresDist: splitShard.requiresDist,
@@ -935,4 +1000,259 @@ export function createNodeTestShards(options = {}) {
       },
     ];
   });
+}
+
+function resolveCiNodeTestRunner(shard) {
+  if (shard.runner !== DEFAULT_NODE_TEST_RUNNER) {
+    return shard.runner;
+  }
+  return KEEP_LARGE_NODE_TEST_RUNNER.has(shard.shardName)
+    ? DEFAULT_NODE_TEST_RUNNER
+    : BUNDLED_NODE_TEST_RUNNER;
+}
+
+function bundleNameForConfigs(configs) {
+  const config = configs[0] ?? "node";
+  return config
+    .replace(/^test\/vitest\/vitest\./u, "")
+    .replace(/\.config\.ts$/u, "")
+    .replace(/[^a-z0-9-]+/giu, "-");
+}
+
+function compareFullNodeTestAdmissionOrder(a, b) {
+  const fallbackPriority = FULL_NODE_TEST_ADMISSION_PRIORITY.size;
+  return (
+    (FULL_NODE_TEST_ADMISSION_PRIORITY.get(a.shardName) ?? fallbackPriority) -
+      (FULL_NODE_TEST_ADMISSION_PRIORITY.get(b.shardName) ?? fallbackPriority) ||
+    a.checkName.localeCompare(b.checkName)
+  );
+}
+
+function createStripedBatches(values, batchCount) {
+  const batches = Array.from({ length: batchCount }, () => []);
+  for (const [index, value] of values.entries()) {
+    batches[index % batchCount].push(value);
+  }
+  return batches;
+}
+
+function listCompactToolingTestFiles() {
+  const unitFastFiles = getUnitFastTestFilesForIncludePatterns([
+    "test/**/*.test.ts",
+    "src/scripts/**/*.test.ts",
+  ]);
+  const excludedFiles = new Set([
+    ...boundaryTestFiles,
+    ...unitFastFiles,
+    TOOLING_DOCKER_TEST_FILE,
+    ...toolingIsolatedTestFiles,
+  ]);
+  return [...listTestFiles("test"), ...listTestFiles("src/scripts")].filter(
+    (file) =>
+      !file.startsWith("test/fixtures/") &&
+      !file.endsWith(".e2e.test.ts") &&
+      !file.endsWith(".live.test.ts") &&
+      !excludedFiles.has(file),
+  );
+}
+
+function expandCompactNodeTestGroup(group) {
+  if (group.shard_name !== "core-tooling") {
+    return [group];
+  }
+
+  // Tooling is hundreds of serial files. Split only the compact PR plan so
+  // one runner cannot dominate admission while release/main topology stays stable.
+  const toolingGroups = createStripedBatches(
+    listCompactToolingTestFiles(),
+    COMPACT_TOOLING_NODE_TEST_GROUPS,
+  ).map((includePatterns, index) =>
+    Object.assign({}, group, {
+      configs: [TOOLING_CONFIG],
+      includePatterns,
+      shard_name: `core-tooling-${index + 1}`,
+    }),
+  );
+  return [
+    ...toolingGroups,
+    {
+      ...group,
+      configs: [TOOLING_ISOLATED_CONFIG],
+      shard_name: "core-tooling-isolated",
+    },
+  ];
+}
+
+/**
+ * Collapse split include-pattern shards into bounded jobs for normal CI.
+ * The base plan remains unchanged for release and coverage consumers.
+ */
+export function createNodeTestShardBundles(options = {}) {
+  if (options.compact === true) {
+    return createCompactNodeTestShardBundles(options);
+  }
+
+  const shards = createNodeTestShards(options);
+  const unbundled = [];
+  const groups = new Map();
+
+  for (const shard of shards) {
+    const runner = resolveCiNodeTestRunner(shard);
+    if (
+      shard.requiresDist ||
+      shard.configs.length !== 1 ||
+      !BUNDLEABLE_NODE_TEST_CONFIGS.has(shard.configs[0]) ||
+      !Array.isArray(shard.includePatterns) ||
+      shard.includePatterns.length === 0
+    ) {
+      unbundled.push({ ...shard, runner });
+      continue;
+    }
+
+    const key = JSON.stringify([shard.configs, shard.requiresDist, runner]);
+    const group = groups.get(key) ?? {
+      configs: shard.configs,
+      requiresDist: shard.requiresDist,
+      runner,
+      shards: [],
+    };
+    group.shards.push(shard);
+    groups.set(key, group);
+  }
+
+  const bundled = [];
+  for (const group of groups.values()) {
+    const bins = [];
+    const sortedShards = group.shards.toSorted(
+      (a, b) =>
+        (b.includePatterns?.length ?? 0) - (a.includePatterns?.length ?? 0) ||
+        a.shardName.localeCompare(b.shardName),
+    );
+    for (const shard of sortedShards) {
+      const patterns = shard.includePatterns ?? [];
+      for (let offset = 0; offset < patterns.length; offset += MAX_BUNDLED_NODE_TEST_PATTERNS) {
+        const chunk = patterns.slice(offset, offset + MAX_BUNDLED_NODE_TEST_PATTERNS);
+        const bin = bins.find(
+          (candidate) =>
+            candidate.includePatterns.length + chunk.length <= MAX_BUNDLED_NODE_TEST_PATTERNS,
+        );
+        if (bin) {
+          bin.includePatterns.push(...chunk);
+        } else {
+          bins.push({ includePatterns: [...chunk] });
+        }
+      }
+    }
+
+    const runnerClass = group.runner.includes("-8vcpu-") ? "large" : "small";
+    const bundleName = `${bundleNameForConfigs(group.configs)}-${runnerClass}`;
+    for (const [index, bin] of bins.entries()) {
+      const shardName = `bundle-${bundleName}-${index + 1}`;
+      bundled.push({
+        checkName: formatNodeTestShardCheckName(shardName),
+        shardName,
+        configs: group.configs,
+        includePatterns: bin.includePatterns.toSorted((a, b) => a.localeCompare(b)),
+        runner: group.runner,
+        requiresDist: group.requiresDist,
+      });
+    }
+  }
+
+  return [...unbundled, ...bundled].toSorted(compareFullNodeTestAdmissionOrder);
+}
+
+function createCompactNodeTestShardBundles(options = {}) {
+  const shards = createNodeTestShards(options);
+  const groupsByRunner = new Map();
+
+  for (const shard of shards) {
+    const runner = resolveCiNodeTestRunner(shard);
+    const key = JSON.stringify([runner, shard.requiresDist]);
+    const groups = groupsByRunner.get(key) ?? [];
+    const group = {
+      configs: shard.configs,
+      ...(shard.env ? { env: shard.env } : {}),
+      ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+      requiresDist: shard.requiresDist,
+      runner,
+      shard_name: shard.shardName,
+    };
+    groups.push(...expandCompactNodeTestGroup(group));
+    groupsByRunner.set(key, groups);
+  }
+
+  const compactJobs = [];
+  for (const groups of groupsByRunner.values()) {
+    const bins = [];
+    const sortedGroups = groups.toSorted(
+      (a, b) =>
+        (b.includePatterns?.length ?? 1) - (a.includePatterns?.length ?? 1) ||
+        a.shard_name.localeCompare(b.shard_name),
+    );
+    for (const group of sortedGroups.filter((candidate) => candidate.includePatterns)) {
+      const weight = group.includePatterns.length;
+      const bin = bins.find(
+        (candidate) =>
+          candidate.groups.length < COMPACT_NODE_TEST_JOB_GROUPS &&
+          candidate.weight + weight <= COMPACT_NODE_TEST_JOB_WEIGHT,
+      );
+      if (bin) {
+        bin.groups.push(group);
+        bin.weight += weight;
+      } else {
+        bins.push({ groups: [group], weight });
+      }
+    }
+
+    const wholeGroups = sortedGroups.filter((candidate) => !candidate.includePatterns);
+    const wholeJobCount = Math.ceil(wholeGroups.length / COMPACT_WHOLE_NODE_TEST_JOB_GROUPS);
+    // A lone whole-config job serializes every fixed suite and owns PR wall time.
+    // Fold it into same-runner jobs when caps allow, retaining the whole-config timeout.
+    const canSpreadWholeGroups =
+      wholeJobCount === 1 &&
+      bins.length > 1 &&
+      bins.every(
+        (bin) =>
+          bin.groups.length + Math.ceil(wholeGroups.length / bins.length) <=
+          COMPACT_NODE_TEST_JOB_GROUPS,
+      );
+    const wholeGroupBatches = canSpreadWholeGroups
+      ? []
+      : createStripedBatches(wholeGroups, wholeJobCount);
+    if (canSpreadWholeGroups) {
+      for (const [index, group] of wholeGroups.entries()) {
+        const bin = bins[index % bins.length];
+        bin.groups.push(group);
+        bin.timeoutMinutes = COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES;
+      }
+    }
+    for (const [index, groupBatch] of wholeGroupBatches.entries()) {
+      const runnerClass = groupBatch[0].runner.includes("-8vcpu-") ? "large" : "small";
+      const distSuffix = groupBatch[0].requiresDist ? "-dist" : "";
+      compactJobs.push({
+        checkName: `checks-node-compact-${runnerClass}${distSuffix}-whole-${index + 1}`,
+        groups: groupBatch,
+        requiresDist: groupBatch[0].requiresDist,
+        runner: groupBatch[0].runner,
+        shardName: `compact-${runnerClass}${distSuffix}-whole-${index + 1}`,
+        timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES,
+      });
+    }
+
+    for (const [index, bin] of bins.entries()) {
+      const runnerClass = bin.groups[0].runner.includes("-8vcpu-") ? "large" : "small";
+      const distSuffix = bin.groups[0].requiresDist ? "-dist" : "";
+      compactJobs.push({
+        checkName: `checks-node-compact-${runnerClass}${distSuffix}-${index + 1}`,
+        groups: bin.groups,
+        requiresDist: bin.groups[0].requiresDist,
+        runner: bin.groups[0].runner,
+        shardName: `compact-${runnerClass}-${index + 1}`,
+        ...(bin.timeoutMinutes ? { timeoutMinutes: bin.timeoutMinutes } : {}),
+      });
+    }
+  }
+
+  return compactJobs.toSorted((a, b) => a.checkName.localeCompare(b.checkName));
 }

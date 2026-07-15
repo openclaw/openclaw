@@ -10,6 +10,7 @@ import {
   jsonResult,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
+  readStringArrayParam,
   readStringParam,
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
@@ -18,6 +19,7 @@ import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
 const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
+const DEDICATED_TOOL_INVOKE_COMMANDS = new Map([["computer.act", "computer"]]);
 
 const NODE_READ_ACTION_COMMANDS = {
   camera_list: "camera.list",
@@ -32,6 +34,7 @@ export type NodeCommandAction =
   | keyof typeof NODE_READ_ACTION_COMMANDS
   | "notifications_action"
   | "location_get"
+  | "which"
   | "invoke";
 
 export async function executeNodeCommandAction(params: {
@@ -115,6 +118,17 @@ export async function executeNodeCommandAction(params: {
       });
       return jsonResult(payload);
     }
+    case "which": {
+      const node = readStringParam(params.input, "node", { required: true });
+      const bins = readStringArrayParam(params.input, "bins", { required: true });
+      const payload = await invokeNodeCommandPayload({
+        gatewayOpts: params.gatewayOpts,
+        node,
+        command: "system.which",
+        commandParams: { bins },
+      });
+      return jsonResult(payload);
+    }
     case "invoke": {
       const node = readStringParam(params.input, "node", { required: true });
       const nodeId = await resolveNodeId(params.gatewayOpts, node);
@@ -123,6 +137,12 @@ export async function executeNodeCommandAction(params: {
       if (BLOCKED_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
         throw new Error(
           `invokeCommand "${invokeCommand}" is reserved for shell execution; use exec with host=node instead`,
+        );
+      }
+      const dedicatedTool = DEDICATED_TOOL_INVOKE_COMMANDS.get(invokeCommandNormalized);
+      if (dedicatedTool) {
+        throw new Error(
+          `invokeCommand "${invokeCommand}" cannot be invoked through the generic nodes surface; use the dedicated ${dedicatedTool} tool`,
         );
       }
       const dedicatedAction = params.mediaInvokeActions[invokeCommandNormalized];

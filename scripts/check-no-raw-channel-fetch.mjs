@@ -83,7 +83,7 @@ function isRawFetchCall(expression) {
 /**
  * Finds raw `fetch(...)` and `globalThis.fetch(...)` call lines.
  */
-export function findRawFetchCallLines(content, fileName = "source.ts") {
+function findRawFetchCallLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   return collectCallExpressionLines(ts, sourceFile, (node) =>
     isRawFetchCall(node.expression) ? node.expression : null,

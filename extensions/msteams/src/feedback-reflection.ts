@@ -10,9 +10,7 @@ import { formatUnknownError } from "./errors.js";
 import { buildReflectionPrompt, parseReflectionResponse } from "./feedback-reflection-prompt.js";
 import {
   DEFAULT_COOLDOWN_MS,
-  clearReflectionCooldowns,
   isReflectionAllowed,
-  loadSessionLearnings,
   recordReflectionTime,
   storeSessionLearning,
 } from "./feedback-reflection-store.js";
@@ -22,7 +20,7 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-export type FeedbackEvent = {
+type FeedbackEvent = {
   type: "custom";
   event: "feedback";
   ts: number;
@@ -56,7 +54,7 @@ export function buildFeedbackEvent(params: {
   };
 }
 
-export type RunFeedbackReflectionParams = {
+type RunFeedbackReflectionParams = {
   cfg: OpenClawConfig;
   app: MSTeamsApp;
   appId: string;
@@ -261,12 +259,3 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     log.debug?.("failed to send reflection follow-up", { error: formatUnknownError(err) });
   }
 }
-
-export {
-  buildReflectionPrompt,
-  clearReflectionCooldowns,
-  isReflectionAllowed,
-  loadSessionLearnings,
-  parseReflectionResponse,
-  recordReflectionTime,
-};

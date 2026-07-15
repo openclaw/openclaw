@@ -6,8 +6,10 @@ import {
   detectMime,
   extensionForMime,
   FILE_TYPE_SNIFF_MAX_BYTES,
+  getFileExtension,
   imageMimeFromFormat,
   isAudioFileName,
+  isGifMedia,
   kindFromMime,
   mimeTypeFromFilePath,
   normalizeMimeType,
@@ -153,6 +155,14 @@ describe("mime detection", () => {
     expect(mime).toBe("text/css");
   });
 
+  it("detects MIME types from encoded URL extensions", async () => {
+    const mime = await detectMime({
+      filePath: "https://cdn.example.com/render%2Emp4?download=1#preview",
+    });
+
+    expect(mime).toBe("video/mp4");
+  });
+
   it("detects AAC from a bare filename when buffer sniffing is inconclusive", async () => {
     const mime = await detectMime({ buffer: Buffer.alloc(16), filePath: "voice.aac" });
     expect(mime).toBe("audio/aac");
@@ -184,18 +194,56 @@ describe("mime detection", () => {
   });
 });
 
+describe("getFileExtension", () => {
+  it.each([
+    { filePath: "https://cdn.example.com/render.mp4", expected: ".mp4" },
+    { filePath: "https://cdn.example.com/render.mp4/", expected: undefined },
+    {
+      filePath: "https://cdn.example.com/render.mp4%2Fpreview",
+      expected: ".mp4%2fpreview",
+    },
+    {
+      filePath: "https://cdn.example.com/render.mp4%5Cpreview",
+      expected: ".mp4%5cpreview",
+    },
+    { filePath: "https://cdn.example.com/bad%ZZ%2Emp4", expected: undefined },
+    { filePath: "https://cdn.example.com/render%2Emp4/", expected: undefined },
+    { filePath: String.raw`C:\media\clip.MP4`, expected: ".mp4" },
+    { filePath: String.raw`C:\media.folder\clip`, expected: undefined },
+    { filePath: String.raw`C:\media.folder\clip.MP4`, expected: ".mp4" },
+  ] as const)("extracts $expected from $filePath", ({ filePath, expected }) => {
+    expect(getFileExtension(filePath)).toBe(expected);
+  });
+});
+
 describe("mimeTypeFromFilePath", () => {
   it.each([
     { filePath: "image.bmp", expected: "image/bmp" },
     { filePath: "photo.jpg", expected: "image/jpeg" },
     { filePath: "photo.JPG", expected: "image/jpeg" },
     { filePath: "voice.mp3", expected: "audio/mpeg" },
+    { filePath: "voice.m2a", expected: "audio/mpeg" },
+    { filePath: "voice.oga", expected: "audio/ogg" },
     { filePath: "voice.wav", expected: "audio/wav" },
     { filePath: "clip.avi", expected: "video/x-msvideo" },
     { filePath: "clip.mkv", expected: "video/x-matroska" },
     { filePath: "clip.webm", expected: "video/webm" },
+    {
+      filePath: "https://cdn.example.com/render%2Emp4?download=1#preview",
+      expected: "video/mp4",
+    },
+    { filePath: "https://cdn.example.com/render%2Em%70%34", expected: "video/mp4" },
+    { filePath: "https://cdn.example.com/render%2EMP4", expected: "video/mp4" },
+    { filePath: "https://cdn.example.com/clip%2Ewebm", expected: "video/webm" },
+    { filePath: "https://cdn.example.com/bad%ZZ/render%2Emp4", expected: "video/mp4" },
+    { filePath: "https://cdn.example.com/archive%2Fclip.mp4", expected: "video/mp4" },
+    { filePath: "https://cdn.example.com/archive%2Fclip%2Emp4", expected: "video/mp4" },
+    { filePath: "https://cdn.example.com/archive%5Cclip%2Emp4", expected: "video/mp4" },
+    { filePath: "https://cdn.example.com/render.mp4%2Fpreview", expected: undefined },
+    { filePath: "https://cdn.example.com/render.mp4%5Cpreview", expected: undefined },
     { filePath: "clip.flv", expected: "video/x-flv" },
     { filePath: "clip.wmv", expected: "video/x-ms-wmv" },
+    { filePath: "https://cdn.example.com/bad%E0%A4%A%2Emp4", expected: undefined },
     { filePath: "debug.log", expected: "text/plain" },
     { filePath: "config.yml", expected: "application/yaml" },
     { filePath: "config.yaml", expected: "application/yaml" },
@@ -265,9 +313,35 @@ describe("isAudioFileName", () => {
   it.each([
     { fileName: "voice.mp3", expected: true },
     { fileName: "voice.caf", expected: true },
+    { fileName: "voice.M2A", expected: true },
+    { fileName: "voice.oga", expected: true },
+    { fileName: "voice.webm", expected: false },
     { fileName: "voice.bin", expected: false },
   ] as const)("matches audio extension for $fileName", ({ fileName, expected }) => {
     expectAudioFileNameCase(fileName, expected);
+  });
+});
+
+describe("isGifMedia", () => {
+  it.each([
+    {
+      opts: { contentType: "image/gif; charset=binary" },
+      expected: true,
+    },
+    {
+      opts: { contentType: " IMAGE/GIF " },
+      expected: true,
+    },
+    {
+      opts: { contentType: "image/png" },
+      expected: false,
+    },
+    {
+      opts: { fileName: "animation.GIF" },
+      expected: true,
+    },
+  ] as const)("detects GIF media from normalized metadata %#", ({ opts, expected }) => {
+    expect(isGifMedia(opts)).toBe(expected);
   });
 });
 

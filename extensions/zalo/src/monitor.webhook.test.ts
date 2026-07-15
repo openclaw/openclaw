@@ -7,7 +7,7 @@ import {
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import { handleZaloWebhookRequest } from "./monitor.js";
+import { testing as monitorTesting } from "./monitor.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
   clearZaloWebhookSecurityStateForTest,
@@ -39,7 +39,7 @@ function createWebhookRequestHandler(processUpdate?: ZaloWebhookProcessUpdate): 
     void (async () => {
       const handled = processUpdate
         ? await handleZaloWebhookRequestInternal(req, res, processUpdate)
-        : await handleZaloWebhookRequest(req, res);
+        : await monitorTesting.handleZaloWebhookRequest(req, res);
       if (!handled) {
         res.statusCode = 404;
         res.end("not found");

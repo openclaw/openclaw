@@ -1,7 +1,7 @@
 /**
  * Normalizes OpenAI Responses reasoning/tool-call history for safe replay.
  */
-import { createHash } from "node:crypto";
+import { sha256HexPrefix } from "../../infra/crypto-digest.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 type OpenAIThinkingBlock = {
@@ -95,7 +95,7 @@ function isOpenAIToolCallType(type: unknown): boolean {
 }
 
 function shortOpenAIResponsesIdHash(id: string): string {
-  return createHash("sha256").update(id).digest("hex").slice(0, 10);
+  return sha256HexPrefix(id, 10);
 }
 
 function sanitizeOpenAIResponsesIdTail(value: string): string {
@@ -454,10 +454,13 @@ export function downgradeOpenAIReasoningBlocks(
     type AssistantContentBlock = (typeof assistantMsg.content)[number];
 
     const nextContent: AssistantContentBlock[] = [];
-    for (let i = 0; i < assistantMsg.content.length; i++) {
-      const block = assistantMsg.content[i];
-      if (!block || typeof block !== "object") {
-        nextContent.push(block as AssistantContentBlock);
+    for (const [i, block] of assistantMsg.content.entries()) {
+      if (!block) {
+        changed = true;
+        continue;
+      }
+      if (typeof block !== "object") {
+        nextContent.push(block);
         continue;
       }
       const record = block as OpenAIThinkingBlock;

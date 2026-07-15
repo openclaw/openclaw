@@ -2,7 +2,12 @@
  * GitHub Copilot OAuth flow
  */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "../../../agents/provider-http-errors.js";
 import {
   nonNegativeSecondsToSafeMilliseconds,
   positiveSecondsToSafeMilliseconds,
@@ -16,8 +21,7 @@ type CopilotCredentials = OAuthCredentials & {
   enterpriseUrl?: string;
 };
 
-const decode = (s: string) => atob(s);
-const CLIENT_ID = decode("SXYxLmI1MDdhMDhjODdlY2ZlOTg=");
+const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 
 const COPILOT_HEADERS = {
   "User-Agent": "GitHubCopilotChat/0.35.0",
@@ -71,7 +75,7 @@ function resolveExpiresAtFromEpochSeconds(value: unknown): number | undefined {
   return resolveExpiresAtMsFromEpochSeconds(value, { bufferMs: 5 * 60 * 1000 });
 }
 
-export function normalizeDomain(input: string): string | null {
+function normalizeDomain(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed) {
     return null;
@@ -106,13 +110,13 @@ function getBaseUrlFromToken(token: string): string | null {
   if (!match) {
     return null;
   }
-  const proxyHost = match[1];
+  const proxyHost = expectDefined(match[1], "github copilot regex capture 1");
   // Convert proxy.xxx to api.xxx
   const apiHost = proxyHost.replace(/^proxy\./, "api.");
   return `https://${apiHost}`;
 }
 
-export function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): string {
+function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): string {
   // If we have a token, extract the base URL from proxy-ep
   if (token) {
     const urlFromToken = getBaseUrlFromToken(token);
@@ -175,6 +179,8 @@ async function fetchResponse(
   }
 }
 
+// Shared 16 MiB bounded reader — a hostile OAuth endpoint cannot force the
+// runtime to buffer an unbounded body through `.text()` / `.json()`.
 async function fetchJson(
   url: string,
   init: RequestInit,
@@ -182,11 +188,9 @@ async function fetchJson(
   options: CopilotRequestOptions = {},
 ): Promise<unknown> {
   const response = await fetchResponse(url, init, operation, options);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`${response.status} ${response.statusText}: ${text}`);
-  }
-  return response.json();
+  const label = `GitHub Copilot ${operation}`;
+  await assertOkOrThrowProviderError(response, label);
+  return readProviderJsonResponse(response, label);
 }
 
 async function startDeviceFlow(
@@ -405,9 +409,10 @@ async function enableGitHubCopilotModel(
 ): Promise<boolean> {
   const baseUrl = getGitHubCopilotBaseUrl(token, enterpriseDomain);
   const url = `${baseUrl}/models/${modelId}/policy`;
+  let response: Response | undefined;
 
   try {
-    const response = await fetchResponse(
+    response = await fetchResponse(
       url,
       {
         method: "POST",
@@ -426,6 +431,8 @@ async function enableGitHubCopilotModel(
     return response.ok;
   } catch {
     return false;
+  } finally {
+    await response?.body?.cancel().catch(() => undefined);
   }
 }
 
@@ -501,7 +508,7 @@ async function enableAllGitHubCopilotModels(
  * @param options.onProgress - Optional progress callback
  * @param options.signal - Optional AbortSignal for cancellation
  */
-export async function loginGitHubCopilot(options: {
+async function loginGitHubCopilot(options: {
   onAuth: (url: string, instructions?: string) => void;
   onPrompt: (prompt: {
     message: string;
@@ -584,5 +591,6 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
 export const testing = {
   enableGitHubCopilotModel,
   listGitHubCopilotModelIds,
+  pollForGitHubAccessToken,
   startDeviceFlow,
 };

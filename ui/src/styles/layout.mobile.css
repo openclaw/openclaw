@@ -45,18 +45,6 @@
     grid-template-areas: "session model";
   }
 
-  .chat-controls__session-row--has-quota {
-    grid-template-columns:
-      minmax(96px, 5fr) minmax(112px, 7fr) minmax(164px, 8fr)
-      minmax(96px, auto);
-    grid-template-areas: "agent session model quota";
-  }
-
-  .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
-    grid-template-columns: minmax(112px, 7fr) minmax(164px, 8fr) minmax(96px, auto);
-    grid-template-areas: "session model quota";
-  }
-
   .chat-controls__agent {
     grid-area: agent;
   }
@@ -67,11 +55,6 @@
 
   .chat-controls__model {
     grid-area: model;
-  }
-
-  .chat-controls__quota {
-    grid-area: quota;
-    min-width: 96px;
   }
 
   .chat-controls__session,
@@ -93,11 +76,16 @@
 @media (max-width: 1100px) {
   .shell,
   .shell--nav-collapsed {
+    --shell-topbar-height: 58px;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
     grid-template-areas:
       "topbar"
       "content";
+    /* The nav collapses to an overlay drawer here, so it no longer reserves a
+       column. Zero the width the docked terminal reads or it would leave a
+       258px gap and waste most of a phone viewport. */
+    --shell-nav-width: 0px;
   }
 
   .shell-nav,
@@ -119,12 +107,8 @@
       opacity var(--shell-focus-duration) var(--shell-focus-ease);
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .shell-nav {
-    width: var(--shell-nav-rail-width);
-    transform: translateX(0);
-    opacity: 1;
-    pointer-events: auto;
-    box-shadow: none;
+  .sidebar-resizer {
+    display: none;
   }
 
   .shell--nav-drawer-open .shell-nav,
@@ -151,13 +135,56 @@
     pointer-events: auto;
   }
 
-  /* Show the hamburger toggle at the same breakpoint where the drawer takes over. */
-  .topbar-nav-toggle {
+  /* Inside the drawer there is no Escape key to hint at. */
+  .settings-sidebar__esc {
+    display: none;
+  }
+
+  /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
+     the desktop rail toggle makes no sense once the sidebar is a drawer. */
+  .topbar .topbar-nav-toggle {
     display: inline-flex;
   }
 
-  .sidebar,
-  .sidebar--collapsed {
+  .topbar {
+    display: flex;
+  }
+
+  .topnav-shell {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
+    gap: 10px;
+  }
+
+  .topnav-shell__content {
+    display: flex;
+    justify-content: center;
+  }
+
+  .topbar-brand {
+    display: flex;
+  }
+
+  .topnav-shell__actions {
+    min-width: 0;
+    justify-content: flex-end;
+  }
+
+  .topbar-search {
+    display: inline-flex;
+    justify-content: center;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+  }
+
+  .sidebar-brand__actions {
+    display: none;
+  }
+
+  .sidebar {
     width: 100%;
     min-width: 0;
     flex: 1 1 auto;
@@ -166,43 +193,16 @@
     border-right: none;
   }
 
-  .sidebar-shell,
-  .sidebar--collapsed .sidebar-shell {
+  .sidebar-shell {
     padding: 18px 16px 14px;
     border-radius: 0;
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-shell,
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .sidebar-shell {
-    padding: 12px 8px 10px;
-  }
-
-  .sidebar-shell__header {
-    min-height: 0;
-    padding: 0 4px 16px;
-  }
-
-  .sidebar-shell__header .nav-collapse-toggle {
-    display: none;
-  }
-
-  .shell--nav-drawer-open .sidebar-shell__header .nav-collapse-toggle {
-    display: flex;
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-shell__header {
-    justify-content: center;
-    align-items: center;
-    gap: 0;
-    padding: 0 2px 16px;
-  }
-
-  .sidebar-nav,
-  .sidebar--collapsed .sidebar-nav {
-    flex: 1 1 auto;
+  .sidebar-nav {
+    /* Match the desktop pinned-nav layout so the session list keeps the
+       remaining drawer height. */
+    flex: 0 0 auto;
+    max-height: 60%;
     display: block;
     padding: 0;
     overflow-x: hidden;
@@ -210,24 +210,11 @@
     scrollbar-width: none;
   }
 
-  .sidebar-nav::-webkit-scrollbar,
-  .sidebar--collapsed .sidebar-nav::-webkit-scrollbar {
+  .sidebar-nav::-webkit-scrollbar {
     display: none;
   }
 
-  .nav-section,
-  .sidebar--collapsed .nav-section {
-    display: grid;
-    margin-bottom: 16px;
-  }
-
-  .sidebar-nav .nav-section__label,
-  .sidebar--collapsed .nav-section__label {
-    display: flex;
-  }
-
-  .nav-item,
-  .sidebar--collapsed .nav-item {
+  .nav-item {
     margin: 0;
     min-height: 40px;
     padding: 0 12px;
@@ -237,67 +224,38 @@
     flex: 0 0 auto;
     width: auto;
   }
+}
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item {
-    justify-content: center;
-    width: 44px;
-    min-height: 44px;
-    padding: 0;
-    margin: 0 auto;
-    border-radius: var(--radius-lg);
+/* Native macOS narrow widths (e.g. the in-app link browser splitting the
+   window): fold the titlebar clearance into one 58px row instead of stacking
+   it. body-qualified + !important outranks the Mac-app-injected topbar rules
+   (DashboardWindowController), so shipped apps get the compact row too. The
+   brand moves first and stays non-interactive under the AppKit drag region
+   (x 78-254, y < 46); the drawer toggle and search sit to its right. */
+@media (max-width: 1100px) {
+  html.openclaw-native-macos body .shell {
+    --shell-topbar-height: 58px;
   }
 
-  .sidebar--collapsed .nav-item--active::before,
-  .sidebar--collapsed .nav-item.active::before {
-    content: none;
+  html.openclaw-native-macos body .topbar {
+    padding: 0 12px 0 78px !important;
   }
 
-  .sidebar--collapsed .nav-item__text,
-  .sidebar--collapsed .nav-item__external-icon {
-    display: inline-flex;
+  html.openclaw-native-macos body .topnav-shell {
+    display: flex;
+    gap: 8px;
+    min-height: 58px;
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item__text,
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item__external-icon {
-    display: none;
+  html.openclaw-native-macos body .topnav-shell__content {
+    order: -1;
+    flex: 0 0 auto;
+    min-width: 176px;
+    justify-content: flex-start;
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item--active::before,
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item.active::before {
-    content: "";
-    position: absolute;
-    left: 8px;
-    top: 10px;
-    bottom: 10px;
-    width: 3px;
-    border-radius: var(--radius-full);
-    background: color-mix(in srgb, var(--accent) 86%, transparent);
-    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
-  }
-
-  .sidebar--collapsed .sidebar-shell__footer {
-    padding: 12px 8px 0;
-  }
-
-  .sidebar--collapsed .sidebar-version {
-    width: auto;
-    min-height: 40px;
-    padding: 0 12px;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .sidebar-shell__footer {
-    padding: 8px 0 2px;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .sidebar-version {
-    width: 44px;
-    min-height: 44px;
-    padding: 0;
-    justify-content: center;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-mode-switch {
-    display: none;
+  html.openclaw-native-macos body .topnav-shell__actions {
+    margin-left: auto;
   }
 }
 
@@ -310,69 +268,45 @@
 
   /* Topbar */
   .topbar {
+    display: flex;
     padding: 10px 12px;
     min-height: auto;
   }
 
   .topnav-shell {
-    flex-wrap: wrap;
     gap: 10px;
   }
 
   .topnav-shell__actions {
     min-width: 0;
-    flex: 1 1 auto;
-    justify-content: space-between;
-    gap: 10px;
-    align-items: stretch;
+    justify-content: flex-end;
   }
 
   .topnav-shell__content {
-    display: none;
-    width: 100%;
+    display: flex;
+    justify-content: center;
   }
 
-  .topbar-nav-toggle {
+  .topbar-brand {
+    display: flex;
+  }
+
+  .topbar .topbar-nav-toggle {
     display: inline-flex;
   }
 
-  .topbar-status {
-    gap: 6px;
-    width: auto;
-    flex-wrap: nowrap;
-  }
-
   .topbar-search {
-    min-width: 0;
-    flex: 1;
-  }
-
-  .topbar-theme-mode {
-    display: none;
+    display: inline-flex;
+    justify-content: center;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
   }
 
   .sidebar-mode-switch {
     display: block;
-  }
-
-  .sidebar-mode-switch .topbar-theme-mode {
-    display: inline-flex;
-    width: 100%;
-    justify-content: center;
-  }
-
-  .topbar-status .pill {
-    padding: 4px 8px;
-    font-size: 12px; /* was 11px */
-    gap: 4px;
-  }
-
-  .topbar-status .pill .mono {
-    display: none;
-  }
-
-  .topbar-status .pill span:nth-child(2) {
-    display: none;
   }
 
   .shell-nav,
@@ -380,20 +314,11 @@
     width: min(92vw, 320px);
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .shell-nav {
-    width: min(92vw, 320px);
-    transform: translateX(-100%);
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  .sidebar-shell,
-  .sidebar--collapsed .sidebar-shell {
+  .sidebar-shell {
     padding: 16px 14px 12px;
   }
 
-  .nav-item,
-  .sidebar--collapsed .nav-item {
+  .nav-item {
     font-size: 12px;
   }
 
@@ -475,22 +400,6 @@
       "model";
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--has-quota {
-    grid-template-areas:
-      "agent session"
-      "model model"
-      "quota quota";
-  }
-
-  .chat-mobile-controls-wrapper
-    .chat-controls-dropdown
-    .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
-    grid-template-areas:
-      "session"
-      "model"
-      "quota";
-  }
-
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session {
     min-width: unset;
     max-width: unset;
@@ -514,38 +423,8 @@
     font-size: 14px;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker {
-    position: static;
-    width: 100%;
-    max-height: min(52vh, 420px);
-    margin-top: 8px;
-    box-shadow: none;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker__search input {
-    min-height: 44px;
-    font-size: 14px;
-  }
-
-  .chat-mobile-controls-wrapper
-    .chat-controls-dropdown
-    .chat-session-picker
-    .chat-session-picker__icon-button.btn--icon {
-    flex: 0 0 44px;
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    padding: 0;
-  }
-
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
     grid-area: model;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__quota {
-    width: 100%;
-    min-width: 0;
-    min-height: 40px;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__inline-select-trigger {
@@ -609,11 +488,6 @@
   }
 
   /* Stats */
-  .stat-grid {
-    gap: 8px;
-    grid-template-columns: repeat(2, 1fr);
-  }
-
   .stat {
     padding: 10px;
     border-radius: var(--radius-md);
@@ -625,12 +499,6 @@
 
   .stat-value {
     font-size: 18px;
-  }
-
-  /* Notes */
-  .note-grid {
-    grid-template-columns: 1fr;
-    gap: 8px;
   }
 
   /* Forms */
@@ -682,7 +550,13 @@
 
   .chat-thread {
     margin-top: 0;
-    padding: 0 8px 12px;
+    /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
+       on the scroll container floats macOS overlay scrollbars off the edge. */
+    padding: 0 0 12px;
+  }
+
+  .chat-thread-inner {
+    width: calc(100% - 36px - 16px);
   }
 
   .chat-msg {
@@ -692,17 +566,6 @@
   .chat-bubble {
     padding: 8px 12px;
     border-radius: var(--radius-md);
-  }
-
-  .chat-compose {
-    gap: 8px;
-  }
-
-  .chat-compose__field textarea {
-    min-height: 60px;
-    padding: 8px 10px;
-    border-radius: var(--radius-md);
-    font-size: 14px;
   }
 
   .agent-chat__input {
@@ -742,31 +605,27 @@
     max-height: 380px;
   }
 
-  /* Reset the desktop fill-height chain on mobile — single page scroll is
-     more usable on small viewports than a tiny pinned log panel.
-     Selectors are intentionally double-classed so they outrank the
-     desktop rules in components.css / config-quick.css, which are
-     imported AFTER this file (see ui/src/styles.css). */
-  .card--fill-height.card--fill-height .log-stream {
-    flex: none;
-    min-height: 200px;
-    max-height: 380px;
-  }
-
-  .content.content--logs {
+  .content:has(openclaw-logs-page) {
     display: block;
     overflow-y: auto;
   }
 
-  .content.content--logs .settings-workspace {
+  .content:has(openclaw-logs-page) > openclaw-router-outlet,
+  .content openclaw-logs-page,
+  .content .settings-workspace--fill-height,
+  .content .settings-workspace--fill-height > .settings-workspace__body,
+  .content .settings-workspace--fill-height .logs-card {
     display: block;
     height: auto;
+    min-height: 0;
     flex: initial;
+    overflow-y: visible;
   }
 
-  .content.content--logs .settings-workspace__body {
-    display: block;
-    flex: initial;
+  .content .settings-workspace--fill-height .log-stream {
+    flex: none;
+    min-height: 200px;
+    max-height: 380px;
   }
 
   .log-row {
@@ -811,12 +670,6 @@
     border-radius: var(--radius-md);
     font-size: 12px; /* was 11px */
   }
-
-  .theme-orb__trigger {
-    width: 26px;
-    height: 26px;
-    font-size: 13px;
-  }
 }
 
 /* Small mobile */
@@ -859,26 +712,9 @@
     padding: 8px 10px;
   }
 
-  .chat-compose__field textarea {
-    min-height: 52px;
-    padding: 8px 10px;
-    font-size: 13px;
-  }
-
   .btn {
     padding: 6px 10px;
     font-size: 12px; /* was 11px */
-  }
-
-  .topbar-status .pill {
-    padding: 3px 6px;
-    font-size: 12px; /* was 10px */
-  }
-
-  .theme-orb__trigger {
-    width: 24px;
-    height: 24px;
-    font-size: 12px;
   }
 }
 
@@ -886,33 +722,14 @@
    Sessions table – responsive column hiding
    =========================================== */
 
-/* nth-child is 1-based and includes the checkbox column (col 1). */
+/* nth-child is 1-based and includes the checkbox column (col 1). The optional
+   Group column in category mode shifts later indexes; grouping is a desktop
+   workflow, so the hide rules target the default 7-column roster. */
 
-/* ≤1400px: hide Verbose (col 12) and Reasoning (col 13) */
-@media (max-width: 1400px) {
+/* ≤900px: tighten padding */
+@media (max-width: 900px) {
   .data-table.sessions-table {
-    min-width: 1120px;
-  }
-
-  .sessions-table th:nth-child(12),
-  .sessions-table td:nth-child(12),
-  .sessions-table th:nth-child(13),
-  .sessions-table td:nth-child(13) {
-    display: none;
-  }
-}
-
-/* ≤1100px: also hide Fast (col 11) and Kind (col 4) */
-@media (max-width: 1100px) {
-  .data-table.sessions-table {
-    min-width: 930px;
-  }
-
-  .sessions-table th:nth-child(4),
-  .sessions-table td:nth-child(4),
-  .sessions-table th:nth-child(11),
-  .sessions-table td:nth-child(11) {
-    display: none;
+    min-width: 640px;
   }
 
   .data-table th,
@@ -921,28 +738,14 @@
   }
 }
 
-/* ≤900px: also hide Thinking (col 10) and Label (col 3) */
-@media (max-width: 900px) {
-  .data-table.sessions-table {
-    min-width: 720px;
-  }
-
-  .sessions-table th:nth-child(3),
-  .sessions-table td:nth-child(3),
-  .sessions-table th:nth-child(10),
-  .sessions-table td:nth-child(10) {
-    display: none;
-  }
-}
-
-/* ≤768px: also hide Tokens (col 8); tighten padding; stack pagination */
+/* ≤768px: hide Tokens (col 6); tighten padding; stack pagination */
 @media (max-width: 768px) {
   .data-table.sessions-table {
-    min-width: 560px;
+    min-width: 500px;
   }
 
-  .sessions-table th:nth-child(8),
-  .sessions-table td:nth-child(8) {
+  .sessions-table th:nth-child(6),
+  .sessions-table td:nth-child(6) {
     display: none;
   }
 
@@ -980,15 +783,6 @@
     max-width: 200px;
   }
 
-  .session-compaction-col {
-    width: 96px;
-    min-width: 86px;
-  }
-
-  .session-compaction-trigger {
-    padding: 6px 7px;
-  }
-
   .session-details-panel {
     padding: 12px;
   }
@@ -1021,16 +815,16 @@
   }
 }
 
-/* ≤500px: hide Runtime (col 6) and Updated (col 7); keep live status visible */
+/* ≤500px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
 @media (max-width: 500px) {
   .data-table.sessions-table {
-    min-width: 340px;
+    min-width: 320px;
   }
 
-  .sessions-table th:nth-child(6),
-  .sessions-table td:nth-child(6),
-  .sessions-table th:nth-child(7),
-  .sessions-table td:nth-child(7) {
+  .sessions-table th:nth-child(3),
+  .sessions-table td:nth-child(3),
+  .sessions-table th:nth-child(5),
+  .sessions-table td:nth-child(5) {
     display: none;
   }
 
@@ -1038,6 +832,12 @@
     width: 106px;
     min-width: 106px;
     max-width: 106px;
+  }
+
+  /* The 106px key column has no room for the kind avatar; run state stays
+     visible through the status column, which this breakpoint keeps. */
+  .sessions-table .session-avatar {
+    display: none;
   }
 
   .sessions-table .session-status-col {
@@ -1061,11 +861,6 @@
 
   .sessions-table .session-goal-chip__objective {
     display: none;
-  }
-
-  .sessions-table .session-compaction-col {
-    width: 84px;
-    min-width: 84px;
   }
 
   .data-table th,

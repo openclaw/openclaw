@@ -4,9 +4,15 @@ import {
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
+const {
+  postJsonRequestMock,
+  fetchWithTimeoutMock,
+  readProviderJsonResponseMock,
+  resolveApiKeyForProviderMock,
+} = getProviderHttpMocks();
 
 let buildXaiVideoGenerationProvider: typeof import("./video-generation-provider.js").buildXaiVideoGenerationProvider;
 
@@ -15,6 +21,51 @@ beforeAll(async () => {
 });
 
 installProviderHttpMockCleanup();
+
+beforeEach(() => {
+  readProviderJsonResponseMock.mockImplementation(async <T>(response: Response, label: string) => {
+    const maxBytes = 16 * 1024 * 1024;
+    if (!response.body) {
+      try {
+        return (await response.json()) as T;
+      } catch (cause) {
+        throw new Error(`${label}: malformed JSON response`, { cause });
+      }
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel();
+          throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const body = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    try {
+      return JSON.parse(new TextDecoder().decode(body)) as T;
+    } catch (cause) {
+      throw new Error(`${label}: malformed JSON response`, { cause });
+    }
+  });
+});
 
 function requirePostJsonCall(index = 0): {
   url?: string;
@@ -52,7 +103,7 @@ function requireFetchInitCall(index: number): {
   };
 }
 
-function streamedVideoResponse(bytes: string): Response {
+function streamedVideoResponse(bytes: string, contentType = "video/mp4"): Response {
   return new Response(
     new ReadableStream({
       start(controller) {
@@ -60,13 +111,201 @@ function streamedVideoResponse(bytes: string): Response {
         controller.close();
       },
     }),
-    { headers: { "content-type": "video/mp4" } },
+    { headers: { "content-type": contentType } },
   );
+}
+
+function streamedJsonResponse(payload: unknown): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+}
+
+// Drives an unbounded JSON body (>16 MiB, no Content-Length) so the bounded
+// reader has to cancel the stream instead of buffering it all. The 1 MiB
+// chunks are emitted lazily on `pull`, and a hard ceiling guards the test from
+// hanging if the reader ever fails to cancel.
+function oversizedJsonResponse(): {
+  response: Response;
+  state: { canceled: boolean; enqueuedBytes: number };
+} {
+  const state = { canceled: false, enqueuedBytes: 0 };
+  const chunk = 1024 * 1024;
+  // 64 MiB ceiling: 4x the 16 MiB cap, so the bounded reader must cancel long
+  // before we run out of chunks.
+  const maxChunks = 64;
+  let emitted = 0;
+  const response = new Response(
+    new ReadableStream({
+      pull(controller) {
+        if (emitted >= maxChunks) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        state.enqueuedBytes += chunk;
+        controller.enqueue(new Uint8Array(chunk));
+      },
+      cancel() {
+        state.canceled = true;
+      },
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+  return { response, state };
 }
 
 describe("xai video generation provider", () => {
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildXaiVideoGenerationProvider());
+    const provider = buildXaiVideoGenerationProvider();
+    expectExplicitVideoGenerationCapabilities(provider);
+    expect(provider.capabilities.videoToVideo).toMatchObject({
+      maxDurationSeconds: 10,
+      supportsAspectRatio: false,
+      supportsResolution: false,
+    });
+  });
+
+  it("advertises canonical 1.5 and resolves capabilities for all API aliases", async () => {
+    const provider = buildXaiVideoGenerationProvider();
+
+    expect(provider.defaultModel).toBe("grok-imagine-video");
+    expect(provider.models).toEqual(["grok-imagine-video", "grok-imagine-video-1.5"]);
+    expect(provider.catalogByModel?.["grok-imagine-video-1.5"]).toMatchObject({
+      modes: ["imageToVideo"],
+      capabilities: {
+        imageToVideo: {
+          enabled: true,
+          maxInputImages: 1,
+          resolutions: ["480P", "720P", "1080P"],
+        },
+        videoToVideo: { enabled: false },
+      },
+    });
+
+    for (const model of [
+      "grok-imagine-video-1.5",
+      "grok-imagine-video-1.5-preview",
+      "grok-imagine-video-1.5-2026-05-30",
+    ]) {
+      const capabilities = await provider.resolveModelCapabilities?.({
+        provider: "xai",
+        model,
+        cfg: {},
+      });
+      expect(capabilities?.imageToVideo).toMatchObject({
+        enabled: true,
+        maxInputImages: 1,
+        maxDurationSeconds: 15,
+        resolutions: ["480P", "720P", "1080P"],
+      });
+      expect(capabilities?.videoToVideo?.enabled).toBe(false);
+    }
+  });
+
+  it("uses the 1.5 default while preserving aliases, 1080p, and source aspect ratio", async () => {
+    const models = [
+      "grok-imagine-video-1.5",
+      "grok-imagine-video-1.5-preview",
+      "grok-imagine-video-1.5-2026-05-30",
+    ];
+    const provider = buildXaiVideoGenerationProvider();
+
+    for (const [index, model] of models.entries()) {
+      const requestId = `req_15_${index}`;
+      postJsonRequestMock.mockResolvedValueOnce({
+        response: { json: async () => ({ request_id: requestId }) },
+        release: vi.fn(async () => {}),
+      });
+      fetchWithTimeoutMock
+        .mockResolvedValueOnce({
+          json: async () => ({
+            request_id: requestId,
+            status: "done",
+            video: { url: `https://cdn.x.ai/${requestId}.mp4` },
+          }),
+        })
+        .mockResolvedValueOnce({
+          headers: new Headers({ "content-type": "video/mp4" }),
+          arrayBuffer: async () => Buffer.from("video-bytes"),
+        });
+
+      const result = await provider.generateVideo({
+        provider: "xai",
+        model,
+        prompt: "Animate this still image",
+        cfg: {},
+        durationSeconds: 20,
+        resolution: index === 0 ? undefined : "1080P",
+        inputImages: [
+          {
+            url: "https://example.com/first-frame.png",
+            ...(index === 0 ? {} : { role: "first_frame" as const }),
+          },
+        ],
+      });
+
+      const body = requirePostJsonCall(index).body ?? {};
+      expect(body.model).toBe(model);
+      expect(body.image).toEqual({ url: "https://example.com/first-frame.png" });
+      expect(body.duration).toBe(15);
+      expect(body.resolution).toBe(index === 0 ? "480p" : "1080p");
+      expect(body).not.toHaveProperty("aspect_ratio");
+      expect(result.model).toBe(model);
+    }
+  });
+
+  it("rejects unsupported 1.5 modes before submitting a request", async () => {
+    const provider = buildXaiVideoGenerationProvider();
+    const cases: Array<
+      Pick<VideoGenerationRequest, "model" | "inputImages" | "inputVideos"> & { error: string }
+    > = [
+      {
+        model: "grok-imagine-video-1.5",
+        inputImages: undefined,
+        error: "xAI grok-imagine-video-1.5 requires exactly one first-frame image.",
+      },
+      {
+        model: "grok-imagine-video-1.5-preview",
+        inputImages: [{ url: "https://example.com/reference.png", role: "reference_image" }],
+        error: "xAI grok-imagine-video-1.5 supports only an ordinary or first_frame image.",
+      },
+      {
+        model: "grok-imagine-video-1.5-2026-05-30",
+        inputImages: [
+          { url: "https://example.com/first.png" },
+          { url: "https://example.com/second.png", role: "first_frame" },
+        ],
+        error: "xAI grok-imagine-video-1.5 requires exactly one first-frame image.",
+      },
+      {
+        model: "grok-imagine-video-1.5",
+        inputImages: undefined,
+        inputVideos: [{ url: "https://example.com/input.mp4" }],
+        error: "xAI grok-imagine-video-1.5 does not support video inputs.",
+      },
+    ];
+
+    for (const testCase of cases) {
+      await expect(
+        provider.generateVideo({
+          provider: "xai",
+          model: testCase.model,
+          prompt: "Unsupported 1.5 request",
+          cfg: {},
+          inputImages: testCase.inputImages,
+          inputVideos: testCase.inputVideos,
+        }),
+      ).rejects.toThrow(testCase.error);
+    }
+    expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
   it("creates, polls, and downloads a generated video", async () => {
@@ -148,6 +387,49 @@ describe("xai video generation provider", () => {
     ).rejects.toThrow("xAI generated video download exceeds 1 bytes");
   });
 
+  it("bounds an unbounded successful xAI create JSON body and cancels the stream", async () => {
+    const oversized = oversizedJsonResponse();
+    postJsonRequestMock.mockResolvedValue({
+      response: oversized.response,
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildXaiVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "xai",
+        model: "grok-imagine-video",
+        prompt: "oversized create body",
+        cfg: {},
+      }),
+    ).rejects.toThrow("xAI video generation response: JSON response exceeds 16777216 bytes");
+    // The bounded reader cancelled the stream rather than buffering the whole
+    // body, and stopped reading well before the 64 MiB ceiling.
+    expect(oversized.state.canceled).toBe(true);
+    expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
+  });
+
+  it("bounds an unbounded successful xAI poll JSON body and cancels the stream", async () => {
+    const oversized = oversizedJsonResponse();
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ request_id: "req_poll_oversized" }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce(oversized.response);
+
+    const provider = buildXaiVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "xai",
+        model: "grok-imagine-video",
+        prompt: "oversized poll body",
+        cfg: {},
+      }),
+    ).rejects.toThrow("xAI video generation response: JSON response exceeds 16777216 bytes");
+    expect(oversized.state.canceled).toBe(true);
+    expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
+  });
+
   it("wraps malformed successful xAI create responses", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
@@ -169,11 +451,9 @@ describe("xai video generation provider", () => {
 
   it("wraps non-JSON successful xAI create responses", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => {
-          throw new SyntaxError("Unexpected token < in JSON");
-        },
-      },
+      response: new Response("<html>Unexpected token < in JSON</html>", {
+        headers: { "content-type": "text/html" },
+      }),
       release: vi.fn(async () => {}),
     });
 
@@ -370,6 +650,8 @@ describe("xai video generation provider", () => {
     expect(image?.url).toMatch(/^data:image\/png;base64,/u);
     const body = request.body ?? {};
     expect(body).not.toHaveProperty("reference_images");
+    expect(body).not.toHaveProperty("aspect_ratio");
+    expect(body.resolution).toBe("480p");
     expect(result.metadata?.mode).toBe("generate");
   });
 
@@ -472,13 +754,17 @@ describe("xai video generation provider", () => {
       model: "grok-imagine-video",
       prompt: "Continue the shot into a neon alleyway",
       cfg: {},
-      durationSeconds: 8,
+      durationSeconds: 15,
+      aspectRatio: "9:16",
+      resolution: "1080P",
       inputVideos: [{ url: "https://example.com/input.mp4" }],
     });
 
     const request = requirePostJsonCall();
     expect(request.url).toBe("https://api.x.ai/v1/videos/extensions");
     expect(request.body?.video).toEqual({ url: "https://example.com/input.mp4" });
-    expect(request.body?.duration).toBe(8);
+    expect(request.body?.duration).toBe(10);
+    expect(request.body).not.toHaveProperty("aspect_ratio");
+    expect(request.body).not.toHaveProperty("resolution");
   });
 });

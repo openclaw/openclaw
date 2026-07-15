@@ -27,7 +27,6 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private var cacheUpdatedAt: Date?
     private let refreshIntervalSeconds: TimeInterval = 12
     private var cachedUsageSummary: GatewayUsageSummary?
-    private var cachedUsageErrorText: String?
     private var usageCacheUpdatedAt: Date?
     private let usageRefreshIntervalSeconds: TimeInterval = 30
     private var cachedCostSummary: GatewayCostUsageSummary?
@@ -777,7 +776,6 @@ extension MenuSessionsInjector {
             self.cachedUsageSummary = try await UsageLoader.loadSummary()
         } catch {
             self.cachedUsageSummary = nil
-            self.cachedUsageErrorText = nil
         }
         self.usageCacheUpdatedAt = Date()
     }
@@ -1045,16 +1043,6 @@ extension MenuSessionsInjector {
         return item
     }
 
-    private func formatVersionLabel(_ version: String) -> String {
-        let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return version }
-        if trimmed.hasPrefix("v") { return trimmed }
-        if let first = trimmed.unicodeScalars.first, CharacterSet.decimalDigits.contains(first) {
-            return "v\(trimmed)"
-        }
-        return trimmed
-    }
-
     @objc
     private func patchThinking(_ sender: NSMenuItem) {
         guard let dict = sender.representedObject as? [String: Any],
@@ -1293,9 +1281,8 @@ extension MenuSessionsInjector {
         self.cacheUpdatedAt = Date()
     }
 
-    func setTestingUsageSummary(_ summary: GatewayUsageSummary?, errorText: String? = nil) {
+    func setTestingUsageSummary(_ summary: GatewayUsageSummary?) {
         self.cachedUsageSummary = summary
-        self.cachedUsageErrorText = errorText
         self.usageCacheUpdatedAt = Date()
     }
 
@@ -1311,10 +1298,6 @@ extension MenuSessionsInjector {
 
     func testingControlChannelStatusText(for state: ControlChannel.ConnectionState) -> String {
         self.controlChannelStatusText(for: state)
-    }
-
-    func testingMenuStatusText(_ text: String) -> String {
-        Self.menuStatusText(text)
     }
 
     func testingFindInsertIndex(in menu: NSMenu) -> Int? {

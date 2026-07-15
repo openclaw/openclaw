@@ -8,17 +8,30 @@ import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
+import {
+  OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV,
+  OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV,
+  OPENCLAW_TOOLS_MCP_TOOLS_ENV,
+} from "../../mcp/openclaw-tools-serve-config.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
+import { resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
-import { findClaudeMcpConfigPath, injectClaudeMcpConfigArgs } from "./bundle-mcp-claude.js";
+import {
+  findClaudeMcpConfigPath,
+  findClaudeMcpConfigPaths,
+  injectClaudeMcpConfigArgs,
+  writeClaudeMcpCaptureConfig,
+} from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import { writeGeminiMcpCaptureSettings, writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
+  beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
@@ -56,19 +69,38 @@ function normalizeOpenClawLoopbackUrl(value: string): string {
   return `${match[1]}:<openclaw-loopback>${match[2]}`;
 }
 
+function canonicalizeSystemAgentTurnStateForResume(
+  server: BundleMcpConfig["mcpServers"][string],
+): BundleMcpConfig["mcpServers"][string] {
+  if (!isRecord(server.env) || server.env[OPENCLAW_TOOLS_MCP_TOOLS_ENV] !== "openclaw") {
+    return server;
+  }
+  // The host reissues approval authority through a fresh stdio server each turn.
+  // Its values may change while tool topology and the native transcript stay safe to resume.
+  return {
+    ...server,
+    env: {
+      ...server.env,
+      [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV]: "<openclaw-turn-state>",
+      [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV]: "<openclaw-turn-state>",
+    },
+  };
+}
+
 function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMcpConfig {
   // The OpenClaw loopback MCP port changes across runs. Replace it before
   // hashing so resume compatibility tracks config shape, not ephemeral ports.
   const canonicalServers = Object.fromEntries(
     Object.entries(config.mcpServers).map(([name, server]) => {
-      if (name !== "openclaw" || typeof server.url !== "string") {
-        return [name, sortJsonValue(server)];
+      const canonicalServer = canonicalizeSystemAgentTurnStateForResume(server);
+      if (name !== "openclaw" || typeof canonicalServer.url !== "string") {
+        return [name, sortJsonValue(canonicalServer)];
       }
       return [
         name,
         sortJsonValue({
-          ...server,
-          url: normalizeOpenClawLoopbackUrl(server.url),
+          ...canonicalServer,
+          url: normalizeOpenClawLoopbackUrl(canonicalServer.url),
         }),
       ];
     }),
@@ -76,6 +108,29 @@ function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMc
   return {
     mcpServers: sortJsonValue(canonicalServers) as BundleMcpConfig["mcpServers"],
   };
+}
+
+const OPENCLAW_MCP_ENV_TEMPLATE_PATTERN = /\$\{(OPENCLAW_MCP_[A-Z0-9_]+)\}/g;
+
+function resolveOpenClawMcpEnvTemplates(value: unknown, env?: Record<string, string>): unknown {
+  if (!env) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value.replace(OPENCLAW_MCP_ENV_TEMPLATE_PATTERN, (match, name: string) => {
+      const replacement = env[name];
+      return Object.hasOwn(env, name) && replacement !== undefined ? replacement : match;
+    });
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => resolveOpenClawMcpEnvTemplates(entry, env));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, resolveOpenClawMcpEnvTemplates(entry, env)]),
+  );
 }
 
 async function prepareModeSpecificBundleMcpConfig(params: {
@@ -122,7 +177,11 @@ async function prepareModeSpecificBundleMcpConfig(params: {
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
   const mcpConfigPath = path.join(tempDir, "mcp.json");
-  await fs.writeFile(mcpConfigPath, serializedConfig, "utf-8");
+  const runtimeConfig = resolveOpenClawMcpEnvTemplates(
+    params.mergedConfig,
+    params.env,
+  ) as BundleMcpConfig;
+  await fs.writeFile(mcpConfigPath, `${JSON.stringify(runtimeConfig, null, 2)}\n`, "utf-8");
   return {
     backend: {
       ...params.backend,
@@ -149,7 +208,14 @@ export async function prepareCliBundleMcpConfig(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   config?: OpenClawConfig;
+  agentDir?: string;
   additionalConfig?: BundleMcpConfig;
+  /**
+   * Serve exactly these servers, skipping user/plugin/additional merges.
+   * Ring-zero OpenClaw runs use this so the CLI harness sees only the
+   * openclaw MCP server instead of the normal openclaw tool surface.
+   */
+  exclusiveConfig?: BundleMcpConfig;
   env?: Record<string, string>;
   warn?: (message: string) => void;
 }): Promise<PreparedCliBundleMcpConfig> {
@@ -158,14 +224,25 @@ export async function prepareCliBundleMcpConfig(params: {
   }
 
   const mode = resolveBundleMcpMode(params.mode);
-  const existingMcpConfigPath =
-    mode === "claude-config-file"
-      ? (findClaudeMcpConfigPath(params.backend.resumeArgs) ??
-        findClaudeMcpConfigPath(params.backend.args))
-      : undefined;
+  if (params.exclusiveConfig) {
+    return await prepareModeSpecificBundleMcpConfig({
+      mode,
+      backend: params.backend,
+      mergedConfig: params.exclusiveConfig,
+      env: params.env,
+    });
+  }
+  const resumeMcpConfigPaths =
+    mode === "claude-config-file" ? findClaudeMcpConfigPaths(params.backend.resumeArgs) : [];
+  const existingMcpConfigPaths =
+    mode === "claude-config-file" && resumeMcpConfigPaths.length > 0
+      ? resumeMcpConfigPaths
+      : mode === "claude-config-file"
+        ? findClaudeMcpConfigPaths(params.backend.args)
+        : [];
   let mergedConfig: BundleMcpConfig = { mcpServers: {} };
 
-  if (existingMcpConfigPath) {
+  for (const existingMcpConfigPath of existingMcpConfigPaths) {
     // Merge any user-provided Claude MCP config first so bundle/plugin config can
     // override intentionally managed server entries.
     const resolvedExistingPath = path.isAbsolute(existingMcpConfigPath)
@@ -189,18 +266,30 @@ export async function prepareCliBundleMcpConfig(params: {
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
+  const resolvedBearerConfig = await resolveMcpBearerBundleConfig({
+    config: mergedConfig,
+    cfg: params.config,
+    agentDir: params.agentDir,
+    env: params.env,
+    omitUnavailableOAuthServers: true,
+    onServerUnavailable: (serverName, error) =>
+      params.warn?.(
+        `bundle MCP skipped unavailable OAuth server ${serverName}: ${formatErrorMessage(error)}`,
+      ),
+  });
 
   return await prepareModeSpecificBundleMcpConfig({
     mode,
     backend: params.backend,
-    mergedConfig,
-    env: params.env,
+    mergedConfig: resolvedBearerConfig.config,
+    env: resolvedBearerConfig.env,
   });
 }
 
 /** Prepares a per-attempt capture token without changing resume compatibility hashes. */
 export async function prepareCliBundleMcpCaptureAttempt(params: {
   mode?: CliBundleMcpMode;
+  backend?: CliBackendConfig;
   env?: Record<string, string>;
   captureKey?: string;
 }): Promise<{ env?: Record<string, string>; cleanup?: () => Promise<void> }> {
@@ -212,6 +301,17 @@ export async function prepareCliBundleMcpCaptureAttempt(params: {
       inheritedEnv: params.env,
       captureKey: params.captureKey,
     });
+  }
+  if (resolveBundleMcpMode(params.mode) === "claude-config-file") {
+    const mcpConfigPath =
+      findClaudeMcpConfigPath(params.backend?.args) ??
+      findClaudeMcpConfigPath(params.backend?.resumeArgs);
+    if (mcpConfigPath) {
+      await writeClaudeMcpCaptureConfig({
+        mcpConfigPath,
+        captureKey: params.captureKey,
+      });
+    }
   }
   return {
     env: {

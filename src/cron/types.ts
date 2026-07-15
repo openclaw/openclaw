@@ -15,13 +15,27 @@ export type CronSchedule =
       tz?: string;
       /** Optional deterministic stagger window in milliseconds (0 keeps exact schedule). */
       staggerMs?: number;
+    }
+  | {
+      /**
+       * Event-driven (non-time) trigger: the job fires once when a gateway-owned
+       * watcher process running `command` exits. The watcher lives under the
+       * gateway ProcessSupervisor, NOT inside any agent turn's process tree, so
+       * it survives the per-turn spawn-and-kill teardown that CLI backends apply
+       * (#71662). On exit the job runs through the normal cron run pipeline, so
+       * delivery to the bound session works exactly like a scheduled main job.
+       * `computeNextRunAtMs` returns undefined for this kind (never time-due).
+       */
+      kind: "on-exit";
+      command: string;
+      cwd?: string;
     };
 
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
-export type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
+type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 
 /** Wake policy for main-session jobs waiting on heartbeat/user activity. */
-export type CronWakeMode = "next-heartbeat" | "now";
+type CronWakeMode = "next-heartbeat" | "now";
 
 /** Messaging channel id accepted by cron delivery settings. */
 export type CronMessageChannel = ChannelId;
@@ -46,13 +60,13 @@ export type CronDelivery = {
 };
 
 /** Webhook completion destination used alongside chat delivery. */
-export type CronCompletionDestination = {
+type CronCompletionDestination = {
   mode: "webhook";
   to?: string;
 };
 
 /** Destination override for failed-run notifications. */
-export type CronFailureDestination = {
+type CronFailureDestination = {
   channel?: CronMessageChannel;
   to?: string;
   accountId?: string;
@@ -60,7 +74,7 @@ export type CronFailureDestination = {
 };
 
 /** Partial failure-destination update shape; null clears individual override fields. */
-export type CronFailureDestinationPatch = {
+type CronFailureDestinationPatch = {
   channel?: CronMessageChannel | null;
   to?: string | null;
   accountId?: string | null;
@@ -124,7 +138,7 @@ export type CronDeliveryPreview = {
 };
 
 /** Token usage summary copied from the agent runner when available. */
-export type CronUsageSummary = {
+type CronUsageSummary = {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
@@ -198,8 +212,6 @@ export type CronAgentExecutionStarted = {
   tool?: string;
   toolCallId?: string;
   itemId?: string;
-  /** @deprecated Use phase-specific execution milestones for watchdog progress. */
-  firstModelCallStarted?: boolean;
 };
 
 /** Watchdog update that requires the new execution phase. */
@@ -248,6 +260,8 @@ type CronAgentTurnPayloadFields = {
   lightContext?: boolean;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
+  toolsAllowIsDefault?: boolean;
 };
 
 type CronAgentTurnPayload = {
@@ -256,9 +270,11 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "toolsAllow">> & {
+} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "fallbacks" | "toolsAllow" | "thinking">> & {
     model?: string | null;
+    fallbacks?: string[] | null;
     toolsAllow?: string[] | null;
+    thinking?: string | null;
   };
 
 type CronCommandPayloadFields = {
@@ -302,6 +318,14 @@ export type CronJobState = {
   lastFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
+  /** Timestamp of the last trigger script evaluation. */
+  lastTriggerEvalAtMs?: number;
+  /** Number of completed trigger script evaluations. */
+  triggerEvalCount?: number;
+  /** Timestamp of the last trigger evaluation that fired. */
+  lastTriggerFireAtMs?: number;
+  /** JSON state returned by the last trigger script evaluation. */
+  triggerState?: unknown;
   /** Explicit delivery outcome, separate from execution outcome. */
   lastDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error text when available. */
@@ -316,6 +340,33 @@ export type CronJobState = {
   lastFailureNotificationDeliveryError?: string;
 };
 
+export type CronTrigger = {
+  script: string;
+  once?: boolean;
+};
+
+/**
+ * Closed failure taxonomy for trigger-script evaluation. Mirrors the code-mode
+ * failure codes plus the trigger tool budget; trigger-script.ts asserts the
+ * union stays in sync at compile time. Lives here (leaf module) so the cron
+ * service contract never imports the agents runtime.
+ */
+export type CronTriggerFailureCode =
+  | "aborted"
+  | "invalid_input"
+  | "runtime_unavailable"
+  | "timeout"
+  | "output_limit_exceeded"
+  | "snapshot_limit_exceeded"
+  | "internal_error"
+  | "tool_budget_exceeded";
+
+/** Result union returned by the cron trigger-script evaluator. */
+export type CronTriggerEvaluationResult =
+  | { kind: "evaluated"; fire: boolean; message?: string; state?: unknown }
+  | { kind: "busy" }
+  | { kind: "error"; code: CronTriggerFailureCode; error: string };
+
 /** Fully persisted cron job with spec fields and mutable run state. */
 export type CronJob = CronJobBase<
   CronSchedule,
@@ -325,6 +376,13 @@ export type CronJob = CronJobBase<
   CronDelivery,
   CronFailureAlert | false
 > & {
+  declarationKey?: string;
+  displayName?: string;
+  owner?: {
+    agentId?: string;
+    sessionKey?: string;
+  };
+  trigger?: CronTrigger;
   state: CronJobState;
 };
 
@@ -336,13 +394,27 @@ export type CronStoreFile = {
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
+  /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
+  id?: string;
   state?: Partial<CronJobState>;
 };
 
 /** Patch input accepted by cron APIs without allowing immutable identity fields. */
 export type CronJobPatch = Partial<
-  Omit<CronJob, "id" | "createdAtMs" | "state" | "payload" | "delivery">
+  Omit<
+    CronJob,
+    | "id"
+    | "createdAtMs"
+    | "state"
+    | "payload"
+    | "delivery"
+    | "declarationKey"
+    | "displayName"
+    | "owner"
+  >
 > & {
+  displayName?: string | null;
+  trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   state?: Partial<CronJobState>;

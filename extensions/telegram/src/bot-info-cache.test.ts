@@ -4,10 +4,11 @@ import {
   deleteCachedTelegramBotInfo,
   readCachedTelegramBotInfo,
   setTelegramBotInfoCacheStoreForTest,
-  TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS,
   writeCachedTelegramBotInfo,
 } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
+
+const BOT_INFO_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const botInfo: TelegramBotInfo = {
   id: 123456,
@@ -18,6 +19,7 @@ const botInfo: TelegramBotInfo = {
   can_read_all_group_messages: false,
   can_manage_bots: false,
   supports_inline_queries: false,
+  supports_join_request_queries: false,
   can_connect_to_business: false,
   has_main_web_app: false,
   has_topics_enabled: false,
@@ -93,7 +95,7 @@ describe("Telegram bot info cache", () => {
       readCachedTelegramBotInfo({
         accountId: "ops",
         botToken: "123456:secret",
-        now: new Date(Date.now() + TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS + 1),
+        now: new Date(Date.now() + BOT_INFO_CACHE_MAX_AGE_MS + 1),
       }),
     ).resolves.toBeNull();
   });

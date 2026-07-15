@@ -2,16 +2,35 @@
 import { describe, expect, it } from "vitest";
 import {
   collectChangedPaths,
-  formatConfigValidationFailure,
   applyUnsetPathsForWrite,
+  createMergePatch,
+  formatConfigValidationFailure,
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveWriteEnvSnapshotForPath,
-  unsetPathForWrite,
 } from "./io.write-prepare.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("config io write prepare", () => {
+  it("ignores prototype-chain keys when building merge patches", () => {
+    // Discriminating fixture: `collision` is own on base and only inherited on
+    // target. With `key in target` the old code treated the inherited value as
+    // present and emitted it in the patch; Object.hasOwn deletes the own key.
+    const base = {
+      safe: { mode: "local" },
+      collision: { mode: "owned-base" },
+    };
+    const target = Object.create({
+      collision: { mode: "inherited-target" },
+    }) as Record<string, unknown>;
+    target.safe = { mode: "cloud" };
+
+    expect(createMergePatch(base, target)).toEqual({
+      safe: { mode: "cloud" },
+      collision: null,
+    });
+  });
+
   it("persists caller changes onto resolved config without leaking runtime defaults", () => {
     const persisted = resolvePersistCandidateForWrite({
       runtimeConfig: {
@@ -170,6 +189,45 @@ describe("config io write prepare", () => {
     });
   });
 
+  it("does not reintroduce legacy openai-codex model params after doctor route repair", () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "openai-codex/gpt-5.5",
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { reasoning_effort: "high" },
+            },
+          },
+        },
+      },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      nextConfig: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            models: {
+              "openai/gpt-5.5": {
+                params: { reasoning_effort: "high" },
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+        },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(persisted.agents?.defaults?.models).not.toHaveProperty("openai-codex/gpt-5.5");
+    expect(persisted.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
+      params: { reasoning_effort: "high" },
+      agentRuntime: { id: "codex" },
+    });
+  });
+
   it("normalizes retired Google model refs during unrelated config writes", () => {
     const sourceConfig: OpenClawConfig = {
       agents: {
@@ -178,6 +236,7 @@ describe("config io write prepare", () => {
             primary: "google/gemini-3-pro-preview",
             fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
           },
+          utilityModel: "google/gemini-3-pro-preview",
           heartbeat: { model: "google/gemini-3-pro-preview" },
           subagents: {
             model: {
@@ -202,6 +261,7 @@ describe("config io write prepare", () => {
               primary: "google/gemini-3-pro-preview",
               fallbacks: ["google/gemini-3-pro-preview"],
             },
+            utilityModel: "google/gemini-3-pro-preview",
             heartbeat: { model: "google/gemini-3-pro-preview" },
             subagents: { model: "google/gemini-3-pro-preview" },
             models: {
@@ -221,6 +281,7 @@ describe("config io write prepare", () => {
             primary: "google/gemini-3.1-pro-preview",
             fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
           },
+          utilityModel: "google/gemini-3.1-pro-preview",
           heartbeat: { model: "google/gemini-3.1-pro-preview" },
           subagents: {
             model: {
@@ -245,6 +306,7 @@ describe("config io write prepare", () => {
               primary: "google/gemini-3.1-pro-preview",
               fallbacks: ["google/gemini-3.1-pro-preview"],
             },
+            utilityModel: "google/gemini-3.1-pro-preview",
             heartbeat: { model: "google/gemini-3.1-pro-preview" },
             subagents: { model: "google/gemini-3.1-pro-preview" },
             models: {
@@ -270,6 +332,7 @@ describe("config io write prepare", () => {
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
     });
+    expect(persisted.agents?.defaults?.utilityModel).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.defaults?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.defaults?.subagents?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
@@ -288,6 +351,7 @@ describe("config io write prepare", () => {
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview"],
     });
+    expect(persisted.agents?.list?.[0]?.utilityModel).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.list?.[0]?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.list?.[0]?.subagents?.model).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.list?.[0]?.models).toEqual({
@@ -437,6 +501,46 @@ describe("config io write prepare", () => {
 
     expect(persisted.agents?.defaults).not.toHaveProperty("params");
     expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).not.toHaveProperty("params");
+  });
+
+  it("applies explicit unsets without mutating caller config", () => {
+    const input: OpenClawConfig = {
+      gateway: { mode: "local" },
+      commands: { ownerDisplay: "hash" },
+      tools: { alsoAllow: ["exec", "fetch", "read"] },
+    };
+
+    const next = applyUnsetPathsForWrite(input, [
+      ["commands", "ownerDisplay"],
+      ["tools", "alsoAllow", "1"],
+    ]);
+
+    expect(input).toEqual({
+      gateway: { mode: "local" },
+      commands: { ownerDisplay: "hash" },
+      tools: { alsoAllow: ["exec", "fetch", "read"] },
+    });
+    expect(next.commands ?? {}).not.toHaveProperty("ownerDisplay");
+    expect(next.tools?.alsoAllow).toEqual(["exec", "read"]);
+  });
+
+  it.each([
+    ["invalid array suffix", ["tools", "alsoAllow", "1abc"]],
+    ["signed array index", ["tools", "alsoAllow", "+0"]],
+    ["unsafe integer", ["tools", "alsoAllow", "9007199254740993"]],
+    ["maximum array key", ["tools", "alsoAllow", "4294967294"]],
+    ["missing key", ["commands", "missingKey"]],
+    ["prototype key", ["commands", "__proto__"]],
+    ["constructor key", ["commands", "constructor"]],
+    ["prototype constructor property", ["commands", "prototype"]],
+  ] as const)("treats %s unset paths as immutable no-ops", (_name, unsetPath) => {
+    const input: OpenClawConfig = {
+      gateway: { mode: "local" },
+      commands: { ownerDisplay: "hash" },
+      tools: { alsoAllow: ["exec", "fetch"] },
+    };
+
+    expect(applyUnsetPathsForWrite(input, [[...unsetPath]])).toBe(input);
   });
 
   it("preserves untouched include-owned subtrees during unrelated writes", () => {
@@ -757,105 +861,6 @@ describe("config io write prepare", () => {
     expect(message).toContain('openclaw config set channels.telegram.dmPolicy "pairing"');
   });
 
-  it("unsets explicit paths when runtime defaults would otherwise reappear", () => {
-    const next = unsetPathForWrite(
-      {
-        gateway: { auth: { mode: "none" } },
-        commands: { ownerDisplay: "hash" },
-      },
-      ["commands", "ownerDisplay"],
-    );
-
-    expect(next.changed).toBe(true);
-    expect(next.next.commands ?? {}).not.toHaveProperty("ownerDisplay");
-  });
-
-  it("does not mutate caller config when unsetting existing config objects", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    } satisfies OpenClawConfig;
-
-    const next = unsetPathForWrite(input, ["commands", "ownerDisplay"]);
-
-    expect(input).toEqual({
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    });
-    expect(next.next.commands ?? {}).not.toHaveProperty("ownerDisplay");
-  });
-
-  it("keeps caller arrays immutable when unsetting array entries", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      tools: { alsoAllow: ["exec", "fetch", "read"] },
-    } satisfies OpenClawConfig;
-
-    const next = unsetPathForWrite(input, ["tools", "alsoAllow", "1"]);
-
-    expect(input.tools!.alsoAllow).toEqual(["exec", "fetch", "read"]);
-    expect((next.next.tools as { alsoAllow?: string[] } | undefined)?.alsoAllow).toEqual([
-      "exec",
-      "read",
-    ]);
-  });
-
-  it("treats invalid array-index unset paths as no-ops", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      tools: { alsoAllow: ["exec", "fetch"] },
-    } satisfies OpenClawConfig;
-
-    for (const path of [
-      ["tools", "alsoAllow", "1abc"],
-      ["tools", "alsoAllow", "+0"],
-      ["tools", "alsoAllow", "9007199254740993"],
-      ["tools", "alsoAllow", "4294967294"],
-    ]) {
-      const next = unsetPathForWrite(input, path);
-      expect(next.changed).toBe(false);
-      expect(next.next).toBe(input);
-    }
-  });
-
-  it("treats missing unset paths as no-op without mutating caller config", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    } satisfies OpenClawConfig;
-
-    const next = unsetPathForWrite(input, ["commands", "missingKey"]);
-
-    expect(next.changed).toBe(false);
-    expect(next.next).toBe(input);
-    expect(input).toEqual({
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    });
-  });
-
-  it("ignores blocked prototype-key unset path segments", () => {
-    const input: OpenClawConfig = {
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    } satisfies OpenClawConfig;
-
-    const blocked = [
-      ["commands", "__proto__"],
-      ["commands", "constructor"],
-      ["commands", "prototype"],
-    ].map((segments) => unsetPathForWrite(input, segments));
-
-    for (const result of blocked) {
-      expect(result.changed).toBe(false);
-      expect(result.next).toBe(input);
-    }
-    expect(input).toEqual({
-      gateway: { mode: "local" },
-      commands: { ownerDisplay: "hash" },
-    });
-  });
-
   it("preserves env refs on unchanged paths while keeping changed paths resolved", () => {
     const changedPaths = new Set<string>();
     collectChangedPaths(
@@ -999,6 +1004,25 @@ describe("config io write prepare", () => {
         { id: "a", token: "${TOKEN_A}" },
       ],
     });
+  });
+
+  it("ignores prototype-chain keys when collecting changed paths", () => {
+    // Same one-sided collision as the merge-patch fixture: own on base, only
+    // inherited on target. Old `in` checks walked into collision.mode; hasOwn
+    // reports the top-level own-key removal instead.
+    const base = {
+      safe: { mode: "local" },
+      collision: { mode: "owned-base" },
+    };
+    const target = Object.create({
+      collision: { mode: "inherited-target" },
+    }) as Record<string, unknown>;
+    target.safe = { mode: "cloud" };
+
+    const changedPaths = new Set<string>();
+    collectChangedPaths(base, target, "", changedPaths);
+
+    expect([...changedPaths].toSorted()).toEqual(["collision", "safe.mode"]);
   });
 
   it("does not overwrite identity-restored escaped refs with positional map entries", () => {
@@ -1471,3 +1495,4 @@ describe("config io write prepare", () => {
     ).toThrow("Config write would flatten $include-owned config at agents.defaults");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

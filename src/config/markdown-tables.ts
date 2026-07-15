@@ -40,24 +40,6 @@ function getDefaultTableModes(): Map<string, MarkdownTableMode> {
   return cachedDefaultTableModes;
 }
 
-const EMPTY_DEFAULT_TABLE_MODES = new Map<string, MarkdownTableMode>();
-
-function bindDefaultTableModesMethod<TValue>(value: TValue): TValue {
-  if (typeof value !== "function") {
-    return value;
-  }
-  return value.bind(getDefaultTableModes()) as TValue;
-}
-
-export const DEFAULT_TABLE_MODES: ReadonlyMap<string, MarkdownTableMode> = new Proxy(
-  EMPTY_DEFAULT_TABLE_MODES,
-  {
-    get(_target, prop, _receiver) {
-      return bindDefaultTableModesMethod(Reflect.get(getDefaultTableModes(), prop));
-    },
-  },
-);
-
 const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
   value === "off" || value === "bullets" || value === "code" || value === "block";
 
@@ -80,11 +62,6 @@ function resolveMarkdownModeFromSection(
   const sectionMode = section.markdown?.tables;
   return isMarkdownTableMode(sectionMode) ? sectionMode : undefined;
 }
-
-export type {
-  ResolveMarkdownTableMode,
-  ResolveMarkdownTableModeParams,
-} from "./markdown-tables.types.js";
 
 export function resolveMarkdownTableMode(
   params: ResolveMarkdownTableModeParams,

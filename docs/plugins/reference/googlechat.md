@@ -20,4 +20,4 @@ channels: googlechat
 
 ## Related docs
 
-- [googlechat](/channels/googlechat)
+- [Google Chat](/channels/googlechat)

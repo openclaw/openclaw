@@ -1,12 +1,17 @@
 // Copilot tests cover tool bridge plugin behavior.
 import type { Tool as SdkTool, ToolInvocation, ToolResultObject } from "@github/copilot-sdk";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AnyAgentTool, SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createCopilotToolBridge,
-  convertOpenClawToolToSdkTool,
-  supportsModelTools,
-} from "./tool-bridge.js";
+import { createCopilotToolBridge } from "./tool-bridge.js";
+
+type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridge>[0];
+type ConvertToolOptions = Pick<
+  CopilotToolBridgeInput,
+  "abortSignal" | "beforeExecute" | "onToolCompleted"
+> & {
+  onAgentToolResult?: NonNullable<CopilotToolBridgeInput["attemptParams"]>["onAgentToolResult"];
+};
 
 type FakeTool = AnyAgentTool & {
   execute: ReturnType<typeof vi.fn>;
@@ -76,19 +81,29 @@ function runSdkTool(tool: SdkTool, args: unknown, invocation = makeInvocation())
   return tool.handler(args, invocation);
 }
 
+async function convertOpenClawToolToSdkToolForTest(
+  sourceTool: AnyAgentTool,
+  options: ConvertToolOptions,
+): Promise<SdkTool> {
+  const bridge = await createCopilotToolBridge({
+    abortSignal: options.abortSignal,
+    agentId: "agent-1",
+    allowModelTools: true,
+    attemptParams: options.onAgentToolResult
+      ? { onAgentToolResult: options.onAgentToolResult }
+      : undefined,
+    beforeExecute: options.beforeExecute,
+    createOpenClawCodingTools: async () => [sourceTool],
+    modelId: "gpt-test",
+    modelProvider: "github-copilot",
+    onToolCompleted: options.onToolCompleted,
+    sessionId: "session-1",
+  });
+  return expectDefined(bridge.sdkTools[0], "Copilot SDK tool");
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
-});
-
-describe("supportsModelTools", () => {
-  it("returns true for github-copilot and false otherwise", () => {
-    expect(supportsModelTools("github-copilot")).toBe(true);
-    expect(supportsModelTools("openai")).toBe(false);
-    expect(supportsModelTools("github")).toBe(false);
-    expect(supportsModelTools("openclaw")).toBe(false);
-    expect(supportsModelTools("copilot")).toBe(false);
-    expect(supportsModelTools("")).toBe(false);
-  });
 });
 
 describe("createCopilotToolBridge", () => {
@@ -107,14 +122,39 @@ describe("createCopilotToolBridge", () => {
     expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
   });
 
+  it("allows vetted BYOK providers to expose model tools", async () => {
+    const sourceTools = [makeTool()];
+    const createOpenClawCodingTools = vi.fn(async () => sourceTools);
+
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      allowModelTools: true,
+      createOpenClawCodingTools,
+      modelId: "gpt-test",
+      modelProvider: "custom-openai",
+      sessionId: "session-1",
+    });
+
+    expect(createOpenClawCodingTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: "gpt-test",
+        modelProvider: "custom-openai",
+      }),
+    );
+    expect(result.sourceTools).toEqual(sourceTools);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a"]);
+  });
+
   it("forwards supported fields to injected createOpenClawCodingTools", async () => {
     const controller = new AbortController();
+    const computerContextEpoch = { value: 0 };
     const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
 
     await createCopilotToolBridge({
       abortSignal: controller.signal,
       agentDir: "/agent",
       agentId: "agent-1",
+      computerContextEpoch,
       createOpenClawCodingTools,
       cwd: "/workspace/task",
       modelId: "gpt-4o",
@@ -133,6 +173,7 @@ describe("createCopilotToolBridge", () => {
         abortSignal: controller.signal,
         agentDir: "/agent",
         agentId: "agent-1",
+        computerContextEpoch,
         cwd: "/workspace/task",
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
@@ -156,9 +197,205 @@ describe("createCopilotToolBridge", () => {
       sessionId: "session-1",
     });
 
-    expect(result.sourceTools).toBe(sourceTools);
+    expect(result.sourceTools).toEqual(sourceTools);
     expect(result.sdkTools).toHaveLength(2);
     expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a", "tool-b"]);
+  });
+
+  it("preserves direct-only OpenClaw through the exact Copilot allowlist", async () => {
+    const systemAgentTool = makeTool({
+      name: "openclaw",
+      catalogMode: "direct-only",
+    } as never);
+
+    const result = await createCopilotToolBridge({
+      agentId: "openclaw",
+      attemptParams: {
+        runId: "openclaw-turn-1",
+        sessionKey: "agent:openclaw:main",
+        toolsAllow: ["openclaw"],
+      } as never,
+      createOpenClawCodingTools: async () => [systemAgentTool],
+      modelId: "gpt-4.1",
+      modelProvider: "github-copilot",
+      sessionId: "openclaw-session",
+    });
+
+    expect(result.sourceTools).toEqual([systemAgentTool]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["openclaw"]);
+  });
+
+  it("compacts the Copilot tool surface behind tool_search controls when enabled", async () => {
+    const createOpenClawCodingTools = vi.fn(async (opts: unknown) => {
+      const includeToolSearchControls = Boolean(
+        (opts as { includeToolSearchControls?: boolean }).includeToolSearchControls,
+      );
+      return includeToolSearchControls
+        ? [
+            makeTool({ name: "tool_search_code" }),
+            makeTool({ name: "fake_hidden" }),
+            makeTool({ name: "read" }),
+          ]
+        : [makeTool({ name: "fake_hidden" }), makeTool({ name: "read" })];
+    });
+
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { toolSearch: true } },
+        runId: "run-tool-search",
+        sessionKey: "agent:main:main",
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(createOpenClawCodingTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeToolSearchControls: true,
+        toolSearchCatalogRef: expect.any(Object),
+        toolSearchCatalogExecutor: expect.any(Function),
+      }),
+    );
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search_code"]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool_search_code"]);
+  });
+
+  it("keeps tool_search controls visible when a narrow allowlist is active", async () => {
+    const createOpenClawCodingTools = vi.fn(async (opts: unknown) => {
+      const includeToolSearchControls = Boolean(
+        (opts as { includeToolSearchControls?: boolean }).includeToolSearchControls,
+      );
+      return includeToolSearchControls
+        ? [makeTool({ name: "tool_search_code" }), makeTool({ name: "read" })]
+        : [makeTool({ name: "read" })];
+    });
+
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { toolSearch: true } },
+        runId: "run-tool-search",
+        sessionKey: "agent:main:main",
+        toolsAllow: ["read"],
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search_code"]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool_search_code"]);
+  });
+
+  it("filters the hidden tool_search catalog before compacting narrowed tools", async () => {
+    let catalogRef: { current?: { entries?: Array<{ name: string }> } } | undefined;
+    const createOpenClawCodingTools = vi.fn(async (opts: unknown) => {
+      catalogRef = (opts as { toolSearchCatalogRef?: typeof catalogRef }).toolSearchCatalogRef;
+      return [
+        makeTool({ name: "tool_search_code" }),
+        makeTool({ name: "read" }),
+        makeTool({ name: "edit" }),
+        makeTool({ name: "write" }),
+      ];
+    });
+
+    await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { toolSearch: true } },
+        runId: "run-tool-search",
+        sessionKey: "agent:main:main",
+        toolsAllow: ["read"],
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(catalogRef?.current?.entries?.map((entry) => entry.name)).toEqual(["read"]);
+  });
+
+  it("compacts the Copilot tool surface behind code-mode exec/wait when enabled", async () => {
+    const createOpenClawCodingTools = vi.fn(async () => [
+      makeTool({ name: "fake_hidden" }),
+      makeTool({ name: "read" }),
+    ]);
+
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { codeMode: true } },
+        runId: "run-code-mode",
+        sessionKey: "agent:main:main",
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(createOpenClawCodingTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeToolSearchControls: false,
+        toolSearchCatalogRef: expect.any(Object),
+        toolSearchCatalogExecutor: expect.any(Function),
+      }),
+    );
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+  });
+
+  it("keeps code-mode controls visible when a narrow allowlist is active", async () => {
+    const createOpenClawCodingTools = vi.fn(async () => [
+      makeTool({ name: "fake_hidden" }),
+      makeTool({ name: "read" }),
+    ]);
+
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { codeMode: true } },
+        runId: "run-code-mode",
+        sessionKey: "agent:main:main",
+        toolsAllow: ["read"],
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+  });
+
+  it("filters the hidden code-mode catalog before compacting narrowed tools", async () => {
+    let catalogRef: { current?: { entries?: Array<{ name: string }> } } | undefined;
+    const createOpenClawCodingTools = vi.fn(async (opts: unknown) => {
+      catalogRef = (opts as { toolSearchCatalogRef?: typeof catalogRef }).toolSearchCatalogRef;
+      return [makeTool({ name: "read" }), makeTool({ name: "edit" }), makeTool({ name: "write" })];
+    });
+
+    await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { codeMode: true } },
+        runId: "run-code-mode",
+        sessionKey: "agent:main:main",
+        toolsAllow: ["read"],
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(catalogRef?.current?.entries?.map((entry) => entry.name)).toEqual(["read"]);
   });
 
   it("throws when createOpenClawCodingTools returns a non-array", async () => {
@@ -319,6 +556,7 @@ describe("createCopilotToolBridge", () => {
           runId: "run-1",
           config,
           onToolOutcome,
+          messageActionTurnCapability: "turn-capability-1",
         } as never,
         createOpenClawCodingTools,
         modelId: "gpt-4o",
@@ -331,6 +569,7 @@ describe("createCopilotToolBridge", () => {
       expect(opts.runId).toBe("run-1");
       expect(opts.config).toBe(config);
       expect(opts.onToolOutcome).toBe(onToolOutcome);
+      expect(opts.messageActionTurnCapability).toBe("turn-capability-1");
     });
 
     it("prefers the unscoped toolAuthProfileStore when building OpenClaw tools", async () => {
@@ -494,6 +733,27 @@ describe("createCopilotToolBridge", () => {
       // runtimeToolAllowlist; consumers (PI plugin tools) read the
       // renamed key, so the bridge must surface the renamed shape too.
       expect(opts.runtimeToolAllowlist).toEqual(["read", "edit"]);
+    });
+
+    it("forwards the native conversation identity from attemptParams", async () => {
+      const { createOpenClawCodingTools, getOpts } = captureCall();
+
+      await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          chatId: "oc_native_chat",
+          chatType: "direct",
+        } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+
+      expect(getOpts()).toMatchObject({
+        chatType: "direct",
+        nativeChannelId: "oc_native_chat",
+      });
     });
 
     it("onYield routes to sessionRef.current.abort() and invokes onYieldDetected when the live session is bound", async () => {
@@ -990,6 +1250,24 @@ describe("createCopilotToolBridge", () => {
       expect(result.sourceTools.map((tool) => tool.name).toSorted()).toEqual(["edit", "read"]);
     });
 
+    it("does not discard lean-mode overrides after tool construction", async () => {
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          config: {
+            agents: { defaults: { experimental: { localModelLean: true } } },
+            tools: { alsoAllow: ["image_generate"] },
+          },
+        } as never,
+        createOpenClawCodingTools: async () => [makeTool({ name: "image_generate" })],
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["image_generate"]);
+    });
+
     it("keeps plugin tools for plugin group allowlists", async () => {
       const createOpenClawCodingTools = vi.fn(async () => [
         makeTool({ name: "memory_search", pluginId: "active-memory" } as never),
@@ -1048,23 +1326,23 @@ describe("createCopilotToolBridge", () => {
   });
 });
 
-describe("convertOpenClawToolToSdkTool", () => {
-  it("throws on empty and non-string names", () => {
-    expect(() => convertOpenClawToolToSdkTool(makeTool({ name: "" as never }), {})).toThrow(
-      "tool name must be a non-empty string",
-    );
-    expect(() => convertOpenClawToolToSdkTool(makeTool({ name: 42 as never }), {})).toThrow(
-      "tool name must be a non-empty string",
-    );
+describe("createCopilotToolBridge tool conversion", () => {
+  it("throws on empty and non-string names", async () => {
+    await expect(
+      convertOpenClawToolToSdkToolForTest(makeTool({ name: "" as never }), {}),
+    ).rejects.toThrow("tool name must be a non-empty string");
+    await expect(
+      convertOpenClawToolToSdkToolForTest(makeTool({ name: 42 as never }), {}),
+    ).rejects.toThrow("tool name must be a non-empty string");
   });
 
-  it("throws on non-function execute", () => {
-    expect(() => convertOpenClawToolToSdkTool(makeTool({ execute: "nope" as never }), {})).toThrow(
-      "must define an execute function",
-    );
+  it("throws on non-function execute", async () => {
+    await expect(
+      convertOpenClawToolToSdkToolForTest(makeTool({ execute: "nope" as never }), {}),
+    ).rejects.toThrow("must define an execute function");
   });
 
-  it("preserves name, description, and parameters exactly", () => {
+  it("preserves name, description, and parameters exactly", async () => {
     const parameters = {
       properties: { path: { type: "string" } },
       type: "object",
@@ -1075,14 +1353,14 @@ describe("convertOpenClawToolToSdkTool", () => {
       parameters: parameters as never,
     });
 
-    const result = convertOpenClawToolToSdkTool(sourceTool, {});
+    const result = await convertOpenClawToolToSdkToolForTest(sourceTool, {});
 
     expect(result.name).toBe("read_file");
     expect(result.description).toBe("Read a file");
     expect(result.parameters).toBe(parameters);
   });
 
-  it("sets skipPermission: true so OpenClaw's wrapped-tool internal enforcement handles permission decisions (PI-parity model)", () => {
+  it("sets skipPermission: true so OpenClaw's wrapped-tool internal enforcement handles permission decisions (PI-parity model)", async () => {
     // Per the harness docs: every bridged OpenClaw tool comes from
     // `createOpenClawCodingTools`, which already wraps each tool with
     // `wrapToolWithBeforeToolCallHook` (loop detection, trusted plugin
@@ -1093,22 +1371,23 @@ describe("convertOpenClawToolToSdkTool", () => {
     // Setting `skipPermission: true` lets the wrapped execute() run
     // OpenClaw's hook with the right context — mirrors codex
     // (`extensions/codex/src/app-server/dynamic-tools.ts`).
-    const result = convertOpenClawToolToSdkTool(makeTool(), {}) as SdkTool & {
+    const result = (await convertOpenClawToolToSdkToolForTest(makeTool(), {})) as SdkTool & {
       skipPermission?: boolean;
     };
 
     expect(result.skipPermission).toBe(true);
   });
 
-  it("marks every bridged tool as overridesBuiltInTool so OpenClaw owns names that collide with Copilot CLI built-ins (edit/read/write/bash/...)", () => {
+  it("marks every bridged tool as overridesBuiltInTool so OpenClaw owns names that collide with Copilot CLI built-ins (edit/read/write/bash/...)", async () => {
     // Real-world dogfood found that openclaw's createOpenClawCodingTools
     // returns a tool named `edit`, which the bundled Copilot CLI also ships
     // as a built-in. The SDK rejects the registration unless the external
     // tool is explicitly marked as an override.
     for (const name of ["edit", "read", "write", "bash", "live_echo"]) {
-      const result = convertOpenClawToolToSdkTool(makeTool({ name }), {}) as SdkTool & {
-        overridesBuiltInTool?: boolean;
-      };
+      const result = (await convertOpenClawToolToSdkToolForTest(
+        makeTool({ name }),
+        {},
+      )) as SdkTool & { overridesBuiltInTool?: boolean };
       expect(result.overridesBuiltInTool).toBe(true);
     }
   });
@@ -1117,7 +1396,9 @@ describe("convertOpenClawToolToSdkTool", () => {
     const controller = new AbortController();
     controller.abort();
     const sourceTool = makeTool();
-    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, { abortSignal: controller.signal });
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(sourceTool, {
+      abortSignal: controller.signal,
+    });
 
     const result = await runSdkTool(sdkTool, {});
 
@@ -1134,7 +1415,7 @@ describe("convertOpenClawToolToSdkTool", () => {
   it("calls beforeExecute with the invocation context before execute", async () => {
     const beforeExecute = vi.fn(async () => undefined);
     const sourceTool = makeTool();
-    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, { beforeExecute });
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(sourceTool, { beforeExecute });
     const invocation = makeInvocation({ toolCallId: "call-42" });
     const args = { value: "input" };
 
@@ -1148,15 +1429,17 @@ describe("convertOpenClawToolToSdkTool", () => {
       toolCallId: "call-42",
       toolName: "tool-a",
     });
-    expect(beforeExecute.mock.invocationCallOrder[0]).toBeLessThan(
-      sourceTool.execute.mock.invocationCallOrder[0],
+    expect(
+      expectDefined(beforeExecute.mock.invocationCallOrder[0], "Copilot before-execute invocation"),
+    ).toBeLessThan(
+      expectDefined(sourceTool.execute.mock.invocationCallOrder[0], "Copilot tool invocation"),
     );
   });
 
   it("returns a failure result when beforeExecute throws", async () => {
     const error = new Error("permission denied");
     const sourceTool = makeTool();
-    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(sourceTool, {
       beforeExecute: vi.fn(async () => {
         throw error;
       }),
@@ -1175,15 +1458,19 @@ describe("convertOpenClawToolToSdkTool", () => {
 
   it("calls prepareArguments and passes the prepared args and toolCallId to execute", async () => {
     const preparedArgs = { value: "prepared" };
+    const onToolCompleted = vi.fn();
     const prepareArguments = vi.fn(() => preparedArgs);
     const sourceTool = makeTool({ prepareArguments });
-    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(sourceTool, { onToolCompleted });
 
     await runSdkTool(sdkTool, { value: "raw" }, makeInvocation({ toolCallId: "call-99" }));
 
     expect(prepareArguments).toHaveBeenCalledTimes(1);
     expect(prepareArguments).toHaveBeenCalledWith({ value: "raw" });
     expect(sourceTool.execute).toHaveBeenCalledWith("call-99", preparedArgs, undefined, undefined);
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ args: preparedArgs, toolCallId: "call-99" }),
+    );
   });
 
   it("returns a failure result when prepareArguments throws", async () => {
@@ -1193,7 +1480,7 @@ describe("convertOpenClawToolToSdkTool", () => {
         throw error;
       }),
     });
-    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(sourceTool, {});
 
     const result = await runSdkTool(sdkTool, {});
 
@@ -1205,22 +1492,15 @@ describe("convertOpenClawToolToSdkTool", () => {
     expect(getError(result as ToolResultObject)).toBe(error.message);
   });
 
-  it("returns success with empty text when content is missing", async () => {
-    const sourceTool = makeTool({}, { details: null });
-    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
-
-    const result = await runSdkTool(sdkTool, {});
-
-    expect(result).toEqual({ resultType: "success", textResultForLlm: "" });
-  });
-
   it("converts single text content to an exact textResultForLlm", async () => {
     const onAgentToolResult = vi.fn();
     const sourceResult = {
       content: [{ text: "hello", type: "text" }],
       details: { results: [{ text: "hello" }] },
     };
-    const sdkTool = convertOpenClawToolToSdkTool(makeTool({}, sourceResult), { onAgentToolResult });
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(makeTool({}, sourceResult), {
+      onAgentToolResult,
+    });
 
     const result = await runSdkTool(sdkTool, {});
 
@@ -1232,10 +1512,33 @@ describe("convertOpenClawToolToSdkTool", () => {
     });
   });
 
+  it("reports terminal tool results to the harness lifecycle bridge", async () => {
+    const onToolCompleted = vi.fn();
+    const sourceResult = {
+      content: [{ text: "hello", type: "text" }],
+      details: { results: [{ text: "hello" }] },
+    };
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(makeTool({}, sourceResult), {
+      onToolCompleted,
+    });
+
+    await runSdkTool(sdkTool, { value: "input" }, makeInvocation({ toolCallId: "call-9" }));
+    await flushAsync();
+
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: { value: "input" },
+        result: sourceResult,
+        toolCallId: "call-9",
+        toolName: "tool-a",
+      }),
+    );
+  });
+
   it("reports thrown tool failures to the private result observer", async () => {
     const error = new Error("backend unavailable");
     const onAgentToolResult = vi.fn();
-    const sdkTool = convertOpenClawToolToSdkTool(
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(
       makeTool({
         execute: vi.fn(async () => {
           throw error;
@@ -1261,17 +1564,46 @@ describe("convertOpenClawToolToSdkTool", () => {
     });
   });
 
-  it("reports returned OpenClaw error results as observer failures", async () => {
+  it("reports terminal tool failures to the harness lifecycle bridge", async () => {
+    const onToolCompleted = vi.fn();
+    const preparedArgs = { value: "prepared" };
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(
+      makeTool({
+        prepareArguments: vi.fn(() => preparedArgs),
+        execute: vi.fn(async () => {
+          throw new Error("backend unavailable");
+        }),
+      }),
+      { onToolCompleted },
+    );
+
+    await runSdkTool(sdkTool, { value: "input" }, makeInvocation({ toolCallId: "call-10" }));
+    await flushAsync();
+
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: preparedArgs,
+        error: "backend unavailable",
+        toolCallId: "call-10",
+        toolName: "tool-a",
+      }),
+    );
+  });
+
+  it("reports returned OpenClaw error results to both tool observers", async () => {
     const onAgentToolResult = vi.fn();
+    const onToolCompleted = vi.fn();
     const sourceResult = {
       content: [{ text: '{"status":"error","error":"backend unavailable"}', type: "text" }],
       details: { status: "error", error: "backend unavailable" },
     };
-    const sdkTool = convertOpenClawToolToSdkTool(makeTool({}, sourceResult), {
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(makeTool({}, sourceResult), {
       onAgentToolResult,
+      onToolCompleted,
     });
 
     const result = await runSdkTool(sdkTool, {});
+    await flushAsync();
 
     expect(result).toMatchObject({ resultType: "success" });
     expect(onAgentToolResult).toHaveBeenCalledWith({
@@ -1279,10 +1611,16 @@ describe("convertOpenClawToolToSdkTool", () => {
       result: sourceResult,
       isError: true,
     });
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "backend unavailable",
+        result: sourceResult,
+      }),
+    );
   });
 
   it("joins multiple text blocks with newlines", async () => {
-    const sdkTool = convertOpenClawToolToSdkTool(
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(
       makeTool(
         {},
         {
@@ -1303,7 +1641,7 @@ describe("convertOpenClawToolToSdkTool", () => {
   });
 
   it("converts image content into binaryResultsForLlm while preserving text", async () => {
-    const sdkTool = convertOpenClawToolToSdkTool(
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(
       makeTool(
         {},
         {
@@ -1322,7 +1660,6 @@ describe("convertOpenClawToolToSdkTool", () => {
     expect(result).toEqual({
       binaryResultsForLlm: [
         {
-          base64Data: "base64-data",
           data: "base64-data",
           mimeType: "image/png",
           type: "image",
@@ -1333,30 +1670,6 @@ describe("convertOpenClawToolToSdkTool", () => {
     });
   });
 
-  it("returns a failure result for unsupported content shapes", async () => {
-    const onAgentToolResult = vi.fn();
-    const sourceResult = {
-      content: [{ type: "resource" }],
-      details: null,
-    };
-    const sdkTool = convertOpenClawToolToSdkTool(makeTool({}, sourceResult), { onAgentToolResult });
-
-    const result = await runSdkTool(sdkTool, {});
-
-    expect(result).toMatchObject({
-      resultType: "failure",
-      textResultForLlm: "[copilot-tool-bridge] unsupported AgentToolResult content shape: resource",
-    });
-    expect(getError(result as ToolResultObject)).toBe(
-      "[copilot-tool-bridge] unsupported AgentToolResult content shape: resource",
-    );
-    expect(onAgentToolResult).toHaveBeenCalledWith({
-      toolName: "tool-a",
-      result: sourceResult,
-      isError: true,
-    });
-  });
-
   it("returns a failure result when execute throws and preserves the error", async () => {
     const error = new Error("tool exploded");
     const sourceTool = makeTool({
@@ -1364,7 +1677,7 @@ describe("convertOpenClawToolToSdkTool", () => {
         throw error;
       }),
     });
-    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(sourceTool, {});
 
     const result = await runSdkTool(sdkTool, {});
 
@@ -1389,7 +1702,7 @@ describe("convertOpenClawToolToSdkTool", () => {
       .mockImplementationOnce(async () => first.promise)
       .mockImplementationOnce(async () => second.promise);
     const sourceTool = makeTool({ execute });
-    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(sourceTool, {});
 
     const firstRun = runSdkTool(sdkTool, {}, makeInvocation({ toolCallId: "call-1" }));
     const secondRun = runSdkTool(sdkTool, {}, makeInvocation({ toolCallId: "call-2" }));
@@ -1419,7 +1732,7 @@ describe("convertOpenClawToolToSdkTool", () => {
       .mockImplementationOnce(async () => first.promise)
       .mockImplementationOnce(async () => second.promise);
     const sourceTool = makeTool({ execute, executionMode: "sequential" });
-    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(sourceTool, {});
 
     const firstRun = runSdkTool(sdkTool, {}, makeInvocation({ toolCallId: "call-1" }));
     const secondRun = runSdkTool(sdkTool, {}, makeInvocation({ toolCallId: "call-2" }));
@@ -1454,7 +1767,9 @@ describe("convertOpenClawToolToSdkTool", () => {
           }),
       ),
     });
-    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, { abortSignal: controller.signal });
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(sourceTool, {
+      abortSignal: controller.signal,
+    });
 
     const resultPromise = runSdkTool(sdkTool, {});
     await flushAsync();
@@ -1469,3 +1784,4 @@ describe("convertOpenClawToolToSdkTool", () => {
     expect(getError(result as ToolResultObject)).toBe("aborted during execute");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

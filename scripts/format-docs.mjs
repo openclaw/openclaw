@@ -7,12 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const CHECK = process.argv.includes("--check");
 const DOCS_FORMAT_MAX_BUFFER_BYTES = 1024 * 1024 * 16;
-export const DOCS_FORMAT_MAX_COMMAND_LINE_BYTES = 24 * 1024;
+const DOCS_FORMAT_MAX_COMMAND_LINE_BYTES = 24 * 1024;
 const FAILURE_OUTPUT_TAIL_BYTES = 16 * 1024;
 
 function outputText(value) {
@@ -128,7 +128,7 @@ export function resolveOxfmtInvocation(args, params = {}) {
 
   if (existsSync(shimPath)) {
     if (platform === "win32") {
-      const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
+      const comSpec = params.comSpec ?? resolveWindowsCmdExePath(params.env ?? process.env);
       return {
         command: comSpec,
         args: ["/d", "/s", "/c", buildCmdExeCommandLine(shimPath, args)],
@@ -183,7 +183,7 @@ export function runOxfmt(files, params = {}, deps = {}) {
   }
 }
 
-export function repairFiles(root, files) {
+function repairFiles(root, files) {
   const changed = [];
   for (const relativePath of files) {
     const absolutePath = path.join(root, relativePath);

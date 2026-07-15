@@ -1,5 +1,5 @@
 // Discord plugin module implements reply delivery behavior.
-import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
+import { formatReasoningMessage, resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildOutboundSessionContext,
   sendDurableMessageBatch,
@@ -17,11 +17,13 @@ import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RequestClient } from "../internal/discord.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
+import type { DiscordAllowedMentions } from "../send.shared.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 
-export type DiscordThreadBindingLookupRecord = {
+type DiscordThreadBindingLookupRecord = {
   accountId: string;
   channelId: string;
   threadId: string;
@@ -35,6 +37,21 @@ export type DiscordThreadBindingLookup = {
   listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
+
+export function formatDiscordReplyDeliveryFailure(params: {
+  kind: string;
+  err: unknown;
+  target: string;
+  sessionKey?: string;
+}) {
+  const context = [
+    `target=${params.target}`,
+    params.sessionKey ? `session=${params.sessionKey}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
+}
 
 function resolveTargetChannelId(target: string): string | undefined {
   if (!target.startsWith("channel:")) {
@@ -70,8 +87,9 @@ function resolveBindingIdentity(
     return undefined;
   }
   const baseLabel = binding.label?.trim() || binding.agentId;
+  const displayName = `🤖 ${baseLabel}`.trim() || "🤖 agent";
   const identity: OutboundIdentity = {
-    name: (`🤖 ${baseLabel}`.trim() || "🤖 agent").slice(0, 80),
+    name: truncateUtf16Safe(displayName, 80),
   };
   try {
     const avatar = resolveAgentAvatar(cfg, binding.agentId);
@@ -88,14 +106,18 @@ function createDiscordDeliveryDeps(params: {
   cfg: OpenClawConfig;
   token: string;
   rest?: RequestClient;
+  allowedMentions?: DiscordAllowedMentions;
 }): OutboundSendDeps {
   return {
+    // Discord webhooks default to user-only parsing; bot messages need this
+    // explicit policy to prevent a fresh preview final from broadcasting.
     discord: (to: string, text: string, opts?: Parameters<typeof sendMessageDiscord>[2]) =>
       sendMessageDiscord(to, text, {
         ...opts,
         cfg: opts?.cfg ?? params.cfg,
         token: params.token,
         rest: params.rest,
+        ...(params.allowedMentions ? { allowedMentions: params.allowedMentions } : {}),
       }),
     discordVoice: (
       to: string,
@@ -156,6 +178,19 @@ function resolveDiscordDeliveryOptions(params: {
   };
 }
 
+function formatDiscordReasoningPayload(payload: ReplyPayload): ReplyPayload {
+  if (payload.isReasoning !== true) {
+    return payload;
+  }
+  const text = typeof payload.text === "string" ? payload.text.trim() : "";
+  const nextPayload: ReplyPayload = {
+    ...payload,
+    text: formatReasoningMessage(text),
+  };
+  delete nextPayload.isReasoning;
+  return nextPayload;
+}
+
 export async function deliverDiscordReply(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
@@ -173,12 +208,15 @@ export async function deliverDiscordReply(params: {
   sessionKey?: string;
   threadBindings?: DiscordThreadBindingLookup;
   mediaLocalRoots?: readonly string[];
+  allowedMentions?: DiscordAllowedMentions;
   kind: "tool" | "block" | "final";
 }) {
   void params.runtime;
 
   const delivery = resolveDiscordDeliveryOptions(params);
-  const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, { kind: params.kind });
+  const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, {
+    kind: params.kind,
+  }).map(formatDiscordReasoningPayload);
   if (payloads.length === 0) {
     return;
   }
@@ -198,6 +236,7 @@ export async function deliverDiscordReply(params: {
       cfg: params.cfg,
       token: params.token,
       rest: params.rest,
+      allowedMentions: params.allowedMentions,
     }),
     mediaAccess: delivery.mediaAccess,
     session: buildOutboundSessionContext({

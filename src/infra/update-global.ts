@@ -55,7 +55,7 @@ const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
 /** npm-compatible spec used when the user asks to install the moving main branch. */
-export const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
+const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
 const COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT = "0";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG = `--allow-build=${PRIMARY_PACKAGE_NAME}`;
@@ -86,7 +86,7 @@ function normalizePackageVersionForComparison(value: string | null | undefined):
 }
 
 /** Returns true when a user target requests the moving main-branch package spec. */
-export function isMainPackageTarget(value: string): boolean {
+function isMainPackageTarget(value: string): boolean {
   return normalizeLowercaseStringOrEmpty(normalizePackageTarget(value)) === "main";
 }
 
@@ -94,7 +94,7 @@ export function isMainPackageTarget(value: string): boolean {
  * Returns true for targets that should pass through as package-manager specs
  * rather than being treated as registry dist-tags.
  */
-export function isExplicitPackageInstallSpec(value: string): boolean {
+function isExplicitPackageInstallSpec(value: string): boolean {
   const trimmed = normalizePackageTarget(value);
   if (!trimmed) {
     return false;
@@ -442,13 +442,8 @@ function resolveBunGlobalRoot(): string {
 }
 
 function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
-  const trimmed = pkgRoot?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const normalized = path.resolve(trimmed);
-  const nodeModulesDir = path.dirname(normalized);
-  if (path.basename(nodeModulesDir) !== "node_modules") {
+  const nodeModulesDir = inferGlobalRootFromPackageRoot(pkgRoot);
+  if (!nodeModulesDir) {
     return null;
   }
   const parentDir = path.dirname(nodeModulesDir);
@@ -595,8 +590,27 @@ function inferGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null 
     return null;
   }
   const normalized = path.resolve(trimmed);
-  const globalRoot = path.dirname(normalized);
+  let globalRoot = path.dirname(normalized);
+  if (path.basename(globalRoot).startsWith("@")) {
+    globalRoot = path.dirname(globalRoot);
+  }
   return path.basename(globalRoot) === "node_modules" ? globalRoot : null;
+}
+
+function resolvePackageRootFromGlobalRoot(params: {
+  globalRoot: string;
+  packageName?: string;
+}): string {
+  const packageName = params.packageName?.trim() || PRIMARY_PACKAGE_NAME;
+  const parts = packageName.split("/");
+  const hasSafeSegments =
+    parts.length > 0 &&
+    parts.length <= 2 &&
+    parts.every(
+      (part) => part.length > 0 && part !== "." && part !== ".." && !part.includes("\\"),
+    ) &&
+    (parts.length === 1 || parts[0]?.startsWith("@"));
+  return path.join(params.globalRoot, ...(hasSafeSegments ? parts : [PRIMARY_PACKAGE_NAME]));
 }
 
 function isDirectNpmNodeModulesRoot(globalRoot: string | null): boolean {
@@ -690,7 +704,7 @@ function resolvePreferredGlobalManagerCommand(
  * Resolves the package-manager command to execute for a global install.
  * npm may use the npm binary beside an existing package root when available.
  */
-export function resolveGlobalInstallCommand(
+function resolveGlobalInstallCommand(
   manager: GlobalInstallManager,
   pkgRoot?: string | null,
 ): ResolvedGlobalInstallCommand {
@@ -724,7 +738,7 @@ function resolveInstallCommandForManager(
  * Reads the global `node_modules` root for a package manager command.
  * Bun uses its deterministic install root because it has no `root -g` command.
  */
-export async function resolveGlobalRoot(
+async function resolveGlobalRoot(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   runCommand: CommandRunner,
   timeoutMs: number,
@@ -743,20 +757,6 @@ export async function resolveGlobalRoot(
   return root || null;
 }
 
-/** Resolves the OpenClaw package root under a package manager's global root. */
-export async function resolveGlobalPackageRoot(
-  managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
-  runCommand: CommandRunner,
-  timeoutMs: number,
-  pkgRoot?: string | null,
-): Promise<string | null> {
-  const root = await resolveGlobalRoot(managerOrCommand, runCommand, timeoutMs, pkgRoot);
-  if (!root) {
-    return null;
-  }
-  return path.join(root, PRIMARY_PACKAGE_NAME);
-}
-
 /**
  * Resolves the effective global install target, honoring an existing package
  * root when requested and detecting pnpm or bun layouts before command probes.
@@ -767,6 +767,7 @@ export async function resolveGlobalInstallTarget(params: {
   timeoutMs: number;
   pkgRoot?: string | null;
   honorPackageRoot?: boolean;
+  packageName?: string;
 }): Promise<ResolvedGlobalInstallTarget> {
   const honoredPackageRootGlobalRoot = params.honorPackageRoot
     ? inferGlobalRootFromPackageRoot(params.pkgRoot)
@@ -793,15 +794,28 @@ export async function resolveGlobalInstallTarget(params: {
     params.pkgRoot,
   );
   const pkgRootGlobalRoot = command.manager === "pnpm" ? pnpmPackageRootGlobalRoot : null;
+  // The detected npm owner applies to the running package, so its prefix is
+  // authoritative. PATH's npm may belong to another Node installation and
+  // report a different root, which would leave the running tree stale.
+  const npmPackageRootGlobalRoot =
+    command.manager === "npm" && inferNpmPrefixFromPackageRoot(params.pkgRoot)
+      ? inferGlobalRootFromPackageRoot(params.pkgRoot)
+      : null;
   const targetGlobalRoot =
     (command.manager === "bun" ? bunPackageRootGlobalRoot : null) ??
     pkgRootGlobalRoot ??
     (command.manager === "npm" ? honoredPackageRootGlobalRoot : null) ??
+    npmPackageRootGlobalRoot ??
     globalRoot;
   return {
     ...command,
     globalRoot: targetGlobalRoot,
-    packageRoot: targetGlobalRoot ? path.join(targetGlobalRoot, PRIMARY_PACKAGE_NAME) : null,
+    packageRoot: targetGlobalRoot
+      ? resolvePackageRootFromGlobalRoot({
+          globalRoot: targetGlobalRoot,
+          packageName: params.packageName,
+        })
+      : null,
     ...(honoredPackageRootGlobalRoot &&
     targetGlobalRoot === honoredPackageRootGlobalRoot &&
     honoredDirectNpmRoot
@@ -999,3 +1013,4 @@ export async function cleanupGlobalRenameDirs(params: {
   }
   return { removed };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

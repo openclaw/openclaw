@@ -7,46 +7,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import prettyMilliseconds from "pretty-ms";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const nodeBin = process.execPath;
-const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 8192;
+const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
 const BUILD_CACHE_VERSION = 3;
-const PLUGIN_SDK_DTS_CACHE_INPUTS = [
-  "package.json",
-  "pnpm-lock.yaml",
-  "npm-shrinkwrap.json",
-  "packages/plugin-sdk/package.json",
-  "packages/llm-core/package.json",
-  "packages/markdown-core/package.json",
-  "packages/media-core/package.json",
-  "packages/media-understanding-common/package.json",
-  "packages/terminal-core/package.json",
-  "packages/acp-core/package.json",
-  "packages/model-catalog-core/package.json",
-  "packages/normalization-core/package.json",
-  "packages/web-content-core/package.json",
-  "packages/memory-host-sdk/package.json",
-  "tsconfig.json",
-  "tsconfig.plugin-sdk.dts.json",
-  "src/plugin-sdk",
-  "packages/llm-core/src",
-  "packages/markdown-core/src",
-  "packages/media-core/src",
-  "packages/media-generation-core/src",
-  "packages/model-catalog-core/src",
-  "packages/memory-host-sdk/src",
-  "packages/normalization-core/src",
-  "packages/acp-core/src",
-  "packages/media-understanding-common/src",
-  "packages/terminal-core/src",
-  "packages/web-content-core/src",
-  "src/types",
-  "src/video-generation/dashscope-compatible.ts",
-  "src/video-generation/types.ts",
+const PLUGIN_SDK_ENTRY_DTS_CACHE_ENV = [
+  "OPENCLAW_BUILD_PRIVATE_QA",
+  "OPENCLAW_PLUGIN_SDK_CANONICAL_DTS",
 ];
-const PLUGIN_SDK_ENTRY_DTS_CACHE_ENV = ["OPENCLAW_BUILD_PRIVATE_QA"];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
   "scripts/write-plugin-sdk-entry-dts.ts",
   "scripts/lib/plugin-sdk-entries.mjs",
@@ -54,20 +25,15 @@ const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
-  ...PLUGIN_SDK_DTS_CACHE_INPUTS,
+  { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
 ];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
-  { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
   "dist/plugin-sdk/webhook-path.js",
   "dist/plugin-sdk/.boundary-entry-shims.stamp",
   ...pluginSdkEntrypoints.map((entry) => `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`),
 ];
 const PNPM_STEP_NODE_FALLBACKS = new Map([
   ["plugins:assets:build", ["scripts/bundled-plugin-assets.mjs", "--phase", "build"]],
-  [
-    "build:plugin-sdk:dts",
-    ["scripts/run-tsgo.mjs", "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
-  ],
   ["plugins:assets:copy", ["scripts/bundled-plugin-assets.mjs", "--phase", "copy"]],
   ["ui:build", ["scripts/ui.js", "build"]],
 ]);
@@ -79,6 +45,11 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["scripts/check-cli-bootstrap-imports.mjs"],
   },
+  {
+    label: "plugins:assets:copy",
+    kind: "pnpm",
+    pnpmArgs: ["plugins:assets:copy"],
+  },
   { label: "runtime-postbuild", kind: "node", args: ["scripts/runtime-postbuild.mjs"] },
   { label: "build-stamp", kind: "node", args: ["scripts/build-stamp.mjs"] },
   {
@@ -87,19 +58,12 @@ export const BUILD_ALL_STEPS = [
     args: ["scripts/runtime-postbuild-stamp.mjs"],
   },
   {
-    label: "build:plugin-sdk:dts",
-    kind: "pnpm",
-    pnpmArgs: ["build:plugin-sdk:dts"],
-    windowsNodeOptions: `--max-old-space-size=${WINDOWS_BUILD_MAX_OLD_SPACE_MB}`,
-    cache: {
-      inputs: PLUGIN_SDK_DTS_CACHE_INPUTS,
-      outputs: ["dist/plugin-sdk/.tsbuildinfo", "dist/plugin-sdk/packages", "dist/plugin-sdk/src"],
-    },
-  },
-  {
     label: "write-plugin-sdk-entry-dts",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/write-plugin-sdk-entry-dts.ts"],
+    args: ["--import", "tsx", "scripts/write-plugin-sdk-entry-dts.ts"],
+    env: {
+      OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1",
+    },
     cache: {
       env: PLUGIN_SDK_ENTRY_DTS_CACHE_ENV,
       inputs: PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS,
@@ -113,19 +77,14 @@ export const BUILD_ALL_STEPS = [
     args: ["scripts/check-plugin-sdk-exports.mjs"],
   },
   {
-    label: "plugins:assets:copy",
-    kind: "pnpm",
-    pnpmArgs: ["plugins:assets:copy"],
-  },
-  {
     label: "copy-hook-metadata",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/copy-hook-metadata.ts"],
+    args: ["--import", "tsx", "scripts/copy-hook-metadata.ts"],
   },
   {
     label: "copy-export-html-templates",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/copy-export-html-templates.ts"],
+    args: ["--import", "tsx", "scripts/copy-export-html-templates.ts"],
     cache: {
       inputs: [
         "scripts/copy-export-html-templates.ts",
@@ -148,17 +107,12 @@ export const BUILD_ALL_STEPS = [
   {
     label: "write-build-info",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/write-build-info.ts"],
+    args: ["--import", "tsx", "scripts/write-build-info.ts"],
   },
   {
     label: "write-cli-startup-metadata",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/write-cli-startup-metadata.ts"],
-  },
-  {
-    label: "write-cli-compat",
-    kind: "node",
-    args: ["--experimental-strip-types", "scripts/write-cli-compat.ts"],
+    args: ["--import", "tsx", "scripts/write-cli-startup-metadata.ts"],
   },
 ];
 
@@ -168,19 +122,17 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:build",
     "tsdown",
     "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
-    "build:plugin-sdk:dts",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
-    "plugins:assets:copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
-    "write-cli-compat",
   ],
   gatewayWatch: [
     "tsdown",
@@ -193,9 +145,20 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:build",
     "tsdown",
     "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
+  ],
+  sourcePerformance: [
+    "plugins:assets:build",
+    "tsdown",
+    "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
+    "runtime-postbuild",
+    "build-stamp",
+    "runtime-postbuild-stamp",
+    "write-cli-startup-metadata",
   ],
   cliStartup: [
     "tsdown",
@@ -204,7 +167,6 @@ export const BUILD_ALL_PROFILES = {
     "build-stamp",
     "runtime-postbuild-stamp",
     "write-cli-startup-metadata",
-    "write-cli-compat",
   ],
 };
 
@@ -216,7 +178,7 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
   },
   ciArtifacts: {
     tsdown: {
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
@@ -231,6 +193,12 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
   qaRuntime: {
     tsdown: {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    },
+  },
+  sourcePerformance: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
   cliStartup: {
@@ -303,6 +271,38 @@ export function resolveBuildAllSteps(profile = "full") {
   });
 }
 
+function readCurrentGitCommit() {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+/** Pin one source identity for every child process that contributes to this build. */
+export function resolveBuildAllEnvironment(
+  env = process.env,
+  now = () => new Date(),
+  readGitCommit = readCurrentGitCommit,
+) {
+  const explicitTimestamp = env.OPENCLAW_BUILD_TIMESTAMP?.trim();
+  const explicitCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
+  const checkedOutCommit = explicitCommit ? null : readGitCommit()?.trim();
+  // GITHUB_SHA names the workflow invocation and can differ from a checked-out tag.
+  const commit = explicitCommit || checkedOutCommit || env.GITHUB_SHA?.trim();
+  if (commit && !FULL_GIT_COMMIT_RE.test(commit)) {
+    throw new Error("build commit must be a full 40-character hexadecimal SHA");
+  }
+  const buildEnv = {
+    ...env,
+    OPENCLAW_BUILD_TIMESTAMP: explicitTimestamp || now().toISOString(),
+  };
+  if (commit) {
+    buildEnv.GIT_COMMIT = commit.toLowerCase();
+  }
+  return buildEnv;
+}
+
 function resolveStepEnv(step, env, platform) {
   const stepEnv = step.env ? Object.assign({}, env, step.env) : env;
   if (platform !== "win32" || !step.windowsNodeOptions) {
@@ -341,7 +341,7 @@ export function resolveBuildAllStep(step, params = {}) {
       pnpmArgs: step.pnpmArgs,
       nodeExecPath: params.nodeExecPath ?? nodeBin,
       npmExecPath: params.npmExecPath ?? env.npm_execpath,
-      comSpec: params.comSpec ?? env.ComSpec,
+      comSpec: params.comSpec,
       platform,
     });
     return {
@@ -587,13 +587,15 @@ export function restoreBuildAllStepCacheOutputs(cacheState, params = {}) {
 
 export function formatBuildAllDuration(durationMs) {
   const clampedMs = Math.max(0, durationMs);
-  if (clampedMs < 1000) {
-    return `${Math.round(clampedMs)}ms`;
-  }
-  if (clampedMs < 10000) {
-    return `${(clampedMs / 1000).toFixed(2)}s`;
-  }
-  return `${(clampedMs / 1000).toFixed(1)}s`;
+  const roundedMs =
+    clampedMs < 1000
+      ? Math.round(clampedMs)
+      : clampedMs < 10_000
+        ? Math.round(clampedMs / 10) * 10
+        : Math.round(clampedMs / 100) * 100;
+  return prettyMilliseconds(roundedMs, {
+    secondsDecimalDigits: clampedMs < 10_000 ? 2 : 1,
+  });
 }
 
 export function formatBuildAllTimingSummary(timings) {
@@ -630,11 +632,12 @@ if (isMainModule()) {
   if (args?.help) {
     console.log(buildAllUsage());
   } else {
+    const buildEnv = resolveBuildAllEnvironment();
     const timings = [];
     let exitCode = 0;
     for (const step of resolveBuildAllSteps(args.profile)) {
       const startedAt = performance.now();
-      const cacheState = resolveBuildAllStepCacheState(step);
+      const cacheState = resolveBuildAllStepCacheState(step, { env: buildEnv });
       if (process.env.OPENCLAW_BUILD_CACHE !== "0" && cacheState.fresh) {
         restoreBuildAllStepCacheOutputs(cacheState);
         const durationMs = performance.now() - startedAt;
@@ -643,7 +646,7 @@ if (isMainModule()) {
         continue;
       }
       console.error(`[build-all] ${step.label}`);
-      const invocation = resolveBuildAllStep(step);
+      const invocation = resolveBuildAllStep(step, { env: buildEnv });
       const result = spawnSync(invocation.command, invocation.args, invocation.options);
       const durationMs = performance.now() - startedAt;
       if (typeof result.status === "number") {
@@ -655,7 +658,10 @@ if (isMainModule()) {
           exitCode = result.status;
           break;
         }
-        writeBuildAllStepCacheStamp(step, resolveBuildAllStepCacheStampState(step, cacheState));
+        writeBuildAllStepCacheStamp(
+          step,
+          resolveBuildAllStepCacheStampState(step, cacheState, { env: buildEnv }),
+        );
         timings.push({ label: step.label, status: "ran", durationMs });
         console.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
         continue;

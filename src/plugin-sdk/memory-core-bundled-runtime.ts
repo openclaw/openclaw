@@ -1,10 +1,11 @@
 // Manual facade. Keep loader boundary explicit.
+import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 // Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 import type {
   MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderAdapter,
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderRuntime,
 } from "./memory-core-host-engine-embeddings.js";
@@ -29,9 +30,6 @@ type RuntimeFacadeModule = {
       fallback: string;
     },
   ) => Promise<EmbeddingProviderResult>;
-  registerBuiltInMemoryEmbeddingProviders: (register: {
-    registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
-  }) => void;
   removeGroundedShortTermCandidates: (params: {
     workspaceDir: string;
   }) => Promise<{ removed: number; storePath: string }>;
@@ -239,18 +237,18 @@ function loadRuntimeFacadeModule(): RuntimeFacadeModule {
   return module;
 }
 
-/** Create a memory embedding provider with built-in fallback metadata. */
-export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvider"] = ((...args) =>
-  loadRuntimeFacadeModule().createEmbeddingProvider(
-    ...args,
-  )) as RuntimeFacadeModule["createEmbeddingProvider"];
+const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig);
 
-/** Register all built-in memory embedding provider adapters with a host registry. */
-export const registerBuiltInMemoryEmbeddingProviders: RuntimeFacadeModule["registerBuiltInMemoryEmbeddingProviders"] =
-  ((...args) =>
-    loadRuntimeFacadeModule().registerBuiltInMemoryEmbeddingProviders(
-      ...args,
-    )) as RuntimeFacadeModule["registerBuiltInMemoryEmbeddingProviders"];
+/** Create a memory embedding provider with built-in fallback metadata. */
+export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvider"] = ((
+  options,
+) => {
+  const createOptions = {
+    ...options,
+    acquireLocalService,
+  };
+  return loadRuntimeFacadeModule().createEmbeddingProvider(createOptions);
+}) as RuntimeFacadeModule["createEmbeddingProvider"];
 
 /** Remove short-term recall candidates already grounded into durable memory. */
 export const removeGroundedShortTermCandidates: RuntimeFacadeModule["removeGroundedShortTermCandidates"] =

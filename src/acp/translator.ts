@@ -33,8 +33,12 @@ import type {
 import { readBool, readNonNegativeInteger, readString } from "@openclaw/acp-core/meta";
 import { defaultAcpSessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
 import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
+import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeFastMode,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
@@ -43,6 +47,7 @@ import {
   resolveFixedWindowRateLimitInteger,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { shortenHomePath } from "../utils.js";
 import {
   createInMemoryAcpEventLedger,
@@ -80,8 +85,6 @@ import {
   buildSessionMetadata,
   buildSessionPresentation,
   buildSessionUsageSnapshot,
-  normalizeClientCapabilities,
-  type ClientCapabilityState,
   type GatewaySessionPresentationRow,
   type SessionSnapshot,
 } from "./translator.presentation.js";
@@ -98,26 +101,37 @@ import {
   resolveListSessionsPageSize,
 } from "./translator.session-list.js";
 import { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
-import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
+import { ACP_AGENT_INFO } from "./types.js";
 
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
 const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
 
-let acpCommandsModulePromise: Promise<typeof import("./commands.js")> | undefined;
-let acpSdkModulePromise: Promise<typeof import("@agentclientprotocol/sdk")> | undefined;
+type ChatSendAck = {
+  runId?: unknown;
+  status?: unknown;
+};
 
-async function getAvailableCommandsForAcp() {
-  acpCommandsModulePromise ??= import("./commands.js");
-  const { getAvailableCommands } = await acpCommandsModulePromise;
-  return getAvailableCommands();
+function normalizedChatSendAckStatus(status: unknown): string {
+  return typeof status === "string" ? status.trim().toLowerCase() : "";
 }
 
-async function getAcpProtocolVersion() {
-  acpSdkModulePromise ??= import("@agentclientprotocol/sdk");
-  const { PROTOCOL_VERSION } = await acpSdkModulePromise;
-  return PROTOCOL_VERSION;
+function isTerminalChatSendAckFailure(status: unknown): boolean {
+  const normalized = normalizedChatSendAckStatus(status);
+  return normalized === "timeout" || normalized === "error";
+}
+
+function isTerminalChatSendAckSuccess(status: unknown): boolean {
+  return normalizedChatSendAckStatus(status) === "ok";
+}
+
+const loadAcpCommandsModule = createLazyRuntimeModule(() => import("./commands.js"));
+const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
+
+async function getAvailableCommandsForAcp() {
+  const { getAvailableCommands } = await loadAcpCommandsModule();
+  return getAvailableCommands();
 }
 
 type DisconnectContext = {
@@ -177,7 +191,8 @@ function isAdminScopeProvenanceRejection(err: unknown): boolean {
 }
 
 function isGatewayCloseError(err: unknown): boolean {
-  return err instanceof Error && err.message.startsWith("gateway closed (");
+  const message = err instanceof Error ? err.message : String(err);
+  return message.startsWith("gateway closed (");
 }
 
 type AgentWaitResult = {
@@ -233,12 +248,15 @@ export class AcpGatewayAgent implements Agent {
   private sessionUpdates: AcpTranslatorSessionUpdates;
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
+  private settlingPromptKeys = new Set<string>();
   private approvalRelays = new Map<string, PendingApprovalRelay>();
-  private clientCapabilities: ClientCapabilityState = normalizeClientCapabilities(undefined);
-  private clientInfo: InitializeRequest["clientInfo"] = null;
   private disconnectTimer: NodeJS.Timeout | null = null;
   private activeDisconnectContext: DisconnectContext | null = null;
   private disconnectGeneration = 0;
+
+  private pendingPromptKey(sessionId: string, runId: string): string {
+    return `${sessionId}\u0000${runId}`;
+  }
 
   private getPendingPrompt(sessionId: string, runId: string): PendingPrompt | undefined {
     const pending = this.pendingPrompts.get(sessionId);
@@ -282,20 +300,10 @@ export class AcpGatewayAgent implements Agent {
     this.log("ready");
   }
 
-  supportsClientReadTextFile(): boolean {
-    return this.clientCapabilities.readTextFile;
-  }
-
-  supportsClientWriteTextFile(): boolean {
-    return this.clientCapabilities.writeTextFile;
-  }
-
-  supportsClientTerminal(): boolean {
-    return this.clientCapabilities.terminal;
-  }
-
-  getClientInfo(): InitializeRequest["clientInfo"] {
-    return this.clientInfo;
+  shutdown(): void {
+    this.sessionUpdates.stop();
+    this.activeDisconnectContext = null;
+    this.clearDisconnectTimer();
   }
 
   handleGatewayReconnect(): void {
@@ -339,11 +347,9 @@ export class AcpGatewayAgent implements Agent {
     }
   }
 
-  async initialize(params: InitializeRequest): Promise<InitializeResponse> {
-    this.clientCapabilities = normalizeClientCapabilities(params.clientCapabilities);
-    this.clientInfo = params.clientInfo ?? null;
+  async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
     return {
-      protocolVersion: await getAcpProtocolVersion(),
+      protocolVersion: (await loadAcpSdkModule()).PROTOCOL_VERSION,
       agentCapabilities: {
         loadSession: true,
         promptCapabilities: {
@@ -702,16 +708,54 @@ export class AcpGatewayAgent implements Agent {
             pending.sendAccepted = true;
           }
         };
+        const applyTerminalAck = async (ack: ChatSendAck | undefined): Promise<boolean> => {
+          const status = normalizedChatSendAckStatus(ack?.status);
+          const pending = () => this.getPendingPrompt(params.sessionId, runId);
+          if (status === "timeout") {
+            const current = pending();
+            if (current) {
+              await this.finishPrompt(params.sessionId, current, "cancelled");
+            }
+            return true;
+          }
+          if (status === "error") {
+            const current = pending();
+            if (current) {
+              this.rejectPendingPrompt(
+                current,
+                new Error("Chat failed before the run started; try again."),
+              );
+            }
+            return true;
+          }
+          if (status === "ok") {
+            markSendAccepted();
+            await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
+            const current = pending();
+            if (current) {
+              await this.finishPrompt(params.sessionId, current, "end_turn");
+            }
+            return true;
+          }
+          return isTerminalChatSendAckFailure(status) || isTerminalChatSendAckSuccess(status);
+        };
+
+        const sendChat = async (payload: Record<string, unknown>): Promise<boolean> => {
+          const ack = await this.gateway.request<ChatSendAck>("chat.send", payload, {
+            timeoutMs: null,
+          });
+          return await applyTerminalAck(ack);
+        };
+
         try {
-          await this.gateway.request(
-            "chat.send",
-            {
-              ...requestParams,
-              systemInputProvenance,
-              systemProvenanceReceipt,
-            },
-            { timeoutMs: null },
-          );
+          const terminal = await sendChat({
+            ...requestParams,
+            systemInputProvenance,
+            systemProvenanceReceipt,
+          });
+          if (terminal) {
+            return;
+          }
           markSendAccepted();
           await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
         } catch (err) {
@@ -719,7 +763,10 @@ export class AcpGatewayAgent implements Agent {
             (systemInputProvenance || systemProvenanceReceipt) &&
             isAdminScopeProvenanceRejection(err)
           ) {
-            await this.gateway.request("chat.send", requestParams, { timeoutMs: null });
+            const terminal = await sendChat(requestParams);
+            if (terminal) {
+              return;
+            }
             markSendAccepted();
             await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
             return;
@@ -729,7 +776,11 @@ export class AcpGatewayAgent implements Agent {
       };
 
       void sendWithProvenanceFallback().catch((err: unknown) => {
-        if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
+        const promptKey = this.pendingPromptKey(params.sessionId, runId);
+        if (
+          isGatewayCloseError(err) &&
+          (this.getPendingPrompt(params.sessionId, runId) || this.settlingPromptKeys.has(promptKey))
+        ) {
           return;
         }
         this.clearApprovalRelaysForPrompt(params.sessionId, runId, { denyActive: true });
@@ -1150,31 +1201,37 @@ export class AcpGatewayAgent implements Agent {
     pending: PendingPrompt,
     stopReason: StopReason,
   ): Promise<void> {
-    this.clearApprovalRelaysForPrompt(sessionId, pending.idempotencyKey, { denyActive: true });
-    this.pendingPrompts.delete(sessionId);
-    this.sessionStore.clearActiveRun(sessionId);
-    if (this.pendingPrompts.size === 0) {
-      this.clearDisconnectTimer();
-    }
-    const sessionSnapshot = await this.getSessionSnapshot(pending.sessionKey);
+    const promptKey = this.pendingPromptKey(sessionId, pending.idempotencyKey);
+    this.settlingPromptKeys.add(promptKey);
     try {
-      await this.sendSessionSnapshotUpdate(
-        {
-          sessionId,
-          sessionKey: pending.sessionKey,
-          ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
-        },
-        sessionSnapshot,
-        {
-          includeControls: false,
-          record: true,
-          runId: pending.idempotencyKey,
-        },
-      );
-    } catch (err) {
-      this.log(`session snapshot update failed for ${sessionId}: ${String(err)}`);
+      this.clearApprovalRelaysForPrompt(sessionId, pending.idempotencyKey, { denyActive: true });
+      this.pendingPrompts.delete(sessionId);
+      this.sessionStore.clearActiveRun(sessionId);
+      if (this.pendingPrompts.size === 0) {
+        this.clearDisconnectTimer();
+      }
+      const sessionSnapshot = await this.getSessionSnapshot(pending.sessionKey);
+      try {
+        await this.sendSessionSnapshotUpdate(
+          {
+            sessionId,
+            sessionKey: pending.sessionKey,
+            ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+          },
+          sessionSnapshot,
+          {
+            includeControls: false,
+            record: true,
+            runId: pending.idempotencyKey,
+          },
+        );
+      } catch (err) {
+        this.log(`session snapshot update failed for ${sessionId}: ${String(err)}`);
+      }
+      pending.resolve({ stopReason });
+    } finally {
+      this.settlingPromptKeys.delete(promptKey);
     }
-    pending.resolve({ stopReason });
   }
 
   private findPendingBySessionKey(sessionKey: string, runId?: string): PendingPrompt | undefined {
@@ -1495,6 +1552,7 @@ export class AcpGatewayAgent implements Agent {
       modelProvider: session.modelProvider,
       model: session.model,
       fastMode: session.fastMode,
+      effectiveFastMode: session.effectiveFastMode,
       verboseLevel: session.verboseLevel,
       traceLevel: session.traceLevel,
       reasoningLevel: session.reasoningLevel,
@@ -1511,7 +1569,7 @@ export class AcpGatewayAgent implements Agent {
     value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
-    patch?: Record<string, string | boolean>;
+    patch?: Record<string, string | boolean | null>;
   } {
     if (typeof value !== "string") {
       throw new Error(
@@ -1524,11 +1582,16 @@ export class AcpGatewayAgent implements Agent {
           patch: { thinkingLevel: value },
           overrides: { thinkingLevel: value },
         };
-      case ACP_FAST_MODE_CONFIG_ID:
+      case ACP_FAST_MODE_CONFIG_ID: {
+        const fastMode = normalizeFastMode(value);
+        if (fastMode === undefined) {
+          throw new Error(`Unsupported fast mode value: ${value}`);
+        }
         return {
-          patch: { fastMode: value === "on" },
-          overrides: { fastMode: value === "on" },
+          patch: { fastMode },
+          overrides: { fastMode },
         };
+      }
       case ACP_VERBOSE_LEVEL_CONFIG_ID:
         return {
           patch: { verboseLevel: value },
@@ -1544,11 +1607,13 @@ export class AcpGatewayAgent implements Agent {
           patch: { reasoningLevel: value },
           overrides: { reasoningLevel: value },
         };
-      case ACP_RESPONSE_USAGE_CONFIG_ID:
+      case ACP_RESPONSE_USAGE_CONFIG_ID: {
+        const next = value === "inherit" ? null : value;
         return {
-          patch: { responseUsage: value },
-          overrides: { responseUsage: value as GatewaySessionPresentationRow["responseUsage"] },
+          patch: { responseUsage: next },
+          overrides: { responseUsage: next as GatewaySessionPresentationRow["responseUsage"] },
         };
+      }
       case ACP_ELEVATED_LEVEL_CONFIG_ID:
         return {
           patch: { elevatedLevel: value },
@@ -1689,3 +1754,4 @@ export class AcpGatewayAgent implements Agent {
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

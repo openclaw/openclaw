@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -379,11 +379,9 @@ describe("gateway server models + voicewake", () => {
         expect(after.ok).toBe(true);
         expect(after.payload?.triggers).toEqual(["hi", "there"]);
 
-        const onDisk = JSON.parse(
-          await fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
-        ) as { triggers?: unknown; updatedAtMs?: unknown };
-        expect(onDisk.triggers).toEqual(["hi", "there"]);
-        expect(typeof onDisk.updatedAtMs).toBe("number");
+        await expect(
+          fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
+        ).rejects.toThrow(/ENOENT/u);
       });
     },
   );
@@ -459,13 +457,9 @@ describe("gateway server models + voicewake", () => {
         { trigger: "robot wake", target: { agentId: "main" } },
       ]);
 
-      const onDisk = JSON.parse(
-        await fs.readFile(
-          path.join(homeDir, ".openclaw", "settings", "voicewake-routing.json"),
-          "utf8",
-        ),
-      ) as { routes?: unknown };
-      expect(onDisk.routes).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
+      await expect(
+        fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake-routing.json"), "utf8"),
+      ).rejects.toThrow(/ENOENT/u);
 
       const invalid = await rpcReq(ws, "voicewake.routing.set", { config: null });
       expect(invalid.ok).toBe(false);

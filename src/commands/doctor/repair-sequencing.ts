@@ -36,6 +36,7 @@ import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sen
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
+import { maybeRepairStaleConfiguredAuthOrders } from "./shared/stale-auth-order.js";
 import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-shadows.js";
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 import { maybeRepairStaleSubagentAllowlists } from "./shared/stale-subagent-allowlist.js";
@@ -143,6 +144,10 @@ export async function runDoctorRepairSequence(params: {
   if (missingConfiguredPluginInstallRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(missingConfiguredPluginInstallRepair.warnings));
   }
+  const missingConfiguredPluginInstallNotices = missingConfiguredPluginInstallRepair.notices ?? [];
+  if (missingConfiguredPluginInstallNotices.length > 0) {
+    warningNotes.push(sanitizeLines(missingConfiguredPluginInstallNotices));
+  }
   const failedPluginIds = missingConfiguredPluginInstallRepair.failedPluginIds ?? [];
   const hasUnscopedInstallRepairWarnings =
     missingConfiguredPluginInstallRepair.warnings.length > 0 && failedPluginIds.length === 0;
@@ -229,6 +234,11 @@ export async function runDoctorRepairSequence(params: {
   if (authProfileSqliteMigration.warnings.length > 0) {
     warningNotes.push(sanitizeLines(authProfileSqliteMigration.warnings));
   }
+  const staleAuthOrderRepair = maybeRepairStaleConfiguredAuthOrders({
+    cfg: state.candidate,
+    env,
+  });
+  applyMutation(staleAuthOrderRepair);
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
     openAIAuthProviderRepair.changes.length > 0 ||

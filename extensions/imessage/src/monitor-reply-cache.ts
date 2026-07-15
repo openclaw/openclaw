@@ -256,7 +256,7 @@ function hasChatScope(ctx?: IMessageChatContext): boolean {
  * so comparing the raw strings would falsely flag the same chat as a
  * cross-chat target. Normalize both sides to the bare suffix.
  */
-function normalizeDirectChatIdentifier(raw: string): string {
+export function normalizeDirectChatIdentifier(raw: string): string {
   const trimmed = raw.trim();
   const lowered = trimmed.toLowerCase();
   for (const prefix of ["imessage;-;", "sms;-;", "any;-;"]) {
@@ -536,6 +536,34 @@ function isPositiveChatMatch(entry: IMessageReplyCacheEntry, ctx: IMessageChatCo
     return true;
   }
   return false;
+}
+
+export function isIMessageCurrentMessageInChat(params: {
+  accountId: string;
+  currentMessageId: string | number;
+  chatContext: IMessageChatContext;
+}): boolean {
+  if (!params.accountId || !hasChatScope(params.chatContext)) {
+    return false;
+  }
+  const currentMessageId = normalizeOptionalString(String(params.currentMessageId));
+  if (!currentMessageId) {
+    return false;
+  }
+  hydrateFromStoreOnce();
+  const fullMessageId = /^\d+$/.test(currentMessageId)
+    ? imessageShortIdToUuid.get(currentMessageId)
+    : currentMessageId;
+  if (!fullMessageId) {
+    return false;
+  }
+  const entry = imessageReplyCacheByMessageId.get(fullMessageId);
+  return Boolean(
+    entry &&
+    entry.accountId === params.accountId &&
+    Date.now() - entry.timestamp <= REPLY_CACHE_TTL_MS &&
+    isPositiveChatMatch(entry, params.chatContext),
+  );
 }
 
 export function resetIMessageShortIdState(options: { clearPersistent?: boolean } = {}): void {

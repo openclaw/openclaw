@@ -9,6 +9,23 @@ const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
   ),
 }));
 
+function createDeferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
+  return { promise, resolve, reject };
+}
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
   registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
 }));
@@ -16,7 +33,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
 import {
   assertManagedProxyAllowsCdpUrl,
   getDirectAgentForCdp,
-  hasProxyEnv,
   withManagedProxyForCdpUrl,
   withNoProxyForCdpUrl,
 } from "./cdp-proxy-bypass.js";
@@ -28,19 +44,6 @@ beforeEach(() => {
   registerManagedProxyBrowserCdpBypassMock.mockReset();
   registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
 });
-
-function createDeferred<T = void>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 async function withIsolatedNoProxyEnv(fn: () => Promise<void>) {
   const origNoProxy = process.env.NO_PROXY;
@@ -105,51 +108,6 @@ describe("cdp-proxy-bypass", () => {
 
     it("returns undefined for invalid URLs", () => {
       expect(getDirectAgentForCdp("not-a-url")).toBeUndefined();
-    });
-  });
-
-  describe("hasProxyEnv", () => {
-    const proxyVars = [
-      "HTTP_PROXY",
-      "http_proxy",
-      "HTTPS_PROXY",
-      "https_proxy",
-      "ALL_PROXY",
-      "all_proxy",
-    ];
-    const saved: Record<string, string | undefined> = {};
-
-    beforeEach(() => {
-      for (const v of proxyVars) {
-        saved[v] = process.env[v];
-      }
-      for (const v of proxyVars) {
-        delete process.env[v];
-      }
-    });
-
-    afterEach(() => {
-      for (const v of proxyVars) {
-        if (saved[v] !== undefined) {
-          process.env[v] = saved[v];
-        } else {
-          delete process.env[v];
-        }
-      }
-    });
-
-    it("returns false when no proxy vars set", () => {
-      expect(hasProxyEnv()).toBe(false);
-    });
-
-    it("returns true when HTTP_PROXY is set", () => {
-      process.env.HTTP_PROXY = "http://proxy:8080";
-      expect(hasProxyEnv()).toBe(true);
-    });
-
-    it("returns true when ALL_PROXY is set", () => {
-      process.env.ALL_PROXY = "socks5://proxy:1080";
-      expect(hasProxyEnv()).toBe(true);
     });
   });
 

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -213,7 +214,7 @@ describe("plugin index install records store", () => {
     );
 
     const first = loadInstalledPluginIndexInstallRecordsSync({ stateDir });
-    first.cached.spec = "mutated@1.0.0";
+    expectDefined(first.cached, "first.cached test invariant").spec = "mutated@1.0.0";
 
     expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
       cached: {
@@ -594,6 +595,12 @@ describe("plugin index install records store", () => {
           clawpackManifestSha256:
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           clawpackSize: 4096,
+          clawhubTrustDisposition: "review-required",
+          clawhubTrustScanStatus: "suspicious",
+          clawhubTrustReasons: ["payload_strings"],
+          clawhubTrustPending: true,
+          clawhubTrustCheckedAt: "2026-05-14T18:00:00.000Z",
+          clawhubTrustAcknowledgedAt: "2026-05-14T18:00:03.000Z",
         },
       },
       { stateDir, candidates: [candidate] },
@@ -612,6 +619,12 @@ describe("plugin index install records store", () => {
       clawpackSpecVersion: 1,
       clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       clawpackSize: 4096,
+      clawhubTrustDisposition: "review-required",
+      clawhubTrustScanStatus: "suspicious",
+      clawhubTrustReasons: ["payload_strings"],
+      clawhubTrustPending: true,
+      clawhubTrustCheckedAt: "2026-05-14T18:00:00.000Z",
+      clawhubTrustAcknowledgedAt: "2026-05-14T18:00:03.000Z",
     });
   });
 

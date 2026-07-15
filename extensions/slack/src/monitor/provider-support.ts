@@ -6,6 +6,7 @@ import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-po
 
 type SlackAppConstructor = typeof import("@slack/bolt").App;
 type SlackHttpReceiverConstructor = typeof import("@slack/bolt").HTTPReceiver;
+type SlackReceiver = import("@slack/bolt").Receiver;
 type SlackSocketModeReceiverConstructor = typeof import("@slack/bolt").SocketModeReceiver;
 type SlackSocketModeReceiverOptions = ConstructorParameters<SlackSocketModeReceiverConstructor>[0];
 type SlackSocketModeConfig = Pick<
@@ -111,6 +112,14 @@ function installSlackNativeReconnectFailureObserver(receiver: unknown) {
       });
     },
   );
+}
+
+function createSlackRelayReceiver(): SlackReceiver {
+  return {
+    init() {},
+    start: () => Promise.resolve(undefined),
+    stop: () => Promise.resolve(undefined),
+  };
 }
 
 function resolveSlackBoltModule(value: unknown): SlackBoltResolvedExports | null {
@@ -226,7 +235,7 @@ function formatSlackSdkLogArgs(args: readonly unknown[]) {
     .join(" ");
 }
 
-export function createSlackSocketModeLogger(
+function createSlackSocketModeLogger(
   sink: Pick<typeof console, "debug" | "info" | "warn" | "error"> = console,
 ): SlackSocketModeLogger {
   let level = "info" as SlackSdkLogLevel;
@@ -267,7 +276,7 @@ export function createSlackSocketModeLogger(
   };
 }
 
-export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {
+function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {
   const botId = args.context?.botId;
   const botUserId = args.context?.botUserId;
   const message = asRecord(args.message);
@@ -296,7 +305,7 @@ export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boo
 
 export function createSlackBoltApp(params: {
   interop: SlackBoltResolvedExports;
-  slackMode: "socket" | "http";
+  slackMode: "socket" | "http" | "relay";
   botToken: string;
   appToken?: string;
   signingSecret?: string;
@@ -322,25 +331,31 @@ export function createSlackBoltApp(params: {
     socketModeReceiverOptions.pingPongLoggingEnabled = params.socketMode.pingPongLoggingEnabled;
   }
 
-  const receiver =
-    params.slackMode === "socket"
-      ? new params.interop.SocketModeReceiver(socketModeReceiverOptions)
-      : new params.interop.HTTPReceiver({
-          signingSecret: params.signingSecret ?? "",
-          endpoints: params.slackWebhookPath,
-        });
+  let receiver:
+    | InstanceType<SlackSocketModeReceiverConstructor>
+    | InstanceType<SlackHttpReceiverConstructor>
+    | SlackReceiver
+    | undefined;
   if (params.slackMode === "socket") {
+    receiver = new params.interop.SocketModeReceiver(socketModeReceiverOptions);
     installSlackNativeReconnectFailureObserver(receiver);
+  } else if (params.slackMode === "http") {
+    receiver = new params.interop.HTTPReceiver({
+      signingSecret: params.signingSecret ?? "",
+      endpoints: params.slackWebhookPath,
+    });
+  } else {
+    receiver = createSlackRelayReceiver();
   }
   const app = new params.interop.App({
     token: params.botToken,
-    receiver,
     clientOptions: params.clientOptions,
     ignoreSelf: false,
     // Bolt eagerly starts an auth.test promise in the constructor when token
     // verification is enabled. Invalid tokens can reject before any listener
     // consumes that promise, tripping OpenClaw's fatal unhandled-rejection path.
     tokenVerificationEnabled: false,
+    ...(receiver ? { receiver } : {}),
   });
   app.use(async (args) => {
     if (shouldSkipOpenClawSlackSelfEvent(args)) {
@@ -351,7 +366,7 @@ export function createSlackBoltApp(params: {
   return { app, receiver, socketModeLogger };
 }
 
-export function createSlackSocketDisconnectWaiter(app: unknown, abortSignal?: AbortSignal) {
+function createSlackSocketDisconnectWaiter(app: unknown, abortSignal?: AbortSignal) {
   const waiterAbortController = new AbortController();
   const relayAbort = () => waiterAbortController.abort();
   let latest: SlackSocketDisconnect | undefined;
@@ -412,9 +427,7 @@ function isMissingSocketStartErrorDetail(err: unknown): boolean {
   );
 }
 
-export function resolveSlackSocketShutdownClient(
-  app: unknown,
-): SlackSocketShutdownClient | undefined {
+function resolveSlackSocketShutdownClient(app: unknown): SlackSocketShutdownClient | undefined {
   if (!app || typeof app !== "object") {
     return undefined;
   }
@@ -442,14 +455,25 @@ function formatSlackResolvedLabel(params: {
   id: string;
   name?: string;
   extra?: string[];
-}): string {
+}): string | null {
   const extras = params.extra?.filter(Boolean) ?? [];
-  const suffix =
-    extras.length > 0 ? ` (id:${params.id}, ${extras.join(", ")})` : ` (id:${params.id})`;
-  return `${params.input}→${params.name ?? params.id}${suffix}`;
+  const display = params.name ?? params.id;
+  if (params.input === params.id && !params.name && extras.length === 0) {
+    // An id that resolved to itself with no display name says nothing; omit it
+    // so startup summaries only list lookups that translated something. Bare
+    // names that resolved to an id stay logged even when name === input.
+    return null;
+  }
+  // Show the raw id only when neither the input nor the display already is it.
+  const details = [
+    ...(params.input === params.id || display === params.id ? [] : [`id:${params.id}`]),
+    ...extras,
+  ];
+  const suffix = details.length > 0 ? ` (${details.join(", ")})` : "";
+  return `${params.input}→${display}${suffix}`;
 }
 
-export function formatSlackChannelResolved(entry: SlackChannelResolution): string {
+export function formatSlackChannelResolved(entry: SlackChannelResolution): string | null {
   const id = entry.id ?? entry.input;
   return formatSlackResolvedLabel({
     input: entry.input,
@@ -459,7 +483,7 @@ export function formatSlackChannelResolved(entry: SlackChannelResolution): strin
   });
 }
 
-export function formatSlackUserResolved(entry: SlackUserResolution): string {
+export function formatSlackUserResolved(entry: SlackUserResolution): string | null {
   const id = entry.id ?? entry.input;
   return formatSlackResolvedLabel({
     input: entry.input,

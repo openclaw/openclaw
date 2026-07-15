@@ -7,6 +7,7 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
@@ -28,15 +29,6 @@ import {
   resolveAnyEnabledFeishuToolsConfig,
   resolveFeishuToolAccount,
 } from "./tool-account.js";
-
-// ============ Helpers ============
-
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
-}
 
 function resolveDocToolLocalRoots(ctx: {
   workspaceDir?: string;
@@ -62,7 +54,11 @@ function extractImageUrls(markdown: string): string[] {
   const urls: string[] = [];
   let match;
   while ((match = regex.exec(markdown)) !== null) {
-    const url = match[1].trim();
+    const capturedUrl = match[1];
+    if (capturedUrl === undefined) {
+      continue;
+    }
+    const url = capturedUrl.trim();
     if (url.startsWith("http://") || url.startsWith("https://")) {
       urls.push(url);
     }
@@ -677,7 +673,7 @@ async function processImages(
   for (let i = 0; i < Math.min(imageUrls.length, imageBlocks.length); i++) {
     const url = imageUrls[i];
     const blockId = imageBlocks[i]?.block_id;
-    if (!blockId) {
+    if (!url || !blockId) {
       continue;
     }
 
@@ -1611,3 +1607,4 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     registered.push("feishu_app_scopes");
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

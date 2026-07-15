@@ -8,8 +8,8 @@ import {
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
-const DEFAULT_FAULT_PROXY_REQUEST_MAX_BYTES = 16 * 1024 * 1024;
-const DEFAULT_FAULT_PROXY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const DEFAULT_FAULT_PROXY_REQUEST_MAX_BYTES = 20 * 1024 * 1024;
+const DEFAULT_FAULT_PROXY_RESPONSE_MAX_BYTES = 20 * 1024 * 1024;
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -25,6 +25,7 @@ const HOP_BY_HOP_HEADERS = new Set([
 
 type MatrixQaFaultProxyRequest = {
   bearerToken?: string;
+  body: Buffer;
   headers: IncomingHttpHeaders;
   method: string;
   path: string;
@@ -41,6 +42,17 @@ type MatrixQaFaultProxyForwardedResponse = {
   body: Buffer;
   headers: Headers;
   status: number;
+};
+
+export type MatrixQaFaultProxyExchange = {
+  context?: unknown;
+  request: MatrixQaFaultProxyRequest;
+  response: MatrixQaFaultProxyForwardedResponse;
+};
+
+export type MatrixQaFaultProxyObserver = {
+  createExchangeContext?: (request: MatrixQaFaultProxyRequest) => unknown;
+  onExchange?: (exchange: MatrixQaFaultProxyExchange) => Promise<void> | void;
 };
 
 class MatrixQaFaultProxyHttpError extends Error {
@@ -70,7 +82,7 @@ export type MatrixQaFaultProxyHit = {
   ruleId: string;
 };
 
-export type MatrixQaFaultProxy = {
+type MatrixQaFaultProxy = {
   baseUrl: string;
   hits(): MatrixQaFaultProxyHit[];
   stop(): Promise<void>;
@@ -228,13 +240,19 @@ function bufferToArrayBuffer(buffer: Buffer) {
   ) as ArrayBuffer;
 }
 
-function writeJsonResponse(res: ServerResponse, response: MatrixQaFaultProxyResponse) {
-  const body = response.body === undefined ? "" : JSON.stringify(response.body);
-  res.writeHead(response.status, {
-    "content-type": "application/json",
-    ...response.headers,
-  });
-  res.end(body);
+function normalizeJsonResponse(
+  response: MatrixQaFaultProxyResponse,
+): MatrixQaFaultProxyForwardedResponse {
+  const body =
+    response.body === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(response.body));
+  return {
+    body,
+    headers: new Headers({
+      "content-type": "application/json",
+      ...response.headers,
+    }),
+    status: response.status,
+  };
 }
 
 async function forwardMatrixQaFaultProxyRequest(params: {
@@ -279,10 +297,18 @@ async function forwardMatrixQaFaultProxyRequest(params: {
 function writeForwardedResponse(
   res: ServerResponse,
   response: MatrixQaFaultProxyForwardedResponse,
+  options: { preserveConnectionClose?: boolean } = {},
 ) {
   const headers: Record<string, string> = {};
   for (const [key, value] of response.headers) {
-    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+    const normalizedKey = key.toLowerCase();
+    const isIntentionalConnectionClose =
+      options.preserveConnectionClose && normalizedKey === "connection" && value === "close";
+    if (
+      (!HOP_BY_HOP_HEADERS.has(normalizedKey) || isIntentionalConnectionClose) &&
+      normalizedKey !== "content-encoding" &&
+      normalizedKey !== "content-length"
+    ) {
       headers[key] = value;
     }
   }
@@ -290,30 +316,38 @@ function writeForwardedResponse(
   res.end(response.body);
 }
 
-export async function startMatrixQaFaultProxy(params: {
-  maxRequestBytes?: number;
-  maxResponseBytes?: number;
-  rules: MatrixQaFaultProxyRule[];
-  targetBaseUrl: string;
-}): Promise<MatrixQaFaultProxy> {
+export async function startMatrixQaFaultProxy(
+  params: MatrixQaFaultProxyObserver & {
+    maxRequestBytes?: number;
+    maxResponseBytes?: number;
+    rules: MatrixQaFaultProxyRule[];
+    targetBaseUrl: string;
+  },
+): Promise<MatrixQaFaultProxy> {
   const targetBaseUrl = new URL(params.targetBaseUrl);
   const maxRequestBytes = params.maxRequestBytes ?? DEFAULT_FAULT_PROXY_REQUEST_MAX_BYTES;
   const maxResponseBytes = params.maxResponseBytes ?? DEFAULT_FAULT_PROXY_RESPONSE_MAX_BYTES;
   const hits: MatrixQaFaultProxyHit[] = [];
   const server = createServer((req, res) => {
     void (async () => {
+      let observedRequest: MatrixQaFaultProxyRequest | undefined;
+      let observedContext: unknown;
       try {
         const requestUrl = new URL(req.url ?? "/", targetBaseUrl);
         const path = requestUrl.pathname;
         const bearerToken = extractBearerToken(req.headers);
+        const body = await readRequestBody(req, maxRequestBytes);
         const request: MatrixQaFaultProxyRequest = {
           ...(bearerToken ? { bearerToken } : {}),
+          body,
           headers: req.headers,
           method: req.method ?? "GET",
           path,
           search: requestUrl.search,
         };
-        const body = await readRequestBody(req, maxRequestBytes);
+        observedRequest = request;
+        const context = params.createExchangeContext?.(request);
+        observedContext = context;
         const rule = params.rules.find((candidate) => candidate.match(request));
         if (rule) {
           hits.push({
@@ -322,7 +356,13 @@ export async function startMatrixQaFaultProxy(params: {
             ruleId: rule.id,
           });
           if (rule.response) {
-            writeJsonResponse(res, rule.response(request));
+            const response = normalizeJsonResponse(rule.response(request));
+            await params.onExchange?.({
+              ...(context !== undefined ? { context } : {}),
+              request,
+              response,
+            });
+            writeForwardedResponse(res, response);
             return;
           }
         }
@@ -339,25 +379,41 @@ export async function startMatrixQaFaultProxy(params: {
                 response: forwarded,
               })
             : forwarded;
+        await params.onExchange?.({
+          ...(context !== undefined ? { context } : {}),
+          request,
+          response,
+        });
         writeForwardedResponse(res, response);
       } catch (error) {
-        if (error instanceof MatrixQaFaultProxyHttpError) {
-          writeJsonResponse(res, {
-            body: {
-              errcode: error.code,
-              error: error.message,
-            },
-            ...(error.status === 413 ? { headers: { connection: "close" } } : {}),
-            status: error.status,
+        const failure =
+          error instanceof MatrixQaFaultProxyHttpError
+            ? {
+                body: {
+                  errcode: error.code,
+                  error: error.message,
+                },
+                ...(error.status === 413 ? { headers: { connection: "close" } } : {}),
+                status: error.status,
+              }
+            : {
+                body: {
+                  errcode: "MATRIX_QA_FAULT_PROXY_ERROR",
+                  error: error instanceof Error ? error.message : String(error),
+                },
+                status: 502,
+              };
+        const response = normalizeJsonResponse(failure);
+        if (observedRequest) {
+          await params.onExchange?.({
+            ...(observedContext !== undefined ? { context: observedContext } : {}),
+            request: observedRequest,
+            response,
           });
-          return;
         }
-        writeJsonResponse(res, {
-          body: {
-            errcode: "MATRIX_QA_FAULT_PROXY_ERROR",
-            error: error instanceof Error ? error.message : String(error),
-          },
-          status: 502,
+        writeForwardedResponse(res, response, {
+          preserveConnectionClose:
+            error instanceof MatrixQaFaultProxyHttpError && error.status === 413,
         });
       }
     })();

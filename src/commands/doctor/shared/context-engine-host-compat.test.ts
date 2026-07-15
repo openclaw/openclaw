@@ -1,10 +1,14 @@
 // Context engine host compatibility tests cover doctor warnings for host/context mismatches.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { registerContextEngine } from "../../../context-engine/registry.js";
+import {
+  getContextEngineFactory,
+  getContextEngineRegistration,
+  registerContextEngine,
+  registerContextEngineForOwner,
+} from "../../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineHostCapability } from "../../../context-engine/types.js";
 import {
-  collectConfiguredContextEngineAgentRunHosts,
   collectContextEngineHostCompatibilityWarnings,
   maybeRepairContextEngineHostCompatibility,
 } from "./context-engine-host-compat.js";
@@ -60,9 +64,27 @@ function configWithEngine(engineId: string, cfg: OpenClawConfig = {}): OpenClawC
 }
 
 describe("doctor context-engine host compatibility", () => {
-  it("collects native Codex and OpenClaw as compatible agent-run hosts", () => {
-    const hosts = collectConfiguredContextEngineAgentRunHosts({
-      cfg: {
+  it("distinguishes read-only discovery registrations from runtime entries", () => {
+    const id = uniqueEngineId();
+    const factory = () => {
+      throw new Error("discovery-only");
+    };
+    const result = registerContextEngineForOwner(id, factory, `doctor-test-owner-${id}`, {
+      lifecycle: "readOnlyDiscovery",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(getContextEngineRegistration(id)).toMatchObject({
+      factory,
+      lifecycle: "readOnlyDiscovery",
+    });
+    expect(getContextEngineFactory(id)).toBeUndefined();
+  });
+
+  it("evaluates native Codex and OpenClaw agent-run hosts", async () => {
+    const engineId = registerEngine(["thread-bootstrap-projection"]);
+    const warnings = await collectContextEngineHostCompatibilityWarnings({
+      cfg: configWithEngine(engineId, {
         agents: {
           defaults: {
             models: {
@@ -71,13 +93,13 @@ describe("doctor context-engine host compatibility", () => {
             },
           },
         },
-      },
+      }),
+      doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(hosts.map((host) => host.host.id).toSorted()).toEqual([
-      "codex-app-server",
-      "openclaw-embedded",
-    ]);
+    expect(warnings.join("\n")).toContain("OpenClaw embedded runner");
+    expect(warnings.join("\n")).toContain("Some configured runtimes support");
+    expect(warnings.join("\n")).not.toContain("Codex app-server harness (");
   });
 
   it("does not warn for context engines without host requirements", async () => {

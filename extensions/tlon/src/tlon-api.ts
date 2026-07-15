@@ -2,7 +2,9 @@
 import crypto from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
@@ -44,6 +46,9 @@ type UploadResult = {
 };
 
 const MEMEX_BASE_URL = "https://memex.tlon.network";
+
+/** Max bytes to read from the Memex upload JSON response. */
+const MEMEX_UPLOAD_RESPONSE_MAX_BYTES = 64 * 1024;
 
 let currentClientConfig: ClientConfig | null = null;
 
@@ -252,7 +257,11 @@ async function getMemexUploadUrl(params: {
       throw new Error(`Memex upload request failed: ${guarded.response.status}`);
     }
 
-    const data = (await guarded.response.json()) as { url?: string; filePath?: string } | null;
+    const data = await readProviderJsonResponse<{ url?: string; filePath?: string } | null>(
+      guarded.response,
+      "Memex upload",
+      { maxBytes: MEMEX_UPLOAD_RESPONSE_MAX_BYTES },
+    );
     if (!data?.url || !data.filePath) {
       throw new Error("Invalid response from Memex");
     }
@@ -326,13 +335,8 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
     throw new Error("No storage credentials configured");
   }
 
-  const endpoint = new URL(prefixEndpoint(credentials.endpoint));
   const client = new S3Client({
-    endpoint: {
-      protocol: endpoint.protocol.slice(0, -1) as "http" | "https",
-      hostname: endpoint.host,
-      path: endpoint.pathname || "/",
-    },
+    endpoint: prefixEndpoint(credentials.endpoint),
     region: storageConfig.region || "us-east-1",
     credentials: {
       accessKeyId: credentials.accessKeyId,
@@ -357,7 +361,6 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
 
   const signedUrl = await getSignedUrl(client, command, {
     expiresIn: 3600,
-    signableHeaders: new Set(Object.keys(headers)),
   });
 
   let release: (() => Promise<void>) | undefined;
@@ -384,7 +387,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
 
   const publicUrl = storageConfig.publicUrlBase
     ? new URL(fileKey, storageConfig.publicUrlBase).toString()
-    : signedUrl.split("?")[0];
+    : expectDefined(signedUrl.split("?").at(0), "signed URL base segment");
 
   return { url: assertSafeUploadResultUrl(publicUrl, "Upload result URL") };
 }

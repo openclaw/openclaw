@@ -1,4 +1,5 @@
 // Line tests cover send plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -154,6 +155,16 @@ describe("LINE send helpers", () => {
     const quickReply = sendModule.createQuickReplyItems(labels);
 
     expect(quickReply.items).toHaveLength(13);
+  });
+
+  it("truncates quick reply labels without leaving lone surrogates", () => {
+    const label = "1234567890123456789😀";
+    const quickReply = sendModule.createQuickReplyItems([label]);
+    const item = quickReply.items?.[0] as { action: { label: string; text: string } } | undefined;
+
+    expect(item?.action.label).toBe("1234567890123456789");
+    expect(item?.action.text).toBe(label);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(item?.action.label ?? "")).toBe(false);
   });
 
   it("pushes images via normalized LINE target", async () => {
@@ -374,6 +385,24 @@ describe("LINE send helpers", () => {
     expect(pushMessageMock).not.toHaveBeenCalled();
   });
 
+  it("preserves UTF-16 boundaries in invalid recipient diagnostics", async () => {
+    await expect(
+      sendModule.pushMessagesLine(`aab😀${"x".repeat(40)}`, [{ type: "text", text: "hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    ).rejects.toThrow(
+      "Recipient is not a valid LINE id (case-sensitive; expected leading capital C/U/R): aab…",
+    );
+    await expect(
+      sendModule.pushMessagesLine(`aa😀${"y".repeat(40)}`, [{ type: "text", text: "hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    ).rejects.toThrow(
+      "Recipient is not a valid LINE id (case-sensitive; expected leading capital C/U/R): aa😀…",
+    );
+    expect(pushMessageMock).not.toHaveBeenCalled();
+  });
+
   it("accepts case-exact LINE recipients with the leading capital preserved", async () => {
     await sendModule.pushMessagesLine(
       "Cabcdef0123456789abcdef0123456789",
@@ -449,6 +478,9 @@ describe("LINE send helpers", () => {
     const firstCall = pushMessageMock.mock.calls.at(0) as [
       { messages: Array<{ quickReply?: { items: unknown[] } }> },
     ];
-    expect(firstCall[0].messages[0].quickReply?.items).toHaveLength(13);
+    const payload = expectDefined(firstCall[0], "LINE push payload");
+    expect(expectDefined(payload.messages[0], "LINE push message").quickReply?.items).toHaveLength(
+      13,
+    );
   });
 });

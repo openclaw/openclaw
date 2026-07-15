@@ -1,7 +1,7 @@
 // Transcript tree helpers keep append-only leaf controls consistent across readers.
 type TranscriptRecord = Record<string, unknown>;
 
-export type SessionTranscriptTreeEntry = {
+type SessionTranscriptTreeEntry = {
   id: string;
   parentId: string | null;
   leafId: string | null | undefined;
@@ -9,7 +9,7 @@ export type SessionTranscriptTreeEntry = {
   appendMode?: "side";
 };
 
-export type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
+type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
   entry: T;
   index: number;
 };
@@ -208,13 +208,20 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
     let treeEntry: SessionTranscriptTreeEntry | undefined =
       explicitTreeEntry ?? parseParentlessCanonicalEntry(entry, leafId);
     if (treeEntry && isCanonicalSessionTranscriptEntry(entry)) {
-      const logicalParentId =
+      const canonicalParentIsStale =
         explicitTreeEntry &&
-        treeEntry.appendMode !== "side" &&
-        treeEntry.parentId === appendParentId &&
-        leafId !== appendParentId
+        treeEntry.parentId !== null &&
+        !byId.has(treeEntry.parentId) &&
+        leafId !== null;
+      const logicalParentId =
+        treeEntry.appendMode !== "side" && canonicalParentIsStale
           ? leafId
-          : treeEntry.parentId;
+          : explicitTreeEntry &&
+              treeEntry.appendMode !== "side" &&
+              treeEntry.parentId === appendParentId &&
+              leafId !== appendParentId
+            ? leafId
+            : treeEntry.parentId;
       const normalizedParentId = resolveCanonicalParentId(logicalParentId, byId);
       if (normalizedParentId !== treeEntry.parentId) {
         // The raw cursor can belong to plugin metadata, an inactive branch, or
@@ -342,21 +349,6 @@ export function mergeSessionTranscriptVisiblePathWithOpaqueAppendPath<T>(params:
           ? params.appendParentId
           : (nodes.at(-1)?.id ?? null),
   };
-}
-
-/** Return the leaf update represented by one transcript row, if any. */
-export function readSessionTranscriptLeafUpdate(record: unknown): string | null | undefined {
-  return parseSessionTranscriptTreeEntry(record)?.leafId;
-}
-
-/** Resolve the active leaf after applying transcript rows in file order. */
-export function resolveSessionTranscriptLeafId(entries: readonly unknown[]): string | null {
-  return scanSessionTranscriptTree(entries).leafId;
-}
-
-/** Resolve the raw parent for the next append after applying rows in file order. */
-export function resolveSessionTranscriptAppendParentId(entries: readonly unknown[]): string | null {
-  return scanSessionTranscriptTree(entries).appendParentId;
 }
 
 /**

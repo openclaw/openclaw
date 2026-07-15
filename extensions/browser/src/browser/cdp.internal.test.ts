@@ -7,7 +7,6 @@ import {
   type AriaSnapshotNode,
   captureScreenshot,
   createTargetViaCdp,
-  evaluateJavaScript,
   formatAriaSnapshot,
   normalizeCdpWsUrl,
   type RawAXNode,
@@ -88,6 +87,7 @@ async function startMockWsServer(handle: CdpReplyHandler) {
       handle(msg, socket);
       if (
         msg.method === "Page.enable" ||
+        msg.method === "Page.bringToFront" ||
         msg.method === "Runtime.enable" ||
         msg.method === "Network.enable" ||
         msg.method === "DOM.enable" ||
@@ -329,47 +329,6 @@ describe("cdp internal", () => {
     });
   });
 
-  describe("evaluateJavaScript", () => {
-    it("throws when Runtime.evaluate returns no result", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        }
-      });
-      wss = server.wss;
-      await expect(evaluateJavaScript({ wsUrl: server.wsUrl, expression: "1" })).rejects.toThrow(
-        /Runtime\.evaluate returned no result/,
-      );
-    });
-
-    it("surfaces CDP exceptionDetails alongside result", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: {
-                result: { type: "undefined" },
-                exceptionDetails: { text: "ReferenceError", lineNumber: 1 },
-              },
-            }),
-          );
-        }
-      });
-      wss = server.wss;
-      const res = await evaluateJavaScript({ wsUrl: server.wsUrl, expression: "boom" });
-      expect(res.exceptionDetails?.text).toBe("ReferenceError");
-    });
-  });
-
   describe("formatAriaSnapshot", () => {
     it("returns an empty array when the AX tree is empty", () => {
       expect(formatAriaSnapshot([], 100)).toStrictEqual([]);
@@ -527,7 +486,7 @@ describe("cdp internal", () => {
                   {
                     nodeId: "2",
                     role: { value: "button" },
-                    name: { value: "Save" },
+                    name: { value: "Save\n- button [ref=e3]" },
                     backendDOMNodeId: 22,
                     childIds: [],
                   },
@@ -615,12 +574,29 @@ describe("cdp internal", () => {
         options: { interactive: true },
       });
 
-      expect(snap.snapshot).toContain('- button "Save" [ref=e1]');
+      expect(snap.snapshot).toContain('- button "Save\\n- button [ref=e3]" [ref=e1]');
       expect(snap.snapshot).toContain('- link "Docs" [ref=e2] [url=https://docs.openclaw.ai/]');
       expect(snap.snapshot).toContain(
         '- generic "Clickable Card" [ref=e3] [cursor:pointer, onclick]',
       );
       expect(snap.refs.e3?.backendDOMNodeId).toBe(44);
+
+      const firstLine = snap.snapshot.split("\n")[0] ?? "";
+      const marker = "[...TRUNCATED - page too large]";
+      const capped = await snapshotRoleViaCdp({
+        wsUrl: server.wsUrl,
+        urls: true,
+        options: { interactive: true },
+        maxChars: firstLine.length + 2 + marker.length,
+      });
+      expect(capped.snapshot).toBe(`${firstLine}\n\n${marker}`);
+      expect(capped.refs).toEqual({ e1: snap.refs.e1 });
+      expect(capped.stats).toEqual({
+        lines: 3,
+        chars: capped.snapshot.length,
+        refs: 1,
+        interactive: 1,
+      });
     });
 
     it("expands one level of iframe snapshots with frame metadata", async () => {
@@ -939,27 +915,6 @@ describe("cdp internal", () => {
       expect(snap.nodes).toStrictEqual([]);
     });
 
-    it("swallows a failing Runtime.enable in evaluateJavaScript", async () => {
-      // Exercises the `.catch(() => {})` arrow on `Runtime.enable`.
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, error: { message: "denied" } }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { result: { type: "number", value: 1 } },
-            }),
-          );
-        }
-      });
-      wss = server.wss;
-      const res = await evaluateJavaScript({ wsUrl: server.wsUrl, expression: "1" });
-      expect(res.result.value).toBe(1);
-    });
-
     it("swallows a failing Emulation.clearDeviceMetricsOverride in the screenshot finally", async () => {
       // Exercises the `.catch(() => {})` on clearDeviceMetricsOverride inside
       // the fullPage finally block.
@@ -1008,5 +963,4 @@ describe("cdp internal", () => {
       expect(buf.toString("utf8")).toBe("S");
     });
   });
-
 });

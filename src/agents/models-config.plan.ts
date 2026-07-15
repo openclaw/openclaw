@@ -28,7 +28,7 @@ import {
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 /** Dependency hook for resolving implicit model providers while planning models.json. */
-export type ResolveImplicitProvidersForModelsJson = (params: {
+type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -112,6 +112,12 @@ export async function resolveProvidersForModelsJsonWithDeps(
   const cfg = params.cfg.models?.providers
     ? { ...params.cfg, models: { ...params.cfg.models, providers: explicitProviders } }
     : params.cfg;
+  // When models.mode is "replace" the user opts out of provider discovery, so
+  // skip the (potentially slow) implicit-provider resolver entirely and return
+  // only the explicit providers. See openclaw#66957.
+  if (cfg.models?.mode === "replace") {
+    return mergeProviders({ implicit: {}, explicit: explicitProviders });
+  }
   const resolveImplicitProvidersImpl = deps?.resolveImplicitProviders ?? resolveImplicitProviders;
   const implicitProviders = await resolveImplicitProvidersImpl({
     agentDir,

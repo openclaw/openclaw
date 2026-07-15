@@ -1,5 +1,6 @@
 /** Resolves and emits cron failure-alert notifications. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState } from "./state.js";
@@ -113,7 +114,7 @@ function emitFailureAlert(
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
-  const truncatedError = (params.error?.trim() || "unknown reason").slice(0, 200);
+  const truncatedError = truncateUtf16Safe(params.error?.trim() || "unknown reason", 200);
   const errorReason =
     params.status === "error" && typeof params.error === "string"
       ? (resolveFailoverReasonFromError(params.error, params.provider) ?? undefined)
@@ -167,6 +168,8 @@ export function maybeEmitFailureAlert(
     error?: string;
     provider?: string;
     consecutiveCount: number;
+    delivery?: "emit" | "record-only";
+    occurredAtMs?: number;
   },
 ) {
   if (!params.alertConfig || params.consecutiveCount < params.alertConfig.after) {
@@ -176,7 +179,7 @@ export function maybeEmitFailureAlert(
   if (isBestEffort) {
     return;
   }
-  const now = state.deps.nowMs();
+  const now = params.occurredAtMs ?? state.deps.nowMs();
   const lastAlert = params.job.state.lastFailureAlertAtMs;
   // Cooldown is stored on job state so process restarts and service reloads do
   // not spam operators with repeated alerts for the same failing job.
@@ -185,16 +188,18 @@ export function maybeEmitFailureAlert(
   if (inCooldown) {
     return;
   }
-  emitFailureAlert(state, {
-    job: params.job,
-    error: params.error,
-    consecutiveErrors: params.consecutiveCount,
-    channel: params.alertConfig.channel,
-    to: params.alertConfig.to,
-    mode: params.alertConfig.mode,
-    accountId: params.alertConfig.accountId,
-    status: params.status,
-    provider: params.provider,
-  });
+  if (params.delivery !== "record-only") {
+    emitFailureAlert(state, {
+      job: params.job,
+      error: params.error,
+      consecutiveErrors: params.consecutiveCount,
+      channel: params.alertConfig.channel,
+      to: params.alertConfig.to,
+      mode: params.alertConfig.mode,
+      accountId: params.alertConfig.accountId,
+      status: params.status,
+      provider: params.provider,
+    });
+  }
   params.job.state.lastFailureAlertAtMs = now;
 }

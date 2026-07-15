@@ -24,7 +24,7 @@ type ExtendableZodObject = ZodTypeAny & {
 };
 
 /** Shared allowlist entry shape for channel sender/user ids. */
-export const AllowFromEntrySchema = z.union([z.string(), z.number()]);
+const AllowFromEntrySchema = z.union([z.string(), z.number()]);
 /** Optional allowlist array used by channel config schema builders. */
 export const AllowFromListSchema = z.array(AllowFromEntrySchema).optional();
 
@@ -50,6 +50,8 @@ export function buildCatchallMultiAccountChannelSchema<T extends ExtendableZodOb
 
 type BuildChannelConfigSchemaOptions = {
   uiHints?: Record<string, ChannelConfigUiHint>;
+  /** Select input mode when transforms must expose accepted config values to editors. */
+  jsonSchemaMode?: "input" | "output";
 };
 
 type BuildJsonChannelConfigSchemaOptions = {
@@ -146,6 +148,7 @@ export function buildChannelConfigSchema(
     return {
       schema: schemaWithJson.toJSONSchema({
         target: "draft-07",
+        ...(options?.jsonSchemaMode ? { io: options.jsonSchemaMode } : {}),
         unrepresentable: "any",
       }) as JsonSchemaObject,
       ...(options?.uiHints ? { uiHints: options.uiHints } : {}),

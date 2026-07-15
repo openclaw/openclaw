@@ -88,7 +88,6 @@ export const SessionSchema = z
         /** @deprecated Use pruneAfter instead. */
         pruneDays: z.number().int().positive().optional(),
         maxEntries: z.number().int().positive().optional(),
-        rotateBytes: z.union([z.string(), z.number()]).optional(),
         resetArchiveRetention: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number()]).optional(),
         highWaterBytes: z.union([z.string(), z.number()]).optional(),
@@ -153,12 +152,17 @@ export const SessionSchema = z
   .strict()
   .optional();
 
+const ResponseUsageModeSchema = z.enum(["on", "off", "tokens", "full"]);
+
 export const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
     responsePrefix: z.string().optional(),
     usageTemplate: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+    responseUsage: z
+      .union([ResponseUsageModeSchema, z.record(z.string(), ResponseUsageModeSchema)])
+      .optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,
     inbound: InboundDebounceSchema,
@@ -172,6 +176,7 @@ export const MessagesSchema = z
         enabled: z.boolean().optional(),
         emojis: z
           .object({
+            queued: z.string().optional(),
             thinking: z.string().optional(),
             tool: z.string().optional(),
             coding: z.string().optional(),

@@ -1,6 +1,4 @@
-// Config gateway methods expose config get/set/patch/apply/schema operations
-// with validation, redaction restoration, secret prep, and reload planning.
-import { execFile } from "node:child_process";
+// Config gateway methods: validation, redaction, secrets, reload planning.
 import { isDeepStrictEqual } from "node:util";
 import {
   asDateTimestampMs,
@@ -8,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -29,13 +28,9 @@ import {
 } from "../../config/io.js";
 import { createMergePatch, projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { applyMergePatch } from "../../config/merge-patch.js";
+import { applyMergePatch, isMergePatchObjectKeyAllowed } from "../../config/merge-patch.js";
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
-import {
-  redactConfigObject,
-  redactConfigSnapshot,
-  restoreRedactedValues,
-} from "../../config/redact-snapshot.js";
+import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
@@ -44,14 +39,15 @@ import {
   validateConfigObjectWithPlugins,
 } from "../../config/validation.js";
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
-import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
-import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
+import { runExec } from "../../process/exec.js";
 import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
 import { diffConfigPaths } from "../config-diff.js";
+import { createConfigGetResponse } from "../config-get-response.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import {
   formatControlPlaneActor,
@@ -154,10 +150,10 @@ function collectDestructiveArrayPatchPaths(params: {
   const merged = isPlainObject(params.merged) ? params.merged : {};
   const paths: string[] = [];
   for (const [key, patchValue] of Object.entries(params.patch)) {
-    if (isBlockedObjectKey(key)) {
+    const path = formatConfigPatchPath(params.path ?? "", key);
+    if (!isMergePatchObjectKeyAllowed(key, params.path)) {
       continue;
     }
-    const path = formatConfigPatchPath(params.path ?? "", key);
     const baseValue = params.base[key];
     const mergedValue = merged[key];
 
@@ -213,10 +209,11 @@ function collectBaseArrayPaths(base: unknown, path: string): string[] {
   }
   const paths: string[] = [];
   for (const [key, value] of Object.entries(base)) {
-    if (isBlockedObjectKey(key)) {
+    const childPath = formatConfigPatchPath(path, key);
+    if (!isMergePatchObjectKeyAllowed(key, path)) {
       continue;
     }
-    paths.push(...collectBaseArrayPaths(value, formatConfigPatchPath(path, key)));
+    paths.push(...collectBaseArrayPaths(value, childPath));
   }
   return paths;
 }
@@ -356,7 +353,7 @@ function sanitizeLookupPathForLog(path: string): string {
     const code = char.charCodeAt(0);
     return code < 0x20 || code === 0x7f ? "?" : char;
   }).join("");
-  return sanitized.length > 120 ? `${sanitized.slice(0, 117)}...` : sanitized;
+  return sanitized.length > 120 ? `${truncateUtf16Safe(sanitized, 117)}...` : sanitized;
 }
 
 function escapePowerShellSingleQuotedString(value: string): string {
@@ -385,16 +382,8 @@ export function resolveConfigOpenCommand(
   };
 }
 
-function execConfigOpenCommand(command: ConfigOpenCommand): Promise<void> {
-  return new Promise((resolve, reject) => {
-    execFile(command.command, command.args, (error) => {
-      if (error) {
-        reject(toErrorObject(error, "Non-Error rejection"));
-        return;
-      }
-      resolve();
-    });
-  });
+async function execConfigOpenCommand(command: ConfigOpenCommand): Promise<void> {
+  await runExec(command.command, command.args, { logOutput: false });
 }
 
 function formatConfigOpenError(error: unknown): string {
@@ -498,7 +487,7 @@ function parseValidateConfigFromRawOrRespond(
     : restored.result;
   const validationCandidate = stripBundledProviderRuntimeDefaults({
     candidate: projectedValidationCandidate,
-    sourceConfig: snapshot.parsed,
+    sourceConfig: snapshot.sourceConfig,
   });
   const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
   if (!sourceValidated.ok) {
@@ -594,7 +583,7 @@ async function respondWithConfigRestartWrite(params: {
   uiHints: ConfigRedactionHints;
 }): Promise<void> {
   clearConfigSchemaResponseCache();
-  const { payload, sentinelPath, restart } = await resolveGatewayConfigRestartWriteResult({
+  const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
     requestParams: params.requestParams,
     kind: params.kind,
     mode: params.mode,
@@ -609,10 +598,13 @@ async function respondWithConfigRestartWrite(params: {
     {
       ok: true,
       path: params.writeResult.path,
+      // Additive ack hash: matches the hash config.get would report for the
+      // persisted bytes, so writers can adopt it without a reload.
+      ...(params.writeResult.hash ? { hash: params.writeResult.hash } : {}),
       config: redactConfigObject(params.writeResult.config, params.uiHints),
       restart,
       sentinel: {
-        path: sentinelPath,
+        persisted: sentinelPersisted,
         payload,
       },
     },
@@ -695,7 +687,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const snapshot = await readConfigFileSnapshot();
     const schema = loadSchemaWithPlugins();
-    respond(true, redactConfigSnapshot(snapshot, schema.uiHints), undefined);
+    respond(true, createConfigGetResponse(snapshot, schema.uiHints), undefined);
   },
   "config.schema": ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {
@@ -764,6 +756,9 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: writeResult.path,
+        // Additive ack hash: matches the hash config.get would report for the
+        // persisted bytes, so writers can adopt it without a reload.
+        ...(writeResult.hash ? { hash: writeResult.hash } : {}),
         config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
       },
       undefined,
@@ -859,7 +854,27 @@ export const configHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const validated = validateConfigObjectWithPlugins(restoredMerge.result);
+    const validationCandidate = stripBundledProviderRuntimeDefaults({
+      candidate: restoredMerge.result,
+      sourceConfig: snapshot.sourceConfig,
+    });
+    const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
+    if (!sourceValidated.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          summarizeConfigValidationIssues(sourceValidated.issues),
+          {
+            details: { issues: sourceValidated.issues },
+          },
+        ),
+      );
+      return;
+    }
+    const writeConfig = validationCandidate as OpenClawConfig;
+    const validated = validateConfigObjectWithPlugins(validationCandidate);
     if (!validated.ok) {
       respond(
         false,
@@ -908,7 +923,7 @@ export const configHandlers: GatewayRequestHandlers = {
     const writeResult = await commitGatewayConfigWrite({
       snapshot,
       writeOptions,
-      nextConfig: validated.config,
+      nextConfig: writeConfig,
       context,
       disconnectSharedAuthClients,
     });
@@ -997,3 +1012,4 @@ export const configHandlers: GatewayRequestHandlers = {
     }
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

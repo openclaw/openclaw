@@ -7,13 +7,13 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
-export type IMessageRpcError = {
+type IMessageRpcError = {
   code?: number;
   message?: string;
   data?: unknown;
 };
 
-export type IMessageRpcResponse<T> = {
+type IMessageRpcResponse<T> = {
   jsonrpc?: string;
   id?: string | number | null;
   result?: T;
@@ -22,12 +22,12 @@ export type IMessageRpcResponse<T> = {
   params?: unknown;
 };
 
-export type IMessageRpcNotification = {
+type IMessageRpcNotification = {
   method: string;
   params?: unknown;
 };
 
-export type IMessageRpcClientOptions = {
+type IMessageRpcClientOptions = {
   cliPath?: string;
   dbPath?: string;
   runtime?: RuntimeEnv;
@@ -40,7 +40,7 @@ type PendingRequest = {
   timer?: NodeJS.Timeout;
 };
 
-export const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
+const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
 
 function isTestEnv(): boolean {
@@ -51,7 +51,7 @@ function isTestEnv(): boolean {
   return Boolean(vitest);
 }
 
-export function normalizeIMessageFullDiskAccessError(message: string): string | undefined {
+function normalizeIMessageFullDiskAccessError(message: string): string | undefined {
   const normalized = normalizeLowercaseStringOrEmpty(message);
   if (!normalized.includes("full disk access") || !normalized.includes("chat.db")) {
     return undefined;
@@ -118,23 +118,29 @@ export class IMessageRpcClient {
       }
     });
 
-    child.on("error", (err) => {
-      this.failAll(err instanceof Error ? err : new Error(String(err)));
-      this.closedResolve?.();
-    });
-
-    // Without this listener, async EPIPE from a dead child crashes the
-    // gateway via uncaughtException. (#75438)
-    child.stdin.on("error", (err) => {
-      this.failAll(err instanceof Error ? err : new Error(String(err)));
-    });
+    // Every process/stdio error is terminal for this RPC transport. Settle the
+    // client once and terminate a helper whose pipe failed; otherwise the
+    // monitor can wait forever on an unusable child. #75438 covered stdin only.
+    const failFromProcessError = (err: unknown) => {
+      if (!this.finish(err instanceof Error ? err : new Error(String(err)))) {
+        return;
+      }
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // The helper may already be gone.
+      }
+    };
+    child.on("error", failFromProcessError);
+    child.stdin.on("error", failFromProcessError);
+    child.stdout.on("error", failFromProcessError);
+    child.stderr.on("error", failFromProcessError);
 
     child.on("close", (code, signal) => {
       if (this.child === child) {
         this.flushStdoutBuffer();
       }
-      this.failAll(this.buildCloseError(code, signal));
-      this.closedResolve?.();
+      this.finish(this.buildCloseError(code, signal));
     });
   }
 
@@ -327,6 +333,17 @@ export class IMessageRpcClient {
       pending.reject(err);
       this.pending.delete(key);
     }
+  }
+
+  private finish(err: Error): boolean {
+    const resolve = this.closedResolve;
+    if (!resolve) {
+      return false;
+    }
+    this.closedResolve = null;
+    this.failAll(err);
+    resolve();
+    return true;
   }
 }
 

@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createMatrixQaClient } from "../../substrate/client.js";
 import {
   createMatrixQaE2eeScenarioClient,
@@ -1017,7 +1018,8 @@ async function runMatrixQaFaultedE2eeBootstrap(context: MatrixQaScenarioContext)
   result: MatrixQaE2eeBootstrapResult;
 }> {
   const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: context.baseUrl,
+    targetBaseUrl: context.faultProxyTargetBaseUrl ?? context.baseUrl,
+    ...context.faultProxyObserver,
     rules: [buildRoomKeyBackupUnavailableFaultRule(context.driverAccessToken)],
   });
   try {
@@ -1053,7 +1055,8 @@ async function runMatrixQaFaultedRecoveryOwnerVerification(params: {
   verification: Awaited<ReturnType<MatrixQaE2eeScenarioClient["verifyWithRecoveryKey"]>>;
 }> {
   const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: params.context.baseUrl,
+    targetBaseUrl: params.context.faultProxyTargetBaseUrl ?? params.context.baseUrl,
+    ...params.context.faultProxyObserver,
     rules: [buildOwnerSignatureUploadBlockedFaultRule(params.accessToken)],
   });
   const recoveryClient = await createMatrixQaE2eeScenarioClient({
@@ -1386,7 +1389,8 @@ export async function runMatrixQaE2eeStateAfterMissingEncryptionScenario(
     configPath,
   });
   const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: context.baseUrl,
+    targetBaseUrl: context.faultProxyTargetBaseUrl ?? context.baseUrl,
+    ...context.faultProxyObserver,
     rules: [buildSyncStateAfterMissingEncryptionFaultRule(context.sutAccessToken)],
   });
   let gatewayPatched = false;
@@ -1536,6 +1540,8 @@ export async function runMatrixQaE2eeBootstrapSuccessScenario(
 ): Promise<MatrixQaScenarioExecution> {
   requireMatrixQaPassword(context, "driver");
   return await withMatrixQaE2eeDriver(context, "matrix-e2ee-bootstrap-success", async (client) => {
+    const initial = await client.bootstrapOwnDeviceVerification();
+    assertMatrixQaBootstrapSucceeded("driver initial", initial);
     const result = await client.bootstrapOwnDeviceVerification({
       forceResetCrossSigning: true,
     });
@@ -1550,7 +1556,7 @@ export async function runMatrixQaE2eeBootstrapSuccessScenario(
         recoveryKeyStored: result.verification.recoveryKeyStored,
       },
       details: [
-        "driver bootstrap succeeded through real Matrix crypto bootstrap",
+        "driver bootstrap and guarded cross-signing reset succeeded through real Matrix crypto bootstrap",
         `device verified: ${result.verification.verified ? "yes" : "no"}`,
         `cross-signing verified: ${result.verification.crossSigningVerified ? "yes" : "no"}`,
         `signed by owner: ${result.verification.signedByOwner ? "yes" : "no"}`,
@@ -2234,7 +2240,8 @@ export async function runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario(
     throw new Error("Matrix E2EE CLI bootstrap-failure login did not return a device id");
   }
   const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: context.baseUrl,
+    targetBaseUrl: context.faultProxyTargetBaseUrl ?? context.baseUrl,
+    ...context.faultProxyObserver,
     rules: [buildRoomKeyBackupUnavailableFaultRule(cliDevice.accessToken)],
   });
   const cli = await createMatrixQaCliE2eeSetupRuntime({
@@ -2280,7 +2287,7 @@ export async function runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario(
     return {
       artifacts: {
         accountId,
-        bootstrapErrorPreview: bootstrapError.slice(0, 240),
+        bootstrapErrorPreview: truncateUtf16Safe(bootstrapError, 240),
         bootstrapSuccess: false,
         cliDeviceId: cliDevice.deviceId,
         faultedEndpoint: faultHits[0]?.path,
@@ -2506,7 +2513,7 @@ export async function runMatrixQaE2eeCliRecoveryKeyInvalidScenario(
     return {
       artifacts: {
         accountId,
-        bootstrapErrorPreview: failure.slice(0, 240),
+        bootstrapErrorPreview: truncateUtf16Safe(failure, 240),
         bootstrapSuccess: false,
         cliDeviceId: cliDevice.deviceId,
         encryptionChanged: payload.encryptionChanged,
@@ -3645,7 +3652,7 @@ export async function runMatrixQaE2eeKeyBootstrapFailureScenario(
   return {
     artifacts: {
       bootstrapActor: "driver",
-      bootstrapErrorPreview: bootstrapError.slice(0, 240),
+      bootstrapErrorPreview: truncateUtf16Safe(bootstrapError, 240),
       bootstrapSuccess: result.success,
       faultedEndpoint: MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT,
       faultHitCount: faultHits.length,
@@ -3660,3 +3667,4 @@ export async function runMatrixQaE2eeKeyBootstrapFailureScenario(
     ].join("\n"),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

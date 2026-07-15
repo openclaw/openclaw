@@ -1,6 +1,8 @@
 // Restart method tests cover safe restart scheduling, deferral flags, and
 // response payloads returned by gateway.restart.request.
-import { describe, expect, it, vi } from "vitest";
+
+import { expectDefined } from "@openclaw/normalization-core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { restartHandlers } from "./restart.js";
 
 const requestSafeGatewayRestart = vi.hoisted(() => vi.fn());
@@ -21,9 +23,12 @@ vi.mock("../../infra/restart-coordinator.js", () => ({
   requestSafeGatewayRestart: (opts: unknown) => requestSafeGatewayRestart(opts),
 }));
 
-function invokeRestartRequest(params: Record<string, unknown>) {
+function invokeRestartRequest(params: unknown) {
   const respond = vi.fn();
-  const handler = restartHandlers["gateway.restart.request"];
+  const handler = expectDefined(
+    restartHandlers["gateway.restart.request"],
+    'restartHandlers["gateway.restart.request"] test invariant',
+  );
   return Promise.resolve(
     handler({
       respond,
@@ -59,6 +64,10 @@ function expectRestartRequest(skipDeferral: boolean) {
 }
 
 describe("gateway.restart.request handler", () => {
+  beforeEach(() => {
+    requestSafeGatewayRestart.mockClear();
+  });
+
   it("defaults to skipDeferral: false when the param is absent", async () => {
     mockScheduledRestart({ safe: true, summary: "safe to restart now" });
 
@@ -89,5 +98,49 @@ describe("gateway.restart.request handler", () => {
     await invokeRestartRequest({ reason: "operator", skipDeferral: false });
 
     expectRestartRequest(false);
+  });
+
+  it("backs off before an emoji that crosses the reason limit", async () => {
+    mockScheduledRestart({ safe: true, summary: "safe to restart now" });
+
+    await invokeRestartRequest({ reason: "x".repeat(199) + "🧠tail" });
+
+    expect(requestSafeGatewayRestart).toHaveBeenCalledWith({
+      reason: "x".repeat(199),
+      delayMs: 0,
+      skipDeferral: false,
+    });
+  });
+
+  it("rejects non-object params without scheduling a restart", async () => {
+    const respond = await invokeRestartRequest("operator");
+
+    expect(requestSafeGatewayRestart).not.toHaveBeenCalled();
+    expect(respond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: "invalid gateway.restart.request params",
+        },
+      ],
+    ]);
+  });
+
+  it("rejects array params without scheduling a restart", async () => {
+    const respond = await invokeRestartRequest([]);
+
+    expect(requestSafeGatewayRestart).not.toHaveBeenCalled();
+    expect(respond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: "invalid gateway.restart.request params",
+        },
+      ],
+    ]);
   });
 });

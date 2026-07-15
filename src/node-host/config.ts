@@ -17,12 +17,13 @@ export type NodeHostGatewayConfig = {
   port?: number;
   tls?: boolean;
   tlsFingerprint?: string;
+  /** Gateway WebSocket context path (e.g. "/openclaw-gw"). */
+  contextPath?: string;
 };
 
 type NodeHostConfig = {
   version: 1;
   nodeId: string;
-  token?: string;
   displayName?: string;
   gateway?: NodeHostGatewayConfig;
 };
@@ -37,7 +38,6 @@ function normalizeConfig(config: Partial<NodeHostConfig> | null): NodeHostConfig
   const base: NodeHostConfig = {
     version: 1,
     nodeId: "",
-    token: config?.token,
     displayName: config?.displayName,
     gateway: config?.gateway,
   };

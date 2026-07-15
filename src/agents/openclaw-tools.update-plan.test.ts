@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { CORE_TOOL_FACTORY_DESCRIPTORS } from "./core-tool-factory-descriptors.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { shouldIncludeUpdatePlanToolForOpenClawTools } from "./openclaw-tools.registration.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
@@ -62,6 +63,26 @@ function openAiGpt5Params(
 describe("openclaw-tools update_plan gating", () => {
   afterEach(() => {
     setEmbeddedMode(false);
+  });
+
+  it("keeps concrete OpenClaw tool names in the factory descriptor catalog", () => {
+    const describedNames = new Set<string>(
+      CORE_TOOL_FACTORY_DESCRIPTORS.filter((descriptor) => descriptor.family === "openclaw").map(
+        (descriptor) => descriptor.name,
+      ),
+    );
+    const emittedNames = createFastToolNames({
+      agentSessionKey: "agent:main:main",
+      config: {
+        tools: { allow: ["update_plan"] },
+        transcripts: { enabled: true },
+      } as OpenClawConfig,
+      cwd: "/repo",
+      enableHeartbeatTool: true,
+      taskSuggestionDeliveryMode: "gateway",
+    });
+
+    expect(emittedNames.filter((name) => !describedNames.has(name))).toEqual([]);
   });
 
   it("keeps update_plan disabled by default", () => {
@@ -124,6 +145,31 @@ describe("openclaw-tools update_plan gating", () => {
 
     expect(defaultTools).not.toContain("transcripts");
     expect(enabledTools).toContain("transcripts");
+  });
+
+  it("registers task suggestions only for sessions with an actionable gateway sink", () => {
+    const withoutSession = createFastToolNames({
+      config: {} as OpenClawConfig,
+      cwd: "/repo",
+      taskSuggestionDeliveryMode: "gateway",
+    });
+    const withoutSink = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+      cwd: "/repo",
+    });
+    const withSink = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+      cwd: "/repo",
+      taskSuggestionDeliveryMode: "gateway",
+    });
+
+    expect(withoutSession).not.toContain("spawn_task");
+    expect(withoutSession).not.toContain("dismiss_task");
+    expect(withoutSink).not.toContain("spawn_task");
+    expect(withoutSink).not.toContain("dismiss_task");
+    expect(withSink).toEqual(expect.arrayContaining(["spawn_task", "dismiss_task"]));
   });
 
   it("keeps explicitly allowed message tool in embedded completions", () => {

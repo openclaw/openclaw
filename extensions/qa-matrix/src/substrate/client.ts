@@ -2,9 +2,11 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { uniqueStrings, uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaObservedEvent } from "./events.js";
-import { requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
+import { MATRIX_QA_JSON_MAX_BYTES, requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
 import {
   createMatrixQaRoomObserver,
   primeMatrixQaRoom,
@@ -339,10 +341,22 @@ async function uploadMatrixQaContent(params: {
     body: uploadBody,
     signal: AbortSignal.timeout(20_000),
   });
-  const body = (await response.json().catch(() => ({}))) as {
-    content_uri?: string;
-    error?: string;
-  };
+  // Bound the media-upload response body before parsing, mirroring
+  // `requestMatrixJson`. The overflow error is read *outside* the parse
+  // try/catch so it fails closed (propagates) instead of being swallowed into
+  // `{}`; malformed-but-in-bounds JSON still falls back to `{}` as before.
+  const uploadBytes = await readResponseWithLimit(response, MATRIX_QA_JSON_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) => new Error(`Matrix homeserver response exceeds ${maxBytes} bytes`),
+  });
+  let body: { content_uri?: string; error?: string };
+  try {
+    body = JSON.parse(new TextDecoder().decode(uploadBytes)) as {
+      content_uri?: string;
+      error?: string;
+    };
+  } catch {
+    body = {};
+  }
   if (response.status !== 200) {
     throw new Error(body.error ?? `Matrix media upload failed with status ${response.status}`);
   }
@@ -786,7 +800,7 @@ async function provisionMatrixQaTopology(params: {
 
   for (const room of params.spec.rooms) {
     const members = resolveTopologyMemberAccounts(params.accounts, room.members);
-    const creator = members[0];
+    const creator = expectDefined(members[0], "Matrix QA room creator");
     const invitees = members.slice(1);
     const creatorClient = createMatrixQaClient({
       accessToken: creator.account.accessToken,
@@ -912,4 +926,4 @@ export const testing = {
   createMatrixQaRoomObserver,
   resolveNextRegistrationAuth,
 };
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

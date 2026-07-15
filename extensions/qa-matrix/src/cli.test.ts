@@ -10,7 +10,21 @@ vi.mock("./cli.runtime.js", () => ({
   runQaMatrixCommand,
 }));
 
-import { matrixQaCliRegistration } from "./cli.js";
+import { qaRunnerCliRegistrations } from "./cli.js";
+
+const matrixQaCliRegistration = qaRunnerCliRegistrations[0];
+
+function requireMatrixQaAdapterFactory(): NonNullable<
+  (typeof matrixQaCliRegistration)["adapterFactory"]
+> {
+  const factory = matrixQaCliRegistration.adapterFactory;
+  if (!factory) {
+    throw new Error("Expected Matrix QA adapter factory");
+  }
+  return factory;
+}
+
+const matrixQaAdapterFactory = requireMatrixQaAdapterFactory();
 
 function mockProcessWrite(
   _chunk: string | Uint8Array,
@@ -51,6 +65,24 @@ describe("matrix qa cli registration", () => {
     stdoutSpy.mockRestore();
   });
 
+  it("assigns proven default shared-flow scenarios to the Matrix adapter", () => {
+    expect(matrixQaAdapterFactory.scenarioIds).toEqual([
+      "channel-chat-baseline",
+      "channel-canary",
+      "channel-dm-group-routing",
+      "channel-mention-gating",
+      "channel-sender-allowlist",
+      "channel-top-level-reply-shape",
+      "channel-secondary-conversation-isolation",
+      "channel-multi-actor-ordering",
+      "thread-follow-up",
+      "thread-isolation",
+      "thread-reply-override",
+      "dm-shared-session",
+      "dm-per-room-session",
+    ]);
+  });
+
   it("keeps disposable Matrix lane flags focused", () => {
     const qa = new Command();
 
@@ -75,6 +107,30 @@ describe("matrix qa cli registration", () => {
     }
     expect(optionNames).not.toContain("--credential-source");
     expect(optionNames).not.toContain("--credential-role");
+  });
+
+  it("passes a non-default selected account into an affected shared flow", async () => {
+    process.env.OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT = "1";
+    const qa = new Command();
+    matrixQaCliRegistration.register(qa);
+    runQaMatrixCommand.mockResolvedValue(undefined);
+
+    await qa.parseAsync([
+      "node",
+      "openclaw",
+      "matrix",
+      "--scenario",
+      "thread-reply-override",
+      "--sut-account",
+      "matrix-alt",
+    ]);
+
+    expect(runQaMatrixCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scenarioIds: ["thread-reply-override"],
+        sutAccountId: "matrix-alt",
+      }),
+    );
   });
 
   it("exits with failure after Matrix artifacts are written for a failed run", async () => {

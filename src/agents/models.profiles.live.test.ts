@@ -1,6 +1,7 @@
 // Live-sweeps discovered model profiles with optional provider/model filters and probes.
 import { writeSync } from "node:fs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { expectDefined } from "@openclaw/normalization-core";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
@@ -20,6 +21,7 @@ import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { isRateLimitErrorMessage } from "./embedded-agent-helpers/errors.js";
+import { extractAssistantText } from "./embedded-agent-utils.js";
 import { collectAnthropicApiKeys } from "./live-auth-keys.js";
 import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
@@ -27,7 +29,6 @@ import {
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isPrioritizedHighSignalLiveModelRef,
-  isPrioritizedSmallLiveModelRef,
   isSmallLiveModelRef,
   listPrioritizedSmallLiveModelRefs,
   resolveHighSignalLiveModelLimit,
@@ -39,14 +40,13 @@ import {
   buildLiveModelFileProbeContext,
   buildLiveModelFileProbeRetryContext,
   buildLiveModelImageProbeContext,
-  extractAssistantText,
   fileProbeTextMatches,
-  imageProbeTextMatches,
   isLiveModelProbeEnabled,
   LIVE_MODEL_FILE_PROBE_ENV,
   LIVE_MODEL_FILE_PROBE_TOKEN,
   LIVE_MODEL_IMAGE_PROBE_ENV,
   modelSupportsImageInput,
+  runLiveModelImageProbeWithRetry,
   shouldSkipLiveModelExtraProbes,
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
@@ -526,7 +526,13 @@ function isIpv4PrivateRange(host: string): boolean {
     return false;
   }
   const [a, b] = octets;
-  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  return (
+    a === 10 ||
+    (a === 172 &&
+      expectDefined(b, "b test invariant") >= 16 &&
+      expectDefined(b, "b test invariant") <= 31) ||
+    (a === 192 && b === 168)
+  );
 }
 
 function isIpv6LocalRange(host: string): boolean {
@@ -1689,25 +1695,31 @@ async function runExtraTurnProbes(params: {
     return;
   }
 
-  logProgress(`${params.progressLabel}: image probe`);
-  const image = await completeSimpleWithTimeout(
-    params.model,
-    buildLiveModelImageProbeContext({ systemPrompt: resolveLiveSystemPrompt(params.model) }),
-    options,
-    params.timeoutMs,
-    `${params.progressLabel}: image probe`,
-  );
-  if (image.stopReason === "error") {
-    throw new Error(image.errorMessage || "image probe returned error with no message");
-  }
-  const imageText = extractAssistantText(image);
-  if (!imageProbeTextMatches(imageText)) {
-    if (imageText.length === 0) {
-      logProgress(`${params.progressLabel}: image probe skipped (empty response)`);
-      return;
-    }
-    throw new Error(`image probe did not return ok: ${imageText}`);
-  }
+  await runLiveModelImageProbeWithRetry({
+    run: async (attempt) => {
+      const attemptLabel = `${params.progressLabel}: image probe attempt ${attempt}/2`;
+      logProgress(attemptLabel);
+      const image = await completeSimpleWithTimeout(
+        params.model,
+        buildLiveModelImageProbeContext({ systemPrompt: resolveLiveSystemPrompt(params.model) }),
+        options,
+        params.timeoutMs,
+        attemptLabel,
+      );
+      if (image.stopReason === "error" || image.stopReason === "aborted") {
+        const fallback =
+          image.stopReason === "aborted"
+            ? `${attemptLabel} was aborted`
+            : `${attemptLabel} returned error with no message`;
+        throw new Error(image.errorMessage || fallback);
+      }
+      return extractAssistantText(image);
+    },
+    onRetry: (firstText) => {
+      const reason = firstText.length === 0 ? "was empty" : "did not return ok";
+      logProgress(`${params.progressLabel}: image probe attempt 1/2 ${reason}; retrying once`);
+    },
+  });
 }
 
 describeLive("live models (profile keys)", () => {
@@ -1854,12 +1866,6 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useSmall) {
-          if (
-            useSmallPriorityOnly &&
-            !isPrioritizedSmallLiveModelRef({ provider: model.provider, id: model.id })
-          ) {
-            continue;
-          }
           if (!isSmallLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }
@@ -1964,13 +1970,14 @@ describeLive("live models (profile keys)", () => {
         const attemptMax =
           model.provider === "anthropic" && anthropicKeys.length > 0 ? anthropicKeys.length : 1;
         for (let attempt = 0; attempt < attemptMax; attempt += 1) {
-          if (model.provider === "anthropic" && anthropicKeys.length > 0) {
-            process.env.ANTHROPIC_API_KEY = anthropicKeys[attempt];
-          }
-          const apiKey =
+          const anthropicApiKey =
             model.provider === "anthropic" && anthropicKeys.length > 0
-              ? anthropicKeys[attempt]
-              : requireApiKey(apiKeyInfo, model.provider);
+              ? expectDefined(anthropicKeys[attempt], `Anthropic API key ${attempt + 1}`)
+              : undefined;
+          if (anthropicApiKey) {
+            process.env.ANTHROPIC_API_KEY = anthropicApiKey;
+          }
+          const apiKey = anthropicApiKey ?? requireApiKey(apiKeyInfo, model.provider);
           try {
             // Special regression: OpenAI requires replayed `reasoning` items for tool-only turns.
             if (
@@ -2120,12 +2127,15 @@ describeLive("live models (profile keys)", () => {
             }
 
             logProgress(`${progressLabel}: prompt`);
-            const ok = await completeOkWithRetry({
-              model,
-              apiKey,
-              timeoutMs: perModelTimeoutMs,
-              progressLabel,
-            });
+            const ok = expectDefined(
+              await completeOkWithRetry({
+                model,
+                apiKey,
+                timeoutMs: perModelTimeoutMs,
+                progressLabel,
+              }),
+              `${progressLabel} completion result`,
+            );
 
             if (ok.res.stopReason === "error") {
               const msg = ok.res.errorMessage ?? "";
@@ -2368,3 +2378,4 @@ describeLive("live models (profile keys)", () => {
     LIVE_TEST_TIMEOUT_MS,
   );
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

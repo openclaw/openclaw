@@ -18,6 +18,28 @@ function createJsonResponse(body: unknown, init?: { status?: number }) {
   });
 }
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 function fetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, index: number) {
   const call = fetchMock.mock.calls[index];
   if (!call) {
@@ -131,6 +153,38 @@ describe("loginOpenAICodexDeviceCode", () => {
     }
   });
 
+  it("aborts device-code polling without another request", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    try {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          createJsonResponse({
+            device_auth_id: "device-auth-123",
+            user_code: "CODE-12345",
+            interval: "5",
+          }),
+        )
+        .mockResolvedValueOnce(new Response(null, { status: 404 }));
+
+      const login = loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        onVerification: async () => {},
+        signal: controller.signal,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      controller.abort(new Error("cancelled"));
+      await expect(login).rejects.toThrow("cancelled");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("treats JWT-derived expiry fallback as an absolute timestamp", async () => {
     const accessToken = createJwt({
       exp: Math.floor(Date.now() / 1000) + 600,
@@ -170,6 +224,44 @@ describe("loginOpenAICodexDeviceCode", () => {
       throw new Error("expected device-code expiry to be calculated");
     }
     expect(credentials.expires).toBe(expectedExpiry);
+  });
+
+  it("accepts token exchange JSON above the diagnostic preview limit", async () => {
+    const accessToken = createJwt({
+      exp: Math.floor(Date.now() / 1000) + 600,
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "acct_123",
+      },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          device_auth_id: "device-auth-123",
+          user_code: "CODE-12345",
+          interval: "0",
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          authorization_code: "authorization-code-123",
+          code_verifier: "code-verifier-123",
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          access_token: accessToken,
+          refresh_token: "refresh-token-123",
+          id_token: "x".repeat(10_000),
+        }),
+      );
+
+    const credentials = await loginOpenAICodexDeviceCode({
+      fetchFn: fetchMock as typeof fetch,
+      onVerification: async () => {},
+    });
+
+    expect(credentials.refresh).toBe("refresh-token-123");
   });
 
   it("falls back when device-code intervals and token lifetimes overflow safe milliseconds", async () => {
@@ -239,6 +331,28 @@ describe("loginOpenAICodexDeviceCode", () => {
         onVerification: async () => {},
       }),
     ).rejects.toThrow("OpenAI device code request failed: HTTP 503 down now");
+  });
+
+  it("bounds user-code error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"device code unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "Content-Type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetchMock = vi.fn().mockResolvedValueOnce(tracked.response);
+
+    const error = await loginOpenAICodexDeviceCode({
+      fetchFn: fetchMock as typeof fetch,
+      onVerification: async () => {},
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(
+      /OpenAI device code request failed: HTTP 503 device code unavailable/,
+    );
+    expect((error as Error).message).not.toContain("tail");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 
   it("surfaces device authorization failures with sanitized payload details", async () => {

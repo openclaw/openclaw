@@ -11,6 +11,8 @@ import {
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
+const readActiveGatewayLockPortMock = vi.hoisted(() => vi.fn());
+
 vi.mock("../config/config.js", async () => {
   const mocks = await import("../gateway/gateway-connection.test-mocks.js");
   return {
@@ -31,8 +33,19 @@ vi.mock("../gateway/net.js", async () => {
   };
 });
 
-const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
+vi.mock("../infra/gateway-lock.js", () => ({
+  readActiveGatewayLockPort: readActiveGatewayLockPortMock,
+}));
+
+const { GatewayChatClient } = await import("./gateway-chat.js");
 const { GatewayClientRequestError } = await import("../gateway/client.js");
+
+const resolveBoundGatewayConnection = (
+  opts: Parameters<typeof GatewayChatClient.connectBound>[0],
+) => GatewayChatClient.connectBound(opts).connection;
+
+const resolveGatewayConnection = async (opts: Parameters<typeof GatewayChatClient.connect>[0]) =>
+  (await GatewayChatClient.connect(opts)).connection;
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -47,13 +60,13 @@ type ModeExecProviderFixture = {
   tokenMarker: string;
   passwordMarker: string;
   providers: {
-    tokenProvider: {
+    tokenprovider: {
       source: "exec";
       command: string;
       args: string[];
       allowInsecurePath: true;
     };
-    passwordProvider: {
+    passwordprovider: {
       source: "exec";
       command: string;
       args: string[];
@@ -85,13 +98,13 @@ async function withModeExecProviderFixture(
       tokenMarker,
       passwordMarker,
       providers: {
-        tokenProvider: {
+        tokenprovider: {
           source: "exec",
           command: process.execPath,
           args: ["-e", tokenExecProgram],
           allowInsecurePath: true,
         },
-        passwordProvider: {
+        passwordprovider: {
           source: "exec",
           command: process.execPath,
           args: ["-e", passwordExecProgram],
@@ -110,11 +123,13 @@ describe("resolveGatewayConnection", () => {
   beforeEach(() => {
     envSnapshot = captureEnv([
       "OPENCLAW_GATEWAY_URL",
+      "OPENCLAW_GATEWAY_PORT",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
       "OPENCLAW_TUI_SETUP_AUTH_SOURCE",
     ]);
     loadConfig.mockReset();
+    readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
     resolveGatewayPort.mockReset();
     resolveStateDir.mockReset();
     resolveConfigPath.mockReset();
@@ -127,6 +142,7 @@ describe("resolveGatewayConnection", () => {
         env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
     );
     delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_TUI_SETUP_AUTH_SOURCE;
@@ -137,11 +153,50 @@ describe("resolveGatewayConnection", () => {
     vi.useRealTimers();
   });
 
+  it("keeps a bound auth-free Gateway isolated from global config and env auth", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://global.example/ws", token: "global-token" },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_URL: "wss://env.example/ws",
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+      },
+      async () => {
+        const result = resolveBoundGatewayConnection({
+          config: {
+            gateway: {
+              mode: "remote",
+              remote: { url: "wss://selected.example/ws" },
+              handshakeTimeoutMs: 12_345,
+            },
+          },
+          url: "wss://selected.example/ws",
+          tlsFingerprint: "sha256:selected",
+        });
+
+        expect(result).toEqual({
+          url: "wss://selected.example/ws",
+          token: undefined,
+          password: undefined,
+          tlsFingerprint: "sha256:selected",
+          preauthHandshakeTimeoutMs: 12_345,
+          allowInsecureLocalOperatorUi: false,
+        });
+        expect(loadConfig).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it("throws when url override is missing explicit credentials", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
 
     await expect(resolveGatewayConnection({ url: "wss://override.example/ws" })).rejects.toThrow(
-      "explicit credentials",
+      /remove --url to use the configured target/i,
     );
   });
 
@@ -184,6 +239,64 @@ describe("resolveGatewayConnection", () => {
     const result = await resolveGatewayConnection({});
 
     expect(result.preauthHandshakeTimeoutMs).toBe(30_000);
+  });
+
+  it("keeps the TLS pin on an explicit Gateway target", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local" } });
+
+    const result = await resolveGatewayConnection({
+      url: "wss://override.example/ws",
+      token: "explicit-token",
+      tlsFingerprint: "sha256:11:22:33:44",
+    });
+
+    expect(result.tlsFingerprint).toBe("sha256:11:22:33:44");
+  });
+
+  it.each([
+    { label: "token auth", auth: { mode: "token", token: "config-token" } },
+    { label: "auth none", auth: { mode: "none" } },
+  ])("keeps the TLS pin on a configured local Gateway with $label", async ({ auth }) => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        tls: { enabled: true },
+        auth,
+      },
+    });
+
+    const result = await resolveGatewayConnection({
+      tlsFingerprint: "sha256:local-self-signed-fingerprint",
+    });
+
+    expect(result.url).toBe("wss://127.0.0.1:18789");
+    expect(result.tlsFingerprint).toBe("sha256:local-self-signed-fingerprint");
+  });
+
+  it("uses a verified active local Gateway port when no target is explicit", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", port: 18789, auth: { token: "config-token" } },
+    });
+    readActiveGatewayLockPortMock.mockResolvedValue(48789);
+
+    const result = await resolveGatewayConnection({});
+
+    expect(result.url).toBe("ws://127.0.0.1:48789");
+    expect(result.token).toBe("config-token");
+  });
+
+  it("keeps an explicit Gateway port ahead of active lock metadata", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", port: 18789, auth: { token: "config-token" } },
+    });
+    readActiveGatewayLockPortMock.mockResolvedValue(48789);
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19001" }, async () => {
+      const result = await resolveGatewayConnection({});
+
+      expect(result.url).toBe("ws://127.0.0.1:19001");
+      expect(readActiveGatewayLockPortMock).not.toHaveBeenCalled();
+    });
   });
   it("uses config auth token for local mode when both config and env tokens are set", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", auth: { token: "config-token" } } });
@@ -350,6 +463,30 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
+  it("uses configured remote password for setup-launched TUI despite stale gateway env", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://remote.example/ws",
+          password: "configured-remote-password", // pragma: allowlist secret
+        },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_PASSWORD: "stale-env-password", // pragma: allowlist secret
+        OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
+      },
+      async () => {
+        const result = await resolveGatewayConnection({});
+        expect(result.token).toBeUndefined();
+        expect(result.password).toBe("configured-remote-password");
+      },
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "resolves file-backed SecretRef token for local mode",
     async () => {
@@ -361,7 +498,7 @@ describe("resolveGatewayConnection", () => {
       loadConfig.mockReturnValue({
         secrets: {
           providers: {
-            fileProvider: {
+            fileprovider: {
               source: "file",
               path: secretFile,
               mode: "json",
@@ -372,7 +509,7 @@ describe("resolveGatewayConnection", () => {
         gateway: {
           mode: "local",
           auth: {
-            token: { source: "file", provider: "fileProvider", id: "/gatewayToken" },
+            token: { source: "file", provider: "fileprovider", id: "/gatewayToken" },
           },
         },
       });
@@ -396,7 +533,7 @@ describe("resolveGatewayConnection", () => {
     loadConfig.mockReturnValue({
       secrets: {
         providers: {
-          execProvider: {
+          execprovider: {
             source: "exec",
             command: process.execPath,
             args: ["-e", execProgram],
@@ -407,7 +544,7 @@ describe("resolveGatewayConnection", () => {
       gateway: {
         mode: "local",
         auth: {
-          token: { source: "exec", provider: "execProvider", id: "EXEC_GATEWAY_TOKEN" },
+          token: { source: "exec", provider: "execprovider", id: "EXEC_GATEWAY_TOKEN" },
         },
       },
     });
@@ -428,8 +565,8 @@ describe("resolveGatewayConnection", () => {
             mode: "local",
             auth: {
               mode: "token",
-              token: { source: "exec", provider: "tokenProvider", id: "TOKEN_SECRET" },
-              password: { source: "exec", provider: "passwordProvider", id: "PASSWORD_SECRET" },
+              token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
+              password: { source: "exec", provider: "passwordprovider", id: "PASSWORD_SECRET" },
             },
           },
         });
@@ -455,8 +592,8 @@ describe("resolveGatewayConnection", () => {
             mode: "local",
             auth: {
               mode: "password",
-              token: { source: "exec", provider: "tokenProvider", id: "TOKEN_SECRET" },
-              password: { source: "exec", provider: "passwordProvider", id: "PASSWORD_SECRET" },
+              token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
+              password: { source: "exec", provider: "passwordprovider", id: "PASSWORD_SECRET" },
             },
           },
         });
@@ -540,6 +677,7 @@ describe("GatewayChatClient", () => {
       const client = new CapturingGatewayChatClient({
         url: "ws://127.0.0.1:18789",
         token: "test-token",
+        tlsFingerprint: "sha256:11:22:33:44",
         preauthHandshakeTimeoutMs: 30_000,
         allowInsecureLocalOperatorUi: true,
       });
@@ -548,8 +686,10 @@ describe("GatewayChatClient", () => {
       expect(constructedOptions).toHaveLength(1);
       expect(constructedOptions[0]).toMatchObject({
         clientName: "openclaw-tui",
+        caps: ["task-suggestions", "tool-events"],
         mode: "ui",
         preauthHandshakeTimeoutMs: 30_000,
+        tlsFingerprint: "sha256:11:22:33:44",
         deviceIdentity: null,
       });
     } finally {
@@ -655,6 +795,70 @@ describe("GatewayChatClient", () => {
     });
   });
 
+  it("preserves side runs for session-scoped TUI aborts", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await client.abortChat({ sessionKey: "main" });
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+      preserveSideRuns: true,
+    });
+  });
+
+  it("retries session aborts without side-run preservation on older Gateways", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid chat.abort params: at root: unexpected property 'preserveSideRuns'",
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["run-main"] });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(client.abortChat({ sessionKey: "main" })).resolves.toEqual({
+      ok: true,
+      aborted: true,
+      runIds: ["run-main"],
+    });
+    expect(request).toHaveBeenNthCalledWith(1, "chat.abort", {
+      sessionKey: "main",
+      preserveSideRuns: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", { sessionKey: "main" });
+  });
+
+  it("returns the actual chat send ack status from the gateway", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi.fn().mockResolvedValue({ runId: "run-gateway", status: "timeout" });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    const result = await client.sendChat({
+      sessionKey: "main",
+      message: "hello",
+      runId: "run-local",
+    });
+
+    expect(result).toEqual({ runId: "run-gateway", status: "timeout" });
+  });
+
   it("lists gateway commands through commands.list", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
@@ -680,5 +884,104 @@ describe("GatewayChatClient", () => {
       provider: "discord",
       scope: "text",
     });
+  });
+
+  it("lists and resolves plugin approvals through the gateway", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const pending = [{ id: "plugin:skill-1" }];
+    const request = vi.fn().mockResolvedValueOnce(pending).mockResolvedValueOnce({ ok: true });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(client.listPluginApprovals()).resolves.toEqual(pending);
+    await expect(client.resolvePluginApproval("plugin:skill-1", "allow-once")).resolves.toEqual({
+      ok: true,
+    });
+
+    expect(request).toHaveBeenNthCalledWith(1, "plugin.approval.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "plugin.approval.resolve", {
+      id: "plugin:skill-1",
+      decision: "allow-once",
+    });
+  });
+
+  it("lists, accepts, and dismisses task suggestions through the gateway", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const suggestion = {
+      id: "task_1",
+      title: "Remove stale adapter",
+      prompt: "Delete the stale adapter.",
+      tldr: "The adapter is unreachable.",
+      cwd: "/repo",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      createdAt: 1_000,
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ suggestions: [suggestion] })
+      .mockResolvedValueOnce({ taskId: "task_1", key: "agent:main:task" })
+      .mockResolvedValueOnce({ taskId: "task_2", dismissed: true });
+    client.hello = {
+      features: {
+        methods: ["taskSuggestions.list", "taskSuggestions.accept", "taskSuggestions.dismiss"],
+      },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    } as never;
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(client.listTaskSuggestions()).resolves.toEqual([suggestion]);
+    await expect(client.acceptTaskSuggestion("task_1")).resolves.toEqual({
+      taskId: "task_1",
+      key: "agent:main:task",
+    });
+    await expect(client.dismissTaskSuggestion("task_2")).resolves.toEqual({
+      taskId: "task_2",
+      dismissed: true,
+    });
+
+    expect(request).toHaveBeenNthCalledWith(1, "taskSuggestions.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "taskSuggestions.accept", { taskId: "task_1" });
+    expect(request).toHaveBeenNthCalledWith(3, "taskSuggestions.dismiss", { taskId: "task_2" });
+  });
+
+  it("derives task suggestion actions from negotiated methods and scopes", () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    client.hello = {
+      features: {
+        methods: ["taskSuggestions.accept", "taskSuggestions.dismiss"],
+      },
+      auth: { role: "operator", scopes: ["operator.write"] },
+    } as never;
+
+    expect(client.getTaskSuggestionActionCapabilities()).toEqual({
+      canAccept: false,
+      canDismiss: true,
+    });
+  });
+
+  it("skips task suggestion refreshes against older gateways", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi.fn();
+    client.hello = { features: { methods: ["chat.history"] } } as never;
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(client.listTaskSuggestions()).resolves.toEqual([]);
+    expect(request).not.toHaveBeenCalled();
   });
 });

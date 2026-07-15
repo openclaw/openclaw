@@ -2,9 +2,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { applyAgentDefaultPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -67,38 +67,6 @@ describe("buildCleanupPlan", () => {
         );
       },
     );
-  });
-});
-
-describe("applyAgentDefaultPrimaryModel", () => {
-  it("does not mutate when already set", () => {
-    const cfg = { agents: { defaults: { model: { primary: "a/b" } } } } as OpenClawConfig;
-    const result = applyAgentDefaultPrimaryModel({ cfg, model: "a/b" });
-    expect(result.changed).toBe(false);
-    expect(result.next).toBe(cfg);
-  });
-
-  it("normalizes legacy models", () => {
-    const cfg = { agents: { defaults: { model: { primary: "legacy" } } } } as OpenClawConfig;
-    const result = applyAgentDefaultPrimaryModel({
-      cfg,
-      model: "a/b",
-      legacyModels: new Set(["legacy"]),
-    });
-    expect(result.changed).toBe(false);
-    expect(result.next).toBe(cfg);
-  });
-
-  it("normalizes retired Google Gemini primary models before writing config", () => {
-    const cfg = { agents: { defaults: {} } } as OpenClawConfig;
-    const result = applyAgentDefaultPrimaryModel({
-      cfg,
-      model: "google/gemini-3-pro-preview",
-    });
-    expect(result.changed).toBe(true);
-    expect(result.next.agents?.defaults?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-    });
   });
 });
 
@@ -210,7 +178,9 @@ describe("cleanup path removals", () => {
     expect(result.ok).toBe(false);
     expect(result.skipped).toBeUndefined();
     expect(runtime.error.mock.calls.length).toBe(1);
-    expect(runtime.error.mock.calls[0][0]).toMatch(/Refusing to remove unsafe path/);
+    expect(
+      expectDefined(runtime.error.mock.calls[0], "runtime.error.mock.calls[0] test invariant")[0],
+    ).toMatch(/Refusing to remove unsafe path/);
     expect(runtime.log.mock.calls.length).toBe(0);
   });
 
@@ -229,7 +199,9 @@ describe("cleanup path removals", () => {
       expect(result.ok).toBe(false);
       expect(result.skipped).toBeUndefined();
       expect(runtime.error.mock.calls.length).toBe(1);
-      expect(runtime.error.mock.calls[0][0]).toMatch(/Refusing to remove unsafe path/);
+      expect(
+        expectDefined(runtime.error.mock.calls[0], "runtime.error.mock.calls[0] test invariant")[0],
+      ).toMatch(/Refusing to remove unsafe path/);
       expect(runtime.log.mock.calls.length).toBe(0);
     } finally {
       cwdSpy.mockRestore();

@@ -4,6 +4,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "../scripts/lib/package-dist-inventory.ts";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
 import {
   compareReleaseVersions,
@@ -23,10 +27,6 @@ import {
   runNpmReleaseCheckCommand,
   shouldSkipPackedTarballValidation,
 } from "../scripts/openclaw-npm-release-check.ts";
-import {
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-} from "../src/infra/package-dist-inventory.ts";
 
 const REQUIRED_PACKED_PATHS = [
   "npm-shrinkwrap.json",
@@ -349,6 +349,21 @@ describe("resolveNpmCommandInvocation", () => {
     });
   });
 
+  it("wraps bare Windows npm_execpath through npm.cmd", () => {
+    expect(
+      resolveNpmCommandInvocation({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmArgs: ["view", "openclaw@beta", "version"],
+        npmExecPath: "npm",
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "npm.cmd view openclaw@beta version"],
+      windowsVerbatimArguments: true,
+    });
+  });
+
   it("wraps Windows npm_execpath command shims", () => {
     expect(
       resolveNpmCommandInvocation({
@@ -414,7 +429,7 @@ describe("resolveNpmCommandInvocation", () => {
             PATH: `${dir}${delimiter}${process.env.PATH ?? ""}`,
           },
           windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-        });
+        } as { cwd: string; env: NodeJS.ProcessEnv });
 
         expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual([
           "view",
@@ -761,7 +776,6 @@ describe("collectReleaseTagErrors", () => {
       collectReleaseTagErrors({
         packageVersion: "2026.3.10",
         releaseTag: "v2026.3.10-1",
-        now: new Date("2026-03-10T00:00:00Z"),
       }),
     ).toStrictEqual([]);
   });
@@ -771,7 +785,6 @@ describe("collectReleaseTagErrors", () => {
       collectReleaseTagErrors({
         packageVersion: "2026.3.10-1",
         releaseTag: "v2026.3.10-1",
-        now: new Date("2026-03-10T00:00:00Z"),
       }),
     ).toStrictEqual([]);
   });
@@ -781,7 +794,6 @@ describe("collectReleaseTagErrors", () => {
       collectReleaseTagErrors({
         packageVersion: "2026.3.10-beta.1",
         releaseTag: "v2026.3.10-1",
-        now: new Date("2026-03-10T00:00:00Z"),
       }),
     ).toStrictEqual([
       "Release tag v2026.3.10-1 does not match package.json version 2026.3.10-beta.1; expected v2026.3.10-beta.1.",

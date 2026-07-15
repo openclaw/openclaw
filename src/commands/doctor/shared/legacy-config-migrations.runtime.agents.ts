@@ -1,6 +1,10 @@
 // Legacy runtime agent config migrations for memory, heartbeat, sandbox, and runtime policy keys.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  isCanonicalToolProviderPolicyKey,
+  normalizeToolProviderPolicyKey,
+} from "../../../agents/provider-tool-policy.js";
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../../../agents/tool-policy-shared.js";
@@ -1028,21 +1032,6 @@ function addHandledProviderPolicyKey(handledProviders: Set<string>, providerKey:
   handledProviders.add(normalizeToolProviderPolicyKey(providerKey));
 }
 
-function normalizeToolProviderPolicyKey(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  const slashIndex = normalized.indexOf("/");
-  if (slashIndex <= 0) {
-    return normalizeProviderId(normalized);
-  }
-  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
-  const modelId = normalized.slice(slashIndex + 1);
-  return modelId ? `${provider}/${modelId}` : provider;
-}
-
-function isCanonicalToolProviderPolicyKey(value: string): boolean {
-  return value.trim().toLowerCase() === normalizeToolProviderPolicyKey(value);
-}
-
 function buildInheritedProviderPolicyLookup(
   inheritedByProvider: Record<string, unknown> | null | undefined,
 ): Map<
@@ -1476,3 +1465,4 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     },
   }),
 ];
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -14,7 +14,7 @@ import {
   type ChannelRouteParsedTarget,
 } from "../../plugin-sdk/channel-route.js";
 import { getChannelPlugin, normalizeChannelId } from "./index.js";
-import { getLoadedChannelPluginForRead } from "./registry-loaded-read.js";
+import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
 
 export type { ChannelRouteParsedTarget } from "../../plugin-sdk/channel-route.js";
 
@@ -25,7 +25,7 @@ export type ParsedChannelExplicitTarget = {
   chatType?: "direct" | "group" | "channel";
 };
 
-export function resolveCompatParsedRouteTarget(params: {
+function resolveCompatParsedRouteTarget(params: {
   channel: string;
   rawTarget?: string | null;
   fallbackThreadId?: string | number | null;

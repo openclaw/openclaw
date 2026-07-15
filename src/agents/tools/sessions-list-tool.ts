@@ -5,9 +5,11 @@
  */
 import path from "node:path";
 import {
+  normalizeFastMode,
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import pMap from "p-map";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -21,6 +23,8 @@ import { callGateway } from "../../gateway/call.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { getSessionStateVersions } from "../../sessions/session-state-events.js";
+import { normalizeFastModeAutoOnSeconds, normalizeFastModeSource } from "../../shared/fast-mode.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   optionalNonNegativeIntegerSchema,
@@ -30,6 +34,7 @@ import {
   describeSessionsListTool,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
+import { stripToolMessages } from "./chat-history-text.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -49,7 +54,6 @@ import {
   resolveSandboxedSessionToolContext,
   type SessionListRow,
   type SessionRunStatus,
-  stripToolMessages,
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
@@ -60,6 +64,7 @@ const SessionsListToolSchema = Type.Object({
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   search: Type.Optional(Type.String({ minLength: 1 })),
+  archived: Type.Optional(Type.Boolean()),
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
@@ -121,6 +126,7 @@ export function createSessionsListTool(opts?: {
       const label = readStringParam(params, "label");
       const agentId = readStringParam(params, "agentId");
       const search = readStringParam(params, "search");
+      const archived = params.archived === true;
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;
       const gatewayCall = opts?.callGateway ?? callGateway;
@@ -135,6 +141,7 @@ export function createSessionsListTool(opts?: {
           label,
           agentId,
           search,
+          archived,
           includeDerivedTitles: false,
           includeLastMessage: false,
           includeGlobal: !restrictToSpawned,
@@ -144,6 +151,21 @@ export function createSessionsListTool(opts?: {
       });
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+      const stateVersions = getSessionStateVersions(
+        sessions.flatMap((entry) =>
+          entry && typeof entry === "object" && typeof entry.key === "string"
+            ? [
+                {
+                  sessionKey: entry.key,
+                  agentId:
+                    typeof entry.agentId === "string" && entry.agentId
+                      ? entry.agentId
+                      : resolveAgentIdFromSessionKey(entry.key),
+                },
+              ]
+            : [],
+        ),
+      );
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
@@ -156,8 +178,9 @@ export function createSessionsListTool(opts?: {
       const titleTargets: Array<{
         row: SessionListRow;
         titleEntry: SessionEntry;
+        sessionEntry: { sessionFile?: string; sessionId: string };
         sessionId: string;
-        sessionFile?: string;
+        sessionKey: string;
         agentId: string;
       }> = [];
 
@@ -263,6 +286,14 @@ export function createSessionsListTool(opts?: {
           }
         }
 
+        const effectiveFastMode = normalizeFastMode(entry.effectiveFastMode);
+        const effectiveFastModeSource = normalizeFastModeSource(entry.effectiveFastModeSource);
+        const fastAutoOnSeconds = normalizeFastModeAutoOnSeconds(entry.fastAutoOnSeconds);
+        // Version lookup keys on the store-owning agent (gateway row agentId), not the
+        // key-derived agent: bare "global" keys parse to the default agent id.
+        const stateVersionAgentId =
+          typeof entry.agentId === "string" && entry.agentId ? entry.agentId : resolvedAgentId;
+        const stateVersion = stateVersions[stateVersionAgentId]?.[key];
         const row: SessionListRow = {
           key: displayKey,
           agentId: resolvedAgentId,
@@ -306,7 +337,12 @@ export function createSessionsListTool(opts?: {
                 }
               : undefined,
           updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
+          archived: entry.archived === true,
+          archivedAt: typeof entry.archivedAt === "number" ? entry.archivedAt : undefined,
+          pinned: entry.pinned === true,
+          pinnedAt: typeof entry.pinnedAt === "number" ? entry.pinnedAt : undefined,
           sessionId,
+          ...(stateVersion ? { stateVersion } : {}),
           model: readStringValue(entry.model),
           contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
           totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
@@ -328,7 +364,10 @@ export function createSessionsListTool(opts?: {
                 )
             : undefined,
           thinkingLevel: readStringValue(entry.thinkingLevel),
-          fastMode: typeof entry.fastMode === "boolean" ? entry.fastMode : undefined,
+          fastMode: normalizeFastMode(entry.fastMode),
+          ...(effectiveFastMode !== undefined ? { effectiveFastMode } : {}),
+          ...(effectiveFastModeSource !== undefined ? { effectiveFastModeSource } : {}),
+          ...(fastAutoOnSeconds !== undefined ? { fastAutoOnSeconds } : {}),
           verboseLevel: readStringValue(entry.verboseLevel),
           reasoningLevel: readStringValue(entry.reasoningLevel),
           elevatedLevel: readStringValue(entry.elevatedLevel),
@@ -356,8 +395,16 @@ export function createSessionsListTool(opts?: {
               subject: readStringValue((entry as { subject?: unknown }).subject),
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
+            sessionEntry: {
+              sessionId,
+              ...(sessionFile ? { sessionFile } : {}),
+            },
             sessionId,
-            ...(sessionFile ? { sessionFile } : {}),
+            sessionKey: resolveInternalSessionKey({
+              key,
+              alias,
+              mainKey,
+            }),
             agentId: resolvedAgentId,
           });
         }
@@ -373,20 +420,14 @@ export function createSessionsListTool(opts?: {
       }
 
       if (titleTargets.length > 0) {
-        const maxConcurrent = Math.min(4, titleTargets.length);
-        let index = 0;
-        const worker = async () => {
-          while (true) {
-            const next = index;
-            index += 1;
-            if (next >= titleTargets.length) {
-              return;
-            }
-            const target = titleTargets[next];
+        await pMap(
+          titleTargets,
+          async (target) => {
             const fields = await readSessionTitleFieldsFromTranscriptAsync({
               agentId: target.agentId,
-              sessionFile: target.sessionFile,
+              sessionEntry: target.sessionEntry,
               sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
               storePath,
             });
             if (includeDerivedTitles && !target.row.derivedTitle) {
@@ -398,22 +439,15 @@ export function createSessionsListTool(opts?: {
             if (includeLastMessage && fields.lastMessagePreview) {
               target.row.lastMessagePreview = fields.lastMessagePreview;
             }
-          }
-        };
-        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
+          },
+          { concurrency: 4, stopOnError: true },
+        );
       }
 
       if (messageLimit > 0 && historyTargets.length > 0) {
-        const maxConcurrent = Math.min(4, historyTargets.length);
-        let index = 0;
-        const worker = async () => {
-          while (true) {
-            const next = index;
-            index += 1;
-            if (next >= historyTargets.length) {
-              return;
-            }
-            const target = historyTargets[next];
+        await pMap(
+          historyTargets,
+          async (target) => {
             const history = await gatewayCall<{ messages: Array<unknown> }>({
               method: "chat.history",
               params: { sessionKey: target.resolvedKey, limit: messageLimit },
@@ -422,9 +456,9 @@ export function createSessionsListTool(opts?: {
             const filtered = stripToolMessages(rawMessages);
             target.row.messages =
               filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
-          }
-        };
-        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
+          },
+          { concurrency: 4, stopOnError: true },
+        );
       }
 
       const visibilityMetadata =

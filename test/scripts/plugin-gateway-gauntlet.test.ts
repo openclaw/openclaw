@@ -1,9 +1,11 @@
 // Plugin Gateway Gauntlet tests cover plugin gateway gauntlet script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildObservationGuardFailures,
@@ -92,6 +94,20 @@ describe("plugin gateway gauntlet helpers", () => {
     throw new Error("condition was not met before timeout");
   }
 
+  async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
+    return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error("child did not close before timeout"));
+        }, timeoutMs);
+        child.once("close", (code, signal) => {
+          clearTimeout(timer);
+          resolve({ code, signal });
+        });
+      },
+    );
+  }
+
   it("stops parsing options after the argument terminator", () => {
     expect(parseArgs(["--plugin", "telegram", "--", "--plugin", "discord"])).toMatchObject({
       pluginIds: ["telegram"],
@@ -114,6 +130,59 @@ describe("plugin gateway gauntlet helpers", () => {
       pluginIds: ["telegram"],
       qaScenarios: ["channel-chat-baseline"],
     });
+  });
+
+  it("rejects duplicate repeatable selectors", () => {
+    expect(() => parseArgs(["--plugin", "telegram", "--plugin", "telegram"])).toThrow(
+      "Duplicate --plugin value: telegram",
+    );
+    expect(() =>
+      parseArgs([
+        "--qa-scenario",
+        "channel-chat-baseline",
+        "--qa-scenario",
+        "channel-chat-baseline",
+      ]),
+    ).toThrow("Duplicate --qa-scenario value: channel-chat-baseline");
+
+    vi.stubEnv("OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS", "telegram,discord");
+    expect(() => parseArgs(["--plugin", "telegram"])).toThrow("Duplicate --plugin value: telegram");
+  });
+
+  it("rejects duplicate single-value controls", () => {
+    expect(() =>
+      parseArgs(["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]),
+    ).toThrow("--output-dir was provided more than once");
+    expect(() => parseArgs(["--shard-total", "2", "--shard-total", "3"])).toThrow(
+      "--shard-total was provided more than once",
+    );
+  });
+
+  it("rejects valued flags followed by another option", () => {
+    for (const flag of [
+      "--repo-root",
+      "--output-dir",
+      "--plugin",
+      "--shard-total",
+      "--shard-index",
+      "--limit",
+      "--qa-scenario",
+      "--qa-plugin-chunk-size",
+      "--cpu-core-warn",
+      "--hot-wall-warn-ms",
+      "--max-rss-warn-mb",
+      "--wall-anomaly-multiplier",
+      "--rss-anomaly-multiplier",
+      "--qa-cpu-regression-multiplier",
+      "--qa-wall-regression-multiplier",
+      "--command-timeout-ms",
+      "--build-timeout-ms",
+      "--qa-timeout-ms",
+    ]) {
+      for (const value of ["--skip-qa", "-h"]) {
+        expect(() => parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
+      }
+    }
   });
 
   it("discovers bundled plugin manifests into lifecycle matrix rows", async () => {
@@ -166,10 +235,11 @@ describe("plugin gateway gauntlet helpers", () => {
       runtimeSlashAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
       skills: [],
     });
-    expect(matrix[1].runtimeSlashAliases).toEqual([
+    const beta = expectDefined(matrix[1], "beta bundled plugin manifest");
+    expect(beta.runtimeSlashAliases).toEqual([
       { name: "dreaming", kind: "runtime-slash", cliCommand: null },
     ]);
-    expect(matrix[1].buildId).toBe("beta");
+    expect(beta.buildId).toBe("beta");
   });
 
   it("keeps manifest ids separate from bounded build entry ids", async () => {
@@ -183,7 +253,8 @@ describe("plugin gateway gauntlet helpers", () => {
         id: "kimi",
       }),
     ]);
-    expect(buildGauntletPrebuildEnv({}, { buildIds: [matrix[0].buildId] })).toEqual({
+    const kimi = expectDefined(matrix[0], "Kimi bundled plugin manifest");
+    expect(buildGauntletPrebuildEnv({}, { buildIds: [kimi.buildId] })).toEqual({
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "kimi-coding",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
@@ -264,9 +335,9 @@ describe("plugin gateway gauntlet helpers", () => {
       { id: "beta", requiredPlugins: ["alpha"] },
     ];
 
-    expect(() => collectRequiredPluginEntries(entries, [entries[0]])).toThrow(
-      "Bundled plugin dependency cycle detected: alpha -> beta -> alpha",
-    );
+    expect(() =>
+      collectRequiredPluginEntries(entries, [expectDefined(entries[0], "alpha plugin entry")]),
+    ).toThrow("Bundled plugin dependency cycle detected: alpha -> beta -> alpha");
   });
 
   it("detects required schema fields recursively", () => {
@@ -536,7 +607,27 @@ describe("plugin gateway gauntlet helpers", () => {
 
     expect(row.status).toBe(1);
     expect(row.spawnError?.code).toBe("ENOENT");
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("[spawn error] ENOENT");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("[spawn error] ENOENT");
+  });
+
+  it("clamps oversized measured command timers before scheduling", async () => {
+    const logDir = path.join(repoRoot, "logs");
+    const row = await runMeasuredCommandLive({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: ["-e", "setTimeout(() => process.exit(0), 25)"],
+      label: "oversized-timeout",
+      phase: "probe",
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      timeMode: "none",
+    });
+
+    expect(row.status).toBe(0);
+    expect(row.timedOut).toBe(false);
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.not.toContain("ETIMEDOUT");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -573,7 +664,7 @@ setInterval(() => {}, 1000);
           label: "timeout-leader-exits",
           phase: "probe",
           timeoutKillGraceMs: 25,
-          timeoutMs: 1_000,
+          timeoutMs: 250,
           timeMode: "none",
         });
 
@@ -599,6 +690,66 @@ setInterval(() => {}, 1000);
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "lets timed-out measured command descendants drain during kill grace",
+    async () => {
+      const logDir = path.join(repoRoot, "logs");
+      const scriptPath = path.join(repoRoot, "leader-exits-drain.mjs");
+      const readyPath = path.join(repoRoot, "grandchild.ready");
+      const drainedPath = path.join(repoRoot, "grandchild.drained");
+      await fs.writeFile(
+        scriptPath,
+        `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchildScript = [
+  "const fs = require('node:fs');",
+  "process.on('SIGTERM', () => {",
+  "  setTimeout(() => {",
+  "    fs.writeFileSync(process.argv[3], 'drained');",
+  "    process.exit(0);",
+  "  }, 50);",
+  "});",
+  "fs.writeFileSync(process.argv[2], 'ready');",
+  "setInterval(() => {}, 1000);",
+].join("\\n");
+spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[2], process.argv[3]], {
+  stdio: "ignore",
+});
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+
+      const rowPromise = runMeasuredCommand({
+        cwd: repoRoot,
+        env: process.env,
+        logDir,
+        command: process.execPath,
+        args: [scriptPath, readyPath, drainedPath],
+        label: "timeout-leader-drain",
+        phase: "probe",
+        timeoutKillGraceMs: 1_000,
+        timeoutMs: 500,
+        timeMode: "none",
+      });
+
+      await waitFor(() =>
+        fs
+          .access(readyPath)
+          .then(() => true)
+          .catch(() => false),
+      );
+      const row = await rowPromise;
+
+      expect(row.timedOut).toBe(true);
+      expect(row.spawnError?.code).toBe("ETIMEDOUT");
+      await expect(fs.readFile(drainedPath, "utf8")).resolves.toBe("drained");
+    },
+  );
+
   it("captures output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
     const row = await runMeasuredCommandLive({
@@ -614,8 +765,8 @@ setInterval(() => {}, 1000);
     });
 
     expect(row.status).toBe(0);
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stdout");
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stderr");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("live stdout");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("live stderr");
   });
 
   it("returns a failed row when measured command log writing fails", async () => {
@@ -660,6 +811,196 @@ setInterval(() => {}, 1000);
     expect(process.listenerCount("SIGTERM")).toBe(before);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "cleans parent-terminated measured process groups when the leader exits first",
+    async () => {
+      const logDir = path.join(repoRoot, "logs");
+      const harnessPath = path.join(repoRoot, "parent-termination-harness.mjs");
+      const scriptPath = path.join(repoRoot, "parent-termination-leader.mjs");
+      const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
+      const grandchildReadyPath = path.join(repoRoot, "grandchild.ready");
+      let grandchildPid = 0;
+
+      await fs.writeFile(
+        scriptPath,
+        `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchildScript = [
+  "const fs = require('node:fs');",
+  "process.on('SIGTERM', () => {});",
+  "process.on('SIGHUP', () => {});",
+  "fs.writeFileSync(process.argv[2], 'ready');",
+  "setInterval(() => {}, 1000);",
+].join("\\n");
+const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[3]], {
+  stdio: "ignore",
+});
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+      await fs.writeFile(
+        harnessPath,
+        `
+import { runMeasuredCommandLive } from ${JSON.stringify(
+          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mjs")).href,
+        )};
+
+await runMeasuredCommandLive({
+  cwd: ${JSON.stringify(repoRoot)},
+  env: process.env,
+  logDir: ${JSON.stringify(logDir)},
+  command: process.execPath,
+  args: [${JSON.stringify(scriptPath)}, ${JSON.stringify(grandchildPidPath)}, ${JSON.stringify(
+    grandchildReadyPath,
+  )}],
+  label: "parent-termination-leader-exits",
+  phase: "probe",
+  timeoutKillGraceMs: 25,
+  timeoutMs: 60_000,
+  timeMode: "none",
+});
+`,
+        "utf8",
+      );
+
+      const harness = spawn(process.execPath, [harnessPath], {
+        cwd: repoRoot,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      try {
+        await waitFor(async () => {
+          try {
+            await fs.access(grandchildReadyPath);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+        expect(isProcessAlive(grandchildPid)).toBe(true);
+
+        harness.kill("SIGTERM");
+        await expect(waitForClose(harness)).resolves.toEqual({ code: null, signal: "SIGTERM" });
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      } finally {
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+        if (harness.pid && isProcessAlive(harness.pid)) {
+          harness.kill("SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rethrows parent termination received during timeout cleanup",
+    async () => {
+      const logDir = path.join(repoRoot, "logs");
+      const harnessPath = path.join(repoRoot, "timeout-parent-termination-harness.mjs");
+      const scriptPath = path.join(repoRoot, "timeout-parent-termination-leader.mjs");
+      const grandchildPidPath = path.join(repoRoot, "timeout-grandchild.pid");
+      const grandchildReadyPath = path.join(repoRoot, "timeout-grandchild.ready");
+      const leaderExitedPath = path.join(repoRoot, "timeout-leader.exited");
+      let grandchildPid = 0;
+
+      await fs.writeFile(
+        scriptPath,
+        `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchildScript = [
+  "const fs = require('node:fs');",
+  "process.on('SIGTERM', () => {});",
+  "process.on('SIGHUP', () => {});",
+  "fs.writeFileSync(process.argv[2], 'ready');",
+  "setInterval(() => {}, 1000);",
+].join("\\n");
+const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[3]], {
+  stdio: "ignore",
+});
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
+process.on("SIGTERM", () => {
+  fs.writeFileSync(process.argv[4], "exited");
+  process.exit(0);
+});
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+      await fs.writeFile(
+        harnessPath,
+        `
+import fs from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
+import { runMeasuredCommandLive } from ${JSON.stringify(
+          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mjs")).href,
+        )};
+
+const promise = runMeasuredCommandLive({
+  cwd: ${JSON.stringify(repoRoot)},
+  env: process.env,
+  logDir: ${JSON.stringify(logDir)},
+  command: process.execPath,
+  args: [${JSON.stringify(scriptPath)}, ${JSON.stringify(grandchildPidPath)}, ${JSON.stringify(
+    grandchildReadyPath,
+  )}, ${JSON.stringify(leaderExitedPath)}],
+  label: "timeout-parent-termination",
+  phase: "probe",
+  timeoutKillGraceMs: 250,
+  timeoutMs: 200,
+  timeMode: "none",
+});
+for (let attempt = 0; attempt < 200 && !fs.existsSync(${JSON.stringify(
+          leaderExitedPath,
+        )}); attempt += 1) {
+  await delay(25);
+}
+if (!fs.existsSync(${JSON.stringify(leaderExitedPath)})) {
+  process.exit(2);
+}
+await delay(50);
+process.kill(process.pid, "SIGTERM");
+await promise;
+process.exit(7);
+`,
+        "utf8",
+      );
+
+      const harness = spawn(process.execPath, [harnessPath], {
+        cwd: repoRoot,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      try {
+        await waitFor(async () => {
+          try {
+            await fs.access(grandchildReadyPath);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+
+        await expect(waitForClose(harness)).resolves.toEqual({ code: null, signal: "SIGTERM" });
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      } finally {
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+        if (harness.pid && isProcessAlive(harness.pid)) {
+          harness.kill("SIGKILL");
+        }
+      }
+    },
+  );
+
   it("bounds captured output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
     const row = await runMeasuredCommandLive({
@@ -676,7 +1017,7 @@ setInterval(() => {}, 1000);
     });
 
     expect(row.status).toBe(0);
-    const log = await fs.readFile(row.logPath, "utf8");
+    const log = await fs.readFile(row.logPath!, "utf8");
     expect(log).toContain("x".repeat(12));
     expect(log).toContain("[stdout truncated after 12 bytes]");
   });
@@ -708,7 +1049,7 @@ setInterval(() => {}, 1000);
     expect(relayed).toContain("x".repeat(12));
     expect(relayed).not.toContain("x".repeat(32));
     expect(relayed).toContain("[stdout relay truncated after 12 bytes]");
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("x".repeat(32));
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("x".repeat(32));
   });
 
   it("force kills timed-out live measured process groups that ignore SIGTERM", async () => {
@@ -836,6 +1177,83 @@ setInterval(() => {}, 1000);
     }
   });
 
+  it("fails once when skip-prebuild leaves plugin lifecycle probes without a built entry", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    await writeManifest("acpx", "openclaw.plugin.json", JSON.stringify({ id: "acpx" }));
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-qa",
+        "--plugin",
+        "acpx",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("Cannot find module");
+    expect(result.stderr).not.toContain("[plugin-gauntlet] acpx install");
+    expect(result.stdout).toContain("failure missing-built-entry");
+
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.rows).toEqual([]);
+    expect(summary.failures).toEqual([]);
+    expect(summary.guardFailures).toEqual([
+      {
+        kind: "missing-built-entry",
+        message:
+          "dist/entry.js is missing; run without --skip-prebuild or build the gauntlet runtime first.",
+      },
+    ]);
+  });
+
+  it("allows skip-prebuild slash-only dry runs when selected plugins have no slash probes", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    await writeManifest("acpx", "openclaw.plugin.json", JSON.stringify({ id: "acpx" }));
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-qa",
+        "--allow-empty",
+        "--plugin",
+        "acpx",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("missing-built-entry");
+
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.rows).toEqual([]);
+    expect(summary.guardFailures).toEqual([]);
+  });
+
   it("parses observation failure mode from CLI and env", () => {
     expect(parseArgs(["--fail-on-observation", "--allow-empty"])).toMatchObject({
       allowEmpty: true,
@@ -952,8 +1370,17 @@ setInterval(() => {}, 1000);
     expect(result.stdout).toContain("failures=0");
   });
 
-  it("probes plugin-owned slash help while the plugin is installed", async () => {
-    const outputDir = path.join(repoRoot, "artifacts");
+  it.each([
+    ["probes plugin-owned slash help while the plugin is installed", "default", [], 0],
+    ["skips plugin-owned slash help when requested", "skip", ["--skip-slash-help"], 0],
+    [
+      "rejects slash-only probes without the install lifecycle",
+      "slash-only",
+      ["--skip-lifecycle"],
+      1,
+    ],
+  ] as const)("%s", async (_title, mode, extraArgs, expectedStatus) => {
+    const outputDir = path.join(repoRoot, `artifacts-${mode}`);
     await writeManifest(
       "workboard",
       "openclaw.plugin.json",
@@ -1007,6 +1434,7 @@ setInterval(() => {}, 1000);
         outputDir,
         "--skip-prebuild",
         "--skip-qa",
+        ...extraArgs,
         "--plugin",
         "workboard",
       ],
@@ -1016,95 +1444,49 @@ setInterval(() => {}, 1000);
       },
     );
 
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(expectedStatus);
     const summary = JSON.parse(
       await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
     );
-    expect(summary.failures).toEqual([]);
-    const slashHelpRow = summary.rows.find(
-      (row: { label?: string; logPath?: string }) => row.label === "workboard-slash-help:workboard",
-    );
-    expect(summary.rows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          label: "workboard-slash-help:workboard",
-          phase: "slash:help",
-          pluginId: "workboard",
-          status: 0,
-        }),
-      ]),
-    );
-    const slashHelpLogPath = slashHelpRow?.logPath;
-    expect(slashHelpLogPath).toEqual(expect.any(String));
-    await expect(fs.readFile(slashHelpLogPath as string, "utf8")).resolves.toContain(
-      "Usage: openclaw workboard",
-    );
+    if (mode === "default") {
+      expect(summary.failures).toEqual([]);
+      const slashHelpRow = summary.rows.find(
+        (row: { label?: string; logPath?: string }) =>
+          row.label === "workboard-slash-help:workboard",
+      );
+      expect(summary.rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            label: "workboard-slash-help:workboard",
+            phase: "slash:help",
+            pluginId: "workboard",
+            status: 0,
+          }),
+        ]),
+      );
+      const slashHelpLogPath = slashHelpRow?.logPath;
+      expect(slashHelpLogPath).toEqual(expect.any(String));
+      await expect(fs.readFile(slashHelpLogPath as string, "utf8")).resolves.toContain(
+        "Usage: openclaw workboard",
+      );
+      return;
+    }
 
-    const skipOutputDir = path.join(repoRoot, "artifacts-skip");
-    const skipResult = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        skipOutputDir,
-        "--skip-prebuild",
-        "--skip-qa",
-        "--skip-slash-help",
-        "--plugin",
-        "workboard",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
+    if (mode === "skip") {
+      expect(summary.failures).toEqual([]);
+      expect(summary.rows).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "slash:help",
+            pluginId: "workboard",
+          }),
+        ]),
+      );
+      return;
+    }
 
-    expect(skipResult.status, skipResult.stderr).toBe(0);
-    const skipSummary = JSON.parse(
-      await fs.readFile(path.join(skipOutputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
-    expect(skipSummary.failures).toEqual([]);
-    expect(skipSummary.rows).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          phase: "slash:help",
-          pluginId: "workboard",
-        }),
-      ]),
-    );
-
-    const slashOnlyOutputDir = path.join(repoRoot, "artifacts-slash-only");
-    const slashOnlyResult = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        slashOnlyOutputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-qa",
-        "--plugin",
-        "workboard",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
-
-    expect(slashOnlyResult.status, slashOnlyResult.stderr).toBe(1);
-    const slashOnlySummary = JSON.parse(
-      await fs.readFile(
-        path.join(slashOnlyOutputDir, "plugin-gateway-gauntlet-summary.json"),
-        "utf8",
-      ),
-    );
-    expect(slashOnlySummary.guardFailures).toEqual([]);
-    expect(slashOnlySummary.failures).toEqual([
+    expect(summary.guardFailures).toEqual([]);
+    expect(summary.failures).toEqual([
       expect.objectContaining({
         label: "workboard-slash-workboard",
         phase: "slash:help",

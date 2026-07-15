@@ -21,6 +21,7 @@
     systemPrompt,
     tools,
     renderedTools,
+    warning,
   } = data;
 
   // ============================================================
@@ -699,11 +700,11 @@
     return "application/octet-stream";
   }
 
-  function sanitizeImageBase64(data) {
-    if (typeof data !== "string") {
+  function sanitizeImageBase64(base64Data) {
+    if (typeof base64Data !== "string") {
       return "";
     }
-    const cleaned = data.replace(/\s+/g, "");
+    const cleaned = base64Data.replace(/\s+/g, "");
     if (!cleaned || cleaned.length % 4 !== 0 || !SAFE_BASE64_RE.test(cleaned)) {
       return "";
     }
@@ -712,11 +713,11 @@
 
   function renderDataUrlImage(img, className) {
     const mimeType = sanitizeImageMimeType(img?.mimeType);
-    const base64 = sanitizeImageBase64(img?.data);
-    if (!base64) {
+    const imgBase64 = sanitizeImageBase64(img?.data);
+    if (!imgBase64) {
       return "";
     }
-    return `<img src="data:${mimeType};base64,${base64}" class="${className}" />`;
+    return `<img src="data:${mimeType};base64,${imgBase64}" class="${className}" />`;
   }
   /**
    * Truncate string to maxLen chars, append "..." if truncated.
@@ -864,8 +865,8 @@
         div.appendChild(content);
         // Navigate to the newest leaf through this node, but scroll to the clicked node
         div.addEventListener("click", () => {
-          const leafId = findNewestLeaf(entry.id);
-          navigateTo(leafId, "target", entry.id);
+          const targetLeafId = findNewestLeaf(entry.id);
+          navigateTo(targetLeafId, "target", entry.id);
         });
 
         container.appendChild(div);
@@ -897,7 +898,7 @@
     setTimeout(() => {
       const activeNode = container.querySelector(".tree-node.active");
       if (activeNode) {
-        activeNode.scrollIntoView({ block: "nearest" });
+        activeNode.scrollIntoView?.({ block: "nearest" });
       }
     }, 0);
   }
@@ -1567,7 +1568,11 @@
       msgParts.push(`${globalStats.branchSummaries} branch summaries`);
     }
 
-    let html = `
+    let html = "";
+    if (warning) {
+      html += `<div class="export-warning">${escapeHtml(warning)}</div>`;
+    }
+    html += `
           <div class="header">
             <h1>Session: ${escapeHtml(header?.id || "unknown")}</h1>
             <div class="help-bar">
@@ -1718,7 +1723,7 @@
         const scrollTargetId = scrollToEntryId || targetId;
         const targetEl = document.getElementById(`entry-${scrollTargetId}`);
         if (targetEl) {
-          targetEl.scrollIntoView({ block: "center" });
+          targetEl.scrollIntoView?.({ block: "center" });
           // Briefly highlight the target message
           if (scrollToEntryId) {
             targetEl.classList.add("highlight");

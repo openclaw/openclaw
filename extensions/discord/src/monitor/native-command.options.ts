@@ -1,5 +1,6 @@
 // Discord plugin module implements native command.options behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
+import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveCommandArgChoices,
@@ -7,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/native-command-registry";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AutocompleteInteraction, CommandOptions } from "../internal/discord.js";
 
 const log = createSubsystemLogger("discord/native-command");
@@ -26,7 +28,7 @@ export function truncateDiscordCommandDescription(params: {
   log.warn(
     `discord: truncating native command description (${label}) from ${value.length} to ${DISCORD_COMMAND_DESCRIPTION_MAX}: ${JSON.stringify(value)}`,
   );
-  return value.slice(0, DISCORD_COMMAND_DESCRIPTION_MAX);
+  return truncateUtf16Safe(value, DISCORD_COMMAND_DESCRIPTION_MAX);
 }
 
 export function truncateDiscordCommandDescriptionLocalizations(params: {
@@ -62,7 +64,7 @@ export function buildDiscordCommandOptions(params: {
   authorizeChoiceContext?: (interaction: AutocompleteInteraction) => Promise<boolean>;
   resolveChoiceContext?: (
     interaction: AutocompleteInteraction,
-  ) => Promise<{ provider?: string; model?: string } | null>;
+  ) => Promise<{ provider?: string; model?: string; agentRuntime?: string } | null>;
 }): CommandOptions | undefined {
   const { command, cfg, resolveConfig, authorizeChoiceContext, resolveChoiceContext } = params;
   const commandLabel = resolveDiscordCommandLogLabel(command);
@@ -117,12 +119,18 @@ export function buildDiscordCommandOptions(params: {
               ? await resolveChoiceContext(interaction)
               : null;
           const currentCfg = resolveConfig?.() ?? cfg;
+          // Autocomplete cannot defer beyond Discord's three-second deadline.
+          // Cache-only catalog reads never start discovery or filesystem work.
+          const choiceCatalog =
+            command.key === "think" ? await loadModelCatalog({ cacheOnly: true }) : undefined;
           const choices = resolveCommandArgChoices({
             command,
             arg,
             cfg: currentCfg,
             provider: context?.provider,
             model: context?.model,
+            agentRuntime: context?.agentRuntime,
+            ...(choiceCatalog?.length ? { catalog: choiceCatalog } : {}),
           });
           const filtered = focusValue
             ? choices.filter((choice) =>
@@ -132,6 +140,11 @@ export function buildDiscordCommandOptions(params: {
           await interaction.respond(
             filtered.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value })),
           );
+          if (command.key === "think" && !choiceCatalog?.length) {
+            // The interaction is acknowledged now, so a failed startup warmup can retry
+            // discovery without risking Discord's response deadline.
+            void loadModelCatalog({ config: currentCfg });
+          }
         }
       : undefined;
     const choices =

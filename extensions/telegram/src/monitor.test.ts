@@ -1,7 +1,7 @@
 // Telegram tests cover monitor plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-type MonitorTelegramOpts = import("./monitor.js").MonitorTelegramOpts;
+type MonitorTelegramOpts = import("./monitor.types.js").MonitorTelegramOpts;
 let monitorTelegramProvider: typeof import("./monitor.js").monitorTelegramProvider;
 let resetTelegramPollingLeasesForTests: typeof import("./polling-lease.js").resetTelegramPollingLeasesForTests;
 
@@ -391,6 +391,8 @@ describe("monitorTelegramProvider (grammY)", () => {
   beforeAll(async () => {
     ({ monitorTelegramProvider } = await import("./monitor.js"));
     ({ resetTelegramPollingLeasesForTests } = await import("./polling-lease.js"));
+    resetTelegramPollingLeasesForTests();
+    await monitorWithAutoAbort();
   });
 
   beforeEach(() => {

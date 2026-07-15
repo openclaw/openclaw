@@ -25,6 +25,8 @@ import {
   asOptionalRecord as asRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseGeminiAuth } from "./gemini-auth.js";
+import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;
@@ -43,31 +45,6 @@ const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "gemini-embedding-001": 2048,
   "gemini-embedding-2-preview": 8192,
 };
-
-function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
-  if (apiKey.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(apiKey) as { token?: string };
-      if (typeof parsed.token === "string" && parsed.token) {
-        return {
-          headers: {
-            Authorization: `Bearer ${parsed.token}`,
-            "Content-Type": "application/json",
-          },
-        };
-      }
-    } catch {
-      // Fall back to API-key auth below.
-    }
-  }
-
-  return {
-    headers: {
-      "x-goog-api-key": apiKey,
-      "Content-Type": "application/json",
-    },
-  };
-}
 
 type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType"]>;
 
@@ -415,6 +392,12 @@ async function resolveGeminiEmbeddingClient(
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     ...headerOverrides,
+    ...resolveGoogleApiClientHeaders({
+      baseUrl,
+      api: "google-generative-ai",
+      capability: "other",
+      transport: "http",
+    }),
   };
   const apiKeys = collectProviderApiKeysForExecution({
     provider: "google",

@@ -18,10 +18,13 @@ import type {
   PluginStateEntry,
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
+  PluginStateOverflowPolicy,
   PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
+// Public plugin-state facade over the sqlite-backed store. It validates plugin
+// ids, namespaces, JSON values, TTLs, and per-plugin limits before persistence.
 // Public plugin-state facade over the sqlite-backed store. It validates plugin
 // ids, namespaces, JSON values, TTLs, and per-plugin limits before persistence.
 export type {
@@ -29,20 +32,13 @@ export type {
   PluginStateEntry,
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
-  PluginStateStoreErrorCode,
-  PluginStateStoreOperation,
-  PluginStateStoreProbeResult,
-  PluginStateStoreProbeStep,
 } from "./plugin-state-store.types.js";
-export { PluginStateStoreError } from "./plugin-state-store.types.js";
+
 export {
   closePluginStateDatabase,
-  closePluginStateSqliteStore,
   countPluginStateLiveEntries,
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
-  probePluginStateStore,
-  setMaxPluginStateEntriesPerPluginForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
 
@@ -53,6 +49,7 @@ const MAX_JSON_DEPTH = 64;
 
 type StoreOptionSignature = {
   maxEntries: number;
+  overflowPolicy: PluginStateOverflowPolicy;
   defaultTtlMs?: number;
 };
 
@@ -109,6 +106,16 @@ function validateMaxEntries(value: number): number {
     throw invalidInput("plugin state maxEntries must be an integer >= 1", "open");
   }
   return value;
+}
+
+function validateOverflowPolicy(value: unknown): PluginStateOverflowPolicy {
+  if (value === undefined || value === "evict-oldest") {
+    return "evict-oldest";
+  }
+  if (value === "reject-new") {
+    return value;
+  }
+  throw invalidInput("plugin state overflowPolicy must be evict-oldest or reject-new", "open");
 }
 
 function validateOptionalTtlMs(
@@ -228,25 +235,6 @@ function prepareRegisterParams(
   };
 }
 
-function prepareUpdateValueJson<T>(
-  key: string,
-  updateValue: (current: T | undefined) => T | undefined,
-  defaultTtlMs?: number,
-  opts?: { ttlMs?: number },
-): (current: unknown) => { valueJson: string; ttlMs?: number } | undefined {
-  return (current) => {
-    const next = updateValue(current as T | undefined);
-    if (next === undefined) {
-      return undefined;
-    }
-    const prepared = prepareRegisterParams(key, next, defaultTtlMs, opts);
-    return {
-      valueJson: prepared.valueJson,
-      ...(prepared.ttlMs != null ? { ttlMs: prepared.ttlMs } : {}),
-    };
-  };
-}
-
 function assertConsistentOptions(
   pluginId: string,
   namespace: string,
@@ -260,6 +248,7 @@ function assertConsistentOptions(
   }
   if (
     existing.maxEntries !== signature.maxEntries ||
+    existing.overflowPolicy !== signature.overflowPolicy ||
     existing.defaultTtlMs !== signature.defaultTtlMs
   ) {
     // A namespace is a shared storage contract. Reopening it with different
@@ -277,9 +266,10 @@ function createKeyedStoreForPluginId<T>(
 ): PluginStateKeyedStore<T> {
   const namespace = validateNamespace(options.namespace);
   const maxEntries = validateMaxEntries(options.maxEntries);
+  const overflowPolicy = validateOverflowPolicy(options.overflowPolicy);
   const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
   const env = options.env;
-  assertConsistentOptions(pluginId, namespace, { maxEntries, defaultTtlMs });
+  assertConsistentOptions(pluginId, namespace, { maxEntries, overflowPolicy, defaultTtlMs });
 
   return {
     async register(key, value, opts) {
@@ -290,6 +280,7 @@ function createKeyedStoreForPluginId<T>(
         key: params.key,
         valueJson: params.valueJson,
         maxEntries,
+        overflowPolicy,
         ...(env ? { env } : {}),
         ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
       });
@@ -302,6 +293,7 @@ function createKeyedStoreForPluginId<T>(
         key: params.key,
         valueJson: params.valueJson,
         maxEntries,
+        overflowPolicy,
         ...(env ? { env } : {}),
         ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
       });
@@ -313,7 +305,18 @@ function createKeyedStoreForPluginId<T>(
         namespace,
         key: normalizedKey,
         maxEntries,
-        updateValueJson: prepareUpdateValueJson(normalizedKey, updateValue, defaultTtlMs, opts),
+        overflowPolicy,
+        updateValueJson: (current) => {
+          const next = updateValue(current as T | undefined);
+          if (next === undefined) {
+            return undefined;
+          }
+          const params = prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts);
+          return {
+            valueJson: params.valueJson,
+            ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+          };
+        },
         ...(env ? { env } : {}),
       });
     },
@@ -363,9 +366,10 @@ function createSyncKeyedStoreForPluginId<T>(
 ): PluginStateSyncKeyedStore<T> {
   const namespace = validateNamespace(options.namespace);
   const maxEntries = validateMaxEntries(options.maxEntries);
+  const overflowPolicy = validateOverflowPolicy(options.overflowPolicy);
   const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
   const env = options.env;
-  assertConsistentOptions(pluginId, namespace, { maxEntries, defaultTtlMs });
+  assertConsistentOptions(pluginId, namespace, { maxEntries, overflowPolicy, defaultTtlMs });
 
   return {
     register(key, value, opts) {
@@ -376,6 +380,7 @@ function createSyncKeyedStoreForPluginId<T>(
         key: params.key,
         valueJson: params.valueJson,
         maxEntries,
+        overflowPolicy,
         ...(env ? { env } : {}),
         ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
       });
@@ -388,6 +393,7 @@ function createSyncKeyedStoreForPluginId<T>(
         key: params.key,
         valueJson: params.valueJson,
         maxEntries,
+        overflowPolicy,
         ...(env ? { env } : {}),
         ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
       });
@@ -399,7 +405,18 @@ function createSyncKeyedStoreForPluginId<T>(
         namespace,
         key: normalizedKey,
         maxEntries,
-        updateValueJson: prepareUpdateValueJson(normalizedKey, updateValue, defaultTtlMs, opts),
+        overflowPolicy,
+        updateValueJson: (current) => {
+          const next = updateValue(current as T | undefined);
+          if (next === undefined) {
+            return undefined;
+          }
+          const params = prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts);
+          return {
+            valueJson: params.valueJson,
+            ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+          };
+        },
         ...(env ? { env } : {}),
       });
     },
@@ -463,13 +480,6 @@ export function createPluginStateSyncKeyedStore<T>(
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
   return createSyncKeyedStoreForPluginId<T>(pluginId, options);
-}
-
-/** Opens an async plugin-state namespace for a trusted core owner id. */
-export function createCorePluginStateKeyedStore<T>(
-  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
-): PluginStateKeyedStore<T> {
-  return createKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
 /** Opens a sync plugin-state namespace for a trusted core owner id. */

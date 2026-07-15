@@ -149,18 +149,82 @@ if ([string]::IsNullOrWhiteSpace($GitDir)) {
 }
 
 # Check for Node.js
+function Test-NodeVersionSupported {
+    param([string]$Version)
+
+    $versionMatch = [regex]::Match($Version, '^v?(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)')
+    if (-not $versionMatch.Success) {
+        return $false
+    }
+    $major = [int]$versionMatch.Groups["major"].Value
+    $minor = [int]$versionMatch.Groups["minor"].Value
+    $patch = [int]$versionMatch.Groups["patch"].Value
+    if ($major -eq 22) {
+        return ($minor -gt 22 -or ($minor -eq 22 -and $patch -ge 3))
+    }
+    if ($major -eq 24) {
+        return ($minor -ge 15)
+    }
+    if ($major -eq 25) {
+        return ($minor -ge 9)
+    }
+    return ($major -gt 25)
+}
+
+function Test-NodeSqliteSupported {
+    param([string]$Version)
+
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        return $false
+    }
+    $versionMatch = [regex]::Match($Version, '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$')
+    if (-not $versionMatch.Success) {
+        return $false
+    }
+    $major = [int]$versionMatch.Groups["major"].Value
+    $minor = [int]$versionMatch.Groups["minor"].Value
+    $patch = [int]$versionMatch.Groups["patch"].Value
+    return (
+        $major -gt 3 -or
+        (
+            $major -eq 3 -and
+            (
+                $minor -gt 51 -or
+                ($minor -eq 51 -and $patch -ge 3) -or
+                ($minor -eq 50 -and $patch -ge 7) -or
+                ($minor -eq 44 -and $patch -ge 6)
+            )
+        )
+    )
+}
+
 function Check-Node {
     try {
-        $nodeVersion = (node -v 2>$null)
+        $nodeCommand = Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $nodePath = $nodeCommand.Source
+        $nodeVersion = (& $nodePath -v 2>$null)
+        $sqliteProbe = 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:"); try { process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get().version)); } finally { db.close(); }'
+        $sqliteVersion = ($sqliteProbe | & $nodePath - 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            $sqliteVersion = $null
+        }
         if ($nodeVersion) {
-            $versionMatch = [regex]::Match($nodeVersion, '^v(?<major>\d+)\.(?<minor>\d+)\.')
-            $major = if ($versionMatch.Success) { [int]$versionMatch.Groups["major"].Value } else { 0 }
-            $minor = if ($versionMatch.Success) { [int]$versionMatch.Groups["minor"].Value } else { 0 }
-            if (($major -gt 22) -or (($major -eq 22) -and ($minor -ge 19))) {
+            if (
+                (Test-NodeVersionSupported -Version $nodeVersion) -and
+                (Test-NodeSqliteSupported -Version $sqliteVersion)
+            ) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
                 return $true
+            } elseif (Test-NodeVersionSupported -Version $nodeVersion) {
+                $sqliteVersionLabel = if ([string]::IsNullOrWhiteSpace($sqliteVersion)) {
+                    "unavailable"
+                } else {
+                    $sqliteVersion
+                }
+                Write-Host "[!] Node.js $nodeVersion uses SQLite $sqliteVersionLabel; SQLite 3.51.3+ (or patched 3.50.7+/3.44.6+) is required" -ForegroundColor Yellow
+                return $false
             } else {
-                Write-Host "[!] Node.js $nodeVersion found, but v22.19+ required" -ForegroundColor Yellow
+                Write-Host "[!] Node.js $nodeVersion found, but Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+ is required" -ForegroundColor Yellow
                 return $false
             }
         }
@@ -172,6 +236,22 @@ function Check-Node {
 }
 
 function Get-WindowsPortableArchitecture {
+    # Native ARM64 Windows may run Windows PowerShell under x64 emulation, so
+    # process env vars can report AMD64 even when the host CPU is ARM64.
+    try {
+        $processor = Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1
+        if ($processor -and $processor.Architecture -eq 12) {
+            return "arm64"
+        }
+    } catch {}
+
+    try {
+        $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop | Select-Object -First 1
+        if ($computerSystem -and $computerSystem.SystemType -match "ARM64") {
+            return "arm64"
+        }
+    } catch {}
+
     foreach ($architecture in @($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE)) {
         if ($architecture -match "ARM64") {
             return "arm64"
@@ -340,10 +420,11 @@ function Install-Node {
     # Try winget first (Windows 11 / Windows 10 with App Installer)
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Host "  Using winget..." -ForegroundColor Gray
-        winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements
+        winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements | Out-Host
 
         # Refresh PATH
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        Refresh-ProcessPath
+        Add-InstalledNodeToProcessPath | Out-Null
         if (Check-Node) {
             Write-Host "[OK] Node.js installed via winget" -ForegroundColor Green
             return $true
@@ -356,20 +437,33 @@ function Install-Node {
     # Try Chocolatey
     if (Get-Command choco -ErrorAction SilentlyContinue) {
         Write-Host "  Using Chocolatey..." -ForegroundColor Gray
-        choco install nodejs-lts -y
+        choco upgrade nodejs-lts -y --install-if-not-installed | Out-Host
 
         # Refresh PATH
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-        Write-Host "[OK] Node.js installed via Chocolatey" -ForegroundColor Green
-        return $true
+        Refresh-ProcessPath
+        if (Check-Node) {
+            Write-Host "[OK] Node.js installed via Chocolatey" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "[!] Chocolatey completed, but the installed Node.js runtime is unsupported" -ForegroundColor Yellow
+        return $false
     }
 
     # Try Scoop
     if (Get-Command scoop -ErrorAction SilentlyContinue) {
         Write-Host "  Using Scoop..." -ForegroundColor Gray
-        scoop install nodejs-lts
-        Write-Host "[OK] Node.js installed via Scoop" -ForegroundColor Green
-        return $true
+        scoop update | Out-Host
+        scoop install nodejs-lts | Out-Host
+        scoop update nodejs-lts | Out-Host
+
+        # Refresh PATH
+        Refresh-ProcessPath
+        if (Check-Node) {
+            Write-Host "[OK] Node.js installed via Scoop" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "[!] Scoop completed, but the installed Node.js runtime is unsupported" -ForegroundColor Yellow
+        return $false
     }
 
     try {
@@ -385,7 +479,7 @@ function Install-Node {
     Write-Host ""
     Write-Host "Error: Could not install Node.js automatically." -ForegroundColor Red
     Write-Host ""
-    Write-Host "Please install Node.js 22+ manually:" -ForegroundColor Yellow
+    Write-Host "Please install Node.js 24.15+ manually:" -ForegroundColor Yellow
     Write-Host "  https://nodejs.org/en/download/" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Or install winget (App Installer) from the Microsoft Store." -ForegroundColor Gray
@@ -426,6 +520,41 @@ function Add-ToProcessPath {
     }
 
     $env:Path = "$PathEntry;$env:Path"
+}
+
+function Add-InstalledNodeToProcessPath {
+    foreach ($programFilesRoot in @($env:ProgramW6432, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ([string]::IsNullOrWhiteSpace($programFilesRoot)) {
+            continue
+        }
+        $nodeDir = Join-Path $programFilesRoot "nodejs"
+        if (Test-Path (Join-Path $nodeDir "node.exe")) {
+            Add-ToProcessPath $nodeDir
+            return $true
+        }
+    }
+    return $false
+}
+
+function Refresh-ProcessPath {
+    $entries = New-Object System.Collections.Generic.List[string]
+    $pathValues = @(
+        [Environment]::GetEnvironmentVariable("Path", "Machine"),
+        [Environment]::GetEnvironmentVariable("Path", "User"),
+        $env:Path
+    )
+
+    foreach ($pathValue in $pathValues) {
+        foreach ($entry in @($pathValue -split ";")) {
+            if (
+                -not [string]::IsNullOrWhiteSpace($entry) -and
+                -not ($entries | Where-Object { $_ -ieq $entry })
+            ) {
+                $entries.Add($entry)
+            }
+        }
+    }
+    $env:Path = $entries -join ";"
 }
 
 function Add-ToUserPath {
@@ -885,22 +1014,16 @@ function Ensure-Pnpm {
         }
     }
     Write-Host "[*] Installing pnpm..." -ForegroundColor Yellow
-    $prevScriptShell = $env:NPM_CONFIG_SCRIPT_SHELL
-    $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
+    $pnpmInstalled = $false
     try {
+        Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)
+        $pnpmInstalled = ($LASTEXITCODE -eq 0)
+    } catch {
         $pnpmInstalled = $false
-        try {
-            Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)
-            $pnpmInstalled = ($LASTEXITCODE -eq 0)
-        } catch {
-            $pnpmInstalled = $false
-        }
-        if (-not $pnpmInstalled) {
-            Write-Host "[!] pnpm install hit an existing or broken shim; retrying with --force" -ForegroundColor Yellow
-            Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)
-        }
-    } finally {
-        $env:NPM_CONFIG_SCRIPT_SHELL = $prevScriptShell
+    }
+    if (-not $pnpmInstalled) {
+        Write-Host "[!] pnpm install hit an existing or broken shim; retrying with --force" -ForegroundColor Yellow
+        Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)
     }
     if (-not (Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir)) {
         throw "pnpm install completed, but $pnpmSpec is not first on PATH."
@@ -1180,7 +1303,6 @@ function Install-OpenClaw {
     $prevUpdateNotifier = $env:NPM_CONFIG_UPDATE_NOTIFIER
     $prevFund = $env:NPM_CONFIG_FUND
     $prevAudit = $env:NPM_CONFIG_AUDIT
-    $prevScriptShell = $env:NPM_CONFIG_SCRIPT_SHELL
     $prevNodeLlamaSkipDownload = $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD
     $prevBefore = $env:NPM_CONFIG_BEFORE
     $prevMinReleaseAge = $env:NPM_CONFIG_MIN_RELEASE_AGE
@@ -1188,7 +1310,6 @@ function Install-OpenClaw {
     $env:NPM_CONFIG_UPDATE_NOTIFIER = "false"
     $env:NPM_CONFIG_FUND = "false"
     $env:NPM_CONFIG_AUDIT = "false"
-    $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
     $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1"
     Remove-Item Env:NPM_CONFIG_BEFORE -ErrorAction SilentlyContinue
     Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE -ErrorAction SilentlyContinue
@@ -1212,7 +1333,6 @@ function Install-OpenClaw {
         $env:NPM_CONFIG_UPDATE_NOTIFIER = $prevUpdateNotifier
         $env:NPM_CONFIG_FUND = $prevFund
         $env:NPM_CONFIG_AUDIT = $prevAudit
-        $env:NPM_CONFIG_SCRIPT_SHELL = $prevScriptShell
         $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload
         $env:NPM_CONFIG_BEFORE = $prevBefore
         $env:NPM_CONFIG_MIN_RELEASE_AGE = $prevMinReleaseAge
@@ -1256,23 +1376,23 @@ function Install-OpenClawFromGit {
 
     Remove-LegacySubmodule -RepoDir $RepoDir
 
-    $prevPnpmScriptShell = $env:NPM_CONFIG_SCRIPT_SHELL
     $prevPnpmChildConcurrency = $env:PNPM_CONFIG_CHILD_CONCURRENCY
     $prevPnpmNetworkConcurrency = $env:PNPM_CONFIG_NETWORK_CONCURRENCY
     $prevPnpmWorkspaceConcurrency = $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY
     $prevPnpmVerifyDepsBeforeRun = $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN
     $prevPnpmSideEffectsCache = $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE
+    $prevNodeLlamaPostinstall = $env:NODE_LLAMA_CPP_POSTINSTALL
     $prevNodeOptions = $env:NODE_OPTIONS
     $pnpmCommand = Get-PnpmCommandPath
     if (-not $pnpmCommand) {
         throw "pnpm not found after installation."
     }
-    $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
     $env:PNPM_CONFIG_CHILD_CONCURRENCY = "1"
     $env:PNPM_CONFIG_NETWORK_CONCURRENCY = "4"
     $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = "1"
     $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"
     $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"
+    $env:NODE_LLAMA_CPP_POSTINSTALL = "skip"
     $pushedRepoLocation = $false
     try {
         Push-Location -LiteralPath $RepoDir
@@ -1314,12 +1434,12 @@ function Install-OpenClawFromGit {
         if ($pushedRepoLocation) {
             Pop-Location
         }
-        $env:NPM_CONFIG_SCRIPT_SHELL = $prevPnpmScriptShell
         $env:PNPM_CONFIG_CHILD_CONCURRENCY = $prevPnpmChildConcurrency
         $env:PNPM_CONFIG_NETWORK_CONCURRENCY = $prevPnpmNetworkConcurrency
         $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = $prevPnpmWorkspaceConcurrency
         $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = $prevPnpmVerifyDepsBeforeRun
         $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = $prevPnpmSideEffectsCache
+        $env:NODE_LLAMA_CPP_POSTINSTALL = $prevNodeLlamaPostinstall
         $env:NODE_OPTIONS = $prevNodeOptions
     }
 
@@ -1394,7 +1514,7 @@ function Refresh-GatewayServiceIfLoaded {
         Invoke-OpenClawCommand gateway status --json | Out-Null
         Write-Host "[OK] Gateway service refreshed" -ForegroundColor Green
     } catch {
-        Write-Host "[!] Gateway service restart failed; continuing." -ForegroundColor Yellow
+        Write-Host "[!] Gateway service restart failed; continuing. Run: openclaw gateway restart" -ForegroundColor Yellow
     }
 }
 

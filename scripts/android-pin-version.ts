@@ -18,7 +18,7 @@ type CliOptions = {
   sync: boolean;
 };
 
-export type PinAndroidVersionResult = {
+type PinAndroidVersionResult = {
   previousVersion: string | null;
   previousVersionCode: number | null;
   nextVersion: string;
@@ -66,15 +66,12 @@ export function parseArgs(argv: string[]): CliOptions {
         break;
       }
       case "--version": {
-        explicitVersion = argv[index + 1] ?? null;
+        explicitVersion = readOptionValue(argv, index, "--version");
         index += 1;
         break;
       }
       case "--version-code": {
-        const value = argv[index + 1];
-        if (!value) {
-          throw new Error("Missing value for --version-code.");
-        }
+        const value = readOptionValue(argv, index, "--version-code");
         explicitVersionCode = parseExplicitVersionCode(value);
         index += 1;
         break;
@@ -84,10 +81,7 @@ export function parseArgs(argv: string[]): CliOptions {
         break;
       }
       case "--root": {
-        const value = argv[index + 1];
-        if (!value) {
-          throw new Error("Missing value for --root.");
-        }
+        const value = readOptionValue(argv, index, "--root");
         rootDir = path.resolve(value);
         index += 1;
         break;
@@ -112,6 +106,14 @@ export function parseArgs(argv: string[]): CliOptions {
   }
 
   return { explicitVersion, explicitVersionCode, fromGateway, rootDir, sync };
+}
+
+function readOptionValue(argv: string[], index: number, flag: string): string {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`Missing value for ${flag}.`);
+  }
+  return value;
 }
 
 export function pinAndroidVersion(params: CliOptions): PinAndroidVersionResult {

@@ -1,13 +1,19 @@
 // Session permissions and hooks tests protect gateway access control around
 // patch/delete/compact/restore APIs plus emitted internal hook payloads.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { afterAll, expect, test, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+
+const permHookTempDirs: string[] = [];
+
+afterAll(() => {
+  cleanupTempDirs(permHookTempDirs);
+});
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
 import { requireRecord } from "./test-helpers.assertions.js";
 import { connectWebchatClient, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
@@ -118,7 +124,7 @@ test("webchat clients cannot patch, delete, compact, or restore sessions", async
 });
 
 test("session:patch hook fires with correct context", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-patch-hook-"));
+  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-patch-hook-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
@@ -158,7 +164,7 @@ test("session:patch hook fires with correct context", async () => {
 });
 
 test("session:patch hook does not fire for webchat clients", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-hook-"));
+  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-webchat-hook-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
@@ -187,7 +193,7 @@ test("session:patch hook does not fire for webchat clients", async () => {
 });
 
 test("session:patch hook only fires after successful patch", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-success-hook-"));
+  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-success-hook-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
@@ -299,7 +305,7 @@ test("session:patch hook mutations cannot change the response path", async () =>
 });
 
 test("control-ui client can delete sessions even in webchat mode", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-control-ui-delete-"));
+  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-control-ui-delete-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
@@ -321,11 +327,9 @@ test("control-ui client can delete sessions even in webchat mode", async () => {
   expect(deleted.ok).toBe(true);
   expect(deleted.payload?.deleted).toBe(true);
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
-  expect(store["agent:main:discord:group:dev"]).toBeUndefined();
+  expect(
+    loadSessionEntry({ sessionKey: "agent:main:discord:group:dev", storePath }),
+  ).toBeUndefined();
 
   ws.close();
 });

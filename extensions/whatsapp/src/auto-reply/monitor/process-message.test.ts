@@ -95,7 +95,7 @@ vi.mock("./inbound-context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./inbound-context.js")>();
   return {
     ...actual,
-    resolveVisibleWhatsAppGroupHistory: () => [],
+    resolveVisibleWhatsAppGroupHistory: (params: { history: unknown[] }) => params.history,
     resolveVisibleWhatsAppReplyContext: () => null,
   };
 });
@@ -173,7 +173,7 @@ function makePolicy(account: ReturnType<typeof makeAccount>) {
 
 const GROUP_JID = "123@g.us";
 
-function makeBaseMsg(overrides: { body?: string } = {}) {
+function makeBaseMsg(overrides: { body?: string; commandBody?: string } = {}) {
   const body = overrides.body ?? "hi";
   return createTestWebInboundMessage({
     event: {
@@ -182,6 +182,7 @@ function makeBaseMsg(overrides: { body?: string } = {}) {
     },
     payload: {
       body,
+      commandBody: overrides.commandBody,
     },
     platform: {
       chatJid: GROUP_JID,
@@ -222,13 +223,19 @@ const baseRoute = {
   matchedBy: "default",
 };
 
-function callProcessMessage(overrides: { cfg?: unknown; msg?: unknown } = {}) {
+function callProcessMessage(
+  overrides: {
+    cfg?: unknown;
+    groupHistories?: Map<string, unknown[]>;
+    msg?: unknown;
+  } = {},
+) {
   return processMessage({
     cfg: (overrides.cfg ?? {}) as never,
     msg: (overrides.msg ?? makeBaseMsg()) as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
-    groupHistories: new Map(),
+    groupHistories: (overrides.groupHistories ?? new Map()) as never,
     groupMemberNames: new Map(),
     connectionId: "conn-1",
     verbose: false,
@@ -309,7 +316,7 @@ describe("processMessage group system prompt wiring", () => {
 
     expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/status", {});
     expect(isControlCommandMessageMock).toHaveBeenCalledWith("/status", {});
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
       commandBody: "/status",
       commandAuthorized: true,
       commandTurn: {
@@ -322,6 +329,27 @@ describe("processMessage group system prompt wiring", () => {
     });
   });
 
+  it("keeps generated media notices out of command input", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    isControlCommandMessageMock.mockReturnValue(true);
+    shouldComputeCommandAuthorizedMock.mockReturnValue(true);
+
+    await callProcessMessage({
+      msg: makeBaseMsg({
+        body: "/reset\n\n[whatsapp attachment unavailable]",
+        commandBody: "/reset",
+      }),
+    });
+
+    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/reset", {});
+    expect(isControlCommandMessageMock).toHaveBeenCalledWith("/reset", {});
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
+      commandBody: "/reset",
+      rawBody: "/reset",
+    });
+  });
+
   it("checks auth for inline command tokens without marking them as command-source turns", async () => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
     isControlCommandMessageMock.mockReturnValue(false);
@@ -331,7 +359,7 @@ describe("processMessage group system prompt wiring", () => {
       msg: makeBaseMsg({ body: "please inspect `/tmp/foo`" }),
     });
 
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
       commandBody: "please inspect `/tmp/foo`",
       commandAuthorized: true,
       commandTurn: {
@@ -342,7 +370,41 @@ describe("processMessage group system prompt wiring", () => {
       },
       rawBody: "please inspect `/tmp/foo`",
     });
-    expect(buildContextMock.mock.calls[0][0].commandSource).toBeUndefined();
+    expect(
+      mockCallArg(buildContextMock, "buildWhatsAppInboundContext").commandSource,
+    ).toBeUndefined();
+  });
+
+  it("passes pending group history from the history window into inbound context", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    const groupHistories = new Map<string, unknown[]>([
+      [
+        "whatsapp:default:group:123@g.us",
+        [
+          {
+            sender: "Alice (+15550002222)",
+            body: "quiet pending context",
+            timestamp: 1710000000,
+            id: "quiet-msg-1",
+            senderJid: "15550002222@s.whatsapp.net",
+          },
+        ],
+      ],
+    ]);
+
+    await callProcessMessage({ groupHistories });
+
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      groupHistory: [
+        {
+          sender: "Alice (+15550002222)",
+          body: "quiet pending context",
+          timestamp: 1710000000,
+          id: "quiet-msg-1",
+          senderJid: "15550002222@s.whatsapp.net",
+        },
+      ],
+    });
   });
 
   it("fires message_received hooks with canonical WhatsApp correlation fields", async () => {

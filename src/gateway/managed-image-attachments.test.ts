@@ -5,6 +5,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer as createNoisyPngFixtureBuffer,
@@ -292,8 +293,12 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(readSessionMessagesMock).toHaveBeenCalledWith(
       {
         agentId: undefined,
-        sessionFile: "session.jsonl",
+        sessionEntry: {
+          sessionFile: "session.jsonl",
+          sessionId: "sess-1",
+        },
         sessionId: "sess-1",
+        sessionKey: "agent:main:main",
         storePath: path.join(stateDir, "gateway-sessions.json"),
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),
@@ -556,7 +561,12 @@ describe("createManagedOutgoingImageBlocks", () => {
 
     const recordsDir = path.join(stateDir, "media", "outgoing", "records");
     const [recordName] = await fs.readdir(recordsDir);
-    const record = JSON.parse(await fs.readFile(path.join(recordsDir, recordName), "utf-8")) as {
+    const record = JSON.parse(
+      await fs.readFile(
+        path.join(recordsDir, expectDefined(recordName, "recordName test invariant")),
+        "utf-8",
+      ),
+    ) as {
       original: { path: string };
     };
     expect(record.original.path).toContain(
@@ -580,6 +590,59 @@ describe("createManagedOutgoingImageBlocks", () => {
     ).rejects.toThrow(/Generated image 1.*byte limit/);
 
     await expectPathMissing(path.join(stateDir, "media", "outgoing", "records"));
+  });
+
+  it("rejects semicolon-heavy malformed data urls without backtracking", async () => {
+    const semicolons = ";".repeat(64);
+    const malformed = `data:image/png${semicolons}`;
+
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [malformed],
+        stateDir,
+      }),
+    ).rejects.toThrow("Invalid image data URL");
+  });
+
+  it("rejects malformed data urls with a later ;base64, marker after a payload comma", async () => {
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: ["data:image/png;base64,garbage;base64,iVBORw0KGgo="],
+        stateDir,
+      }),
+    ).rejects.toThrow("Invalid image data URL");
+  });
+
+  it("requires the base64 marker to be adjacent to the payload comma", async () => {
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [`data:image/png;base64\n,${TINY_PNG_BASE64}`],
+        stateDir,
+      }),
+    ).rejects.toThrow("Invalid image data URL");
+  });
+
+  it("preserves parameterized image data urls", async () => {
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [`data:image/png;charset=utf-8;base64,${TINY_PNG_BASE64}`],
+      stateDir,
+    });
+
+    expect(requireBlock(blocks).mimeType).toBe("image/png");
+  });
+
+  it("rejects data urls without a media type", async () => {
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [`data:;base64,${TINY_PNG_BASE64}`],
+        stateDir,
+      }),
+    ).rejects.toThrow("Invalid image data URL");
   });
 
   it("rewrites local image sources into managed display blocks without leaking the source path", async () => {
@@ -855,6 +918,24 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(requireBlock(blocks).type).toBe("image");
   });
 
+  it("allows managed inbound image paths before validating explicit roots", async () => {
+    const inboundPath = path.join(stateDir, "media", "inbound", "inbound.png");
+    await fs.mkdir(path.dirname(inboundPath), { recursive: true });
+    await fs.writeFile(inboundPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [inboundPath],
+        stateDir,
+        localRoots: [path.parse(stateDir).root],
+      });
+
+      expect(blocks).toHaveLength(1);
+      expect(requireBlock(blocks).type).toBe("image");
+    });
+  });
+
   it("rejects relative local image paths that resolve outside allowed roots", async () => {
     const allowedWorkspaceDir = path.join(stateDir, "workspace");
     const outsidePath = path.join(stateDir, "outside.png");
@@ -996,7 +1077,12 @@ describe("attachManagedOutgoingImagesToMessage", () => {
 
     const recordsDir = path.join(stateDir, "media", "outgoing", "records");
     const [recordName] = await fs.readdir(recordsDir);
-    const record = JSON.parse(await fs.readFile(path.join(recordsDir, recordName), "utf-8")) as {
+    const record = JSON.parse(
+      await fs.readFile(
+        path.join(recordsDir, expectDefined(recordName, "recordName test invariant")),
+        "utf-8",
+      ),
+    ) as {
       messageId: string | null;
       retentionClass?: string;
       updatedAt?: string;
@@ -1064,8 +1150,12 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(readSessionMessagesMock).toHaveBeenCalledWith(
       {
         agentId: undefined,
-        sessionFile: "/tmp/sess-main.jsonl",
+        sessionEntry: {
+          sessionFile: "/tmp/sess-main.jsonl",
+          sessionId: "sess-main",
+        },
         sessionId: "sess-main",
+        sessionKey: "agent:main:main",
         storePath: path.join(stateDir, "gateway-sessions.json"),
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),
@@ -1221,3 +1311,4 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     await expectPathMissing(fixture.originalPath);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

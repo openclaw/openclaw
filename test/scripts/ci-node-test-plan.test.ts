@@ -3,11 +3,15 @@ import { existsSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
-import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
+import {
+  createNodeTestShardBundles,
+  createNodeTestShards,
+} from "../../scripts/lib/ci-node-test-plan.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
+import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 
 type VitestTestConfig = {
   dir?: string;
@@ -78,6 +82,21 @@ function listMatchedTestFiles(config: VitestConfig): string[] {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+function listAllToolingTestFiles(): string[] {
+  const originalArgv = process.argv;
+  try {
+    process.argv = originalArgv.slice(0, 2);
+    return listMatchedTestFiles(
+      createToolingVitestConfig({
+        ...process.env,
+        OPENCLAW_VITEST_INCLUDE_FILE: undefined,
+      }),
+    );
+  } finally {
+    process.argv = originalArgv;
+  }
+}
+
 function isGatewayServerTestFile(file: string): boolean {
   return (
     file.startsWith("src/gateway/") &&
@@ -107,6 +126,164 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(payload.includePatterns).toBeGreaterThan(0);
   });
 
+  it("bundles split shards deterministically without changing coverage", () => {
+    const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+    const bundled = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
+    const basePatterns = base
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .toSorted((a, b) => a.localeCompare(b));
+    const bundledPatterns = bundled
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .toSorted((a, b) => a.localeCompare(b));
+
+    expect(bundled.length).toBeLessThan(base.length);
+    expect(bundledPatterns).toEqual(basePatterns);
+    expect(
+      bundled
+        .filter((shard) => shard.shardName.startsWith("bundle-"))
+        .every((shard) => (shard.includePatterns?.length ?? 0) <= 64),
+    ).toBe(true);
+    expect(bundled.every((shard) => shard.runner?.startsWith("blacksmith-"))).toBe(true);
+    expect(bundled).toEqual(createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false }));
+    expect(bundled.slice(0, 2).map((shard) => shard.shardName)).toEqual([
+      "core-tooling",
+      "auto-reply-reply-commands",
+    ]);
+    expect(bundled.find((shard) => shard.shardName === "core-unit-fast")?.runner).toBe(
+      DEFAULT_NODE_TEST_RUNNER,
+    );
+    expect(
+      bundled.find((shard) => shard.shardName === "agentic-control-plane-startup-health-runtime")
+        ?.env,
+    ).toEqual({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" });
+    expect(
+      bundled.find((shard) => shard.shardName === "agentic-control-plane-startup-core")?.runner,
+    ).toBe(DEFAULT_NODE_TEST_RUNNER);
+    expect(bundled.find((shard) => shard.shardName === "bundle-infra-small-1")?.runner).toBe(
+      "blacksmith-4vcpu-ubuntu-2404",
+    );
+    expect(
+      new Set(
+        bundled
+          .filter((shard) => shard.shardName.startsWith("bundle-"))
+          .flatMap((shard) => shard.configs),
+      ),
+    ).toEqual(new Set(["test/vitest/vitest.infra.config.ts"]));
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-commands-"))).toBe(false);
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-cron-"))).toBe(false);
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-agents-core-"))).toBe(false);
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-gateway-server-"))).toBe(
+      false,
+    );
+  });
+
+  it("compacts pull-request shards into isolated groups inside fewer jobs", () => {
+    const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+    const compact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compact: true,
+    });
+
+    expect(compact).toHaveLength(15);
+    expect(compact.filter((shard) => !shard.requiresDist)).toHaveLength(14);
+    expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
+    expect(compact.some((shard) => shard.requiresDist)).toBe(true);
+    expect(
+      compact.every((shard) =>
+        shard.groups.every((group) => group.requiresDist === shard.requiresDist),
+      ),
+    ).toBe(true);
+    expect(
+      compact
+        .flatMap((shard) =>
+          shard.groups.flatMap((group) =>
+            group.shard_name.startsWith("core-tooling-") ? [] : (group.includePatterns ?? []),
+          ),
+        )
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(
+      base.flatMap((shard) => shard.includePatterns ?? []).toSorted((a, b) => a.localeCompare(b)),
+    );
+    expect(compact.every((shard) => shard.groups.every((group) => group.configs.length > 0))).toBe(
+      true,
+    );
+    expect(
+      compact
+        .flatMap((shard) => shard.groups)
+        .find((group) => group.shard_name === "core-runtime-tui-pty")?.env,
+    ).toEqual({
+      OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+    });
+    const startupCoreJob = compact.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "agentic-control-plane-startup-core"),
+    );
+    expect(startupCoreJob?.runner).toBe(DEFAULT_NODE_TEST_RUNNER);
+    expect(
+      startupCoreJob?.groups.find(
+        (group) => group.shard_name === "agentic-control-plane-startup-core",
+      )?.runner,
+    ).toBe(DEFAULT_NODE_TEST_RUNNER);
+    expect(
+      compact
+        .flatMap((shard) => shard.groups)
+        .find((group) => group.shard_name === "agentic-control-plane-startup-health-runtime")?.env,
+    ).toEqual({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" });
+    expect(
+      compact
+        .filter((shard) => shard.groups.some((group) => !group.includePatterns))
+        .every((shard) => shard.timeoutMinutes === 120),
+    ).toBe(true);
+    const largeJobs = compact.filter((shard) =>
+      shard.checkName.startsWith("checks-node-compact-large-"),
+    );
+    expect(
+      largeJobs.map((shard) => shard.groups.filter((group) => !group.includePatterns).length),
+    ).toEqual([2, 2, 2]);
+    expect(
+      compact.some((shard) => shard.checkName.startsWith("checks-node-compact-large-whole-")),
+    ).toBe(false);
+    const smallWholeJobs = compact.filter((shard) =>
+      shard.checkName.startsWith("checks-node-compact-small-whole-"),
+    );
+    const wholeGroupCounts = smallWholeJobs.map((shard) => shard.groups.length);
+    expect(Math.max(...wholeGroupCounts) - Math.min(...wholeGroupCounts)).toBeLessThanOrEqual(1);
+    expect(
+      smallWholeJobs.some((shard) =>
+        shard.groups.some((group) => group.shard_name === "core-tooling"),
+      ),
+    ).toBe(false);
+    expect(
+      smallWholeJobs
+        .flatMap((shard) => shard.groups)
+        .find((group) => group.shard_name === "core-tooling-isolated"),
+    ).toEqual(
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+      }),
+    );
+    expect(
+      smallWholeJobs
+        .flatMap((shard) => shard.groups)
+        .find((group) => group.shard_name === "core-tooling-docker"),
+    ).toEqual(
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.tooling-docker.config.ts"],
+      }),
+    );
+    const toolingGroups = compact
+      .flatMap((shard) => shard.groups)
+      .filter((group) => /^core-tooling-\d+$/u.test(group.shard_name));
+    const toolingFiles = toolingGroups.flatMap((group) => group.includePatterns ?? []);
+    expect(toolingGroups).toHaveLength(3);
+    expect(
+      toolingGroups.every((group) => group.configs[0] === "test/vitest/vitest.tooling.config.ts"),
+    ).toBe(true);
+    const toolingGroupSizes = toolingGroups.map((group) => group.includePatterns?.length ?? 0);
+    expect(Math.max(...toolingGroupSizes) - Math.min(...toolingGroupSizes)).toBeLessThanOrEqual(1);
+    expect(new Set(toolingFiles).size).toBe(toolingFiles.length);
+    expect(toolingFiles.toSorted((a, b) => a.localeCompare(b))).toEqual(listAllToolingTestFiles());
+  });
+
   it("splits the slow core unit shards while keeping paired source/security coverage", () => {
     const coreUnitShards = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("core-unit-"))
@@ -132,11 +309,6 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         ],
         requiresDist: false,
         shardName: "core-unit-src-security",
-      },
-      {
-        configs: ["test/vitest/vitest.unit-ui.config.ts"],
-        requiresDist: false,
-        shardName: "core-unit-ui",
       },
       {
         configs: ["test/vitest/vitest.unit-support.config.ts"],
@@ -321,6 +493,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         configs: ["test/vitest/vitest.infra.config.ts"],
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-misc",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
         shardName: "core-runtime-infra-misc-dedupe-disk",
       },
       {
@@ -406,6 +584,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "core-runtime-infra-process",
       },
       {
+        configs: ["test/vitest/vitest.tui-pty.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-tui-pty",
+      },
+      {
         configs: [
           "test/vitest/vitest.media.config.ts",
           "test/vitest/vitest.media-understanding.config.ts",
@@ -449,6 +633,21 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ]);
   });
 
+  it("runs the TUI PTY local smoke inside the CI node shard", () => {
+    const tuiPtyShard = createNodeTestShards().find(
+      (shard) => shard.shardName === "core-runtime-tui-pty",
+    );
+
+    expect(tuiPtyShard).toMatchObject({
+      checkName: "checks-node-core-runtime-tui-pty",
+      configs: ["test/vitest/vitest.tui-pty.config.ts"],
+      env: {
+        OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+      },
+      requiresDist: false,
+    });
+  });
+
   it("covers every infra test exactly once across core runtime infra shards", () => {
     const infraShards = createNodeTestShards().filter((shard) =>
       shard.shardName.startsWith("core-runtime-infra-"),
@@ -473,6 +672,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       "core-runtime-infra-gateway-watch",
       "core-runtime-infra-heartbeat-core",
       "core-runtime-infra-heartbeat-runner",
+      "core-runtime-infra-misc",
       "core-runtime-infra-misc-dedupe-disk",
       "core-runtime-infra-misc-os",
       "core-runtime-infra-misc-values",
@@ -549,9 +749,15 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       controlPlaneShards.map((shard) => ({
         checkName: `checks-node-${shard.shardName}`,
         configs: ["test/vitest/vitest.gateway-server.config.ts"],
+        ...(shard.shardName === "agentic-control-plane-startup-health-runtime"
+          ? { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" } }
+          : {}),
         includePatterns: shard.includePatterns,
         requiresDist: false,
-        runner: "blacksmith-4vcpu-ubuntu-2404",
+        runner:
+          shard.shardName === "agentic-control-plane-startup-core"
+            ? DEFAULT_NODE_TEST_RUNNER
+            : "blacksmith-4vcpu-ubuntu-2404",
         shardName: shard.shardName,
       })),
     );
@@ -752,7 +958,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
     const expected = listTestFiles("src/agents")
-      .filter((file) => !relative("src/agents", file).includes("/"))
+      .filter((file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"))
       .toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(expected);

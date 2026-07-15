@@ -1,6 +1,37 @@
 import { describe, expect, it } from "vitest";
 import { buildStatusText } from "./status-text.js";
 
+type StatusTextParams = Parameters<typeof buildStatusText>[0];
+
+async function renderTelegramStatus(params: {
+  cfg: StatusTextParams["cfg"];
+  sessionEntry: NonNullable<StatusTextParams["sessionEntry"]>;
+  statusAccountId?: string;
+}): Promise<string> {
+  return await buildStatusText({
+    cfg: params.cfg,
+    sessionEntry: params.sessionEntry,
+    sessionKey: "agent:main:main",
+    statusChannel: "telegram",
+    ...(params.statusAccountId ? { statusAccountId: params.statusAccountId } : {}),
+    provider: "openai",
+    model: "gpt-5.4-mini",
+    resolvedHarness: "pi",
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    isGroup: false,
+    defaultGroupActivation: () => "mention",
+    pluginHealthLineOverride: "Plugins: test",
+    taskLineOverride: "",
+    skipDefaultTaskLookup: true,
+    primaryModelLabelOverride: "openai/gpt-5.4-mini",
+    modelAuthOverride: "test",
+    activeModelAuthOverride: "test",
+    includeTranscriptUsage: false,
+  });
+}
+
 describe("buildStatusText channel features", () => {
   it.each([
     { richMessages: undefined, expected: "Telegram rich messages: off" },
@@ -8,21 +39,9 @@ describe("buildStatusText channel features", () => {
     { richMessages: true, expected: "Telegram rich messages: on" },
   ])("shows Telegram rich message state for %s", async ({ richMessages, expected }) => {
     const telegram = richMessages === undefined ? {} : { richMessages };
-    const text = await buildStatusText({
+    const text = await renderTelegramStatus({
       cfg: { channels: { telegram } },
       sessionEntry: { sessionId: `telegram-rich-${String(richMessages)}`, updatedAt: 0 },
-      sessionKey: "agent:main:telegram:direct:584667058",
-      statusChannel: "telegram",
-      provider: "anthropic",
-      model: "claude-haiku-4-5",
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => "medium",
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-      taskLineOverride: undefined,
-      pluginHealthLineOverride: undefined,
-      skipDefaultTaskLookup: true,
     });
 
     expect(text).toContain(expected);
@@ -34,7 +53,7 @@ describe("buildStatusText channel features", () => {
   });
 
   it("uses Telegram account rich message overrides", async () => {
-    const text = await buildStatusText({
+    const text = await renderTelegramStatus({
       cfg: {
         channels: {
           telegram: {
@@ -48,18 +67,6 @@ describe("buildStatusText channel features", () => {
         updatedAt: 0,
         lastAccountId: "work",
       },
-      sessionKey: "agent:main:telegram:work:direct:584667058",
-      statusChannel: "telegram",
-      provider: "anthropic",
-      model: "claude-haiku-4-5",
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => "medium",
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-      taskLineOverride: undefined,
-      pluginHealthLineOverride: undefined,
-      skipDefaultTaskLookup: true,
     });
 
     expect(text).toContain("Telegram rich messages: off");
@@ -67,7 +74,7 @@ describe("buildStatusText channel features", () => {
   });
 
   it("uses the current Telegram command account before the session records it", async () => {
-    const text = await buildStatusText({
+    const text = await renderTelegramStatus({
       cfg: {
         channels: {
           telegram: {
@@ -80,19 +87,7 @@ describe("buildStatusText channel features", () => {
         sessionId: "telegram-rich-command-account",
         updatedAt: 0,
       },
-      sessionKey: "agent:main:telegram:work:direct:584667058",
-      statusChannel: "telegram",
       statusAccountId: "work",
-      provider: "anthropic",
-      model: "claude-haiku-4-5",
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => "medium",
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-      taskLineOverride: undefined,
-      pluginHealthLineOverride: undefined,
-      skipDefaultTaskLookup: true,
     });
 
     expect(text).toContain("Telegram rich messages: off");

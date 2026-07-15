@@ -1,10 +1,42 @@
 /**
  * Tests plugin runtime mock helpers stay aligned with channel runtime contracts.
  */
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 
 describe("createPluginRuntimeMock", () => {
+  it("clones the initializer callback input and applies its final extension patch", async () => {
+    const runtime = createPluginRuntimeMock();
+    const pluginExtensions = { codex: { marker: "original" } };
+    const afterCreate = vi.fn(async (initialized) => {
+      initialized.entry.pluginExtensions = { codex: { marker: "callback mutation" } };
+      return { pluginExtensions: { codex: { marker: "final" } } };
+    });
+
+    const created = await runtime.agent.session.createSessionEntry({
+      cfg: {},
+      key: "agent:main:dashboard:mock-created",
+      initialEntry: {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        pluginExtensions,
+      },
+      afterCreate,
+    });
+    pluginExtensions.codex.marker = "input mutation";
+
+    expect(afterCreate).toHaveBeenCalledOnce();
+    expect(afterCreate.mock.calls[0]?.[0]).not.toBe(created);
+    expect(afterCreate.mock.calls[0]?.[0]).toMatchObject({
+      key: created.key,
+      agentId: created.agentId,
+      sessionId: created.sessionId,
+      entry: { initializationPending: true },
+    });
+    expect(created.entry.pluginExtensions).toEqual({ codex: { marker: "final" } });
+    expect(created.entry.initializationPending).toBeUndefined();
+  });
+
   it("keeps the inbound debouncer mock aligned with the runtime contract", () => {
     const runtime = createPluginRuntimeMock();
     const debouncer = runtime.channel.debounce.createInboundDebouncer({
@@ -15,6 +47,32 @@ describe("createPluginRuntimeMock", () => {
 
     expect(debouncer.cancelKey("key")).toBe(false);
     expect(vi.isMockFunction(debouncer.cancelKey)).toBe(true);
+  });
+
+  it("tracks channel runtime contexts through the mock registry", () => {
+    const runtime = createPluginRuntimeMock();
+    const key = {
+      channelId: "whatsapp",
+      accountId: "default",
+      capability: "connection-controller",
+    };
+    const context = { getActiveListener: vi.fn() };
+    const onEvent = vi.fn();
+    const unsubscribe = runtime.channel.runtimeContexts.watch({ ...key, onEvent });
+
+    const lease = runtime.channel.runtimeContexts.register({ ...key, context });
+
+    expect(runtime.channel.runtimeContexts.get(key)).toBe(context);
+    expect(onEvent).toHaveBeenCalledWith({ type: "registered", key, context });
+    expect(vi.isMockFunction(runtime.channel.runtimeContexts.register)).toBe(true);
+    expect(vi.isMockFunction(runtime.channel.runtimeContexts.get)).toBe(true);
+    expect(vi.isMockFunction(runtime.channel.runtimeContexts.watch)).toBe(true);
+
+    lease.dispose();
+
+    expect(runtime.channel.runtimeContexts.get(key)).toBeUndefined();
+    expect(onEvent).toHaveBeenLastCalledWith({ type: "unregistered", key });
+    unsubscribe();
   });
 
   it("exposes channel inbound helpers without the removed turn aliases", async () => {

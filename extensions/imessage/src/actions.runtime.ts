@@ -1,5 +1,4 @@
 // Imessage plugin module implements actions behavior.
-import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import {
@@ -7,12 +6,14 @@ import {
   parseStrictInteger,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
+import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
-import { resolveIMessageMessageId as resolveIMessageMessageIdImpl } from "./monitor-reply-cache.js";
+import {
+  normalizeDirectChatIdentifier,
+  resolveIMessageMessageId as resolveIMessageMessageIdImpl,
+} from "./monitor-reply-cache.js";
 import type { IMessageTarget } from "./targets.js";
 
 type CliRunOptions = {
@@ -115,7 +116,7 @@ function chatListCacheSet(
  * forms — the action surface synthesizes `iMessage;-;<phone>` from a
  * handle target, while imsg's chats.list returns `identifier: <phone>`
  * and `guid: any;-;<phone>`. Comparing the raw strings would falsely
- * miss the match. Mirror of the same helper in monitor-reply-cache.ts.
+ * miss the match.
  */
 export function normalizeDirectChatIdentifierForTest(raw: string): string {
   return normalizeDirectChatIdentifier(raw);
@@ -126,17 +127,6 @@ export function findChatGuidForTest(
   target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
 ): string | null {
   return findChatGuid(chats, target);
-}
-
-function normalizeDirectChatIdentifier(raw: string): string {
-  const trimmed = raw.trim();
-  const lowered = trimmed.toLowerCase();
-  for (const prefix of ["imessage;-;", "sms;-;", "any;-;"]) {
-    if (lowered.startsWith(prefix)) {
-      return trimmed.slice(prefix.length);
-    }
-  }
-  return trimmed;
 }
 
 function findChatGuid(
@@ -173,135 +163,15 @@ function findChatGuid(
   return null;
 }
 
-function buildIMessageCliJsonArgs(args: readonly string[], options: CliRunOptions): string[] {
-  const dbPath = options.dbPath?.trim();
-  return [...args, ...(dbPath ? ["--db", dbPath] : []), "--json"];
-}
-
 async function runIMessageCliJson(
   args: readonly string[],
   options: CliRunOptions,
 ): Promise<Record<string, unknown>> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(options.cliPath, buildIMessageCliJsonArgs(args, options), {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let killEscalation: ReturnType<typeof setTimeout> | null = null;
-    let settled = false;
-    const clearTimers = (optionsValue: { keepKillEscalation?: boolean } = {}): void => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (killEscalation && !optionsValue.keepKillEscalation) {
-        clearTimeout(killEscalation);
-      }
-    };
-    const fail = (error: Error, optionsLocal: { keepKillEscalation?: boolean } = {}): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers(optionsLocal);
-      reject(error);
-    };
-    const succeed = (value: Record<string, unknown>): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      resolve(value);
-    };
-    const timer =
-      options.timeoutMs && options.timeoutMs > 0
-        ? setTimeout(() => {
-            child.kill("SIGTERM");
-            // If SIGTERM doesn't take within 2s (wedged child, ignored
-            // signal handler), escalate to SIGKILL so the process doesn't
-            // linger as a zombie.
-            killEscalation = setTimeout(() => {
-              try {
-                child.kill("SIGKILL");
-              } catch {
-                // best-effort
-              }
-            }, 2000);
-            fail(new Error(`iMessage action timed out after ${options.timeoutMs}ms`), {
-              keepKillEscalation: true,
-            });
-          }, options.timeoutMs)
-        : null;
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      if (settled) {
-        return;
-      }
-      const appended = appendIMessageCliStdout(stdout, chunk);
-      if (!appended.ok) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // best-effort
-        }
-        fail(new Error(appended.message));
-        return;
-      }
-      stdout = appended.value;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr = appendIMessageCliStderrTail(stderr, chunk);
-    });
-    child.on("error", (error) => {
-      if (settled) {
-        clearTimers();
-        return;
-      }
-      fail(error);
-    });
-    child.on("close", (code) => {
-      if (settled) {
-        clearTimers();
-        return;
-      }
-      const lines = normalizeStringEntries(stdout.split(/\r?\n/));
-      const last = lines.at(-1);
-      let parsed: Record<string, unknown> | null = null;
-      if (last) {
-        try {
-          const value = JSON.parse(last);
-          if (value && typeof value === "object" && !Array.isArray(value)) {
-            parsed = value as Record<string, unknown>;
-          }
-        } catch {
-          parsed = null;
-        }
-      }
-      if (code !== 0) {
-        const detail =
-          (typeof parsed?.error === "string" && parsed.error.trim()) ||
-          stderr.trim() ||
-          stdout.trim() ||
-          `imsg exited with code ${code}`;
-        fail(new Error(detail));
-        return;
-      }
-      if (!parsed) {
-        fail(new Error(`imsg returned non-JSON output: ${stdout.trim() || stderr.trim()}`));
-        return;
-      }
-      if (parsed.success === false) {
-        const error =
-          typeof parsed.error === "string" && parsed.error.trim()
-            ? parsed.error.trim()
-            : "iMessage action failed";
-        fail(new Error(error));
-        return;
-      }
-      succeed(parsed);
-    });
+  return await runIMessageCliJsonCommand({
+    args,
+    cliPath: options.cliPath,
+    dbPath: options.dbPath,
+    timeoutMs: options.timeoutMs,
   });
 }
 
@@ -530,6 +400,55 @@ export const imessageActionsRuntime = {
 
   async leaveGroup(params: { chatGuid: string; options: IMessageBridgeActionOptions }) {
     await runIMessageCliJson(["chat-leave", "--chat", params.chatGuid], params.options);
+  },
+
+  async sendPoll(params: {
+    chatGuid: string;
+    question: string;
+    // Pre-validated, trimmed choices (>=2). Named `choices` so it does not
+    // shadow `options` (the CLI run options) on this params bag.
+    choices: readonly string[];
+    replyToMessageId?: string;
+    options: IMessageBridgeActionOptions;
+  }): Promise<IMessageBridgeSendResult> {
+    const result = await runIMessageCliJson(
+      [
+        "poll",
+        "send",
+        "--chat",
+        params.chatGuid,
+        "--question",
+        params.question,
+        ...params.choices.flatMap((choice) => ["--option", choice]),
+        ...(params.replyToMessageId ? ["--reply-to", params.replyToMessageId] : []),
+      ],
+      params.options,
+    );
+    return { messageId: resolveMessageId(result) };
+  },
+
+  async sendPollVote(params: {
+    chatGuid: string;
+    pollGuid: string;
+    // Exactly one selector; the CLI resolves index/text to the option UUID.
+    optionIndex?: number;
+    optionId?: string;
+    optionText?: string;
+    options: IMessageBridgeActionOptions;
+  }): Promise<IMessageBridgeSendResult & { optionText?: string }> {
+    const selector = params.optionId
+      ? ["--option-id", params.optionId]
+      : params.optionIndex !== undefined
+        ? ["--option-index", String(params.optionIndex)]
+        : params.optionText
+          ? ["--option", params.optionText]
+          : [];
+    const result = await runIMessageCliJson(
+      ["poll", "vote", "--chat", params.chatGuid, "--poll", params.pollGuid, ...selector],
+      params.options,
+    );
+    const optionText = typeof result.optionText === "string" ? result.optionText.trim() : "";
+    return { messageId: resolveMessageId(result), ...(optionText ? { optionText } : {}) };
   },
 
   async sendAttachment(params: {

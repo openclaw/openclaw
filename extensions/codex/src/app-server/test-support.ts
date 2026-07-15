@@ -3,10 +3,56 @@
  * transports.
  */
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import type { Model } from "openclaw/plugin-sdk/llm";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
+import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from "./shared-client.js";
+
+/** Creates temp directories that are removed by the supplied test cleanup hook. */
+export function useAutoCleanupTempDirTracker(registerCleanup: (cleanup: () => void) => unknown) {
+  const dirs = new Set<string>();
+  registerCleanup(() => {
+    for (const dir of dirs) {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    }
+    dirs.clear();
+  });
+  return {
+    dirs,
+    make(prefix: string): string {
+      const dir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), prefix));
+      dirs.add(dir);
+      return dir;
+    },
+  };
+}
+
+/** Positional naked-client injection contract confined to tests. */
+export type CodexTestAppServerClientFactory = (
+  startOptions?: CodexAppServerClientOptions["startOptions"],
+  authProfileId?: string,
+  agentDir?: string,
+  config?: CodexAppServerClientOptions["config"],
+  options?: CodexAppServerClientOptions,
+) => Promise<CodexAppServerClient>;
+
+/** Adapts a positional test factory to the production options-object contract. */
+export function adaptCodexTestClientFactory(
+  factory: CodexTestAppServerClientFactory,
+): CodexAppServerClientFactory {
+  return (options) =>
+    factory(
+      options?.startOptions,
+      options?.authProfileId ?? undefined,
+      options?.agentDir,
+      options?.config,
+      options,
+    );
+}
 
 /** Builds a representative Codex-capable model fixture for app-server tests. */
 export function createCodexTestModel(provider = "openai", input = ["text"]): Model {
