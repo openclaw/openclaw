@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveRestartRecoveryChannelAuthority } from "../../config/sessions/restart-recovery-state.js";
 
-export type AgentRestartRecoveryChannelContext = {
+type AgentRestartRecoveryChannelContext = {
   channel: string;
   currentChannelId: string;
   currentThreadTs?: string;

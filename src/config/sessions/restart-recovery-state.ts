@@ -7,7 +7,7 @@ import type { SessionEntry } from "./types.js";
 
 const MAX_TERMINAL_RUN_IDS = 64;
 
-export type RestartRecoveryChannelAuthority = {
+type RestartRecoveryChannelAuthority = {
   deliveryContext: DeliveryContext & { channel: string; to: string };
   sourceTurnId: string;
 };

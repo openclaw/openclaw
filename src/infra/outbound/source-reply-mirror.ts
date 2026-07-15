@@ -41,7 +41,7 @@ type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams &
   sessionKey: string;
 };
 
-export type TerminalSourceReplyDeliveryReceipt = RestartRecoveryTerminalDeliveryScope;
+type TerminalSourceReplyDeliveryReceipt = RestartRecoveryTerminalDeliveryScope;
 
 type SourceReplyThreadPlacement = "match" | "mismatch" | "unknown";
 

@@ -1,4 +1,4 @@
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/source-reply-delivery-mode.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
 export type RestartRecoveryBeforeAgentReplyState =
