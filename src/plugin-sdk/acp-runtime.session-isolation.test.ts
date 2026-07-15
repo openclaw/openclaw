@@ -76,11 +76,17 @@ describe("acp-runtime session isolation", () => {
       managerResolutionExposedPrivateState:
         resolved.kind === "ready" && Object.hasOwn(resolved.entry ?? {}, "mainRestartRecovery"),
       managerFacadeIsStable: getAcpSessionManager() === manager,
+      managerFacadeHidesConstructor: Reflect.get(manager, "constructor") === undefined,
+      managerFacadeHidesDeps: Reflect.get(manager, "deps") === undefined,
+      managerFacadeHasNullPrototype: Object.getPrototypeOf(manager) === null,
       boundManagerMethodWorks: manager.getObservabilitySnapshot(cfg).turns.active === 0,
     }).toEqual({
       directReadExposedPrivateState: false,
       managerResolutionExposedPrivateState: false,
       managerFacadeIsStable: true,
+      managerFacadeHidesConstructor: true,
+      managerFacadeHidesDeps: true,
+      managerFacadeHasNullPrototype: true,
       boundManagerMethodWorks: true,
     });
     const internalEntry = loadInternalSessionEntry({ sessionKey, storePath }) as
