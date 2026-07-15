@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  DISCORD_PRESENCE_BURST_LIMIT,
-  DISCORD_PRESENCE_BURST_WINDOW_MS,
-  DISCORD_PRESENCE_RECONNECT_SUPPRESS_MS,
   DiscordPresenceEmissionGate,
   resolveDiscordPresenceGateOptions,
 } from "./presence-emission-gate.js";
@@ -13,11 +10,10 @@ const guildId = "guild-1";
 describe("resolveDiscordPresenceGateOptions", () => {
   it("defaults to a five-minute reconnect window and bounded burst", () => {
     expect(options).toEqual({
-      reconnectSuppressMs: DISCORD_PRESENCE_RECONNECT_SUPPRESS_MS,
-      burstLimit: DISCORD_PRESENCE_BURST_LIMIT,
-      burstWindowMs: DISCORD_PRESENCE_BURST_WINDOW_MS,
+      reconnectSuppressMs: 5 * 60 * 1000,
+      burstLimit: 8,
+      burstWindowMs: 60 * 1000,
     });
-    expect(DISCORD_PRESENCE_RECONNECT_SUPPRESS_MS).toBe(5 * 60 * 1000);
   });
 
   it("converts configured seconds and honors zero as disabled", () => {

@@ -1,7 +1,7 @@
 // Discord plugin module gates presence-event emission after reconnects and during bursts.
-export const DISCORD_PRESENCE_RECONNECT_SUPPRESS_MS = 5 * 60 * 1000;
-export const DISCORD_PRESENCE_BURST_LIMIT = 8;
-export const DISCORD_PRESENCE_BURST_WINDOW_MS = 60 * 1000;
+const DISCORD_PRESENCE_RECONNECT_SUPPRESS_MS = 5 * 60 * 1000;
+const DISCORD_PRESENCE_BURST_LIMIT = 8;
+const DISCORD_PRESENCE_BURST_WINDOW_MS = 60 * 1000;
 
 type DiscordPresenceGateConfig = {
   reconnectSuppressSeconds?: number;
@@ -9,7 +9,7 @@ type DiscordPresenceGateConfig = {
   burstWindowSeconds?: number;
 };
 
-export type DiscordPresenceGateOptions = {
+type DiscordPresenceGateOptions = {
   reconnectSuppressMs: number;
   burstLimit: number;
   burstWindowMs: number;
@@ -31,7 +31,7 @@ export function resolveDiscordPresenceGateOptions(
   };
 }
 
-export type DiscordPresenceReconnectDecision =
+type DiscordPresenceReconnectDecision =
   | { allowed: true }
   | { allowed: false; reason: "reconnect-window"; shouldLog: boolean };
 
@@ -45,9 +45,9 @@ type DiscordPresenceBurstState = {
   logged: boolean;
 };
 
-export type DiscordPresenceBurstReservation = number;
+type DiscordPresenceBurstReservation = number;
 
-export type DiscordPresenceBurstDecision =
+type DiscordPresenceBurstDecision =
   | { allowed: true; reservation: DiscordPresenceBurstReservation }
   | { allowed: false; reason: "burst"; shouldLog: boolean };
 
