@@ -641,6 +641,8 @@ export const zh_TW: TranslationMap = {
     archiveSession: "封存工作階段",
     archiveSessionCount: "封存 {count}",
     restoreSession: "還原工作階段",
+    stopCloudWorker: "停止雲端工作程序…",
+    stopCloudWorkerConfirm: "要停止「{session}」的雲端工作程序嗎？",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "刪除 {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',
