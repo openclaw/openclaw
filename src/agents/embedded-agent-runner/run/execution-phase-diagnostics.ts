@@ -10,14 +10,10 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 type ExecutionPhaseCallback = NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
 type SessionIdChangedCallback = NonNullable<RunEmbeddedAgentParams["onSessionIdChanged"]>;
 
-// sessionId/sessionKey are read-through only, so they stay optional here even
-// though the real runner params require sessionId; that keeps the wrapper (and
-// its tests) usable without a session identity.
 type ExecutionPhaseParams = Pick<
   RunEmbeddedAgentParams,
-  "onExecutionPhase" | "onSessionIdChanged" | "runId"
-> &
-  Partial<Pick<RunEmbeddedAgentParams, "sessionId" | "sessionKey">>;
+  "onExecutionPhase" | "onSessionIdChanged" | "runId" | "sessionId" | "sessionKey"
+>;
 
 /**
  * Wraps params.onExecutionPhase so every phase transition also emits a

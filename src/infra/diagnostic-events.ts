@@ -376,7 +376,7 @@ export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
 export type DiagnosticRunExecutionPhaseEvent = DiagnosticBaseEvent & {
   type: "run.execution_phase";
   sessionKey?: string;
-  sessionId?: string;
+  sessionId: string;
   runId: string;
   phase: EmbeddedAgentExecutionPhase;
   provider?: string;

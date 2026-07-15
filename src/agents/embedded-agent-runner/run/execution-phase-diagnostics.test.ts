@@ -47,7 +47,7 @@ describe("withExecutionPhaseDiagnostics", () => {
       },
     });
 
-    params.onExecutionPhase?.({ phase: "model_call_started", firstModelCallStarted: true });
+    params.onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
     await waitForDiagnosticEventsDrained();
     stop();
 
@@ -68,14 +68,20 @@ describe("withExecutionPhaseDiagnostics", () => {
     const { events, stop } = collectEvents(["run.execution_phase"]);
     const params = withExecutionPhaseDiagnostics({
       runId: "run-2",
+      sessionId: "sid-2",
     });
 
-    params.onExecutionPhase?.({ phase: "context_assembled" });
+    params.onExecutionPhase({ phase: "context_assembled" });
     await waitForDiagnosticEventsDrained();
     stop();
 
     expect(events).toMatchObject([
-      { type: "run.execution_phase", runId: "run-2", phase: "context_assembled" },
+      {
+        type: "run.execution_phase",
+        runId: "run-2",
+        sessionId: "sid-2",
+        phase: "context_assembled",
+      },
     ]);
   });
 
@@ -83,6 +89,7 @@ describe("withExecutionPhaseDiagnostics", () => {
     const { events, stop } = collectEvents(["model.call.started", "run.execution_phase"]);
     const params = withExecutionPhaseDiagnostics({
       runId: "run-3",
+      sessionId: "sid-3",
       sessionKey: "sk-3",
     });
 
@@ -91,7 +98,7 @@ describe("withExecutionPhaseDiagnostics", () => {
       provider: "anthropic",
       model: "claude",
     } as never);
-    params.onExecutionPhase?.({ phase: "model_call_started", firstModelCallStarted: true });
+    params.onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
     // Nothing is delivered synchronously: both event kinds ride the async lane.
     expect(events).toEqual([]);
     await waitForDiagnosticEventsDrained();
@@ -114,9 +121,9 @@ describe("withExecutionPhaseDiagnostics", () => {
       },
     });
 
-    params.onExecutionPhase?.({ phase: "context_assembled" });
-    params.onSessionIdChanged?.("sid-after");
-    params.onExecutionPhase?.({ phase: "model_call_started", firstModelCallStarted: true });
+    params.onExecutionPhase({ phase: "context_assembled" });
+    params.onSessionIdChanged("sid-after");
+    params.onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
     await waitForDiagnosticEventsDrained();
     stop();
 
@@ -133,12 +140,13 @@ describe("withExecutionPhaseDiagnostics", () => {
     const seen: unknown[] = [];
     const params = withExecutionPhaseDiagnostics({
       runId: "run-5",
+      sessionId: "sid-5",
       onExecutionPhase: (info) => {
         seen.push(info);
       },
     });
 
-    params.onExecutionPhase?.({ phase: "auth" });
+    params.onExecutionPhase({ phase: "auth" });
     await waitForDiagnosticEventsDrained();
     stop();
 

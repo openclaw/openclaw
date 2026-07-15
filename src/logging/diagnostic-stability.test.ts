@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
@@ -287,9 +288,10 @@ describe("diagnostic stability recorder", () => {
   it("projects run.execution_phase into the dedicated phase fields", async () => {
     startDiagnosticStabilityRecorder();
 
-    emitDiagnosticEvent({
+    emitTrustedDiagnosticEvent({
       type: "run.execution_phase",
       runId: "run-1",
+      sessionId: "sid-1",
       sessionKey: "sk-1",
       phase: "model_call_started",
       provider: "anthropic",
