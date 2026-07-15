@@ -7,7 +7,7 @@ import {
 } from "./config.js";
 import { resolveRecoverableCodexPluginConfigKeys } from "./plugin-inventory.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import { buildCodexPluginThreadConfigWithinDeadline } from "./plugin-thread-config-deadline.js";
+import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildCodexPluginThreadConfig,
@@ -1854,7 +1854,10 @@ describe("Codex plugin thread config", () => {
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     const request = vi.fn(async () => pluginList([]));
 
-    const config = await buildCodexPluginThreadConfigWithinDeadline({
+    const config = await createCodexPluginThreadConfigStartupProvider({
+      inputFingerprint: undefined,
+      enabledPluginConfigKeys: undefined,
+      policy: undefined,
       requestTimeoutMs: 100,
       signal: new AbortController().signal,
       pluginConfig: {
@@ -1871,8 +1874,8 @@ describe("Codex plugin thread config", () => {
       appCache: new CodexAppInventoryCache(),
       appCacheKey: "runtime",
       metadataCache,
-      request,
-    });
+      client: { request },
+    }).build();
 
     expect(config.diagnostics).toEqual([
       expect.objectContaining({ code: "plugin_config_timeout" }),
@@ -1896,7 +1899,10 @@ describe("Codex plugin thread config", () => {
     });
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     const controller = new AbortController();
-    const build = buildCodexPluginThreadConfigWithinDeadline({
+    const build = createCodexPluginThreadConfigStartupProvider({
+      inputFingerprint: undefined,
+      enabledPluginConfigKeys: undefined,
+      policy: undefined,
       requestTimeoutMs: 1_000,
       signal: controller.signal,
       pluginConfig: {
@@ -1912,8 +1918,8 @@ describe("Codex plugin thread config", () => {
       },
       appCacheKey: "runtime",
       metadataCache,
-      request: vi.fn(async () => pluginList([])),
-    });
+      client: { request: vi.fn(async () => pluginList([])) },
+    }).build();
     controller.abort(new Error("outer abort"));
 
     await expect(build).rejects.toThrow("outer abort");
@@ -1927,13 +1933,16 @@ describe("Codex plugin thread config", () => {
     const request = vi.fn(async () => pluginList([]));
 
     await expect(
-      buildCodexPluginThreadConfigWithinDeadline({
+      createCodexPluginThreadConfigStartupProvider({
+        inputFingerprint: undefined,
+        enabledPluginConfigKeys: undefined,
+        policy: undefined,
         requestTimeoutMs: 1_000,
         signal: controller.signal,
         pluginConfig: { codexPlugins: { enabled: true } },
         appCacheKey: "runtime",
-        request,
-      }),
+        client: { request },
+      }).build(),
     ).rejects.toThrow("outer abort");
     expect(request).not.toHaveBeenCalled();
   });

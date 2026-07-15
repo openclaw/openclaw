@@ -77,7 +77,7 @@ export function resolveCodexPluginThreadConfigStartupPolicy(params: {
 }
 
 /** Builds plugin config without allowing sequential RPC timeouts to consume the turn. */
-export async function buildCodexPluginThreadConfigWithinDeadline(
+async function buildCodexPluginThreadConfigWithinDeadline(
   params: BuildCodexPluginThreadConfigWithinDeadlineParams,
 ): Promise<CodexPluginThreadConfig> {
   const { requestTimeoutMs, signal, request, ...buildParams } = params;

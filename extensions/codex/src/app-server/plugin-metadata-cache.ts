@@ -12,13 +12,13 @@ const CODEX_PLUGIN_METADATA_CACHE_TTL_MS = 60 * 60 * 1_000;
 export type CodexPluginMetadataQueryKind = "curated-global" | "workspace-directory";
 
 /** Request callback used to read Codex plugin metadata. */
-export type CodexPluginMetadataRequest = (
+type CodexPluginMetadataRequest = (
   method: "plugin/list",
   params: v2.PluginListParams,
 ) => Promise<v2.PluginListResponse>;
 
 /** Successful plugin metadata snapshot scoped to one app-server runtime. */
-export type CodexPluginMetadataSnapshot = {
+type CodexPluginMetadataSnapshot = {
   appCacheKey: string;
   queryKind: CodexPluginMetadataQueryKind;
   response: v2.PluginListResponse;
@@ -102,8 +102,8 @@ export class CodexPluginMetadataCache {
         queryKind: params.queryKind,
         response,
       } satisfies CodexPluginMetadataSnapshot;
-      // Gateway plugin metadata, including workspace discovery, is process-stable.
-      // Keep absence until install invalidation, identity change, restart, or test reset.
+      // Settled snapshots survive until install invalidation, identity change,
+      // TTL expiry, restart, or test reset — never a per-turn refresh.
       if (
         generation === (this.generations.get(params.appCacheKey) ?? 0) &&
         clearGeneration === this.clearGeneration &&
