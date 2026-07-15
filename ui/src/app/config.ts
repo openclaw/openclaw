@@ -10,6 +10,8 @@ import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { setUiTimeFormatPreference } from "../lib/format.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 
+const CONFIG_FETCH_TIMEOUT_MS = 15_000;
+
 type ApplicationConfigAuthSource = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
   settings?: { token?: string | null } | null;
@@ -206,7 +208,7 @@ async function loadApplicationConfig(params: {
         method: "GET",
         headers,
         credentials: "same-origin",
-        signal: params.signal,
+        signal: params.signal ?? AbortSignal.timeout(CONFIG_FETCH_TIMEOUT_MS),
       });
       if (res.ok) {
         break;
