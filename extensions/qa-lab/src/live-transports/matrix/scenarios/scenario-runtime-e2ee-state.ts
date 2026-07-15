@@ -8,10 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { loadMatrixQaE2eeRuntime } from "../substrate/e2ee-client.js";
 import { requestMatrixJson } from "../substrate/request.js";
-import type {
-  MatrixQaCliRuntime,
-  MatrixQaStorageMetadataRuntime,
-} from "./scenario-runtime-e2ee-destructive-recovery.js";
+import type { MatrixQaCliRuntime } from "./scenario-runtime-e2ee-destructive-recovery.js";
 
 async function findFilesByName(params: { filename: string; rootDir: string }): Promise<string[]> {
   const matches: string[] = [];
@@ -42,13 +39,12 @@ async function findFilesByName(params: { filename: string; rootDir: string }): P
   return matches.toSorted();
 }
 
-export async function findMatrixQaCliAccountRoot(params: {
+async function findMatrixQaCliAccountRoot(params: {
   deviceId: string;
   runtime: Pick<MatrixQaCliRuntime, "stateDir">;
-  storageMetadataRuntime?: MatrixQaStorageMetadataRuntime;
   userId: string;
 }) {
-  const storageMetadataRuntime = params.storageMetadataRuntime ?? (await loadMatrixQaE2eeRuntime());
+  const storageMetadataRuntime = await loadMatrixQaE2eeRuntime();
   const sqlitePaths = await findFilesByName({
     filename: "openclaw.sqlite",
     rootDir: params.runtime.stateDir,
@@ -127,7 +123,7 @@ function writeMatrixQaCliRecoveryKeyState(params: {
 export async function mutateMatrixQaCliStateLoss(params: {
   deviceId: string;
   preserveRecoveryKey: boolean;
-  runtime: MatrixQaCliRuntime;
+  runtime: Pick<MatrixQaCliRuntime, "stateDir">;
   userId: string;
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);

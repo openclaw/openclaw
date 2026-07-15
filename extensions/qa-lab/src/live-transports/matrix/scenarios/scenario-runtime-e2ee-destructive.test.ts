@@ -5,13 +5,13 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertMatrixQaCliBackupRestoreFailed } from "./scenario-runtime-e2ee-destructive-recovery.js";
-import { findMatrixQaCliAccountRoot } from "./scenario-runtime-e2ee-state.js";
+import { mutateMatrixQaCliStateLoss } from "./scenario-runtime-e2ee-state.js";
 
 const testing = { assertMatrixQaCliBackupRestoreFailed };
 
-const storageMetadataRuntime = {
+const storageMetadataRuntime = vi.hoisted(() => ({
   normalizeMatrixStorageMetadata(value: unknown) {
     if (!value || typeof value !== "object") {
       return null;
@@ -29,7 +29,18 @@ const storageMetadataRuntime = {
       env: { ...process.env, OPENCLAW_STATE_DIR: storageRootDir },
     };
   },
-};
+}));
+
+vi.mock("../substrate/e2ee-client.js", () => ({
+  loadMatrixQaE2eeRuntime: async () => ({
+    ...storageMetadataRuntime,
+    openMatrixRecoveryKeyStoreOptions: (storageRootDir: string) => ({
+      namespace: "recovery-key",
+      maxEntries: 10,
+      env: { ...process.env, OPENCLAW_STATE_DIR: storageRootDir },
+    }),
+  }),
+}));
 
 describe("Matrix destructive E2EE storage discovery", () => {
   const tempDirs: string[] = [];
@@ -53,13 +64,13 @@ describe("Matrix destructive E2EE storage discovery", () => {
     resetPluginStateStoreForTests();
 
     await expect(
-      findMatrixQaCliAccountRoot({
+      mutateMatrixQaCliStateLoss({
         deviceId: "DEVICE",
+        preserveRecoveryKey: false,
         runtime: { stateDir },
-        storageMetadataRuntime,
         userId: "@owner:matrix-qa.test",
       }),
-    ).resolves.toBe(accountRoot);
+    ).resolves.toMatchObject({ accountRoot });
   });
 });
 

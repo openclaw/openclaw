@@ -2,7 +2,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createMatrixQaClient } from "../substrate/client.js";
-import { loadMatrixQaE2eeRuntime } from "../substrate/e2ee-client.js";
 import {
   createMatrixQaOpenClawCliRuntime,
   formatMatrixQaCliCommand,
@@ -12,11 +11,6 @@ import {
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 export type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
-
-export type MatrixQaStorageMetadataRuntime = Pick<
-  Awaited<ReturnType<typeof loadMatrixQaE2eeRuntime>>,
-  "normalizeMatrixStorageMetadata" | "openMatrixStorageMetaStoreOptions"
->;
 
 export type MatrixQaCliBackupStatus = {
   backup?: {
