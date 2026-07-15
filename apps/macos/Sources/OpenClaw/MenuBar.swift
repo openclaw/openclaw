@@ -251,7 +251,7 @@ final class StatusItemMouseRouter: NSResponder {
     typealias EventMonitorInstaller = (NSEvent.EventTypeMask, @escaping EventMonitorHandler) -> Any?
     typealias EventMonitorRemover = (Any) -> Void
 
-    private weak var button: NSStatusBarButton?
+    private weak var button: NSView?
     private var eventMonitor: Any?
     private var trackingArea: NSTrackingArea?
     private var onLeftClick: (() -> Void)?
@@ -298,7 +298,7 @@ final class StatusItemMouseRouter: NSResponder {
     }
 
     func install(
-        on button: NSStatusBarButton,
+        on button: NSView,
         onLeftClick: @escaping () -> Void,
         onRightClick: @escaping () -> Void,
         onHoverChanged: @escaping (Bool) -> Void)
@@ -346,7 +346,7 @@ final class StatusItemMouseRouter: NSResponder {
         }
     }
 
-    private func track(_ button: NSStatusBarButton) {
+    private func track(_ button: NSView) {
         guard self.button !== button else { return }
         if let previousButton = self.button, let trackingArea {
             previousButton.removeTrackingArea(trackingArea)
@@ -361,7 +361,7 @@ final class StatusItemMouseRouter: NSResponder {
         self.trackingArea = trackingArea
     }
 
-    private static func contains(_ event: NSEvent, in button: NSStatusBarButton) -> Bool {
+    private static func contains(_ event: NSEvent, in button: NSView) -> Bool {
         guard let window = button.window, event.windowNumber == window.windowNumber else { return false }
         let point = button.convert(event.locationInWindow, from: nil)
         return button.bounds.contains(point)

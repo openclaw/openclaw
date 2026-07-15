@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct StatusItemMouseRouterTests {
-    @Test func `installed monitor consumes the native button event`() throws {
+    @Test func `installed monitor consumes the target event before native dispatch`() throws {
         let (window, button) = Self.makeButtonWindow()
         defer { window.close() }
 
@@ -114,13 +114,13 @@ struct StatusItemMouseRouterTests {
         #expect(rightClicks == 1)
     }
 
-    private static func makeButtonWindow() -> (NSWindow, NSStatusBarButton) {
+    private static func makeButtonWindow() -> (NSWindow, NSView) {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 120, height: 80),
             styleMask: .borderless,
             backing: .buffered,
             defer: false)
-        let button = NSStatusBarButton(frame: NSRect(x: 20, y: 20, width: 40, height: 24))
+        let button = NSView(frame: NSRect(x: 20, y: 20, width: 40, height: 24))
         window.contentView?.addSubview(button)
         return (window, button)
     }
