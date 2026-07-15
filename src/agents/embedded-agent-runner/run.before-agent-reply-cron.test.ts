@@ -161,6 +161,45 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(result.payloads?.[0]?.text).toBe("user turn claimed");
   });
 
+  it("preserves native user identity in the before_agent_reply context", async () => {
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "before_agent_reply",
+    );
+    mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue({ handled: true });
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "user",
+      senderId: "sender-123",
+      chatId: "chat-456",
+      channelContext: { channel: "telegram", accountId: "primary" },
+    });
+
+    const [, hookContext] = firstBeforeAgentReplyCall();
+    expect(hookContext).toEqual(
+      expect.objectContaining({
+        senderId: "sender-123",
+        chatId: "chat-456",
+        channelContext: expect.objectContaining({ channel: "telegram", accountId: "primary" }),
+      }),
+    );
+  });
+
+  it("does not expose internal manual runs to before_agent_reply hooks", async () => {
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "before_agent_reply",
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "manual",
+    });
+
+    expect(mockedGlobalHookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards one-shot auxiliary-run flags into the embedded attempt", async () => {
     // Auxiliary-run flags are request-scoped; they must pass through to the
     // first attempt without becoming persistent session settings.
