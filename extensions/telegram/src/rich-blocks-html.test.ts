@@ -278,6 +278,17 @@ describe("block HTML islands", () => {
     }
   });
 
+  it("matches islands whose bodies quote tag names inside code elements", () => {
+    const block = single(
+      "<details><summary>How</summary>Maps <code><details></code> and <code><table></code> to blocks.</details>",
+    );
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(JSON.stringify(block.blocks)).toContain("<details>");
+  });
+
   it("suppresses islands nested under an unmatched supported opener", () => {
     const blocks = blocksFor("<details><summary>x</summary><hr/>");
     expect(blocks.every((block) => block.type === "paragraph")).toBe(true);

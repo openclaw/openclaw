@@ -803,10 +803,22 @@ export function findTelegramHtmlIslands(text: string): TelegramHtmlIsland[] {
     let matched = tag.selfClosing || VOID_TAGS.has(tag.name);
     if (!matched) {
       let depth = 1;
+      // Tag names quoted in prose (<code><details></code>) must not count
+      // toward matching; models routinely mention tags inside code spans.
+      let codeDepth = 0;
       let scan = index + 1;
       while (scan < tags.length) {
         const candidate = tags[scan];
-        if (candidate && candidate.name === tag.name) {
+        if (candidate && (candidate.name === "code" || candidate.name === "pre")) {
+          if (candidate.closing) {
+            codeDepth = Math.max(0, codeDepth - 1);
+          } else if (!candidate.selfClosing) {
+            codeDepth += 1;
+          }
+          scan += 1;
+          continue;
+        }
+        if (candidate && candidate.name === tag.name && codeDepth === 0) {
           depth += candidate.closing ? -1 : candidate.selfClosing ? 0 : 1;
           if (depth === 0) {
             end = candidate.end;
