@@ -13,7 +13,6 @@ export type LiveTransportCheckResult = {
   title: string;
   status: "pass" | "fail";
   details: string;
-  coverageIds?: readonly string[];
   timing?: QaEvidenceTiming;
   rttMs?: number;
   requestStartedAt?: string;

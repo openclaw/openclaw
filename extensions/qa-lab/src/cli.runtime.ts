@@ -70,6 +70,7 @@ import {
 } from "./run-config.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import {
+  listQaScenariosForExecutionProfile,
   QA_RUNTIME_PARITY_TIERS,
   readQaScenarioPack,
   type QaRuntimeParityTier,
@@ -986,13 +987,14 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   if (liveChannelId && !liveAdapterFactory) {
     throw new Error(`unknown live QA adapter: ${liveChannelId}`);
   }
+  // liveChannelId exists only for the live driver, and explicit IDs always win.
+  // This keeps adapter profiles out of non-live and explicit-selection paths.
   const liveScenarioIds =
     liveAdapterFactory && scenarioIds.length === 0
-      ? [...(liveAdapterFactory.scenarioIds ?? [])]
+      ? listQaScenariosForExecutionProfile(`${liveChannelId}:adapter`).map(
+          (scenario) => scenario.id,
+        )
       : scenarioIds;
-  if (liveAdapterFactory && liveScenarioIds.length === 0) {
-    throw new Error(`live QA adapter ${liveChannelId} does not declare default scenarios`);
-  }
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }

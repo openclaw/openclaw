@@ -5,7 +5,6 @@ import {
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
-import { SLACK_QA_DEFAULT_SCENARIO_IDS } from "./profiles.js";
 
 type SlackQaAdapterRuntime = typeof import("./adapter.runtime.js");
 type SlackQaCliRuntime = typeof import("./cli.runtime.js");
@@ -23,7 +22,6 @@ async function runQaSlack(opts: LiveTransportQaCommandOptions) {
 
 const slackQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
   id: "slack",
-  scenarioIds: SLACK_QA_DEFAULT_SCENARIO_IDS,
   matches: ({ channelId, driver }) => driver === "live" && channelId === "slack",
   async create(context) {
     return await (await loadSlackQaAdapterRuntime()).createSlackQaTransportAdapter(context);

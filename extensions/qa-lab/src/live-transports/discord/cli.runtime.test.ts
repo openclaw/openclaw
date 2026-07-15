@@ -13,8 +13,8 @@ vi.mock("../shared/live-transport-cli.runtime.js", () => ({
   }),
 }));
 
+import { listQaScenariosForExecutionProfile } from "../../scenario-catalog.js";
 import { runQaDiscordCommand } from "./cli.runtime.js";
-import { DISCORD_QA_DEFAULT_SCENARIO_IDS } from "./profiles.js";
 
 describe("QA Lab Discord CLI runtime", () => {
   beforeEach(() => {
@@ -48,7 +48,9 @@ describe("QA Lab Discord CLI runtime", () => {
       channelDriver: "live",
       channel: "discord",
       concurrency: 1,
-      scenarioIds: [...DISCORD_QA_DEFAULT_SCENARIO_IDS],
+      scenarioIds: listQaScenariosForExecutionProfile("discord:adapter").map(
+        (scenario) => scenario.id,
+      ),
       sutAccountId: "discord-sut",
       credentialSource: "convex",
       credentialRole: "ci",

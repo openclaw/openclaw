@@ -5,7 +5,6 @@ import {
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
-import { DISCORD_QA_DEFAULT_SCENARIO_IDS } from "./profiles.js";
 
 type DiscordQaCliRuntime = typeof import("./cli.runtime.js");
 type DiscordQaAdapterRuntime = typeof import("./adapter.runtime.js");
@@ -27,7 +26,6 @@ export const discordQaCliRegistration: LiveTransportQaCliRegistration =
     commandName: "discord",
     adapterFactory: {
       id: "discord",
-      scenarioIds: DISCORD_QA_DEFAULT_SCENARIO_IDS,
       matches: ({ channelId, driver }) => driver === "live" && channelId === "discord",
       async create(context) {
         return await (await loadDiscordQaAdapterRuntime()).createDiscordQaTransportAdapter(context);

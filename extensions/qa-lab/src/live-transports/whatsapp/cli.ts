@@ -5,7 +5,6 @@ import {
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
-import { resolveWhatsAppQaScenarioIds } from "./profiles.js";
 
 type WhatsAppQaAdapterRuntime = typeof import("./adapter.runtime.js");
 type WhatsAppQaCliRuntime = typeof import("./cli.runtime.js");
@@ -23,7 +22,6 @@ async function runQaWhatsApp(opts: LiveTransportQaCommandOptions) {
 
 const whatsappQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
   id: "whatsapp",
-  scenarioIds: resolveWhatsAppQaScenarioIds({ providerMode: "live-frontier" }),
   matches: ({ channelId, driver }) => driver === "live" && channelId === "whatsapp",
   async create(context) {
     return await (await loadWhatsAppQaAdapterRuntime()).createWhatsAppQaTransportAdapter(context);

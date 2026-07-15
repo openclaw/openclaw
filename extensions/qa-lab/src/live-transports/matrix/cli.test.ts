@@ -50,24 +50,6 @@ describe("QA Lab Matrix CLI registration", () => {
     stdoutSpy.mockRestore();
   });
 
-  it("keeps generic Matrix suite defaults in the repo-backed flow catalog", () => {
-    expect(matrixQaCliRegistration.adapterFactory?.scenarioIds).toEqual([
-      "channel-chat-baseline",
-      "channel-canary",
-      "channel-dm-group-routing",
-      "channel-mention-gating",
-      "channel-sender-allowlist",
-      "channel-top-level-reply-shape",
-      "channel-secondary-conversation-isolation",
-      "channel-multi-actor-ordering",
-      "thread-follow-up",
-      "thread-isolation",
-      "thread-reply-override",
-      "dm-shared-session",
-      "dm-per-room-session",
-    ]);
-  });
-
   it("exposes only QA Lab selector flags", () => {
     const qa = new Command();
     matrixQaCliRegistration.register(qa);

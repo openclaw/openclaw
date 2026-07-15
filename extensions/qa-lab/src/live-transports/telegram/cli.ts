@@ -5,7 +5,6 @@ import {
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
-import { TELEGRAM_QA_ALL_SCENARIO_IDS } from "./profiles.js";
 
 type TelegramQaAdapterRuntime = typeof import("./adapter.runtime.js");
 type TelegramQaCliRuntime = typeof import("./cli.runtime.js");
@@ -23,7 +22,6 @@ async function runQaTelegram(opts: LiveTransportQaCommandOptions) {
 
 const telegramQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
   id: "telegram",
-  scenarioIds: ["channel-chat-baseline", ...TELEGRAM_QA_ALL_SCENARIO_IDS],
   matches: ({ channelId, driver }) => driver === "live" && channelId === "telegram",
   async create(context) {
     return await (await loadTelegramQaAdapterRuntime()).createTelegramQaTransportAdapter(context);

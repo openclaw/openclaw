@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../bus-state.js";
 import { createQaChannelTransport } from "../qa-channel-transport.js";
 import { createQaTransportAdapter } from "../qa-transport-registry.js";
+import { listQaScenariosForExecutionProfile } from "../scenario-catalog.js";
 
 const { createSlack, createTelegram, createWhatsApp } = vi.hoisted(() => ({
   createSlack: vi.fn(),
@@ -19,10 +20,8 @@ vi.mock("./whatsapp/adapter.runtime.js", () => ({
 }));
 
 import { slackQaCliRegistration } from "./slack/cli.js";
-import { SLACK_QA_DEFAULT_SCENARIO_IDS } from "./slack/profiles.js";
 import { telegramQaCliRegistration } from "./telegram/cli.js";
 import { whatsappQaCliRegistration } from "./whatsapp/cli.js";
-import { resolveWhatsAppQaScenarioIds } from "./whatsapp/profiles.js";
 
 const slackQaAdapterFactory = slackQaCliRegistration.adapterFactory;
 const telegramQaAdapterFactory = telegramQaCliRegistration.adapterFactory;
@@ -38,14 +37,30 @@ const factories = [
 ] as const;
 
 describe("live transport adapter factories", () => {
-  it("assigns the canonical live scenario defaults to Slack", () => {
-    expect(slackQaAdapterFactory.scenarioIds).toEqual(SLACK_QA_DEFAULT_SCENARIO_IDS);
+  it("selects Slack generic defaults from the YAML adapter profile", () => {
+    expect(
+      listQaScenariosForExecutionProfile("slack:adapter").map((scenario) => scenario.id),
+    ).toEqual([
+      "channel-chat-baseline",
+      "channel-canary",
+      "channel-mention-gating",
+      "channel-top-level-reply-shape",
+      "thread-follow-up",
+      "thread-isolation",
+    ]);
   });
 
-  it("assigns the canonical live-frontier scenario defaults to WhatsApp", () => {
-    expect(whatsappQaAdapterFactory.scenarioIds).toEqual(
-      resolveWhatsAppQaScenarioIds({ providerMode: "live-frontier" }),
-    );
+  it("selects WhatsApp DM-safe defaults from the YAML adapter profile", () => {
+    expect(
+      listQaScenariosForExecutionProfile("whatsapp:adapter").map((scenario) => scenario.id),
+    ).toEqual([
+      "dm-chat-baseline",
+      "channel-canary",
+      "channel-dm-group-routing",
+      "channel-mention-gating",
+      "channel-top-level-reply-shape",
+      "whatsapp-help-command",
+    ]);
   });
 
   it.each([
