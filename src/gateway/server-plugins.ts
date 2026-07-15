@@ -206,10 +206,6 @@ function hasServerAttestedPluginSubagentClient(
   );
 }
 
-function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boolean {
-  return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
-}
-
 function canTrustedOfficialPluginRequestScopes(params: {
   pluginId?: string;
   pluginOrigin?: PluginOrigin;
@@ -540,7 +536,9 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         scope?.client,
         pluginId,
       );
-      let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
+      // Plugin runtime reauthorizes every override against its own allowlist; a nested run
+      // must not inherit the gateway dispatch's one-shot internal override capability.
+      let allowOverride = hasRequestScopeClient && hasAdminScope(scope?.client);
       let allowSyntheticModelOverride = false;
       if (
         overrideRequested &&
