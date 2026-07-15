@@ -47,6 +47,8 @@ describe("tui session actions", () => {
       restorePendingUsers: vi.fn(),
       updateAssistant: vi.fn(),
       startTool: vi.fn(),
+      recordToolActivity: vi.fn(),
+      resetStreamingAssistantState: vi.fn(),
     } as unknown as ChatLog;
     return { chatLog, addSystem, addUser };
   };
