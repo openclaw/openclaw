@@ -1620,6 +1620,8 @@ export const ja_JP: TranslationMap = {
     attachSession: "セッションに接続",
     attachFailed: "ターミナルセッションに接続できませんでした",
     starting: "Starting terminal…",
+    connecting: "セッションに接続しています…",
+    connectionTimedOut: "30秒以内にセッションに接続できませんでした。",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

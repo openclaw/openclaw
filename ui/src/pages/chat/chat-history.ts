@@ -43,6 +43,7 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   isRetryableStartupUnavailable,
   isUnknownGatewayMethodError,
@@ -53,6 +54,7 @@ import {
   isLocallyOptimisticHistoryMessage,
   messageDisplaySignature,
   preserveOptimisticTailMessages,
+  readTranscriptSequence,
 } from "./history-merge.ts";
 import {
   controlUiNowMs,
@@ -62,7 +64,7 @@ import {
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
-  cacheChatMessages,
+  cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
@@ -376,10 +378,6 @@ export type ChatHistoryResult = {
   metadata?: ChatMetadataResult;
 };
 
-export type ChatHistoryPagination =
-  | { hasMore: false; totalMessages?: number; completeSnapshot?: true }
-  | { hasMore: true; nextOffset: number; totalMessages?: number };
-
 export function resolveChatHistoryPagination(
   result: ChatHistoryResult | undefined,
 ): ChatHistoryPagination {
@@ -408,6 +406,76 @@ export function resolveChatHistoryPagination(
   };
 }
 
+function resolveChatHistorySessionId(result: ChatHistoryResult): string | null {
+  if (typeof result.sessionInfo?.sessionId === "string" && result.sessionInfo.sessionId.trim()) {
+    return result.sessionInfo.sessionId.trim();
+  }
+  return typeof result.sessionId === "string" && result.sessionId.trim()
+    ? result.sessionId.trim()
+    : null;
+}
+
+function retainedRawHistoryStart(pagination: ChatHistoryPagination | undefined): number | null {
+  const totalMessages = pagination?.totalMessages;
+  if (
+    typeof totalMessages !== "number" ||
+    !Number.isSafeInteger(totalMessages) ||
+    totalMessages < 0
+  ) {
+    return null;
+  }
+  const retainedDepth = pagination?.hasMore ? pagination.nextOffset : totalMessages;
+  const start = totalMessages - retainedDepth + 1;
+  return Number.isSafeInteger(start) && start > 0 ? start : null;
+}
+
+function reconcileLoadedHistoryTail(options: {
+  nextMessages: unknown[];
+  nextPagination: ChatHistoryPagination;
+  nextSessionId: string | null;
+  previousMessages: unknown[];
+  previousPagination: ChatHistoryPagination | undefined;
+  previousSessionId: string | null;
+}): { messages: unknown[]; pagination: ChatHistoryPagination } | null {
+  if (
+    !options.previousSessionId ||
+    options.previousSessionId !== options.nextSessionId ||
+    options.previousMessages.length === 0
+  ) {
+    return null;
+  }
+  const previousTotal = options.previousPagination?.totalMessages;
+  const nextTotal = options.nextPagination.totalMessages;
+  const previousStart = retainedRawHistoryStart(options.previousPagination);
+  const nextStart = retainedRawHistoryStart(options.nextPagination);
+  if (
+    typeof previousTotal !== "number" ||
+    typeof nextTotal !== "number" ||
+    previousStart === null ||
+    nextStart === null ||
+    nextTotal < previousTotal ||
+    nextStart > previousTotal + 1 ||
+    nextStart <= previousStart
+  ) {
+    return null;
+  }
+  const prefix = options.previousMessages.filter((message) => {
+    const seq = readTranscriptSequence(message);
+    return seq !== null && seq < nextStart;
+  });
+  if (prefix.length === 0) {
+    return null;
+  }
+  const retainedDepth = nextTotal - previousStart + 1;
+  return {
+    messages: [...prefix, ...options.nextMessages],
+    pagination:
+      previousStart > 1
+        ? { hasMore: true, nextOffset: retainedDepth, totalMessages: nextTotal }
+        : { hasMore: false, totalMessages: nextTotal },
+  };
+}
+
 export type ChatMetadataResult = CommandsListResult & {
   models?: ModelCatalogEntry[];
 };
@@ -421,6 +489,8 @@ export type ChatEventPayload = {
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  stopReason?: string;
+  yielded?: true;
 };
 
 function setChatError(state: ChatState, error: string | null) {
@@ -658,16 +728,20 @@ function recordChatHistoryTiming(
   );
 }
 
-function replaceCachedChatMessages(
-  state: ChatState,
-  sessionKey: string,
-  messages: unknown[],
-  agentId?: string,
-) {
+function replaceCachedChatMessages(state: ChatState, sessionKey: string, agentId?: string) {
   if (!state.chatMessagesBySession) {
     return;
   }
-  cacheChatMessages(state.chatMessagesBySession, state, { sessionKey, agentId }, messages);
+  cacheChatSessionSnapshot(
+    state.chatMessagesBySession,
+    state,
+    { sessionKey, agentId },
+    {
+      messages: state.chatMessages,
+      pagination: state.chatHistoryPagination ?? { hasMore: false },
+      sessionId: state.currentSessionId ?? null,
+    },
+  );
 }
 
 type ClearChatHistoryState = ChatState &
@@ -910,6 +984,8 @@ async function loadChatHistoryUncached(
   const startedAt = Date.now();
   const startedAtMs = controlUiNowMs();
   const previousMessages = state.chatMessages;
+  const previousPagination = state.chatHistoryPagination;
+  const previousSessionId = state.currentSessionId ?? null;
   const previousRunId = state.chatRunId;
   recordChatHistoryTiming(state, "start", startedAtMs, {
     requestSessionKey: sessionKey,
@@ -971,7 +1047,8 @@ async function loadChatHistoryUncached(
       return undefined;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatHistoryPagination = resolveChatHistoryPagination(res);
+    const nextPagination = resolveChatHistoryPagination(res);
+    const nextSessionId = resolveChatHistorySessionId(res);
     applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     const reconciledTerminal = reconcileAuthoritativeTerminalHistory({
@@ -981,26 +1058,31 @@ async function loadChatHistoryUncached(
       sessionKey,
       visibleMessages,
     });
+    const reconciledHistory = reconcileLoadedHistoryTail({
+      nextMessages: visibleMessages,
+      nextPagination,
+      nextSessionId,
+      previousMessages: reconciledTerminal.previousMessages,
+      previousPagination,
+      previousSessionId,
+    });
+    const authoritativeMessages = reconciledHistory?.messages ?? visibleMessages;
     const lateOptimisticTail = collectLateOptimisticTailMessages(
       reconciledTerminal.previousMessages,
       reconciledTerminal.currentMessages,
-      visibleMessages,
+      authoritativeMessages,
     );
     state.chatMessages = preserveOptimisticTailMessages(
-      visibleMessages,
+      authoritativeMessages,
       reconciledTerminal.previousMessages,
       shouldHideHistoryMessage,
     );
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
     }
-    replaceCachedChatMessages(state, sessionKey, state.chatMessages, requestAgentId);
-    state.currentSessionId =
-      typeof res.sessionInfo?.sessionId === "string" && res.sessionInfo.sessionId.trim()
-        ? res.sessionInfo.sessionId
-        : typeof res.sessionId === "string" && res.sessionId.trim()
-          ? res.sessionId
-          : null;
+    state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
+    state.currentSessionId = nextSessionId;
+    replaceCachedChatMessages(state, sessionKey, requestAgentId);
     if (
       state.reconnectResumeSessionId &&
       state.reconnectResumeSessionId !== state.currentSessionId

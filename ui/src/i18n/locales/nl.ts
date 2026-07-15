@@ -1620,6 +1620,8 @@ export const nl: TranslationMap = {
     attachSession: "Sessie koppelen",
     attachFailed: "Kan terminalsessie niet koppelen",
     starting: "Starting terminal…",
+    connecting: "Verbinding maken met sessie…",
+    connectionTimedOut: "Er kon niet binnen 30 seconden verbinding worden gemaakt met de sessie.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

@@ -1575,6 +1575,8 @@ export const en: TranslationMap = {
     attachSession: "Attach session",
     attachFailed: "Could not attach terminal session",
     starting: "Starting terminal…",
+    connecting: "Connecting to session…",
+    connectionTimedOut: "Session did not connect within 30 seconds.",
     tabLabel: "shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

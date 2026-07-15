@@ -1619,6 +1619,8 @@ export const uk: TranslationMap = {
     attachSession: "Підключитися до сеансу",
     attachFailed: "Не вдалося підключитися до сеансу термінала",
     starting: "Starting terminal…",
+    connecting: "Підключення до сеансу…",
+    connectionTimedOut: "Не вдалося підключитися до сеансу протягом 30 секунд.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

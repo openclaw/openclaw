@@ -1619,6 +1619,8 @@ export const tr: TranslationMap = {
     attachSession: "Oturuma bağlan",
     attachFailed: "Terminal oturumuna bağlanılamadı",
     starting: "Starting terminal…",
+    connecting: "Oturuma bağlanılıyor…",
+    connectionTimedOut: "Oturum bağlantısı 30 saniye içinde kurulamadı.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",
