@@ -188,14 +188,14 @@ Slack-only:
 
 ### Legacy key migration
 
-| Channel  | Legacy keys                                                 | Status                                                                                                                                               |
-| -------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Telegram | `streamMode`, scalar/boolean `streaming`                    | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                        |
-| Discord  | `streamMode`, boolean `streaming`                           | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                        |
-| Slack    | `streamMode`; boolean `streaming`; legacy `nativeStreaming` | Rewritten to `streaming.mode` (and `streaming.nativeTransport` for the boolean/legacy forms) by `openclaw doctor --fix`; not read at runtime         |
-| Matrix   | scalar/boolean `streaming`                                  | Rewritten to `streaming.mode` (including Matrix's `"quiet"` mode) by `openclaw doctor --fix`; not read at runtime                                    |
-| Feishu   | boolean `streaming`                                         | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                        |
-| QQ Bot   | boolean `streaming`; `streaming.c2cStreamApi`               | Rewritten to `streaming.mode` (and `streaming.nativeTransport` for the boolean/`c2cStreamApi` forms) by `openclaw doctor --fix`; not read at runtime |
+| Channel  | Legacy keys                                                       | Status                                                                                                                                       |
+| -------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Telegram | `streamMode`, scalar/boolean `streaming`                          | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                |
+| Discord  | `streamMode`, boolean `streaming`                                 | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                |
+| Slack    | `streamMode`; boolean `streaming`; legacy `nativeStreaming`       | Rewritten to `streaming.mode` (and `streaming.nativeTransport` for the boolean/legacy forms) by `openclaw doctor --fix`; not read at runtime |
+| Matrix   | scalar/boolean `streaming`                                        | Rewritten to `streaming.mode` (including Matrix's `"quiet"` mode) by `openclaw doctor --fix`; not read at runtime                            |
+| Feishu   | boolean `streaming`                                               | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                |
+| QQ Bot   | boolean `streaming`; `streaming.nativeTransport` / `c2cStreamApi` | Boolean values are accepted by Tencent QQBot 2.0; retired transport keys are collapsed into `streaming.mode` by `openclaw doctor --fix`      |
 
 ## Runtime behavior
 

@@ -179,6 +179,34 @@ describe("buildOfficialChannelCatalog", () => {
     });
     expect(
       summarizeCatalogEntry(
+        findCatalogEntry(entries, (entry) => entry.name === "@tencent-connect/openclaw-qqbot"),
+      ),
+    ).toEqual({
+      name: "@tencent-connect/openclaw-qqbot",
+      description: "OpenClaw QQ Bot channel plugin by the Tencent Connect team.",
+      source: "external",
+      plugin: {
+        id: "openclaw-qqbot",
+        label: "QQ Bot",
+      },
+      channel: {
+        id: "qqbot",
+        label: "QQ Bot",
+        selectionLabel: "QQ Bot (Official API)",
+        detailLabel: "QQ Bot",
+        docsPath: "/channels/qqbot",
+        docsLabel: "qqbot",
+        blurb: "connect to QQ via official QQ Bot API with group chat and direct message support.",
+        envVars: ["QQBOT_APP_ID", "QQBOT_CLIENT_SECRET"],
+        systemImage: "bubble.left.and.bubble.right",
+      },
+      install: {
+        npmSpec: "@tencent-connect/openclaw-qqbot",
+        defaultChoice: "npm",
+      },
+    });
+    expect(
+      summarizeCatalogEntry(
         findCatalogEntry(entries, (entry) => entry.name === "@openclaw/whatsapp"),
       ),
     ).toEqual({
@@ -205,7 +233,7 @@ describe("buildOfficialChannelCatalog", () => {
     });
   });
 
-  it("keeps third-party official external catalog npm sources exactly pinned", () => {
+  it("keeps third-party official external catalog npm sources pinned unless they track latest", () => {
     const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-policy-");
     const entries = buildOfficialChannelCatalog({ repoRoot }).entries.filter(
       (entry) => entry.source === "external" && !entry.name?.startsWith("@openclaw/"),
@@ -214,6 +242,11 @@ describe("buildOfficialChannelCatalog", () => {
     expect(entries.length).toBeGreaterThan(0);
     for (const entry of entries) {
       const installSource = describePluginInstallSource(requireInstall(entry));
+      if (entry.name === "@tencent-connect/openclaw-qqbot") {
+        expect(requireNpmInstallSource(installSource).pinState).toBe("floating-without-integrity");
+        expect(installSource.warnings).toEqual(["npm-spec-floating", "npm-spec-missing-integrity"]);
+        continue;
+      }
       expect(installSource.warnings).toStrictEqual([]);
       expect(requireNpmInstallSource(installSource).pinState).toBe("exact-with-integrity");
     }
@@ -263,7 +296,6 @@ describe("buildOfficialChannelCatalog", () => {
         },
       },
     });
-
     const entry = buildOfficialChannelCatalog({ repoRoot }).entries.find(
       (candidate) => candidate.openclaw?.channel?.id === "storepack-chat",
     );

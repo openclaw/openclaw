@@ -32,4 +32,13 @@ describe("getSecretTargetRegistry metadata reuse", () => {
       expect(call.allowWorkspaceScopedCurrent).not.toBe(true);
     }
   });
+
+  it("keeps official external channel secret targets without installed plugin metadata", async () => {
+    const { getSecretTargetRegistry } = await import("./target-registry-data.js");
+
+    const ids = getSecretTargetRegistry().map((entry) => entry.id);
+
+    expect(ids).toContain("channels.qqbot.clientSecret");
+    expect(ids).toContain("channels.qqbot.accounts.*.clientSecret");
+  });
 });

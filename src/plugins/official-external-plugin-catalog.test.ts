@@ -7,6 +7,7 @@ import officialExternalPluginCatalog from "../../scripts/lib/official-external-p
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
+  getOfficialExternalChannelSecretContract,
   type HostedOfficialExternalPluginCatalogSnapshot,
   type HostedOfficialExternalPluginCatalogSnapshotStore,
   type OfficialExternalPluginCatalogEntry,
@@ -943,6 +944,8 @@ describe("official external plugin catalog", () => {
     const wecomByChannel = expectCatalogEntry("wecom");
     const wecomByPlugin = expectCatalogEntry("wecom-openclaw-plugin");
     const yuanbaoByChannel = expectCatalogEntry("yuanbao");
+    const qqbotByChannel = expectCatalogEntry("qqbot");
+    const qqbotByPlugin = expectCatalogEntry("openclaw-qqbot");
 
     expect(resolveOfficialExternalPluginId(wecomByChannel)).toBe("wecom-openclaw-plugin");
     expect(resolveOfficialExternalPluginId(wecomByPlugin)).toBe("wecom-openclaw-plugin");
@@ -953,6 +956,22 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(
       "openclaw-plugin-yuanbao@2.15.0",
     );
+    expect(resolveOfficialExternalPluginId(qqbotByChannel)).toBe("openclaw-qqbot");
+    expect(qqbotByPlugin).toBe(qqbotByChannel);
+    expect(resolveOfficialExternalPluginInstall(qqbotByChannel)).toEqual({
+      npmSpec: "@tencent-connect/openclaw-qqbot",
+      defaultChoice: "npm",
+    });
+    expect(getOfficialExternalChannelSecretContract("qqbot")).toEqual({
+      channelId: "qqbot",
+      fields: [
+        {
+          field: "clientSecret",
+          activationField: "appId",
+          activationEnv: "QQBOT_APP_ID",
+        },
+      ],
+    });
   });
 
   it("keeps official launch package specs on the production package names", () => {

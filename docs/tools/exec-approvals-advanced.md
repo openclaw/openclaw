@@ -258,8 +258,11 @@ normal channel auth model for that conversation. If the originating chat can alr
 and receive replies, approval requests no longer need a separate native delivery adapter just to
 stay pending.
 
-Discord, Telegram, and QQ bot also support same-chat `/approve`, but those channels still use their
-resolved approver list for authorization even when native approval delivery is disabled.
+Discord and Telegram also support same-chat `/approve`, and use their resolved
+approver list for authorization even when native approval delivery is disabled.
+Tencent QQBot 2.0 instead authorizes its interactive approval buttons directly
+from the account's `allowFrom` list. Use explicit non-wildcard IDs; an empty list
+or `"*"` authorizes every operator who can reach the button.
 
 ### Native approval delivery
 
@@ -280,8 +283,11 @@ Generic model:
 
 - host exec policy still decides whether exec approval is required
 - `approvals.exec` controls forwarding approval prompts to other chat destinations
-- `channels.<channel>.execApprovals` controls whether Discord, Slack, Telegram, QQ bot, and similar
+- `channels.<channel>.execApprovals` controls whether Discord, Slack, Telegram, and similar
   channel-specific native clients are enabled
+- Tencent QQBot 2.0 always exposes its native client and authorizes button
+  actions through `channels.qqbot.allowFrom`; it does not read an
+  `execApprovals` block
 - Slack plugin approvals can use Slack's native approval client when the request comes from Slack
   and Slack plugin approvers resolve; `approvals.plugin` can also route plugin approvals to Slack
   sessions or targets even when Slack exec approvals are disabled
@@ -308,7 +314,7 @@ FAQ: [Why are there two exec approval configs for chat approvals?](/help/faq-fir
 - Discord: `channels.discord.execApprovals.*`
 - Slack: `channels.slack.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
-- QQ bot: `channels.qqbot.execApprovals.*`
+- QQ bot: `channels.qqbot.allowFrom` (explicit non-wildcard operator IDs)
 - Google Chat: configure stable approvers with `channels.googlechat.dm.allowFrom` or
   `channels.googlechat.defaultTo`; no `execApprovals` block is required
 - WhatsApp: use `approvals.exec` and `approvals.plugin` to route approval prompts to WhatsApp

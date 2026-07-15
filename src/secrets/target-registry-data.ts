@@ -3,6 +3,7 @@ import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
+import { listOfficialExternalChannelSecretTargetRegistryEntries } from "./official-external-channel-secret-contract.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
@@ -507,7 +508,7 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   }).plugins;
   const bundledPlugins = plugins.filter((record) => record.origin === "bundled");
   const channelPlugins = plugins.filter((record) => record.channels.length > 0);
-  return [
+  const entries = [
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listBundledWebProviderSecretTargetRegistryEntries(bundledPlugins),
     ...listBundledPluginConfigSecretTargetRegistryEntries([
@@ -515,7 +516,17 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
       ...listSourceBundledPluginConfigContractRecords(),
     ]),
     ...listChannelSecretTargetRegistryEntries(channelPlugins),
+    ...listOfficialExternalChannelSecretTargetRegistryEntries(),
   ];
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    const key = `${entry.configFile}:${entry.pathPattern}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 /** Returns only core-owned secret target registry entries. */

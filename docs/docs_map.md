@@ -6888,15 +6888,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
-## plugins/reference/qqbot.md
-
-- Route: /plugins/reference/qqbot
-- Headings:
-  - H1: QQ Bot plugin
-  - H2: Distribution
-  - H2: Surface
-  - H2: Related docs
-
 ## plugins/reference/qwen.md
 
 - Route: /plugins/reference/qwen

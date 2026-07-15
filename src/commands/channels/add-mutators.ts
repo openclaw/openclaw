@@ -4,6 +4,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeExternalChannelSetupConfig } from "../channel-setup/config-compatibility.js";
 
 type ChatChannel = ChannelId;
 
@@ -35,5 +36,8 @@ export function applyChannelAccountConfig(params: {
   if (!apply) {
     return params.cfg;
   }
-  return apply({ cfg: params.cfg, accountId, input: params.input });
+  return normalizeExternalChannelSetupConfig({
+    cfg: apply({ cfg: params.cfg, accountId, input: params.input }),
+    channel: params.channel,
+  });
 }

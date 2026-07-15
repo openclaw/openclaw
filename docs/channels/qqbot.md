@@ -19,8 +19,10 @@ Status: official downloadable plugin.
 ## Install
 
 ```bash
-openclaw plugins install @openclaw/qqbot
+openclaw plugins install @tencent-connect/openclaw-qqbot
 ```
+
+OpenClaw installs the package version published under npm's `latest` tag.
 
 ## Setup
 
@@ -63,6 +65,7 @@ Minimal config:
       enabled: true,
       appId: "YOUR_APP_ID",
       clientSecret: "YOUR_APP_SECRET",
+      allowFrom: ["openclaw:approval-disabled"],
     },
   },
 }
@@ -73,15 +76,34 @@ Default-account env vars (top-level account only):
 - `QQBOT_APP_ID`
 - `QQBOT_CLIENT_SECRET`
 
+For an environment-only deployment, run `openclaw doctor --fix` once after
+setting both variables. Doctor creates a credential-free `channels.qqbot`
+shell, preserves open private-chat behavior, and locks native approval actions
+until you configure explicit operator IDs in `allowFrom`.
+
 File-backed AppSecret:
 
 ```json5
 {
+  secrets: {
+    providers: {
+      "qqbot-client-secret": {
+        source: "file",
+        path: "/path/to/qqbot-secret.txt",
+        mode: "singleValue",
+      },
+    },
+  },
   channels: {
     qqbot: {
       enabled: true,
       appId: "YOUR_APP_ID",
-      clientSecretFile: "/path/to/qqbot-secret.txt",
+      clientSecret: {
+        source: "file",
+        provider: "qqbot-client-secret",
+        id: "value",
+      },
+      allowFrom: ["openclaw:approval-disabled"],
     },
   },
 }
@@ -96,6 +118,7 @@ Env SecretRef AppSecret:
       enabled: true,
       appId: "YOUR_APP_ID",
       clientSecret: { source: "env", provider: "default", id: "QQBOT_CLIENT_SECRET" },
+      allowFrom: ["openclaw:approval-disabled"],
     },
   },
 }
@@ -103,10 +126,15 @@ Env SecretRef AppSecret:
 
 Notes:
 
+- Replace the `openclaw:approval-disabled` sentinel with concrete operator
+  openids to enable native approval actions. Run `/bot-me` in a private chat to
+  see your openid.
 - `openclaw channels add --channel qqbot --token-file ...` sets the AppSecret
   only; `appId` must already be set in config or `QQBOT_APP_ID`.
-- `clientSecret` accepts a plaintext string, a file path (`clientSecretFile`),
-  or a structured SecretRef object.
+- `clientSecret` accepts a plaintext string or a structured SecretRef object.
+- Tencent QQBot 2.0 does not read `clientSecretFile`. `openclaw doctor --fix`
+  migrates existing root/account file paths to file-backed SecretRefs without
+  copying the secret into `openclaw.json`.
 - Legacy `secretref:...` / `secretref-env:...` marker strings are rejected for
   `clientSecret`; use a structured SecretRef object instead.
 
@@ -118,7 +146,6 @@ Notes:
     qqbot: {
       streaming: {
         mode: "partial", // block streaming: "partial" (default) or "off"
-        nativeTransport: true, // use QQ's official C2C stream_messages API for DMs
       },
     },
   },
@@ -126,10 +153,13 @@ Notes:
 ```
 
 - `streaming.mode: "off"` disables block streaming for the account.
-- `streaming.nativeTransport: true` streams C2C (DM) replies through QQ's
-  official `stream_messages` API; group/channel targets are unaffected.
-- Legacy `streaming: true|false` scalars and the `streaming.c2cStreamApi` key
-  migrate to this shape via `openclaw doctor --fix`.
+- Tencent QQBot 2.0 also accepts legacy `streaming: true|false` values, but the
+  object form is the canonical OpenClaw configuration.
+- `openclaw doctor --fix` removes retired `nativeTransport` / `c2cStreamApi`
+  keys. It maps an explicitly disabled old native transport to `mode: "off"` so
+  Tencent 2.0 does not unexpectedly enable its single C2C streaming transport.
+  An enabled old native transport maps to `mode: "partial"` even if old block
+  streaming was off, matching the bundled runtime's effective wire behavior.
 - `/bot-streaming on|off` toggles the same config from a DM.
 
 ### Access policy
@@ -191,15 +221,13 @@ group, then mention it or configure the group to run without a mention.
       groups: {
         "*": {
           requireMention: true,
-          commandLevel: "all",
           historyLimit: 50,
-          tools: { deny: ["exec", "read", "write"] },
+          toolPolicy: "restricted",
         },
         GROUP_OPENID: {
           name: "Release room",
           requireMention: false,
           ignoreOtherMentions: true,
-          commandLevel: "safety",
           historyLimit: 20,
           prompt: "Keep replies short and operational.",
         },
@@ -212,26 +240,27 @@ group, then mention it or configure the group to run without a mention.
 `groups["*"]` sets defaults for every group; a concrete `groups.GROUP_OPENID`
 entry overrides those defaults for one group. Group settings:
 
-| Field                 | Default          | Description                                                                                        |
-| --------------------- | ---------------- | -------------------------------------------------------------------------------------------------- |
-| `requireMention`      | `true`           | Require an `@`-mention before the bot replies.                                                     |
-| `commandLevel`        | `all`            | Which built-in slash commands can run in the group (see below).                                    |
-| `ignoreOtherMentions` | `false`          | Drop messages that mention someone else but not the bot.                                           |
-| `historyLimit`        | `50`             | Recent non-mention messages kept as context for the next mentioned turn. `0` disables history.     |
-| `tools`               | —                | Allow/deny tools for the whole group.                                                              |
-| `toolsBySender`       | —                | Per-sender tool overrides; see [Groups](/channels/groups#groupchannel-tool-restrictions-optional). |
-| `name`                | openid prefix    | Friendly label used in logs and group context.                                                     |
-| `prompt`              | built-in default | Per-group behavior prompt appended to the agent context.                                           |
+| Field                 | Default          | Description                                                                                    |
+| --------------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
+| `requireMention`      | `true`           | Require an `@`-mention before the bot replies.                                                 |
+| `ignoreOtherMentions` | `false`          | Drop messages that mention someone else but not the bot.                                       |
+| `historyLimit`        | `20`             | Recent non-mention messages kept as context for the next mentioned turn. `0` disables history. |
+| `toolPolicy`          | `restricted`     | `full`, `restricted`, or `none`.                                                               |
+| `name`                | openid prefix    | Friendly label used in logs and group context.                                                 |
+| `prompt`              | built-in default | Per-group behavior prompt appended to the agent context.                                       |
 
-`commandLevel` accepts:
+When upgrading from the bundled QQBot plugin, `openclaw doctor --fix` maps the
+former OpenClaw `tools` policies back to Tencent's `toolPolicy`. Exact `full`,
+`restricted`, and `none` policies are preserved. Custom or per-sender policies
+that Tencent 2.0 cannot express are migrated to `none` so the upgrade does not
+broaden tool access. If both old and Tencent policy fields coexist, doctor keeps
+the most restrictive result.
 
-| Level    | Behavior                                                                                                                                      |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `all`    | Existing built-in commands stay available. Some stay hidden from menus but authorized users can still run them in the group.                  |
-| `safety` | `/help`, `/btw`, `/stop` stay visible in the group; sensitive commands (`/config`, `/tools`, `/bash`, etc.) must be run in private chat.      |
-| `strict` | Only group-session controls needed for strict operation are allowed. `/stop` still works so an authorized sender can interrupt an active run. |
-
-Old QQBot `toolPolicy` entries are retired. Run `openclaw doctor --fix` to migrate them to `tools`.
+Tencent 2.0 cannot express the bundled plugin's per-group `commandLevel`.
+Doctor removes `commandLevel: "all"` as redundant. If any group used `safety`,
+`strict`, or an unknown value, doctor sets that account's `groupPolicy` to
+`"disabled"`; review the combined group and command policy before re-enabling
+group access.
 
 Activation modes are `mention` and `always`. `requireMention: true` maps to
 `mention`; `requireMention: false` maps to `always`. A session-level activation
@@ -325,7 +354,8 @@ Built-in commands intercepted before the AI queue:
 | `/bot-logs`          | allowlist | private only | Export recent gateway logs as a file                                           |
 | `/bot-clear-storage` | allowlist | private only | Delete cached downloads under the QQBot media directory                        |
 | `/bot-streaming`     | allowlist | private only | Toggle C2C streaming replies                                                   |
-| `/bot-group-allways` | allowlist | private only | Toggle the default group activation mode (mention-required vs. always-on)      |
+| `/bot-group-always`  | allowlist | private only | Toggle the default group activation mode (mention-required vs. always-on)      |
+| `/bot-pairing`       | allowlist | private only | Manage QQ Bot pairing settings                                                 |
 
 Append `?` to any command for usage help (for example `/bot-upgrade ?`).
 
@@ -339,11 +369,17 @@ silently dropping the message.
 `/bot-me`, `/bot-version`, and `/bot-upgrade` are private-chat-only but do not
 require the allowlist — any C2C sender can run them.
 
-When QQ Bot exec approvals use the default same-chat fallback, native approval
-button clicks follow the same explicit non-wildcard command allowlist. To
-grant approval-only access without broader command access, configure
-`channels.qqbot.execApprovals.approvers`. Native exec approvals are enabled by
-default.
+Tencent QQBot 2.0 authorizes native approval button clicks with `allowFrom`.
+Use an explicit, non-wildcard list when native approvals are enabled; an empty
+list or `"*"` allows any operator who can reach the button. During upgrade,
+`openclaw doctor --fix` intersects legacy `execApprovals.approvers` with an
+existing restrictive `allowFrom`. It also replaces implicit empty/wildcard
+approval access with explicit IDs when present, or a non-matching marker.
+Policies Tencent cannot represent (disabled, agent/session filters, or custom
+targets) use the same lock until an operator reviews the new combined
+chat/approval policy. The migration keeps previously open private chats open
+with an explicit `dmPolicy: "open"`, and removes legacy `qqbot:` prefixes from
+`allowFrom` and approver IDs.
 
 ## Media and storage
 

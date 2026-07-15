@@ -269,11 +269,6 @@ extensions/qa-lab/src/suite.ts
 extensions/qa-lab/src/test-file-scenario-runner.test.ts
 extensions/qa-lab/web/src/app.ts
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.ts
-extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts
-extensions/qqbot/src/engine/gateway/outbound-dispatch.ts
-extensions/qqbot/src/engine/messaging/outbound-deliver.ts
-extensions/qqbot/src/engine/messaging/outbound-media-send.ts
-extensions/qqbot/src/engine/messaging/streaming-c2c.ts
 extensions/signal/src/approval-reactions.ts
 extensions/signal/src/channel.ts
 extensions/signal/src/client-container.test.ts
