@@ -9,13 +9,15 @@ import type {
 import { describe, expect, it } from "vitest";
 import { createMinimaxMessageEndMarkerWrapper } from "./stream.js";
 
+const TEST_MODEL_ID = "MiniMax-M3";
+
 function createAssistantMessage(text: string): AssistantMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
     api: "anthropic-messages",
     provider: "minimax",
-    model: "MiniMax-M2.7",
+    model: TEST_MODEL_ID,
     usage: {
       input: 0,
       output: 0,
@@ -106,7 +108,7 @@ function runWrapper(events: AssistantMessageEvent[], onIteratorClose?: () => voi
     {
       api: "anthropic-messages",
       provider: "minimax",
-      id: "MiniMax-M2.7",
+      id: TEST_MODEL_ID,
     } as Model<"anthropic-messages">,
     { messages: [] } as Context,
   );
