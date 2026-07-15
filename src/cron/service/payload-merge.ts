@@ -19,9 +19,11 @@ function applyToolsAllowPatch(
     // which fail-closes the next run on CLI backends that cannot enforce
     // runtime toolsAllow. Kind replacements (no existing payload) still require
     // the cron-tool-stamped marker on the patch itself.
-    const keepDefaultMarker =
-      patch.toolsAllowIsDefault === true ||
-      (existing?.toolsAllowIsDefault === true && toolsAllowEqual(existing, patch));
+    const existingDefaultUnchanged =
+      existing?.toolsAllowIsDefault === true && toolsAllowEqual(existing, patch);
+    const installsDefault =
+      patch.toolsAllowIsDefault === true && existing?.toolsAllowIsDefault !== true;
+    const keepDefaultMarker = existingDefaultUnchanged || installsDefault;
     if (keepDefaultMarker) {
       payload.toolsAllowIsDefault = true;
     } else {
