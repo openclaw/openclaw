@@ -375,6 +375,7 @@ enum class GatewayMethod(
   ModelsProbe("models.probe"),
   MigrationsMemoryPlan("migrations.memory.plan"),
   MigrationsMemoryApply("migrations.memory.apply"),
+  ChatInjectBashExecution("chat.injectBashExecution"),
 }
 
 enum class GatewayEvent(

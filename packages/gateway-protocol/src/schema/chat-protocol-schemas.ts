@@ -1,0 +1,36 @@
+// Ordered protocol schema group for chat request/response and chat stream events.
+import {
+  ChatAbortedEventSchema,
+  ChatAbortParamsSchema,
+  ChatDeltaEventSchema,
+  ChatErrorEventSchema,
+  ChatEventSchema,
+  ChatFinalEventSchema,
+  ChatHistoryParamsSchema,
+  ChatMetadataParamsSchema,
+  ChatMessageGetParamsSchema,
+  ChatMessageGetResultSchema,
+  ChatInjectParamsSchema,
+  ChatInjectBashExecutionParamsSchema,
+  ChatSendParamsSchema,
+  ChatToolTitlesParamsSchema,
+  ChatToolTitlesResultSchema,
+} from "./logs-chat.js";
+
+export const ChatProtocolSchemas = {
+  ChatHistoryParams: ChatHistoryParamsSchema,
+  ChatMetadataParams: ChatMetadataParamsSchema,
+  ChatMessageGetParams: ChatMessageGetParamsSchema,
+  ChatMessageGetResult: ChatMessageGetResultSchema,
+  ChatToolTitlesParams: ChatToolTitlesParamsSchema,
+  ChatToolTitlesResult: ChatToolTitlesResultSchema,
+  ChatSendParams: ChatSendParamsSchema,
+  ChatAbortParams: ChatAbortParamsSchema,
+  ChatInjectParams: ChatInjectParamsSchema,
+  ChatInjectBashExecutionParams: ChatInjectBashExecutionParamsSchema,
+  ChatDeltaEvent: ChatDeltaEventSchema,
+  ChatFinalEvent: ChatFinalEventSchema,
+  ChatAbortedEvent: ChatAbortedEventSchema,
+  ChatErrorEvent: ChatErrorEventSchema,
+  ChatEvent: ChatEventSchema,
+} as const;

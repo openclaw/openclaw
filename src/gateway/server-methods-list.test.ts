@@ -72,8 +72,17 @@ describe("listGatewayMethods", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("config.openFile");
     expect(methods).not.toContain("chat.inject");
+    expect(methods).not.toContain("chat.injectBashExecution");
     expect(methods).not.toContain("nativeHook.invoke");
     expect(methods).not.toContain("sessions.usage");
+  });
+
+  it("wires a dispatchable handler for the hidden chat.injectBashExecution method", () => {
+    // Same failure mode as the terminal.* check above: a descriptor with no matching
+    // lazy-handler entry dispatches as "unknown method" even though it resolves fine
+    // in listCoreGatewayMethodNames().
+    expect(listCoreGatewayMethodNames()).toContain("chat.injectBashExecution");
+    expect(typeof coreGatewayHandlers["chat.injectBashExecution"]).toBe("function");
   });
 
   it("preserves the legacy advertised method order", () => {
@@ -94,7 +103,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-9)).toEqual([
+    expect(coreMethods.slice(-10)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -104,6 +113,7 @@ describe("listGatewayMethods", () => {
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
+      "chat.injectBashExecution",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

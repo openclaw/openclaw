@@ -1,5 +1,5 @@
 // Exercises slower TUI PTY paths against real local and Gateway backends.
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,6 +11,7 @@ import {
 } from "../../test/helpers/openclaw-test-instance.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { sleep, startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
@@ -101,10 +102,14 @@ const GATEWAY_SCENARIOS = {
 
 type GatewayScenarioId = keyof typeof GATEWAY_SCENARIOS;
 
-const LOCAL_STARTUP_TIMEOUT_MS = 60_000;
+// Startup covers a tsx cold-compile of the full TUI in the child PTY; slow
+// dev hosts need well over 60s while fast runners still exit early.
+const LOCAL_STARTUP_TIMEOUT_MS = 150_000;
 const LOCAL_OUTPUT_TIMEOUT_MS = 120_000;
 const LOCAL_EXIT_TIMEOUT_MS = 4_000;
-const LOCAL_TEST_TIMEOUT_MS = 150_000;
+// 300s: the persistence spec restarts the TUI mid-test, so it pays the
+// tsx cold-compile cost twice on slow dev hosts.
+const LOCAL_TEST_TIMEOUT_MS = 300_000;
 const SUBMISSION_SETTLE_MS = 150;
 const SESSION_ROLLOVER_BUSY_MESSAGE = "abort the current run before /new";
 
@@ -574,6 +579,7 @@ async function startLocalModeTui(
     kind: "local" as const,
     run,
     mockModel,
+    tempDir,
     cleanup,
   };
 }
@@ -874,6 +880,124 @@ describe("TUI PTY real backends", () => {
         await fixture.run.write("/exit\r", { delay: false });
         const exit = await fixture.run.waitForExit();
         expect(exit.exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "persists shared `!` output into model context and keeps `!!` output history-only",
+    async ({ onTestFinished }) => {
+      const fixture = await startLocalModeTui(onTestFinished);
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+
+        // Materialize the session with a normal first turn; `!` persistence
+        // targets the session the agent actually continues from.
+        await fixture.run.write("seed the session\r");
+        await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE");
+        const seedOffset = fixture.run.output().lastIndexOf("LOCAL_PTY_RESPONSE");
+        await waitForOutputAfter(fixture.run, "| idle", seedOffset);
+
+        // First `!` command triggers the consent prompt; pick the share option
+        // (third item: No / Yes, local only / Yes, and share with the agent).
+        await fixture.run.write("!echo PROOF_AGENT_VISIBLE_123\r");
+        await fixture.run.waitForOutput("Allow local shell commands for this session?");
+        await fixture.run.write("\u001b[B\u001b[B", { delay: false });
+        await sleep(100);
+        await fixture.run.write("\r", { delay: false });
+        await fixture.run.waitForOutput("local shell: enabled; output is saved to history");
+        await fixture.run.waitForOutput("[local] PROOF_AGENT_VISIBLE_123");
+        await fixture.run.waitForOutput("[local] exit 0");
+
+        await fixture.run.write("!!echo PROOF_HISTORY_ONLY_456\r");
+        await fixture.run.waitForOutput("[local] PROOF_HISTORY_ONLY_456");
+        const bangBangOffset = fixture.run.output().lastIndexOf("PROOF_HISTORY_ONLY_456");
+        await waitForOutputAfter(fixture.run, "[local] exit 0", bangBangOffset);
+
+        // Both rows must be persisted with the right context visibility. The
+        // persist write lands after the `[local] exit` echo renders, so poll.
+        // Transcripts live in the per-agent SQLite DB, so read the raw event
+        // rows from every agent database under the temp state dir.
+        const readTranscriptEventRows = async () => {
+          const files = await readdir(fixture.tempDir, { recursive: true });
+          const databases = files.filter((file) => file.endsWith("openclaw-agent.sqlite"));
+          const { DatabaseSync } = requireNodeSqlite();
+          const events: Array<Record<string, unknown>> = [];
+          for (const file of databases) {
+            const db = new DatabaseSync(path.join(fixture.tempDir, file), { readOnly: true });
+            try {
+              const rows = db
+                .prepare("SELECT event_json FROM transcript_events ORDER BY seq")
+                .all() as Array<{ event_json: string }>;
+              events.push(
+                ...rows.map((row) => JSON.parse(row.event_json) as Record<string, unknown>),
+              );
+            } finally {
+              db.close();
+            }
+          }
+          return events;
+        };
+        const readBashExecutionRows = async () =>
+          (await readTranscriptEventRows())
+            .filter(
+              (row) =>
+                (row.message as Record<string, unknown> | undefined)?.role === "bashExecution",
+            )
+            .map((row) => row.message as Record<string, unknown>);
+        let rows: Array<Record<string, unknown>> = [];
+        const rowsDeadline = Date.now() + LOCAL_OUTPUT_TIMEOUT_MS;
+        while (rows.length < 2 && Date.now() < rowsDeadline) {
+          rows = await readBashExecutionRows();
+          if (rows.length < 2) {
+            await sleep(250);
+          }
+        }
+        if (rows.length < 2) {
+          throw new Error(
+            `expected 2 persisted bashExecution rows, saw ${rows.length}\n${fixture.run.output()}`,
+          );
+        }
+        expect(rows).toHaveLength(2);
+        const visible = rows.find((row) => row.command === "echo PROOF_AGENT_VISIBLE_123");
+        const hidden = rows.find((row) => row.command === "echo PROOF_HISTORY_ONLY_456");
+        expect(visible?.excludeFromContext).toBeUndefined();
+        expect(hidden?.excludeFromContext).toBe(true);
+
+        // The next model request must include the `!` output and not the `!!` output.
+        await fixture.run.write("what did my last commands print?\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length >= 2 ? true : null),
+          onTimeout: () => new Error(`prompt did not reach the model\n${fixture.run.output()}`),
+        });
+        const modelRequest = JSON.stringify(fixture.mockModel.requests()[1]?.body);
+        if (!modelRequest.includes("PROOF_AGENT_VISIBLE_123")) {
+          const dump = (await readTranscriptEventRows())
+            .map((row) => {
+              const message = row.message as Record<string, unknown> | undefined;
+              return JSON.stringify({
+                type: row.type,
+                id: row.id,
+                parentId: row.parentId,
+                appendMode: row.appendMode,
+                role: message?.role,
+              });
+            })
+            .join("\n  ");
+          throw new Error(
+            `model request missing PROOF_AGENT_VISIBLE_123\nrequest=${modelRequest.slice(0, 2000)}\n\ntranscript events:\n  ${dump}`,
+          );
+        }
+        expect(modelRequest).toContain("PROOF_AGENT_VISIBLE_123");
+        expect(modelRequest).not.toContain("PROOF_HISTORY_ONLY_456");
+        await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE");
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
         await fixture.cleanup();
       }

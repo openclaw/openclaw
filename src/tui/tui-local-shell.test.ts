@@ -30,6 +30,18 @@ function createShellHarness(params?: {
   getCwd?: () => string | undefined;
   env?: Record<string, string>;
   maxOutputChars?: number;
+  getSessionScope?: () => { sessionKey: string; agentId?: string } | undefined;
+  injectBashExecution?: (
+    result: {
+      command: string;
+      output: string;
+      exitCode?: number;
+      cancelled?: boolean;
+      truncated?: boolean;
+      excludeFromContext: boolean;
+    },
+    scope: { sessionKey: string; agentId?: string },
+  ) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const messages: string[] = [];
   const chatLog = {
@@ -57,6 +69,8 @@ function createShellHarness(params?: {
     ...(params?.getCwd ? { getCwd: params.getCwd } : {}),
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.maxOutputChars !== undefined ? { maxOutputChars: params.maxOutputChars } : {}),
+    ...(params?.getSessionScope ? { getSessionScope: params.getSessionScope } : {}),
+    ...(params?.injectBashExecution ? { injectBashExecution: params.injectBashExecution } : {}),
   });
   return {
     messages,
@@ -130,7 +144,7 @@ describe("createLocalShellRunner", () => {
     const spawnOptions = requireSpawnOptions(spawnCommand);
     expect(spawnOptions.env?.OPENCLAW_SHELL).toBe("tui-local");
     expect(spawnOptions.env?.PATH).toBe("/tmp/bin");
-    expect(harness.messages).toContain("local shell: enabled for this session");
+    expect(harness.messages).toContain("local shell: enabled for this session (local only)");
   });
 
   it("keeps stderr visible instead of evicting it when stdout fills the output cap", async () => {
@@ -231,5 +245,302 @@ describe("createLocalShellRunner", () => {
 
     await expect(run).resolves.toBeUndefined();
     expect(harness.messages.some((message) => message.includes("exit 0"))).toBe(true);
+  });
+
+  function makeCompletingSpawn(stdoutText: string, exitCode: number) {
+    return vi.fn(() => {
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      return {
+        stdout,
+        stderr,
+        on: (event: string, callback: (...args: unknown[]) => void) => {
+          if (event === "close") {
+            setImmediate(() => {
+              stdout.emit("data", Buffer.from(stdoutText));
+              callback(exitCode, null);
+            });
+          }
+        },
+      };
+    });
+  }
+
+  it("persists a `!` command as agent-visible (excludeFromContext: false)", async () => {
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: "main", agentId: "work" }),
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!echo hi");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await run;
+
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+    expect(injectBashExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "echo hi",
+        output: "hi",
+        exitCode: 0,
+        excludeFromContext: false,
+      }),
+      { sessionKey: "main", agentId: "work" },
+    );
+  });
+
+  it("persists a `!!` command as history-only (excludeFromContext: true)", async () => {
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "secret",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: "main" }),
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!!cat secrets.env");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await run;
+
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+    expect(injectBashExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "cat secrets.env", excludeFromContext: true }),
+      { sessionKey: "main" },
+    );
+  });
+
+  it("does not persist anything when consent was local-only", async () => {
+    // "Yes, local only" is the default-safe choice and must match shipped
+    // pre-persistence behavior exactly: nothing reaches history or the model.
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: "main", agentId: "work" }),
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!echo hi");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes, local only" });
+    await run;
+
+    expect(injectBashExecution).not.toHaveBeenCalled();
+    expect(harness.messages).toContain("[local] hi");
+  });
+
+  it("re-prompts for consent per session instead of carrying approval across sessions", async () => {
+    let currentSession = "session-a";
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: currentSession }),
+      injectBashExecution,
+    });
+
+    const first = harness.runLocalShellLine("!echo one");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await first;
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+
+    // A different session must get its own prompt, and its own (here: local-only)
+    // answer must control persistence — session-a's share approval cannot leak.
+    currentSession = "session-b";
+    const second = harness.runLocalShellLine("!echo two");
+    expect(harness.createSelectorSpy).toHaveBeenCalledTimes(2);
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes, local only" });
+    await second;
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+
+    // Returning to session-a reuses its stored answer without a third prompt.
+    currentSession = "session-a";
+    await harness.runLocalShellLine("!echo three");
+    expect(harness.createSelectorSpy).toHaveBeenCalledTimes(2);
+    expect(injectBashExecution).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-prompts when a different agent uses the same session key", async () => {
+    // Shared keys like "global" keep the same sessionKey across an agent
+    // switch; consent keyed on sessionKey alone would silently hand one
+    // agent's share approval to the next agent.
+    let currentAgent = "agent-a";
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: "global", agentId: currentAgent }),
+      injectBashExecution,
+    });
+
+    const first = harness.runLocalShellLine("!echo one");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await first;
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+
+    currentAgent = "agent-b";
+    const second = harness.runLocalShellLine("!echo two");
+    expect(harness.createSelectorSpy).toHaveBeenCalledTimes(2);
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes, local only" });
+    await second;
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+
+    // agent-a's stored answer still applies without a third prompt.
+    currentAgent = "agent-a";
+    await harness.runLocalShellLine("!echo three");
+    expect(harness.createSelectorSpy).toHaveBeenCalledTimes(2);
+    expect(injectBashExecution).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the persisted row truncated when a single stream overflows the cap", async () => {
+    // Streams are capped as chunks arrive, so at close time the retained
+    // length equals the cap exactly — a close-time length check reports
+    // complete output for a stream that actually lost data.
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "x".repeat(30),
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      maxOutputChars: 20,
+      getSessionScope: () => ({ sessionKey: "main" }),
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!noisy");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await run;
+
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+    expect(injectBashExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ output: "x".repeat(20), truncated: true }),
+      { sessionKey: "main" },
+    );
+  });
+
+  it("persists to the session captured at command start, not the one current at completion", async () => {
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    // Scope flips to session-b immediately after the initial capture, modeling a
+    // `/session` switch while the command is still running.
+    const getSessionScope = vi
+      .fn()
+      .mockReturnValueOnce({ sessionKey: "session-a", agentId: "agent-a" })
+      .mockReturnValue({ sessionKey: "session-b", agentId: "agent-b" });
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope,
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!echo hi");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await run;
+
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+    expect(injectBashExecution).toHaveBeenCalledWith(expect.anything(), {
+      sessionKey: "session-a",
+      agentId: "agent-a",
+    });
+  });
+
+  it("does not persist when no session scope is available", async () => {
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => undefined,
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!echo hi");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await run;
+
+    expect(injectBashExecution).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a system message when persistence fails, without crashing", async () => {
+    const injectBashExecution = vi.fn(async () => ({ ok: false, error: "disk full" }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: "main" }),
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!echo hi");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await run;
+
+    expect(
+      harness.messages.some((m) => m.includes("not saved to session history: disk full")),
+    ).toBe(true);
+  });
+
+  it("persists only once when a failed spawn emits both error and close", async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const emitter = new EventEmitter();
+    const spawnCommand = vi.fn(() => ({
+      stdout,
+      stderr,
+      on: (event: string, callback: (...args: unknown[]) => void) => {
+        emitter.on(event, callback);
+      },
+    }));
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: "main" }),
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!does-not-exist");
+    harness
+      .getLastSelector()
+      ?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledTimes(1));
+
+    emitter.emit("error", new Error("ENOENT"));
+    emitter.emit("close", null, null);
+    await run;
+
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+    expect(harness.messages.filter((m) => m.startsWith("[local] error:"))).toHaveLength(1);
+    expect(harness.messages.some((m) => m.startsWith("[local] exit"))).toBe(false);
   });
 });

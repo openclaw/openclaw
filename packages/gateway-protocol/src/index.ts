@@ -2,9 +2,9 @@ export * from "./clawhub-trust-error-details.js";
 export * from "./terminal-validators.js";
 export { validateApprovalGetResult } from "./approval-result-validators.js";
 export { validateApprovalResolveResult } from "./approval-result-validators.js";
-import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 import { lazyCompile } from "./protocol-validator.js";
+import { checkWorkerProtocolJson } from "./worker-protocol-json.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
@@ -97,6 +97,7 @@ import {
   ChatMessageGetResultSchema,
   ChatMessageGetParamsSchema,
   ChatInjectParamsSchema,
+  ChatInjectBashExecutionParamsSchema,
   ChatSendParamsSchema,
   ChatToolTitlesParamsSchema,
   ChatToolTitlesResultSchema,
@@ -488,51 +489,6 @@ export const validateWorkerAdmissionHandshake = lazyCompile(WorkerAdmissionHands
 export const validateWorkerConnectRequestFrame = lazyCompile(WorkerConnectRequestFrameSchema);
 export const validateWorkerHeartbeatParams = lazyCompile(WorkerHeartbeatParamsSchema);
 
-function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
-  const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
-  const seen = new WeakSet<object>();
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      break;
-    }
-    if (current.depth > WORKER_TRANSCRIPT_MAX_JSON_DEPTH) {
-      return {
-        keyword: "maxDepth",
-        params: { limit: WORKER_TRANSCRIPT_MAX_JSON_DEPTH },
-        message: `must not exceed JSON nesting depth ${WORKER_TRANSCRIPT_MAX_JSON_DEPTH}`,
-      };
-    }
-    if (
-      current.value === null ||
-      typeof current.value === "string" ||
-      typeof current.value === "boolean"
-    ) {
-      continue;
-    }
-    if (typeof current.value === "number") {
-      if (!Number.isFinite(current.value)) {
-        return { keyword: "finite", message: "must contain only finite JSON numbers" };
-      }
-      continue;
-    }
-    if (typeof current.value !== "object") {
-      return { keyword: "jsonValue", message: "must contain only JSON values" };
-    }
-    if (seen.has(current.value)) {
-      return { keyword: "acyclic", message: "must be an acyclic JSON value" };
-    }
-    seen.add(current.value);
-    const values = Array.isArray(current.value)
-      ? current.value
-      : Object.values(current.value as Record<string, unknown>);
-    for (const value of values) {
-      stack.push({ depth: current.depth + 1, value });
-    }
-  }
-  return undefined;
-}
-
 export const validateWorkerTranscriptCommitParams = lazyCompile(
   WorkerTranscriptCommitParamsSchema,
   checkWorkerProtocolJson,
@@ -825,6 +781,9 @@ export const validateChatToolTitlesParams = lazyCompile(ChatToolTitlesParamsSche
 export const validateChatSendParams = lazyCompile(ChatSendParamsSchema);
 export const validateChatAbortParams = lazyCompile(ChatAbortParamsSchema);
 export const validateChatInjectParams = lazyCompile(ChatInjectParamsSchema);
+export const validateChatInjectBashExecutionParams = lazyCompile(
+  ChatInjectBashExecutionParamsSchema,
+);
 export const validateChatEvent = lazyCompile(ChatEventSchema);
 export const validateChatMessageGetResult = lazyCompile(ChatMessageGetResultSchema);
 export const validateUpdateStatusParams = lazyCompile(UpdateStatusParamsSchema);
@@ -1246,6 +1205,7 @@ export {
   ChatInjectParamsSchema,
   ChatToolTitlesParamsSchema,
   ChatToolTitlesResultSchema,
+  ChatInjectBashExecutionParamsSchema,
   UpdateRunParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
@@ -1649,6 +1609,7 @@ export type {
   UpdateStatusParams,
   UpdateRunParams,
   ChatInjectParams,
+  ChatInjectBashExecutionParams,
   WorktreeRecord,
   WorktreesListParams,
   WorktreesListResult,

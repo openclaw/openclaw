@@ -859,6 +859,57 @@ describe("GatewayChatClient", () => {
     expect(result).toEqual({ runId: "run-gateway", status: "timeout" });
   });
 
+  it("persists a `!`/`!!` local shell command via chat.injectBashExecution", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi.fn().mockResolvedValue({ ok: true, messageId: "msg-1" });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    const result = await client.injectBashExecution({
+      sessionKey: "main",
+      agentId: "work",
+      command: "echo hi",
+      output: "hi",
+      exitCode: 0,
+      excludeFromContext: true,
+    });
+
+    expect(request).toHaveBeenCalledWith("chat.injectBashExecution", {
+      sessionKey: "main",
+      agentId: "work",
+      command: "echo hi",
+      output: "hi",
+      exitCode: 0,
+      cancelled: undefined,
+      truncated: undefined,
+      fullOutputPath: undefined,
+      excludeFromContext: true,
+    });
+    expect(result).toEqual({ ok: true, messageId: "msg-1" });
+  });
+
+  it("reports failure when chat.injectBashExecution rejects", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi.fn().mockRejectedValue(new Error("session not found"));
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    const result = await client.injectBashExecution({
+      sessionKey: "missing",
+      command: "ls",
+      output: "",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("session not found");
+  });
+
   it("lists gateway commands through commands.list", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",

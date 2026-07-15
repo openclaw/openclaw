@@ -7,22 +7,24 @@ import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
+  resolveCodexCliBin,
+  resolveLocalAuthCliInvocation,
+  resolveLocalAuthSpawnCwd,
+  resolveLocalAuthSpawnInvocation,
+} from "./tui-local-auth-launch.js";
+import {
   createBackspaceDeduper,
   createDeferredTuiFinish,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
   isIgnorableTuiStopError,
   isTuiTerminalLossError,
-  resolveCodexCliBin,
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
   resolveTuiToolsToggleActivityStatus,
   isTuiBusyActivityStatus,
-  resolveLocalAuthCliInvocation,
-  resolveLocalAuthSpawnCwd,
-  resolveLocalAuthSpawnInvocation,
   resolveTuiCtrlCAction,
   resolveTuiFooterHostLabel,
   resolveTuiShutdownHardExitMs,

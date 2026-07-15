@@ -76,6 +76,14 @@ const loadSessionEntryMock = vi.fn(
     entry: {},
   }),
 );
+const injectBashExecutionTranscriptMessageMock = vi.fn(
+  async (
+    ..._args: unknown[]
+  ): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> => ({
+    ok: true,
+    messageId: "msg-embedded-1",
+  }),
+);
 let registeredListener: ((evt: unknown) => void) | undefined;
 const embeddedEventTimestamp = Date.parse("2026-05-09T07:26:00.000Z");
 
@@ -171,6 +179,7 @@ vi.mock("../gateway/cli-session-history.js", () => ({
 }));
 
 vi.mock("../gateway/chat-display-projection.js", () => ({
+  augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
   projectChatDisplayMessages: (messages: unknown[]) => messages,
   projectRecentChatDisplayMessages: (messages: unknown[]) => messages,
   resolveEffectiveChatHistoryMaxChars: () => 100_000,
@@ -180,11 +189,15 @@ vi.mock("../gateway/server-constants.js", () => ({
   getMaxChatHistoryMessagesBytes: () => 100_000,
 }));
 
-vi.mock("../gateway/server-methods/chat.js", () => ({
+vi.mock("../gateway/server-methods/chat-history-budget.js", () => ({
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
-  augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
   enforceChatHistoryFinalBudget: ({ messages }: { messages: unknown[] }) => ({ messages }),
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
+}));
+
+vi.mock("../gateway/server-methods/chat-inject-handlers.js", () => ({
+  injectBashExecutionTranscriptMessage: (...args: unknown[]) =>
+    injectBashExecutionTranscriptMessageMock(...args),
 }));
 
 vi.mock("../gateway/session-utils.js", () => ({
@@ -349,6 +362,11 @@ describe("EmbeddedTuiBackend", () => {
     }));
     buildGatewaySessionInfoMock.mockClear();
     getSessionDefaultsMock.mockClear();
+    injectBashExecutionTranscriptMessageMock.mockReset();
+    injectBashExecutionTranscriptMessageMock.mockResolvedValue({
+      ok: true,
+      messageId: "msg-embedded-1",
+    });
     registeredListener = undefined;
     setEmbeddedMode(false);
     defaultRuntime.log = originalRuntimeLog;
@@ -405,6 +423,53 @@ describe("EmbeddedTuiBackend", () => {
       key: "agent:main:main",
       entry: {},
       resolved: { modelProvider: "openai", model: "gpt-5.4" },
+    });
+  });
+
+  it("persists a `!`/`!!` local shell command directly, no gateway RPC round trip", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    const result = await backend.injectBashExecution({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      command: "echo hi",
+      output: "hi",
+      exitCode: 0,
+      excludeFromContext: true,
+    });
+
+    expect(injectBashExecutionTranscriptMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        command: "echo hi",
+        output: "hi",
+        exitCode: 0,
+        excludeFromContext: true,
+        getRuntimeConfig: expect.any(Function),
+      }),
+    );
+    expect(result).toEqual({ ok: true, messageId: "msg-embedded-1" });
+  });
+
+  it("surfaces a failure from the shared transcript-inject core", async () => {
+    injectBashExecutionTranscriptMessageMock.mockResolvedValueOnce({
+      ok: false,
+      error: "session has no history yet; send the agent a message first",
+    });
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    const result = await backend.injectBashExecution({
+      sessionKey: "agent:main:missing",
+      command: "ls",
+      output: "",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "session has no history yet; send the agent a message first",
     });
   });
 

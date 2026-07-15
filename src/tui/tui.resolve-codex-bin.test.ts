@@ -14,7 +14,7 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { resolveCodexCliBin } from "./tui.js";
+import { resolveCodexCliBin } from "./tui-local-auth-launch.js";
 
 afterEach(() => {
   vi.restoreAllMocks();

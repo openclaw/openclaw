@@ -5,6 +5,23 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { createSearchableSelectList } from "./components/selectors.js";
 
+type LocalShellExecutionResult = {
+  command: string;
+  output: string;
+  exitCode?: number;
+  cancelled?: boolean;
+  truncated?: boolean;
+  excludeFromContext: boolean;
+};
+
+type LocalShellSessionScope = { sessionKey: string; agentId?: string };
+
+type LocalShellConsent = {
+  asked: boolean;
+  allowed: boolean;
+  share: boolean;
+};
+
 type LocalShellDeps = {
   chatLog: {
     addSystem: (line: string) => void;
@@ -25,44 +42,139 @@ type LocalShellDeps = {
   getCwd?: () => string | undefined;
   env?: NodeJS.ProcessEnv;
   maxOutputChars?: number;
+  /** Session scope to persist the command result under. Omit to skip persistence entirely. */
+  getSessionScope?: () => LocalShellSessionScope | undefined;
+  /** Persists the command+output to session history; only called after the user picks the
+   * share option at the consent prompt. `!` sets excludeFromContext: false so the agent sees
+   * it on its next turn; `!!` sets it true so it skips context assembly. excludeFromContext
+   * is context hygiene, not confidentiality: the row stays in session history, which the
+   * agent can still read via history tools. The scope is the one captured when the command
+   * was submitted, never the currently viewed session. */
+  injectBashExecution?: (
+    result: LocalShellExecutionResult,
+    scope: LocalShellSessionScope,
+  ) => Promise<{ ok: boolean; error?: string }>;
 };
 
+/**
+ * Renders a persisted `!`/`!!` bashExecution history row on session resume with
+ * the same `[local]` framing as the live echo below; replay must not diverge
+ * from live. Always shown regardless of verbose level — it is a user-run
+ * command, not an agent tool call. Returns false for any other message role.
+ */
+export function renderBashExecutionReplay(
+  chatLog: { addSystem: (line: string) => void },
+  message: Record<string, unknown>,
+): boolean {
+  if (message.role !== "bashExecution") {
+    return false;
+  }
+  const command = typeof message.command === "string" ? message.command : "";
+  chatLog.addSystem(`[local] $ ${command}`);
+  const output = typeof message.output === "string" ? message.output : "";
+  if (output) {
+    for (const outputLine of output.split("\n")) {
+      chatLog.addSystem(`[local] ${outputLine}`);
+    }
+  }
+  const exitCode = typeof message.exitCode === "number" ? message.exitCode : undefined;
+  const cancelled = message.cancelled === true;
+  chatLog.addSystem(`[local] exit ${cancelled ? "cancelled" : (exitCode ?? "?")}`);
+  return true;
+}
+
+/**
+ * Builds the persistence deps for `createLocalShellRunner` from the live TUI
+ * session state and backend. The runner passes the scope captured at command
+ * submit time; reading the current session at completion instead would
+ * retarget a mid-command `/session` switch to the wrong session.
+ */
+export function createLocalShellPersistence(params: {
+  state: { currentSessionKey: string; currentAgentId?: string };
+  backend: {
+    injectBashExecution?: (
+      opts: LocalShellExecutionResult & LocalShellSessionScope,
+    ) => Promise<{ ok: boolean; error?: string; messageId?: string }>;
+  };
+}): Pick<LocalShellDeps, "getSessionScope" | "injectBashExecution"> {
+  return {
+    getSessionScope: () => ({
+      sessionKey: params.state.currentSessionKey,
+      agentId: params.state.currentAgentId,
+    }),
+    injectBashExecution: async (result, scope) => {
+      if (!params.backend.injectBashExecution) {
+        return { ok: false, error: "backend does not support persisting local shell output" };
+      }
+      const response = await params.backend.injectBashExecution({ ...result, ...scope });
+      return { ok: response.ok, ...(response.error ? { error: response.error } : {}) };
+    },
+  };
+}
+
 export function createLocalShellRunner(deps: LocalShellDeps) {
-  let localExecAsked = false;
-  let localExecAllowed = false;
+  // Consent is per agent+session identity, and sharing is opt-in: without the
+  // share answer `!`/`!!` stay purely local (the shipped pre-persistence
+  // behavior). Approval granted while one session is active must never
+  // silently carry into another, and the session key alone is not enough:
+  // shared keys like "global" keep the same sessionKey across an agent
+  // switch, so the key must include the agent or approval leaks across the
+  // agent boundary.
+  const consentBySession = new Map<string, LocalShellConsent>();
+  const consentKeyFor = (scope: LocalShellSessionScope | undefined): string =>
+    scope ? `${scope.agentId ?? ""}\u0000${scope.sessionKey}` : "";
+  const consentFor = (scope: LocalShellSessionScope | undefined): LocalShellConsent => {
+    const key = consentKeyFor(scope);
+    const existing = consentBySession.get(key);
+    if (existing) {
+      return existing;
+    }
+    const created: LocalShellConsent = { asked: false, allowed: false, share: false };
+    consentBySession.set(key, created);
+    return created;
+  };
   const createSelector = deps.createSelector ?? createSearchableSelectList;
   const spawnCommand = deps.spawnCommand ?? spawn;
   const getCwd = deps.getCwd ?? tryProcessCwd;
   const env = deps.env ?? process.env;
   const maxChars = deps.maxOutputChars ?? 40_000;
 
-  const ensureLocalExecAllowed = async (): Promise<boolean> => {
-    if (localExecAllowed) {
+  const ensureLocalExecAllowed = async (consent: LocalShellConsent): Promise<boolean> => {
+    if (consent.allowed) {
       return true;
     }
-    if (localExecAsked) {
+    if (consent.asked) {
       return false;
     }
-    localExecAsked = true;
+    consent.asked = true;
 
     return await new Promise<boolean>((resolve) => {
       deps.chatLog.addSystem("Allow local shell commands for this session?");
       deps.chatLog.addSystem(
         "This runs commands on YOUR machine (not the gateway) and may delete files or reveal secrets.",
       );
-      deps.chatLog.addSystem("Select Yes/No (arrows + Enter), Esc to cancel.");
+      deps.chatLog.addSystem(
+        "Sharing also saves commands+output to session history; the agent sees `!` output next turn (`!!` skips the model's context but stays in history the agent can query).",
+      );
+      deps.chatLog.addSystem("Select an option (arrows + Enter), Esc to cancel.");
       const selector = createSelector(
         [
           { value: "no", label: "No" },
-          { value: "yes", label: "Yes" },
+          { value: "yes", label: "Yes, local only" },
+          { value: "yes-share", label: "Yes, and share with the agent" },
         ],
-        2,
+        3,
       );
       selector.onSelect = (item) => {
         deps.closeOverlay(overlayHandle);
-        if (item.value === "yes") {
-          localExecAllowed = true;
-          deps.chatLog.addSystem("local shell: enabled for this session");
+        if (item.value === "yes" || item.value === "yes-share") {
+          consent.allowed = true;
+          consent.share = item.value === "yes-share";
+          deps.chatLog.addSystem(
+            consent.share
+              ? "local shell: enabled; output is saved to history and `!` output is shared with the agent"
+              : "local shell: enabled for this session (local only)",
+          );
           resolve(true);
         } else {
           deps.chatLog.addSystem("local shell: not enabled");
@@ -82,20 +194,30 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   };
 
   const runLocalShellLine = async (line: string) => {
-    const cmd = line.slice(1);
-    // NOTE: A lone '!' is handled by the submit handler as a normal message.
+    // '!!' means "history-only, keep it out of the agent's context" (excludeFromContext);
+    // plain '!' means "agent-visible next turn" (Claude Code's own `!` convention).
+    const isBangBang = line.startsWith("!!");
+    const cmd = isBangBang ? line.slice(2) : line.slice(1);
+    // NOTE: A lone '!' or '!!' is handled by the submit handler as a normal message.
     // Keep this guard anyway in case this is called directly.
     if (cmd === "") {
       return;
     }
 
-    if (localExecAsked && !localExecAllowed) {
+    // Bind consent and the persistence target to the session that was active
+    // when the command was submitted. A mid-command `/session` switch must not
+    // retarget the output: persisting into the newly selected session would
+    // hand this session's (possibly sensitive) output to the wrong agent.
+    const scope = deps.getSessionScope?.();
+    const consent = consentFor(scope);
+
+    if (consent.asked && !consent.allowed) {
       deps.chatLog.addSystem("local shell: not enabled for this session");
       deps.tui.requestRender();
       return;
     }
 
-    const allowed = await ensureLocalExecAllowed();
+    const allowed = await ensureLocalExecAllowed(consent);
     if (!allowed) {
       return;
     }
@@ -113,9 +235,39 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     deps.chatLog.addSystem(`[local] $ ${cmd}`);
     deps.tui.requestRender();
 
+    // Streamed chunks are capped as they arrive, so the retained strings can
+    // never exceed maxChars: a length check at close time misses a single
+    // overflowing stream entirely. Record the loss here, where it happens.
+    let overflowed = false;
     const appendWithCap = (text: string, chunk: string) => {
       const combined = text + chunk;
-      return combined.length > maxChars ? sliceUtf16Safe(combined, -maxChars) : combined;
+      if (combined.length <= maxChars) {
+        return combined;
+      }
+      overflowed = true;
+      return sliceUtf16Safe(combined, -maxChars);
+    };
+
+    const persistResult = async (
+      result: Omit<LocalShellExecutionResult, "command" | "excludeFromContext">,
+    ) => {
+      if (!consent.share || !scope || !deps.injectBashExecution) {
+        return;
+      }
+      const persisted = await deps.injectBashExecution(
+        {
+          ...result,
+          command: cmd,
+          excludeFromContext: isBangBang,
+        },
+        scope,
+      );
+      if (!persisted.ok) {
+        deps.chatLog.addSystem(
+          `[local] not saved to session history: ${persisted.error ?? "unknown error"}`,
+        );
+        deps.tui.requestRender();
+      }
     };
 
     await new Promise<void>((resolve) => {
@@ -140,14 +292,20 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         stderr = appendWithCap(stderr, buf.toString("utf8"));
       });
 
-      child.on("close", (code, signal) => {
+      // A failed spawn emits both 'error' and a subsequent 'close'; guard so
+      // only the first terminal event persists/resolves the run.
+      let settled = false;
+
+      const handleClose = async (code: number | null, signal: NodeJS.Signals | null) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         // Keep the tail (consistent with the streaming appendWithCap above) so a
         // large stdout cannot evict stderr: the failure reason (FATAL etc.) at the
         // end is what the operator needs most when output overflows the cap.
-        const combined = sliceUtf16Safe(
-          stdout + (stderr ? (stdout ? "\n" : "") + stderr : ""),
-          -maxChars,
-        ).trimEnd();
+        const uncapped = stdout + (stderr ? (stdout ? "\n" : "") + stderr : "");
+        const combined = sliceUtf16Safe(uncapped, -maxChars).trimEnd();
 
         if (combined) {
           for (const lineLocal of combined.split("\n")) {
@@ -156,13 +314,35 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         }
         deps.chatLog.addSystem(`[local] exit ${code ?? "?"}${signal ? ` (signal ${signal})` : ""}`);
         deps.tui.requestRender();
+        await persistResult({
+          output: combined,
+          exitCode: code ?? undefined,
+          cancelled: signal != null,
+          truncated: overflowed || uncapped.length > maxChars,
+        });
         resolve();
-      });
+      };
 
-      child.on("error", (err) => {
+      const handleError = async (err: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         deps.chatLog.addSystem(`[local] error: ${String(err)}`);
         deps.tui.requestRender();
+        await persistResult({
+          output: `error: ${String(err)}`,
+          cancelled: false,
+          truncated: false,
+        });
         resolve();
+      };
+
+      child.on("close", (code, signal) => {
+        void handleClose(code, signal);
+      });
+      child.on("error", (err) => {
+        void handleError(err);
       });
     });
   };
