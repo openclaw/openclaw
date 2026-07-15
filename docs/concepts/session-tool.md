@@ -14,7 +14,8 @@ orchestrate sub-agents.
 
 | Tool               | What it does                                                                |
 | ------------------ | --------------------------------------------------------------------------- |
-| `sessions_list`    | List sessions with optional filters (kind, label, agent, recency, preview)  |
+| `sessions`         | Manage session settings (rename, pin, archive, model) and session groups    |
+| `sessions_list`    | List sessions with optional filters (kind, label, agent, archive, preview)  |
 | `sessions_history` | Read the transcript of a specific session                                   |
 | `sessions_send`    | Send a message to another session and optionally wait                       |
 | `sessions_spawn`   | Spawn an isolated sub-agent session for background work                     |
@@ -141,6 +142,49 @@ poll loops.
 `subagents` is the visibility helper for already spawned OpenClaw
 sub-agents. It supports `action: "list"` to inspect active/recent runs.
 
+## Self-service session management
+
+The `sessions` tool lets agents manage their own sessions and custom session groups. It is owner-gated (`dangerous-tools` list) and unavailable to sandboxed sessions.
+
+### Patch
+
+`sessions` `action: "patch"` updates a session's metadata in-place. Accepted fields:
+
+| Field            | Type    | Description                                                     |
+| ---------------- | ------- | --------------------------------------------------------------- |
+| `sessionKey`     | string  | Target session key (default: current session)                   |
+| `label`          | string  | Human-readable session label                                    |
+| `pinned`         | boolean | Pin or unpin the session                                        |
+| `archived`       | boolean | Archive or restore the session                                  |
+| `model`          | string  | Per-session model override (needs in-process gateway)           |
+| `thinkingLevel`  | string  | Per-session thinking level override                             |
+
+Patch is scoped to the caller's own session tree and the configured session tools visibility level. Targeting another agent's session requires `visibility: "all"`. At least one optional field is required; an empty patch is rejected.
+
+Model overrides applied through `sessions` `patch` carry a marker so the runtime can distinguish agent-selected model changes from operator-configured ones. See [Model auto-revert](#model-auto-revert).
+
+### Groups
+
+Groups let agents organize sessions into named categories. Group management is global per gateway — all agents share the same group catalog. The built-in **Pinned** and **Chats** groups are reserved.
+
+| Action           | What it does                                  |
+| ---------------- | --------------------------------------------- |
+| `group_list`     | List all group names in display order         |
+| `group_set`      | Replace the full ordered group list           |
+| `group_rename`   | Rename a group (`name` → `to`)                |
+| `group_delete`   | Delete a group and return its sessions to Chats |
+
+Group names are capped at 512 characters; `group_set` accepts at most 200 names.
+
+## Model auto-revert
+
+When an agent patches its own session model through `sessions` `action: "patch"` and the next run fails with a permanent error, OpenClaw automatically reverts the model to the pre-patch value:
+
+- **Permanent failures that trigger revert:** `auth`, `auth_permanent`, `billing`, `model_not_found`
+- **Transient failures that do NOT trigger revert:** `rate_limit`, `overloaded`, `timeout`, `server_error`
+
+The agent receives a system notice when a revert occurs so it knows to pick a different model. Subsequent turns keep the restored model unless the agent or operator patches again.
+
 ## Spawning sub-agents
 
 `sessions_spawn` creates an isolated session for a background task by default.
@@ -155,22 +199,14 @@ Key options:
 - `model` and `thinking` overrides for the child session.
 - `thread: true` to bind the spawn to a chat thread (Discord, Slack, etc.).
 - `sandbox: "require"` to enforce sandboxing on the child.
-- `context: "fork"` for native sub-agents when the child needs the current
-  requester transcript; omit it or use `context: "isolated"` for a clean child.
-  Thread-bound native sub-agents default to `context: "fork"` unless
-  `threadBindings.defaultSpawnContext` says otherwise.
+- `context: "fork"` for native sub-agents when the child needs the current requester transcript; omit it or use `context: "isolated"` for a clean child. `context: "fork"` is only valid with `runtime: "subagent"`. Thread-bound native sub-agents default to `context: "fork"` unless `threadBindings.defaultSpawnContext` says otherwise.
+- `visible: true` to create a dashboard session that appears in the Control UI sidebar. Only valid with `runtime: "subagent"`. When set, other overrides (`model`, `thinking`, `cwd`, `thread`, `mode`, `context`, `attachments`) are unavailable — the visible session inherits defaults from the target agent config. Optional `worktree`, `worktreeName`, and `worktreeBaseRef` only apply with `visible: true`.
 
-Default leaf sub-agents do not get session tools. When
-`maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive
-`sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they
-can manage their own children. Leaf runs still do not get recursive
-orchestration tools.
+A `visible` spawn routes through `sessions.create` instead of the subagent registry. The child is a full dashboard session with its own worktree (when requested), not a hidden background run. It still counts against the requester session's max-active-children limit and the configured spawn depth.
 
-After completion, an announce step posts the result to the requester's channel.
-Completion delivery preserves bound thread/topic routing when available, and if
-the completion origin only identifies a channel OpenClaw can still reuse the
-requester session's stored route (`lastChannel` / `lastTo`) for direct
-delivery.
+Default leaf sub-agents do not get session tools. When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their own children. Leaf runs still do not get recursive orchestration tools.
+
+After completion, an announce step posts the result to the requester's channel. Completion delivery preserves bound thread/topic routing when available, and if the completion origin only identifies a channel, OpenClaw can still reuse the requester session's stored route (`lastChannel` / `lastTo`) for direct delivery.
 
 For ACP-specific behavior, see [ACP Agents](/tools/acp-agents).
 

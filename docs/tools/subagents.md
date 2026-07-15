@@ -224,6 +224,18 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
 <ParamField path="context" type='"isolated" | "fork"' default="isolated">
   `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`.
 </ParamField>
+<ParamField path="visible" type="boolean" default="false">
+  When `true`, creates a visible dashboard session instead of a background run. Only valid with `runtime: "subagent"`. The session appears in the Control UI sidebar with the given `label`. Other params (`model`, `thinking`, `cwd`, `thread`, `mode`, `context`, `lightContext`, `attachments`, `attachAs`) are unavailable when `visible: true` — they are rejected with a tool input error. The visible session inherits its model and thinking defaults from the target agent config.
+</ParamField>
+<ParamField path="worktree" type="boolean">
+  Visible sessions only. Requests the new session own a managed worktree. Ignored when `visible` is absent or `false`.
+</ParamField>
+<ParamField path="worktreeName" type="string">
+  Visible sessions only. Optional worktree name (the branch becomes `openclaw/<name>`). Ignored when `visible` is absent or `false`.
+</ParamField>
+<ParamField path="worktreeBaseRef" type="string">
+  Visible sessions only. Base ref for the managed worktree. Ignored when `visible` is absent or `false`.
+</ParamField>
 
 <Warning>
 `sessions_spawn` does **not** accept channel-delivery params (`target`,
