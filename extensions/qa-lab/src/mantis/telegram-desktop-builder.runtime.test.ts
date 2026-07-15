@@ -109,8 +109,12 @@ describe("mantis Telegram desktop builder runtime", () => {
     expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_SUT_BOT_TOKEN).toBe("sut-token");
     const remoteScript = runCommand?.args.at(-1);
     expect(remoteScript).toContain(
-      "curl -fsSL --connect-timeout 10 --max-time 120 https://deb.nodesource.com/setup_22.x",
+      'curl -fsSL --connect-timeout 10 --max-time 120 https://deb.nodesource.com/setup_22.x -o "$out/nodesource-setup.sh"',
     );
+    expect(remoteScript).toContain(
+      'sudo -E bash "$out/nodesource-setup.sh" >>"$out/node-apt.log" 2>&1',
+    );
+    expect(remoteScript).not.toContain("setup_22.x | sudo");
     expect(remoteScript).toContain(
       'curl -fsSL --connect-timeout 10 --max-time 600 --retry 2 --retry-delay 2 https://telegram.org/dl/desktop/linux -o "$out/telegram-desktop.tar.xz"',
     );

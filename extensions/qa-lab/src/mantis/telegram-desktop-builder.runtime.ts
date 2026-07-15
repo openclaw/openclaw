@@ -314,7 +314,9 @@ if [ -n "\${OPENCLAW_LIVE_OPENAI_KEY:-}" ] && [ -z "\${OPENAI_API_KEY:-}" ]; the
 fi
 if ! command -v node >/dev/null 2>&1; then
   sudo apt-get update -y >"$out/node-apt.log" 2>&1
-  curl -fsSL --connect-timeout 10 --max-time 120 https://deb.nodesource.com/setup_22.x | sudo -E bash - >>"$out/node-apt.log" 2>&1
+  # Complete the setup download before execution; a timed-out stream may be partial.
+  curl -fsSL --connect-timeout 10 --max-time 120 https://deb.nodesource.com/setup_22.x -o "$out/nodesource-setup.sh"
+  sudo -E bash "$out/nodesource-setup.sh" >>"$out/node-apt.log" 2>&1
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs >>"$out/node-apt.log" 2>&1
 fi
 if ! command -v scrot >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1 || ! command -v xz >/dev/null 2>&1; then
