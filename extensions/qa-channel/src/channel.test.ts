@@ -256,6 +256,33 @@ describe("qa-channel plugin", () => {
     expect(route?.threadId).toBeUndefined();
   });
 
+  it("does not append routing metadata to explicit thread targets", async () => {
+    const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      accountId: "default",
+      target: "thread:qa-room/thread-1",
+      replyToId: "reply-1",
+      threadId: "thread-1",
+      currentSessionKey: "agent:main:qa-channel:channel:thread:qa-room/thread-1:thread:stale",
+    });
+
+    expect(route?.sessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
+    expect(route?.baseSessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
+    expect(route?.threadId).toBeUndefined();
+  });
+
+  it("rejects non-canonical target prefix casing before routing", () => {
+    expect(() =>
+      qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
+        cfg: {},
+        agentId: "main",
+        accountId: "default",
+        target: "THREAD:qa-room/thread-1",
+      }),
+    ).toThrow("qa-channel target prefixes must be lowercase");
+  });
+
   it("derives group outbound session routes from explicit group targets", async () => {
     const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
       cfg: {},
@@ -756,7 +783,9 @@ describe("qa-channel plugin", () => {
       };
 
       await expect(runSearch({ channelId: "allowed" })).resolves.toEqual([allowedRoot.id]);
-      await expect(runSearch({ channelId: "CHANNEL:allowed" })).resolves.toEqual([allowedRoot.id]);
+      await expect(runSearch({ channelId: "CHANNEL:allowed" })).rejects.toThrow(
+        "qa-channel target prefixes must be lowercase",
+      );
       await expect(runSearch({ channelId: "thread:allowed/thread-1" })).resolves.toEqual([
         allowedThread.id,
       ]);

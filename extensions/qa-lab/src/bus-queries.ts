@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements bus queries behavior.
+import { parseQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   QaBusAttachment,
@@ -26,34 +27,10 @@ export function normalizeConversationFromTarget(target: string): {
   conversation: QaBusConversation;
   threadId?: string;
 } {
-  const trimmed = target.trim();
-  if (trimmed.startsWith("thread:")) {
-    const rest = trimmed.slice("thread:".length);
-    const slash = rest.indexOf("/");
-    if (slash > 0) {
-      return {
-        conversation: { id: rest.slice(0, slash), kind: "channel" },
-        threadId: rest.slice(slash + 1),
-      };
-    }
-  }
-  if (trimmed.startsWith("channel:")) {
-    return {
-      conversation: { id: trimmed.slice("channel:".length), kind: "channel" },
-    };
-  }
-  if (trimmed.startsWith("group:")) {
-    return {
-      conversation: { id: trimmed.slice("group:".length), kind: "group" },
-    };
-  }
-  if (trimmed.startsWith("dm:")) {
-    return {
-      conversation: { id: trimmed.slice("dm:".length), kind: "direct" },
-    };
-  }
+  const parsed = parseQaTarget(target);
   return {
-    conversation: { id: trimmed, kind: "direct" },
+    conversation: { id: parsed.conversationId, kind: parsed.chatType },
+    ...(parsed.threadId !== undefined ? { threadId: parsed.threadId } : {}),
   };
 }
 

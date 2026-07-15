@@ -4,6 +4,26 @@ import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 
 describe("qa-bus state", () => {
+  it("roundtrips canonical target kinds and rejects non-canonical prefix casing", () => {
+    const state = createQaBusState();
+    const direct = state.addOutboundMessage({ to: "dm:CaseSensitive", text: "direct" });
+    const channel = state.addOutboundMessage({ to: "channel:CaseSensitive", text: "channel" });
+    const group = state.addOutboundMessage({ to: "group:CaseSensitive", text: "group" });
+    const thread = state.addOutboundMessage({
+      to: "thread:CaseSensitive/ThreadCase",
+      text: "thread",
+    });
+
+    expect(direct.conversation).toEqual({ id: "CaseSensitive", kind: "direct" });
+    expect(channel.conversation).toEqual({ id: "CaseSensitive", kind: "channel" });
+    expect(group.conversation).toEqual({ id: "CaseSensitive", kind: "group" });
+    expect(thread.conversation).toEqual({ id: "CaseSensitive", kind: "channel" });
+    expect(thread.threadId).toBe("ThreadCase");
+    expect(() =>
+      state.addOutboundMessage({ to: "CHANNEL:CaseSensitive", text: "invalid" }),
+    ).toThrow("qa-channel target prefixes must be lowercase");
+  });
+
   it("records inbound and outbound traffic in cursor order", () => {
     const state = createQaBusState();
 

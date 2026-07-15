@@ -4,6 +4,62 @@ import { isRecord } from "../../packages/normalization-core/src/record-coerce.js
 /** Conversation shape supported by the synthetic QA channel bus. */
 export type QaBusConversationKind = "direct" | "channel" | "group";
 
+/** Parsed QA channel target with case-preserving conversation identifiers. */
+export type QaTargetParts = {
+  chatType: QaBusConversationKind;
+  conversationId: string;
+  threadId?: string;
+};
+
+/** Parse the lowercase, prefix-scoped target grammar shared by QA Channel and QA Lab. */
+export function parseQaTarget(
+  raw: string,
+  options?: { defaultChatType?: QaBusConversationKind },
+): QaTargetParts {
+  const normalized = raw.trim();
+  if (!normalized) {
+    throw new Error("qa-channel target is required");
+  }
+  const prefixed = /^(thread|channel|group|dm):(.*)$/u.exec(normalized);
+  if (!prefixed && /^(thread|channel|group|dm):/iu.test(normalized)) {
+    throw new Error(`qa-channel target prefixes must be lowercase: ${normalized}`);
+  }
+  const prefix = prefixed?.[1];
+  const rest = prefixed?.[2]?.trim();
+  if (prefix === "thread") {
+    if (!rest) {
+      throw new Error(`invalid qa-channel thread target: ${normalized}`);
+    }
+    const slashIndex = rest.indexOf("/");
+    if (slashIndex <= 0 || slashIndex === rest.length - 1) {
+      throw new Error(`invalid qa-channel thread target: ${normalized}`);
+    }
+    const conversationId = rest.slice(0, slashIndex).trim();
+    const threadId = rest.slice(slashIndex + 1).trim();
+    if (!conversationId || !threadId) {
+      throw new Error(`invalid qa-channel thread target: ${normalized}`);
+    }
+    return {
+      chatType: "channel",
+      conversationId,
+      threadId,
+    };
+  }
+  if (prefix) {
+    if (!rest) {
+      throw new Error(`invalid qa-channel ${prefix} target: ${normalized}`);
+    }
+    return {
+      chatType: prefix === "dm" ? "direct" : prefix === "group" ? "group" : "channel",
+      conversationId: rest,
+    };
+  }
+  return {
+    chatType: options?.defaultChatType ?? "direct",
+    conversationId: normalized,
+  };
+}
+
 /** Addressable conversation used by QA bus messages and thread state. */
 export type QaBusConversation = {
   id: string;

@@ -93,10 +93,15 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
           from: `${QA_CHANNEL_ID}:${accountId ?? DEFAULT_ACCOUNT_ID}`,
           to: buildQaTarget(parsed),
         });
+        // An explicit thread target already owns the complete session identity;
+        // applying reply or current-thread metadata would append a second thread.
+        if (parsed.threadId !== undefined) {
+          return baseRoute;
+        }
         return buildThreadAwareOutboundSessionRoute({
           route: baseRoute,
           replyToId,
-          threadId: threadId ?? (target.trim().startsWith("thread:") ? undefined : parsed.threadId),
+          threadId,
           currentSessionKey,
           canRecoverCurrentThread: ({ route }) =>
             route.chatType !== "direct" || (cfg.session?.dmScope ?? "main") !== "main",

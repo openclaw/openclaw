@@ -169,15 +169,15 @@ describe("qa-bus client", () => {
   });
 
   it("parses canonical target prefixes consistently and rejects empty ids", () => {
-    expect(parseQaTarget("CHANNEL:CaseSensitiveId")).toEqual({
+    expect(parseQaTarget("channel:CaseSensitiveId")).toEqual({
       chatType: "channel",
       conversationId: "CaseSensitiveId",
     });
-    expect(parseQaTarget("DM:Alice")).toEqual({
+    expect(parseQaTarget("dm:Alice")).toEqual({
       chatType: "direct",
       conversationId: "Alice",
     });
-    expect(parseQaTarget("THREAD:Room/Topic")).toEqual({
+    expect(parseQaTarget("thread:Room/Topic")).toEqual({
       chatType: "channel",
       conversationId: "Room",
       threadId: "Topic",
@@ -186,8 +186,11 @@ describe("qa-bus client", () => {
       chatType: "channel",
       conversationId: "plain-id",
     });
-    for (const target of ["channel:", "GROUP:  ", "dm:", "thread:/topic", "THREAD:room/"]) {
+    for (const target of ["channel:", "group:  ", "dm:", "thread:/topic", "thread:room/"]) {
       expect(() => parseQaTarget(target)).toThrow("invalid qa-channel");
+    }
+    for (const target of ["CHANNEL:room", "Dm:alice", "THREAD:room/topic"]) {
+      expect(() => parseQaTarget(target)).toThrow("qa-channel target prefixes must be lowercase");
     }
   });
 

@@ -14,6 +14,8 @@ import type {
   QaBusToolCall,
 } from "./protocol.js";
 
+export { parseQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
+
 export type {
   QaBusAttachment,
   QaBusConversation,
@@ -138,68 +140,6 @@ export function normalizeQaTarget(raw: string): string | undefined {
     return undefined;
   }
   return trimmed;
-}
-
-export function parseQaTarget(raw: string): {
-  chatType: "direct" | "channel" | "group";
-  conversationId: string;
-  threadId?: string;
-};
-export function parseQaTarget(
-  raw: string,
-  options: { defaultChatType: "direct" | "channel" | "group" },
-): {
-  chatType: "direct" | "channel" | "group";
-  conversationId: string;
-  threadId?: string;
-};
-export function parseQaTarget(
-  raw: string,
-  options?: { defaultChatType?: "direct" | "channel" | "group" },
-): {
-  chatType: "direct" | "channel" | "group";
-  conversationId: string;
-  threadId?: string;
-} {
-  const normalized = normalizeQaTarget(raw);
-  if (!normalized) {
-    throw new Error("qa-channel target is required");
-  }
-  const prefixed = /^(thread|channel|group|dm):(.*)$/iu.exec(normalized);
-  const prefix = prefixed?.[1]?.toLowerCase();
-  const rest = prefixed?.[2]?.trim();
-  if (prefix === "thread") {
-    if (!rest) {
-      throw new Error(`invalid qa-channel thread target: ${normalized}`);
-    }
-    const slashIndex = rest.indexOf("/");
-    if (slashIndex <= 0 || slashIndex === rest.length - 1) {
-      throw new Error(`invalid qa-channel thread target: ${normalized}`);
-    }
-    const conversationId = rest.slice(0, slashIndex).trim();
-    const threadId = rest.slice(slashIndex + 1).trim();
-    if (!conversationId || !threadId) {
-      throw new Error(`invalid qa-channel thread target: ${normalized}`);
-    }
-    return {
-      chatType: "channel",
-      conversationId,
-      threadId,
-    };
-  }
-  if (prefix) {
-    if (!rest) {
-      throw new Error(`invalid qa-channel ${prefix} target: ${normalized}`);
-    }
-    return {
-      chatType: prefix === "dm" ? "direct" : prefix === "group" ? "group" : "channel",
-      conversationId: rest,
-    };
-  }
-  return {
-    chatType: options?.defaultChatType ?? "direct",
-    conversationId: normalized,
-  };
 }
 
 export function buildQaTarget(params: {
