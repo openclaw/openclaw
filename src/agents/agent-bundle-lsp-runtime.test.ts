@@ -460,8 +460,6 @@ describe("bundle LSP runtime", () => {
           referencesProvider: true,
         }),
     );
-    const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
-
     const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
 
     const toolNames = runtime.tools.map((tool) => tool.name);
@@ -501,8 +499,6 @@ describe("bundle LSP runtime", () => {
       diagnostics: [],
     });
     spawnMock.mockReturnValue(new MockChildProcess());
-    const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
-
     const runtime = await createBundleLspToolRuntime({
       workspaceDir: "/tmp/workspace",
       reservedToolNames: ["lsp_hover_Type-Script-"],

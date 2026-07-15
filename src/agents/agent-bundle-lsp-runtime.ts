@@ -599,11 +599,13 @@ export async function createBundleLspToolRuntime(params: {
     return { tools: [], sessions: [], dispose: async () => {} };
   }
 
-  const reservedNames = new Set(
-    Array.from(params.reservedToolNames ?? [], (name) =>
-      normalizeOptionalLowercaseString(name),
-    ).filter((name): name is string => Boolean(name)),
-  );
+  const reservedNames = new Set<string>();
+  for (const name of params.reservedToolNames ?? []) {
+    const normalizedName = normalizeOptionalLowercaseString(name);
+    if (normalizedName) {
+      reservedNames.add(normalizedName);
+    }
+  }
   const sessions: LspSession[] = [];
   const tools: AnyAgentTool[] = [];
   const usedToolPrefixes = new Set<string>();
