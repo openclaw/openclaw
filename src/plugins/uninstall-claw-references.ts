@@ -11,8 +11,7 @@ function clawPackageRefMatchesPluginInstall(
   }
   const installedRef =
     record.clawhubPackage ?? record.spec?.replace(/^clawhub:/i, "").replace(/@[^@]+$/, "");
-  const installedVersion = record.version ?? record.resolvedVersion;
-  return (installedRef ?? pluginId) === ref.ref && installedVersion === ref.version;
+  return (installedRef ?? pluginId) === ref.ref;
 }
 
 /** Explain Claw dependents without blocking the operator-owned uninstall. */
@@ -31,8 +30,23 @@ export function collectClawPluginUninstallWarnings(params: {
   if (clawIds.length === 0) {
     return [];
   }
-  return [
+
+  const installedVersion = installRecord.resolvedVersion ?? installRecord.version;
+  const expectedVersions = [...new Set(refs.map((ref) => ref.version))].toSorted();
+  const drifted =
+    installedVersion !== undefined &&
+    expectedVersions.some((version) => version !== installedVersion);
+
+  const warnings = [
     `Warning: plugin "${params.pluginId}" is referenced by Claw${clawIds.length === 1 ? "" : "s"}: ${clawIds.join(", ")}.`,
-    "Uninstalling it may break those Claws until the plugin is reinstalled or the Claws are updated.",
   ];
+  if (drifted) {
+    warnings.push(
+      `Installed version ${installedVersion} differs from the Claw reference${expectedVersions.length === 1 ? "" : "s"} ${expectedVersions.join(", ")}.`,
+    );
+  }
+  warnings.push(
+    "Uninstalling it may break those Claws until the plugin is reinstalled or the Claws are updated.",
+  );
+  return warnings;
 }
