@@ -202,28 +202,21 @@ When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep,
 
 ## Key defaults
 
-All settings live under `plugins.entries.memory-core.config.dreaming`.
+Dreaming settings live under the plugin that owns the active memory slot:
 
-<ParamField path="enabled" type="boolean" default="false">
-  Enable or disable the dreaming sweep.
-</ParamField>
-<ParamField path="frequency" type="string" default="0 3 * * *">
-  Cron cadence for the full dreaming sweep.
-</ParamField>
-<ParamField path="model" type="string">
-  Optional Dream Diary subagent model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
-</ParamField>
-<ParamField path="phases.deep.maxPromotedSnippetTokens" type="number" default="160">
-  Maximum estimated token count kept from each short-term recall snippet promoted into `MEMORY.md`. Ranking provenance remains visible.
-</ParamField>
+- **Built-in `memory-core`** (default memory slot): `plugins.entries.memory-core.config.dreaming`
+- **LanceDB / vector slot plugins**: that plugin entry's `config` (for example `plugins.entries.memory-lancedb-pro.config`), not `memory-core`
 
-<Warning>
-`dreaming.model` requires `plugins.entries.memory-core.subagent.allowModelOverride: true`. To restrict it, also set `plugins.entries.memory-core.subagent.allowedModels`. The automatic retry only covers model-unavailable errors; trust or allowlist failures stay visible in logs instead of falling back silently.
-</Warning>
+The defaults below apply when `memory-core` owns dreaming. If your memory slot is provided by another plugin, use that plugin's config path and see its docs for dreaming keys.
 
-<Note>
-Most phase policy, thresholds, and storage behavior are internal implementation details. See [Memory configuration reference](/reference/memory-config#dreaming) for the full key list.
-</Note>
+| Key         | Default     |
+| ----------- | ----------- |
+| `enabled`   | `false`     |
+| `frequency` | `0 3 * * *` |
+
+Phase policy, thresholds, and storage behavior are internal implementation details (not user-facing config).
+
+See [Memory configuration reference](/reference/memory-config#dreaming) for the full key list.
 
 ## Dreams UI
 
@@ -235,6 +228,16 @@ When enabled, the Gateway **Dreams** tab shows:
 - next scheduled run timing
 - a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
+
+## Dreaming never runs: status shows blocked
+
+If `openclaw memory status` reports `Dreaming status: blocked`, the managed cron exists but the default agent heartbeat is not firing. Check that heartbeat is enabled for the default agent and that its target is not `none`, then run `openclaw memory status --deep` again after the next heartbeat interval.
+
+### LanceDB and dreaming
+
+When **memory-lancedb** (or another plugin) owns `plugins.slots.memory`, OpenClaw may read **dreaming settings** from that slot plugin's config. That is separate from consolidating your **LanceDB vector index** with the full Light / REM / Deep pipeline and narrative output.
+
+For **LanceDB-vector-native** dreaming (themes, promotion, dream diary, optional daily report), browse community plugins on [ClawHub](https://clawhub.ai/).
 
 ## Related
 
