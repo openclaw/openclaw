@@ -1387,7 +1387,8 @@ describe("ci workflow guards", () => {
     expect(action).toContain("base-sha:");
     expect(action).toContain("docs_only:");
     expect(action).toContain("docs_changed:");
-    expect(action).toContain('BASE="${{ inputs.base-sha }}"');
+    expect(action).toContain("BASE_SHA: ${{ inputs.base-sha }}");
+    expect(action).toContain('BASE="$BASE_SHA"');
     expect(action).toContain(
       'CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")',
     );
