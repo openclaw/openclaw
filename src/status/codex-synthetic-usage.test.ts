@@ -54,7 +54,7 @@ describe("mergeUsageSummaries", () => {
             windows: [{ label: "Week", usedPercent: 40 }],
             billing: [
               { type: "balance", amount: 12.5, unit: "credits" },
-              { type: "subscription", amount: 20, unit: "usd", period: "month" },
+              { type: "spend", amount: 20, unit: "usd", period: "month" },
             ],
           },
         ],
