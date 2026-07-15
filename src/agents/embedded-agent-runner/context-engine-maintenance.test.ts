@@ -30,8 +30,8 @@ const rewriteTranscriptEntriesInRuntimeTranscriptMock = vi.fn(async (_params?: u
   bytesFreed: 123,
   rewrittenEntries: 2,
 }));
-let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-maintenance.js").createDeferredTurnMaintenanceAbortSignal;
-let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.js").resetDeferredTurnMaintenanceStateForTest;
+let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-maintenance.test-support.js").createDeferredTurnMaintenanceAbortSignal;
+let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.test-support.js").resetDeferredTurnMaintenanceStateForTest;
 let waitForDeferredTurnMaintenanceForSession: typeof import("./context-engine-maintenance.js").waitForDeferredTurnMaintenanceForSession;
 
 function createQueuedTaskRun(params: Parameters<typeof createQueuedTaskRunOrNull>[0]): TaskRecord {
@@ -111,12 +111,10 @@ vi.mock("./transcript-rewrite.js", () => ({
 async function loadFreshContextEngineMaintenanceModuleForTest() {
   // The module owns singleton deferred-maintenance state, so reload between
   // cases before asserting abort or queue behavior.
-  ({
-    createDeferredTurnMaintenanceAbortSignal,
-    resetDeferredTurnMaintenanceStateForTest,
-    runContextEngineMaintenance,
-    waitForDeferredTurnMaintenanceForSession,
-  } = await import("./context-engine-maintenance.js"));
+  ({ runContextEngineMaintenance, waitForDeferredTurnMaintenanceForSession } =
+    await import("./context-engine-maintenance.js"));
+  ({ createDeferredTurnMaintenanceAbortSignal, resetDeferredTurnMaintenanceStateForTest } =
+    await import("./context-engine-maintenance.test-support.js"));
   resetDeferredTurnMaintenanceStateForTest();
 }
 

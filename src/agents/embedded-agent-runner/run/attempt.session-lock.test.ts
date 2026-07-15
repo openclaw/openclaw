@@ -32,8 +32,8 @@ import {
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
   installPromptSubmissionLockRelease,
-  resetEmbeddedAttemptSessionFileOwnersForTest,
 } from "./attempt.session-lock.js";
+import { resetEmbeddedAttemptSessionFileOwnersForTest } from "./attempt.session-lock.test-support.js";
 
 const lockOptions = {
   sessionFile: "/tmp/session.jsonl",

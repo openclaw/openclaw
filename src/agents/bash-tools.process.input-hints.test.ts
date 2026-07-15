@@ -3,13 +3,9 @@
  * Idle writable sessions should surface actionable metadata and user-facing hints.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  addSession,
-  appendOutput,
-  markExited,
-  resetProcessRegistryForTests,
-} from "./bash-process-registry.js";
+import { addSession, appendOutput, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
 type ProcessTool = ReturnType<typeof createProcessTool>;
