@@ -32,7 +32,9 @@ const {
     const channel = cfg.channels?.clickclack;
     return Boolean(
       channel?.baseUrl?.trim() &&
-      (hasConfiguredAccountValue(channel.token) || Boolean(channel.tokenFile?.trim())) &&
+      (hasConfiguredAccountValue(channel.token) ||
+        Boolean(channel.tokenFile?.trim()) ||
+        Boolean(process.env.CLICKCLACK_BOT_TOKEN?.trim())) &&
       channel.workspace?.trim(),
     );
   },

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   listClickClackAccountIds,
   resolveClickClackAccount,
@@ -11,6 +11,10 @@ import {
 import type { CoreConfig } from "./types.js";
 
 describe("ClickClack account resolution", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("preserves top-level default account when named accounts are configured", () => {
     const cfg = {
       channels: {
@@ -137,7 +141,9 @@ describe("ClickClack account resolution", () => {
       },
     } satisfies CoreConfig;
     const env = { CLICKCLACK_BOT_TOKEN: "  default-env-token  " };
+    vi.stubEnv("CLICKCLACK_BOT_TOKEN", env.CLICKCLACK_BOT_TOKEN);
 
+    expect(listClickClackAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveClickClackAccount({ cfg, env }).token).toBe("default-env-token");
     expect(resolveClickClackAccount({ cfg, accountId: "work", env }).token).toBe("");
   });
