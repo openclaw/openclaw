@@ -30,7 +30,10 @@ import {
   drainPendingSessionDeliveries,
   enqueueSessionDelivery,
   loadPendingSessionDelivery,
+  markSessionDeliverySettlement,
   recoverPendingSessionDeliveries,
+  SessionDeliveryDeadLetteredError,
+  SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
   type SessionDeliveryRecoveryLogger,
@@ -280,6 +283,12 @@ export async function deliverQueuedSessionDelivery(params: {
   ) {
     return;
   }
+  if (params.entry.deliveryStartedAt !== undefined) {
+    await markSessionDeliverySettlement(params.entry, "moved-to-failed");
+    throw new SessionDeliveryDeadLetteredError(
+      "queued agent turn dead-lettered after an interrupted unproven attempt",
+    );
+  }
 
   const route = params.entry.route;
   const messageId = resolveQueuedRestartContinuationMessageId(params.entry);
@@ -342,7 +351,7 @@ export async function deliverQueuedSessionDelivery(params: {
     delivery: {
       preparePayload: (payload) => {
         if (isRestartContinuationBusyPayload(payload)) {
-          throw new Error(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
+          throw new SessionDeliverySafeRetryError(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
         }
         return payload;
       },

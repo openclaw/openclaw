@@ -9,6 +9,7 @@ import {
   failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
+  markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
 } from "./session-delivery-queue-storage.js";
@@ -197,6 +198,39 @@ describe("session-delivery queue storage", () => {
       await settleSessionDelivery(id, tempDir);
       expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
       expect(readSessionQueueStatus(tempDir, id)).toBe("completed");
+    });
+  });
+
+  it("retains ambiguous attempt ownership and clears it only for a safe retry", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-attempt-owner:agent-loop",
+        },
+        tempDir,
+      );
+      const entry = await loadPendingSessionDelivery(id, tempDir);
+      if (!entry) {
+        throw new Error("Expected pending session delivery");
+      }
+
+      await markSessionDeliveryAttemptStarted(entry, tempDir);
+      expect(await loadPendingSessionDelivery(id, tempDir)).toMatchObject({
+        deliveryStartedAt: expect.any(Number),
+      });
+
+      await failSessionDelivery(id, "ambiguous failure after send", tempDir);
+      expect(await loadPendingSessionDelivery(id, tempDir)).toMatchObject({
+        deliveryStartedAt: expect.any(Number),
+      });
+
+      await failSessionDelivery(id, "safe failure before commit", tempDir, {
+        releaseAttemptOwnership: true,
+      });
+      expect(await loadPendingSessionDelivery(id, tempDir)).not.toHaveProperty("deliveryStartedAt");
     });
   });
 

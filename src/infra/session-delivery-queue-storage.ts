@@ -73,6 +73,7 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
+  deliveryStartedAt?: number;
   acknowledgedAt?: number;
   settlementOutcome?: SessionDeliverySettledOutcome;
   availableAt?: number;
@@ -87,7 +88,17 @@ export class SessionDeliveryRetryChargedError extends Error {
   override name = "SessionDeliveryRetryChargedError";
 }
 
-/** Signals that delivery was deliberately moved to failed and must not be retried or acknowledged. */
+/** Signals that durable pre-delivery ownership could not be established. */
+export class SessionDeliveryAttemptStartError extends Error {
+  override name = "SessionDeliveryAttemptStartError";
+}
+
+/** Signals that delivery proved no external or transcript side effect committed. */
+export class SessionDeliverySafeRetryError extends Error {
+  override name = "SessionDeliverySafeRetryError";
+}
+
+/** Signals that recovery must settle this pending row as failed without replaying delivery. */
 export class SessionDeliveryDeadLetteredError extends Error {
   override name = "SessionDeliveryDeadLetteredError";
 }
@@ -205,11 +216,39 @@ export async function advanceSessionDeliveryAgentRun(
     return {
       ...queued,
       agentRunAttempt: (queued.agentRunAttempt ?? 0) + 1,
+      deliveryStartedAt: undefined,
       ...(updates?.message ? { message: updates.message } : {}),
       ...(updates?.expectedMediaUrls ? { expectedMediaUrls: updates.expectedMediaUrls } : {}),
       ...(updates?.suppressTextDelivery === true ? { suppressTextDelivery: true as const } : {}),
     };
   });
+}
+
+/** Mark an agent turn before it can commit transcript or channel side effects. */
+export async function markSessionDeliveryAttemptStarted(
+  entry: QueuedSessionDelivery,
+  stateDir?: string,
+): Promise<void> {
+  try {
+    const started = upsertDeliveryQueueEntry({
+      queueName: QUEUE_NAME,
+      entry: {
+        ...entry,
+        deliveryStartedAt: entry.deliveryStartedAt ?? Date.now(),
+      },
+      metadata: queuedSessionDeliveryMetadata(entry),
+      stateDir,
+      updatePendingOnly: true,
+    });
+    if (!started) {
+      throw new Error(`Session delivery ${entry.id} is no longer pending`);
+    }
+  } catch (error) {
+    throw new SessionDeliveryAttemptStartError(
+      `Session delivery ${entry.id} could not persist attempt ownership`,
+      { cause: error },
+    );
+  }
 }
 
 /** Signals that a delivered result still needs durable settlement finalization. */
@@ -278,6 +317,7 @@ export async function failSessionDelivery(
   id: string,
   error: string,
   stateDir?: string,
+  options?: { releaseAttemptOwnership?: boolean },
 ): Promise<void> {
   updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => {
     const queued = entry as QueuedSessionDelivery;
@@ -287,6 +327,7 @@ export async function failSessionDelivery(
       ...(queued.kind === "agentTurn"
         ? { lastChargedAgentRunAttempt: queued.agentRunAttempt ?? 0 }
         : {}),
+      ...(options?.releaseAttemptOwnership === true ? { deliveryStartedAt: undefined } : {}),
       lastAttemptAt: Date.now(),
       lastError: error,
     };

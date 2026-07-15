@@ -9,12 +9,15 @@ export {
   failSessionDelivery,
   loadPendingSessionDeliveries,
   loadPendingSessionDelivery,
+  markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
   releaseSessionDeliveryClaim,
   SessionDeliveryDeadLetteredError,
+  SessionDeliveryAttemptStartError,
   SessionDeliveryDeferredError,
   SessionDeliveryRetryChargedError,
+  SessionDeliverySafeRetryError,
 } from "./session-delivery-queue-storage.js";
 export type {
   QueuedSessionDelivery,

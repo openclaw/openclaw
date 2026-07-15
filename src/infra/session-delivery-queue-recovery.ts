@@ -17,12 +17,15 @@ import {
   failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
+  markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
   SessionDeliveryAcknowledgementFinalizeError,
+  SessionDeliveryAttemptStartError,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   SessionDeliveryRetryChargedError,
+  SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
   type SessionDeliverySettledOutcome,
 } from "./session-delivery-queue-storage.js";
@@ -167,6 +170,11 @@ async function drainQueuedEntry(opts: {
     if (pendingOutcome) {
       return pendingOutcome;
     }
+    if (entry.kind === "agentTurn" && entry.deliveryStartedAt === undefined) {
+      // Agent turns can commit transcript or channel effects before returning.
+      // Persist ownership first so an interrupted attempt never re-enters blindly.
+      await markSessionDeliveryAttemptStarted(entry, opts.stateDir);
+    }
     await opts.deliver(entry);
     // Keep route/session metadata pending until owner cleanup succeeds. Recovery
     // sees this marker and finalizes without replaying the external side effect.
@@ -190,13 +198,18 @@ async function drainQueuedEntry(opts: {
     if (err instanceof SessionDeliveryAcknowledgementFinalizeError) {
       return "deferred";
     }
+    if (err instanceof SessionDeliveryAttemptStartError) {
+      return "deferred";
+    }
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
     if (err instanceof SessionDeliveryRetryChargedError) {
       return "failed";
     }
     try {
-      await failSessionDelivery(entry.id, errMsg, opts.stateDir);
+      await failSessionDelivery(entry.id, errMsg, opts.stateDir, {
+        releaseAttemptOwnership: err instanceof SessionDeliverySafeRetryError,
+      });
       return "failed";
     } catch (failErr) {
       if (getErrnoCode(failErr) === "ENOENT") {

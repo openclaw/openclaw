@@ -11,6 +11,7 @@ import {
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   SessionDeliveryRetryChargedError,
+  SessionDeliverySafeRetryError,
 } from "./session-delivery-queue-storage.js";
 import {
   drainPendingSessionDeliveries,
@@ -47,6 +48,34 @@ describe("session-delivery queue recovery", () => {
       expect(onSettled).toHaveBeenCalledWith(expect.any(Object), "recovered");
       expect(summary.recovered).toBe(1);
       expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
+    });
+  });
+
+  it("persists agent-turn ownership before invoking delivery", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-preflight-owner:agent-loop",
+        },
+        tempDir,
+      );
+      const deliver = vi.fn(async () => {
+        expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
+          expect.objectContaining({ id, deliveryStartedAt: expect.any(Number) }),
+        ]);
+      });
+
+      await recoverPendingSessionDeliveries({
+        deliver,
+        stateDir: tempDir,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
     });
   });
 
@@ -413,6 +442,33 @@ describe("session-delivery queue recovery", () => {
       expect(summary.failed).toBe(1);
       expect(failedEntry?.retryCount).toBe(1);
       expect(failedEntry?.lastError).toBe("transient failure");
+      expect(failedEntry?.deliveryStartedAt).toEqual(expect.any(Number));
+    });
+  });
+
+  it("releases attempt ownership only for an explicitly safe retry", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "continue",
+          messageId: "restart-sentinel:safe-retry",
+        },
+        tempDir,
+      );
+
+      await recoverPendingSessionDeliveries({
+        deliver: vi.fn(async () => {
+          throw new SessionDeliverySafeRetryError("busy before agent start");
+        }),
+        stateDir: tempDir,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
+        expect.not.objectContaining({ deliveryStartedAt: expect.any(Number) }),
+      ]);
     });
   });
 
