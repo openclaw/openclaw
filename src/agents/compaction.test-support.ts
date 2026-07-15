@@ -3,6 +3,14 @@ import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { CompactionSummarizationInstructions } from "./compaction.js";
 import "./compaction.js";
 
+type CompactionPartialSummaryProgress = {
+  kind: "safety-timeout";
+  completedChunks: number;
+  totalChunks: number;
+  completedMessages: number;
+  totalMessages: number;
+};
+
 type SummarizeWithFallbackParams = {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
@@ -15,6 +23,7 @@ type SummarizeWithFallbackParams = {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  onPartialSummary?: (progress: CompactionPartialSummaryProgress) => void;
 };
 
 type CompactionTestApi = {
