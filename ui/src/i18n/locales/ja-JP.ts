@@ -503,6 +503,7 @@ export const ja_JP: TranslationMap = {
       "復旧時にタスクを保護できるようにするには、クラウドワーカーにセキュアなブラウザーコンテキストが必要です。",
     cloudStartFailed:
       "セッションはローカルに作成されましたが、クラウドの起動に失敗しました: {error}",
+    cloudSyncsFolder: "{folder} をクラウドワーカーに同期",
     folder: "フォルダ",
     folderPlaceholder: "エージェントワークスペース",
     browse: "フォルダを参照",
@@ -3398,6 +3399,9 @@ export const ja_JP: TranslationMap = {
     sendShortcut: "送信ショートカット",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "エージェントの作業中のフォローアップ",
+    followUpModeQueue: "実行が終了するまでキューに追加",
+    followUpModeSteer: "進行中の実行に反映",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",

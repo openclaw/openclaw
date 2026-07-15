@@ -1989,6 +1989,7 @@ class ChatPane extends OpenClawLightDomElement {
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
+      followUpMode: state.settings.chatFollowUpMode,
       draft: state.chatMessage,
       queue: state.chatQueue,
       realtimeTalkActive: state.realtimeTalkActive,

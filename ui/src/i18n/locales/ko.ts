@@ -493,6 +493,7 @@ export const ko: TranslationMap = {
     cloudSecureContextRequired:
       "복구 기능이 작업을 보호할 수 있도록 Cloud 작업자에는 안전한 브라우저 컨텍스트가 필요합니다.",
     cloudStartFailed: "세션은 로컬에 생성되었지만 Cloud 시작에 실패했습니다: {error}",
+    cloudSyncsFolder: "{folder}을(를) 클라우드 워커에 동기화",
     folder: "폴더",
     folderPlaceholder: "Agent workspace",
     browse: "폴더 찾아보기",
@@ -3366,6 +3367,9 @@ export const ko: TranslationMap = {
     sendShortcut: "전송 단축키",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "에이전트가 작업 중일 때 후속 메시지 처리 방식",
+    followUpModeQueue: "실행이 끝날 때까지 대기열에 추가",
+    followUpModeSteer: "진행 중인 실행에 반영",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",

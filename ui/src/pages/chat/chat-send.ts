@@ -8,9 +8,9 @@ import {
 } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import {
-  loadSettings,
   normalizeChatFollowUpMode,
   setLastActiveSessionKey,
+  type ChatFollowUpMode,
 } from "../../app/settings.ts";
 import type {
   ChatAttachment,
@@ -129,6 +129,7 @@ export type ChatHost = ChatInputHistoryState &
     eventLogBuffer?: unknown[];
     assistantAgentId?: string | null;
     agentsList?: ChatAgentsListSnapshot | null;
+    settings?: { chatFollowUpMode?: ChatFollowUpMode };
     /** Selected message to reply to (right-click / keyboard shortcut). */
     chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
     /** Placeholder for an in-flight /btw side question awaiting chat.side_result. */
@@ -2439,7 +2440,7 @@ export async function handleSendChat(
         // message stays queued, keeping the queue row as the visible fallback.
         if (
           !skillWorkshopRevision &&
-          normalizeChatFollowUpMode(loadSettings().chatFollowUpMode) === "steer" &&
+          normalizeChatFollowUpMode(host.settings?.chatFollowUpMode) === "steer" &&
           host.connected &&
           hasAbortableSessionRun(host)
         ) {

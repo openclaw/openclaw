@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { patchSettings, type UiSettings } from "../../app/settings.ts";
+import type { UiSettings } from "../../app/settings.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -3224,8 +3224,6 @@ describe("handleSendChat", () => {
   });
 
   it("keeps queued normal messages recallable before transcript history catches up", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    patchSettings({ chatFollowUpMode: "queue" });
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -3233,6 +3231,7 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "queued while busy",
       chatRunId: "run-1",
+      settings: { chatFollowUpMode: "queue" },
     });
 
     await handleSendChat(host);
@@ -3248,8 +3247,7 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("queued while busy");
   });
 
-  it("auto-steers messages sent during an active run by default", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
+  it("auto-steers messages sent during an active run with the default steer setting", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
         return { status: "started", runId: "steer-run" };
@@ -3262,6 +3260,7 @@ describe("handleSendChat", () => {
       chatRunId: "run-1",
       chatStream: "Working...",
       sessionKey: "agent:main:main",
+      settings: { chatFollowUpMode: "steer" },
     });
 
     await handleSendChat(host);
@@ -3282,12 +3281,12 @@ describe("handleSendChat", () => {
   });
 
   it("keeps busy sends queued in steer mode while disconnected", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
     const host = makeHost({
       client: null,
       connected: false,
       chatMessage: "queued while offline",
       chatRunId: "run-1",
+      settings: { chatFollowUpMode: "steer" },
     });
 
     await handleSendChat(host);

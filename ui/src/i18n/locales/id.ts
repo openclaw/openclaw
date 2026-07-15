@@ -495,6 +495,7 @@ export const id: TranslationMap = {
     cloudSecureContextRequired:
       "Worker cloud memerlukan konteks browser yang aman agar pemulihan dapat melindungi tugas Anda.",
     cloudStartFailed: "Sesi dibuat secara lokal, tetapi proses memulai cloud gagal: {error}",
+    cloudSyncsFolder: "Menyinkronkan {folder} ke worker cloud",
     folder: "Folder",
     folderPlaceholder: "Ruang kerja agen",
     browse: "Jelajahi folder",
@@ -3385,6 +3386,9 @@ export const id: TranslationMap = {
     sendShortcut: "Pintasan kirim",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "Tindak lanjut saat agen sedang bekerja",
+    followUpModeQueue: "Antrekan hingga proses berakhir",
+    followUpModeSteer: "Arahkan ke proses yang sedang aktif",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",

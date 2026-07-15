@@ -491,6 +491,7 @@ export const ar: TranslationMap = {
     cloudSecureContextRequired:
       "تحتاج عوامل السحابة إلى سياق متصفح آمن حتى تتمكن الاستعادة من حماية مهمتك.",
     cloudStartFailed: "تم إنشاء الجلسة محليًا، ولكن تعذّر بدء التشغيل السحابي: {error}",
+    cloudSyncsFolder: "يزامن {folder} مع العامل السحابي",
     folder: "المجلد",
     folderPlaceholder: "مساحة عمل الوكيل",
     browse: "تصفح المجلدات",
@@ -3353,6 +3354,9 @@ export const ar: TranslationMap = {
     sendShortcut: "اختصار الإرسال",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "المتابعات أثناء عمل الوكيل",
+    followUpModeQueue: "وضعها في قائمة الانتظار حتى انتهاء التشغيل",
+    followUpModeSteer: "توجيهها إلى التشغيل النشط",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",

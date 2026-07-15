@@ -495,6 +495,7 @@ export const fa: TranslationMap = {
     cloudSecureContextRequired:
       "عامل‌های ابری به یک محیط امن مرورگر نیاز دارند تا بازیابی بتواند از وظیفه شما محافظت کند.",
     cloudStartFailed: "نشست به‌صورت محلی ایجاد شد، اما راه‌اندازی ابری ناموفق بود: {error}",
+    cloudSyncsFolder: "پوشهٔ {folder} را با عامل ابری همگام‌سازی می‌کند",
     folder: "پوشه",
     folderPlaceholder: "فضای کاری Agent",
     browse: "مرور پوشه‌ها",
@@ -3382,6 +3383,9 @@ export const fa: TranslationMap = {
     sendShortcut: "میان‌بر ارسال",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "پیام‌های پیگیری هنگام کار عامل",
+    followUpModeQueue: "در صف نگه‌داشتن تا پایان اجرا",
+    followUpModeSteer: "هدایت به اجرای فعال",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",

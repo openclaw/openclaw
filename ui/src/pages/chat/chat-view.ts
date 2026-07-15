@@ -8,7 +8,7 @@ import type {
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { ChatSendShortcut } from "../../app/settings.ts";
+import type { ChatFollowUpMode, ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -126,6 +126,7 @@ export type ChatProps = {
   chatMessageMaxWidth?: string | null;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
+  followUpMode?: ChatFollowUpMode;
   assistantAvatar: string | null;
   userName?: string | null;
   userAvatar?: string | null;
@@ -338,6 +339,7 @@ export function renderChat(props: ChatProps) {
     providerUsage: props.providerUsage,
     assistantName: props.assistantName,
     sendShortcut: props.sendShortcut,
+    followUpMode: props.followUpMode,
     attachments: props.attachments,
     getAttachments: props.getAttachments,
     replyTarget: props.replyTarget,

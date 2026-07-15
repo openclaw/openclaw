@@ -5,7 +5,11 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
-import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
+import {
+  normalizeChatSendShortcut,
+  type ChatFollowUpMode,
+  type ChatSendShortcut,
+} from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
@@ -96,6 +100,7 @@ type ChatComposerProps = {
   providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
+  followUpMode?: ChatFollowUpMode;
   attachments?: ChatAttachment[];
   getAttachments?: () => ChatAttachment[];
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
@@ -1670,6 +1675,7 @@ type ChatRunControlsProps = {
   hasAttachments?: boolean;
   hasMessages: boolean;
   isBusy: boolean;
+  followUpMode?: ChatFollowUpMode;
   sending: boolean;
   voiceActive?: boolean;
   voiceStatus?: RealtimeTalkStatus;
@@ -1687,6 +1693,13 @@ type ChatRunControlsProps = {
 
 function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
+  const steersActiveRun = props.followUpMode !== "queue";
+  const activeRunActionLabel = steersActiveRun
+    ? t("chat.queue.steer")
+    : t("chat.runControls.queue");
+  const activeRunActionDescription = steersActiveRun
+    ? t("chat.followUpModeSteer")
+    : t("chat.runControls.queueMessage");
   const storeDraftAndSend = () => {
     if (props.draft.trim()) {
       props.onStoreDraft(props.draft);
@@ -1750,15 +1763,15 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
         ? html`
             ${hasComposedContent
               ? html`
-                  <openclaw-tooltip .content=${t("chat.runControls.queue")}>
+                  <openclaw-tooltip .content=${activeRunActionLabel}>
                     <button
                       class="chat-send-btn"
                       @click=${storeDraftAndSend}
                       ?disabled=${!props.canSend || props.sending}
-                      aria-label=${t("chat.runControls.queueMessage")}
+                      aria-label=${activeRunActionDescription}
                     >
                       ${icons.arrowUp}
-                      <span class="agent-chat__control-label">${t("chat.runControls.queue")}</span>
+                      <span class="agent-chat__control-label">${activeRunActionLabel}</span>
                     </button>
                   </openclaw-tooltip>
                 `
@@ -2120,6 +2133,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     hasAttachments: Boolean(props.attachments?.length),
     hasMessages: props.messages.length > 0,
     isBusy,
+    followUpMode: props.followUpMode,
     sending: props.sending,
     voiceActive: props.realtimeTalkActive,
     voiceStatus: props.realtimeTalkStatus,

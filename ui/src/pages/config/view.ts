@@ -1105,8 +1105,8 @@ function renderChatPreferencesSection(props: ConfigProps) {
           value: props.chatFollowUpMode,
           setting: "follow-up-mode",
           options: [
-            { value: "queue", label: t("chat.followUpModeQueue") },
             { value: "steer", label: t("chat.followUpModeSteer") },
+            { value: "queue", label: t("chat.followUpModeQueue") },
           ],
           onChange: (value) => props.setChatFollowUpMode(normalizeChatFollowUpMode(value)),
         })}

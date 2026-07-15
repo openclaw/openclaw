@@ -497,6 +497,7 @@ export const vi: TranslationMap = {
     cloudSecureContextRequired:
       "Worker đám mây cần ngữ cảnh trình duyệt bảo mật để tính năng khôi phục có thể bảo vệ tác vụ của bạn.",
     cloudStartFailed: "Phiên đã được tạo cục bộ, nhưng không thể khởi động trên đám mây: {error}",
+    cloudSyncsFolder: "Đồng bộ {folder} với worker trên đám mây",
     folder: "Thư mục",
     folderPlaceholder: "Không gian làm việc của agent",
     browse: "Duyệt thư mục",
@@ -3381,6 +3382,9 @@ export const vi: TranslationMap = {
     sendShortcut: "Phím tắt gửi",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "Tin nhắn tiếp theo trong khi tác nhân đang làm việc",
+    followUpModeQueue: "Xếp hàng đợi cho đến khi lượt chạy kết thúc",
+    followUpModeSteer: "Điều hướng lượt chạy đang hoạt động",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
