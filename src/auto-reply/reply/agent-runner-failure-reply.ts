@@ -166,14 +166,14 @@ const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
 const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but failed:";
 
-export type ExternalRunFailureReply = {
+type ExternalRunFailureReply = {
   text: string;
   isGenericRunnerFailure: boolean;
 };
 
 type ExternalRunFailureInput = string | { message: string; error?: unknown };
 
-export type ExternalFailureConversationContext = Pick<
+type ExternalFailureConversationContext = Pick<
   TemplateContext,
   "ChatType" | "Provider" | "SessionKey" | "Surface"
 >;

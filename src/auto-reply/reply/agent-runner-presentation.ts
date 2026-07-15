@@ -15,7 +15,7 @@ import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 
-export type AgentTurnPresentation = {
+type AgentTurnPresentation = {
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
   preparePartialForTyping: (payload: ReplyPayload) => string | undefined;
   handlePartialForTyping: (payload: ReplyPayload) => Promise<string | undefined>;
