@@ -76,6 +76,7 @@ const waitForActiveCronJobs = vi.fn(async (_timeoutMs?: number) => ({
 const reloadTaskRuntimeStateFromStore = vi.fn();
 const rotateAgentEventLifecycleGeneration = vi.fn();
 const clearRuntimeConfigSnapshot = vi.fn();
+const clearPluginCachesForInProcessRestart = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
   (_opts?: { env?: NodeJS.ProcessEnv }) => {
     mode: "spawned" | "supervised" | "disabled" | "failed";
@@ -208,6 +209,10 @@ vi.mock("../../infra/agent-events.js", () => ({
 
 vi.mock("../../config/runtime-snapshot.js", () => ({
   clearRuntimeConfigSnapshot: () => clearRuntimeConfigSnapshot(),
+}));
+
+vi.mock("../../plugins/loader.js", () => ({
+  clearPluginCachesForInProcessRestart: () => clearPluginCachesForInProcessRestart(),
 }));
 
 vi.mock("../../tasks/task-registry.maintenance.js", () => ({
@@ -979,6 +984,7 @@ describe("runGatewayLoop", () => {
       expect(
         resetGatewaySuspendCoordinatorForLifecycleRestart.mock.invocationCallOrder[0],
       ).toBeLessThan(resetAllLanes.mock.invocationCallOrder[0] ?? 0);
+      expect(clearPluginCachesForInProcessRestart).toHaveBeenCalledTimes(1);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(1);
       expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(1);

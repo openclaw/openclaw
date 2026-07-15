@@ -901,6 +901,7 @@ export async function runGatewayLoop(params: {
       // cancelled/completed work is not kept alive by old in-memory maps.
       const {
         abortActiveCronTaskRuns,
+        clearPluginCachesForInProcessRestart,
         advanceCronActiveJobGeneration,
         reloadTaskRuntimeStateFromStore,
         retireActiveCronTaskRunTracking,
@@ -930,6 +931,10 @@ export async function runGatewayLoop(params: {
       resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetAllLanes();
       clearRuntimeConfigSnapshot();
+      // Plugin registries/manifests are process-stable; an explicit in-process restart
+      // is the reload boundary, so drop them or updated workspace plugin code on disk
+      // never loads while the restart still logs "registered" (#103571).
+      clearPluginCachesForInProcessRestart();
       resetGatewayRestartStateForInProcessRestart();
       reloadTaskRuntimeStateFromStore();
       markGatewayRestartTrace("restart.next-start");

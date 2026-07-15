@@ -54,3 +54,4 @@ export { waitForActiveGatewayRootWork } from "../../process/gateway-work-admissi
 export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 export { reloadTaskRuntimeStateFromStore } from "../../tasks/runtime-internal.js";
 export { abortPendingChannelReloads } from "../../gateway/server-reload-handlers.js";
+export { clearPluginCachesForInProcessRestart } from "../../plugins/loader.js";

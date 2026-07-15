@@ -85,9 +85,14 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { clearPluginManifestLoadCache } from "./manifest.js";
 import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
 import { clearMemoryPluginState } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
+import {
+  clearNativeRequireJavaScriptModuleCache,
+  clearRequireModuleCacheUnderPluginRoot,
+} from "./native-module-require.js";
 import {
   fingerprintPluginDiscoveryContext,
   resolvePluginDiscoveryContext,
@@ -328,6 +333,25 @@ class PluginLoadFailureError extends Error {
 
 const { scoped: pluginLoaderCacheState, fullWorkspace: fullWorkspacePluginLoaderCacheState } =
   pluginLoaderCacheInstances;
+// Plugin entrypoints imported this process-lifetime; native-required JS lands in
+// Node's shared require.cache, which must be purged at the in-process restart
+// boundary or reloads re-serve stale module exports (#103571).
+const importedPluginModulePathsForRestart = new Map<string, string | undefined>();
+
+// Records a plugin module import for restart-boundary eviction. rootDir, when known,
+// becomes the eviction dependencyRoot so nested entrypoints (e.g. dist/index.js)
+// still evict plugin-owned modules elsewhere under the package root.
+function recordPluginModuleImportForRestart(modulePath: string, rootDir?: string): void {
+  const existing = importedPluginModulePathsForRestart.get(modulePath);
+  importedPluginModulePathsForRestart.set(modulePath, rootDir ?? existing);
+}
+
+export function getTrackedPluginModuleImportsForRestartForTests(): ReadonlyMap<
+  string,
+  string | undefined
+> {
+  return new Map(importedPluginModulePathsForRestart);
+}
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "gateway",
@@ -365,6 +389,38 @@ function createPluginCandidatesFromManifestRegistry(
     ...(record.packageManifest !== undefined ? { packageManifest: record.packageManifest } : {}),
   }));
 }
+export function clearPluginLoaderCache(): void {
+  pluginLoaderCacheState.clear();
+  fullWorkspacePluginLoaderCacheState.clear();
+  clearActivatedPluginRuntimeState();
+}
+
+/**
+ * Drops cached plugin registries, activated runtime state, and manifest reads at the
+ * in-process gateway restart boundary (SIGUSR1 / `gateway restart --safe`). Restart is
+ * the explicit reload moment for process-stable plugin state: without this, the next
+ * startup re-runs `register()` from the cached module graph and logs "registered"
+ * while updated workspace plugin source on disk never loads (#103571).
+ */
+export function clearPluginCachesForInProcessRestart(): void {
+  clearPluginLoaderCache();
+  clearPluginManifestLoadCache();
+  // Evict each tracked entrypoint plus its plugin-LOCAL dependency subtree so a
+  // fresh entrypoint is never paired with stale local exports while shared
+  // OpenClaw and third-party singleton modules stay untouched. Root-scoped
+  // purge covers jiti-transformed TypeScript entries too (jiti registers them
+  // in Node's CJS cache under their source paths, which the native-JS eviction
+  // cannot match by extension).
+  for (const [modulePath, rootDir] of importedPluginModulePathsForRestart) {
+    if (rootDir) {
+      clearRequireModuleCacheUnderPluginRoot(rootDir);
+    } else {
+      clearNativeRequireJavaScriptModuleCache(modulePath, {});
+    }
+  }
+  importedPluginModulePathsForRestart.clear();
+}
+
 export function clearActivatedPluginRuntimeState(): void {
   clearAgentHarnesses();
   clearPluginCommands();
@@ -470,6 +526,10 @@ function createPluginModuleLoader(options: {
       pluginSdkResolution: options.pluginSdkResolution,
     });
   };
+  // Restart tracking happens at the plugin-owned call sites (main, setup/runtime,
+  // CLI entrypoints) with each plugin's discovered root — never here: this loader
+  // also imports the shared plugin runtime module, and evicting that on restart
+  // would tear down a module graph core still holds.
   return (modulePath: string): unknown =>
     createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
 }
@@ -2098,11 +2158,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         recordImportedPluginId(record.id);
         pluginLoadAttemptCount++;
         logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`);
-        mod = withProfile(
-          { pluginId: record.id, source: safeSource },
-          registrationMode,
-          () => loadPluginModule(safeSource) as OpenClawPluginModule,
-        );
+        mod = withProfile({ pluginId: record.id, source: safeSource }, registrationMode, () => {
+          recordPluginModuleImportForRestart(safeSource, record.rootDir);
+          return loadPluginModule(safeSource) as OpenClawPluginModule;
+        });
       } catch (err) {
         recordPluginError({
           logger,
@@ -2202,7 +2261,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               runtimeMod = withProfile(
                 { pluginId: record.id, source: safeRuntimeSource },
                 "load-setup-runtime-entry",
-                () => loadPluginModule(safeRuntimeSource) as OpenClawPluginModule,
+                () => {
+                  recordPluginModuleImportForRestart(safeRuntimeSource, runtimeModuleRoot);
+                  return loadPluginModule(safeRuntimeSource) as OpenClawPluginModule;
+                },
               );
             } catch (err) {
               recordPluginError({
@@ -2849,11 +2911,10 @@ export async function loadOpenClawPluginCliRegistry(
 
     let mod: OpenClawPluginModule | null;
     try {
-      mod = withProfile(
-        { pluginId: record.id, source: safeSource },
-        "cli-metadata",
-        () => loadPluginModule(safeSource) as OpenClawPluginModule,
-      );
+      mod = withProfile({ pluginId: record.id, source: safeSource }, "cli-metadata", () => {
+        recordPluginModuleImportForRestart(safeSource, pluginRoot);
+        return loadPluginModule(safeSource) as OpenClawPluginModule;
+      });
     } catch (err) {
       recordPluginError({
         logger,

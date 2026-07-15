@@ -110,6 +110,22 @@ export function clearNativeRequireJavaScriptModuleCache(
   }
 }
 
+/**
+ * Clears every CJS-cached module under a plugin's package root, regardless of
+ * extension. TypeScript plugin entrypoints load through jiti, which registers
+ * transformed modules in Node's native require cache (moduleCache: true) keyed
+ * by their source path — the native-JS eviction above never matches ".ts", so
+ * restart eviction for a plugin with a known root purges by root containment.
+ */
+export function clearRequireModuleCacheUnderPluginRoot(rootDir: string): void {
+  const root = resolveRequireCachePath(rootDir);
+  for (const cachedPath of Object.keys(nodeRequire.cache)) {
+    if (isPathInsideOrSame(root, cachedPath)) {
+      delete nodeRequire.cache[cachedPath];
+    }
+  }
+}
+
 function resolveRequireCachePath(targetPath: string): string {
   try {
     return fs.realpathSync.native(targetPath);

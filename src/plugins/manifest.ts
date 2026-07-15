@@ -45,6 +45,14 @@ type PluginManifestLoadCacheEntry = {
 const pluginManifestLoadCache = new PluginLruCache<PluginManifestLoadCacheEntry>(
   MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES,
 );
+
+// The manifest load cache is process-stable and keyed by file identity, so an in-process
+// restart that reloads updated workspace plugin code must also drop cached manifests or the
+// next load re-serves stale metadata for changed plugins (#103571).
+export function clearPluginManifestLoadCache(): void {
+  pluginManifestLoadCache.clear();
+}
+
 export type PluginManifestChannelConfig = {
   schema: JsonSchemaObject;
   uiHints?: Record<string, PluginConfigUiHint>;
