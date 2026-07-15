@@ -397,12 +397,17 @@ export async function getReplyFromConfig(
     return nativeSlashCommandFastReply.reply;
   }
 
+  const isRuntimeManaged = Boolean(
+    resolveAgentConfig(cfg, agentId)?.runtime &&
+    resolveAgentConfig(cfg, agentId)!.runtime!.type !== "embedded",
+  );
   const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
     useFastTestBootstrap
       ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
       : await ensureAgentWorkspace({
           dir: workspaceDirRaw,
-          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+          ensureBootstrapFiles: !isRuntimeManaged && !agentCfg?.skipBootstrap && !isFastTestEnv,
+          runtimeManaged: isRuntimeManaged,
           skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
         }),
   );
