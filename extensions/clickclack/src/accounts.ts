@@ -60,7 +60,7 @@ export function resolveClickClackAccountConfig(
   if (accountTokenFile) {
     return {
       ...merged,
-      token: account.token,
+      token: account?.token,
       tokenFile: accountTokenFile,
     };
   }
