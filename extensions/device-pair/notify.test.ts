@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { listDevicePairing as listDevicePairingFn } from "openclaw/plugin-sdk/device-bootstrap";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -67,12 +70,15 @@ describe("device-pair notify persistence", () => {
     });
   }
 
-  function createApi(sendText?: ReturnType<typeof vi.fn>) {
+  function createApi(
+    sendText?: ReturnType<typeof vi.fn>,
+    openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T> = openStore,
+  ) {
     return createTestPluginApi({
       runtime: {
         state: {
           resolveStateDir: () => stateDir,
-          openKeyedStore: openStore,
+          openKeyedStore,
         },
         channel: {
           outbound: {
@@ -287,6 +293,43 @@ describe("device-pair notify persistence", () => {
       mode: "once",
       addedAtMs: 11_000,
     });
+    await service.stop?.({} as never);
+  });
+
+  it("rejects missing conditional-delete support before one-shot delivery", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const subscriber: NotifySubscription = {
+      to: "chat-123",
+      mode: "once",
+      addedAtMs: 1_000,
+      armId: "arm-1",
+    };
+    await openSubscriberStore().register(notifySubscriberStoreKey(subscriber), subscriber);
+    listDevicePairingMock.mockResolvedValue({
+      pending: [
+        {
+          requestId: "request-1",
+          deviceId: "device-1",
+          publicKey: "public-key-1",
+          ts: 2_000,
+        },
+      ],
+      paired: [],
+    });
+    const sendText = vi.fn(async () => ({ channel: "telegram", to: "chat-123" }));
+    const api = createApi(sendText, <T>(options: OpenKeyedStoreOptions) => {
+      const { deleteIf: _deleteIf, ...store } = openStore<T>(options);
+      return store;
+    });
+    const service = createPairingNotifierService(api);
+
+    await service.start({} as never);
+
+    expect(sendText).not.toHaveBeenCalled();
+    await expect(
+      openSubscriberStore().lookup(notifySubscriberStoreKey(subscriber)),
+    ).resolves.toEqual(subscriber);
     await service.stop?.({} as never);
   });
 

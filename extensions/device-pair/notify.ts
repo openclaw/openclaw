@@ -79,13 +79,21 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
   return lines.join("\n");
 }
 
-function openNotifySubscriberStore(
-  api: OpenClawPluginApi,
-): PluginStateKeyedStore<NotifySubscription> {
-  return api.runtime.state.openKeyedStore<NotifySubscription>({
+type NotifySubscriberStore = PluginStateKeyedStore<NotifySubscription> & {
+  deleteIf: NonNullable<PluginStateKeyedStore<NotifySubscription>["deleteIf"]>;
+};
+
+function openNotifySubscriberStore(api: OpenClawPluginApi): NotifySubscriberStore {
+  const store = api.runtime.state.openKeyedStore<NotifySubscription>({
     namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
     maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
   });
+  if (!store.deleteIf) {
+    throw new Error(
+      "device-pair notify requires a runtime with atomic plugin state conditional delete support",
+    );
+  }
+  return store as NotifySubscriberStore;
 }
 
 function openNotifySeenRequestStore(
@@ -168,19 +176,6 @@ function isSameNotifySubscription(
     current.mode === expected.mode &&
     current.addedAtMs === expected.addedAtMs &&
     notifySubscriberKey(current) === notifySubscriberKey(expected)
-  );
-}
-
-async function deleteNotifySubscriberIfUnchanged(params: {
-  store: PluginStateKeyedStore<NotifySubscription>;
-  key: string;
-  expected: NotifySubscription;
-}): Promise<void> {
-  if (!params.store.deleteIf) {
-    throw new Error("device-pair notify requires atomic plugin state conditional delete");
-  }
-  await params.store.deleteIf(params.key, (current) =>
-    isSameNotifySubscription(current, params.expected),
   );
 }
 
@@ -318,11 +313,9 @@ async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }):
           deliveredOneShots.add(entry.key);
           // Delivery is fallible and uncancellable. Delete only the exact arm
           // that was sent so an overlapping re-arm remains subscribed.
-          await deleteNotifySubscriberIfUnchanged({
-            store: subscriberStore,
-            key: entry.key,
-            expected: subscriber,
-          });
+          await subscriberStore.deleteIf(entry.key, (current) =>
+            isSameNotifySubscription(current, subscriber),
+          );
         }
       }
 
