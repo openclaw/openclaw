@@ -14,9 +14,7 @@ type SubagentRegistryMigrationDatabase = Pick<
   "migration_runs" | "migration_sources"
 >;
 
-type SubagentRegistryMigrationDecision =
-  | "receipt-authoritative"
-  | "retired-source-discarded";
+type SubagentRegistryMigrationDecision = "receipt-authoritative" | "retired-source-discarded";
 
 /** Records the irreversible retirement decision before Doctor removes the claimed file. */
 export function recordLegacySubagentRegistryDiscard(params: {
