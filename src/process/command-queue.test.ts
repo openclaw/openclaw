@@ -540,7 +540,9 @@ describe("command queue", () => {
           throw new Error("hook exploded");
         },
       });
-      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+      const firstRejected = expect(first).rejects.toMatchObject({
+        name: "CommandLaneTaskTimeoutError",
+      });
       let secondRan = false;
       const second = enqueueCommandInLane(lane, async () => {
         secondRan = true;

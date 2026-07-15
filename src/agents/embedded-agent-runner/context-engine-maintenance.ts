@@ -1,7 +1,6 @@
 /**
  * Schedules and runs deferred context-engine turn maintenance.
  */
-import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
@@ -11,7 +10,6 @@ import type {
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
   ContextEngineSessionTarget,
-  TranscriptRewriteResult,
 } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -22,7 +20,6 @@ import {
 } from "../../process/command-queue.js";
 import {
   completeTaskRunByRunId,
-  createQueuedTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
   startTaskRunByRunId,
@@ -34,79 +31,31 @@ import {
 } from "../../tasks/task-owner-access.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
+import {
+  createDeferredTurnMaintenanceAbortSignal,
+  resetDeferredTurnMaintenanceAbortStateForTest,
+} from "./context-engine-maintenance-abort-signal.js";
+import {
+  buildTurnMaintenanceTaskDescriptor,
+  markDeferredTurnMaintenanceTaskScheduleFailure,
+  markDeferredTurnMaintenanceTaskTimeout,
+  promoteTurnMaintenanceTaskVisibility,
+  TURN_MAINTENANCE_TASK_KIND,
+} from "./context-engine-maintenance-descriptor.js";
+import {
+  createDeferredTurnMaintenancePersistenceCheckpoint,
+  type DeferredTurnMaintenanceFence,
+  type DeferredTurnMaintenancePersistenceCheckpoint,
+  fencedTranscriptRewriteResult,
+} from "./context-engine-maintenance-fence.js";
 import { log } from "./logger.js";
 import {
   rewriteTranscriptEntriesInRuntimeTranscript,
   rewriteTranscriptEntriesInSessionManager,
 } from "./transcript-rewrite.js";
 
-const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
-const TURN_MAINTENANCE_TASK_LABEL = "Context engine turn maintenance";
-const TURN_MAINTENANCE_TASK_TASK = "Deferred context-engine maintenance after turn.";
 const TURN_MAINTENANCE_LANE_PREFIX = "context-engine-turn-maintenance:";
 const TURN_MAINTENANCE_LONG_WAIT_MS = 10_000;
-const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
-  "openclaw.contextEngineTurnMaintenanceAbortState",
-);
-
-/**
- * Per-run safety fence shared between the queue timeout hook and the running
- * worker. Once a deferred run times out the lane is released and a queued user
- * turn can proceed, so a worker still unwinding must not perform late side
- * effects (transcript rewrite, task complete/fail, progress) against state the
- * foreground turn has already read.
- */
-type DeferredTurnMaintenanceFence = { tripped: boolean };
-
-/**
- * Bounded read checkpoint that complements the write-side fence. The lane (and
- * therefore the read barrier the next same-session turn awaits) is released at
- * the timeout point for liveness, while a transcript persist admitted just
- * before the timeout may still be awaiting I/O in the background worker. This
- * tracker lets the timeout path wait for that single in-flight persist to
- * settle so the next same-session read never observes a half-applied rewrite.
- * It is bounded to one persist: once the fence trips the rewrite helper no-ops
- * every fresh request, so no new persist can start after a timeout.
- */
-type DeferredTurnMaintenancePersistenceCheckpoint = {
-  /** Record the promise for a persist attempt as it begins. */
-  track: (persist: Promise<unknown>) => void;
-  /** Resolve once the currently in-flight persist settles, or immediately when none is. */
-  waitForInFlight: () => Promise<void>;
-};
-
-function createDeferredTurnMaintenancePersistenceCheckpoint(): DeferredTurnMaintenancePersistenceCheckpoint {
-  let inFlight: Promise<unknown> | undefined;
-  return {
-    track: (persist) => {
-      inFlight = persist;
-      // Clear once settled so a later waitForInFlight never blocks on a persist
-      // that already finished (and never rethrows its failure into the barrier).
-      const clear = () => {
-        if (inFlight === persist) {
-          inFlight = undefined;
-        }
-      };
-      persist.then(clear, clear);
-    },
-    waitForInFlight: async () => {
-      const current = inFlight;
-      if (!current) {
-        return;
-      }
-      await current.catch(() => {});
-    },
-  };
-}
-
-function fencedTranscriptRewriteResult(): TranscriptRewriteResult {
-  return {
-    changed: false,
-    bytesFreed: 0,
-    rewrittenEntries: 0,
-    reason: "maintenance fenced after timeout",
-  };
-}
 
 type DeferredTurnMaintenanceScheduleParams = {
   contextEngine: ContextEngine;
@@ -132,47 +81,6 @@ type DeferredTurnMaintenanceRunState = {
 const activeDeferredTurnMaintenanceRuns = new Map<string, DeferredTurnMaintenanceRunState>();
 
 type SessionManagerRewriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
-
-type DeferredTurnMaintenanceSignal = "SIGINT" | "SIGTERM";
-type DeferredTurnMaintenanceProcessLike = Pick<NodeJS.Process, "on" | "off"> &
-  Partial<Pick<NodeJS.Process, "listenerCount" | "kill" | "pid">> & {
-    [DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY]?: DeferredTurnMaintenanceAbortState;
-  };
-type DeferredTurnMaintenanceAbortState = {
-  registered: boolean;
-  controllers: Set<AbortController>;
-  cleanupHandlers: Map<DeferredTurnMaintenanceSignal, () => void>;
-};
-
-function resolveDeferredTurnMaintenanceAbortState(
-  processLike: DeferredTurnMaintenanceProcessLike,
-): DeferredTurnMaintenanceAbortState {
-  const existing = processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
-  if (existing) {
-    return existing;
-  }
-  const created: DeferredTurnMaintenanceAbortState = {
-    registered: false,
-    controllers: new Set<AbortController>(),
-    cleanupHandlers: new Map<DeferredTurnMaintenanceSignal, () => void>(),
-  };
-  processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY] = created;
-  return created;
-}
-
-function unregisterDeferredTurnMaintenanceAbortSignalHandlers(
-  processLike: DeferredTurnMaintenanceProcessLike,
-  state: DeferredTurnMaintenanceAbortState,
-): void {
-  if (!state.registered) {
-    return;
-  }
-  for (const [signal, handler] of state.cleanupHandlers) {
-    processLike.off(signal, handler);
-  }
-  state.cleanupHandlers.clear();
-  state.registered = false;
-}
 
 function normalizeSessionKey(sessionKey?: string): string | undefined {
   return normalizeOptionalString(sessionKey) || undefined;
@@ -208,81 +116,9 @@ async function disposeDeferredMaintenanceContextEngine(
   }
 }
 
-function createDeferredTurnMaintenanceAbortSignal(params?: {
-  processLike?: DeferredTurnMaintenanceProcessLike;
-}): {
-  abortSignal?: AbortSignal;
-  dispose: () => void;
-} {
-  if (typeof AbortController === "undefined") {
-    return { abortSignal: undefined, dispose: () => {} };
-  }
-
-  const processLike = (params?.processLike ?? process) as DeferredTurnMaintenanceProcessLike;
-  const state = resolveDeferredTurnMaintenanceAbortState(processLike);
-  const handleTerminationSignal = (signalName: DeferredTurnMaintenanceSignal) => {
-    const shouldReraise =
-      typeof processLike.listenerCount === "function"
-        ? processLike.listenerCount(signalName) === 1
-        : false;
-    for (const activeController of state.controllers) {
-      if (!activeController.signal.aborted) {
-        activeController.abort(
-          new Error(`received ${signalName} while waiting for deferred maintenance`),
-        );
-      }
-    }
-    state.controllers.clear();
-    unregisterDeferredTurnMaintenanceAbortSignalHandlers(processLike, state);
-    if (shouldReraise && typeof processLike.kill === "function") {
-      try {
-        processLike.kill(processLike.pid ?? process.pid, signalName);
-      } catch {
-        // Ignore shutdown-path failures.
-      }
-    }
-  };
-  if (!state.registered) {
-    state.registered = true;
-    const onSigint = () => handleTerminationSignal("SIGINT");
-    const onSigterm = () => handleTerminationSignal("SIGTERM");
-    state.cleanupHandlers.set("SIGINT", onSigint);
-    state.cleanupHandlers.set("SIGTERM", onSigterm);
-    processLike.on("SIGINT", onSigint);
-    processLike.on("SIGTERM", onSigterm);
-  }
-
-  const controller = new AbortController();
-  state.controllers.add(controller);
-  let disposed = false;
-
-  const cleanup = () => {
-    if (disposed) {
-      return;
-    }
-    disposed = true;
-    state.controllers.delete(controller);
-    if (state.controllers.size === 0) {
-      unregisterDeferredTurnMaintenanceAbortSignalHandlers(processLike, state);
-    }
-  };
-
-  return {
-    abortSignal: controller.signal,
-    dispose: cleanup,
-  };
-}
-
 function resetDeferredTurnMaintenanceStateForTest(): void {
   activeDeferredTurnMaintenanceRuns.clear();
-  const processLike = process as DeferredTurnMaintenanceProcessLike;
-  const state = processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
-  if (!state) {
-    return;
-  }
-  state.controllers.clear();
-  unregisterDeferredTurnMaintenanceAbortSignalHandlers(processLike, state);
-  delete processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
+  resetDeferredTurnMaintenanceAbortStateForTest();
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -300,78 +136,6 @@ export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: stri
     return;
   }
   await activeDeferredTurnMaintenanceRuns.get(normalizedSessionKey)?.promise;
-}
-
-function markDeferredTurnMaintenanceTaskScheduleFailure(params: {
-  sessionKey: string;
-  taskId: string;
-  error: unknown;
-}): void {
-  const errorMessage = formatErrorMessage(params.error);
-  log.warn(`failed to schedule deferred context engine maintenance: ${errorMessage}`);
-  cancelTaskByIdForOwner({
-    taskId: params.taskId,
-    callerOwnerKey: params.sessionKey,
-    endedAt: Date.now(),
-    terminalSummary: `Deferred maintenance could not be scheduled: ${errorMessage}`,
-  });
-}
-
-function markDeferredTurnMaintenanceTaskTimeout(params: {
-  sessionKey: string;
-  taskId: string;
-  timeoutMs: number;
-}): void {
-  log.warn(
-    `deferred context engine maintenance timed out: sessionKey=${params.sessionKey} ` +
-      `taskId=${params.taskId} taskTimeoutMs=${params.timeoutMs}`,
-  );
-  cancelTaskByIdForOwner({
-    taskId: params.taskId,
-    callerOwnerKey: params.sessionKey,
-    endedAt: Date.now(),
-    terminalSummary: `Deferred maintenance timed out after ${params.timeoutMs}ms.`,
-  });
-}
-
-function buildTurnMaintenanceTaskDescriptor(params: {
-  sessionKey: string;
-  runId?: string;
-  notifyPolicy?: "silent" | "done_only" | "state_changes";
-  deliveryStatus?: "not_applicable" | "pending";
-}) {
-  const runId =
-    params.runId ??
-    `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`;
-  return createQueuedTaskRun({
-    runtime: "acp",
-    taskKind: TURN_MAINTENANCE_TASK_KIND,
-    sourceId: TURN_MAINTENANCE_TASK_KIND,
-    requesterSessionKey: params.sessionKey,
-    ownerKey: params.sessionKey,
-    scopeKind: "session",
-    runId,
-    label: TURN_MAINTENANCE_TASK_LABEL,
-    task: TURN_MAINTENANCE_TASK_TASK,
-    notifyPolicy: params.notifyPolicy ?? "silent",
-    // Fast maintenance stays silent and must not create a one-task flow.
-    // Long-running and failed workers promote it to pending before notifying.
-    deliveryStatus: params.deliveryStatus ?? "not_applicable",
-    preferMetadata: true,
-  });
-}
-
-function promoteTurnMaintenanceTaskVisibility(params: {
-  sessionKey: string;
-  runId: string;
-  notifyPolicy: "done_only" | "state_changes";
-}) {
-  return buildTurnMaintenanceTaskDescriptor({
-    sessionKey: params.sessionKey,
-    runId: params.runId,
-    notifyPolicy: params.notifyPolicy,
-    deliveryStatus: "pending",
-  });
 }
 
 /**
