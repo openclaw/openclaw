@@ -1014,6 +1014,53 @@ describe("parseCliJsonl", () => {
     );
   });
 
+  it("keeps max-turn context values UTF-16 safe when an emoji straddles the 200-char head boundary", () => {
+    // Regression: `formatCliOutputError` formats the user-visible message
+    // "OpenClaw run: <runId>. OpenClaw session: <sessionId>." through the
+    // internal `normalizeCliContextValue` helper. The old helper used a raw
+    // `slice(0, 200)` so an emoji (or any astral code point) landing at the
+    // 200th UTF-16 code unit would leave a lone high surrogate. That surrogate
+    // then propagated through `JSON.stringify` (used by the CLI streaming
+    // path) and was rewritten to U+FFFD in the user-visible error string.
+    //
+    // The fix replaces the raw slice with the shared `sliceUtf16Safe` helper
+    // from `@openclaw/normalization-core/utf16-slice` (mirrors the Wave 2
+    // UTF-16-safe cohort, e.g. #102949 / #104540 / #104423).
+    const runId = `${"a".repeat(199)}\u{1F600}tail`;
+    const sessionId = `${"b".repeat(199)}\u{1F680}tail`;
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        session_id: "session-utf16-boundary",
+        errors: ["Reached maximum number of turns (1)"],
+        terminal_reason: "max_turns",
+      }),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    const formatted = formatCliOutputError(result!, { runId, sessionId });
+
+    // No lone surrogate should remain anywhere in the formatted error.
+    expect(formatted).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
+    // The head must end on a code-point boundary, not in the middle of an
+    // astral code point. Both runId and sessionId have an emoji straddling
+    // index 200, so both should be trimmed to 199 ASCII chars.
+    expect(formatted).toContain(`OpenClaw run: ${"a".repeat(199)}.`);
+    expect(formatted).toContain(`OpenClaw session: ${"b".repeat(199)}.`);
+    // And the result must round-trip through JSON.stringify without forcing
+    // any surrogate to U+FFFD.
+    const roundTripped = structuredClone({ formatted }) as { formatted: string };
+    expect(roundTripped.formatted).toBe(formatted);
+  });
+
   it("does not apply Claude terminal semantics to an explicit Gemini dialect", () => {
     const result = parseCliJsonl(
       JSON.stringify({

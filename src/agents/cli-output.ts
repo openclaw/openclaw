@@ -7,7 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { CliBackendConfig } from "../config/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
-import { isRecord } from "../utils.js";
+import { isRecord, sliceUtf16Safe } from "../utils.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -61,8 +61,8 @@ export type CliOutput = {
 };
 
 function normalizeCliContextValue(value: string | undefined): string | undefined {
-  const normalized = value?.trim().replace(/\s+/g, " ");
-  return normalized ? normalized.slice(0, 200) : undefined;
+  const v = value?.trim().replace(/\s+/g, " ");
+  return v ? sliceUtf16Safe(v, 0, 200) : undefined;
 }
 
 export function formatCliOutputError(
