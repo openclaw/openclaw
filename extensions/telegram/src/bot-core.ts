@@ -78,16 +78,10 @@ const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
 };
 const TELEGRAM_TYPING_COALESCE_MS = 4_000;
 
-let telegramBotRuntimeForTest: TelegramBotRuntime | undefined;
-
-export function setTelegramBotRuntimeForTest(runtime?: TelegramBotRuntime): void {
-  telegramBotRuntimeForTest = runtime;
-}
-
 export function createTelegramBotCore(
   opts: TelegramBotOptions & { telegramDeps: TelegramBotDeps },
 ): TelegramBotInstance {
-  const botRuntime = telegramBotRuntimeForTest ?? DEFAULT_TELEGRAM_BOT_RUNTIME;
+  const botRuntime = DEFAULT_TELEGRAM_BOT_RUNTIME;
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const telegramDeps = opts.telegramDeps;
   const cfg = opts.config ?? telegramDeps.getRuntimeConfig();

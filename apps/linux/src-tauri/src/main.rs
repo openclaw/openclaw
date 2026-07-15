@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 mod canvas;
 mod cli;
 mod gateway;
@@ -280,28 +281,41 @@ async fn gateway_action(
 }
 
 fn main() {
-    let app = canvas::register_protocol(tauri::Builder::default())
-        .setup(|app| {
-            let window = app
-                .get_webview_window("main")
-                .expect("tauri.conf.json must define the main window");
-            let state = DesktopState::new(window.url()?);
-            app.manage(state.clone());
-            match canvas::CanvasBridge::start(app.handle().clone()) {
-                Ok(bridge) => {
-                    app.manage(bridge);
-                }
-                Err(error) => eprintln!("Canvas bridge unavailable: {error}"),
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "linux")]
+    let builder = canvas::register_protocol(builder);
+
+    let builder = builder.setup(|app| {
+        let window = app
+            .get_webview_window("main")
+            .expect("tauri.conf.json must define the main window");
+        let state = DesktopState::new(window.url()?);
+        app.manage(state.clone());
+        #[cfg(target_os = "linux")]
+        match canvas::CanvasBridge::start(app.handle().clone()) {
+            Ok(bridge) => {
+                app.manage(bridge);
             }
-            state.set_tray(tray::build(app, state.clone())?);
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            bootstrap,
-            canvas::canvas_a2ui_action,
-            install_cli,
-            gateway_action
-        ])
+            Err(error) => eprintln!("Canvas bridge unavailable: {error}"),
+        }
+        state.set_tray(tray::build(app, state.clone())?);
+        Ok(())
+    });
+    #[cfg(target_os = "linux")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        bootstrap,
+        canvas::canvas_a2ui_action,
+        install_cli,
+        gateway_action
+    ]);
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        bootstrap,
+        install_cli,
+        gateway_action
+    ]);
+
+    let app = builder
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.app_handle().state::<DesktopState>();
@@ -314,10 +328,13 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("OpenClaw desktop app failed");
     app.run(|app, event| {
+        #[cfg(target_os = "linux")]
         if matches!(event, tauri::RunEvent::Exit) {
             if let Some(bridge) = app.try_state::<canvas::CanvasBridge>() {
                 bridge.shutdown();
             }
         }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (app, event);
     });
 }

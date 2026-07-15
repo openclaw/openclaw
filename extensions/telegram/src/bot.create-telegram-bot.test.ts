@@ -51,7 +51,6 @@ const {
   setMessageReactionSpy,
   setMyCommandsSpy,
   telegramBotDepsForTest,
-  telegramBotRuntimeForTest,
   throttlerSpy,
   useSpy,
 } = harness;
@@ -60,8 +59,7 @@ type BuildModelsProviderDataMock = ReturnType<
 >;
 const { resolveTelegramFetch } = await import("./fetch.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
-const { createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-  await import("./bot-core.js");
+const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const { getTelegramSequentialKey } = await import("./sequential-key.js");
 const {
   createTelegramSpooledReplayDeferredParticipant,
@@ -71,7 +69,7 @@ const {
 } = await import("./bot-processing-outcome.js");
 const { TELEGRAM_RICH_TEXT_LIMIT } = await import("./rich-message.js");
 const { resolveTelegramConversationRoute } = await import("./conversation-route.js");
-const { clearAccountThrottlersForTest } = await import("./account-throttler.js");
+const { resetTelegramAccountThrottlersForTest } = await import("./runtime.test-support.js");
 const {
   buildTelegramGroupFrom,
   buildTelegramThreadParams,
@@ -256,11 +254,8 @@ describe("createTelegramBot", () => {
     process.env.OPENCLAW_STATE_DIR = createTelegramBotTestStateDir();
     resetTelegramForumFlagCacheForTest();
     pluginRuntime.clearPluginInteractiveHandlers();
-    clearAccountThrottlersForTest();
+    resetTelegramAccountThrottlersForTest();
     throttlerSpy.mockReset();
-    setTelegramBotRuntimeForTest(
-      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-    );
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         ...opts,

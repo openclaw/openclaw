@@ -1,6 +1,7 @@
 // Telegram tests cover send plugin behavior.
 import fs from "node:fs";
 import type { Bot } from "grammy";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -13,10 +14,14 @@ import {
   buildTelegramConversationContext,
   createTelegramMessageCache,
   resolveTelegramMessageCacheScope,
-  resetTelegramMessageCacheBucketsForTest,
 } from "./message-cache.js";
 import { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
-import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import { setTelegramRuntime } from "./runtime.js";
+import {
+  clearTelegramRuntimeForTest as clearTelegramRuntime,
+  resetTelegramMessageCacheForTest as resetTelegramMessageCacheBucketsForTest,
+  resetTelegramSentMessageCacheForTest,
+} from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import type { TelegramApiOverride } from "./send.js";
 import {
@@ -27,10 +32,7 @@ import {
 import {
   TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
   TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
-  clearSentMessageCache,
   recordSentMessage,
-  resetSentMessageCacheForTest,
-  setTelegramSentMessageStoreForTest,
   wasSentByBot,
 } from "./sent-message-cache.js";
 
@@ -128,7 +130,13 @@ const sendMessageTelegram: typeof sendMessageTelegramImpl = async (to, text, opt
   );
 
 const TELEGRAM_TEST_CFG = {};
-let sentMessageStore: NonNullable<Parameters<typeof setTelegramSentMessageStoreForTest>[0]>;
+type PersistedSentMessageForTest = {
+  scopeKey: string;
+  chatId: string;
+  messageId: string;
+  timestamp: number;
+};
+let sentMessageStore: PluginStateSyncKeyedStore<PersistedSentMessageForTest>;
 
 function markdownTable(columns: number): string {
   return [
@@ -158,16 +166,18 @@ function countTelegramRichHtmlBlocks(html: string): number {
 
 beforeEach(() => {
   resetPluginStateStoreForTests({ closeDatabase: false });
-  installTelegramStateRuntimeForTest();
   sentMessageStore = createPluginStateSyncKeyedStoreForTests("telegram", {
     namespace: TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
     maxEntries: TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
   });
   sentMessageStore.clear();
-  setTelegramSentMessageStoreForTest(sentMessageStore);
+  installTelegramStateRuntimeForTest(sentMessageStore);
+  resetTelegramSentMessageCacheForTest();
 });
 
-function installTelegramStateRuntimeForTest(): void {
+function installTelegramStateRuntimeForTest(
+  syncStore: PluginStateSyncKeyedStore<PersistedSentMessageForTest>,
+): void {
   setTelegramRuntime({
     state: {
       openKeyedStore: ((options) =>
@@ -175,11 +185,7 @@ function installTelegramStateRuntimeForTest(): void {
           "telegram",
           options,
         )) as TelegramRuntime["state"]["openKeyedStore"],
-      openSyncKeyedStore: ((options) =>
-        createPluginStateSyncKeyedStoreForTests(
-          "telegram",
-          options,
-        )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      openSyncKeyedStore: (() => syncStore) as TelegramRuntime["state"]["openSyncKeyedStore"],
     },
     channel: {},
   } as TelegramRuntime);
@@ -402,9 +408,8 @@ function capturedLogText(logFile: string): string {
 }
 
 afterEach(() => {
+  resetTelegramSentMessageCacheForTest();
   clearTelegramRuntime();
-  clearSentMessageCache();
-  setTelegramSentMessageStoreForTest(undefined);
   resetPluginStateStoreForTests();
   setLoggerOverride(null);
   resetLogger();
@@ -435,16 +440,8 @@ describe("sent-message-cache", () => {
     expect(wasSentByBot(123, 1)).toBe(true);
   });
 
-  it("clears cache", () => {
-    recordSentMessage(123, 1);
-    expect(wasSentByBot(123, 1)).toBe(true);
-
-    clearSentMessageCache();
-    expect(wasSentByBot(123, 1)).toBe(false);
-  });
-
   it("keeps sent-message cache storage failures best-effort", () => {
-    setTelegramSentMessageStoreForTest({
+    installTelegramStateRuntimeForTest({
       ...sentMessageStore,
       entries() {
         throw new Error("read boom");
@@ -460,7 +457,7 @@ describe("sent-message-cache", () => {
 
   it("persists only the newly recorded sent-message row", () => {
     const persistedMessageIds: string[] = [];
-    setTelegramSentMessageStoreForTest({
+    installTelegramStateRuntimeForTest({
       ...sentMessageStore,
       register(key, value, options) {
         sentMessageStore.register(key, value, options);
@@ -479,7 +476,7 @@ describe("sent-message-cache", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-26T12:00:00.000Z"));
     const ttlByMessageId = new Map<string, number>();
-    setTelegramSentMessageStoreForTest({
+    installTelegramStateRuntimeForTest({
       ...sentMessageStore,
       register(key, value, options) {
         sentMessageStore.register(key, value, options);
@@ -502,20 +499,13 @@ describe("sent-message-cache", () => {
     recordSentMessage(123, 1, sentMessageCfg);
     expect(wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
 
-    resetSentMessageCacheForTest();
+    resetTelegramSentMessageCacheForTest();
 
     const restartedCache = await importFreshModule<typeof import("./sent-message-cache.js")>(
       import.meta.url,
       "./sent-message-cache.js?scope=restart",
     );
-    restartedCache.setTelegramSentMessageStoreForTest(sentMessageStore);
-
-    try {
-      expect(restartedCache.wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
-    } finally {
-      restartedCache.clearSentMessageCache();
-      restartedCache.setTelegramSentMessageStoreForTest(undefined);
-    }
+    expect(restartedCache.wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
   });
 
   it("keeps expired custom-store cleanup away from the default store", () => {
@@ -566,21 +556,13 @@ describe("sent-message-cache", () => {
       import.meta.url,
       "./sent-message-cache.js?scope=shared-b",
     );
-    cacheA.setTelegramSentMessageStoreForTest(sentMessageStore);
-    cacheB.setTelegramSentMessageStoreForTest(sentMessageStore);
-
-    cacheA.clearSentMessageCache();
+    resetTelegramSentMessageCacheForTest();
 
     try {
       cacheA.recordSentMessage(123, 1);
       expect(cacheB.wasSentByBot(123, 1)).toBe(true);
-
-      cacheB.clearSentMessageCache();
-      expect(cacheA.wasSentByBot(123, 1)).toBe(false);
     } finally {
-      cacheA.clearSentMessageCache();
-      cacheA.setTelegramSentMessageStoreForTest(undefined);
-      cacheB.setTelegramSentMessageStoreForTest(undefined);
+      resetTelegramSentMessageCacheForTest();
     }
   });
 });

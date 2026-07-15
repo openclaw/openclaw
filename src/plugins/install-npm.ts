@@ -89,7 +89,9 @@ export async function installPluginFromNpmSpec(
       error: metadataResult.error,
       ...(isNpmPackageNotFoundMessage(metadataResult.error)
         ? { code: PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND }
-        : {}),
+        : metadataResult.category === "metadata-env"
+          ? { code: PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE }
+          : {}),
     };
   }
   const npmResolution: NpmSpecResolution = {
