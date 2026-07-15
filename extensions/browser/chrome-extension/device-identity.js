@@ -14,7 +14,18 @@ function base64url(buffer) {
 }
 
 async function generateIdentity() {
-  const keyPair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+  let keyPair;
+  try {
+    keyPair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+  } catch (err) {
+    // Ed25519 WebCrypto is only enabled by default from Chrome 137, but the rest
+    // of the extension supports the manifest's minimum (125) and keeps working,
+    // so name the real cause instead of surfacing a bare NotSupportedError.
+    throw new Error(
+      "The side panel needs Chrome 137 or newer (for Ed25519 device keys). The rest of the extension works on older versions.",
+      { cause: err },
+    );
+  }
   const publicKeyRaw = await crypto.subtle.exportKey("raw", keyPair.publicKey);
   const privateKeyPkcs8 = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
   const hashBuf = await crypto.subtle.digest("SHA-256", publicKeyRaw);

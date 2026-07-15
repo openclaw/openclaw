@@ -51,6 +51,7 @@ let gatewayToken = "";
 let reqCounter = 0;
 const pendingReqs = new Map();
 let reconnectTimer = null;
+let pairingRetryTimer = null;
 let reconnectAttempt = 0;
 let cachedIdentity = null;
 
@@ -198,11 +199,16 @@ function dropSocket() {
   const old = ws;
   ws = null;
   subscribedKey = null;
-  // A retry scheduled by an earlier close would fire alongside the connect()
-  // that follows this drop, leaving two live sockets.
+  // A retry scheduled by an earlier close or pairing response would fire
+  // alongside the connect() that follows this drop, leaving two live sockets —
+  // or tear down a healthy one once pairing is approved.
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
+  }
+  if (pairingRetryTimer) {
+    clearTimeout(pairingRetryTimer);
+    pairingRetryTimer = null;
   }
   old?.close();
   abandonInFlightTurn("Disconnected");
@@ -221,6 +227,19 @@ function scheduleReconnect() {
 }
 
 async function handleChallenge(payload) {
+  try {
+    await signChallenge(payload);
+  } catch (err) {
+    // Why auth failed is the whole diagnostic: an unsupported-Chrome build and a
+    // rejected credential both end here, and "Auth failed" alone tells the user
+    // neither.
+    const failure = err instanceof Error ? err.message : String(err);
+    setWsStatus("err", "Auth failed");
+    addMessage("system", failure);
+  }
+}
+
+async function signChallenge(payload) {
   cachedIdentity ??= await getOrCreateIdentity();
   const device = await buildDeviceBlock(cachedIdentity, {
     clientId: CLIENT_ID,
@@ -260,7 +279,7 @@ async function handleChallenge(payload) {
 
 function handleMessage(msg) {
   if (msg.type === "event" && msg.event === "connect.challenge") {
-    handleChallenge(msg.payload).catch(() => setWsStatus("err", "Auth failed"));
+    void handleChallenge(msg.payload);
     return;
   }
   if (msg.type === "res" && msg.ok && msg.payload?.type === "hello-ok") {
@@ -279,7 +298,12 @@ function handleMessage(msg) {
           "Device not paired yet. Approve it on the gateway (openclaw devices) — retrying…",
         ).classList.add("pairing-msg");
       }
-      setTimeout(() => {
+      // The gateway closes the socket after this response, so its close listener
+      // also schedules a retry. Track this timer or a stale one fires later and
+      // tears down an already-healthy connection mid-turn.
+      clearTimeout(pairingRetryTimer);
+      pairingRetryTimer = setTimeout(() => {
+        pairingRetryTimer = null;
         dropSocket();
         void connect();
       }, 5000);
@@ -454,10 +478,30 @@ function handleChatEvent(payload) {
     return;
   }
   if (payload.state === "final" || payload.state === "aborted" || payload.state === "error") {
-    if (streamingEl && payload.state === "error" && payload.errorMessage) {
-      streamingText += `\n[Error: ${payload.errorMessage}]`;
+    // A reconnect mid-run can deliver ONLY this event: the gateway dedupes its
+    // pre-terminal flush against what it already broadcast, so the reply reaches
+    // the new socket once, in this payload's snapshot. With no bubble to fold it
+    // into it would be dropped silently — the failure mode this panel exists to
+    // avoid — so render the snapshot here.
+    if (!streamingEl) {
+      const update = applyChatDelta(stream, payload);
+      if (update?.segmentText) {
+        streamingEl = addMessage("assistant", "");
+        streamingText = update.segmentText;
+        streamingEl.innerHTML = renderMarkdownLite(streamingText);
+      }
+    }
+    if (payload.state === "error" && payload.errorMessage) {
+      // An error before any delta has no bubble either; say so rather than just
+      // handing the composer back with nothing on screen.
+      if (!streamingEl) {
+        streamingEl = addMessage("assistant", "");
+        streamingText = "";
+      }
+      streamingText += `${streamingText ? "\n" : ""}[Error: ${payload.errorMessage}]`;
       streamingEl.innerHTML = renderMarkdownLite(streamingText);
     }
+    messagesEl.scrollTop = messagesEl.scrollHeight;
     finalizeBubble();
     resetChatStream(stream);
     setInputEnabled(true);
@@ -600,6 +644,24 @@ async function onNewChat() {
   if (pinnedTabId == null || !mainSessionKey) {
     return;
   }
+  // The generation bump is persisted, so a failure after it would leave the
+  // pane showing the old thread while sessionKey already points at the new one,
+  // and later sends would land somewhere the user cannot see. Refuse up front
+  // rather than half-applying the swap, and report the rest.
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    addMessage("system", "Not connected to the gateway yet — reconnecting.");
+    return;
+  }
+  try {
+    await startFreshThread();
+  } catch (err) {
+    const failure = err instanceof Error ? err.message : String(err);
+    addMessage("system", `Could not start a fresh conversation: ${failure}`);
+    setInputEnabled(true);
+  }
+}
+
+async function startFreshThread() {
   const generation = await bumpTabGeneration(pinnedTabId);
   sessionKey = deriveTabSessionKey(mainSessionKey, pinnedTabId, generation);
   await ensureSession(sessionKey);
