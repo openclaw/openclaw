@@ -7,7 +7,10 @@ import type { TerminalGatewayClient } from "./terminal-connection.ts";
 
 type CreateOptions = {
   parent: HTMLElement;
-  terminalOptions?: { fontFamily?: string };
+  terminalOptions?: {
+    fontFamily?: string;
+    theme?: { background?: string; foreground?: string };
+  };
   onData?: (bytes: Uint8Array) => void;
   onResize?: (size: { columns: number; rows: number }) => void;
 };
@@ -241,6 +244,56 @@ describe("OpenClawTerminalPanel", () => {
       controller.terminal,
       0,
     );
+  });
+
+  it("answers live OSC default-color queries with the terminal theme", async () => {
+    const controller = createTerminalController();
+    createGhosttyTerminalMock.mockResolvedValue(controller);
+    const requests: Array<{ method: string; params: unknown }> = [];
+    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        return (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T;
+      },
+      addEventListener: (nextListener) => {
+        listener = nextListener;
+        return () => {};
+      },
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    panel.toggle();
+    await vi.waitFor(() => {
+      expect(requests.some(({ method }) => method === "terminal.resize")).toBe(true);
+    });
+
+    const query = "\u001b]10;?\u001b\\\u001b]11;?\u001b\\";
+    listener?.({
+      event: "terminal.data",
+      payload: { sessionId: "session-1", seq: query.length, data: query },
+    });
+
+    await vi.waitFor(() => {
+      expect(requests).toContainEqual({
+        method: "terminal.input",
+        params: {
+          sessionId: "session-1",
+          data: "\u001b]10;rgb:d7d7/dada/e0e0\u001b\\",
+        },
+      });
+      expect(requests).toContainEqual({
+        method: "terminal.input",
+        params: {
+          sessionId: "session-1",
+          data: "\u001b]11;rgb:0e0e/1010/1515\u001b\\",
+        },
+      });
+    });
+    expect(new TextDecoder().decode(controller.write.mock.calls[0]?.[0])).toBe(query);
   });
 
   it("flushes keystrokes entered while open is in flight after resize resync", async () => {

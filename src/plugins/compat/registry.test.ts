@@ -50,6 +50,9 @@ describe("plugin compatibility registry", () => {
       expect(record.introduced, record.code).toMatch(datePattern);
       expect(record.docsPath, record.code).toMatch(/^\//u);
       if (record.status === "deprecated") {
+        expect(record.deprecated, record.code).toMatch(datePattern);
+        expect(record.warningStarts, record.code).toMatch(datePattern);
+        expect(record.removeAfter, record.code).toMatch(datePattern);
         expect(record.replacement, record.code).toMatch(/\S/u);
       }
       expectNonEmptyStringList(record.surfaces, `${record.code}: surfaces`);

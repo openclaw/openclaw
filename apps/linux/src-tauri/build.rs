@@ -4,6 +4,8 @@ fn main() {
     const COMMANDS: &[&str] = &[
         "bootstrap",
         "canvas_a2ui_action",
+        "connect_discovered_gateway",
+        "discover_gateways",
         "gateway_action",
         "install_cli",
     ];

@@ -6,6 +6,7 @@ import { parse } from "yaml";
 import {
   buildReleaseCandidateState,
   buildPublishCommand,
+  buildTelegramArtifactInputs,
   candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
@@ -98,6 +99,16 @@ describe("release candidate checklist", () => {
     expect(output).toHaveLength(2 * 1024 * 1024);
   });
 
+  it("passes scoped environment overrides to release child commands", () => {
+    const output = run(
+      process.execPath,
+      ["-e", "process.stdout.write(process.env.OPENCLAW_RELEASE_TEST_VALUE ?? '')"],
+      { capture: true, env: { OPENCLAW_RELEASE_TEST_VALUE: "passed" } },
+    );
+
+    expect(output).toBe("passed");
+  });
+
   it("keeps the frozen release target separate from clean trusted workflow tooling", () => {
     expect(
       validateCandidateCheckout({
@@ -161,6 +172,11 @@ describe("release candidate checklist", () => {
     ).toThrow("clean tracked tooling checkout");
     const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
     expect(source).toContain('const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url))');
+    expect(source).toContain('mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"))');
+    expect(source).toContain(
+      '["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"]',
+    );
+    expect(source).toContain("cwd: TOOLING_ROOT");
     expect(source).toContain("`+refs/heads/${workflowRef}:${remoteRef}`");
     expect(source).toContain('"worktree", "add", "--detach", toolingRoot, trustedToolingSha');
     expect(source).toContain(
@@ -443,9 +459,10 @@ describe("release candidate checklist", () => {
   });
 
   it("runs Parallels against the exact prepared candidate tarball", () => {
-    expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz")).toEqual([
-      "test:parallels:npm-update",
-      "--",
+    expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [], "/trusted")).toEqual([
+      "exec",
+      "tsx",
+      "/trusted/scripts/e2e/parallels/npm-update-smoke.ts",
       "--target-tarball",
       ".artifacts/preflight/openclaw.tgz",
       "--json",
@@ -465,12 +482,15 @@ describe("release candidate checklist", () => {
       ),
     ).toContain("'--target-tarball' '.artifacts/preflight/openclaw candidate.tgz'");
     expect(
-      candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [
-        ".artifacts/preflight/openclaw-ai.tgz",
-      ]),
+      candidateParallelsArgs(
+        ".artifacts/preflight/openclaw.tgz",
+        [".artifacts/preflight/openclaw-ai.tgz"],
+        "/trusted",
+      ),
     ).toEqual([
-      "test:parallels:npm-update",
-      "--",
+      "exec",
+      "tsx",
+      "/trusted/scripts/e2e/parallels/npm-update-smoke.ts",
       "--target-tarball",
       ".artifacts/preflight/openclaw.tgz",
       "--dependency-tarball",
@@ -952,6 +972,37 @@ describe("release candidate checklist", () => {
         "openclaw-npm-preflight-",
       ),
     ).toBe("openclaw-npm-preflight-dba00");
+  });
+
+  it("builds the complete immutable Telegram artifact identity tuple", () => {
+    expect(
+      buildTelegramArtifactInputs({
+        artifact: {
+          digest: `sha256:${"a".repeat(64)}`,
+          id: 123,
+          name: "openclaw-npm-preflight-v2026.7.2-beta.1",
+          workflowRunId: 456,
+        },
+        manifest: {
+          packageVersion: "2026.7.2-beta.1",
+          tarballName: "openclaw-2026.7.2-beta.1.tgz",
+          tarballSha256: "b".repeat(64),
+        },
+        runAttempt: 2,
+        runId: "456",
+        sourceSha: "c".repeat(40),
+      }),
+    ).toEqual({
+      package_artifact_digest: "a".repeat(64),
+      package_artifact_id: 123,
+      package_artifact_name: "openclaw-npm-preflight-v2026.7.2-beta.1",
+      package_artifact_run_attempt: 2,
+      package_artifact_run_id: "456",
+      package_file_name: "openclaw-2026.7.2-beta.1.tgz",
+      package_sha256: "b".repeat(64),
+      package_source_sha: "c".repeat(40),
+      package_version: "2026.7.2-beta.1",
+    });
   });
 
   it("bounds GitHub API requests with a timeout signal", async () => {

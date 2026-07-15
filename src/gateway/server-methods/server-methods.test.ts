@@ -16,11 +16,11 @@ import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
-  clearContextEngineRuntimeQuarantine,
   clearContextEnginesForOwner,
   registerContextEngineForOwner,
   resolveContextEngine,
 } from "../../context-engine/registry.js";
+import { resetContextEngineRuntimeQuarantineForTests } from "../../context-engine/registry.test-support.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -4864,14 +4864,14 @@ describe("gateway healthHandlers.health cache freshness", () => {
     pricingState.clearGatewayModelPricingFailures();
     registerLegacyContextEngine();
     clearContextEnginesForOwner(contextEngineTestOwner);
-    clearContextEngineRuntimeQuarantine();
+    resetContextEngineRuntimeQuarantineForTests();
   });
 
   afterEach(() => {
     pricingState.replaceGatewayModelPricingCache(new Map(), 0);
     pricingState.clearGatewayModelPricingFailures();
     clearContextEnginesForOwner(contextEngineTestOwner);
-    clearContextEngineRuntimeQuarantine();
+    resetContextEngineRuntimeQuarantineForTests();
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {

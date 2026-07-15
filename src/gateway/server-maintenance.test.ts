@@ -9,7 +9,6 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
-import { isManagedWorktreeOwnerActive } from "./worktree-owner-activity.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
 
@@ -209,7 +208,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const timers = startGatewayMaintenanceTimers(deps);
     await Promise.resolve();
 
-    expect(gc).toHaveBeenCalledWith({ isOwnerActive: isManagedWorktreeOwnerActive, limits: {} });
+    expect(gc).toHaveBeenCalledWith({ shouldProtectOwner: expect.any(Function), limits: {} });
     stopMaintenanceTimers(timers);
   });
 

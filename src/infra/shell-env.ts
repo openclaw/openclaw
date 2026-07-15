@@ -321,16 +321,17 @@ export function getShellPathFromLoginShell(opts: {
 
 type UserShellExecutableResolution = {
   executable: string;
-  /** Present only when resolution required the login-shell PATH fallback. */
+  /** Present only when the login-shell PATH selected the executable. */
   pathEnv?: string;
 };
 
-export function resolveExecutableFromUserShellPathWithPathEnv(
+export function resolveExecutableFromUserShellPath(
   executable: string,
   opts: {
     env: NodeJS.ProcessEnv;
     pathEnv?: string;
     includeExtensionless?: boolean;
+    strategy: "fallback" | "prefer";
     timeoutMs?: number;
     exec?: typeof execFileSync;
     platform?: NodeJS.Platform;
@@ -342,7 +343,7 @@ export function resolveExecutableFromUserShellPathWithPathEnv(
     opts.env,
     { includeExtensionless: opts.includeExtensionless },
   );
-  if (direct) {
+  if (direct && opts.strategy === "fallback") {
     return { executable: direct };
   }
   const shellPath = getShellPathFromLoginShell({
@@ -352,12 +353,15 @@ export function resolveExecutableFromUserShellPathWithPathEnv(
     platform: opts.platform,
   });
   if (!shellPath) {
-    return undefined;
+    return direct ? { executable: direct } : undefined;
   }
   const resolved = resolveExecutableFromPathEnv(executable, shellPath, opts.env, {
     includeExtensionless: opts.includeExtensionless,
   });
-  return resolved ? { executable: resolved, pathEnv: shellPath } : undefined;
+  if (resolved) {
+    return { executable: resolved, pathEnv: shellPath };
+  }
+  return direct ? { executable: direct } : undefined;
 }
 
 export function getShellEnvAppliedKeys(): string[] {

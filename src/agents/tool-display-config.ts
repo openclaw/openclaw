@@ -313,12 +313,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     gateway: {
       emoji: "🔌",
       title: "Gateway",
-      actions: {
-        restart: {
-          label: "restart",
-          detailKeys: ["reason", "delayMs"],
-        },
-      },
+      detailKeys: ["action", "path"],
     },
     exec: {
       emoji: "🛠️",

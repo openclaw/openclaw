@@ -97,6 +97,8 @@ struct OpenClawApp: App {
                 .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
                 .environment(self.tailscaleService)
         }
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         .windowResizability(.contentSize)
         .commands {
@@ -313,21 +315,6 @@ final class StatusItemMouseRouter: NSResponder {
             guard let self else { return event }
             return self.route(event)
         }
-    }
-
-    func uninstall() {
-        if let eventMonitor {
-            self.eventMonitorRemover(eventMonitor)
-            self.eventMonitor = nil
-        }
-        if let button, let trackingArea {
-            button.removeTrackingArea(trackingArea)
-        }
-        self.button = nil
-        self.trackingArea = nil
-        self.onLeftClick = nil
-        self.onRightClick = nil
-        self.onHoverChanged = nil
     }
 
     func route(_ event: NSEvent) -> NSEvent? {

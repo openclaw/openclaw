@@ -617,6 +617,13 @@ const DiscordAccountSchema = z
     configWrites: z.boolean().optional(),
     token: SecretInputSchema.optional().register(sensitive),
     applicationId: DiscordIdSchema.optional(),
+    activities: z
+      .object({
+        clientSecret: z.string().min(1).optional().register(sensitive),
+        applicationId: DiscordSnowflakeStringSchema.optional(),
+      })
+      .strict()
+      .optional(),
     proxy: z.string().optional(),
     gatewayInfoTimeoutMs: z.number().int().positive().max(120_000).optional(),
     gatewayReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),

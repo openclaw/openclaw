@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createSkillUploadStore, SkillUploadRequestError } from "./upload-store.js";
+import { SkillUploadRequestError } from "./upload-store.js";
+import { createSkillUploadStore } from "./upload-store.test-support.js";
 
 const ACTIVE_UPLOAD_LIMIT = 32;
 

@@ -981,6 +981,73 @@ describe("Codex app-server dynamic tool build", () => {
       nativeToolSurfaceEnabled: true,
     });
     expect(gatewayTools.map((tool) => tool.name)).toEqual(["message"]);
+
+    const allowlistedParams = {
+      ...gatewayParams,
+      toolsAllow: ["message"],
+    } as EmbeddedRunAttemptParams;
+    const allowlistedTools = await buildDynamicToolsForTest(allowlistedParams, workspaceDir, {
+      nativeToolSurfaceEnabled: true,
+    });
+    expect(allowlistedTools.map((tool) => tool.name)).toEqual(["message"]);
+  });
+
+  it("restores the policy-filtered OpenClaw shell when a finite allowlist disables native Code Mode", async () => {
+    const execTool = createRuntimeDynamicTool("exec");
+    const processTool = createRuntimeDynamicTool("process");
+    const messageTool = createRuntimeDynamicTool("message");
+    setOpenClawCodingToolsFactoryForTests(() => [execTool, processTool, messageTool]);
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "restricted-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["exec", "process", "message"];
+    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled,
+    });
+
+    expect(nativeToolSurfaceEnabled).toBe(false);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "exec",
+      "process",
+      "message",
+      "node_exec",
+      "node_process",
+    ]);
+
+    const bridge = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+      loading: "direct",
+    });
+    await bridge.handleToolCall({
+      threadId: "restricted-thread",
+      turnId: "restricted-turn",
+      tool: "exec",
+      callId: "restricted-exec",
+      arguments: { command: "echo restored" },
+    });
+    expect(execTool.execute).toHaveBeenCalledWith(
+      "restricted-exec",
+      { command: "echo restored" },
+      expect.any(AbortSignal),
+      undefined,
+    );
+
+    const excludedTools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled,
+      pluginConfig: { codexDynamicToolsExclude: ["exec", "process"] },
+    });
+    expect(excludedTools.map((tool) => tool.name)).toEqual(["message"]);
+
+    const messageOnlyTools = await buildDynamicToolsForTest(
+      { ...params, toolsAllow: ["message"] },
+      workspaceDir,
+      { nativeToolSurfaceEnabled: false },
+    );
+    expect(messageOnlyTools.map((tool) => tool.name)).toEqual(["message"]);
   });
 
   it("exposes Docker sandbox shell tools when native Code Mode cannot honor sandbox paths", async () => {
@@ -1024,9 +1091,12 @@ describe("Codex app-server dynamic tool build", () => {
 
     const disabledSandboxTools = await buildDynamicToolsForTest(params, workspaceDir, {
       sandbox: { enabled: false, backendId: "ssh" } as never,
+      nativeToolSurfaceEnabled: false,
     });
 
     expect(disabledSandboxTools.map((tool) => tool.name)).toEqual([
+      "exec",
+      "process",
       "message",
       "node_exec",
       "node_process",
@@ -1046,6 +1116,7 @@ describe("Codex app-server dynamic tool build", () => {
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       sandbox: { enabled: true, backendId: "ssh" } as never,
+      nativeToolSurfaceEnabled: false,
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(["message"]);
@@ -1066,6 +1137,7 @@ describe("Codex app-server dynamic tool build", () => {
     for (const excludedToolName of ["sandbox_exec", "process"]) {
       const tools = await buildDynamicToolsForTest(params, workspaceDir, {
         sandbox: { enabled: true, backendId: "ssh" } as never,
+        nativeToolSurfaceEnabled: false,
         pluginConfig: { codexDynamicToolsExclude: [excludedToolName] },
       });
 

@@ -269,6 +269,10 @@
             "type": "boolean",
             "default": false
           },
+          "loopDetectionPreToolUseRelay": {
+            "type": "boolean",
+            "default": true
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
@@ -584,6 +588,11 @@
     "appServer.codeModeOnly": {
       "label": "Code Mode Only",
       "help": "Expose Codex's code-mode-only tool surface. OpenClaw dynamic tools remain available through Codex nested tool calls.",
+      "advanced": true
+    },
+    "appServer.loopDetectionPreToolUseRelay": {
+      "label": "Loop Detection Pre-tool Relay",
+      "help": "Install the Codex PreToolUse subprocess used only for OpenClaw loop detection and its no-policy marker. Disable to reduce per-tool process fan-out; before-tool and trusted policy relays remain enforced.",
       "advanced": true
     },
     "appServer.requestTimeoutMs": {

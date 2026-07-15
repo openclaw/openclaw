@@ -12,7 +12,7 @@ import {
   saveAuthProfileStore,
 } from "../auth-profiles.js";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
-import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.js";
+import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.test-support.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";

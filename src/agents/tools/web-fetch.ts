@@ -364,7 +364,12 @@ function normalizeContentType(value: string | null | undefined): string | undefi
   }
   const [raw] = value.split(";");
   const trimmed = raw?.trim();
-  return trimmed || undefined;
+  return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
+function isJsonMediaType(value: string): boolean {
+  // Structured +json subtypes are single JSON documents; sequence formats are not.
+  return value === "application/json" || value.endsWith("+json");
 }
 
 type WebFetchRuntimeParams = {
@@ -655,13 +660,13 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     let title: string | undefined;
     let extractor = "raw";
     let text = body;
-    if (contentType.includes("text/markdown")) {
+    if (normalizedContentType === "text/markdown") {
       // Cloudflare Markdown for Agents: server returned pre-rendered markdown
       extractor = "cf-markdown";
       if (params.extractMode === "text") {
         text = markdownToText(body);
       }
-    } else if (contentType.includes("text/html")) {
+    } else if (normalizedContentType === "text/html") {
       if (params.readabilityEnabled) {
         const readable = await extractReadableContent({
           html: body,
@@ -718,7 +723,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
         );
       }
-    } else if (contentType.includes("application/json")) {
+    } else if (isJsonMediaType(normalizedContentType)) {
       try {
         text = JSON.stringify(JSON.parse(body), null, 2);
         extractor = "json";

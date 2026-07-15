@@ -297,7 +297,7 @@ export function createRuntimeSecretsActivator(params: {
           activationParams.activate &&
           !params.prepareRuntimeSecretsSnapshot &&
           !params.activateRuntimeSecretsSnapshot &&
-          assignmentConfig === sourceConfig
+          assignmentConfig === undefined
         ) {
           const fastPath = prepareSecretsRuntimeFastPathSnapshot({
             config: sourceConfig,
@@ -339,7 +339,7 @@ export function createRuntimeSecretsActivator(params: {
           () =>
             prepareRuntimeSecretsSnapshot({
               config: sourceConfig,
-              ...(assignmentConfig !== sourceConfig ? { assignmentConfig } : {}),
+              ...(assignmentConfig !== undefined ? { assignmentConfig } : {}),
               ...(activationParams.env ? { env: activationParams.env } : {}),
               includeAuthStoreRefs: activationParams.includeAuthStoreRefs,
               ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
