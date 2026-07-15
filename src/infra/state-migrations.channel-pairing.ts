@@ -112,6 +112,8 @@ function parseAllowFromFilename(
       targets.push({ channel: channel as PairingChannel, accountId: matchingAccountIds[0] });
     } else if (matchingAccountIds.length > 1) {
       hasAccountCollision = true;
+    } else if (accountKey === DEFAULT_ACCOUNT_ID && CHANNEL_IDS.includes(channel)) {
+      targets.push({ channel: channel as PairingChannel, accountId: DEFAULT_ACCOUNT_ID });
     }
   }
   if (hasAccountCollision || targets.length > 1) {
