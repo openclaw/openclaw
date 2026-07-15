@@ -90,11 +90,11 @@ describe("SessionSchema maintenance extensions", () => {
     ["resetArchiveRetention", "0h0m"],
     ["resetArchiveRetention", 0],
   ] as const)("rejects zero-value %s: %s", (field, value) => {
-      const result = SessionSchema.safeParse({
-        maintenance: { [field]: value },
-      });
-      expect(result.success).toBe(false);
-      expect(result.error?.issues[0]?.path).toContain(field);
+    const result = SessionSchema.safeParse({
+      maintenance: { [field]: value },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toContain(field);
   });
 
   it.each(["pruneAfter", "resetArchiveRetention"] as const)(
@@ -107,8 +107,8 @@ describe("SessionSchema maintenance extensions", () => {
   );
 
   it("still accepts false resetArchiveRetention", () => {
-    expect(
-      SessionSchema.safeParse({ maintenance: { resetArchiveRetention: false } }).success,
-    ).toBe(true);
+    expect(SessionSchema.safeParse({ maintenance: { resetArchiveRetention: false } }).success).toBe(
+      true,
+    );
   });
 });

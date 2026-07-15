@@ -23,9 +23,7 @@ describe("session maintenance zero-duration migrations", () => {
 
     const result = applyLegacyDoctorMigrations(raw);
     expect(getMaintenance(result.next)).not.toHaveProperty("pruneAfter");
-    expect(result.changes).toEqual([
-      expect.stringContaining("documented 30d default applies"),
-    ]);
+    expect(result.changes).toEqual([expect.stringContaining("documented 30d default applies")]);
     expect(applyLegacyDoctorMigrations(result.next)).toEqual({ next: null, changes: [] });
   });
 

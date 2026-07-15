@@ -20,10 +20,7 @@ function hasLegacyParentForkMaxTokens(value: unknown): boolean {
 
 type SessionMaintenanceDurationKey = "pruneAfter" | "resetArchiveRetention";
 
-function getZeroDurationValue(
-  raw: unknown,
-  key: SessionMaintenanceDurationKey,
-): string | null {
+function getZeroDurationValue(raw: unknown, key: SessionMaintenanceDurationKey): string | null {
   const maintenance = getRecord(raw);
   if (!maintenance || !Object.hasOwn(maintenance, key)) {
     return null;
@@ -116,10 +113,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
         );
       }
 
-      const resetArchiveRetention = getZeroDurationValue(
-        maintenance,
-        "resetArchiveRetention",
-      );
+      const resetArchiveRetention = getZeroDurationValue(maintenance, "resetArchiveRetention");
       if (resetArchiveRetention !== null) {
         // False is the canonical keep-archives setting. Deleting the field also
         // keeps archives today, but explicit false preserves operator intent.
