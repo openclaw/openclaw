@@ -1,7 +1,7 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-// Google Meet plugin module implements meet behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveAttendanceGraceMinutes } from "./attendance-grace.js";
 import { exportGoogleDriveDocumentText, extractGoogleDriveDocumentId } from "./drive.js";
 import { googleApiError } from "./google-api-errors.js";
 
@@ -738,8 +738,8 @@ function decorateAttendanceRow(
   const conferenceEndMs = parseGoogleMeetTimestamp(conferenceRecord.endTime);
   const firstJoinMs = parseGoogleMeetTimestamp(firstJoinTime);
   const lastLeaveMs = parseGoogleMeetTimestamp(lastLeaveTime);
-  const lateGraceMs = (params.lateAfterMinutes ?? 5) * 60_000;
-  const earlyGraceMs = (params.earlyBeforeMinutes ?? 5) * 60_000;
+  const lateGraceMs = resolveAttendanceGraceMinutes(params.lateAfterMinutes) * 60_000;
+  const earlyGraceMs = resolveAttendanceGraceMinutes(params.earlyBeforeMinutes) * 60_000;
   const lateByMs =
     conferenceStartMs !== undefined && firstJoinMs !== undefined
       ? Math.max(firstJoinMs - conferenceStartMs, 0)

@@ -528,6 +528,35 @@ describe("google-meet CLI", () => {
     },
   );
 
+  it.each([
+    ["1.5", "late-after-minutes must be a positive integer between 1 and"],
+    ["0", "late-after-minutes must be a positive integer between 1 and"],
+    [
+      String(Number.MAX_SAFE_INTEGER),
+      "late-after-minutes must be a positive integer between 1 and",
+    ],
+  ])("rejects invalid attendance grace minutes: %s", async (value, message) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "attendance",
+          "--access-token",
+          "token",
+          "--conference-record",
+          "rec-1",
+          "--late-after-minutes",
+          value,
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow(message);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("prints markdown artifact and attendance output", async () => {
     stubMeetArtifactsApi();
     const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-artifacts-"));

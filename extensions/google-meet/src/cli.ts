@@ -12,6 +12,7 @@ import {
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import prettyMilliseconds from "pretty-ms";
+import { parseEarlyBeforeMinutesOption, parseLateAfterMinutesOption } from "./attendance-grace.js";
 import {
   buildGoogleMeetCalendarDayWindow,
   findGoogleMeetCalendarEvent,
@@ -46,7 +47,6 @@ import {
   waitForGoogleMeetAuthCode,
 } from "./oauth.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
-
 type JoinOptions = {
   transport?: GoogleMeetTransport;
   mode?: GoogleMeetModeInput;
@@ -791,8 +791,8 @@ function resolveArtifactTokenOptions(
     allConferenceRecords: Boolean(options.allConferenceRecords),
     includeDocumentBodies: Boolean(options.includeDocBodies),
     mergeDuplicateParticipants: options.mergeDuplicates !== false,
-    lateAfterMinutes: parseOptionalNumber(options.lateAfterMinutes),
-    earlyBeforeMinutes: parseOptionalNumber(options.earlyBeforeMinutes),
+    lateAfterMinutes: parseLateAfterMinutesOption(options.lateAfterMinutes),
+    earlyBeforeMinutes: parseEarlyBeforeMinutesOption(options.earlyBeforeMinutes),
   };
 }
 

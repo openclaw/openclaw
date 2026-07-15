@@ -1564,6 +1564,54 @@ describe("google-meet plugin", () => {
     ]);
   });
 
+  it("keeps late detection finite when lateAfterMinutes would overflow", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.pathname === "/v2/conferenceRecords/rec-1") {
+        return jsonResponse({
+          name: "conferenceRecords/rec-1",
+          startTime: "2026-04-25T10:00:00Z",
+          endTime: "2026-04-27T11:00:00Z",
+        });
+      }
+      if (url.pathname === "/v2/conferenceRecords/rec-1/participants") {
+        return jsonResponse({
+          participants: [
+            {
+              name: "conferenceRecords/rec-1/participants/p1",
+              signedinUser: { user: "users/alice", displayName: "Alice" },
+            },
+          ],
+        });
+      }
+      if (url.pathname === "/v2/conferenceRecords/rec-1/participants/p1/participantSessions") {
+        return jsonResponse({
+          participantSessions: [
+            {
+              name: "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
+              // More than default 5-minute grace after conference start.
+              startTime: "2026-04-25T10:30:00Z",
+              endTime: "2026-04-25T11:00:00Z",
+            },
+          ],
+        });
+      }
+      return new Response(`unexpected ${url.pathname}`, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchGoogleMeetAttendance({
+      accessToken: "token",
+      conferenceRecord: "rec-1",
+      // Overflow-class input must not disable late detection via Infinity grace.
+      lateAfterMinutes: 1e308,
+    });
+
+    expect(result.attendance).toHaveLength(1);
+    expect(result.attendance[0]?.late).toBe(true);
+    expect(result.attendance[0]?.lateByMs).toBe(30 * 60_000);
+  });
+
   it("surfaces Developer Preview acknowledgment blockers in preflight reports", () => {
     const report = buildGoogleMeetPreflightReport({
       input: "abc-defg-hij",

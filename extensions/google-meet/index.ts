@@ -17,6 +17,10 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import {
+  optionalAttendanceGraceMinutesSchema,
+  readAttendanceGraceParam,
+} from "./src/attendance-grace.js";
+import {
   buildGoogleMeetCalendarDayWindow,
   findGoogleMeetCalendarEvent,
   listGoogleMeetCalendarEvents,
@@ -44,11 +48,8 @@ import {
 } from "./src/node-invoke-policy.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
 import { isGoogleMeetBrowserManualActionError } from "./src/transports/chrome-create.js";
-
 const loadGoogleMeetCreateModule = createLazyRuntimeModule(() => import("./src/create.js"));
-
 const loadGoogleMeetCliModule = createLazyRuntimeModule(() => import("./src/cli.js"));
-
 const googleMeetConfigSchema = {
   parse(value: unknown) {
     return resolveGoogleMeetConfig(value);
@@ -223,7 +224,6 @@ const googleMeetConfigSchema = {
     },
   },
 };
-
 const GoogleMeetToolSchema = Type.Object({
   action: Type.String({
     enum: [
@@ -338,19 +338,18 @@ const GoogleMeetToolSchema = Type.Object({
   mergeDuplicateParticipants: Type.Optional(
     Type.Boolean({ description: "For attendance, merge duplicate participant resources." }),
   ),
-  lateAfterMinutes: optionalPositiveIntegerSchema({
-    description: "For attendance, mark participants late after this many minutes.",
-  }),
-  earlyBeforeMinutes: optionalPositiveIntegerSchema({
-    description: "For attendance, mark early leavers before this many minutes.",
-  }),
+  lateAfterMinutes: optionalAttendanceGraceMinutesSchema(
+    "For attendance, mark participants late after this many minutes.",
+  ),
+  earlyBeforeMinutes: optionalAttendanceGraceMinutesSchema(
+    "For attendance, mark early leavers before this many minutes.",
+  ),
   accessToken: Type.Optional(Type.String({ description: "Access token override" })),
   refreshToken: Type.Optional(Type.String({ description: "Refresh token override" })),
   clientId: Type.Optional(Type.String({ description: "OAuth client id override" })),
   clientSecret: Type.Optional(Type.String({ description: "OAuth client secret override" })),
   expiresAt: Type.Optional(Type.Number({ description: "Cached access token expiry ms" })),
 });
-
 function asParamRecord(params: unknown): Record<string, unknown> {
   return params && typeof params === "object" && !Array.isArray(params)
     ? (params as Record<string, unknown>)
@@ -621,8 +620,8 @@ async function resolveArtifactQueryFromParams(
     includeDocumentBodies: raw.includeDocumentBodies === true,
     allConferenceRecords: raw.includeAllConferenceRecords === true,
     mergeDuplicateParticipants: raw.mergeDuplicateParticipants !== false,
-    lateAfterMinutes: readPositiveIntegerParam(raw, "lateAfterMinutes"),
-    earlyBeforeMinutes: readPositiveIntegerParam(raw, "earlyBeforeMinutes"),
+    lateAfterMinutes: readAttendanceGraceParam(raw, "lateAfterMinutes"),
+    earlyBeforeMinutes: readAttendanceGraceParam(raw, "earlyBeforeMinutes"),
   };
 }
 
