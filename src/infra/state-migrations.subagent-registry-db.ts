@@ -14,7 +14,7 @@ type SubagentRegistryMigrationDatabase = Pick<
   "migration_runs" | "migration_sources"
 >;
 
-export type SubagentRegistryMigrationDecision =
+type SubagentRegistryMigrationDecision =
   | "receipt-authoritative"
   | "retired-source-discarded";
 
