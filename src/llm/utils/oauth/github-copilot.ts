@@ -2,7 +2,6 @@
  * GitHub Copilot OAuth flow
  */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   assertOkOrThrowProviderError,
