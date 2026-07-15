@@ -745,10 +745,18 @@ describe("chat pane catalog session lifecycle", () => {
     pane.loadOlderMessages = vi.fn(async () => undefined);
     vi.stubGlobal("IntersectionObserver", undefined);
     const thread = document.createElement("div");
+    class TestTouchEvent extends Event {
+      readonly touches: TouchList;
+
+      constructor(type: string, clientY: number) {
+        super(type);
+        this.touches = [{ clientY }] as unknown as TouchList;
+      }
+    }
+    vi.stubGlobal("TouchEvent", TestTouchEvent);
     const touchEvent = (type: string, clientY: number) => {
-      const event = new TouchEvent(type);
+      const event = new TestTouchEvent(type, clientY);
       Object.defineProperty(event, "currentTarget", { value: thread });
-      Object.defineProperty(event, "touches", { value: [{ clientY }] });
       return event;
     };
 

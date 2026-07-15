@@ -64,11 +64,12 @@ describe("MattermostConfigSchema", () => {
           label: "Shelling",
           maxLines: 4,
           toolProgress: false,
+          commandText: "status",
         },
       },
       accounts: {
         quiet: {
-          streaming: { mode: "off" },
+          streaming: { mode: "off", preview: { commandText: "raw" } },
         },
       },
     });
