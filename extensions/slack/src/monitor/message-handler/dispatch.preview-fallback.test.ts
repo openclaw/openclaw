@@ -101,6 +101,7 @@ let capturedReplyOptions:
         summary?: string;
       }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
+      onQueuedFollowupAdmitted?: () => Promise<void> | void;
     }
   | undefined;
 let capturedStatusReactionOptions: { enabled?: boolean; initialEmoji?: string } | undefined;
@@ -651,25 +652,23 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
     },
     createChannelProgressDraftGate: (params: { onStart: () => void | Promise<void> }) => {
       let started = false;
-      let workEvents = 0;
+      const startNow = async () => {
+        if (!started) {
+          started = true;
+          await params.onStart();
+        }
+      };
       return {
         get hasStarted() {
           return started;
         },
         async noteWork() {
-          workEvents += 1;
-          if (!started && workEvents > 1) {
-            started = true;
-            await params.onStart();
-          }
+          // Gate timing is covered by the SDK suite; these tests exercise the
+          // downstream Slack renderer after an explicit start.
+          await startNow();
           return started;
         },
-        async startNow() {
-          if (!started) {
-            started = true;
-            await params.onStart();
-          }
-        },
+        startNow,
         cancel() {},
       };
     },
@@ -3288,6 +3287,24 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("starts a new draft delivery target when a queued followup is admitted", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "replace";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [{ kind: "partial", text: "first reply" }];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
+    await capturedReplyOptions?.onQueuedFollowupAdmitted?.();
+
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("can hide raw Slack command progress text by config", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
@@ -3666,6 +3683,36 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectMockCallArgFields(startSlackStreamMock, 0, "enterprise Slack stream start params", {
       client: eventClient,
       teamId: "T_ENTERPRISE",
+    });
+  });
+
+  it("resolves and caches the native stream recipient team per enterprise client", async () => {
+    mockedNativeStreaming = true;
+    const usersInfo = vi.fn(async () => ({ user: { team_id: "T_RECIPIENT" } }));
+    const eventClient = {
+      chat: { postMessage: postMessageMock, update: chatUpdateMock },
+      users: { info: usersInfo },
+    };
+    const eventScope = {
+      apiAppId: "A_TEST",
+      enterpriseId: "E_TEST",
+      isEnterpriseInstall: true as const,
+      teamId: "T_ENTERPRISE",
+      client: eventClient,
+    };
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ eventScope }));
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ eventScope }));
+
+    expect(usersInfo).toHaveBeenCalledTimes(1);
+    expect(usersInfo).toHaveBeenCalledWith({ token: "xoxb-test", user: "U123" });
+    expectMockCallArgFields(startSlackStreamMock, 0, "first enterprise Slack stream start", {
+      client: eventClient,
+      teamId: "T_RECIPIENT",
+    });
+    expectMockCallArgFields(startSlackStreamMock, 1, "cached enterprise Slack stream start", {
+      client: eventClient,
+      teamId: "T_RECIPIENT",
     });
   });
 
@@ -4389,3 +4436,4 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(postMessageMock).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

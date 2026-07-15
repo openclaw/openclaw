@@ -9,6 +9,7 @@ import type {
   ConfigWriteNotification,
   OpenClawConfig,
 } from "../config/config.js";
+import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   pinActivePluginChannelRegistry,
@@ -232,6 +233,16 @@ describe("buildGatewayReloadPlan", () => {
       restart: false,
       hot: "agents.defaults.model",
       restartHeartbeat: true,
+    },
+    {
+      path: "worktrees.cleanup.maxCount",
+      restart: false,
+      hot: "worktrees.cleanup.maxCount",
+    },
+    {
+      path: "worktrees.cleanup.maxTotalSizeGb",
+      restart: false,
+      hot: "worktrees.cleanup.maxTotalSizeGb",
     },
     {
       path: "unknownField",
@@ -567,6 +578,7 @@ function createReloaderHarness(
       sourceConfig: OpenClawConfig,
     ) => Promise<() => Promise<void>>;
     onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+    onConfigRevisionApplied?: (hash: string) => void;
     onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
     onNoopConfigCommit?: (
       plan: GatewayReloadPlan,
@@ -598,6 +610,7 @@ function createReloaderHarness(
       (async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
   );
   const onConfigAccepted = vi.fn(options.onConfigAccepted ?? (async () => {}));
+  const onConfigRevisionApplied = vi.fn(options.onConfigRevisionApplied ?? (() => {}));
   const onEffectiveConfigUnchanged = vi.fn(
     options.onEffectiveConfigUnchanged ?? (async () => async () => {}),
   );
@@ -652,6 +665,7 @@ function createReloaderHarness(
       : {}),
     onConfigChange,
     onConfigApplied,
+    onConfigRevisionApplied,
     onConfigAccepted,
     onEffectiveConfigUnchanged,
     onNoopConfigCommit,
@@ -665,6 +679,7 @@ function createReloaderHarness(
     watcher,
     onConfigChange,
     onConfigApplied,
+    onConfigRevisionApplied,
     onConfigAccepted,
     onEffectiveConfigUnchanged,
     onNoopConfigCommit,
@@ -756,6 +771,9 @@ describe("startGatewayConfigReloader", () => {
 
     expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
     expect(harness.onConfigApplied).not.toHaveBeenCalled();
+    expect(harness.onConfigRevisionApplied).toHaveBeenCalledWith(
+      hashRuntimeConfigValue(initialConfig),
+    );
     expect(harness.onHotReload).not.toHaveBeenCalled();
     expect(harness.onRestart).not.toHaveBeenCalled();
     await harness.reloader.stop();
@@ -890,6 +908,7 @@ describe("startGatewayConfigReloader", () => {
         events.push("applied");
         terminalPolicy.commitConfig();
       },
+      onConfigRevisionApplied: () => events.push("revision-applied"),
       onConfigAccepted: () => {
         events.push("accepted");
         terminalPolicy.acceptConfig({ retireRejectedRestart: false });
@@ -908,7 +927,7 @@ describe("startGatewayConfigReloader", () => {
     });
     await vi.runAllTimersAsync();
 
-    expect(events).toEqual(["applied", "accepted"]);
+    expect(events).toEqual(["applied", "revision-applied", "accepted"]);
     expect(terminalPolicy.resolve()).toMatchObject({
       ok: false,
       block: { kind: "sandboxed", mode: "all" },
@@ -1787,6 +1806,9 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onHotReload.mock.invocationCallOrder[0]).toBeLessThan(
       harness.onConfigApplied.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
+    expect(harness.onConfigRevisionApplied).toHaveBeenCalledWith(
+      hashRuntimeConfigValue(nextConfig),
+    );
     await harness.reloader.stop();
   });
 
@@ -1806,6 +1828,7 @@ describe("startGatewayConfigReloader", () => {
 
     expect(harness.onConfigChange).toHaveBeenCalledTimes(1);
     expect(harness.onConfigApplied).not.toHaveBeenCalled();
+    expect(harness.onConfigRevisionApplied).not.toHaveBeenCalled();
     expect(harness.onRestart).toHaveBeenCalledTimes(1);
     expect(harness.onConfigChange.mock.invocationCallOrder[0]).toBeLessThan(
       harness.onRestart.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -4013,3 +4036,4 @@ describe("startGatewayConfigReloader skills invalidation", () => {
     await reloader.stop();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

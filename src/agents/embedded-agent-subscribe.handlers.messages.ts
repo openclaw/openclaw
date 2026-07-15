@@ -32,7 +32,7 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
-import { warnIfAssistantEmittedToolText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
+import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -1213,7 +1213,7 @@ export function handleMessageEnd(
     rawText,
     rawThinking: extractAssistantThinking(assistantMessage),
   });
-  warnIfAssistantEmittedToolText(ctx, assistantMessage);
+  warnIfAssistantEmittedSuspiciousText(ctx, assistantMessage);
   const visibleText =
     extractStandaloneMessageToolText(rawVisibleText, {
       allowRoutedReply: isOpenAiCompletionsAssistantMessage(assistantMessage),
@@ -1505,3 +1505,4 @@ export function handleMessageEnd(
   finalizeMessageEnd();
   return undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

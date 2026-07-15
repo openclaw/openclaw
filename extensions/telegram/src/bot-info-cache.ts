@@ -11,7 +11,7 @@ import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 const LEGACY_STORE_VERSION = 1;
 export const TELEGRAM_BOT_INFO_CACHE_NAMESPACE = "telegram.bot-info-cache";
 export const TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES = 128;
-export const TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 type TelegramBotInfoCacheState = {
   tokenFingerprint: string;

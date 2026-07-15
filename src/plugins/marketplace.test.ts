@@ -769,7 +769,7 @@ describe("marketplace plugins", () => {
 
       expect(result).toEqual({
         ok: false,
-        error: "failed to download https://%/frontend-design.tgz: Invalid URL",
+        error: "failed to download ***: Invalid URL",
       });
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
@@ -1323,3 +1323,4 @@ describe("marketplace plugins", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

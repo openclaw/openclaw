@@ -20,7 +20,7 @@ const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 const lastSweepAtMsByStore = new Map<string, number>();
 
 /** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
-export function resolveRetentionMs(cronConfig?: CronConfig): number | null {
+function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   if (cronConfig?.sessionRetention === false) {
     return null; // pruning disabled
   }

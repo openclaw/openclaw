@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { runDoctorLintChecks, type OpenClawConfig } from "openclaw/plugin-sdk/health";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectPolicyEvidence, scanPolicyIngress, scanPolicyMcpServers } from "../policy-state.js";
+import { collectPolicyEvidence } from "../policy-state.js";
 import {
   workspaceDir,
   cfgWithPolicy,
@@ -16,6 +16,11 @@ import {
   describe0BeforeEach0,
   describe0AfterEach1,
 } from "./register.test-harness.js";
+
+const scanPolicyMcpServers = (cfg: object) =>
+  collectPolicyEvidence(cfg as Record<string, unknown>).mcpServers;
+const scanPolicyIngress = (cfg: object) =>
+  collectPolicyEvidence(cfg as Record<string, unknown>).ingress ?? [];
 
 describe("registerPolicyDoctorChecks", () => {
   beforeEach(describe0BeforeEach0);
@@ -1650,3 +1655,4 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

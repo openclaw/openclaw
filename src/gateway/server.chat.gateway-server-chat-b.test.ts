@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import { resolveSessionRoutingContract } from "../config/sessions/main-session.js";
@@ -20,7 +21,6 @@ import {
   replaceSessionEntry,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
-import { appendSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -4969,6 +4969,57 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history offset pages preserve a hidden heartbeat boundary from overread context", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: HEARTBEAT_PROMPT }],
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "heartbeat run output" }],
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "newest output" }],
+          },
+        }),
+      ]);
+
+      const page = await rpcReq<{
+        messages?: Array<{
+          content?: Array<{ text?: string }>;
+          __openclaw?: { turnBoundary?: boolean };
+        }>;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 1,
+        offset: 1,
+      });
+
+      expect(page.ok).toBe(true);
+      expect(page.payload?.messages).toHaveLength(1);
+      expect(page.payload?.messages?.[0]?.content?.[0]?.text).toBe("heartbeat run output");
+      expect(page.payload?.messages?.[0]?.["__openclaw"]?.turnBoundary).toBe(true);
+    });
+  });
+
   test("chat.send does not force-disable block streaming", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const spy = getReplyFromConfig;
@@ -6142,43 +6193,36 @@ describe("gateway server chat", () => {
       if (!storePath) {
         throw new Error("session store path was not initialized");
       }
-      await appendSqliteTranscriptEvents(
-        {
-          agentId: "main",
-          sessionId: "sess-before-reset",
-          sessionKey: "agent:main:main",
-          storePath,
+      const archivedScope = {
+        agentId: "main",
+        sessionId: "sess-before-reset",
+        sessionKey: "agent:main:main",
+        storePath,
+      };
+      await appendTranscriptMessage(archivedScope, {
+        eventId: "archived-1",
+        parentId: null,
+        message: {
+          role: "user",
+          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+          content: "before anchor",
+          timestamp: currentSessionStartedAt - 2_000,
         },
-        [
-          {
-            type: "message",
-            id: "archived-1",
-            parentId: null,
-            message: {
-              role: "user",
-              provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-              content: "before anchor",
-              timestamp: currentSessionStartedAt - 2_000,
-            },
-          },
-          {
-            type: "message",
-            id: "archived-2",
-            parentId: "archived-1",
-            message: {
-              role: "assistant",
-              content: "matching anchor",
-              timestamp: currentSessionStartedAt - 1_000,
-            },
-          },
-          {
-            type: "message",
-            id: "archived-3",
-            parentId: "archived-2",
-            message: { role: "user", content: "after anchor" },
-          },
-        ],
-      );
+      });
+      await appendTranscriptMessage(archivedScope, {
+        eventId: "archived-2",
+        parentId: "archived-1",
+        message: {
+          role: "assistant",
+          content: "matching anchor",
+          timestamp: currentSessionStartedAt - 1_000,
+        },
+      });
+      await appendTranscriptMessage(archivedScope, {
+        eventId: "archived-3",
+        parentId: "archived-2",
+        message: { role: "user", content: "after anchor" },
+      });
 
       const history = await rpcReq<{
         messages?: Array<{ content?: string }>;
@@ -6444,3 +6488,4 @@ describe("gateway server chat", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

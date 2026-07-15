@@ -1254,3 +1254,4 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

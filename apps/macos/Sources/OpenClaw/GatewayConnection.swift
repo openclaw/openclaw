@@ -8,6 +8,14 @@ import Security
 
 private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category: "gateway.connection")
 
+private struct GatewayRouteChangedAfterDispatchError: LocalizedError, Sendable {
+    let method: String
+
+    var errorDescription: String? {
+        "The Gateway route changed after \(self.method) was sent. Its result is unknown; refresh before retrying."
+    }
+}
+
 private enum GatewayActivationBindingKeyStore {
     private static let service = "ai.openclaw.onboarding-route-binding"
     private static let account = "credential-binding-v1"
@@ -93,7 +101,7 @@ actor GatewayConnection {
 
     typealias EndpointProvider = @Sendable () async throws -> EndpointSnapshot
 
-    struct Route: Equatable {
+    struct Route: Equatable, Sendable {
         fileprivate let generation: UInt64
         fileprivate let authority: UInt64?
         fileprivate let url: URL
@@ -117,7 +125,7 @@ actor GatewayConnection {
 
     /// One connected Gateway server, not merely an endpoint configuration.
     /// A reconnect at the same URL creates a different lease.
-    struct ServerLease {
+    struct ServerLease: Sendable {
         fileprivate let route: Route
         fileprivate let socketGeneration: UInt64
         fileprivate let client: GatewayChannelActor
@@ -575,6 +583,9 @@ extension GatewayConnection {
             timeoutMs: timeoutMs,
             ifCurrentRoute: route,
             distinguishPreDispatchRouteChange: true)
+        guard await self.isCurrentRoute(route) else {
+            throw GatewayRouteChangedAfterDispatchError(method: method.rawValue)
+        }
         do {
             return try self.decoder.decode(T.self, from: data)
         } catch {
@@ -637,6 +648,18 @@ extension GatewayConnection {
     /// recover before onboarding freezes the successful physical connection.
     func acquireServerLease() async throws -> ServerLease {
         try await self.acquireServerLease(timeoutMs: 15000, retryTransportFailures: true)
+    }
+
+    /// Captures the currently connected physical socket without probing or
+    /// reconnecting. Queued mutations use this so waiting cannot retarget them.
+    func captureServerLease() async -> ServerLease? {
+        guard let route = await self.captureRoute(),
+              let client = self.client,
+              let socketGeneration = self.activeSocketGeneration
+        else { return nil }
+        let lease = ServerLease(route: route, socketGeneration: socketGeneration, client: client)
+        guard await self.isCurrentServerLease(lease) else { return nil }
+        return lease
     }
 
     private func acquireServerLease(
@@ -1210,6 +1233,11 @@ extension GatewayConnection {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    func cachedGatewayVersion(ifCurrentServerLease lease: ServerLease) async -> String? {
+        guard await self.isCurrentServerLease(lease) else { return nil }
+        return self.cachedGatewayVersion()
+    }
+
     func snapshotPaths() -> (configPath: String?, stateDir: String?) {
         guard let snapshot = lastSnapshot else { return (nil, nil) }
         let configPath = snapshot.snapshot.configpath?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1300,6 +1328,10 @@ extension GatewayConnection {
         if let cached = cachedMainSessionKey() {
             return cached
         }
+        return await self.refreshMainSessionKey(timeoutMs: timeoutMs)
+    }
+
+    func refreshMainSessionKey(timeoutMs: Double = 15000) async -> String {
         do {
             let data = try await requestRaw(method: "config.get", params: nil, timeoutMs: timeoutMs)
             return try Self.mainSessionKey(fromConfigGetData: data)

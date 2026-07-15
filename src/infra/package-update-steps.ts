@@ -34,7 +34,7 @@ const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
  * Captures one package-manager or filesystem step from the global update flow.
  * Callers surface these records directly in update diagnostics.
  */
-export type PackageUpdateStepResult = {
+type PackageUpdateStepResult = {
   name: string;
   command: string;
   cwd: string;
@@ -762,3 +762,4 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

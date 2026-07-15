@@ -6,6 +6,7 @@ import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
+import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { sanitizeHostExecEnv } from "./host-env-security.js";
 import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
@@ -318,11 +319,45 @@ export function getShellPathFromLoginShell(opts: {
   return cachedShellPath;
 }
 
-export function resetShellPathCacheForTests(): void {
-  cachedShellPath = undefined;
-  cachedEtcShells = undefined;
-  loginShellEnvProbeCache.clear();
-  nextExecCacheId = 1;
+type UserShellExecutableResolution = {
+  executable: string;
+  /** Present only when resolution required the login-shell PATH fallback. */
+  pathEnv?: string;
+};
+
+export function resolveExecutableFromUserShellPathWithPathEnv(
+  executable: string,
+  opts: {
+    env: NodeJS.ProcessEnv;
+    pathEnv?: string;
+    includeExtensionless?: boolean;
+    timeoutMs?: number;
+    exec?: typeof execFileSync;
+    platform?: NodeJS.Platform;
+  },
+): UserShellExecutableResolution | undefined {
+  const direct = resolveExecutableFromPathEnv(
+    executable,
+    opts.pathEnv ?? opts.env.PATH ?? opts.env.Path ?? "",
+    opts.env,
+    { includeExtensionless: opts.includeExtensionless },
+  );
+  if (direct) {
+    return { executable: direct };
+  }
+  const shellPath = getShellPathFromLoginShell({
+    env: opts.env,
+    timeoutMs: opts.timeoutMs,
+    exec: opts.exec,
+    platform: opts.platform,
+  });
+  if (!shellPath) {
+    return undefined;
+  }
+  const resolved = resolveExecutableFromPathEnv(executable, shellPath, opts.env, {
+    includeExtensionless: opts.includeExtensionless,
+  });
+  return resolved ? { executable: resolved, pathEnv: shellPath } : undefined;
 }
 
 export function getShellEnvAppliedKeys(): string[] {

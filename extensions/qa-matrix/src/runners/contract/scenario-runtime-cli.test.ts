@@ -5,13 +5,17 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  killMatrixQaCliChild,
+  resolveMatrixQaOpenClawCliEntryPath,
+} from "./scenario-runtime-cli-process.js";
+import {
   formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,
-  resolveMatrixQaOpenClawCliEntryPath,
   runMatrixQaOpenClawCli,
   startMatrixQaOpenClawCli,
-  testing,
 } from "./scenario-runtime-cli.js";
+
+const testing = { killMatrixQaCliChild, resolveMatrixQaOpenClawCliEntryPath };
 
 function isProcessRunning(pid: number): boolean {
   try {
@@ -126,7 +130,9 @@ describe("Matrix QA CLI runtime", () => {
     try {
       await mkdir(path.join(root, "dist"));
       await writeFile(path.join(root, "dist", "index.mjs"), "");
-      expect(resolveMatrixQaOpenClawCliEntryPath(root)).toBe(path.join(root, "dist", "index.mjs"));
+      expect(testing.resolveMatrixQaOpenClawCliEntryPath(root)).toBe(
+        path.join(root, "dist", "index.mjs"),
+      );
     } finally {
       await rm(root, { force: true, recursive: true });
     }

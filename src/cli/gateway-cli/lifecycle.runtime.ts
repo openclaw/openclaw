@@ -14,9 +14,7 @@ export {
 } from "../../infra/process-respawn.js";
 export {
   resolveGatewayRestartDeferralTimeoutMs,
-  consumeGatewayRestartIntentPayloadSync,
   consumeGatewaySigusr1RestartIntent,
-  consumeGatewayRestartIntentSync,
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
@@ -26,7 +24,12 @@ export {
   rollbackGatewayRestartSignalAdmission,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
+export {
+  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewayRestartIntentSync,
+} from "../../infra/restart-intent.js";
 export { writeGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
+export { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../../infra/gateway-suspend-coordinator.js";
 export { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 export { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.js";
 export { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
@@ -40,7 +43,7 @@ export {
   abortActiveCronTaskRuns,
   retireActiveCronTaskRunTracking,
   waitForActiveCronTaskRuns,
-} from "../../tasks/cron-task-cancel.js";
+} from "../../cron/service/active-run-cancellation.js";
 export {
   getActiveTaskCount,
   markGatewayDraining,

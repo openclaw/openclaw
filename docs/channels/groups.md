@@ -349,7 +349,12 @@ Replying to a bot message counts as an implicit mention when the channel exposes
 
 ## Scope configured mention patterns
 
-Configured `mentionPatterns` are regex fallback triggers. Use them when the platform does not expose a native bot mention, or when plain text such as `openclaw:` should count as a mention. Native platform mentions are separate: when Discord, Slack, Telegram, Matrix, or another channel can prove the message explicitly mentioned the bot, that native mention still triggers even where configured regex patterns are denied.
+Configured `mentionPatterns` are regex fallback triggers. Use them when the
+platform does not expose a native bot mention, or when you want plain text such
+as `openclaw:` to count as a mention. Native platform mentions are separate:
+when Discord, Slack, Telegram, Matrix, Signal, or another channel can prove the message
+explicitly mentioned the bot, that native mention still triggers even if
+configured regex patterns are denied.
 
 By default, configured mention patterns apply everywhere the channel passes provider and conversation facts into mention detection. To keep broad patterns from waking the agent in every group, scope them per channel with `channels.<channel>.mentionPatterns`.
 
@@ -542,7 +547,7 @@ Group owners can toggle per-group activation with a standalone message:
 - `/activation mention`
 - `/activation always`
 
-`/activation` is a core owner-gated command and only applies in group chats. Owner means the sender matches the channel's `allowFrom` / `commands.ownerAllowFrom` (when no allowlist is configured, the account's own id counts as owner). The stored mode overrides that group's `requireMention` on channels that consult it (Google Chat, QQBot, Telegram, WhatsApp), and the group system-prompt intro reflects the active mode everywhere.
+`/activation` is a core owner-gated command and only applies in group chats. Owner means the sender matches `commands.ownerAllowFrom`; channel `allowFrom` lists only control ordinary channel and command access. The stored mode overrides that group's `requireMention` on channels that consult it (Google Chat, QQBot, Telegram, WhatsApp), and the group system-prompt intro reflects the active mode everywhere.
 
 ## Context fields
 
@@ -554,7 +559,7 @@ Group inbound payloads set:
 - `WasMentioned` (mention gating result)
 - Telegram forum topics also include `MessageThreadId` and `IsForum`.
 
-The agent system prompt includes a group intro on the first turn of a new group session (and after `/activation` changes). It reminds the model to respond like a human, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Non-Telegram groups also discourage Markdown tables; Telegram rich-text guidance comes from the Telegram channel prompt. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
+The agent system prompt includes a group intro on the first turn of a new group session (and after `/activation` changes). It reminds the model to respond like a human, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Channels whose declared table mode does not preserve native or raw tables also discourage Markdown tables. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
 
 ## iMessage specifics
 

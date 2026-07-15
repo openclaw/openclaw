@@ -20,6 +20,7 @@ import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   clearLastGoodProfileWithLock,
   promoteAuthProfileInOrder,
+  removeAuthProfilesWithLock,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
 import {
@@ -1281,6 +1282,51 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
+  it("removes selected profiles while preserving unrelated provider credentials", async () => {
+    await withAuthProfileTestState("openclaw-auth-remove-selected-", async ({ agentDir }) => {
+      fs.mkdirSync(agentDir, { recursive: true });
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openrouter:oauth": {
+              type: "oauth",
+              provider: "openrouter",
+              access: "oauth-access",
+              refresh: "oauth-refresh",
+              expires: Date.now() + 60_000,
+            },
+            "openrouter:api-key": {
+              type: "api_key",
+              provider: "openrouter",
+              key: "api-key",
+            },
+          },
+          order: { openrouter: ["openrouter:oauth", "openrouter:api-key"] },
+          lastGood: { openrouter: "openrouter:oauth" },
+          usageStats: {
+            "openrouter:oauth": { lastUsed: 1 },
+            "openrouter:api-key": { lastUsed: 2 },
+          },
+        },
+        agentDir,
+      );
+
+      await removeAuthProfilesWithLock({
+        agentDir,
+        profileIds: ["openrouter:oauth"],
+      });
+
+      expect(loadAuthProfileStoreForRuntime(agentDir)).toMatchObject({
+        profiles: { "openrouter:api-key": expect.any(Object) },
+        order: { openrouter: ["openrouter:api-key"] },
+        usageStats: { "openrouter:api-key": { lastUsed: 2 } },
+      });
+      expect(loadAuthProfileStoreForRuntime(agentDir).profiles["openrouter:oauth"]).toBeUndefined();
+      expect(loadAuthProfileStoreForRuntime(agentDir).lastGood).toBeUndefined();
+    });
+  });
+
   it("does not clear lastGood when the failed profile is not the stored profile", async () => {
     await withAuthProfileTestState("openclaw-auth-clear-lastgood-keep-", async ({ agentDir }) => {
       fs.mkdirSync(agentDir, { recursive: true });
@@ -1312,3 +1358,4 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

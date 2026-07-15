@@ -31,7 +31,8 @@ type StaleChunkReloadDeps = {
   reload?: () => void;
 };
 
-let lastAttemptAt: number | null = null;
+const lastAttemptAtByStorage = new WeakMap<object, number>();
+let lastAttemptWithoutStorage: number | null = null;
 let inFlightDocumentProbe: Promise<boolean> | null = null;
 
 export function isStaleChunkImportError(error: unknown): boolean {
@@ -115,11 +116,18 @@ function persistGuardBuildId(
  */
 export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}): Promise<boolean> {
   const now = deps.now?.() ?? Date.now();
+  const storage = deps.storage === undefined ? sessionStorageOrNull() : deps.storage;
+  const lastAttemptAt = storage
+    ? (lastAttemptAtByStorage.get(storage) ?? null)
+    : lastAttemptWithoutStorage;
   if (lastAttemptAt !== null && now - lastAttemptAt < ATTEMPT_COOLDOWN_MS) {
     return false;
   }
-  lastAttemptAt = now;
-  const storage = deps.storage === undefined ? sessionStorageOrNull() : deps.storage;
+  if (storage) {
+    lastAttemptAtByStorage.set(storage, now);
+  } else {
+    lastAttemptWithoutStorage = now;
+  }
   const buildId = deps.buildId ?? CONTROL_UI_BUILD_INFO.buildId;
   // One automatic reload per build id: if the reloaded document still fails
   // with the same build, the build itself is broken and reloading cannot help.
@@ -151,11 +159,6 @@ export async function retryStaleChunkReload(deps: StaleChunkReloadDeps = {}): Pr
   }
   (deps.reload ?? reloadControlUiDocument)();
   return true;
-}
-
-export function resetStaleChunkReloadStateForTest(): void {
-  lastAttemptAt = null;
-  inFlightDocumentProbe = null;
 }
 
 /**

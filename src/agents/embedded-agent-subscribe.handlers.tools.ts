@@ -1423,6 +1423,7 @@ export async function handleToolExecutionEnd(
       })
     ) {
       ctx.state.messageToolOnlySourceReplyDelivered = true;
+      ctx.params.onDeliveredMessageToolOnlySourceReply?.();
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {
@@ -1430,7 +1431,6 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
-
   // Track committed reminders only when cron.add completed successfully.
   if (
     !isToolError &&
@@ -1727,3 +1727,4 @@ export async function handleToolExecutionEnd(
       });
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

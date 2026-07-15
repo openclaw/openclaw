@@ -24,7 +24,7 @@ export type NpmSpecResolution = {
 };
 
 /** Flattened npm resolution fields stored on install results and diagnostics. */
-export type NpmResolutionFields = {
+type NpmResolutionFields = {
   resolvedName?: string;
   resolvedVersion?: string;
   resolvedSpec?: string;
@@ -83,6 +83,8 @@ function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
 }
 
 /** Reads npm registry metadata for a package spec without running package scripts. */
+type NpmMetadataFailureCategory = "metadata-env";
+
 export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?: number }): Promise<
   | {
       ok: true;
@@ -91,6 +93,7 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
   | {
       ok: false;
       error: string;
+      category?: NpmMetadataFailureCategory;
     }
 > {
   const res = await runCommandWithTimeout(
@@ -118,18 +121,26 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
         error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
       };
     }
-    return { ok: false, error: `npm view failed: ${raw}` };
+    return { ok: false, error: `npm view failed: ${raw}`, category: "metadata-env" };
   }
 
   try {
     const parsed = JSON.parse(res.stdout.trim()) as unknown;
     const metadata = normalizeNpmViewMetadata(parsed);
     if (!metadata?.name || !metadata.version) {
-      return { ok: false, error: "npm view produced incomplete package metadata" };
+      return {
+        ok: false,
+        error: "npm view produced incomplete package metadata",
+        category: "metadata-env",
+      };
     }
     return { ok: true, metadata };
   } catch (err) {
-    return { ok: false, error: `npm view produced invalid JSON: ${String(err)}` };
+    return {
+      ok: false,
+      error: `npm view produced invalid JSON: ${String(err)}`,
+      category: "metadata-env",
+    };
   }
 }
 

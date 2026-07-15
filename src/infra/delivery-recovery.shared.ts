@@ -5,7 +5,7 @@ import { isPlatformMessageNotDispatchedError } from "./outbound/deliver-types.js
 import { getRetryAttemptErrors } from "./retry-attempt-errors.js";
 
 const RECOVERY_BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
-export const RECOVERY_REPLAY_SPACING_MS = 250;
+const RECOVERY_REPLAY_SPACING_MS = 250;
 
 const PRE_CONNECT_ERROR_CODES = new Set([
   "ECONNREFUSED",
