@@ -132,22 +132,20 @@ describe("qa suite gateway helpers", () => {
   it("bounds stalled suite gateway JSON response bodies", async () => {
     vi.useFakeTimers();
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockImplementation(
-      async ({ timeoutMs }: { timeoutMs: number }) => {
-        let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
-        const response = new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              bodyController = controller;
-              controller.enqueue(new TextEncoder().encode('{"pending":'));
-            },
-          }),
-          { headers: { "content-type": "application/json" } },
-        );
-        setTimeout(() => bodyController?.error(new Error("request timed out")), timeoutMs);
-        return { response, release };
-      },
-    );
+    fetchWithSsrFGuardMock.mockImplementation(async ({ timeoutMs }: { timeoutMs: number }) => {
+      let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            bodyController = controller;
+            controller.enqueue(new TextEncoder().encode('{"pending":'));
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+      setTimeout(() => bodyController?.error(new Error("request timed out")), timeoutMs);
+      return { response, release };
+    });
 
     const request = fetchJson("http://127.0.0.1:43123/config", 1_000);
     const rejection = expect(request).rejects.toThrow("request timed out");
