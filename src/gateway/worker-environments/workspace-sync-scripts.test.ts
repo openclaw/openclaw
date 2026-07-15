@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
+  REMOTE_WORKSPACE_MANIFEST_JS,
   REMOTE_WORKSPACE_QUIESCE_JS,
   REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
   REMOTE_WORKSPACE_RESUME_JS,
@@ -180,5 +181,83 @@ describe("remote workspace quiescence scripts", () => {
       { timeoutMs: 10_000, baseEnv: input.env },
     );
     expect(result.code).not.toBe(0);
+  });
+});
+
+describe("remote workspace manifest script", () => {
+  it("drops stale descendants when a tracked directory becomes a file", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manifest-test-"));
+    roots.push(root);
+    const home = path.join(root, "home");
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(home);
+    await fs.mkdir(path.join(workspace, "src"), { recursive: true });
+    await fs.writeFile(path.join(workspace, "src", "old.txt"), "old");
+    for (const args of [
+      ["init", "--quiet"],
+      ["add", "."],
+      [
+        "-c",
+        "user.name=OpenClaw Test",
+        "-c",
+        "user.email=test@openclaw.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "base",
+      ],
+    ]) {
+      const result = await runCommandWithTimeout(["git", "-C", workspace, ...args], {
+        timeoutMs: 10_000,
+      });
+      expect(result.code).toBe(0);
+    }
+    const base = await runCommandWithTimeout(["git", "-C", workspace, "rev-parse", "HEAD"], {
+      timeoutMs: 10_000,
+    });
+    expect(base.code).toBe(0);
+    const env = { ...process.env, HOME: home };
+    const initial = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        REMOTE_WORKSPACE_MANIFEST_JS,
+        workspace,
+        base.stdout.trim(),
+        "eligible",
+        "",
+      ],
+      { timeoutMs: 10_000, baseEnv: env },
+    );
+    expect(initial.code).toBe(0);
+
+    await fs.rm(path.join(workspace, "src"), { recursive: true });
+    await fs.writeFile(path.join(workspace, "src"), "replacement");
+    const current = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        REMOTE_WORKSPACE_MANIFEST_JS,
+        workspace,
+        base.stdout.trim(),
+        "eligible",
+        initial.stdout.trim().slice("sha256:".length),
+      ],
+      { timeoutMs: 10_000, baseEnv: env },
+    );
+    expect(current.code).toBe(0);
+    const manifest = JSON.parse(
+      await fs.readFile(
+        path.join(
+          home,
+          ".openclaw-worker",
+          "manifests",
+          current.stdout.trim().slice("sha256:".length) + ".json",
+        ),
+        "utf8",
+      ),
+    ) as { entries: Array<{ path: string; type: string }> };
+    expect(manifest.entries).toContainEqual(expect.objectContaining({ path: "src", type: "file" }));
+    expect(manifest.entries.some((entry) => entry.path === "src/old.txt")).toBe(false);
   });
 });

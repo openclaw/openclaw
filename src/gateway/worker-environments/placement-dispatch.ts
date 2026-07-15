@@ -241,38 +241,42 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           environmentId: current.environmentId,
           ownerEpoch: current.activeOwnerEpoch,
         });
-        await options.workspaceOperations.run(current.environmentId, async () => {
-          const owned = placements.get(current.sessionId);
-          if (
-            owned?.state !== "active" ||
-            owned.generation !== current.generation ||
-            owned.environmentId !== current.environmentId ||
-            owned.activeOwnerEpoch !== current.activeOwnerEpoch ||
-            owned.turnClaim
-          ) {
-            throw new Error("Cloud worker stop lost its placement owner before reconciliation");
-          }
-          const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
-          let destroyed = false;
-          try {
-            const reconciliation = await tunnel.reconcileWorkspace({
-              localPath,
-              remoteWorkspaceDir: current.remoteWorkspaceDir,
-              baseManifestRef: current.workspaceBaseManifestRef,
-              journal,
-            });
-            if (!accepted) {
-              throw new Error("Cloud worker stop did not commit its reconciled workspace");
+        const acceptedPlacement = await options.workspaceOperations.run(
+          current.environmentId,
+          async () => {
+            const owned = placements.get(current.sessionId);
+            if (
+              owned?.state !== "active" ||
+              owned.generation !== current.generation ||
+              owned.environmentId !== current.environmentId ||
+              owned.activeOwnerEpoch !== current.activeOwnerEpoch ||
+              owned.turnClaim
+            ) {
+              throw new Error("Cloud worker stop lost its placement owner before reconciliation");
             }
-            await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
-            await environments.destroy(current.environmentId);
-            destroyed = true;
-          } finally {
-            if (!destroyed) {
-              await quiescence.resume();
+            const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
+            let destroyed = false;
+            try {
+              const reconciliation = await tunnel.reconcileWorkspace({
+                localPath,
+                remoteWorkspaceDir: current.remoteWorkspaceDir,
+                baseManifestRef: current.workspaceBaseManifestRef,
+                journal,
+              });
+              if (!accepted) {
+                throw new Error("Cloud worker stop did not commit its reconciled workspace");
+              }
+              await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+              await environments.destroy(current.environmentId);
+              destroyed = true;
+              return accepted;
+            } finally {
+              if (!destroyed) {
+                await quiescence.resume();
+              }
             }
-          }
-        });
+          },
+        );
         try {
           await environments.stopTunnel(current.environmentId, current.activeOwnerEpoch);
         } catch {
@@ -281,10 +285,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         // Provider teardown is proven. Persist the terminal placement state in
         // one CAS so restart recovery never strands a successful stop mid-transition.
         const reclaimed = placements.finishReclaim({
-          sessionId: accepted.sessionId,
-          environmentId: accepted.environmentId,
-          ownerEpoch: accepted.activeOwnerEpoch,
-          expectedGeneration: accepted.generation,
+          sessionId: acceptedPlacement.sessionId,
+          environmentId: acceptedPlacement.environmentId,
+          ownerEpoch: acceptedPlacement.activeOwnerEpoch,
+          expectedGeneration: acceptedPlacement.generation,
         });
         if (reclaimed.state !== "reclaimed") {
           throw new Error("Cloud worker stop did not produce a reclaimed placement");

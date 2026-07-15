@@ -518,7 +518,7 @@ function addEntry(relative) {
   try {
     stats = fs.lstatSync(absolute);
   } catch (error) {
-    if (error && error.code === "ENOENT") return;
+    if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return;
     throw error;
   }
   const mode = stats.mode & 0o777;
