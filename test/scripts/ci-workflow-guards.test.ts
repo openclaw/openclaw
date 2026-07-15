@@ -1384,10 +1384,10 @@ describe("ci workflow guards", () => {
   it("keeps docs-change detection fail-safe and fixture-aware", () => {
     const action = readFileSync(".github/actions/detect-docs-changes/action.yml", "utf8");
 
+    expect(action).toContain("base-sha:");
     expect(action).toContain("docs_only:");
     expect(action).toContain("docs_changed:");
-    expect(action).toContain('BASE="${{ github.event.before }}"');
-    expect(action).toContain('BASE="${{ github.event.pull_request.base.sha }}"');
+    expect(action).toContain('BASE="${{ inputs.base-sha }}"');
     expect(action).toContain(
       'CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")',
     );
@@ -1646,7 +1646,7 @@ describe("ci workflow guards", () => {
       expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
       expect(checkoutStep.run, jobName).not.toContain("if timeout --signal=TERM");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
-      const expectedDepth = jobName === "preflight" ? 2 : 1;
+      const expectedDepth = jobName === "skills-python" ? 1 : 2;
       expect(checkoutStep.run, jobName).toContain(
         `fetch --no-tags --prune --no-recurse-submodules --depth=${expectedDepth} origin`,
       );
@@ -1896,6 +1896,7 @@ describe("ci workflow guards", () => {
   });
 
   it("runs dependency policy guards in PR CI preflight", () => {
+    const parsedWorkflow = readCiWorkflow();
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const preflightGuards = workflow.slice(
       workflow.indexOf("guards)"),
@@ -1910,6 +1911,26 @@ describe("ci workflow guards", () => {
     expect(workflow).toContain("check-shrinkwrap");
     expect(shrinkwrapGuards).toContain("pnpm deps:shrinkwrap:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
+    expect(parsedWorkflow.jobs.preflight.outputs.diff_base_revision).toBe(
+      "${{ steps.diff_base.outputs.sha }}",
+    );
+    expect(
+      parsedWorkflow.jobs.preflight.steps.find(
+        (step: WorkflowStep) => step.name === "Resolve exact diff base",
+      ).run,
+    ).toContain("--prefer-first-parent");
+    const securityDiffBase = parsedWorkflow.jobs["security-fast"].steps.find(
+      (step: WorkflowStep) => step.name === "Resolve security diff base",
+    ).run;
+    expect(securityDiffBase).toContain("git rev-list --parents -n 1 HEAD");
+    expect(securityDiffBase).not.toContain("node scripts/lib/merge-head-diff-base.mjs");
+    expect(
+      parsedWorkflow.jobs["check-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run check shard",
+      ).env.PR_BASE_SHA,
+    ).toBe(
+      "${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}",
+    );
   });
 
   it("uses stable deadcode checks for current and frozen checkouts", () => {

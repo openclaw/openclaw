@@ -94,17 +94,9 @@ function makeRetryRepo(): { repoDir: string; stubBin: string; headSha: string } 
   mkdirSync(repoDir);
   for (const args of [
     ["init", "-q"],
-    [
-      "-c",
-      "user.name=t",
-      "-c",
-      "user.email=t@example.com",
-      "commit",
-      "-q",
-      "--allow-empty",
-      "-m",
-      "retry head",
-    ],
+    ["config", "user.name", "t"],
+    ["config", "user.email", "t@example.com"],
+    ["commit", "-q", "--allow-empty", "-m", "retry head"],
   ]) {
     const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
     expect(result.status).toBe(0);
