@@ -269,6 +269,10 @@ struct UpdateOrchestrationTests {
             status: .incompatible(location: managed, found: "2026.7.3", required: "2026.7.4"),
             ownsManagedRuntime: false,
             gatewayUpdateIncomplete: false) == .none)
+        #expect(PostUpdateController.gatewayAction(
+            status: .ready(location: managed, version: "2026.7.4"),
+            ownsManagedRuntime: false,
+            gatewayUpdateIncomplete: true) == .ownershipFailure)
     }
 
     @Test func `incomplete managed update keeps ownership failures retryable`() {

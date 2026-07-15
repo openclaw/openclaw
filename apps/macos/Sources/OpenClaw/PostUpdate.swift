@@ -221,6 +221,7 @@ final class PostUpdateModel {
 
 enum PostUpdateGatewayAction: Equatable {
     case none
+    case ownershipFailure
     case repair
     case update
     case install
@@ -398,6 +399,11 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         {
         case .none:
             self.finishSilently()
+            return
+        case .ownershipFailure:
+            self.finishAfterOwnershipCheckFailure(
+                connectionMode: connectionMode,
+                receipt: receipt)
             return
         case .repair:
             self.model.phase = .updating
@@ -686,6 +692,9 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         ownsManagedRuntime: Bool,
         gatewayUpdateIncomplete: Bool) -> PostUpdateGatewayAction
     {
+        if gatewayUpdateIncomplete, !ownsManagedRuntime {
+            return .ownershipFailure
+        }
         guard ownsManagedRuntime else { return .none }
         return switch status {
         case .ready:
