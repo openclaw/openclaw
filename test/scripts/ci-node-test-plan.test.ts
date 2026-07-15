@@ -204,16 +204,19 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(jobOf("core-unit-fast")).toBeGreaterThanOrEqual(0);
     expect(jobOf("agentic-agents-core-runner-embedded")).not.toBe(jobOf("core-unit-fast"));
     // Spawn/signal-timing suites flake next to a concurrent sibling Vitest
-    // run; their bins must force the shard runner to concurrency 1 and never
-    // mix with regular groups.
+    // run; their bins never mix with regular groups, and every 4 vCPU bin
+    // runs serially because overlapping Vitest runs starve process-spawning
+    // tests on that runner class.
     const exclusiveGroupRe = /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$/u;
     for (const shard of compact) {
       const exclusiveCount = shard.groups.filter((group) =>
         exclusiveGroupRe.test(group.shard_name),
       ).length;
       if (exclusiveCount > 0) {
-        expect(shard.planConcurrency).toBe(1);
         expect(exclusiveCount).toBe(shard.groups.length);
+      }
+      if (exclusiveCount > 0 || !shard.runner.includes("-8vcpu-")) {
+        expect(shard.planConcurrency).toBe(1);
       } else {
         expect(shard.planConcurrency).toBeUndefined();
       }

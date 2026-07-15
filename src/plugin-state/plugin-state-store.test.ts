@@ -253,6 +253,24 @@ describe("plugin state keyed store", () => {
     });
   });
 
+  it("deletes an entry only when the current value matches", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateKeyedStore<{ version: number }>("device-pair", {
+        namespace: "notify-subscribers",
+        maxEntries: 10,
+      });
+      await store.register("chat", { version: 1 });
+      if (!store.deleteIf) {
+        throw new Error("plugin state conditional delete unavailable");
+      }
+
+      await expect(store.deleteIf("chat", (current) => current.version === 2)).resolves.toBe(false);
+      await expect(store.lookup("chat")).resolves.toEqual({ version: 1 });
+      await expect(store.deleteIf("chat", (current) => current.version === 1)).resolves.toBe(true);
+      await expect(store.lookup("chat")).resolves.toBeUndefined();
+    });
+  });
+
   it("registerIfAbsent keeps plugin and namespace claims isolated", async () => {
     await withPluginStateTestState(async () => {
       const discordA = createPluginStateKeyedStore<{ owner: string }>("discord", {

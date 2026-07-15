@@ -1933,7 +1933,7 @@ export async function deliverSubagentAnnouncement(params: {
   });
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(
     overrides?: Partial<SubagentAnnounceDeliveryDeps> & {
       callGateway?: typeof callGateway;
@@ -1965,4 +1965,9 @@ export const testing = {
   hasSessionFileChangedAnnounceError,
   isSessionFileChangedAnnounceError,
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.subagentAnnounceDeliveryTestApi")
+  ] = testing;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
