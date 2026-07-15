@@ -1055,8 +1055,8 @@ describe("worker turn launcher", () => {
       ...unusedEnvironments(),
       get: vi.fn(() => attachedEnvironment()),
     };
-    const enteredWorkspaceQueue = createDeferred<void>();
-    const releaseWorkspaceQueue = createDeferred<void>();
+    const enteredWorkspaceQueue = createDeferred();
+    const releaseWorkspaceQueue = createDeferred();
     const workspaceOperations: NonNullable<WorkerTurnLauncherOptions["workspaceOperations"]> = {
       async run(environmentId, operation) {
         expect(environmentId).toBe(ENVIRONMENT_ID);
