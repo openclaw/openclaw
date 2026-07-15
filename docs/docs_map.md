@@ -8403,6 +8403,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: GLM models
   - H2: Getting started
   - H3: Endpoints
+  - H2: Rate limits and overloads
   - H2: Config example
   - H2: Built-in catalog
   - H2: Thinking levels
