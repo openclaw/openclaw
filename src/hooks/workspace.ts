@@ -5,6 +5,7 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { readFileDescriptorBoundedSync } from "../infra/file-descriptor-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 // Hook package manifests and HOOK.md files are small metadata; cap reads so a
@@ -308,33 +309,11 @@ function readRootFileUtf8(params: {
       // symlink swap cannot redirect the read outside the hook root. Enforce the
       // byte cap while reading so a file that grows after open-time validation
       // cannot be buffered past the intended limit.
-      return readFdUtf8Bounded(opened.fd, params.maxBytes);
+      return readFileDescriptorBoundedSync(opened.fd, params.maxBytes).toString("utf-8");
     } catch {
       return null;
     }
   });
-}
-
-function readFdUtf8Bounded(fd: number, maxBytes: number): string {
-  const chunks: Buffer[] = [];
-  const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1));
-  let total = 0;
-  let position = 0;
-  while (total <= maxBytes) {
-    const remaining = maxBytes - total + 1;
-    const chunkSize = Math.min(buffer.length, remaining);
-    const bytesRead = fs.readSync(fd, buffer, 0, chunkSize, position);
-    if (bytesRead === 0) {
-      break;
-    }
-    if (total + bytesRead > maxBytes) {
-      throw new Error(`File exceeds ${maxBytes} bytes`);
-    }
-    chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
-    total += bytesRead;
-    position += bytesRead;
-  }
-  return Buffer.concat(chunks).toString("utf-8");
 }
 
 function withOpenedRootFileSync<T>(
