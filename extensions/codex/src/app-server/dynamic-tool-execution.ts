@@ -503,8 +503,8 @@ function readComputerToolTimeoutMs(value: JsonValue | undefined): number {
   // Node discovery can make two calls when it falls back from node.list to the
   // legacy pairing list. Screenshot/wait then capture once; input also acts.
   const gatewayCallCount = action === "screenshot" || action === "wait" ? 3 : 4;
-  // Reject hex/exponent duration strings while preserving fractional numeric
-  // seconds (the duration contract is seconds, not integer-only).
+  // Reject hex/exponent/fraction string durations. Fractional numeric
+  // durations (e.g. 0.5 → 500 ms) are preserved via the Number.isFinite path.
   const durationSeconds =
     typeof args?.duration === "number" && Number.isFinite(args.duration)
       ? Math.max(0, args.duration)
