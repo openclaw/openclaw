@@ -8,7 +8,7 @@ import type {
   PluginRegistry,
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
-import { collectLivePluginRegistries } from "./runtime.js";
+import { collectLivePluginRegistries, getActivePluginChannelRegistry } from "./runtime.js";
 
 type TrustedPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
@@ -47,11 +47,17 @@ function collectHookRegistrySources(
     seen.add(registry);
     ordered.push(registry);
   };
-  // Precedence: the explicitly initialized registry wins so an SDK caller that
-  // initializes an isolated registry stays authoritative; in the gateway it is
-  // the same object as the active registry, so this just dedupes.
-  add(lastInitialized);
-  for (const registry of collectLivePluginRegistries()) {
+  const liveRegistries = collectLivePluginRegistries();
+  const initializedLiveRegistry = liveRegistries.some((registry) => registry === lastInitialized);
+  // SDK callers can initialize an isolated registry and expect it to stay
+  // authoritative. Runtime activations are different: plugin tools resolve
+  // from the pinned channel registry first, so hooks for the same plugin must
+  // use that registry's closure too.
+  if (!initializedLiveRegistry) {
+    add(lastInitialized);
+  }
+  add(getActivePluginChannelRegistry());
+  for (const registry of liveRegistries) {
     add(registry);
   }
   return ordered;

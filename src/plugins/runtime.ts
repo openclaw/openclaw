@@ -323,6 +323,11 @@ export function getActivePluginChannelRegistry(): PluginRegistry | null {
   return getActivePluginChannelRegistrySnapshotFromState().registry as PluginRegistry | null;
 }
 
+/** Returns the process-owned Gateway channel registry, excluding active-registry aliases. */
+export function getPinnedPluginChannelRegistry(): PluginRegistry | null {
+  return state.channel.pinned ? asPluginRegistry(state.channel.registry) : null;
+}
+
 export function getActivePluginChannelRegistryVersion(): number {
   return getActivePluginChannelRegistrySnapshotFromState().version;
 }

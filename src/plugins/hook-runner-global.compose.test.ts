@@ -35,7 +35,38 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-describe("global hook runner composition (#91918)", () => {
+describe("global hook runner composition (#91918, #107933)", () => {
+  it("uses the pinned gateway owner when the active registry has the same plugin", async () => {
+    const gatewayHook = vi.fn();
+    const activeHook = vi.fn();
+    const gateway = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: gatewayHook, pluginId: "stateful" },
+    ]);
+    const active = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: activeHook, pluginId: "stateful" },
+    ]);
+
+    setActivePluginRegistry(gateway);
+    pinActivePluginChannelRegistry(gateway);
+    initializeGlobalHookRunner(gateway);
+    setActivePluginRegistry(active);
+    initializeGlobalHookRunner(active);
+
+    await runner().runBeforeToolCall(
+      { toolName: "stateful_tool", params: {} },
+      {
+        agentId: "test-agent",
+        sessionKey: "test-session",
+        toolCallId: "test-call",
+      },
+    );
+
+    // Plugin tools resolve from the pinned channel registry before the active
+    // registry. Hooks for that plugin must use the same registration closure.
+    expect(gatewayHook).toHaveBeenCalledOnce();
+    expect(activeHook).not.toHaveBeenCalled();
+  });
+
   it("prefers a loaded registration over a failed scoped reload of the same plugin", () => {
     const boot = createMockPluginRegistry([
       { hookName: "before_tool_call", handler: vi.fn(), pluginId: "gate" },

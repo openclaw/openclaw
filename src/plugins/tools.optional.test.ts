@@ -3277,7 +3277,7 @@ describe("resolvePluginTools optional tools", () => {
     expect(loaderParams.toolDiscovery).toBe(true);
   });
 
-  it("reuses the pinned gateway channel registry after provider runtime loads replace active registry", () => {
+  it("reuses the pinned gateway registry across workspace-scoped provider runtime loads", () => {
     const gatewayRegistry = createOptionalDemoActiveRegistry();
     setActivePluginRegistry(
       gatewayRegistry as never,
@@ -3298,7 +3298,7 @@ describe("resolvePluginTools optional tools", () => {
       } as never,
       "provider-runtime",
       "default",
-      "/tmp",
+      "/tmp/provider-workspace",
     );
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
 
@@ -3312,6 +3312,79 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("loads only tool plugins missing from the pinned gateway registry", () => {
+    const gatewayFactory = vi.fn(() => makeTool("optional_tool"));
+    const standaloneFactory = vi.fn(() => makeTool("other_tool"));
+    const gatewayRegistry = createToolRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        names: ["optional_tool"],
+        factory: gatewayFactory,
+      },
+    ]);
+    const standaloneRegistry = createToolRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["other_tool"],
+        factory: standaloneFactory,
+      },
+    ]);
+    const config = createContext().config;
+    installToolManifestSnapshots({
+      config,
+      plugins: [
+        {
+          id: "optional-demo",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["optional_tool"] },
+        },
+        {
+          id: "multi",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["other_tool"] },
+        },
+      ],
+    });
+    setActivePluginRegistry(
+      gatewayRegistry as never,
+      "gateway-startup",
+      "gateway-bindable",
+      "/tmp",
+    );
+    pinActivePluginChannelRegistry(gatewayRegistry as never);
+    setActivePluginRegistry(
+      createEmptyPluginRegistry(),
+      "provider-runtime",
+      "default",
+      "/tmp/provider-workspace",
+    );
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+    loadOpenClawPluginsMock.mockReturnValue(standaloneRegistry);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), config },
+        toolAllowlist: ["optional_tool", "other_tool"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool", "other_tool"]);
+    expect(gatewayFactory).toHaveBeenCalledOnce();
+    expect(standaloneFactory).toHaveBeenCalledOnce();
+    expectLoaderSelectedOnlyPluginIds(["multi"]);
   });
 
   it("reuses the pinned gateway channel registry even when the caller omits gateway binding", () => {
