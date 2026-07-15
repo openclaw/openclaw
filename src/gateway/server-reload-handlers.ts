@@ -1039,7 +1039,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               if (isLifecycleReloadAborted()) {
                 continue;
               }
-              await params.startChannel(channel, accountId);
+              await runOutsideGatewayRootWorkAdmission(() =>
+                params.startChannel(channel, accountId),
+              );
             } catch (err) {
               accountRestartFailures.push(`${channel}[${accountId}]`);
               params.logChannels.error(

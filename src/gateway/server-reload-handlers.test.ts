@@ -3153,23 +3153,34 @@ describe("gateway channel hot reload handlers", () => {
 
   it("restarts only the changed account", async () => {
     const events: string[] = [];
+    const startRootCounts: number[] = [];
     const channels = {
       stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
         events.push(`stop:${channel}:${accountId}`);
       }),
       start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
         events.push(`start:${channel}:${accountId}`);
+        startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
       }),
     };
     const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
 
-    await withChannelReloadsEnabled(async () => {
-      await withDiscordAccounts(["default", "alpha", "beta"], async () => {
-        await applyHotReload(createAccountReloadPlan(["alpha"]), {});
+    try {
+      await root?.run(async () => {
+        await withChannelReloadsEnabled(async () => {
+          await withDiscordAccounts(["default", "alpha", "beta"], async () => {
+            await applyHotReload(createAccountReloadPlan(["alpha"]), {});
+          });
+        });
       });
-    });
+    } finally {
+      root?.release();
+    }
 
     expect(events).toEqual(["stop:discord:alpha", "start:discord:alpha"]);
+    expect(startRootCounts).toEqual([1]);
   });
 
   it("continues targeted restarts after an account failure", async () => {
