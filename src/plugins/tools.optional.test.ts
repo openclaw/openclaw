@@ -3387,6 +3387,73 @@ describe("resolvePluginTools optional tools", () => {
     expectLoaderSelectedOnlyPluginIds(["multi"]);
   });
 
+  it("combines pinned gateway and compatible active tool owners", () => {
+    const gatewayFactory = vi.fn(() => makeTool("optional_tool"));
+    const activeFactory = vi.fn(() => makeTool("other_tool"));
+    const gatewayRegistry = createToolRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        names: ["optional_tool"],
+        factory: gatewayFactory,
+      },
+    ]);
+    const activeRegistry = createToolRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["other_tool"],
+        factory: activeFactory,
+      },
+    ]);
+    const config = createContext().config;
+    installToolManifestSnapshots({
+      config,
+      plugins: [
+        {
+          id: "optional-demo",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["optional_tool"] },
+        },
+        {
+          id: "multi",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["other_tool"] },
+        },
+      ],
+    });
+    setActivePluginRegistry(
+      gatewayRegistry as never,
+      "gateway-startup",
+      "gateway-bindable",
+      "/tmp",
+    );
+    pinActivePluginChannelRegistry(gatewayRegistry as never);
+    setActivePluginRegistry(activeRegistry as never, "provider-runtime", "default", "/tmp");
+    resolveRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), config },
+        toolAllowlist: ["optional_tool", "other_tool"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool", "other_tool"]);
+    expect(gatewayFactory).toHaveBeenCalledOnce();
+    expect(activeFactory).toHaveBeenCalledOnce();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
   it("reuses the pinned gateway channel registry even when the caller omits gateway binding", () => {
     const gatewayRegistry = createOptionalDemoActiveRegistry();
     setActivePluginRegistry(
