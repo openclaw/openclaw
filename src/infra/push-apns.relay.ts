@@ -1,6 +1,9 @@
 // Sends APNs notifications through the configured relay endpoint.
 import { URL } from "node:url";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -83,7 +86,7 @@ function normalizeTimeoutMs(value: string | number | undefined): number {
   if (raw === undefined || raw === "") {
     return DEFAULT_APNS_RELAY_TIMEOUT_MS;
   }
-  const parsed = Number(raw);
+  const parsed = typeof raw === "number" ? raw : parseStrictPositiveInteger(raw);
   return resolveTimerTimeoutMs(parsed, DEFAULT_APNS_RELAY_TIMEOUT_MS, 1000);
 }
 
