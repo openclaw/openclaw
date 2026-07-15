@@ -1508,6 +1508,12 @@ describe("ci workflow guards", () => {
     const stickyCondition = setupNodeStep.with["sticky-disk"];
     const cacheCondition = setupNodeStep.with["use-actions-cache"];
     const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const validateLayoutStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Validate sticky pnpm layout",
+    );
+    const setupPnpmStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Setup pnpm",
+    );
     const mountStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Mount dependency sticky disk",
     );
@@ -1540,6 +1546,18 @@ describe("ci workflow guards", () => {
     );
     expect(cacheCondition).toContain("&& 'false' || 'true'");
     expect(action.inputs["sticky-disk"].default).toBe("false");
+    expect(validateLayoutStep.if).toBe("inputs.sticky-disk == 'true'");
+    expect(validateLayoutStep.run).toContain("for config_name in modules-dir virtual-store-dir");
+    expect(validateLayoutStep.run).toContain('config_value="$(pnpm config get "$config_name")"');
+    expect(validateLayoutStep.run).toContain(
+      "sticky mode requires pnpm's stock node_modules layout",
+    );
+    expect(action.runs.steps.indexOf(setupPnpmStep)).toBeLessThan(
+      action.runs.steps.indexOf(validateLayoutStep),
+    );
+    expect(action.runs.steps.indexOf(validateLayoutStep)).toBeLessThan(
+      action.runs.steps.indexOf(mountStep),
+    );
     expect(mountStep).toMatchObject({
       if: "inputs.sticky-disk == 'true'",
       uses: "useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f",

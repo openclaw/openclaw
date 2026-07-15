@@ -56,6 +56,29 @@ runs:
         source "$GITHUB_ACTION_PATH/../setup-pnpm-store-cache/ensure-node.sh"
         openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
+    - name: Setup pnpm
+      id: setup-pnpm
+      uses: ./.github/actions/setup-pnpm-store-cache
+      with:
+        node-version: ${{ inputs.node-version }}
+        use-actions-cache: ${{ inputs.use-actions-cache }}
+
+    - name: Validate sticky pnpm layout
+      if: inputs.sticky-disk == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        for config_name in modules-dir virtual-store-dir; do
+          config_value="$(pnpm config get "$config_name")"
+          case "$config_value" in
+            ""|undefined|null) ;;
+            *)
+              echo "::error::$config_name must be unset when sticky-disk is enabled; sticky mode requires pnpm's stock node_modules layout"
+              exit 2
+              ;;
+          esac
+        done
+
     - name: Mount dependency sticky disk
       if: inputs.sticky-disk == 'true'
       uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
@@ -95,13 +118,6 @@ runs:
         findmnt --target "$workspace_modules"
         # zizmor: ignore[github-env] static trusted path defined in this composite action.
         echo "PNPM_CONFIG_STORE_DIR=$sticky_store" >> "$GITHUB_ENV"
-
-    - name: Setup pnpm
-      id: setup-pnpm
-      uses: ./.github/actions/setup-pnpm-store-cache
-      with:
-        node-version: ${{ inputs.node-version }}
-        use-actions-cache: ${{ inputs.use-actions-cache }}
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
