@@ -2317,8 +2317,33 @@ describe("package artifact reuse", () => {
 
   it("includes package acceptance in release checks", () => {
     const workflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+    const packageAcceptanceWorkflow = parse(readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8")) as {
+      on?: {
+        workflow_call?: { inputs?: Record<string, unknown> };
+        workflow_dispatch?: { inputs?: Record<string, unknown> };
+      };
+    };
+    const packageAcceptanceJob = workflowJob(
+      RELEASE_CHECKS_WORKFLOW,
+      "package_acceptance_release_checks",
+    );
+    const dockerAcceptanceJob = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance");
 
     expect(workflow).toContain("package_acceptance_release_checks:");
+    expect(packageAcceptanceWorkflow.on?.workflow_call?.inputs).toHaveProperty(
+      "allow_frozen_target_scenario_omissions",
+    );
+    expect(packageAcceptanceWorkflow.on?.workflow_dispatch?.inputs).toHaveProperty(
+      "allow_frozen_target_scenario_omissions",
+    );
+    expect(packageAcceptanceJob.with).toMatchObject({
+      allow_frozen_target_scenario_omissions:
+        "${{ inputs.allow_frozen_target_scenario_omissions }}",
+    });
+    expect(dockerAcceptanceJob.with).toMatchObject({
+      allow_frozen_target_scenario_omissions:
+        "${{ inputs.allow_frozen_target_scenario_omissions }}",
+    });
     expect(workflow).toContain(
       "live_repo_e2e_release_checks:\n    name: Run repo/live E2E validation\n    needs: [resolve_target]",
     );
