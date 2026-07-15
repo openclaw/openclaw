@@ -115,9 +115,12 @@ function createTelegramSessionCtx(): TemplateContext {
 }
 
 function createReplyOperation(): ReplyOperation {
+  let sessionId = "session-1";
   return {
     key: "test",
-    sessionId: "session-1",
+    get sessionId() {
+      return sessionId;
+    },
     abortSignal: new AbortController().signal,
     resetTriggered: false,
     phase: "queued",
@@ -128,7 +131,9 @@ function createReplyOperation(): ReplyOperation {
     setPhase: vi.fn(),
     markWaitingForDeferredMaintenance: vi.fn(),
     markDeferredMaintenanceWaitEnded: vi.fn(),
-    updateSessionId: vi.fn(),
+    updateSessionId: vi.fn((nextSessionId: string) => {
+      sessionId = nextSessionId;
+    }),
     updateSessionKey: vi.fn(),
     hasOwnedSessionId: vi.fn(() => false),
     attachBackend: vi.fn(),
@@ -380,9 +385,8 @@ describe("runReplyAgent runtime config", () => {
       });
       const onBlockReply = vi.fn();
       replyParams.opts = { onBlockReply };
-      const updateSessionIdSpy = vi.fn();
       const replyOperation = createReplyOperation();
-      replyOperation.updateSessionId = updateSessionIdSpy;
+      const updateSessionIdSpy = vi.mocked(replyOperation.updateSessionId);
       replyParams.replyOperation = replyOperation;
       runPreflightCompactionIfNeededMock.mockImplementation(
         async (params: { sessionEntry?: unknown }) => params.sessionEntry,
@@ -411,6 +415,7 @@ describe("runReplyAgent runtime config", () => {
       resetReplyRunSessionMock.mockImplementation(async (params: unknown) => {
         const resetParams = params as {
           activeSessionEntry?: typeof sessionEntry;
+          activeSessionStore?: Record<string, typeof sessionEntry>;
           followupRun: typeof followupRun;
           onActiveSessionEntry: (entry: typeof sessionEntry) => void;
           onNewSession: (sessionId: string, sessionFile: string) => void;
@@ -423,6 +428,9 @@ describe("runReplyAgent runtime config", () => {
           memoryFlushFailureCount: 0,
           compactionCount: 0,
         };
+        if (resetParams.activeSessionStore) {
+          resetParams.activeSessionStore[sessionKey] = nextEntry;
+        }
         await replaceSessionEntry({ storePath, sessionKey }, nextEntry);
         resetParams.followupRun.run.sessionId = nextEntry.sessionId;
         resetParams.followupRun.run.sessionFile = sessionFile;
