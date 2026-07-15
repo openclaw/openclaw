@@ -71,7 +71,9 @@ function toStoredState(params: {
   now: number;
 }): StoredSkillHistoryScanState {
   const previous = params.previous;
-  const reviewedTimes = params.sessions.map((session) => Date.parse(session.updatedAt));
+  const reviewedTimes = params.sessions
+    .map((session) => Date.parse(session.updatedAt))
+    .filter((ms): ms is number => Number.isFinite(ms));
   const previousOldest = previous?.oldestReviewedAt
     ? Date.parse(previous.oldestReviewedAt)
     : undefined;
@@ -399,3 +401,6 @@ export function runSkillHistoryScan(
     .catch(() => undefined);
   return run;
 }
+
+const testing = { toStoredState };
+export { testing as __testing };

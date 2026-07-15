@@ -16,11 +16,13 @@ import {
   resolveSkillHistoryScanHasMore,
 } from "./history-scan-progress.js";
 import { buildSkillHistoryScanPrompt } from "./history-scan-prompt.js";
+import type { SkillHistoryScanPromptSession } from "./history-scan-prompt.js";
 import {
   resolveSkillHistoryScanReviewOutcome,
   resolveSkillHistoryScanRunFailure,
 } from "./history-scan-review-outcome.js";
 import { getSkillHistoryScanStatus, type SkillHistoryScanResult } from "./history-scan-state.js";
+import type { StoredSkillHistoryScanState } from "./history-scan-state.js";
 import {
   formatSkillHistoryScanTranscript,
   isSkillHistoryScanLocalTranscriptSizeEligible,
@@ -30,7 +32,7 @@ import {
   collectSkillHistoryScanBatch,
   resolveSkillHistoryScanTranscriptBudget,
 } from "./history-scan-transcript.js";
-import { runSkillHistoryScan } from "./history-scan.js";
+import { runSkillHistoryScan, __testing } from "./history-scan.js";
 
 function summary(sessionKey: string, overrides: Partial<SessionEntrySummary["entry"]> = {}) {
   return {
@@ -587,5 +589,75 @@ describe("Skill Workshop history scan", () => {
 
     expect(JSON.stringify(result)).not.toContain("transcript");
     expect(result.hasMore).toBe(true);
+  });
+});
+
+describe("toStoredState date bounds", () => {
+  const sessionHelper = (
+    overrides: Partial<SkillHistoryScanPromptSession>,
+  ): SkillHistoryScanPromptSession => ({
+    instanceId: "inst-1",
+    sessionKey: "session-1",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    modelIterations: 1,
+    transcript: "",
+    ...overrides,
+  });
+
+  it("filters invalid updatedAt timestamps instead of corrupting bounds with NaN", () => {
+    const result = __testing.toStoredState({
+      previous: undefined,
+      direction: "older",
+      considered: [],
+      sessions: [
+        sessionHelper({ instanceId: "a", updatedAt: "2026-01-01T00:00:00.000Z" }),
+        sessionHelper({ instanceId: "b", updatedAt: "not-a-date" }),
+        sessionHelper({ instanceId: "c", updatedAt: "2026-01-03T00:00:00.000Z" }),
+      ],
+      candidates: [],
+      ideasFound: 0,
+      now: 1_767_220_800_000,
+    });
+    expect(result.oldestReviewedAt).toBe("2026-01-01T00:00:00.000Z");
+    expect(result.newestReviewedAt).toBe("2026-01-03T00:00:00.000Z");
+  });
+
+  it("omits reviewed timestamps when all sessions have invalid dates", () => {
+    const result = __testing.toStoredState({
+      previous: undefined,
+      direction: "older",
+      considered: [],
+      sessions: [sessionHelper({ instanceId: "a", updatedAt: "not-a-date" })],
+      candidates: [],
+      ideasFound: 0,
+      now: 1_767_220_800_000,
+    });
+    expect(result.oldestReviewedAt).toBeUndefined();
+    expect(result.newestReviewedAt).toBeUndefined();
+  });
+
+  it("ignores invalid previous bounds without corrupting current bounds", () => {
+    const previous: StoredSkillHistoryScanState = {
+      schema: "openclaw.skill-workshop.history-scan.v1",
+      hasScanned: true,
+      reviewedSessions: 5,
+      ideasFound: 2,
+      hasMore: false,
+      lastScanReviewed: 5,
+      lastScanIdeas: 2,
+      oldestReviewedAt: "not-a-date",
+      newestReviewedAt: "also-not-a-date",
+    };
+    const result = __testing.toStoredState({
+      previous,
+      direction: "older",
+      considered: [],
+      sessions: [sessionHelper({ instanceId: "a", updatedAt: "2026-01-02T00:00:00.000Z" })],
+      candidates: [],
+      ideasFound: 1,
+      now: 1_767_220_800_000,
+    });
+    expect(result.oldestReviewedAt).toBe("2026-01-02T00:00:00.000Z");
+    expect(result.newestReviewedAt).toBe("2026-01-02T00:00:00.000Z");
   });
 });
