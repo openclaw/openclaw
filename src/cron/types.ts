@@ -246,11 +246,15 @@ export type CronPayloadPatch =
   | (CronCommandPayloadPatch & CronPayloadToolAllowPatch);
 
 type CronPayloadToolAllow = {
+  /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
   toolsAllow?: string[];
+  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
+  toolsAllowIsDefault?: boolean;
 };
 
 type CronPayloadToolAllowPatch = {
   toolsAllow?: string[] | null;
+  toolsAllowIsDefault?: boolean;
 };
 
 type CronAgentTurnPayloadFields = {
@@ -266,8 +270,6 @@ type CronAgentTurnPayloadFields = {
   externalContentSource?: HookExternalContentSource;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
-  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
-  toolsAllowIsDefault?: boolean;
 };
 
 type CronAgentTurnPayload = {

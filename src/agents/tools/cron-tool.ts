@@ -486,10 +486,14 @@ function capCronJobToolsAllow(params: {
   creatorToolAllowlist: CronCreatorToolAllowlistEntry[];
   defaultToolsAllow?: unknown;
 }): void {
-  if (params.payload.kind !== "agentTurn" && !hasCronTriggerScript(params.trigger)) {
+  const writesToolsAllow = Object.hasOwn(params.payload, "toolsAllow");
+  if (
+    params.payload.kind !== "agentTurn" &&
+    !hasCronTriggerScript(params.trigger) &&
+    !writesToolsAllow
+  ) {
     return;
   }
-  const isAgentTurn = params.payload.kind === "agentTurn";
   const creatorToolsAllow = normalizeCronCreatorToolsAllow(params.creatorToolAllowlist);
   const creatorToolNames = cronCreatorToolNames(creatorToolsAllow);
   const requestedRaw = Object.hasOwn(params.payload, "toolsAllow")
@@ -497,11 +501,7 @@ function capCronJobToolsAllow(params: {
     : params.defaultToolsAllow;
   if (!Array.isArray(requestedRaw)) {
     params.payload.toolsAllow = creatorToolNames;
-    if (isAgentTurn) {
-      params.payload.toolsAllowIsDefault = true;
-    } else {
-      delete params.payload.toolsAllowIsDefault;
-    }
+    params.payload.toolsAllowIsDefault = true;
     return;
   }
   const requestedToolsAllow = normalizeCronToolsAllow(
@@ -514,11 +514,7 @@ function capCronJobToolsAllow(params: {
   }
   if (requestedToolsAllow.includes("*")) {
     params.payload.toolsAllow = creatorToolNames;
-    if (isAgentTurn) {
-      params.payload.toolsAllowIsDefault = true;
-    } else {
-      delete params.payload.toolsAllowIsDefault;
-    }
+    params.payload.toolsAllowIsDefault = true;
     return;
   }
   const pluginGroups = buildPluginToolGroups({
@@ -556,18 +552,21 @@ function readCronPayloadKind(value: unknown): string | undefined {
   return typeof value.kind === "string" ? value.kind : undefined;
 }
 
-async function capCronJobUpdatePatchToolsAllow(params: {
+async function prepareCronJobUpdatePatch(params: {
   id: string;
   patch: Record<string, unknown>;
   creatorToolAllowlist: CronCreatorToolAllowlistEntry[] | undefined;
   gatewayOpts: GatewayCallOptions;
   callGateway: GatewayToolCaller;
 }): Promise<void> {
-  if (!params.creatorToolAllowlist) {
-    return;
-  }
   const payload = isRecord(params.patch.payload) ? params.patch.payload : undefined;
-  if (payload?.kind === "agentTurn" && Object.hasOwn(payload, "toolsAllow")) {
+  const explicitPayloadKind = readCronPayloadKind(payload);
+  if (
+    params.creatorToolAllowlist &&
+    explicitPayloadKind !== undefined &&
+    payload &&
+    Object.hasOwn(payload, "toolsAllow")
+  ) {
     capCronJobToolsAllow({
       payload,
       trigger: params.patch.trigger,
@@ -575,19 +574,34 @@ async function capCronJobUpdatePatchToolsAllow(params: {
     });
     return;
   }
+  const needsStoredPayloadKind = payload !== undefined && explicitPayloadKind === undefined;
+  if (!needsStoredPayloadKind && !params.creatorToolAllowlist) {
+    return;
+  }
   const existing = await params.callGateway("cron.get", params.gatewayOpts, {
     id: params.id,
   });
-  const existingPayload = isRecord(existing) ? existing.payload : undefined;
+  const existingRecord = isRecord(existing) ? existing : undefined;
+  const existingPayload = existingRecord?.payload;
   const existingPayloadKind = readCronPayloadKind(existingPayload);
+  const payloadKind = explicitPayloadKind ?? existingPayloadKind;
+  if (payload && payloadKind !== undefined) {
+    payload.kind = payloadKind;
+    params.patch.payload = payload;
+  }
+  if (!params.creatorToolAllowlist) {
+    return;
+  }
   const patchIncludesTrigger = Object.hasOwn(params.patch, "trigger");
-  const trigger = patchIncludesTrigger ? params.patch.trigger : existing?.trigger;
-  const payloadKind = readCronPayloadKind(payload) ?? existingPayloadKind;
-  if (payloadKind !== "agentTurn" && !hasCronTriggerScript(trigger)) {
+  const trigger = patchIncludesTrigger ? params.patch.trigger : existingRecord?.trigger;
+  const writesToolsAllow = payload !== undefined && Object.hasOwn(payload, "toolsAllow");
+  if (payloadKind !== "agentTurn" && !hasCronTriggerScript(trigger) && !writesToolsAllow) {
     return;
   }
   const nextPayload: Record<string, unknown> = payload ?? {};
-  nextPayload.kind = payloadKind;
+  if (payloadKind !== undefined) {
+    nextPayload.kind = payloadKind;
+  }
   params.patch.payload = nextPayload;
   capCronJobToolsAllow({
     payload: nextPayload,
@@ -1173,13 +1187,19 @@ Restricted isolated runs may only self status/list, current get/runs, and remove
             if (callerScope) {
               assertCronToolSessionRefsMatchScope(patch, callerScope);
             }
-            await capCronJobUpdatePatchToolsAllow({
+            const callerIncludedPayloadPatch = isRecord(patch.payload);
+            await prepareCronJobUpdatePatch({
               id,
               patch,
               creatorToolAllowlist: opts?.creatorToolAllowlist,
               gatewayOpts,
               callGateway,
             });
+            if (callerIncludedPayloadPatch) {
+              // Kind-less caller payloads inherit the stored kind above. Recheck
+              // those edits, but not a toolsAllow cap synthesized internally.
+              assertNoCronShellExecution(patch);
+            }
             return jsonResult(
               await callGateway("cron.update", gatewayOpts, {
                 id,

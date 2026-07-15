@@ -86,7 +86,6 @@ function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
     "fallbacks" in payload ||
     "thinking" in payload ||
     "timeoutSeconds" in payload ||
-    "toolsAllow" in payload ||
     typeof payload.lightContext === "boolean" ||
     typeof payload.allowUnsafeExternalContent === "boolean"
   );

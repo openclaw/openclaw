@@ -19,8 +19,8 @@ export type CronToolOptions = {
   currentDeliveryContext?: DeliveryContext;
   /**
    * Effective tool surface visible to the caller that created or edited a cron job.
-   * Isolated cron runs use a fresh session, so agent-origin jobs need this cap
-   * persisted on agentTurn payloads before the original session policy is lost.
+   * Cron agent turns and trigger scripts use fresh runtimes, so agent-origin jobs
+   * need this cap persisted before the original session policy is lost.
    */
   creatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
   selfRemoveOnlyJobId?: string;

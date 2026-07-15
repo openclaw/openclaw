@@ -46,6 +46,7 @@ function cronCommandPayloadSchema(params: { argv: TSchema; toolsAllow: TSchema }
     noOutputTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
     outputMaxBytes: Type.Optional(Type.Integer({ minimum: 1 })),
     toolsAllow: Type.Optional(params.toolsAllow),
+    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
   });
 }
 
@@ -229,6 +230,7 @@ export const CronPayloadSchema = Type.Union([
     kind: Type.Literal("systemEvent"),
     text: NonEmptyString,
     toolsAllow: Type.Optional(Type.Array(Type.String())),
+    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
   }),
   cronAgentTurnPayloadSchema({
     message: NonEmptyString,
@@ -249,6 +251,7 @@ export const CronPayloadPatchSchema = Type.Union([
     kind: Type.Literal("systemEvent"),
     text: Type.Optional(NonEmptyString),
     toolsAllow: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
   }),
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),

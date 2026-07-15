@@ -2,12 +2,13 @@
 import type { CronPayload, CronPayloadPatch } from "../types.js";
 
 type CronAgentTurnPayload = Extract<CronPayload, { kind: "agentTurn" }>;
-type CronAgentTurnPayloadPatch = Extract<CronPayloadPatch, { kind: "agentTurn" }>;
+type CronPayloadToolAllow = Pick<CronPayload, "toolsAllow" | "toolsAllowIsDefault">;
+type CronPayloadToolAllowPatch = Pick<CronPayloadPatch, "toolsAllow" | "toolsAllowIsDefault">;
 
-function applyAgentTurnToolsAllowPatch(
-  payload: CronAgentTurnPayload,
-  patch: CronAgentTurnPayloadPatch,
-  existing?: CronAgentTurnPayload,
+function applyToolsAllowPatch(
+  payload: CronPayloadToolAllow,
+  patch: CronPayloadToolAllowPatch,
+  existing?: CronPayloadToolAllow,
 ): void {
   if (Array.isArray(patch.toolsAllow)) {
     payload.toolsAllow = patch.toolsAllow;
@@ -18,9 +19,9 @@ function applyAgentTurnToolsAllowPatch(
     // which fail-closes the next run on CLI backends that cannot enforce
     // runtime toolsAllow. Kind replacements (no existing payload) still require
     // the cron-tool-stamped marker on the patch itself.
-    const keepDefaultMarker = existing
-      ? existing.toolsAllowIsDefault === true && toolsAllowEqual(existing, patch)
-      : patch.toolsAllowIsDefault === true;
+    const keepDefaultMarker =
+      patch.toolsAllowIsDefault === true ||
+      (existing?.toolsAllowIsDefault === true && toolsAllowEqual(existing, patch));
     if (keepDefaultMarker) {
       payload.toolsAllowIsDefault = true;
     } else {
@@ -33,8 +34,8 @@ function applyAgentTurnToolsAllowPatch(
 }
 
 function toolsAllowEqual(
-  left: Pick<CronAgentTurnPayload, "toolsAllow">,
-  right: Pick<CronAgentTurnPayloadPatch, "toolsAllow">,
+  left: Pick<CronPayloadToolAllow, "toolsAllow">,
+  right: Pick<CronPayloadToolAllowPatch, "toolsAllow">,
 ): boolean {
   const rightToolsAllow = right.toolsAllow;
   return (
@@ -47,7 +48,16 @@ function toolsAllowEqual(
 
 export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
   if (patch.kind !== existing.kind) {
-    return buildPayloadFromPatch(patch);
+    const next = buildPayloadFromPatch(patch);
+    // toolsAllow is shared security state. Kind changes must not silently
+    // reopen a restricted trigger runtime; null remains the explicit clear.
+    if (patch.toolsAllow === undefined && Array.isArray(existing.toolsAllow)) {
+      next.toolsAllow = [...existing.toolsAllow];
+      if (existing.toolsAllowIsDefault === true) {
+        next.toolsAllowIsDefault = true;
+      }
+    }
+    return next;
   }
 
   if (patch.kind === "systemEvent") {
@@ -56,11 +66,7 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     }
     const text = typeof patch.text === "string" ? patch.text : existing.text;
     const next: Extract<CronPayload, { kind: "systemEvent" }> = { ...existing, text };
-    if (Array.isArray(patch.toolsAllow)) {
-      next.toolsAllow = patch.toolsAllow;
-    } else if (patch.toolsAllow === null) {
-      delete next.toolsAllow;
-    }
+    applyToolsAllowPatch(next, patch, existing);
     return next;
   }
 
@@ -90,11 +96,7 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     if (typeof patch.outputMaxBytes === "number") {
       next.outputMaxBytes = patch.outputMaxBytes;
     }
-    if (Array.isArray(patch.toolsAllow)) {
-      next.toolsAllow = patch.toolsAllow;
-    } else if (patch.toolsAllow === null) {
-      delete next.toolsAllow;
-    }
+    applyToolsAllowPatch(next, patch, existing);
     return next;
   }
 
@@ -116,7 +118,7 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
   } else if (patch.fallbacks === null) {
     delete next.fallbacks;
   }
-  applyAgentTurnToolsAllowPatch(next, patch, existing);
+  applyToolsAllowPatch(next, patch, existing);
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
   } else if (patch.thinking === null) {
@@ -139,18 +141,19 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     if (typeof patch.text !== "string" || patch.text.length === 0) {
       throw new Error('cron.update payload.kind="systemEvent" requires text');
     }
-    return {
+    const next: Extract<CronPayload, { kind: "systemEvent" }> = {
       kind: "systemEvent",
       text: patch.text,
-      ...(Array.isArray(patch.toolsAllow) ? { toolsAllow: patch.toolsAllow } : {}),
     };
+    applyToolsAllowPatch(next, patch);
+    return next;
   }
 
   if (patch.kind === "command") {
     if (!Array.isArray(patch.argv) || patch.argv.length === 0) {
       throw new Error('cron.update payload.kind="command" requires argv');
     }
-    return {
+    const next: Extract<CronPayload, { kind: "command" }> = {
       kind: "command",
       argv: patch.argv,
       cwd: patch.cwd,
@@ -159,8 +162,9 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       timeoutSeconds: patch.timeoutSeconds,
       noOutputTimeoutSeconds: patch.noOutputTimeoutSeconds,
       outputMaxBytes: patch.outputMaxBytes,
-      ...(Array.isArray(patch.toolsAllow) ? { toolsAllow: patch.toolsAllow } : {}),
     };
+    applyToolsAllowPatch(next, patch);
+    return next;
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {
@@ -177,6 +181,6 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
   };
-  applyAgentTurnToolsAllowPatch(next, patch);
+  applyToolsAllowPatch(next, patch);
   return next;
 }

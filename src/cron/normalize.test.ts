@@ -951,7 +951,7 @@ describe("normalizeCronJobPatch", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 
-  it("promotes implicit text payloads with agentTurn hints to agentTurn patches", () => {
+  it("does not infer agentTurn from the shared toolsAllow field", () => {
     const normalized = normalizeCronJobPatch({
       payload: {
         text: " continue the report ",
@@ -960,11 +960,10 @@ describe("normalizeCronJobPatch", () => {
     }) as unknown as Record<string, unknown>;
 
     expect(normalized.payload).toEqual({
-      kind: "agentTurn",
-      message: "continue the report",
+      text: "continue the report",
       toolsAllow: ["read"],
     });
-    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(false);
   });
 
   it("preserves null sessionKey patches and trims string values", () => {

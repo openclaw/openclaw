@@ -634,6 +634,7 @@ describe("cron store", () => {
       kind: "systemEvent",
       text: "changed",
       toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
     };
 
     await saveCronStore(store.storePath, payload);
@@ -642,6 +643,7 @@ describe("cron store", () => {
       kind: "systemEvent",
       text: "changed",
       toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
     });
   });
 
@@ -657,6 +659,7 @@ describe("cron store", () => {
       kind: "command",
       argv: ["echo", "hi"],
       toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
     };
 
     await saveCronStore(store.storePath, payload);
@@ -665,6 +668,7 @@ describe("cron store", () => {
       kind: "command",
       argv: ["echo", "hi"],
       toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
     });
   });
 
