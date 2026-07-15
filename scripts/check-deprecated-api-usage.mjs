@@ -217,7 +217,6 @@ const rules = [
       "src/plugin-sdk/inbound-reply-dispatch.ts",
       "src/plugin-sdk/outbound-runtime.ts",
       "src/plugin-sdk/test-helpers/outbound-delivery.ts",
-      "src/plugin-sdk/testing.ts",
     ],
     message: "use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext",
   },

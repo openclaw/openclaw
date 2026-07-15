@@ -70,8 +70,6 @@
     "!dist/plugin-sdk/test-node-mocks.d.ts",
     "!dist/plugin-sdk/test-utils.js",
     "!dist/plugin-sdk/test-utils.d.ts",
-    "!dist/plugin-sdk/testing.js",
-    "!dist/plugin-sdk/testing.d.ts",
     "!dist/plugin-sdk/src/agents/test-helpers/**",
     "!dist/plugin-sdk/src/test-helpers/**",
     "!dist/plugin-sdk/src/test-utils/**",
