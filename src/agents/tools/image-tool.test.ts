@@ -261,8 +261,7 @@ vi.mock("../model-auth.js", () => ({
 
 const minimaxUnderstandImageMock = vi.hoisted(() => vi.fn());
 vi.mock("../minimax-vlm.js", async () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mod = (await vi.importActual("../minimax-vlm.js")) as any;
+  const mod = await vi.importActual<typeof import("../minimax-vlm.js")>("../minimax-vlm.js");
   return {
     ...mod,
     minimaxUnderstandImage: minimaxUnderstandImageMock,

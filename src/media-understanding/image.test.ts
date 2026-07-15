@@ -151,8 +151,9 @@ vi.mock("../plugin-sdk/provider-auth.js", () => ({
 
 const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 vi.mock("../infra/net/fetch-guard.js", async () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mod = (await vi.importActual("../infra/net/fetch-guard.js")) as any;
+  const mod = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+    "../infra/net/fetch-guard.js",
+  );
   return {
     ...mod,
     fetchWithSsrFGuard: imageTestFetchWithSsrFGuardMock,
@@ -184,8 +185,7 @@ describe("describeImageWithModel", () => {
     // Bridge fetchWithSsrFGuard through the globally-stubbed fetch so existing
     // assertions on fetchMock call count and arguments continue to work.
     imageTestFetchWithSsrFGuardMock.mockImplementation(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      async (opts: any) => {
+      async (opts: { url: string; init: RequestInit; timeoutMs?: number }) => {
         const signal = AbortSignal.timeout(opts.timeoutMs ?? 60_000);
         const init = { ...opts.init, signal };
         const response = await globalThis.fetch(opts.url, init);
