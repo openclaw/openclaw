@@ -3,21 +3,28 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearIMessageApprovalReactionTargetsForTest,
-  resolveIMessageApprovalReactionTargetWithPersistence,
-} from "./approval-reactions.js";
 import type { IMessageRpcClient } from "./client.js";
-import {
-  findLatestIMessageEntryForChat,
-  resetIMessageShortIdState,
-} from "./monitor-reply-cache.js";
-import {
-  hasPersistedIMessageEcho,
-  resetPersistedIMessageEchoCacheForTest,
-} from "./monitor/persisted-echo-cache.js";
-import { sendMessageIMessage } from "./send.js";
-import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
+import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
+
+type ApprovalReactionsModule = typeof import("./approval-reactions.js");
+type PersistedEchoCacheModule = typeof import("./monitor/persisted-echo-cache.js");
+type ReplyCacheModule = typeof import("./monitor-reply-cache.js");
+type SendModule = typeof import("./send.js");
+let clearIMessageApprovalReactionTargetsForTest: ApprovalReactionsModule["clearIMessageApprovalReactionTargetsForTest"];
+let resolveIMessageApprovalReactionTargetWithPersistence: ApprovalReactionsModule["resolveIMessageApprovalReactionTargetWithPersistence"];
+let hasPersistedIMessageEcho: PersistedEchoCacheModule["hasPersistedIMessageEcho"];
+let findLatestIMessageEntryForChat: ReplyCacheModule["findLatestIMessageEntryForChat"];
+let sendMessageIMessage: SendModule["sendMessageIMessage"];
+
+async function loadFreshSendModule(): Promise<void> {
+  ({ findLatestIMessageEntryForChat } = await loadFreshIMessageReplyCacheForTest());
+  ({
+    clearIMessageApprovalReactionTargetsForTest,
+    resolveIMessageApprovalReactionTargetWithPersistence,
+  } = await import("./approval-reactions.js"));
+  ({ hasPersistedIMessageEcho } = await import("./monitor/persisted-echo-cache.js"));
+  ({ sendMessageIMessage } = await import("./send.js"));
+}
 
 const IMESSAGE_TEST_CFG = {
   channels: {
@@ -66,16 +73,12 @@ function createApprovalText(id = "approval-123"): string {
 }
 
 describe("sendMessageIMessage receipts", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
-    resetIMessageShortIdState();
-    resetPersistedIMessageEchoCacheForTest();
+  beforeEach(async () => {
+    await loadFreshSendModule();
   });
 
   afterEach(() => {
     clearIMessageApprovalReactionTargetsForTest();
-    resetIMessageShortIdState();
-    resetPersistedIMessageEchoCacheForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
@@ -1269,16 +1272,12 @@ describe("sendMessageIMessage receipts", () => {
 });
 
 describe("sendMessageIMessage CLI wrapper errors", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
-    resetIMessageShortIdState();
-    resetPersistedIMessageEchoCacheForTest();
+  beforeEach(async () => {
+    await loadFreshSendModule();
   });
 
   afterEach(() => {
     clearIMessageApprovalReactionTargetsForTest();
-    resetIMessageShortIdState();
-    resetPersistedIMessageEchoCacheForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
@@ -1298,3 +1297,4 @@ describe("sendMessageIMessage CLI wrapper errors", () => {
     ).rejects.toBe(wrapperError);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

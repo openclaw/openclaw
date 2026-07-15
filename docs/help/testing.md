@@ -131,21 +131,21 @@ When debugging real providers/models (requires real creds):
     through `npm-pack:`, verifies the dependency under the managed npm
     project root, then asks a live OpenAI model to call the plugin tool and
     return the hidden slug.
-- Crestodian rescue command smoke: `pnpm test:live:crestodian-rescue-channel`
+- OpenClaw rescue command smoke: `pnpm test:live:system-agent-rescue-channel`
   - Opt-in belt-and-suspenders check for the message-channel rescue command
-    surface. Exercises `/crestodian status`, queues a persistent model
-    change, replies `/crestodian yes`, and verifies the audit/config write
+    surface. Exercises `/openclaw status`, queues a persistent model
+    change, replies `/openclaw yes`, and verifies the audit/config write
     path.
-- Crestodian first-run Docker smoke: `pnpm test:docker:crestodian-first-run`
+- OpenClaw first-run Docker smoke: `pnpm test:docker:system-agent-first-run`
   - Starts from an empty OpenClaw state dir and first proves the packaged
-    `openclaw crestodian` CLI fails closed without inference. It then
+    `openclaw setup` CLI fails closed without inference. It then
     tests and activates fake Claude through the packaged activation module.
     Only afterward does a fuzzy packaged CLI request reach the planner and
     resolve to typed setup, followed by one-shot model, agent, Discord plugin,
     and SecretRef operations. It validates config and audit entries. This is
     supporting gate/operation evidence, not an interactive onboarding or
-    Crestodian agent/tool/approval proof. The same lane is exposed in QA Lab by
-    `pnpm openclaw qa suite --scenario crestodian-ring-zero-setup`.
+    OpenClaw agent/tool/approval proof. The same lane is exposed in QA Lab by
+    `pnpm openclaw qa suite --scenario system-agent-ring-zero-setup`.
 - Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
   `openclaw models list --provider moonshot --json`, then run an isolated
   `openclaw agent --local --session-id live-kimi-cost --message 'Reply exactly: KIMI_LIVE_OK' --thinking off --json`

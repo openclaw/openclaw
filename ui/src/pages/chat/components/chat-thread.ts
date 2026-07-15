@@ -49,10 +49,8 @@ import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
-import {
-  renderBackgroundTasksStatusRow,
-  type BackgroundTasksProps,
-} from "./chat-background-tasks.ts";
+import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
 import { renderChatDivider } from "./chat-divider.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
@@ -1019,3 +1017,4 @@ export function renderChatThread(props: ChatThreadProps) {
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

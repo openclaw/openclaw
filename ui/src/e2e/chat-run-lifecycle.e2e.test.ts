@@ -71,7 +71,15 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
-    await currentPage.getByText("Working…", { exact: true }).waitFor();
+    const workingLabel = currentPage.locator(
+      ".chat-working-indicator__status > .agent-chat__sr-only",
+    );
+    expect(await workingLabel.textContent()).toBe("Working…");
+    expect(
+      await currentPage
+        .locator(".chat-working-indicator__status > span:not(.agent-chat__sr-only)")
+        .count(),
+    ).toBe(0);
   });
 
   it("clears shared session activity when chat final arrives first", async () => {

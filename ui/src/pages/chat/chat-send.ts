@@ -33,6 +33,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { buildChatApiAttachments } from "./attachment-api.ts";
 import {
   discardChatAttachmentDataUrls,
   getChatAttachmentDataUrl,
@@ -201,37 +202,6 @@ type ChatSendOptions = {
   onSideQuestionSendRejected?: () => void;
 };
 
-function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
-  if (!match) {
-    return null;
-  }
-  const mimeType = match[1];
-  const content = match[2];
-  return mimeType && content ? { mimeType, content } : null;
-}
-
-function buildApiAttachments(attachments?: ChatAttachment[]) {
-  const hasAttachments = attachments && attachments.length > 0;
-  return hasAttachments
-    ? attachments
-        .map((att) => {
-          const dataUrl = getChatAttachmentDataUrl(att);
-          const parsed = dataUrl ? dataUrlToBase64(dataUrl) : null;
-          if (!parsed) {
-            return null;
-          }
-          return {
-            type: parsed.mimeType.startsWith("image/") ? "image" : "file",
-            mimeType: parsed.mimeType,
-            fileName: att.fileName,
-            content: parsed.content,
-          };
-        })
-        .filter((a): a is NonNullable<typeof a> => a !== null)
-    : undefined;
-}
-
 function normalizeAckTimingValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
@@ -295,7 +265,7 @@ async function requestChatSend(
     message: params.message,
     deliver: false,
     idempotencyKey: params.runId,
-    attachments: buildApiAttachments(params.attachments),
+    attachments: buildChatApiAttachments(params.attachments),
   });
   if (controlUiReconnectResume) {
     state.reconnectResumeSessionId = null;
@@ -1324,7 +1294,7 @@ async function sendDetachedCommandMessage(
 }
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string) {
-  if (!host.connected || !host.chatRunId) {
+  if (!host.connected || !hasAbortableSessionRun(host)) {
     return;
   }
   const activeRunId = host.chatRunId;
@@ -1363,7 +1333,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     createdAt: item.createdAt,
     kind: "steered",
     ...(item.attachments?.length ? { attachments: item.attachments } : {}),
-    pendingRunId: activeRunId,
+    ...(activeRunId ? { pendingRunId: activeRunId } : { sendState: "steering" as const }),
   };
   const hasTransientProjection = setTransientQueuedMessageProjection(
     host,
@@ -1391,17 +1361,19 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     hasAttachments ? attachments : undefined,
     () => visibleSessionMatches(host, itemSessionKey, item.agentId),
   );
-  const pendingStillVisible = host.chatQueue.some(
-    (entry) => entry.id === id && entry.pendingRunId === activeRunId,
-  );
-  replacePendingQueuedMessageProjection(
-    host,
-    itemSessionKey,
-    id,
-    activeRunId,
-    claimed,
-    item.agentId,
-  );
+  const pendingStillVisible = activeRunId
+    ? host.chatQueue.some((entry) => entry.id === id && entry.pendingRunId === activeRunId)
+    : false;
+  if (activeRunId) {
+    replacePendingQueuedMessageProjection(
+      host,
+      itemSessionKey,
+      id,
+      activeRunId,
+      claimed,
+      item.agentId,
+    );
+  }
   clearTransientQueuedMessageProjection(host, itemSessionKey, id, item.agentId);
   const itemStillVisible = visibleSessionMatches(host, itemSessionKey, item.agentId);
   if (!ack) {
@@ -2507,3 +2479,4 @@ function escapeMarkdownInline(value: string): string {
 }
 
 export const flushChatQueueForEvent = flushChatQueue;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

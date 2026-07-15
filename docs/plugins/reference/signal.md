@@ -20,4 +20,4 @@ channels: signal
 
 ## Related docs
 
-- [signal](/channels/signal)
+- [Signal](/channels/signal)

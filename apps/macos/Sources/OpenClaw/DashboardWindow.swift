@@ -13,6 +13,24 @@ enum DashboardWindowLayout {
     static let linkBrowserPreferredFraction: CGFloat = 0.4
     static let linkBrowserTabBarHeight: CGFloat = 30
     static let linkBrowserSplitAutosaveName = "OpenClawDashboardLinkBrowserSplit"
+    static let windowFrameAutosaveName = "OpenClawDashboardWindow"
+}
+
+/// Raw values are window event names the Control UI handles. `newSession`
+/// reuses the shipped pre-web-chrome event; `commandPalette` gets a dedicated
+/// toggle event because the legacy `native-open-search` contract is open-only.
+enum DashboardNativeCommand: String {
+    case newSession = "openclaw:native-new-session"
+    case commandPalette = "openclaw:native-toggle-search"
+
+    /// Older gateway bundles lack the toggle listener; dispatch degrades to the
+    /// open-only legacy event when the primary event goes unhandled.
+    var legacyFallbackEventName: String? {
+        switch self {
+        case .newSession: nil
+        case .commandPalette: "openclaw:native-open-search"
+        }
+    }
 }
 
 enum DashboardLinkTarget: String, Equatable {

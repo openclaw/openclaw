@@ -2067,3 +2067,4 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(deliveryCall.replies).toEqual([{ text: "No response generated. Please try again." }]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

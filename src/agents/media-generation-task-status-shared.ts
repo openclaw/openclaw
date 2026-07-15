@@ -208,7 +208,7 @@ export function recordRecentMediaGenerationTaskStartForSession(params: {
 }
 
 /** Finds a recent started media task from memory or persisted task state. */
-export function findRecentStartedMediaGenerationTaskForSession(params: {
+function findRecentStartedMediaGenerationTaskForSession(params: {
   sessionKey?: string;
   taskKind: string;
   sourcePrefix: string;

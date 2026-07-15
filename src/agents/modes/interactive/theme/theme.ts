@@ -855,3 +855,4 @@ export function getLanguageFromPath(filePath: string): string | undefined {
 
   return extToLang[ext];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

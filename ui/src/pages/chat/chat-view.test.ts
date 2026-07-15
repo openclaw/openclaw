@@ -1650,6 +1650,7 @@ describe("chat composer workbench", () => {
   it("moves the background-tasks rail to a bottom strip on narrow panes", () => {
     const backgroundTasks = {
       agentId: "main",
+      statusRowId: "chat-tasks-status-test",
       collapsed: false,
       narrowLayout: false,
       connected: true,
@@ -1681,6 +1682,7 @@ describe("chat composer workbench", () => {
   it("shows the running-tasks status row after the turn settles, not while working", () => {
     const backgroundTasks = {
       agentId: "main",
+      statusRowId: "chat-tasks-status-test",
       collapsed: true,
       narrowLayout: false,
       connected: true,
@@ -5562,3 +5564,4 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

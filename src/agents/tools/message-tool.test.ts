@@ -16,7 +16,6 @@ import {
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
 } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-import { CRITICAL_THRESHOLD } from "../tool-loop-detection.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
@@ -25,6 +24,7 @@ type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActi
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
 
 const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
+const CRITICAL_THRESHOLD = 20;
 
 let createMessageTool: CreateMessageTool;
 let createOpenClawTools: CreateOpenClawTools;
@@ -2119,6 +2119,118 @@ describe("message tool schema scoping", () => {
     expect(properties).not.toHaveProperty("eventName");
   });
 
+  it("prunes fields for action groups that discovery does not advertise", () => {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: [
+        "send",
+        "read",
+        "react",
+        "reactions",
+        "edit",
+        "delete",
+        "pin",
+        "unpin",
+        "list-pins",
+        "thread-create",
+        "thread-list",
+        "thread-reply",
+        "upload-file",
+      ],
+    });
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "discord",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(properties).toHaveProperty("message");
+    expect(properties).toHaveProperty("messageId");
+    expect(properties).toHaveProperty("threadName");
+
+    expect(properties).not.toHaveProperty("topic");
+    expect(properties).not.toHaveProperty("rateLimitPerUser");
+    expect(properties).not.toHaveProperty("clearParent");
+    expect(properties).not.toHaveProperty("activityName");
+    expect(properties).not.toHaveProperty("activityState");
+    expect(properties).not.toHaveProperty("status");
+    expect(properties).not.toHaveProperty("pollId");
+    expect(properties).not.toHaveProperty("eventName");
+  });
+
+  it.each<{
+    action: ChannelMessageActionName;
+    fields: string[];
+  }>([
+    { action: "search", fields: ["query", "limit"] },
+    { action: "reactions", fields: ["messageId", "limit"] },
+    { action: "sticker-search", fields: ["query", "limit"] },
+    { action: "emoji-list", fields: ["guildId", "limit"] },
+    { action: "emoji-upload", fields: ["guildId", "emojiName", "media", "roleIds"] },
+    {
+      action: "sticker-upload",
+      fields: ["guildId", "stickerName", "stickerDesc", "stickerTags", "media"],
+    },
+    { action: "voice-status", fields: ["guildId", "userId"] },
+    { action: "timeout", fields: ["guildId", "userId", "durationMin", "until", "reason"] },
+    { action: "download-file", fields: ["fileId", "channelId", "threadId"] },
+    { action: "thread-create", fields: ["messageId", "threadName", "channelId"] },
+    { action: "renameGroup", fields: ["name"] },
+    { action: "setGroupIcon", fields: ["name", "filename", "buffer"] },
+    { action: "channel-info", fields: ["channelId", "pageSize", "pageToken"] },
+    { action: "channel-list", fields: ["query", "limit"] },
+  ])("keeps fields consumed by scoped $action handlers", ({ action, fields }) => {
+    const plugin = createChannelPlugin({
+      id: "test-channel",
+      label: "Test Channel",
+      docsPath: "/channels/test-channel",
+      blurb: "Scoped schema contract plugin.",
+      actions: [action],
+    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "test-channel", source: "test", plugin }]),
+    );
+
+    const properties = getToolProperties(
+      createMessageTool({
+        config: {} as never,
+        currentChannelProvider: "test-channel",
+      }),
+    );
+
+    for (const field of fields) {
+      expect(properties, `${action} should advertise ${field}`).toHaveProperty(field);
+    }
+  });
+
+  it("describes the send payload contract on the action and message fields", () => {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: ["send", "channel-info"],
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const properties = getToolProperties(
+      createMessageTool({ config: {} as never, currentChannelProvider: "discord" }),
+    );
+
+    expect((properties.action as { description?: string }).description).toContain(
+      'For action="send"',
+    );
+    expect((properties.message as { description?: string }).description).toContain(
+      "A send needs message",
+    );
+  });
+
   it("filters scoped schemas through the per-agent message action allowlist", () => {
     const plugin = createChannelPlugin({
       id: "discord",
@@ -2158,6 +2270,59 @@ describe("message tool schema scoping", () => {
     expect(properties).not.toHaveProperty("messageId");
     expect(tool.description).toContain("Supports actions: send.");
     expect(tool.description).not.toContain("react");
+  });
+
+  it("preserves channel-management params for scoped channel-move and category-delete allowlists", () => {
+    // Regression: SCOPED_ACTION_GROUPS previously omitted channel-move and
+    // category-delete from the channel-management group, so narrowing an agent
+    // allowlist to either action stripped position/parentId/categoryId from
+    // the schema even though the Discord handlers require them.
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: ["send", "channel-move", "category-delete"],
+    });
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const channelMoveTool = createMessageTool({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "mover",
+              tools: { message: { actions: { allow: ["channel-move"] } } },
+            },
+          ],
+        },
+      } as never,
+      currentChannelProvider: "discord",
+      agentId: "mover",
+    });
+    const channelMoveProps = getToolProperties(channelMoveTool);
+    expect(getActionEnum(channelMoveProps)).toEqual(["channel-move"]);
+    expect(channelMoveProps).toHaveProperty("position");
+    expect(channelMoveProps).toHaveProperty("parentId");
+
+    const categoryDeleteTool = createMessageTool({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "purger",
+              tools: { message: { actions: { allow: ["category-delete"] } } },
+            },
+          ],
+        },
+      } as never,
+      currentChannelProvider: "discord",
+      agentId: "purger",
+    });
+    const categoryDeleteProps = getToolProperties(categoryDeleteTool);
+    expect(getActionEnum(categoryDeleteProps)).toEqual(["category-delete"]);
+    expect(categoryDeleteProps).toHaveProperty("categoryId");
   });
 
   it("uses discovery account scope for other configured channel actions", () => {
@@ -3482,3 +3647,4 @@ describe("message tool sandbox passthrough", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

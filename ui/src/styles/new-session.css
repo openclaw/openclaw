@@ -36,7 +36,10 @@ openclaw-new-session-page {
    here; its margin: auto still centers whenever there is spare room. */
 .new-session-page .agent-chat__welcome {
   flex: 0 0 auto;
+  width: 100%;
+  max-width: none;
   min-height: auto;
+  box-sizing: border-box;
 }
 
 /* Draft block inside the centered welcome column; the welcome centers text,
@@ -55,8 +58,13 @@ openclaw-new-session-page {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-start;
   gap: 4px 16px;
-  padding: 0 2px;
+  width: calc(100% - 36px);
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 .new-session-page__select {

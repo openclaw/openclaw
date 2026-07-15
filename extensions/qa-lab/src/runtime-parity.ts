@@ -1156,12 +1156,4 @@ export async function runRuntimeParityScenario(params: {
   };
 }
 
-const testing = {
-  classifyRuntimeParityCells,
-  filterMockRequestsForParentPrompt,
-  hasProvenTerminalImageResult,
-  resolveRuntimeParityToolCalls,
-  resolveToolCallOrderFromMockRequests,
-};
-
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

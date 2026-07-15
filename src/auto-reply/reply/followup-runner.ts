@@ -101,6 +101,7 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
+import { type InternalGetReplyOptions, shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
@@ -115,6 +116,7 @@ import {
   FollowupRunDeferredError,
   isFollowupRunAborted,
   refreshQueuedFollowupSession,
+  resolveFollowupAbortSignal,
   type FollowupRun,
   resolveQueueSettings,
 } from "./queue.js";
@@ -160,15 +162,6 @@ function preserveNonVisibleFollowupResult(
     // Prefer any earlier result that carries a user-facing terminal presentation.
     preserveResultPriority: -1,
   };
-}
-
-function resolveFollowupAbortSignal(
-  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
-): AbortSignal | undefined {
-  const signals = [run.abortSignal, run.queueAbortSignal].filter(
-    (signal): signal is AbortSignal => signal !== undefined,
-  );
-  return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
 }
 
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
@@ -402,7 +395,7 @@ async function forwardFollowupProgressEvent(params: {
 
 /** Creates the function that drains one queued follow-up run. */
 export function createFollowupRunner(params: {
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   typing: TypingController;
   typingMode: TypingMode;
   sessionEntry?: SessionEntry;
@@ -703,7 +696,7 @@ export function createFollowupRunner(params: {
         resetTriggered: false,
         routeThreadId: queued.originatingThreadId,
         upstreamAbortSignal: resolveFollowupAbortSignal(queued),
-        onFollowupAdmissionWaitChange: effectiveQueued.onFollowupAdmissionWaitChange,
+        onReplyAdmissionWaitChange: effectiveQueued.onReplyAdmissionWaitChange,
       });
       if (admission.status === "skipped") {
         if (admission.reason === "active-run") {
@@ -1235,7 +1228,7 @@ export function createFollowupRunner(params: {
                         ]);
                       },
                       onCommentaryText:
-                        progressOpts?.commentaryProgressEnabled === true && progressOpts.onItemEvent
+                        progressOpts?.onItemEvent && shouldBridgeCliPreambleEvents(progressOpts)
                           ? async ({ text, itemId }) => {
                               await forwardFollowupProgressEvent({
                                 evt: {
@@ -2074,3 +2067,4 @@ export function createFollowupRunner(params: {
   };
   return runFollowupTurn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
