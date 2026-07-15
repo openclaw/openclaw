@@ -357,7 +357,15 @@ describe("plugin npm extended-stable workflow", () => {
     );
     expect(consume.run).toContain("--workflow-jobs-metadata");
     expect(consume.run).toContain("--source-package-json-sha256");
-    expect(consume.run).toContain('[[ "$WORKFLOW_REF" == "refs/heads/main" ]]');
+    expect(consume.run).toContain(
+      '[[ "$WORKFLOW_REF" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]',
+    );
+    expect(consume.run).toContain(
+      '[[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ && "${WORKFLOW_SHA:0:12}" == "$workflow_sha_prefix" ]]',
+    );
+    expect(consume.run).toContain(
+      '[[ "$WORKFLOW_REF" == "refs/heads/main" || "$sha_pinned_release_publish" == "true" ]]',
+    );
     expect(consume.run).toContain('git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main');
     expect(
       step(parsed.jobs?.publish_plugins_npm, "Checkout trusted publication tooling").with?.ref,
