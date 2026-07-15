@@ -16,6 +16,7 @@ import {
   type DeliveryQueueRowMetadata,
 } from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
+import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMirror } from "./mirror.js";
@@ -139,9 +140,20 @@ export async function enqueueDelivery(
   return id;
 }
 
+/** Spool artifacts a pending row still references; empty once it is gone or unreadable. */
+function loadEntrySpoolPaths(id: string, stateDir: string | undefined): string[] {
+  const entry = loadDeliveryQueueEntry(QUEUE_NAME, id, stateDir) as QueuedDelivery | null;
+  return entry ? collectEntrySpoolPaths(entry.payloads, stateDir) : [];
+}
+
 /** Remove a successfully delivered entry from the queue. */
 export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
+  // Read the media references before the row goes, then unlink only after the
+  // delete commits. A crash in between leaves an orphan for generation reclaim;
+  // unlinking first could strip media from a row that still has to replay.
+  const spoolPaths = loadEntrySpoolPaths(id, stateDir);
   deleteDeliveryQueueEntry(QUEUE_NAME, id, stateDir);
+  await releaseSpoolArtifacts(spoolPaths, stateDir);
 }
 
 /** Update a queue entry after a failed delivery attempt. */
@@ -248,7 +260,11 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
 
 /** Move a queue entry out of the pending retry set. */
 export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
+  // Dead-lettered rows are retained but never replayed: recovery loads the
+  // pending set only, so a failed row's media has no remaining reader.
+  const spoolPaths = loadEntrySpoolPaths(id, stateDir);
   moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
+  await releaseSpoolArtifacts(spoolPaths, stateDir);
 }
 
 type FailPendingDeliveryResult = { status: "failed" } | { status: "not_pending" };
@@ -263,9 +279,15 @@ export async function failPendingDelivery(
   },
   stateDir?: string,
 ): Promise<FailPendingDeliveryResult> {
-  return failPendingDeliveryQueueEntry({
+  const result = failPendingDeliveryQueueEntry({
     queueName: QUEUE_NAME,
     ...params,
     stateDir,
   });
+  // Only the writer that won the guarded transition owns the media; a
+  // not_pending result means another path holds the row and its artifacts.
+  if (result.status === "failed") {
+    await releaseSpoolArtifacts(collectEntrySpoolPaths(params.entry.payloads, stateDir), stateDir);
+  }
+  return result;
 }

@@ -1,5 +1,7 @@
 // Covers outbound delivery core: hooks, queue cleanup, durable capability
 // checks, adapter sends, transcript mirroring, and payload outcomes.
+import fsPromises from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -4495,7 +4497,7 @@ describe("deliverOutboundPayloads", () => {
       channelDataCount: 0,
       items: [
         { index: 0, kinds: ["text"] as const, text: "hello", mediaUrls: [] },
-        { index: 1, kinds: ["media"] as const, mediaUrls: ["file:///tmp/a.png"] },
+        { index: 1, kinds: ["media"] as const, mediaUrls: ["https://example.com/a.png"] },
       ],
     };
 
@@ -4503,7 +4505,9 @@ describe("deliverOutboundPayloads", () => {
       cfg: matrixChunkConfig,
       channel: "matrix",
       to: "!room:example",
-      payloads: [{ text: "hello" }, { mediaUrl: "file:///tmp/a.png" }],
+      // Remote media passes through queue staging untouched, keeping this case
+      // about plan persistence rather than about local media custody.
+      payloads: [{ text: "hello" }, { mediaUrl: "https://example.com/a.png" }],
       deps: { matrix: sendMatrix },
       renderedBatchPlan,
     });
@@ -4512,6 +4516,110 @@ describe("deliverOutboundPayloads", () => {
       queueMocks.enqueueDelivery.mock.calls as unknown as Array<[{ renderedBatchPlan?: unknown }]>
     )[0]?.[0];
     expect(queuedDelivery?.renderedBatchPlan).toBe(renderedBatchPlan);
+  });
+
+  it("queues a spool copy while the live send keeps the producer's path", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-spool", roomId: "!room:example" });
+    const sourceDir = await fsPromises.realpath(
+      await fsPromises.mkdtemp(path.join(os.tmpdir(), "deliver-spool-")),
+    );
+    const source = path.join(sourceDir, "voice.ogg");
+    await fsPromises.writeFile(source, "opus-bytes");
+    const payload = { mediaUrl: source, audioAsVoice: true };
+
+    try {
+      await deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [payload],
+        mediaAccess: { localRoots: [sourceDir] },
+        deps: { matrix: sendMatrix },
+      });
+
+      const queued = (
+        queueMocks.enqueueDelivery.mock.calls as unknown as Array<
+          [{ payloads: { mediaUrl?: string }[] }]
+        >
+      )[0]?.[0];
+      const queuedMediaUrl = queued?.payloads[0]?.mediaUrl;
+      // The row points at the queue's own copy...
+      expect(queuedMediaUrl).not.toBe(source);
+      expect(await fsPromises.readFile(queuedMediaUrl as string, "utf8")).toBe("opus-bytes");
+      // ...while the live send stays copy-free on the producer's path.
+      expect(payload.mediaUrl).toBe(source);
+      expect(sendMatrix.mock.calls[0]?.[0]?.mediaUrl ?? source).toBe(source);
+    } finally {
+      await fsPromises.rm(sourceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a best-effort send live-only when its media cannot be staged", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-live", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ mediaUrl: "/nonexistent/voice.ogg" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    // No durable row may claim media it cannot replay; the send still goes out.
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(sendMatrix).toHaveBeenCalled();
+  });
+
+  it("fails a required send closed when its media cannot be staged", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-req", roomId: "!room:example" });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ mediaUrl: "/nonexistent/voice.ogg" }],
+        queuePolicy: "required",
+        deps: { matrix: sendMatrix },
+      }),
+    ).rejects.toThrow();
+
+    // Required durability cannot be honored, so nothing reaches the recipient.
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("fails a required send closed rather than persist sensitive media", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-sens", roomId: "!room:example" });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ mediaUrl: "https://example.com/secret.ogg", sensitiveMedia: true }],
+        queuePolicy: "required",
+        deps: { matrix: sendMatrix },
+      }),
+    ).rejects.toThrow();
+
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+  });
+
+  it("sends sensitive media live-only under best effort", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-sens2", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ mediaUrl: "https://example.com/secret.ogg", sensitiveMedia: true }],
+      deps: { matrix: sendMatrix },
+    });
+
+    // Live-only content must leave no durable reference behind.
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(sendMatrix).toHaveBeenCalled();
   });
 
   it("suppresses direct silent replies from the outbound session", async () => {

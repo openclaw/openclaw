@@ -40,6 +40,7 @@ import {
   type ReplyPayloadDeliveryPin,
 } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -67,6 +68,7 @@ import {
   runOutboundDeliveryCommitHooks,
   type OutboundDeliveryCommitHook,
 } from "./delivery-commit-hooks.js";
+import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import {
   ackDelivery,
   enqueueDelivery,
@@ -1381,25 +1383,52 @@ export async function deliverOutboundPayloadsInternal(
     }
   }
   const queuePolicy = params.queuePolicy ?? "best_effort";
-  const queuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
-  const queuePayloadsChanged = queuePayloads.some((payload, index) => payload !== payloads[index]);
+  const strippedQueuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
+  const queuePayloadsChanged = strippedQueuePayloads.some(
+    (payload, index) => payload !== payloads[index],
+  );
   const renderedBatchPlan =
     params.renderedBatchPlan ?? createRenderedMessageBatchPlan(params.payloads);
+  // Media staging only rewrites source URLs one-for-one, and the plan is read for
+  // its per-payload counts (see resolveMessagePlanMediaCount), so it stays keyed
+  // to the payload shape rather than to which copy the row happens to reference.
   const queueRenderedBatchPlan = queuePayloadsChanged
-    ? createRenderedMessageBatchPlan(queuePayloads)
+    ? createRenderedMessageBatchPlan(strippedQueuePayloads)
     : renderedBatchPlan;
 
-  // Invocation authority is not queued; recovery must re-enter delegated after restart.
-  // Write-ahead delivery queue: persist before sending, remove after success.
-  const queueId = params.skipQueue
-    ? null
-    : await enqueueDelivery({
+  const stageAndEnqueueDelivery = async (): Promise<string | null> => {
+    // A durable row must not outlive its media. Producer-owned local sources
+    // (TTS temps above all) are deleted when this process exits, so the queue
+    // takes its own copy first and the row references that; the live send below
+    // keeps the original path and stays copy-free.
+    const staged = await stageQueuePayloadMedia({
+      payloads: strippedQueuePayloads,
+      mediaAccess: params.mediaAccess,
+      maxBytes: resolveOutboundMediaMaxBytes({
+        cfg: params.cfg,
+        channel,
+        accountId: params.accountId,
+      }),
+    });
+    if (staged.status !== "staged") {
+      // Sensitive media must reach neither the spool nor the row, so there is no
+      // replayable copy to promise. Required sends fail closed instead of
+      // persisting an unreplayable row; best-effort degrades to a live-only send.
+      if (queuePolicy === "required") {
+        throw new Error(
+          `Required durable message send is unsupported for ${channel}: ${staged.reason} cannot be persisted`,
+        );
+      }
+      return null;
+    }
+    try {
+      return await enqueueDelivery({
         channel,
         to,
         accountId: params.accountId,
         queuePolicy,
         requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
-        payloads: queuePayloads,
+        payloads: staged.payloads,
         renderedBatchPlan: queueRenderedBatchPlan,
         threadId: params.threadId,
         replyToId: params.replyToId,
@@ -1414,13 +1443,26 @@ export async function deliverOutboundPayloadsInternal(
         mirror: params.mirror,
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
-      }).catch((err: unknown) => {
+      });
+    } catch (err) {
+      // The row never became visible, so no reclaim pass will ever see these as
+      // owned. Drop them here rather than wait for the owner process to die.
+      await releaseSpoolArtifacts(staged.artifacts);
+      throw err;
+    }
+  };
+
+  // Invocation authority is not queued; recovery must re-enter delegated after restart.
+  // Write-ahead delivery queue: persist before sending, remove after success.
+  const queueId = params.skipQueue
+    ? null
+    : await stageAndEnqueueDelivery().catch((err: unknown) => {
         if (queuePolicy === "required") {
           emitPreQueueFailure();
           throw err;
         }
         return null;
-      }); // Best-effort delivery falls back to direct send if the queue write fails.
+      }); // Best-effort delivery falls back to direct send if staging or the queue write fails.
 
   if (queueId) {
     params.onDeliveryIntent?.({
