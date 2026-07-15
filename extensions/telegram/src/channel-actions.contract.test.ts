@@ -13,7 +13,7 @@ describe("telegram actions contract", () => {
         cfg: {
           channels: {
             telegram: {
-              botToken: "123:telegram-test-token",
+              botToken: "test-token-placeholder",
             },
           },
         } as OpenClawConfig,
@@ -32,7 +32,7 @@ describe("telegram actions contract", () => {
       cfg: {
         channels: {
           telegram: {
-            botToken: "123:telegram-test-token",
+            botToken: "test-token-placeholder",
             richMessages,
           },
         },
@@ -48,7 +48,7 @@ describe("telegram actions contract", () => {
       cfg: {
         channels: {
           telegram: {
-            botToken: "123:telegram-test-token",
+            botToken: "test-token-placeholder",
             capabilities: [],
           },
         },
@@ -79,7 +79,7 @@ describe("telegram actions contract", () => {
       cfg: {
         channels: {
           telegram: {
-            botToken: "123:telegram-test-token",
+            botToken: "test-token-placeholder",
             capabilities: ["vision"],
           },
         },
@@ -94,7 +94,7 @@ describe("telegram actions contract", () => {
       cfg: {
         channels: {
           telegram: {
-            botToken: "123:telegram-test-token",
+            botToken: "test-token-placeholder",
             richMessages: true,
             accounts: {
               ops: {
@@ -133,11 +133,11 @@ describe("telegram actions contract", () => {
             defaultAccount: "ops",
             accounts: {
               default: {
-                botToken: "123:default-token",
+                botToken: "test-token-placeholder",
                 richMessages: false,
               },
               ops: {
-                botToken: "123:ops-token",
+                botToken: "test-token-placeholder",
                 richMessages: true,
               },
             },
