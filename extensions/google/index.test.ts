@@ -19,6 +19,7 @@ import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googlePlugin from "./index.js";
 import googleProviderDiscovery from "./provider-discovery.js";
 import { registerGoogleProvider } from "./provider-registration.js";
+import { GOOGLE_TTS_VOICES } from "./speech-provider.js";
 
 const googleProviderPlugin = {
   register(api: Parameters<typeof registerGoogleProvider>[0]) {
@@ -383,6 +384,21 @@ describe("google provider plugin hooks", () => {
 
     expect(googleProvider.buildReplayPolicy).toBe(cliProvider.buildReplayPolicy);
     expect(googleProvider.wrapStreamFn).toBe(cliProvider.wrapStreamFn);
+  });
+
+  it("advertises the shared TTS voice inventory for the realtime catalog", () => {
+    let realtimeProvider: RealtimeVoiceProviderPlugin | undefined;
+    googlePlugin.register(
+      createTestPluginApi({
+        registerRealtimeVoiceProvider(provider) {
+          realtimeProvider = provider;
+        },
+      }),
+    );
+
+    expect(realtimeProvider?.voices).toEqual(GOOGLE_TTS_VOICES);
+    // The bridge's default voice must stay selectable from the advertised list.
+    expect(realtimeProvider?.voices).toContain("Kore");
   });
 
   it("buffers early realtime audio while the lazy Google bridge loads", () => {

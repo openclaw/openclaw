@@ -32,7 +32,7 @@ const GOOGLE_TTS_MODELS = [
   "gemini-2.5-pro-preview-tts",
 ] as const;
 
-const GOOGLE_TTS_VOICES = [
+export const GOOGLE_TTS_VOICES = [
   "Zephyr",
   "Puck",
   "Charon",

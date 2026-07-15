@@ -20,7 +20,7 @@ import {
 } from "./generation-provider-metadata.js";
 import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { registerGoogleProvider } from "./provider-registration.js";
-import { buildGoogleSpeechProvider } from "./speech-provider.js";
+import { buildGoogleSpeechProvider, GOOGLE_TTS_VOICES } from "./speech-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 let googleImageGenerationProviderPromise: Promise<ImageGenerationProvider> | null = null;
@@ -311,6 +311,10 @@ function createLazyGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
   return {
     id: "google",
     label: "Google Live Voice",
+    // Live native-audio models accept every Google TTS voice and the realtime
+    // runtime forwards the id unvalidated, so the shared TTS inventory is the
+    // provider-wide voice contract advertised through talk.catalog.
+    voices: GOOGLE_TTS_VOICES,
     autoSelectOrder: 20,
     resolveConfig: ({ cfg, rawConfig }) => resolveGoogleRealtimeProviderConfig(rawConfig, cfg),
     isConfigured: ({ cfg, providerConfig }) =>

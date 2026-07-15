@@ -47,18 +47,6 @@ import {
   OPENAI_GPT_LIVE_BROWSER_SESSION_UNSUPPORTED_MESSAGE,
 } from "./realtime-quicksilver.js";
 
-type OpenAIRealtimeVoice =
-  | "alloy"
-  | "ash"
-  | "ballad"
-  | "cedar"
-  | "coral"
-  | "echo"
-  | "marin"
-  | "sage"
-  | "shimmer"
-  | "verse";
-
 type OpenAIRealtimeVoiceProviderConfig = {
   apiKey?: string;
   model?: string;
@@ -115,7 +103,8 @@ const OPENAI_REALTIME_VOICES = [
   "verse",
   "marin",
   "cedar",
-] as const satisfies readonly OpenAIRealtimeVoice[];
+] as const;
+type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number];
 
 function normalizeOpenAIRealtimeVoice(value: unknown): OpenAIRealtimeVoice | undefined {
   if (typeof value !== "string") {
@@ -1532,6 +1521,10 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     id: "openai",
     label: "OpenAI Realtime Voice",
     defaultModel: OPENAI_REALTIME_DEFAULT_MODEL,
+    // Advertises exactly the set normalizeOpenAIRealtimeVoice accepts, so
+    // talk.catalog matches config validation. The default gpt-realtime-2.1
+    // accepts all ten (marin/cedar are its recommended voices).
+    voices: OPENAI_REALTIME_VOICES,
     autoSelectOrder: 10,
     capabilities: {
       transports: ["webrtc", "gateway-relay"],

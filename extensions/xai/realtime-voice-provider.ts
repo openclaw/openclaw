@@ -6,6 +6,7 @@ import {
 import { XaiRealtimeVoiceBridge } from "./realtime-voice-bridge.js";
 import {
   XAI_REALTIME_DEFAULT_MODEL,
+  XAI_REALTIME_VOICES,
   hasXaiRealtimeApiKeyInput,
   normalizeXaiRealtimeBaseUrl,
   normalizeXaiRealtimeProviderConfig,
@@ -18,6 +19,9 @@ export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
     label: "xAI Grok Voice",
     aliases: ["xai-realtime-voice", "grok-voice"],
     defaultModel: XAI_REALTIME_DEFAULT_MODEL,
+    // The canonical Grok voice ids normalizeXaiRealtimeVoice recognizes (it
+    // passes other strings through), advertised as the selectable voice set.
+    voices: XAI_REALTIME_VOICES,
     autoSelectOrder: 25,
     capabilities: {
       transports: ["gateway-relay"],

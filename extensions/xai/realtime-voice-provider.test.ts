@@ -142,6 +142,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     const provider = buildXaiRealtimeVoiceProvider();
 
     expect(provider.defaultModel).toBe("grok-voice-latest");
+    expect(provider.voices).toEqual(["eve", "ara", "rex", "sal", "leo"]);
     expect(provider.capabilities).toEqual({
       transports: ["gateway-relay"],
       inputAudioFormats: [
