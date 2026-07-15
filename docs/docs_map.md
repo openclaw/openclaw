@@ -7321,6 +7321,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Existing outbound adapters
   - H2: Durable sends
   - H2: Deferred delivery admission
+  - H2: Post-Send Validation
   - H2: Compatibility dispatch
 
 ## plugins/sdk-channel-plugins.md

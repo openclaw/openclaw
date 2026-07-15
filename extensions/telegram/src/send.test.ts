@@ -1258,6 +1258,55 @@ describe("sendMessageTelegram", () => {
     expect(result).toEqual({ messageId: "55", chatId: "123" });
   });
 
+  it("preserves topic proof when durable rich sends fall back to plain text", async () => {
+    const chatId = "-1001234567890";
+    const text = "Status includes openai:owner@example.com";
+    const onDeliveryResult = vi.fn();
+    botRawApi.sendRichMessage.mockRejectedValueOnce(createRichEntityInvalidError("EMAIL"));
+    botApi.sendMessage.mockResolvedValueOnce({
+      message_id: 46,
+      chat: { id: chatId },
+      message_thread_id: 271,
+    });
+
+    const result = await sendMessageTelegram(chatId, text, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      messageThreadId: 271,
+      onDeliveryResult,
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledWith(chatId, text, {
+      message_thread_id: 271,
+    });
+    const expectedMeta = {
+      telegram: {
+        chatId,
+        messageThreadId: 271,
+        requestedMessageThreadId: 271,
+        messages: [
+          {
+            messageId: "46",
+            chatId,
+            messageThreadId: 271,
+            requestedMessageThreadId: 271,
+          },
+        ],
+      },
+    };
+    expect(onDeliveryResult).toHaveBeenCalledWith({
+      messageId: "46",
+      chatId,
+      meta: expectedMeta,
+    });
+    expect(result).toEqual({
+      messageId: "46",
+      chatId,
+      meta: expectedMeta,
+    });
+  });
+
   it("uses table-aware plain text when durable rich sends fall back", async () => {
     const logFile = captureInfoLogs();
     const html =
@@ -1798,6 +1847,44 @@ describe("sendMessageTelegram", () => {
     });
     expect(cursor.nextPartIndex).toBe(1);
     expect(cursor.complete).toBe(false);
+  });
+
+  it("reports Telegram provider proof through delivery progress for topic sends", async () => {
+    botApi.sendMessage.mockResolvedValueOnce({
+      message_id: 54,
+      message_thread_id: 8590,
+      chat: { id: "-1001234567890" },
+    });
+    const onDeliveryResult = vi.fn();
+
+    const result = await sendMessageTelegram("-1001234567890", "threaded", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      messageThreadId: 8590,
+      onDeliveryResult,
+    });
+
+    const expectedMeta = {
+      telegram: {
+        chatId: "-1001234567890",
+        messageThreadId: 8590,
+        requestedMessageThreadId: 8590,
+        messages: [
+          {
+            messageId: "54",
+            chatId: "-1001234567890",
+            messageThreadId: 8590,
+            requestedMessageThreadId: 8590,
+          },
+        ],
+      },
+    };
+    expect(onDeliveryResult).toHaveBeenCalledWith({
+      messageId: "54",
+      chatId: "-1001234567890",
+      meta: expectedMeta,
+    });
+    expect(result.meta).toEqual(expectedMeta);
   });
 
   it("chunks long inline markdown through the HTML text path", async () => {
@@ -3357,6 +3444,123 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("returns provider-confirmed topic delivery metadata", async () => {
+    const chatId = "-1001234567890";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 55,
+      chat: { id: chatId },
+      message_thread_id: 271,
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const result = await sendMessageTelegram(chatId, "hello forum", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      messageThreadId: 271,
+    });
+
+    expect(result).toEqual({
+      messageId: "55",
+      chatId,
+      meta: {
+        telegram: {
+          chatId,
+          messageThreadId: 271,
+          requestedMessageThreadId: 271,
+          messages: [
+            {
+              messageId: "55",
+              chatId,
+              messageThreadId: 271,
+              requestedMessageThreadId: 271,
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("keeps requested topic metadata separate when Telegram omits provider thread proof", async () => {
+    const chatId = "-1001234567890";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 55,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const result = await sendMessageTelegram(chatId, "hello forum", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      messageThreadId: 271,
+    });
+
+    expect(result).toEqual({
+      messageId: "55",
+      chatId,
+      meta: {
+        telegram: {
+          chatId,
+          requestedMessageThreadId: 271,
+          messages: [
+            {
+              messageId: "55",
+              chatId,
+              requestedMessageThreadId: 271,
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("returns provider-confirmed metadata for every text chunk", async () => {
+    const chatId = "-1001234567890";
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        message_id: 55,
+        chat: { id: chatId },
+        message_thread_id: 271,
+      })
+      .mockResolvedValueOnce({
+        message_id: 56,
+        chat: { id: chatId },
+        message_thread_id: 271,
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const result = await sendMessageTelegram(chatId, "a".repeat(4100), {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      messageThreadId: 271,
+    });
+
+    expect(result.messageId).toBe("56");
+    expect(result.meta?.telegram?.messages).toEqual([
+      {
+        messageId: "55",
+        chatId,
+        messageThreadId: 271,
+        requestedMessageThreadId: 271,
+      },
+      {
+        messageId: "56",
+        chatId,
+        messageThreadId: 271,
+        requestedMessageThreadId: 271,
+      },
+    ]);
+  });
+
   it("fails topic sends instead of retrying without message_thread_id", async () => {
     const cases = [{ name: "forum", chatId: "-100123", text: "hello forum" }] as const;
     const threadErr = new Error("400: Bad Request: message thread not found");
@@ -3960,6 +4164,34 @@ describe("sendStickerTelegram", () => {
     expect(sendSticker).toHaveBeenCalledWith(chatId, "fileId123", {
       message_thread_id: 271,
     });
+  });
+
+  it("returns provider-confirmed sticker topic delivery metadata", async () => {
+    const chatId = "-100123";
+    const sendSticker = vi.fn().mockResolvedValue({
+      message_id: 100,
+      chat: { id: chatId },
+      message_thread_id: 271,
+    });
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+
+    const res = await sendStickerTelegram(chatId, "fileId123", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      messageThreadId: 271,
+    });
+
+    expect(res.meta?.telegram?.messages).toEqual([
+      {
+        messageId: "100",
+        chatId,
+        messageThreadId: 271,
+        requestedMessageThreadId: 271,
+      },
+    ]);
   });
 
   it("fails when sticker send returns no message_id", async () => {
@@ -4619,6 +4851,39 @@ describe("sendPollTelegram", () => {
     expect(sendPollCall[1]).toBe("Q");
     expect(sendPollCall[2]).toEqual(["A", "B"]);
     expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(60);
+  });
+
+  it("returns provider-confirmed poll topic delivery metadata", async () => {
+    const chatId = "-100123";
+    const api = {
+      sendPoll: vi.fn(async () => ({
+        message_id: 123,
+        chat: { id: chatId },
+        message_thread_id: 271,
+        poll: { id: "p1" },
+      })),
+    };
+
+    const res = await sendPollTelegram(
+      chatId,
+      { question: "Q", options: ["A", "B"] },
+      {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "t",
+        api: api as unknown as Bot["api"],
+        messageThreadId: 271,
+      },
+    );
+
+    expect(res.pollId).toBe("p1");
+    expect(res.meta?.telegram?.messages).toEqual([
+      {
+        messageId: "123",
+        chatId,
+        messageThreadId: 271,
+        requestedMessageThreadId: 271,
+      },
+    ]);
   });
 
   it("fails poll sends instead of retrying without message_thread_id", async () => {

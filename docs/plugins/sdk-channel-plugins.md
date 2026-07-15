@@ -228,6 +228,11 @@ custom approval payloads instead of the shared renderer.
   `outbound.beforeDeliverPayload` for channel-specific payload lifecycle
   behavior such as hiding duplicate local approval prompts or sending typing
   indicators before delivery.
+- Use `outbound.validateDeliveryResults` only for channel-owned, fail-closed
+  proof checks that require provider-confirmed send results after the native
+  API call, such as verifying a platform-returned thread id. The hook can fail
+  a delivery after one or more messages were already sent, so keep advisory
+  side effects in `afterDeliverPayload`.
 - Use `approvalCapability.describeExecApprovalSetup` when the channel wants
   the disabled-path reply to explain the exact config knobs needed to enable
   native exec approvals. The hook receives `{ channel, channelLabel, accountId }`;

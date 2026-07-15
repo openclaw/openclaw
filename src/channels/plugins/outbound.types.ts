@@ -196,6 +196,13 @@ export type ChannelOutboundAdapter = {
     payload: ReplyPayload;
     results: readonly OutboundDeliveryResult[];
   }) => Promise<void> | void;
+  /** Throws to fail the payload delivery after platform send results are available. */
+  validateDeliveryResults?: (params: {
+    cfg: OpenClawConfig;
+    target: ChannelOutboundTargetRef;
+    payload: ReplyPayload;
+    results: readonly OutboundDeliveryResult[];
+  }) => Promise<void> | void;
   /** Channel-advertised presentation features and limits used by core adaptation. */
   presentationCapabilities?: ChannelPresentationCapabilities;
   deliveryCapabilities?: ChannelDeliveryCapabilities;

@@ -172,6 +172,11 @@ type ChannelHandler = {
     payload: ReplyPayload;
     results: readonly OutboundDeliveryResult[];
   }) => Promise<void>;
+  validateDeliveryResults?: (params: {
+    target: ChannelOutboundTargetRef;
+    payload: ReplyPayload;
+    results: readonly OutboundDeliveryResult[];
+  }) => Promise<void>;
   buildTargetRef: (overrides?: { threadId?: string | number | null }) => ChannelOutboundTargetRef;
   shouldSkipPlainTextSanitization?: (payload: ReplyPayload) => boolean;
   resolveEffectiveTextChunkLimit?: (fallbackLimit?: number) => number | undefined;
@@ -481,6 +486,15 @@ function createPluginHandler(
     afterDeliverPayload: outbound?.afterDeliverPayload
       ? async ({ target, payload, results }) =>
           outbound.afterDeliverPayload!({
+            cfg: params.cfg,
+            target,
+            payload,
+            results,
+          })
+      : undefined,
+    validateDeliveryResults: outbound?.validateDeliveryResults
+      ? async ({ target, payload, results }) =>
+          outbound.validateDeliveryResults!({
             cfg: params.cfg,
             target,
             payload,
@@ -1060,6 +1074,22 @@ async function maybeNotifyAfterDeliveredPayload(params: {
       error: formatErrorMessage(err),
     });
   }
+}
+
+async function maybeValidateDeliveredPayload(params: {
+  handler: ChannelHandler;
+  payload: ReplyPayload;
+  target: ChannelOutboundTargetRef;
+  results: readonly OutboundDeliveryResult[];
+}): Promise<void> {
+  if (!params.handler.validateDeliveryResults || params.results.length === 0) {
+    return;
+  }
+  await params.handler.validateDeliveryResults({
+    target: params.target,
+    payload: params.payload,
+    results: params.results,
+  });
 }
 
 async function renderPresentationForDelivery(
@@ -2299,6 +2329,12 @@ async function deliverOutboundPayloadsCore(
           );
           continue;
         }
+        await maybeValidateDeliveredPayload({
+          handler: deliveryHandler,
+          payload: effectivePayload,
+          target: deliveryTarget,
+          results: deliveredResults,
+        });
         recordPayloadOutcome({
           index: payloadIndex,
           status: "sent",
@@ -2339,6 +2375,14 @@ async function deliverOutboundPayloadsCore(
           await sendTextChunks(deliveryHandler, payloadSummary.text, sendOverrides);
         }
         const deliveredResults = results.slice(beforeCount);
+        const messageId = deliveredResults.at(-1)?.messageId;
+        const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
+        await maybeValidateDeliveredPayload({
+          handler: deliveryHandler,
+          payload: effectivePayload,
+          target: deliveryTarget,
+          results: deliveredResults,
+        });
         if (deliveredResults.length > 0) {
           recordPayloadOutcome({
             index: payloadIndex,
@@ -2354,8 +2398,6 @@ async function deliverOutboundPayloadsCore(
             }),
           );
         }
-        const messageId = deliveredResults.at(-1)?.messageId;
-        const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
           payload: effectivePayload,
@@ -2396,6 +2438,14 @@ async function deliverOutboundPayloadsCore(
         const beforeCount = results.length;
         await sendTextChunks(deliveryHandler, fallbackText, sendOverrides);
         const deliveredResults = results.slice(beforeCount);
+        const messageId = deliveredResults.at(-1)?.messageId;
+        const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
+        await maybeValidateDeliveredPayload({
+          handler: deliveryHandler,
+          payload: effectivePayload,
+          target: deliveryTarget,
+          results: deliveredResults,
+        });
         if (deliveredResults.length > 0) {
           recordPayloadOutcome({
             index: payloadIndex,
@@ -2411,8 +2461,6 @@ async function deliverOutboundPayloadsCore(
             }),
           );
         }
-        const messageId = deliveredResults.at(-1)?.messageId;
-        const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
           payload: effectivePayload,
@@ -2462,6 +2510,12 @@ async function deliverOutboundPayloadsCore(
         }
       }
       const deliveredResults = results.slice(beforeCount);
+      await maybeValidateDeliveredPayload({
+        handler: deliveryHandler,
+        payload: effectivePayload,
+        target: deliveryTarget,
+        results: deliveredResults,
+      });
       if (deliveredResults.length > 0) {
         recordPayloadOutcome({
           index: payloadIndex,
