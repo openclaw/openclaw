@@ -403,13 +403,11 @@ async function bindTabSession() {
     // reconnect still has to resubscribe even though the key is unchanged.
     // subscribeSession() no-ops when it is already subscribed on this socket.
     await subscribeSession(key);
-    // Rebuild from history rather than resuming the local buffer. The drop left
-    // a frozen partial bubble and a reset stream, so a run that survives the
-    // reconnect would arrive with an unmatched runId and re-render its whole
-    // snapshot underneath that partial — the same reply twice. chat.history
-    // carries the in-flight run, so redrawing is both correct and simpler than
-    // rebasing onto whatever the old socket managed to deliver.
-    await hydrateHistory(key);
+    // Deliberately no rehydrate here. Redrawing from chat.history would drop a
+    // just-sent user message that the server has not echoed back yet, which is
+    // worse than the known cosmetic cost of NOT redrawing: a run that survives
+    // the reconnect repeats its text in a second bubble under the frozen
+    // partial. Losing nothing beats losing the turn.
     return;
   }
   sessionKey = key;
