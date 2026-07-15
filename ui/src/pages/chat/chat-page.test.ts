@@ -15,7 +15,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SplitDropZone } from "./split-drop-zone.ts";
-import { createSplitLayout, type ChatSplitLayout } from "./split-layout.ts";
+import { insertPane, type ChatSplitLayout } from "./split-layout.ts";
 
 type RenderedPane = HTMLElement & {
   paneId: string;
@@ -30,6 +30,15 @@ type RenderedPane = HTMLElement & {
 };
 
 type RenderedDivider = HTMLElement & { orientation: "horizontal" | "vertical" };
+
+function createSplitLayout(sessionKey: string): ChatSplitLayout {
+  const singlePane: ChatSplitLayout = {
+    columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
+    columnWeights: [1],
+    activePaneId: "p1",
+  };
+  return insertPane(singlePane, "p1", sessionKey, "right");
+}
 
 function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);

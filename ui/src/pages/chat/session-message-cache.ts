@@ -82,21 +82,6 @@ function resolveChatMessageCacheKey(
   return `agent:${agentId}:${sessionKey}`;
 }
 
-export function cacheChatMessages(
-  cache: ChatMessageCache,
-  host: ChatMessageCacheHost,
-  target: ChatMessageCacheTarget,
-  messages: unknown[],
-): void {
-  const cacheKey = resolveChatMessageCacheKey(host, target);
-  const existing = getSessionCacheValue(cache, cacheKey)?.snapshot;
-  cacheChatSessionSnapshot(cache, host, target, {
-    messages,
-    pagination: existing?.pagination ?? { hasMore: false },
-    sessionId: existing?.sessionId ?? null,
-  });
-}
-
 export function appendChatMessageToCache(
   cache: ChatMessageCache,
   host: ChatMessageCacheHost,
