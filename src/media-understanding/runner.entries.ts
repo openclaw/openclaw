@@ -549,7 +549,9 @@ async function resolveProviderExecutionAuth(params: {
     cfg: params.cfg,
     providerId: params.providerId,
   });
-  if (literalApiKey) {
+  // OpenAI audio must use the canonical resolver even for exact literal config:
+  // configured auth mode and endpoint trust decide whether bearer use is safe.
+  if (literalApiKey && !modelApi) {
     return {
       kind: "api-key",
       apiKeys: collectProviderApiKeysForExecution({

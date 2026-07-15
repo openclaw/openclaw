@@ -396,7 +396,6 @@ describe("runCapability local no-auth audio providers", () => {
             cfg.models = {
               providers: {
                 OpenAI: {
-                  api: "openai-audio-transcriptions",
                   baseUrl: "https://api.openai.com/v1",
                   [["api", "Key"].join("")]: "openai:default",
                   models: [],
@@ -471,6 +470,59 @@ describe("runCapability local no-auth audio providers", () => {
             expect(result.decision.outcome).toBe("failed");
             expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain(
               "requires an OpenAI API key profile",
+            );
+            expect(result.decision.attachments[0]?.attempts[0]?.reason).not.toContain(
+              "oauth-chat-token",
+            );
+            expect(result.decision.attachments[0]?.attempts[0]?.reason).not.toContain(
+              "oauth-refresh-token",
+            );
+            expect(transcribeAudio).not.toHaveBeenCalled();
+          },
+        );
+      });
+    });
+  });
+
+  it("does not send literal OpenAI OAuth config auth to custom audio base URLs", async () => {
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync(AUTH_ENV, async () => {
+        await withAudioFixture(
+          "openclaw-openai-audio-oauth-config-custom-base-url",
+          async ({ ctx, media, cache }) => {
+            const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+              text: `auth:${req.apiKey}`,
+              model: req.model,
+            }));
+            const cfg = createAudioCfg({
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+              providerConfig: {
+                auth: "oauth",
+                [["api", "Key"].join("")]: "oauth-config-token",
+                baseUrl: "https://openai-compatible.example.test/v1",
+                models: [],
+              },
+            });
+
+            const result = await runCapability({
+              capability: "audio",
+              cfg,
+              ctx,
+              attachments: cache,
+              media,
+              agentDir,
+              providerRegistry: buildProviderRegistry({
+                openai: createAudioProvider("openai", transcribeAudio),
+              }),
+            });
+
+            expect(result.decision.outcome).toBe("failed");
+            expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain(
+              'No API key found for provider "openai"',
+            );
+            expect(result.decision.attachments[0]?.attempts[0]?.reason).not.toContain(
+              "oauth-config-token",
             );
             expect(transcribeAudio).not.toHaveBeenCalled();
           },

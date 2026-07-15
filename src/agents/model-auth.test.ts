@@ -432,6 +432,52 @@ describe("resolveModelAuthMode", () => {
       readCodexCliCredentialsCached.mockRestore();
     }
   });
+
+  it("applies configured OAuth mode consistently to OpenAI env credentials", async () => {
+    const codexApiKeyEnv = ["CODEX", "API", "KEY"].join("_");
+    const openAiApiKeyEnv = ["OPENAI", "API", "KEY"].join("_");
+    const openAiOAuthTokenEnv = ["OPENAI", "OAUTH", "TOKEN"].join("_");
+    const snapshot = captureEnv([codexApiKeyEnv, openAiApiKeyEnv, openAiOAuthTokenEnv]);
+    deleteTestEnvValue(codexApiKeyEnv);
+    deleteTestEnvValue(openAiOAuthTokenEnv);
+    setTestEnvValue(openAiApiKeyEnv, "env-openai-credential");
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            auth: "oauth" as const,
+            baseUrl: "https://openai-compatible.example.test/v1",
+            models: [],
+          },
+        },
+      },
+    };
+
+    try {
+      expect(resolveModelAuthMode("openai", cfg, { version: 1, profiles: {} })).toBe("oauth");
+      await expect(
+        hasAvailableAuthForProvider({
+          provider: "openai",
+          cfg,
+          store: { version: 1, profiles: {} },
+          modelApi: "openai-audio-transcriptions",
+          openAIAudioEndpointTrust: "custom-openai-compatible",
+        }),
+      ).resolves.toBe(false);
+      expect(
+        hasRuntimeAvailableProviderAuth({
+          provider: "openai",
+          cfg,
+          env: { [openAiApiKeyEnv]: "env-openai-credential" },
+          allowPluginSyntheticAuth: false,
+          modelApi: "openai-audio-transcriptions",
+          openAIAudioEndpointTrust: "custom-openai-compatible",
+        }),
+      ).toBe(false);
+    } finally {
+      snapshot.restore();
+    }
+  });
 });
 
 describe("requireApiKey", () => {
@@ -1734,7 +1780,6 @@ describe("resolveApiKeyForProvider", () => {
       models: {
         providers: {
           openai: {
-            api: "openai-audio-transcriptions" as const,
             auth: "oauth" as const,
             apiKey: { source: "file", provider: "vault", id: "/openai/oauth" } as const,
             baseUrl: "https://openai-compatible.example.test/v1",

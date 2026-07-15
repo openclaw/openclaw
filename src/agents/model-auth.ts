@@ -44,6 +44,7 @@ import {
   type AuthProfileStore,
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
+  getRuntimeAuthProfileStoreSnapshot,
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
   listProfilesForProvider,
@@ -51,6 +52,7 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import { evaluateStoredCredentialEligibility } from "./auth-profiles/credential-state.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import * as cliCredentials from "./cli-credentials.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
@@ -1015,6 +1017,8 @@ function shouldResolvePluginSyntheticAuth(params: {
 export function hasRuntimeAvailableProviderAuth(params: {
   provider: string;
   cfg?: OpenClawConfig;
+  store?: AuthProfileStore;
+  agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
@@ -1026,6 +1030,46 @@ export function hasRuntimeAvailableProviderAuth(params: {
   const authOverride = resolveProviderAuthOverride(params.cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
+  }
+  const runtimeStore = params.store ?? getRuntimeAuthProfileStoreSnapshot(params.agentDir);
+  if (runtimeStore) {
+    const providerEntryReference = resolveProviderEntryApiKeyProfileReference({
+      cfg: params.cfg,
+      provider,
+      store: runtimeStore,
+    });
+    if (providerEntryReference.kind === "profile") {
+      const { credential } = providerEntryReference;
+      return (
+        evaluateStoredCredentialEligibility({ credential }).eligible &&
+        isAuthModeAllowedForModel({
+          provider,
+          modelApi: params.modelApi,
+          mode: providerEntryReference.mode,
+          openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
+        })
+      );
+    }
+    if (providerEntryReference.kind === "profile-incompatible") {
+      return false;
+    }
+  } else if (
+    directOpenAIPlatformModelRequiresApiKey({
+      provider,
+      modelApi: params.modelApi,
+      openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
+    })
+  ) {
+    const unresolvedReference = resolveProviderEntryApiKeyProfileReference({
+      cfg: params.cfg,
+      provider,
+      store: { version: 1, profiles: {} },
+    });
+    // A profile id is ambiguous without the process-local store. Fail closed
+    // in this fast path and let the canonical async resolver classify it.
+    if (unresolvedReference.kind === "literal" && unresolvedReference.apiKey.includes(":")) {
+      return false;
+    }
   }
   const envAuth = resolveEnvApiKey(provider, params.env, {
     config: params.cfg,
@@ -1040,7 +1084,11 @@ export function hasRuntimeAvailableProviderAuth(params: {
     isAuthModeAllowedForModel({
       provider,
       modelApi: params.modelApi,
-      mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+      mode: resolveDirectProviderCredentialMode({
+        cfg: params.cfg,
+        provider,
+        inferredMode: resolveEnvAuthModeFromSource(envAuth.source),
+      }),
       openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
     })
   ) {
@@ -1499,6 +1547,23 @@ export async function resolveApiKeyForProvider(params: {
     );
   }
 
+  // The media runner historically treated a configured OpenAI audio key as
+  // the selected credential. Preserve that billing/account choice while the
+  // canonical resolver adds OAuth fallback for otherwise unconfigured audio.
+  const shouldPreserveOpenAIAudioConfiguredApiKeyPrecedence =
+    providerEntryBinding.kind === "literal" &&
+    normalizeProviderId(provider) === OPENAI_PROVIDER_ID &&
+    normalizeLowercaseStringOrEmpty(params.modelApi) === OPENAI_AUDIO_TRANSCRIPTIONS_API &&
+    resolveDirectProviderCredentialMode({ cfg, provider, inferredMode: "api-key" }) === "api-key";
+  if (shouldPreserveOpenAIAudioConfiguredApiKeyPrecedence) {
+    const { apiKey, source } = providerEntryBinding;
+    return {
+      apiKey,
+      source,
+      mode: "api-key",
+    };
+  }
+
   if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
     const runtimeCustomKey = resolveManagedSecretRefRuntimeProviderAuth({
       cfg,
@@ -1868,7 +1933,11 @@ export function resolveModelAuthMode(
 
   const envKey = resolveConfigAwareEnvApiKey(cfg, resolved, options?.workspaceDir);
   if (envKey?.apiKey) {
-    return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
+    return resolveDirectProviderCredentialMode({
+      cfg,
+      provider: resolved,
+      inferredMode: resolveEnvAuthModeFromSource(envKey.source),
+    });
   }
 
   if (
@@ -1898,10 +1967,50 @@ export async function hasAvailableAuthForProvider(params: {
   openAIAudioEndpointTrust?: OpenAIAudioEndpointTrust;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
+  const store =
+    params.store ??
+    resolveScopedAuthProfileStore({
+      agentDir: params.agentDir,
+      cfg,
+      provider,
+      preferredProfile,
+    });
 
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
+  }
+
+  // Match execution-time classification before treating provider apiKey text
+  // as a literal. Stored profile ids are terminal bindings, including when
+  // their auth class is not allowed for the selected model endpoint.
+  const providerEntryBinding = await resolveProviderEntryApiKeyBinding({
+    cfg,
+    provider,
+    store,
+    agentDir: params.agentDir,
+  });
+  if (providerEntryBinding.kind === "profile-resolved") {
+    return isAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      mode: providerEntryBinding.auth.mode,
+      openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
+    });
+  }
+  if (
+    providerEntryBinding.kind === "profile-incompatible" ||
+    providerEntryBinding.kind === "profile-unresolved"
+  ) {
+    return false;
+  }
+  if (providerEntryBinding.kind === "literal") {
+    return isAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      mode: resolveDirectProviderCredentialMode({ cfg, provider, inferredMode: "api-key" }),
+      openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
+    });
   }
   const envAuth = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
   if (
@@ -1909,7 +2018,11 @@ export async function hasAvailableAuthForProvider(params: {
     isAuthModeAllowedForModel({
       provider,
       modelApi: params.modelApi,
-      mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+      mode: resolveDirectProviderCredentialMode({
+        cfg,
+        provider,
+        inferredMode: resolveEnvAuthModeFromSource(envAuth.source),
+      }),
       openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
     })
   ) {
@@ -1941,14 +2054,6 @@ export async function hasAvailableAuthForProvider(params: {
   ) {
     return true;
   }
-  const store =
-    params.store ??
-    resolveScopedAuthProfileStore({
-      agentDir: params.agentDir,
-      cfg,
-      provider,
-      preferredProfile,
-    });
   const order = resolveAuthProfileOrder({
     cfg,
     store,

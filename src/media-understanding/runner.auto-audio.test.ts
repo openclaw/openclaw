@@ -240,6 +240,8 @@ describe("runCapability auto audio entries", () => {
               models: {
                 providers: {
                   openai: {
+                    auth: "oauth",
+                    [["api", "Key"].join("")]: "oauth-config-token",
                     models: [],
                   },
                   mistral: {

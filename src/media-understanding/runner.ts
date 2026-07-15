@@ -125,16 +125,17 @@ async function hasProviderAuthAvailable(params: {
   workspaceDir?: string;
   baseUrl?: string;
 }): Promise<boolean> {
-  // Literal config keys are cheap to detect; defer loading model-auth until
-  // profile/env discovery is actually needed.
-  if (resolveLiteralProviderApiKey(params.cfg, params.provider)) {
-    return true;
-  }
-  const hasAvailableAuthForProvider = await loadHasAvailableAuthForProvider();
   const modelApi = resolveOpenAiAudioAuthModelApi({
     capability: params.capability,
     providerId: params.provider,
   });
+  // Literal config keys are cheap to detect; defer loading model-auth until
+  // profile/env discovery is actually needed. OpenAI audio is the exception:
+  // availability must enforce the same auth-mode/endpoint trust as execution.
+  if (resolveLiteralProviderApiKey(params.cfg, params.provider) && !modelApi) {
+    return true;
+  }
+  const hasAvailableAuthForProvider = await loadHasAvailableAuthForProvider();
   const effectiveBaseUrl =
     params.baseUrl ?? resolveConfiguredProviderBaseUrl(params.cfg, params.provider);
   return await hasAvailableAuthForProvider({
