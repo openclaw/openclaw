@@ -136,11 +136,13 @@ describe("ClickClack HTTP client", () => {
       created_at: "2026-07-15T00:00:00.000Z",
       updated_at: "2026-07-15T00:00:00.000Z",
     };
-    const fetchMock = vi.fn(async () => Response.json({ bot_commands: [botCommand] }));
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ bot_commands: [botCommand] }),
+    );
     const client = createClickClackClient({
       baseUrl: "https://clickclack.example",
       token: "fake",
-      fetch: fetchMock,
+      fetch: fetchMock as unknown as typeof fetch,
     });
 
     const result = await client.setBotCommands([

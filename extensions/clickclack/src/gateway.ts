@@ -187,7 +187,7 @@ export async function startClickClackGatewayAccount(
     workspace: workspaceId,
     botUserId: configuredAccount.botUserId ?? me.id,
   };
-  if (account.commandMenu !== false) {
+  if (account.commandMenu) {
     await syncClickClackCommandMenu({ cfg: ctx.cfg, client, log: ctx.log });
   }
   ctx.setStatus({
