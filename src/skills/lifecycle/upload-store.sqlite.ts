@@ -167,7 +167,8 @@ export function renewSkillUploadInstallLease(params: {
           })
           .where("scope", "=", SKILL_UPLOAD_LEASE_SCOPE)
           .where("lease_key", "=", params.uploadId)
-          .where("owner", "=", params.owner),
+          .where("owner", "=", params.owner)
+          .where("expires_at", ">", params.heartbeatAt),
       ).numAffectedRows === 1n
     );
   }, params.options);

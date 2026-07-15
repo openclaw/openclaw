@@ -663,10 +663,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
                 scope: SKILL_UPLOAD_LEASE_SCOPE,
                 lease_key: uploadId,
                 owner: leaseOwner,
-                expires_at: Math.max(
-                  currentTime + installLeaseMs,
-                  current.expires_at + installLeaseMs,
-                ),
+                expires_at: currentTime + installLeaseMs,
                 heartbeat_at: currentTime,
                 payload_json: null,
                 created_at: currentTime,
@@ -689,7 +686,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
               uploadId,
               owner: leaseOwner,
               heartbeatAt,
-              expiresAt: Math.max(heartbeatAt + installLeaseMs, row.expires_at + installLeaseMs),
+              expiresAt: heartbeatAt + installLeaseMs,
               options: stateOptions,
             });
           } catch {

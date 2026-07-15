@@ -10,7 +10,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { SkillUploadRequestError } from "./upload-store.js";
-import { deleteExpiredSkillUploadUnlessLeased } from "./upload-store.sqlite.js";
+import {
+  deleteExpiredSkillUploadUnlessLeased,
+  renewSkillUploadInstallLease,
+} from "./upload-store.sqlite.js";
 import { createSkillUploadStore } from "./upload-store.test-support.js";
 
 type ReadSkillUploadArchiveChunks =
@@ -736,6 +739,85 @@ describe("skill upload store", () => {
     release.resolve();
     await pinned;
     expect(installLeaseCount(databasePath, committed.uploadId)).toBe(0);
+  });
+
+  it("starts install lease expiry from the claim time", async () => {
+    let now = 1000;
+    const { databasePath, store } = await makeStore({
+      installLeaseHeartbeatMs: 1000,
+      installLeaseMs: 100,
+      now: () => now,
+      ttlMs: 10_000,
+    });
+    const archive = Buffer.from("abc");
+    const committed = await store.begin({
+      kind: "skill-archive",
+      slug: "bounded-lease-skill",
+      sizeBytes: archive.length,
+    });
+    await store.chunk({
+      uploadId: committed.uploadId,
+      offset: 0,
+      dataBase64: archive.toString("base64"),
+    });
+    await store.commit({ uploadId: committed.uploadId });
+
+    const entered = deferred();
+    const release = deferred();
+    const pinned = store.withCommittedUpload(committed.uploadId, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    expect(
+      stateDatabase(databasePath)
+        .prepare(
+          "SELECT expires_at FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
+        )
+        .get(committed.uploadId),
+    ).toMatchObject({ expires_at: 1100 });
+
+    now = 1001;
+    release.resolve();
+    await pinned;
+  });
+
+  it("does not renew an expired install lease", async () => {
+    const { databasePath, store } = await makeStore({ installLeaseHeartbeatMs: 60_000 });
+    const archive = Buffer.from("abc");
+    const committed = await store.begin({
+      kind: "skill-archive",
+      slug: "expired-heartbeat-skill",
+      sizeBytes: archive.length,
+    });
+    await store.chunk({
+      uploadId: committed.uploadId,
+      offset: 0,
+      dataBase64: archive.toString("base64"),
+    });
+    await store.commit({ uploadId: committed.uploadId });
+
+    await store.withCommittedUpload(committed.uploadId, async () => {
+      const db = stateDatabase(databasePath);
+      const lease = db
+        .prepare(
+          "SELECT owner FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
+        )
+        .get(committed.uploadId) as { owner: string };
+      const heartbeatAt = Date.now();
+      db.prepare(
+        "UPDATE state_leases SET expires_at = ? WHERE scope = 'skill-upload-install' AND lease_key = ?",
+      ).run(heartbeatAt - 1, committed.uploadId);
+      expect(
+        renewSkillUploadInstallLease({
+          uploadId: committed.uploadId,
+          owner: lease.owner,
+          heartbeatAt,
+          expiresAt: heartbeatAt + 60_000,
+          options: { path: databasePath },
+        }),
+      ).toBe(false);
+    });
   });
 
   it("lets the install lease owner remove the upload", async () => {
