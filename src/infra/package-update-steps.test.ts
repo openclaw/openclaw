@@ -13,6 +13,7 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
 } from "./update-doctor-result.js";
 import {
+  resolveGlobalInstallTarget,
   resolveNpmGlobalPrefixLayoutFromPrefix,
   type CommandRunner,
   type ResolvedGlobalInstallTarget,
@@ -156,6 +157,60 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
 });
 
 describe("runGlobalPackageUpdateSteps", () => {
+  it("keeps redacted npm roots out of staged paths and install arguments", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-redacted-root-" }, async (base) => {
+      const redactedRoot = path.join(
+        base,
+        "ci-agent",
+        "***",
+        "workspace",
+        "sbx-***",
+        "nvm",
+        "versions",
+        "node",
+        "v24.14.0",
+        "lib",
+        "node_modules",
+      );
+      const runCommand: CommandRunner = async (argv) => {
+        if (argv.join(" ") === "npm root -g") {
+          return { stdout: `${redactedRoot}\n`, stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+      const installTarget = await resolveGlobalInstallTarget({
+        manager: "npm",
+        runCommand,
+        timeoutMs: 1000,
+      });
+      const installArgv: string[][] = [];
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget,
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        runCommand,
+        runStep: async ({ name, argv, cwd }) => {
+          installArgv.push(argv);
+          return {
+            name,
+            command: argv.join(" "),
+            cwd: cwd ?? process.cwd(),
+            durationMs: 1,
+            exitCode: 1,
+          };
+        },
+        timeoutMs: 1000,
+      });
+
+      expect(result.failedStep).not.toBeNull();
+      expect(installArgv).toHaveLength(2);
+      expect(installArgv.flat()).not.toContain("--prefix");
+      expect(installArgv.flat().some((arg) => arg.includes("***"))).toBe(false);
+      await expectPathMissing(redactedRoot);
+    });
+  });
+
   it("installs npm updates into a clean staged prefix before swapping the global package", async () => {
     await withTempDir({ prefix: "openclaw-package-update-staged-" }, async (base) => {
       const prefix = path.join(base, "prefix");

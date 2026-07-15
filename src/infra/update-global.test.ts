@@ -411,42 +411,84 @@ describe("update global helpers", () => {
     });
   });
 
-  it("falls back to the running package root when npm redacts UUID-like path segments", async () => {
-    await withMockedPlatform("darwin", async () => {
-      await withTempDir({ prefix: "openclaw-update-redacted-probe-" }, async (base) => {
-        const globalRoot = path.join(base, "usr", "local", "lib", "node_modules");
-        const pkgRoot = path.join(globalRoot, "openclaw");
-        const redactedRoot = path.join(
-          base,
-          "tmp",
-          "ci-agent",
-          "***",
-          "workspace",
-          "sbx-***",
-          "nvm",
-          "versions",
-          "node",
-          "v24.14.0",
-          "lib",
-          "node_modules",
-        );
-        await fs.mkdir(pkgRoot, { recursive: true });
+  it("rejects redacted npm global roots when no running-package fallback exists", async () => {
+    await withTempDir({ prefix: "openclaw-update-redacted-probe-" }, async (base) => {
+      const redactedRoot = path.join(
+        base,
+        "ci-agent",
+        "***",
+        "workspace",
+        "sbx-***",
+        "nvm",
+        "versions",
+        "node",
+        "v24.14.0",
+        "lib",
+        "node_modules",
+      );
+      const runCommand = createNpmRootRunner({ defaultNpmRoot: redactedRoot });
 
-        const runCommand = createNpmRootRunner({ defaultNpmRoot: redactedRoot });
-
-        await expect(
-          resolveGlobalInstallTarget({
-            manager: "npm",
-            runCommand,
-            timeoutMs: 1000,
-            pkgRoot,
-          }),
-        ).resolves.toEqual({
+      await expect(
+        resolveGlobalInstallTarget({
           manager: "npm",
-          command: "npm",
-          globalRoot,
-          packageRoot: pkgRoot,
-        });
+          runCommand,
+          timeoutMs: 1000,
+        }),
+      ).resolves.toEqual({
+        manager: "npm",
+        command: "npm",
+        globalRoot: null,
+        packageRoot: null,
+      });
+    });
+  });
+
+  it("preserves literal star segments reported by pnpm", async () => {
+    await withTempDir({ prefix: "openclaw-update-pnpm-stars-" }, async (base) => {
+      const globalRoot = path.join(base, "pnpm", "***", "5", "node_modules");
+      const runCommand: CommandRunner = async (argv) => {
+        if (argv[0] === "pnpm") {
+          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "pnpm",
+          runCommand,
+          timeoutMs: 1000,
+        }),
+      ).resolves.toEqual({
+        manager: "pnpm",
+        command: "pnpm",
+        globalRoot,
+        packageRoot: path.join(globalRoot, "openclaw"),
+      });
+    });
+  });
+
+  it("rejects multiline package-manager root output", async () => {
+    await withTempDir({ prefix: "openclaw-update-multiline-root-" }, async (base) => {
+      const firstRoot = path.join(base, "first", "lib", "node_modules");
+      const secondRoot = path.join(base, "second", "lib", "node_modules");
+      const runCommand: CommandRunner = async () => ({
+        stdout: `${firstRoot}\n${secondRoot}\n`,
+        stderr: "",
+        code: 0,
+      });
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "npm",
+          runCommand,
+          timeoutMs: 1000,
+        }),
+      ).resolves.toEqual({
+        manager: "npm",
+        command: "npm",
+        globalRoot: null,
+        packageRoot: null,
       });
     });
   });

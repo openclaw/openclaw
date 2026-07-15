@@ -17,6 +17,7 @@ import {
   readPackageDistInventoryIfPresent,
 } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
+import { parseGlobalRootOutput } from "./package-manager-output.js";
 import { applyPathPrepend } from "./path-prepend.js";
 import { parseSemver } from "./runtime-guard.js";
 
@@ -753,14 +754,7 @@ async function resolveGlobalRoot(
   if (!res || res.code !== 0) {
     return null;
   }
-  const root = res.stdout.trim();
-  if (!root || root.includes("***")) {
-    // npm >= 11 redacts UUID-like path segments in stdout to literal "***".
-    // Trusting a poisoned path creates a literal "***" directory tree and leaves
-    // the live install stale, so treat it as an unresolved probe and fall back.
-    return null;
-  }
-  return root;
+  return parseGlobalRootOutput(resolved.manager, res.stdout);
 }
 
 /**
@@ -854,7 +848,7 @@ export async function detectGlobalInstallManagerForRoot(
     if (!res || res.code !== 0) {
       continue;
     }
-    const globalRoot = res.stdout.trim();
+    const globalRoot = parseGlobalRootOutput(manager, res.stdout);
     if (!globalRoot) {
       continue;
     }
