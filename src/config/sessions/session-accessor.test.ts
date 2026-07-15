@@ -2604,6 +2604,7 @@ describe("session accessor seam", () => {
           retryable.restartRecoverySameChannelThreadRequired,
         restartRecoverySourceIngress: retryable.restartRecoverySourceIngress,
         restartRecoverySourceReplyDeliveryMode: retryable.restartRecoverySourceReplyDeliveryMode,
+        restartRecoveryTerminalRunIds: retryable.restartRecoveryTerminalRunIds,
         status: retryable.status,
         updatedAt: retryable.updatedAt,
       },
@@ -2796,6 +2797,7 @@ describe("session accessor seam", () => {
       restartRecoverySameChannelThreadRequired: stored.restartRecoverySameChannelThreadRequired,
       restartRecoverySourceIngress: stored.restartRecoverySourceIngress,
       restartRecoverySourceReplyDeliveryMode: stored.restartRecoverySourceReplyDeliveryMode,
+      restartRecoveryTerminalRunIds: stored.restartRecoveryTerminalRunIds,
       status: stored.status,
       updatedAt: stored.updatedAt,
     };

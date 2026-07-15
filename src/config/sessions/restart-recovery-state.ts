@@ -81,6 +81,11 @@ function sameOptionalStringArray(left: unknown, right: string[] | undefined): bo
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+/** Compares normalized durable terminal-source tombstones by value and order. */
+export function sameRestartRecoveryTerminalRunIds(left: unknown, right: unknown): boolean {
+  return sameOptionalStringArray(left, normalizeRestartRecoveryTerminalRunIds(right));
+}
+
 /** Normalizes restart-claim fields while preserving an already-canonical array identity. */
 export function normalizeRestartRecoveryEntryFields(
   entry: SessionEntry,

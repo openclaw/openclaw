@@ -970,6 +970,7 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
         params.entry.restartRecoverySameChannelThreadRequired,
       restartRecoverySourceIngress: params.entry.restartRecoverySourceIngress,
       restartRecoverySourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode,
+      restartRecoveryTerminalRunIds: params.entry.restartRecoveryTerminalRunIds,
       status: params.entry.status,
       updatedAt: params.entry.updatedAt,
     };
@@ -1110,6 +1111,7 @@ async function writeUnresumableSessionNotice(params: {
         params.entry.restartRecoverySameChannelThreadRequired,
       restartRecoverySourceIngress: params.entry.restartRecoverySourceIngress,
       restartRecoverySourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode,
+      restartRecoveryTerminalRunIds: params.entry.restartRecoveryTerminalRunIds,
       status: params.entry.status,
       updatedAt: params.entry.updatedAt,
     },

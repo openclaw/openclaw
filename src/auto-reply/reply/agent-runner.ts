@@ -34,6 +34,7 @@ import {
   resolveSessionPluginTraceLines,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   formatSqliteSessionFileMarker,
@@ -1260,6 +1261,25 @@ export async function runReplyAgent(params: {
     beforeAgentReplyInvoked = true;
     return await beforeAgentReply(admitted);
   };
+  const restartRecoverySourceTurnId = readChannelSourceTurnId(sessionCtx);
+  const restartRecoveryEntry =
+    sessionKey && storePath
+      ? (loadSessionEntry({
+          storePath,
+          sessionKey,
+          clone: false,
+          hydrateSkillPromptRefs: false,
+        }) ?? activeSessionEntry)
+      : activeSessionEntry;
+  if (
+    restartRecoverySourceTurnId &&
+    hasRestartRecoveryTerminalRun(restartRecoveryEntry, restartRecoverySourceTurnId)
+  ) {
+    // Terminal source IDs are durable ingress tombstones. Stop before hooks or
+    // maintenance can repeat model/tool effects for a provider redelivery.
+    typing.cleanup();
+    return undefined;
+  }
 
   const baseShouldEmitToolResult = createShouldEmitToolResult({
     sessionKey,
@@ -1566,7 +1586,6 @@ export async function runReplyAgent(params: {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
-  const restartRecoverySourceTurnId = readChannelSourceTurnId(sessionCtx);
   const restartRecoverySameChannelThreadRequired = restartRecoverySourceTurnId
     ? buildThreadingToolContext({
         sessionCtx,
@@ -1584,7 +1603,8 @@ export async function runReplyAgent(params: {
     getEntry: () =>
       sessionKey ? (activeSessionStore?.[sessionKey] ?? activeSessionEntry) : activeSessionEntry,
     getSessionId: () => replyOperation.sessionId,
-    hasBeforeAgentReplyHook: beforeAgentReply !== undefined,
+    beforeAgentReplyState:
+      beforeAgentReply === undefined ? undefined : beforeAgentReplyInvoked ? "continue" : "pending",
     isRestartAbort: () =>
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart",
@@ -1763,11 +1783,16 @@ export async function runReplyAgent(params: {
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
-    await admitUserTurn(followupRun.userTurnTranscriptRecorder);
+    const userTurnAdmission = await admitUserTurn(followupRun.userTurnTranscriptRecorder);
+    if (userTurnAdmission === "duplicate-terminal-source") {
+      return returnWithQueuedFollowupDrain(undefined);
+    }
     // Adoption marks run start and must never be spool-replayed (would re-run tools).
     // Suppressed delivery persists only the user transcript; crashed suppressed runs die
     // silently. Deliverable turns atomically persist transcript plus recovery ownership.
     await opts?.onTurnAdopted?.();
+    const shouldCheckpointBeforeAgentReply =
+      beforeAgentReply !== undefined && !beforeAgentReplyInvoked;
     const hookReply = await invokeBeforeAgentReply({ sessionId: replyOperation.sessionId });
     if (hookReply) {
       const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
@@ -1814,7 +1839,7 @@ export async function runReplyAgent(params: {
       await checkpointBeforeAgentReply(hookCheckpoint);
       return returnWithQueuedFollowupDrain(hookReply);
     }
-    if (beforeAgentReply) {
+    if (shouldCheckpointBeforeAgentReply) {
       await checkpointBeforeAgentReply({ state: "continue" });
     }
     const runOutcome = await traceAgentPhase("reply.run_agent_turn", () =>

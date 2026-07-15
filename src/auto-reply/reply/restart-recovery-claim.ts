@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
+import {
+  buildRestartRecoveryClaimCleanupPatch,
+  hasRestartRecoveryTerminalRun,
+  sameRestartRecoveryTerminalRunIds,
+} from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type {
@@ -13,7 +17,9 @@ import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 type ReplyRestartRecoveryClaimController = {
-  admitUserTurn: (recorder?: UserTurnTranscriptRecorder) => Promise<void>;
+  admitUserTurn: (
+    recorder?: UserTurnTranscriptRecorder,
+  ) => Promise<"admitted" | "duplicate-terminal-source">;
   checkpointBeforeAgentReply: (params: {
     state: Exclude<RestartRecoveryBeforeAgentReplyState, "pending">;
     pendingFinalDelivery?: {
@@ -40,6 +46,7 @@ function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnEx
     restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
     restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
     restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
+    restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
     updatedAt: entry.updatedAt,
   };
@@ -67,6 +74,10 @@ function matchesExpectedSessionState(
     entry.restartRecoverySourceIngress === expected.restartRecoverySourceIngress &&
     entry.restartRecoverySourceReplyDeliveryMode ===
       expected.restartRecoverySourceReplyDeliveryMode &&
+    sameRestartRecoveryTerminalRunIds(
+      entry.restartRecoveryTerminalRunIds,
+      expected.restartRecoveryTerminalRunIds,
+    ) &&
     entry.status === expected.status &&
     entry.updatedAt === expected.updatedAt
   );
@@ -76,7 +87,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   admissionRunId?: unknown;
   getEntry: () => SessionEntry | undefined;
   getSessionId: () => string;
-  hasBeforeAgentReplyHook: boolean;
+  beforeAgentReplyState?: "pending" | "continue";
   isRestartAbort: () => boolean;
   resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
   requesterAccountId?: unknown;
@@ -141,25 +152,27 @@ export function createReplyRestartRecoveryClaimController(params: {
     }
   };
 
-  const admitUserTurn = async (recorder?: UserTurnTranscriptRecorder): Promise<void> => {
+  const admitUserTurn: ReplyRestartRecoveryClaimController["admitUserTurn"] = async (recorder) => {
     if (!params.sessionKey || !params.storePath) {
       await recorder?.persistApproved();
-      return;
+      return "admitted";
     }
     const sessionId = params.getSessionId();
     const entry =
-      params.getEntry() ??
       loadSessionEntry({
         storePath: params.storePath,
         sessionKey: params.sessionKey,
         clone: false,
         hydrateSkillPromptRefs: false,
-      });
+      }) ?? params.getEntry();
     if (!entry || entry.sessionId !== sessionId) {
       throw new Error("session changed before durable user-turn admission");
     }
     const admissionRunId = normalizeOptionalString(params.admissionRunId);
     const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
+    if (sourceTurnId && hasRestartRecoveryTerminalRun(entry, sourceTurnId)) {
+      return "duplicate-terminal-source";
+    }
     const activeClaimRunId = normalizeOptionalString(entry?.restartRecoveryDeliveryRunId);
     const isTranscriptOnlyClaim =
       admissionRunId &&
@@ -174,9 +187,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       const adopted = await persistAdmissionPatch({
         entry,
         patch: {
-          restartRecoveryBeforeAgentReplyState: params.hasBeforeAgentReplyHook
-            ? "pending"
-            : undefined,
+          restartRecoveryBeforeAgentReplyState: params.beforeAgentReplyState,
           restartRecoveryDeliveryReceiptState: undefined,
           restartRecoveryDeliveryToolCallId: undefined,
           restartRecoveryDeliveryRequestFingerprint: undefined,
@@ -191,7 +202,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       recoveryRunId = admissionRunId;
       recoverySourceRunId = normalizeOptionalString(adopted.restartRecoveryDeliverySourceRunId);
       tracked = true;
-      return;
+      return "admitted";
     }
 
     const deliveryContext = params.resolveDeliveryContext(entry);
@@ -210,7 +221,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       // Source-less scheduled/ambient runs may execute, but cannot own a
       // channel recovery claim that would be impossible to correlate after restart.
       await persistUserTurnOnly(recorder, sessionId);
-      return;
+      return "admitted";
     }
     const updatedAt = Date.now();
     if (entry.abortedLastRun === true || (activeClaimRunId && entry.status === "running")) {
@@ -228,9 +239,7 @@ export function createReplyRestartRecoveryClaimController(params: {
           ...retiredClaim,
           abortedLastRun: false,
           endedAt: undefined,
-          restartRecoveryBeforeAgentReplyState: params.hasBeforeAgentReplyHook
-            ? "pending"
-            : undefined,
+          restartRecoveryBeforeAgentReplyState: params.beforeAgentReplyState,
           restartRecoveryDeliveryReceiptState: undefined,
           restartRecoveryDeliveryToolCallId: undefined,
           restartRecoveryDeliveryContext: recoverableDeliveryContext,
@@ -264,6 +273,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     params.setEntry(persisted);
     recoverySourceRunId = normalizeOptionalString(persisted.restartRecoveryDeliverySourceRunId);
     tracked = persisted.restartRecoveryDeliveryRunId === recoveryRunId;
+    return "admitted";
   };
 
   const checkpointBeforeAgentReply: ReplyRestartRecoveryClaimController["checkpointBeforeAgentReply"] =

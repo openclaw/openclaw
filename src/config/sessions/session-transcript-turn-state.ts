@@ -1,4 +1,7 @@
-import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
+import {
+  mergeRestartRecoveryTerminalRunIds,
+  sameRestartRecoveryTerminalRunIds,
+} from "./restart-recovery-state.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -43,6 +46,10 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
           expectedState.restartRecoverySourceIngress &&
         selected.entry.restartRecoverySourceReplyDeliveryMode ===
           expectedState.restartRecoverySourceReplyDeliveryMode &&
+        sameRestartRecoveryTerminalRunIds(
+          selected.entry.restartRecoveryTerminalRunIds,
+          expectedState.restartRecoveryTerminalRunIds,
+        ) &&
         selected.entry.status === expectedState.status &&
         selected.entry.updatedAt === expectedState.updatedAt)),
   );

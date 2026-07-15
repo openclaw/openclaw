@@ -322,6 +322,7 @@ export function resolveRestartSafeChatAdmission(params: {
               entry.restartRecoverySameChannelThreadRequired,
             restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
             restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
+            restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
             status: entry.status,
             updatedAt: entry.updatedAt,
           },
