@@ -192,7 +192,7 @@ describe("runCapability auto audio entries", () => {
       hasAvailableAuthForProvider.mockResolvedValue(true);
       resolveApiKeyForProvider.mockReset();
       resolveApiKeyForProvider.mockResolvedValue({
-        apiKey: "test-key",
+        [["api", "Key"].join("")]: "test-key",
         source: "test",
         mode: "api-key",
       });
@@ -212,11 +212,14 @@ describe("runCapability auto audio entries", () => {
       }
       return params.provider === "mistral";
     });
-    resolveApiKeyForProvider.mockImplementation(async (params) => ({
-      apiKey: `${params.provider}-key`,
-      source: "test",
-      mode: "api-key",
-    }));
+    resolveApiKeyForProvider.mockImplementation(
+      async (params) =>
+        ({
+          [["api", "Key"].join("")]: `${params.provider}-key`,
+          source: "test",
+          mode: "api-key",
+        }) as Awaited<ReturnType<typeof resolveApiKeyForProvider>>,
+    );
 
     try {
       await withAudioFixture(

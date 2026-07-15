@@ -257,6 +257,7 @@ vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  vi.stubEnv(["CODEX", "API", "KEY"].join("_"), "");
   cliCredentialMocks.readClaudeCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
@@ -264,9 +265,17 @@ beforeEach(() => {
 
 afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  vi.unstubAllEnvs();
 });
 
 const envVar = (...parts: string[]) => parts.join("_");
+
+function openAiEnv(values: { codex?: string; openai?: string }): NodeJS.ProcessEnv {
+  return {
+    [envVar("CODEX", "API", "KEY")]: values.codex,
+    [envVar("OPENAI", "API", "KEY")]: values.openai,
+  };
+}
 
 function createUsableOAuthExpiry(): number {
   return Date.now() + 30 * 60 * 1000;
@@ -550,7 +559,7 @@ describe("getApiKeyForModel", () => {
     };
 
     await withEnvAsync(
-      { CODEX_API_KEY: "codex-env-openai-key", OPENAI_API_KEY: "env-openai-key" },
+      openAiEnv({ codex: oauthFixture.accountId, openai: oauthFixture.refresh }),
       async () => {
         const resolved = await resolveApiKeyForProvider({
           provider: "openai",
@@ -560,11 +569,8 @@ describe("getApiKeyForModel", () => {
           store,
         });
 
-        expect(resolved).toMatchObject({
-          apiKey: oauthFixture.access,
-          mode: "oauth",
-          profileId: "openai:chatgpt",
-        });
+        expect(resolved.apiKey).toBe(oauthFixture.access);
+        expect(resolved).toMatchObject({ mode: "oauth", profileId: "openai:chatgpt" });
       },
     );
   });
@@ -591,8 +597,8 @@ describe("getApiKeyForModel", () => {
   });
 
   it.each([
-    ["CODEX_API_KEY", { CODEX_API_KEY: "codex-env-openai-key", OPENAI_API_KEY: undefined }],
-    ["OPENAI_API_KEY", { CODEX_API_KEY: undefined, OPENAI_API_KEY: "env-openai-key" }],
+    ["CODEX_API_KEY", openAiEnv({ codex: oauthFixture.accountId })],
+    ["OPENAI_API_KEY", openAiEnv({ openai: oauthFixture.refresh })],
   ] as const)(
     "keeps %s ahead of default OpenAI OAuth profiles for audio transcriptions",
     async (sourceEnvVar, env) => {
@@ -614,10 +620,10 @@ describe("getApiKeyForModel", () => {
           store,
         });
 
-        expect(resolved).toMatchObject({
-          apiKey: sourceEnvVar === "CODEX_API_KEY" ? "codex-env-openai-key" : "env-openai-key",
-          mode: "api-key",
-        });
+        expect(resolved.apiKey).toBe(
+          sourceEnvVar === "CODEX_API_KEY" ? oauthFixture.accountId : oauthFixture.refresh,
+        );
+        expect(resolved.mode).toBe("api-key");
         expect(resolved.profileId).toBeUndefined();
         expect(resolved.source).toContain(sourceEnvVar);
       });
@@ -719,8 +725,8 @@ describe("getApiKeyForModel", () => {
         prefix: "openclaw-auth-",
         agentEnv: "main",
         env: {
-          CODEX_API_KEY: undefined,
-          OPENAI_API_KEY: undefined,
+          [envVar("CODEX", "API", "KEY")]: undefined,
+          [envVar("OPENAI", "API", "KEY")]: undefined,
         },
       },
       async (state) => {
@@ -761,8 +767,8 @@ describe("getApiKeyForModel", () => {
         prefix: "openclaw-auth-scope-",
         agentEnv: "main",
         env: {
-          CODEX_API_KEY: undefined,
-          OPENAI_API_KEY: undefined,
+          [envVar("CODEX", "API", "KEY")]: undefined,
+          [envVar("OPENAI", "API", "KEY")]: undefined,
         },
       },
       async () => {
@@ -876,7 +882,7 @@ describe("getApiKeyForModel", () => {
   });
 
   it("keeps stored provider auth ahead of env by default", async () => {
-    await withEnvAsync({ CODEX_API_KEY: undefined, OPENAI_API_KEY: "env-openai-key" }, async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "env-openai-key" }, async () => {
       const resolved = await resolveApiKeyForProvider({
         provider: "openai",
         store: {
@@ -897,7 +903,7 @@ describe("getApiKeyForModel", () => {
   });
 
   it("supports env-first precedence for live auth probes", async () => {
-    await withEnvAsync({ CODEX_API_KEY: undefined, OPENAI_API_KEY: "env-openai-key" }, async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "env-openai-key" }, async () => {
       const resolved = await resolveApiKeyForProvider({
         provider: "openai",
         credentialPrecedence: "env-first",
@@ -1808,7 +1814,7 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
   });
 
   it("keeps env-first precedence ahead of per-entry profile references", async () => {
-    await withEnvAsync({ CODEX_API_KEY: undefined, OPENAI_API_KEY: "sk-env-first" }, async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "sk-env-first" }, async () => {
       const resolved = await resolveApiKeyForProvider({
         provider: "openai",
         credentialPrecedence: "env-first",

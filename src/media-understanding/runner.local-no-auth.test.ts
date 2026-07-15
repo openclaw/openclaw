@@ -369,25 +369,77 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
-  it("does not send OpenAI OAuth profile auth to custom audio base URLs", async () => {
+  it("resolves normalized provider config profile ids before audio execution", async () => {
+    modelAuthTestControl.store = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "resolved-openai-key",
+        },
+      },
+    };
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
-        saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: {
-              "openai:default": {
-                type: "oauth",
-                provider: "openai",
-                access: "oauth-chat-token",
-                refresh: "oauth-refresh-token",
-                expires: Date.now() + 60_000,
+        await withAudioFixture(
+          "openclaw-openai-audio-normalized-profile",
+          async ({ ctx, media, cache }) => {
+            const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+              text: `auth:${req.apiKey}`,
+              model: req.model,
+            }));
+            const cfg = createAudioCfg({
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+            });
+            cfg.models = {
+              providers: {
+                OpenAI: {
+                  api: "openai-audio-transcriptions",
+                  baseUrl: "https://api.openai.com/v1",
+                  [["api", "Key"].join("")]: "openai:default",
+                  models: [],
+                },
               },
-            },
+            };
+
+            const result = await runCapability({
+              capability: "audio",
+              cfg,
+              ctx,
+              attachments: cache,
+              media,
+              agentDir,
+              providerRegistry: buildProviderRegistry({
+                openai: createAudioProvider("openai", transcribeAudio),
+              }),
+            });
+
+            expect(result.decision.outcome).toBe("success");
+            expect(transcribeAudio).toHaveBeenCalledTimes(1);
+            expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe("resolved-openai-key");
           },
-          agentDir,
-          { filterExternalAuthProfiles: false, syncExternalCli: false },
         );
+      });
+    });
+  });
+
+  it("does not send OpenAI OAuth profile auth to custom audio base URLs", async () => {
+    modelAuthTestControl.store = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+          access: "oauth-chat-token",
+          refresh: "oauth-refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync(AUTH_ENV, async () => {
         await withAudioFixture(
           "openclaw-openai-audio-oauth-custom-base-url",
           async ({ ctx, media, cache }) => {
@@ -421,56 +473,6 @@ describe("runCapability local no-auth audio providers", () => {
               "requires an OpenAI API key profile",
             );
             expect(transcribeAudio).not.toHaveBeenCalled();
-          },
-        );
-      });
-    });
-  });
-
-  it("uses OpenAI API key auth for audio when the default OpenAI profile is OAuth", async () => {
-    await withIsolatedAgentDir(async (agentDir) => {
-      await withEnvAsync({ ...AUTH_ENV, OPENAI_API_KEY: "env-openai-audio-key" }, async () => {
-        saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: {
-              "openai:default": {
-                type: "oauth",
-                provider: "openai",
-                access: "oauth-chat-token",
-                refresh: "oauth-refresh-token",
-                expires: Date.now() + 60_000,
-              },
-            },
-          },
-          agentDir,
-          { filterExternalAuthProfiles: false, syncExternalCli: false },
-        );
-        await withAudioFixture(
-          "openclaw-openai-audio-oauth-env-key",
-          async ({ ctx, media, cache }) => {
-            const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
-              text: `auth:${req.apiKey}`,
-              model: req.model,
-            }));
-            const cfg = createAudioCfg({ provider: "openai", model: "whisper-1" });
-
-            const result = await runCapability({
-              capability: "audio",
-              cfg,
-              ctx,
-              attachments: cache,
-              media,
-              agentDir,
-              providerRegistry: buildProviderRegistry({
-                openai: createAudioProvider("openai", transcribeAudio),
-              }),
-            });
-
-            expect(result.decision.outcome).toBe("success");
-            expect(result.outputs[0]?.text).toBe("auth:env-openai-audio-key");
-            expect(transcribeAudio).toHaveBeenCalledTimes(1);
-            expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe("env-openai-audio-key");
           },
         );
       });

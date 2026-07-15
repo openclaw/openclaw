@@ -463,6 +463,31 @@ function resolveDirectProviderCredentialMode(params: {
     : params.inferredMode;
 }
 
+function resolveUsableCustomProviderApiKeyForModel(
+  params: Parameters<typeof resolveUsableCustomProviderApiKey>[0] & {
+    modelApi?: string;
+    openAIAudioEndpointTrust?: OpenAIAudioEndpointTrust;
+  },
+): ResolvedCustomProviderApiKey | null {
+  const customAuth = resolveUsableCustomProviderApiKey(params);
+  if (!customAuth) {
+    return null;
+  }
+  const mode = resolveDirectProviderCredentialMode({
+    cfg: params.cfg,
+    provider: params.provider,
+    inferredMode: "api-key",
+  });
+  return isAuthModeAllowedForModel({
+    provider: params.provider,
+    modelApi: params.modelApi,
+    mode,
+    openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
+  })
+    ? customAuth
+    : null;
+}
+
 function shouldUseImplicitAwsSdkAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -1021,10 +1046,27 @@ export function hasRuntimeAvailableProviderAuth(params: {
   ) {
     return true;
   }
-  if (resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env })) {
+  if (
+    resolveUsableCustomProviderApiKeyForModel({
+      cfg: params.cfg,
+      provider,
+      env: params.env,
+      modelApi: params.modelApi,
+      openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
+    })
+  ) {
     return true;
   }
-  if (resolveManagedSecretRefRuntimeProviderAuth({ cfg: params.cfg, provider })) {
+  const managedAuth = resolveManagedSecretRefRuntimeProviderAuth({ cfg: params.cfg, provider });
+  if (
+    managedAuth &&
+    isAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      mode: managedAuth.mode,
+      openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
+    })
+  ) {
     return true;
   }
   if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
@@ -1492,12 +1534,20 @@ export async function resolveApiKeyForProvider(params: {
       mode: "api-key",
     };
   }
-  const envAuthBeforeDefaultProfiles = resolveConfigAwareEnvApiKey(
+  const localMarkerEnv = resolveConfigAwareEnvApiKey(
     cfg,
     provider,
     params.workspaceDir,
     params.skipSetupProviderFallback,
   );
+  if (localMarkerEnv && isNonSecretApiKeyMarker(localMarkerEnv.apiKey)) {
+    return {
+      apiKey: localMarkerEnv.apiKey,
+      source: localMarkerEnv.source,
+      mode: "api-key",
+    };
+  }
+  const envAuthBeforeDefaultProfiles = localMarkerEnv;
   const envAuthModeBeforeDefaultProfiles = envAuthBeforeDefaultProfiles
     ? resolveDirectProviderCredentialMode({
         cfg,
@@ -1505,16 +1555,6 @@ export async function resolveApiKeyForProvider(params: {
         inferredMode: resolveEnvAuthModeFromSource(envAuthBeforeDefaultProfiles.source),
       })
     : undefined;
-  if (
-    envAuthBeforeDefaultProfiles &&
-    isNonSecretApiKeyMarker(envAuthBeforeDefaultProfiles.apiKey)
-  ) {
-    return {
-      apiKey: envAuthBeforeDefaultProfiles.apiKey,
-      source: envAuthBeforeDefaultProfiles.source,
-      mode: "api-key",
-    };
-  }
   const store =
     scopedStore ??
     resolveScopedAuthProfileStore({
@@ -1628,6 +1668,7 @@ export async function resolveApiKeyForProvider(params: {
             provider,
             modelApi: params.modelApi,
             mode: candidateMode,
+            openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
           }))
       ) {
         refreshFailure = err;
@@ -1673,13 +1714,26 @@ export async function resolveApiKeyForProvider(params: {
       provider,
       modelApi: params.modelApi,
       mode: managedRuntimeAuth.mode,
+      openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
     })
   ) {
     return managedRuntimeAuth;
   }
 
+  const customKeyConfig = isAuthModeAllowedForModel({
+    provider,
+    modelApi: params.modelApi,
+    mode: resolveDirectProviderCredentialMode({
+      cfg,
+      provider,
+      inferredMode: "api-key",
+    }),
+    openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
+  })
+    ? cfg
+    : undefined;
   const customKey = resolveUsableCustomProviderApiKey({
-    cfg,
+    cfg: customKeyConfig,
     provider,
     secretSentinels: params.secretSentinels,
   });
@@ -1705,7 +1759,15 @@ export async function resolveApiKeyForProvider(params: {
     secretSentinels: params.secretSentinels,
     allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,
   });
-  if (syntheticLocalAuth) {
+  if (
+    syntheticLocalAuth &&
+    isAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      mode: syntheticLocalAuth.mode,
+      openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
+    })
+  ) {
     return syntheticLocalAuth;
   }
 
@@ -1853,10 +1915,30 @@ export async function hasAvailableAuthForProvider(params: {
   ) {
     return true;
   }
-  if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
+  if (
+    resolveUsableCustomProviderApiKeyForModel({
+      cfg,
+      provider,
+      modelApi: params.modelApi,
+      openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
+    })
+  ) {
     return true;
   }
-  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
+  const syntheticAuth = resolveSyntheticLocalProviderAuth({
+    cfg,
+    provider,
+    modelApi: params.modelApi,
+  });
+  if (
+    syntheticAuth &&
+    isAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      mode: syntheticAuth.mode,
+      openAIAudioEndpointTrust: params.openAIAudioEndpointTrust,
+    })
+  ) {
     return true;
   }
   const store =

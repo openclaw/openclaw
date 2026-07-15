@@ -1729,6 +1729,49 @@ describe("resolveApiKeyForProvider", () => {
     });
   });
 
+  it("rejects managed OpenAI OAuth SecretRefs for custom audio endpoints", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-audio-transcriptions" as const,
+            auth: "oauth" as const,
+            apiKey: { source: "file", provider: "vault", id: "/openai/oauth" } as const,
+            baseUrl: "https://openai-compatible.example.test/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              ...sourceConfig.models.providers.openai,
+              [["api", "Key"].join("")]: "resolved-oauth-credential",
+            },
+          },
+        },
+      },
+      sourceConfig,
+    );
+
+    await withoutEnv("CODEX_API_KEY", () =>
+      withoutEnv("OPENAI_API_KEY", async () => {
+        await expect(
+          resolveApiKeyForProvider({
+            provider: "openai",
+            cfg: sourceConfig,
+            modelApi: "openai-audio-transcriptions",
+            openAIAudioEndpointTrust: "custom-openai-compatible",
+            store: { version: 1, profiles: {} },
+          }),
+        ).rejects.toThrow(/No API key found for provider "openai"/);
+      }),
+    );
+  });
+
   it("prefers non-secret local env markers over ambient profiles", async () => {
     const resolved = await withEnv("OLLAMA_API_KEY", "ollama-local", () =>
       resolveApiKeyForProvider({

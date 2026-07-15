@@ -2,8 +2,8 @@
 // rotation, output extraction, and decision summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
@@ -84,7 +84,9 @@ function resolveLiteralProviderApiKey(params: {
   cfg: OpenClawConfig;
   providerId: string;
 }): string | null {
-  return normalizeNullableString(resolveProviderConfig(params.cfg, params.providerId)?.apiKey);
+  // Keep this fast path exact-key-only. Normalized entries may store profile ids,
+  // which must flow through the canonical resolver before becoming bearer auth.
+  return normalizeNullableString(params.cfg.models?.providers?.[params.providerId]?.apiKey);
 }
 
 function resolveProviderConfig(
