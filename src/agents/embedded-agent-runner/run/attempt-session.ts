@@ -1,7 +1,7 @@
 /**
  * Prepares embedded-agent resources, tools, and active sessions.
  */
-import { setAgentToolRoundLimit } from "../../../../packages/agent-core/src/tool-round-limit-hook.js";
+import { setAgentToolRoundLimit } from "@openclaw/agent-core/tool-round-limit-hook";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";

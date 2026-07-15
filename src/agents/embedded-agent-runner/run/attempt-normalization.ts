@@ -57,6 +57,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
   contextRecoveryState: ReturnType<typeof createEmbeddedRunContextRecoveryState>;
   replayState: ReplayState;
   lastRetryFailoverReason: Parameters<typeof resolveRunFailoverDecision>[0]["failoverReason"];
+  deferHandledPreflightRecovery?: boolean;
 }): Promise<
   | { action: "complete"; result: EmbeddedAgentRunResult }
   | {
@@ -103,6 +104,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
       resolveReplayInvalidForAttempt: (incompleteTurnText?: string | null) => boolean;
       assistantErrorText: string | undefined;
       canRestartForLiveSwitch: boolean;
+      preflightRecovery: ReturnType<typeof normalizeEmbeddedRunAttemptResult>["preflightRecovery"];
     }
 > {
   const { runInput, preparedRuntime, dispatchedAttempt, sessionPromptState, provider, modelId } =
@@ -284,7 +286,12 @@ export async function normalizeEmbeddedRunAttempt(input: {
     sessionAssistantForCandidate?.stopReason === "error"
       ? sessionAssistantForCandidate.errorMessage?.trim() || formattedAssistantErrorText
       : undefined;
-  if (!signalOwnedInterruption && !preparedRuntime.nativeModelOwned && preflightRecovery?.handled) {
+  if (
+    !input.deferHandledPreflightRecovery &&
+    !signalOwnedInterruption &&
+    !preparedRuntime.nativeModelOwned &&
+    preflightRecovery?.handled
+  ) {
     const retryingFromTranscript = preflightRecovery.source === "mid-turn";
     log.info(
       `[context-overflow-precheck] early recovery route=${preflightRecovery.route} completed for ${provider}/${modelId}; ` +
@@ -331,6 +338,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     activeErrorContext,
     resolveReplayInvalidForAttempt,
     assistantErrorText,
+    preflightRecovery,
     canRestartForLiveSwitch:
       !hasOutboundDeliveryEvidence(attempt) &&
       !attempt.didSendDeterministicApprovalPrompt &&

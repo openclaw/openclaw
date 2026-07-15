@@ -76,6 +76,7 @@ type AttemptControl = {
   onToolStreamBoundary: NonNullable<EmbeddedRunAttemptParams["onToolStreamBoundary"]>;
   onRunProgress: NonNullable<EmbeddedRunAttemptParams["onRunProgress"]>;
   onToolResult: NonNullable<EmbeddedRunAttemptParams["onToolResult"]>;
+  onBeforeToolCallingRound?: EmbeddedRunAttemptParams["onBeforeToolCallingRound"];
   onAgentEvent: NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>;
   onUserMessagePersisted: NonNullable<EmbeddedRunAttemptParams["onUserMessagePersisted"]>;
   onUserMessagePersistenceInvalidated: NonNullable<
@@ -308,6 +309,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
     onReasoningEnd: params.onReasoningEnd,
     onToolResult: control.onToolResult,
+    onBeforeToolCallingRound: control.onBeforeToolCallingRound,
     onAgentToolResult: params.onAgentToolResult,
     onAgentEvent: control.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,

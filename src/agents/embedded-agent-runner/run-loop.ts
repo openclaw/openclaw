@@ -29,13 +29,21 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-pre
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
+import {
+  createToolLimit,
+  resolveBudgetSummaryProfileFailureReason,
+} from "./run/budget-exhaustion.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { createEmbeddedRunFailoverRetryController } from "./run/failover-retry-controller.js";
-import { buildErrorAgentMeta, resolveMaxRunRetryIterations } from "./run/helpers.js";
+import {
+  buildAttemptAgentMeta,
+  buildErrorAgentMeta,
+  resolveMaxRunRetryIterations,
+} from "./run/helpers.js";
 import { createIdleTimeoutBreakerState } from "./run/idle-timeout-breaker.js";
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
@@ -161,6 +169,7 @@ export async function runPreparedEmbeddedLoop(
     modelId,
   });
   const executionContract = strictAgenticActive ? "strict-agentic" : "default";
+  const roundLimit = createToolLimit(params, sessionAgentId, started);
   const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
   const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
@@ -274,7 +283,7 @@ export async function runPreparedEmbeddedLoop(
     let lastTurnTotal: number | undefined;
     while (true) {
       refreshPreparedRuntimeSnapshot();
-      if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
+      if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS && !roundLimit?.summaryPending) {
         const message =
           `Exceeded retry limit after ${runLoopIterations} attempts ` +
           `(max=${MAX_RUN_LOOP_ITERATIONS}).`;
@@ -309,7 +318,7 @@ export async function runPreparedEmbeddedLoop(
           livenessState: "blocked",
         });
       }
-      runLoopIterations += 1;
+      runLoopIterations += roundLimit?.summaryPending ? 0 : 1;
       const runtimeAuthRetry: boolean = authRetryPending;
       authRetryPending = false;
       attemptedThinking.add(thinkLevel);
@@ -341,6 +350,7 @@ export async function runPreparedEmbeddedLoop(
             postCompactionAbortController = undefined;
           }
         },
+        onBeforeToolCallingRound: roundLimit?.beforeRound,
       });
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
@@ -359,6 +369,7 @@ export async function runPreparedEmbeddedLoop(
         contextRecoveryState,
         replayState: accumulatedReplayState,
         lastRetryFailoverReason,
+        deferHandledPreflightRecovery: roundLimit?.summaryPending,
       });
       if (normalizedAttempt.action === "complete") {
         return normalizedAttempt.result;
@@ -399,7 +410,66 @@ export async function runPreparedEmbeddedLoop(
         activeErrorContext,
         resolveReplayInvalidForAttempt,
         canRestartForLiveSwitch,
+        preflightRecovery,
       } = normalizedAttempt;
+      const budgetSummaryInterrupted = terminalAborted || signalOwnedInterruption;
+      const finishBudgetSummary = async (
+        reason?: Parameters<
+          typeof failoverRetryController.maybeMarkAuthProfileFailure
+        >[0]["reason"],
+        failed = false,
+      ) => {
+        await failoverRetryController
+          .maybeMarkAuthProfileFailure({ profileId: lastProfileId, reason, modelId })
+          .catch((error: unknown) =>
+            log.warn(`summary profile failure mark failed: ${formatErrorMessage(error)}`),
+          );
+        return roundLimit!.finish(
+          attempt,
+          buildAttemptAgentMeta({
+            attempt,
+            assistant: attemptAssistant,
+            provider,
+            model: model.id,
+            ...outerContextTokenMeta,
+            contextBudgetStatus: contextRecoveryState.lastContextBudgetStatus,
+            compactionCount: contextRecoveryState.autoCompactionCount,
+            compactionTokensAfter: contextRecoveryState.lastCompactionTokensAfter,
+            usageAccumulator,
+            lastRunPromptUsage,
+            lastTurnTotal,
+          }),
+          terminalAborted,
+          setTerminalLifecycleMeta,
+          failed,
+        );
+      };
+      if (
+        roundLimit?.summaryPending &&
+        !budgetSummaryInterrupted &&
+        !preparedRuntime.nativeModelOwned &&
+        preflightRecovery?.handled
+      ) {
+        if (roundLimit.exhaustsRecovery(MAX_RUN_LOOP_ITERATIONS)) {
+          return await finishBudgetSummary(undefined, true);
+        }
+        if (preflightRecovery.source === "mid-turn") {
+          sessionPromptState.continueFromCurrentTranscript();
+        }
+        continue;
+      }
+      if (roundLimit?.summaryPending && !budgetSummaryInterrupted) {
+        const profileFailureReason = resolveBudgetSummaryProfileFailureReason({
+          attempt,
+          assistant: attemptAssistant,
+          provider: activeErrorContext.provider,
+          policy: params.authProfileFailurePolicy,
+        });
+        return await finishBudgetSummary(
+          profileFailureReason,
+          Boolean(promptError || terminalInterrupted || attemptAssistant?.stopReason === "error"),
+        );
+      }
       const recovery = await recoverEmbeddedRunAttempt({
         runInput: input,
         preparedRuntime,
@@ -560,6 +630,12 @@ export async function runPreparedEmbeddedLoop(
       });
       if (terminalTimeoutResult) {
         return terminalTimeoutResult;
+      }
+
+      if (roundLimit?.request(attempt, terminalAborted, Boolean(promptError), terminalTimedOut)) {
+        sessionPromptState.activateInternalPrompt(roundLimit.summaryInstruction, false);
+        terminalRetryState.compactionContinuationInstruction = null;
+        continue;
       }
 
       const terminalResolution = await resolveEmbeddedRunTerminal({
