@@ -16,6 +16,8 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
+/** user_list JSON can be larger than inbound webhook pre-auth payloads. */
+const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 let lastSendTime = 0;
 let sendQueue: Promise<void> = Promise.resolve();
 
@@ -182,12 +184,51 @@ async function fetchChatUsers(
 
     const req = transport
       .get(listUrl, requestOptions, (res) => {
-        res.setEncoding("utf8");
-        let data = "";
-        res.on("data", (chunk: string) => {
-          data += chunk;
+        // Bound the body while preserving UTF-8 across chunk splits (Buffer concat).
+        let totalBytes = 0;
+        let overflow = false;
+        const chunks: Buffer[] = [];
+
+        const failOverflow = () => {
+          if (settled) {
+            return;
+          }
+          log?.warn(
+            `fetchChatUsers: response exceeded ${USER_LIST_RESPONSE_MAX_BYTES} bytes, using cached data`,
+          );
+          finish(cached?.users ?? []);
+        };
+
+        res.on("data", (chunk: Buffer | string) => {
+          if (overflow) {
+            return;
+          }
+          const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+          totalBytes += buf.byteLength;
+          if (totalBytes > USER_LIST_RESPONSE_MAX_BYTES) {
+            overflow = true;
+            chunks.length = 0;
+            // Settle immediately: destroy() without an error often skips end/error.
+            failOverflow();
+            res.destroy();
+            return;
+          }
+          chunks.push(buf);
+        });
+        res.on("error", (err) => {
+          if (overflow) {
+            finish(cached?.users ?? []);
+            return;
+          }
+          log?.warn(`fetchChatUsers: HTTP error — ${err instanceof Error ? err.message : err}`);
+          finish(cached?.users ?? []);
         });
         res.on("end", () => {
+          if (overflow) {
+            finish(cached?.users ?? []);
+            return;
+          }
+          const data = Buffer.concat(chunks).toString("utf8");
           const result = safeParseJsonWithSchema(ChatUserListResponseSchema, data);
           if (!result) {
             log?.warn("fetchChatUsers: failed to parse user_list response");
