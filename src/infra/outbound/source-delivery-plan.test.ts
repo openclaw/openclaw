@@ -265,9 +265,7 @@ describe("source delivery plan", () => {
             source: "test",
             plugin: {
               ...createChannelTestPluginBase({ id: channel, label: channel }),
-              messaging: {
-                ...(comparison ? { targetIdComparison: comparison } : {}),
-              },
+              messaging: comparison ? { targetIdComparison: comparison } : {},
             },
           },
         ]),
