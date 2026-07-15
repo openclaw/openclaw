@@ -18,6 +18,21 @@ resolve_head_push_url() {
   return 1
 }
 
+# A prior GraphQL push records distinct hosted/local OIDs with identical trees.
+resolve_graphql_local_base() (
+  local hosted_oid="$1"
+  if [ -s .local/prep.env ]; then
+    unset PREP_HEAD_SHA LOCAL_PREP_HEAD_SHA
+    # shellcheck disable=SC1091
+    source .local/prep.env
+    if [ "${PREP_HEAD_SHA:-}" = "$hosted_oid" ] && [ -n "${LOCAL_PREP_HEAD_SHA:-}" ]; then
+      printf '%s\n' "$LOCAL_PREP_HEAD_SHA"
+      return 0
+    fi
+  fi
+  printf '%s\n' "$hosted_oid"
+)
+
 # Push to a fork PR branch via GitHub GraphQL createCommitOnBranch.
 # This uses the same permission model as the GitHub web editor, bypassing
 # the git-protocol 403 that occurs even when maintainer_can_modify is true.
@@ -30,6 +45,40 @@ graphql_push_to_fork() {
   local branch="$2"
   local expected_oid="$3"
   local max_blob_bytes=$((5 * 1024 * 1024))
+
+  # createCommitOnBranch always parents the new commit to expected_oid. Refuse
+  # rewritten history, while accepting a recorded same-tree local twin from a
+  # prior verified GraphQL push.
+  local local_base_oid
+  local_base_oid=$(resolve_graphql_local_base "$expected_oid")
+  local diff_base_oid=""
+  if git merge-base --is-ancestor "$expected_oid" HEAD 2>/dev/null; then
+    diff_base_oid="$expected_oid"
+  elif [ "$local_base_oid" != "$expected_oid" ] &&
+    git merge-base --is-ancestor "$local_base_oid" HEAD 2>/dev/null &&
+    [ "$(git rev-parse "${local_base_oid}^{tree}" 2>/dev/null)" = "$(git rev-parse "${expected_oid}^{tree}" 2>/dev/null)" ]; then
+    diff_base_oid="$local_base_oid"
+  fi
+  if [ -z "$diff_base_oid" ]; then
+    echo "GitHub createCommitOnBranch cannot rewrite branch ancestry: remote PR head $expected_oid is not an ancestor of local HEAD." >&2
+    echo "Refusing to materialize mainline changes as a PR commit. Use an ancestry-preserving git push for rewritten history." >&2
+    return 3
+  fi
+
+  # A merge can keep the old PR head as an ancestor while incorporating newer
+  # mainline commits. GraphQL would flatten those commits into the PR as files.
+  if git rev-parse --verify 'origin/main^{commit}' >/dev/null 2>&1; then
+    local head_mainline_base
+    head_mainline_base=$(git merge-base HEAD origin/main) || {
+      echo "Unable to verify the prepared head against origin/main ancestry." >&2
+      return 3
+    }
+    if ! git merge-base --is-ancestor "$head_mainline_base" "$expected_oid"; then
+      echo "GitHub createCommitOnBranch cannot preserve newly incorporated mainline ancestry." >&2
+      echo "Refusing to materialize mainline changes as a PR commit. Use an ancestry-preserving git push for rewritten history." >&2
+      return 3
+    fi
+  fi
 
   local additions="[]"
   local deletions="[]"
@@ -258,14 +307,27 @@ push_prep_head_to_pr_branch() {
   if [ "$remote_sha" = "$prep_head_sha" ]; then
     echo "Remote branch already at local prep HEAD; skipping push."
   else
+    local remote_sha_changed=false
     if [ "$remote_sha" != "$lease_sha" ]; then
       echo "Remote SHA $remote_sha differs from PR head SHA $lease_sha. Refreshing lease SHA from remote."
       lease_sha="$remote_sha"
+      remote_sha_changed=true
     fi
     pushed_from_sha="$lease_sha"
-    local push_output
-    if ! push_output=$(push_prep_head_once "$pr_head" "$lease_sha" "$prep_head_sha" 2>&1); then
+    local push_output push_status
+    if push_output=$(push_prep_head_once "$pr_head" "$lease_sha" "$prep_head_sha" 2>&1); then
+      push_status=0
+    else
+      push_status=$?
+    fi
+    if [ "$push_status" -ne 0 ]; then
       echo "Push failed: $push_output"
+
+      if [ "$push_status" -eq 3 ] && [ "$remote_sha_changed" != "true" ]; then
+        echo "The prepared history requires an ancestry-preserving push; rerunning the GraphQL sync cannot fix it."
+        echo "After reviewing the rewritten commits, rerun with OPENCLAW_PR_PUSH_MODE=git OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH=1."
+        exit 1
+      fi
 
       if printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)'; then
         echo "Permission denied on git push; trying GraphQL createCommitOnBranch fallback..."
@@ -336,8 +398,7 @@ push_prep_head_to_pr_branch() {
   fi
 
   # merge-verify owns relevance-aware mainline drift checks. Requiring every
-  # prepared head to contain main here forces needless rebases, while GraphQL
-  # createCommitOnBranch cannot move a rebased branch's commit ancestry.
+  # prepared head to contain main here forces needless rebases.
   # Security: shell-escape values to prevent command injection when sourced.
   printf '%s=%q\n' \
     PUSH_PREP_HEAD_SHA "$prep_head_sha" \

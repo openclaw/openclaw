@@ -47,7 +47,12 @@ function sanitizedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 
 function runGatesBash(
   script: string,
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; sourcePrepareCore?: boolean } = {},
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    sourcePrepareCore?: boolean;
+    sourcePush?: boolean;
+  } = {},
 ) {
   return spawnSync(
     "bash",
@@ -58,6 +63,7 @@ function runGatesBash(
         `script_parent_dir='${repoRoot}/scripts'`,
         `source '${repoRoot}/scripts/pr-lib/common.sh'`,
         `source '${repoRoot}/scripts/pr-lib/gates.sh'`,
+        ...(options.sourcePush ? [`source '${repoRoot}/scripts/pr-lib/push.sh'`] : []),
         ...(options.sourcePrepareCore
           ? [`source '${repoRoot}/scripts/pr-lib/prepare-core.sh'`]
           : []),
@@ -171,6 +177,49 @@ function makeSyncRepo(options: { needsRebase: boolean }): string {
   writeFileSync(join(repoDir, ".local", "prep-context.env"), "PR_HEAD=topic\nPREP_BRANCH=prep\n");
   writeFileSync(join(repoDir, ".local", "prep.md"), "# Prepare\n");
   return repoDir;
+}
+
+function makeGraphqlMainRefreshRepo(
+  strategy: "merge" | "rebase" = "rebase",
+): { repoDir: string; staleHead: string } {
+  const repoDir = join(makeTempDir("openclaw-pr-graphql-rewrite-"), "repo");
+  mkdirSync(repoDir);
+
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  git("init", "-q", "-b", "main");
+  git("config", "user.name", "t");
+  git("config", "user.email", "t@example.com");
+
+  writeFileSync(join(repoDir, "feature.txt"), "old\n");
+  writeFileSync(join(repoDir, "main-only.txt"), "old\n");
+  git("add", ".");
+  git("commit", "-qm", "base");
+
+  git("checkout", "-qb", "prep");
+  writeFileSync(join(repoDir, "feature.txt"), "from pr\n");
+  git("add", "feature.txt");
+  git("commit", "-qm", "pr change");
+  const staleHead = git("rev-parse", "HEAD");
+
+  git("checkout", "-q", "main");
+  writeFileSync(join(repoDir, "main-only.txt"), "from main\n");
+  git("add", "main-only.txt");
+  git("commit", "-qm", "main refresh");
+  git("remote", "add", "origin", ".");
+  git("fetch", "-q", "origin", "main");
+
+  git("checkout", "-q", "prep");
+  if (strategy === "rebase") {
+    git("rebase", "origin/main");
+  } else {
+    git("merge", "-qm", "merge main refresh", "origin/main");
+  }
+  mkdirSync(join(repoDir, ".local"));
+  return { repoDir, staleHead };
 }
 
 function prepareSyncHeadStubs(): string[] {
@@ -473,6 +522,138 @@ describe("lease-retry gate stamp refresh", () => {
 });
 
 describe("prepare sync-head transitions", () => {
+  it("keeps GraphQL follow-up pushes for a recorded hosted/local twin", () => {
+    const { repoDir } = makeGraphqlMainRefreshRepo();
+
+    const result = runGatesBash(
+      [
+        "local_head=$(git rev-parse HEAD)",
+        "local_tree=$(git rev-parse 'HEAD^{tree}')",
+        "local_parent=$(git rev-parse 'HEAD^')",
+        "hosted_head=$(printf 'hosted twin\\n' | git commit-tree \"$local_tree\" -p \"$local_parent\")",
+        "printf 'PREP_HEAD_SHA=%q\\nLOCAL_PREP_HEAD_SHA=%q\\n' \"$hosted_head\" \"$local_head\" > .local/prep.env",
+        "printf 'prepared follow-up\\n' > feature.txt",
+        "git add feature.txt",
+        "git commit -qm 'prepared follow-up'",
+        "gh() { cat > .local/graphql-payload.json; printf '%s\\n' '{\"data\":{\"createCommitOnBranch\":{\"commit\":{\"oid\":\"deadbeef\"}}}}'; }",
+        'test "$(graphql_push_to_fork openclaw/openclaw topic "$hosted_head")" = deadbeef',
+        'test "$(jq -r \'.variables.input.fileChanges.additions[].path\' .local/graphql-payload.json)" = feature.txt',
+      ].join("\n"),
+      { cwd: repoDir, sourcePush: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("GraphQL push succeeded: deadbeef");
+  });
+
+  it("refuses a GraphQL tree push after main refresh rewrites the PR ancestry", () => {
+    const { repoDir, staleHead } = makeGraphqlMainRefreshRepo();
+
+    const result = runGatesBash(
+      [
+        'test "$(git diff --name-only "$stale_head" HEAD)" = "main-only.txt"',
+        "gh() { cat > .local/graphql-payload.json; printf '%s\\n' '{\"data\":{\"createCommitOnBranch\":{\"commit\":{\"oid\":\"deadbeef\"}}}}'; }",
+        'if graphql_push_to_fork openclaw/openclaw topic "$stale_head"; then',
+        '  echo "unsafe GraphQL ancestry rewrite succeeded" >&2',
+        "  exit 97",
+        "else",
+        '  test "$?" -eq 3',
+        "fi",
+        "test ! -e .local/graphql-payload.json",
+      ].join("\n"),
+      {
+        cwd: repoDir,
+        env: { stale_head: staleHead },
+        sourcePush: true,
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("cannot rewrite branch ancestry");
+    expect(result.stderr).toContain("materialize mainline changes");
+  });
+
+  it("refuses follow-ups from a legacy hosted commit with flattened mainline ancestry", () => {
+    const { repoDir, staleHead } = makeGraphqlMainRefreshRepo();
+
+    const result = runGatesBash(
+      [
+        "local_head=$(git rev-parse HEAD)",
+        "local_tree=$(git rev-parse 'HEAD^{tree}')",
+        'hosted_head=$(printf \'legacy flattened host\\n\' | git commit-tree "$local_tree" -p "$stale_head")',
+        "printf 'PREP_HEAD_SHA=%q\\nLOCAL_PREP_HEAD_SHA=%q\\n' \"$hosted_head\" \"$local_head\" > .local/prep.env",
+        "printf 'prepared follow-up\\n' > feature.txt",
+        "git add feature.txt",
+        "git commit -qm 'prepared follow-up'",
+        "gh() { cat > .local/graphql-payload.json; exit 97; }",
+        'if graphql_push_to_fork openclaw/openclaw topic "$hosted_head"; then exit 98; else test "$?" -eq 3; fi',
+        "test ! -e .local/graphql-payload.json",
+      ].join("\n"),
+      {
+        cwd: repoDir,
+        env: { stale_head: staleHead },
+        sourcePush: true,
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("cannot preserve newly incorporated mainline ancestry");
+  });
+
+  it("refuses to flatten a merged main refresh even when the PR head remains an ancestor", () => {
+    const { repoDir, staleHead } = makeGraphqlMainRefreshRepo("merge");
+
+    const result = runGatesBash(
+      [
+        'git merge-base --is-ancestor "$stale_head" HEAD',
+        "gh() { cat > .local/graphql-payload.json; exit 97; }",
+        'if graphql_push_to_fork openclaw/openclaw topic "$stale_head"; then exit 98; else test "$?" -eq 3; fi',
+        "test ! -e .local/graphql-payload.json",
+      ].join("\n"),
+      {
+        cwd: repoDir,
+        env: { stale_head: staleHead },
+        sourcePush: true,
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("cannot preserve newly incorporated mainline ancestry");
+  });
+
+  it("keeps the lease retry when the remote PR head advanced concurrently", () => {
+    const repoDir = makeSyncRepo({ needsRebase: false });
+
+    const result = runGatesBash(
+      [
+        "prep_head=$(git rev-parse HEAD)",
+        "lease_sha=$(git rev-parse HEAD^)",
+        'git checkout -qb contributor "$lease_sha"',
+        "printf 'contributor update\\n' > contributor.txt",
+        "git add contributor.txt",
+        "git commit -qm 'contributor update'",
+        "concurrent_head=$(git rev-parse HEAD)",
+        'git update-ref refs/pull/4242/head "$concurrent_head"',
+        "git checkout -q prep",
+        "setup_prhead_remote() { :; }",
+        'resolve_prhead_remote_sha() { printf \'%s\\n\' "$concurrent_head"; }',
+        "gh() { git rev-parse refs/pull/4242/head; }",
+        "run_prepare_push_retry_gates() { touch .local/retry-gates; }",
+        'push_prep_head_once() { if [ ! -e .local/retry-gates ]; then return 3; fi; git update-ref refs/pull/4242/head "$3"; printf \'%s\\n\' "$3"; }',
+        'wait_for_pr_head_sha() { test "$(git rev-parse refs/pull/4242/head)" = "$2"; }',
+        'push_prep_head_to_pr_branch 4242 topic "$prep_head" "$lease_sha" true false .local/push-result.env',
+        "test -e .local/retry-gates",
+        "source .local/push-result.env",
+        'test "$PUSHED_FROM_SHA" = "$concurrent_head"',
+        'test "$PUSH_PREP_HEAD_SHA" = "$(git rev-parse HEAD)"',
+      ].join("\n"),
+      { cwd: repoDir, sourcePush: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Lease push failed, retrying once with fresh PR head");
+  });
+
   it("publishes a changed-patch Testbox rebase with fresh sync evidence", () => {
     const repoDir = makeSyncRepo({ needsRebase: true });
     writeFileSync(join(repoDir, ".local", "prep-sync.env"), "PREP_SYNC_TREE=stale\n");

@@ -336,8 +336,7 @@ EOF_PREP
       ); then
       echo "Pre-sync local and hosted trees differ; fresh exact-head evidence is required."
     fi
-    # Preserve local lineage separately from the hosted SHA: GraphQL creates
-    # a remote commit with the same tree but the old branch parent.
+    # Preserve the prepared tree and mainline base for post-push evidence.
     printf '%s=%q\n' \
       PREP_SYNC_MAINLINE_BASE_SHA "$mainline_base_sha" \
       PREP_SYNC_TREE "$prep_sync_tree" \
