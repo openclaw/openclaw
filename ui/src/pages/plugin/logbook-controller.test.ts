@@ -71,22 +71,6 @@ describe("Logbook controller", () => {
     vi.useRealTimers();
   });
 
-  it("rebinds polling when the gateway client changes", async () => {
-    vi.useFakeTimers();
-    const host = {};
-    hosts.push(host);
-    const state = getLogbookState(host);
-    const firstRequest = vi.fn(async () => ({}));
-    const secondRequest = vi.fn(async () => ({}));
-
-    configureLogbookPolling(state, clientWithRequest(firstRequest), true);
-    configureLogbookPolling(state, clientWithRequest(secondRequest), true);
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    expect(firstRequest).not.toHaveBeenCalled();
-    expect(secondRequest).toHaveBeenCalled();
-  });
-
   it("lets an in-flight load settle after polling stops", async () => {
     const host = {};
     hosts.push(host);
@@ -168,55 +152,6 @@ describe("Logbook controller", () => {
     expect(request.mock.calls.filter(([method]) => method === "logbook.days")).toHaveLength(2);
     expect(request.mock.calls.filter(([method]) => method === "logbook.timeline")).toHaveLength(2);
     expect(state.timeline?.cards[0]?.title).toBe("Resumed poll");
-  });
-
-  it("retires a pending poll refresh when the client changes", async () => {
-    vi.useFakeTimers();
-    const host = {};
-    hosts.push(host);
-    const state = getLogbookState(host);
-    state.day = "2026-07-04";
-    state.dayPinned = true;
-    const oldStatus = deferred<unknown>();
-    const oldDays = deferred<unknown>();
-    const oldTimeline = deferred<unknown>();
-    const oldResponses = new Map([
-      ["logbook.status", oldStatus],
-      ["logbook.days", oldDays],
-      ["logbook.timeline", oldTimeline],
-    ]);
-    const oldRequest = vi.fn((method: string) => {
-      const response = oldResponses.get(method);
-      if (!response) {
-        throw new Error(`Unexpected old-client request: ${method}`);
-      }
-      return response.promise;
-    });
-    const newRequest = vi.fn(async (method: string) => {
-      if (method === "logbook.status") {
-        return statusFor("2026-07-04");
-      }
-      if (method === "logbook.days") {
-        return { days: [] };
-      }
-      return timelineFor("2026-07-04", "New client");
-    });
-
-    configureLogbookPolling(state, clientWithRequest(oldRequest), true);
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(oldRequest).toHaveBeenCalledTimes(3);
-
-    configureLogbookPolling(state, clientWithRequest(newRequest), true);
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(newRequest).toHaveBeenCalledTimes(3);
-    expect(state.timeline?.cards[0]?.title).toBe("New client");
-
-    oldStatus.resolve(statusFor("2026-07-04"));
-    oldDays.resolve({ days: [] });
-    oldTimeline.resolve(timelineFor("2026-07-04", "Retired client"));
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(state.timeline?.cards[0]?.title).toBe("New client");
   });
 
   it("shares the background refresh owner with analysis completion", async () => {
@@ -321,54 +256,48 @@ describe("Logbook controller", () => {
     expect(state.timeline?.cards[0]?.title).toBe("Post-analysis refresh");
   });
 
-  it("does not let a retired analysis action affect the new client", async () => {
+  it("drops a queued analysis refresh when polling stops", async () => {
     vi.useFakeTimers();
     const host = {};
     hosts.push(host);
     const state = getLogbookState(host);
     state.day = "2026-07-04";
     state.dayPinned = true;
-    const oldAnalysis = deferred<unknown>();
-    const newAnalysis = deferred<unknown>();
-    const oldRequest = vi.fn((method: string) => {
-      if (method !== "logbook.analyze.now") {
-        throw new Error(`Unexpected retired-client request: ${method}`);
-      }
-      return oldAnalysis.promise;
-    });
-    const newRequest = vi.fn(async (method: string) => {
+    const status = deferred<unknown>();
+    const days = deferred<unknown>();
+    const timeline = deferred<unknown>();
+    const pending = new Map([
+      ["logbook.status", status],
+      ["logbook.days", days],
+      ["logbook.timeline", timeline],
+    ]);
+    const request = vi.fn((method: string) => {
       if (method === "logbook.analyze.now") {
-        return await newAnalysis.promise;
+        return Promise.resolve({ started: true });
       }
-      if (method === "logbook.status") {
-        return statusFor("2026-07-04");
+      const response = pending.get(method);
+      if (!response) {
+        throw new Error(`Unexpected refresh request: ${method}`);
       }
-      if (method === "logbook.days") {
-        return { days: [] };
-      }
-      return timelineFor("2026-07-04", "New client");
+      pending.delete(method);
+      return response.promise;
     });
-    const oldClient = clientWithRequest(oldRequest);
-    const newClient = clientWithRequest(newRequest);
+    const client = clientWithRequest(request);
 
-    configureLogbookPolling(state, oldClient, true);
-    const oldAction = runLogbookAnalysisNow(state, oldClient);
-    configureLogbookPolling(state, newClient, true);
-    const newAction = runLogbookAnalysisNow(state, newClient);
-    expect(state.actionPending).toBe(true);
+    configureLogbookPolling(state, client, true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(request).toHaveBeenCalledTimes(3);
+    await runLogbookAnalysisNow(state, client);
+    expect(request).toHaveBeenCalledTimes(4);
 
-    oldAnalysis.resolve({ started: false, reason: "Retired analysis error" });
-    await oldAction;
-    expect(oldRequest).toHaveBeenCalledTimes(1);
-    expect(state.actionPending).toBe(true);
-    expect(state.error).not.toBe("Retired analysis error");
-
-    newAnalysis.resolve({ started: true });
-    await newAction;
+    stopLogbookPolling(host);
+    status.resolve(statusFor("2026-07-04"));
+    days.resolve({ days: [] });
+    timeline.resolve(timelineFor("2026-07-04", "Detached host"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(state.actionPending).toBe(false);
-    expect(newRequest).toHaveBeenCalledTimes(4);
-    expect(state.timeline?.cards[0]?.title).toBe("New client");
+
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(state.timeline?.cards[0]?.title).toBe("Detached host");
   });
 
   it("does not let an older day load overwrite a newer selection", async () => {

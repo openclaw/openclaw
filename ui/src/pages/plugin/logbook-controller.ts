@@ -1,7 +1,6 @@
 // Control UI controller for the Logbook tab: state, gateway calls, polling.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
-  LogbookBackgroundRefresh,
   LogbookDaysPayload,
   LogbookStatusPayload,
   LogbookTimelinePayload,
@@ -11,7 +10,18 @@ import type {
 const FRAME_PREVIEW_CACHE_LIMIT = 48;
 const POLL_INTERVAL_MS = 30_000;
 
-const logbookStates = new WeakMap<object, LogbookUiState>();
+export type LogbookControllerState = LogbookUiState & {
+  // Every load advances result ownership; foreground loading state has its own
+  // owner so a superseded request cannot clear a newer spinner.
+  loadGeneration: number;
+  loadingGeneration: number | null;
+  backgroundRefresh: Promise<void> | null;
+  backgroundRefreshQueued: boolean;
+  pollTimer: ReturnType<typeof globalThis.setInterval> | null;
+  pollClient: GatewayBrowserClient | null;
+};
+
+const logbookStates = new WeakMap<object, LogbookControllerState>();
 
 export function localDayKey(date = new Date()): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -25,7 +35,7 @@ export function shiftDay(day: string, deltaDays: number): string {
   return localDayKey(base);
 }
 
-export function getLogbookState(host: object): LogbookUiState {
+export function getLogbookState(host: object): LogbookControllerState {
   let state = logbookStates.get(host);
   if (!state) {
     state = {
@@ -46,13 +56,10 @@ export function getLogbookState(host: object): LogbookUiState {
       askAnswer: null,
       askLoading: false,
       actionPending: false,
-      actionGeneration: 0,
-      actionPendingGeneration: null,
       loadGeneration: 0,
       loadingGeneration: null,
-      lifecycleGeneration: 0,
       backgroundRefresh: null,
-      backgroundRefreshQueued: null,
+      backgroundRefreshQueued: false,
       pollTimer: null,
       pollClient: null,
       requestUpdate: null,
@@ -66,7 +73,7 @@ function notify(state: LogbookUiState): void {
   state.requestUpdate?.();
 }
 
-function resetDayView(state: LogbookUiState, day: string): void {
+function resetDayView(state: LogbookControllerState, day: string): void {
   state.day = day;
   state.timeline = null;
   state.standup = null;
@@ -75,7 +82,7 @@ function resetDayView(state: LogbookUiState, day: string): void {
 }
 
 export async function loadLogbook(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient | null,
   opts?: { day?: string; today?: boolean; silent?: boolean },
 ): Promise<void> {
@@ -143,68 +150,29 @@ export async function loadLogbook(
   }
 }
 
-function retireLogbookLoads(state: LogbookUiState): void {
-  // A stopped or rebound view must not accept results from its retired client,
-  // and an abandoned background request must not block the next polling epoch.
-  state.loadGeneration += 1;
-  state.lifecycleGeneration += 1;
-  state.actionGeneration += 1;
-  state.actionPendingGeneration = null;
-  state.actionPending = false;
-  state.loadingGeneration = null;
-  state.loading = false;
-  state.backgroundRefresh = null;
-  state.backgroundRefreshQueued = null;
-}
-
-function isLogbookActionCurrent(
-  state: LogbookUiState,
-  actionGeneration: number,
-  refresh: LogbookBackgroundRefresh,
-): boolean {
-  return actionGeneration === state.actionGeneration && isLogbookRefreshCurrent(state, refresh);
-}
-
-function isLogbookRefreshCurrent(
-  state: LogbookUiState,
-  refresh: LogbookBackgroundRefresh,
-): boolean {
-  return (
-    refresh.lifecycleGeneration === state.lifecycleGeneration &&
-    (state.pollClient === null || state.pollClient === refresh.client)
-  );
-}
-
-function drainQueuedLogbookRefresh(state: LogbookUiState): void {
-  if (state.loading || state.backgroundRefresh) {
+function drainQueuedLogbookRefresh(state: LogbookControllerState): void {
+  if (!state.backgroundRefreshQueued || state.loading || state.backgroundRefresh) {
     return;
   }
-  const queued = state.backgroundRefreshQueued;
-  state.backgroundRefreshQueued = null;
-  if (!queued || !isLogbookRefreshCurrent(state, queued)) {
+  state.backgroundRefreshQueued = false;
+  const client = state.pollClient;
+  if (!client) {
     return;
   }
-  void refreshLogbookSilently(state, queued.client, {
-    lifecycleGeneration: queued.lifecycleGeneration,
-    required: true,
-  });
+  void refreshLogbookSilently(state, client, { required: true });
 }
 
 function refreshLogbookSilently(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient,
-  opts?: { lifecycleGeneration?: number; required?: boolean },
+  opts?: { required?: boolean },
 ): Promise<void> {
-  const refreshRequest = {
-    client,
-    lifecycleGeneration: opts?.lifecycleGeneration ?? state.lifecycleGeneration,
-  };
-  if (!isLogbookRefreshCurrent(state, refreshRequest)) {
+  if (state.pollClient !== client) {
     return Promise.resolve();
   }
   if (state.loading || state.backgroundRefresh) {
     if (opts?.required) {
-      state.backgroundRefreshQueued = refreshRequest;
+      state.backgroundRefreshQueued = true;
     }
     return state.backgroundRefresh ?? Promise.resolve();
   }
@@ -228,13 +196,14 @@ export function stopLogbookPolling(host: object): void {
   }
   if (state) {
     state.pollClient = null;
-    // PluginPage replaces the host before calling stop. Let detached-host loads
+    state.backgroundRefreshQueued = false;
+    // PluginPage retires this host immediately after stop returns. Let its loads
     // settle; host identity keeps their results out of the replacement view.
   }
 }
 
 export function configureLogbookPolling(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient | null,
   active: boolean,
 ): void {
@@ -244,7 +213,7 @@ export function configureLogbookPolling(
       state.pollTimer = null;
     }
     state.pollClient = null;
-    retireLogbookLoads(state);
+    state.backgroundRefreshQueued = false;
     return;
   }
   if (state.pollTimer && state.pollClient === client) {
@@ -253,7 +222,6 @@ export function configureLogbookPolling(
   if (state.pollTimer) {
     clearInterval(state.pollTimer);
   }
-  retireLogbookLoads(state);
   state.pollClient = client;
   state.pollTimer = setInterval(() => {
     // All background refresh sources share one owner so slow gateway responses
@@ -305,69 +273,42 @@ export async function setLogbookCapturePaused(
   if (!client || state.actionPending) {
     return;
   }
-  const actionGeneration = ++state.actionGeneration;
-  state.actionPendingGeneration = actionGeneration;
   state.actionPending = true;
   notify(state);
-  const refresh = { client, lifecycleGeneration: state.lifecycleGeneration };
   try {
     const status = await client.request<LogbookStatusPayload>("logbook.capture.set", { paused });
-    if (isLogbookActionCurrent(state, actionGeneration, refresh)) {
-      state.status = status;
-    }
+    state.status = status;
   } catch (err) {
-    if (isLogbookActionCurrent(state, actionGeneration, refresh)) {
-      state.error = err instanceof Error ? err.message : String(err);
-    }
+    state.error = err instanceof Error ? err.message : String(err);
   } finally {
-    if (state.actionPendingGeneration === actionGeneration) {
-      state.actionPendingGeneration = null;
-      state.actionPending = false;
-      notify(state);
-    }
+    state.actionPending = false;
+    notify(state);
   }
 }
 
 export async function runLogbookAnalysisNow(
-  state: LogbookUiState,
+  state: LogbookControllerState,
   client: GatewayBrowserClient | null,
 ): Promise<void> {
   if (!client || state.actionPending) {
     return;
   }
-  const actionGeneration = ++state.actionGeneration;
-  state.actionPendingGeneration = actionGeneration;
   state.actionPending = true;
   notify(state);
-  const refresh = { client, lifecycleGeneration: state.lifecycleGeneration };
   try {
     const result = await client.request<{ started: boolean; reason?: string }>(
       "logbook.analyze.now",
       {},
     );
-    if (
-      isLogbookActionCurrent(state, actionGeneration, refresh) &&
-      !result.started &&
-      result.reason
-    ) {
+    if (!result.started && result.reason) {
       state.error = result.reason;
     }
   } catch (err) {
-    if (isLogbookActionCurrent(state, actionGeneration, refresh)) {
-      state.error = err instanceof Error ? err.message : String(err);
-    }
+    state.error = err instanceof Error ? err.message : String(err);
   } finally {
-    if (state.actionPendingGeneration === actionGeneration) {
-      state.actionPendingGeneration = null;
-      state.actionPending = false;
-      notify(state);
-    }
-    if (isLogbookActionCurrent(state, actionGeneration, refresh)) {
-      void refreshLogbookSilently(state, client, {
-        lifecycleGeneration: refresh.lifecycleGeneration,
-        required: true,
-      });
-    }
+    state.actionPending = false;
+    notify(state);
+    void refreshLogbookSilently(state, client, { required: true });
   }
 }
 
