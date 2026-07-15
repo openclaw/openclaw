@@ -50,6 +50,7 @@ magick 32x32.png -background none -gravity center -extent 32x32 PNG32:32x32.png
 rsvg-convert -w 128 -h 128 icon-tile.svg -o 128x128.png
 rsvg-convert -w 256 -h 256 icon-tile.svg -o 128x128@2x.png
 rsvg-convert -w 512 -h 512 icon-tile.svg -o icon.png
+magick icon.png -define icon:auto-resize=256,128,64,48,32,16 icon.ico
 ```
 
 ## Packaging
