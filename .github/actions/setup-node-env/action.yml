@@ -82,6 +82,11 @@ runs:
           echo "PNPM_CONFIG_STORE_DIR=/var/tmp/openclaw-node-deps/store"
           echo "PNPM_CONFIG_MODULES_DIR=/var/tmp/openclaw-node-deps/node_modules"
           echo "PNPM_CONFIG_VIRTUAL_STORE_DIR=/var/tmp/openclaw-node-deps/virtual-store"
+          # The cold install (once per lockfile) links ~1200 packages into the
+          # relocated modules dir; unthrottled linking EMFILEs pnpm there
+          # (crabbox-hydrate throttles to 1 for the same reason). Warm jobs do
+          # a no-op verify, so this only bounds the first run per lockfile.
+          echo "PNPM_CONFIG_CHILD_CONCURRENCY=4"
         } >> "$GITHUB_ENV"
 
     - name: Setup pnpm
@@ -125,6 +130,9 @@ runs:
         FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
       run: |
         set -euo pipefail
+        # Large parallel installs (sticky-disk cold path) can exhaust the
+        # default soft fd limit; raise it best-effort before pnpm runs.
+        ulimit -n 65536 2>/dev/null || true
         export PATH="$NODE_BIN:$PATH"
         which node
         node -v
