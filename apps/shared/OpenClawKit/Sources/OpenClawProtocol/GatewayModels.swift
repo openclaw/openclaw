@@ -11497,6 +11497,204 @@ public struct SkillsProposalHistoryScanResult: Codable, Sendable {
     }
 }
 
+public struct SkillsWriteValidateParams: Codable, Sendable {
+    public let agentid: String?
+    public let name: String?
+    public let content: String
+    public let supportfiles: [[String: AnyCodable]]?
+
+    public init(
+        agentid: String? = nil,
+        name: String? = nil,
+        content: String,
+        supportfiles: [[String: AnyCodable]]? = nil)
+    {
+        self.agentid = agentid
+        self.name = name
+        self.content = content
+        self.supportfiles = supportfiles
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case name
+        case content
+        case supportfiles = "supportFiles"
+    }
+}
+
+public struct SkillsWriteValidateResult: Codable, Sendable {
+    public let name: String
+    public let description: String
+    public let scan: [String: AnyCodable]
+
+    public init(
+        name: String,
+        description: String,
+        scan: [String: AnyCodable])
+    {
+        self.name = name
+        self.description = description
+        self.scan = scan
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case scan
+    }
+}
+
+public struct SkillsWriteApplyProposalParams: Codable, Sendable {
+    public let agentid: String?
+    public let proposalid: String
+    public let reason: String?
+
+    public init(
+        agentid: String? = nil,
+        proposalid: String,
+        reason: String? = nil)
+    {
+        self.agentid = agentid
+        self.proposalid = proposalid
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case proposalid = "proposalId"
+        case reason
+    }
+}
+
+public struct SkillsWriteApplyProposalResult: Codable, Sendable {
+    public let record: SkillsProposalRecordResult
+    public let targetskillfile: String
+
+    public init(
+        record: SkillsProposalRecordResult,
+        targetskillfile: String)
+    {
+        self.record = record
+        self.targetskillfile = targetskillfile
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case record
+        case targetskillfile = "targetSkillFile"
+    }
+}
+
+public struct SkillsWriteProposeResult: Codable, Sendable {
+    public let record: SkillsProposalRecordResult
+    public let content: String
+    public let supportfiles: [[String: AnyCodable]]?
+
+    public init(
+        record: SkillsProposalRecordResult,
+        content: String,
+        supportfiles: [[String: AnyCodable]]? = nil)
+    {
+        self.record = record
+        self.content = content
+        self.supportfiles = supportfiles
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case record
+        case content
+        case supportfiles = "supportFiles"
+    }
+}
+
+public struct SkillsWriteDirectParams: Codable, Sendable {
+    public let agentid: String?
+    public let mode: AnyCodable
+    public let name: String
+    public let content: String
+    public let supportfiles: [[String: AnyCodable]]?
+    public let refresh: Bool?
+
+    public init(
+        agentid: String? = nil,
+        mode: AnyCodable,
+        name: String,
+        content: String,
+        supportfiles: [[String: AnyCodable]]? = nil,
+        refresh: Bool? = nil)
+    {
+        self.agentid = agentid
+        self.mode = mode
+        self.name = name
+        self.content = content
+        self.supportfiles = supportfiles
+        self.refresh = refresh
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case mode
+        case name
+        case content
+        case supportfiles = "supportFiles"
+        case refresh
+    }
+}
+
+public struct SkillsWriteDirectResult: Codable, Sendable {
+    public let targetskillfile: String
+    public let scan: [String: AnyCodable]
+    public let rollback: [String: AnyCodable]
+    public let snapshotversion: Int?
+
+    public init(
+        targetskillfile: String,
+        scan: [String: AnyCodable],
+        rollback: [String: AnyCodable],
+        snapshotversion: Int? = nil)
+    {
+        self.targetskillfile = targetskillfile
+        self.scan = scan
+        self.rollback = rollback
+        self.snapshotversion = snapshotversion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case targetskillfile = "targetSkillFile"
+        case scan
+        case rollback
+        case snapshotversion = "snapshotVersion"
+    }
+}
+
+public struct SkillsWriteRefreshSnapshotParams: Codable, Sendable {
+    public let agentid: String?
+
+    public init(
+        agentid: String? = nil)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
+
+public struct SkillsWriteRefreshSnapshotResult: Codable, Sendable {
+    public let snapshotversion: Int
+
+    public init(
+        snapshotversion: Int)
+    {
+        self.snapshotversion = snapshotversion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case snapshotversion = "snapshotVersion"
+    }
+}
+
 public struct SkillsProposalInspectParams: Codable, Sendable {
     public let agentid: String?
     public let proposalid: String

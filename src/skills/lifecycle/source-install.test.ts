@@ -1,11 +1,19 @@
 // Source install tests cover installing skill sources from local and remote inputs.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
+import {
+  getSkillsSnapshotVersion,
+  resetSkillsRefreshStateForTest,
+} from "../runtime/refresh-state.js";
 import { installSkillFromSource } from "./source-install.js";
+
+afterEach(() => {
+  resetSkillsRefreshStateForTest();
+});
 
 async function writeSkill(dir: string, params: { name?: string; description?: string } = {}) {
   await fs.mkdir(dir, { recursive: true });
@@ -99,6 +107,7 @@ describe("installSkillFromSource", () => {
       const workspaceDir = path.join(root, "workspace");
       const sourceDir = path.join(root, "source");
       await writeSkill(sourceDir, { name: "frontmatter-skill" });
+      const versionBefore = getSkillsSnapshotVersion(workspaceDir);
 
       const result = await installSkillFromSource({
         workspaceDir,
@@ -111,6 +120,7 @@ describe("installSkillFromSource", () => {
         source: "path",
         targetDir: path.join(workspaceDir, "skills", "frontmatter-skill"),
       });
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(versionBefore);
       await expect(
         fs.readFile(path.join(workspaceDir, "skills", "frontmatter-skill", "SKILL.md"), "utf8"),
       ).resolves.toContain("frontmatter-skill");

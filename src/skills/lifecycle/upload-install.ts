@@ -2,8 +2,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ArchiveLogger } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { skillsWriteService } from "../api/index.js";
 import {
-  installSkillArchiveFromPath,
   type SkillArchiveInstallFailureKind,
   validateRequestedSkillSlug,
 } from "./archive-install.js";
@@ -92,7 +92,8 @@ export async function installUploadedSkillArchive(params: {
         return await rejectInvalid("committed upload is missing sha256");
       }
 
-      const install = await installSkillArchiveFromPath({
+      const install = await skillsWriteService.installBundle({
+        kind: "archive",
         archivePath: record.archivePath,
         workspaceDir: params.workspaceDir,
         slug: record.slug,
@@ -123,6 +124,7 @@ export async function installUploadedSkillArchive(params: {
         };
       }
       await upload.remove().catch(() => undefined);
+      skillsWriteService.refreshSnapshot(params.workspaceDir);
       return {
         ok: true,
         message: `Installed ${record.slug}`,

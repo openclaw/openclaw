@@ -12,6 +12,7 @@ import {
 } from "../../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
+import { skillsWriteService } from "../api/index.js";
 import {
   hasBinary as defaultHasBinary,
   resolveSkillsInstallPreferences as defaultResolveSkillsInstallPreferences,
@@ -64,6 +65,18 @@ function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInst
     ...result,
     warnings: warnings.slice(),
   };
+}
+
+function finalizeSkillInstall(
+  workspaceDir: string,
+  result: SkillInstallResult,
+  warnings: string[],
+): SkillInstallResult {
+  const finalResult = withWarnings(result, warnings);
+  if (finalResult.ok) {
+    skillsWriteService.refreshSnapshot(workspaceDir);
+  }
+  return finalResult;
 }
 
 function resolveInstallId(spec: SkillInstallSpec, index: number): string {
@@ -752,7 +765,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
   if (spec.kind === "download") {
     const downloadResult = await installDownloadSpec({ entry, spec, timeoutMs });
-    return withWarnings(downloadResult, warnings);
+    return finalizeSkillInstall(workspaceDir, downloadResult, warnings);
   }
 
   const prefs = deps.resolveSkillsInstallPreferences(params.config);
@@ -816,7 +829,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     spec.kind === "go" && !installResult.ok && isGoToolchainPrerequisiteFailure(installResult)
       ? { ...installResult, skipReason: "go" as const }
       : installResult;
-  return withWarnings(normalizedResult, warnings);
+  return finalizeSkillInstall(workspaceDir, normalizedResult, warnings);
 }
 
 const testing = {

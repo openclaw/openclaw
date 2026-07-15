@@ -4,12 +4,12 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/skill-history.js";
 import { getSkillHistoryScanStatus } from "../../skills/workshop/history-scan-state.js";
 import { runSkillHistoryScan } from "../../skills/workshop/history-scan.js";
-import { runSkillsProposalWorkspaceHandler } from "./skills-workspace-handler.js";
+import { runSkillsWorkspaceHandler } from "./skills-workspace-handler.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const skillProposalHistoryHandlers: GatewayRequestHandlers = {
   "skills.proposals.historyStatus": async ({ params, respond, context }) => {
-    await runSkillsProposalWorkspaceHandler({
+    await runSkillsWorkspaceHandler({
       method: "skills.proposals.historyStatus",
       rawParams: params,
       respond,
@@ -26,7 +26,7 @@ export const skillProposalHistoryHandlers: GatewayRequestHandlers = {
     });
   },
   "skills.proposals.historyScan": async ({ params, respond, context }) => {
-    await runSkillsProposalWorkspaceHandler({
+    await runSkillsWorkspaceHandler({
       method: "skills.proposals.historyScan",
       rawParams: params,
       respond,

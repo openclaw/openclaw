@@ -11,8 +11,9 @@ import { writeJson } from "../../infra/json-files.js";
 import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-install.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
+import { skillsWriteService } from "../api/index.js";
 import { parseFrontmatter } from "../loading/frontmatter.js";
-import { installExtractedSkillRoot, validateRequestedSkillSlug } from "./archive-install.js";
+import { validateRequestedSkillSlug } from "./archive-install.js";
 import { untrackClawHubSkill } from "./clawhub.js";
 
 type Logger = {
@@ -210,7 +211,8 @@ async function installLocalSkillDir(params: {
     fallbackLabel: params.fallbackLabel,
     slug: params.slug,
   });
-  const install = await installExtractedSkillRoot({
+  const install = await skillsWriteService.installBundle({
+    kind: "directory",
     workspaceDir: params.workspaceDir,
     slug,
     extractedRoot: params.sourceDir,
@@ -252,6 +254,7 @@ async function installLocalSkillDir(params: {
     ...(params.git ? { git: params.git } : {}),
   });
   await untrackClawHubSkill(params.workspaceDir, slug);
+  skillsWriteService.refreshSnapshot(params.workspaceDir);
 
   return {
     ok: true,

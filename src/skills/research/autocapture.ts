@@ -11,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { skillsWriteService } from "../api/index.js";
 import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
 import { resolveSkillWorkshopConfig } from "../workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../workshop/frontmatter.js";
@@ -18,8 +19,6 @@ import {
   inspectSkillProposal,
   listSkillProposals,
   listWritableWorkspaceSkillSummaries,
-  proposeCreateSkill,
-  proposeUpdateSkill,
   reviseSkillProposal,
 } from "../workshop/service.js";
 import { resolveSkillProposalTarget } from "../workshop/store.js";
@@ -259,7 +258,7 @@ export async function runSkillResearchAutoCapture(params: {
     }
 
     // Discovery runs only after cheap signal extraction, and uses the same writable status as
-    // proposeUpdateSkill (including .agents/skills project skills).
+    // the write service's update path (including .agents/skills project skills).
     const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
       config: params.config,
       agentId: params.ctx.agentId,
@@ -400,7 +399,8 @@ export async function runSkillResearchAutoCapture(params: {
                 .join("\n"),
             })
           : existingSkill === null
-            ? await proposeCreateSkill({
+            ? await skillsWriteService.propose({
+                kind: "create",
                 workspaceDir,
                 config: params.config,
                 name: proposal.skillName,
@@ -411,7 +411,8 @@ export async function runSkillResearchAutoCapture(params: {
                 goal: proposal.goal,
                 evidence: proposal.evidence,
               })
-            : await proposeUpdateSkill({
+            : await skillsWriteService.propose({
+                kind: "update",
                 workspaceDir,
                 config: params.config,
                 agentId: params.ctx.agentId,

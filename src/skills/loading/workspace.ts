@@ -55,6 +55,7 @@ import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths, tryRealpath } from "./symlink-targets.js";
+import { DEFAULT_MAX_SKILL_FILE_BYTES, resolveMaxSkillFileBytes } from "./validation.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
@@ -228,7 +229,6 @@ const DEFAULT_MAX_CANDIDATES_PER_ROOT = 300;
 const DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE = 200;
 const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
 const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 18_000;
-const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
 const DEFAULT_MIN_RAW_ENTRIES_PER_DIRECTORY_SCAN = 1_000;
 const DEFAULT_MAX_RAW_ENTRIES_PER_DIRECTORY_SCAN = 10_000;
 // Match Codex's bounded recursive skills discovery without letting broad
@@ -282,7 +282,7 @@ function resolveSkillsLimits(config?: OpenClawConfig, agentId?: string): Resolve
       agentSkillsLimits?.maxSkillsPromptChars ??
       limits?.maxSkillsPromptChars ??
       DEFAULT_MAX_SKILLS_PROMPT_CHARS,
-    maxSkillFileBytes: limits?.maxSkillFileBytes ?? DEFAULT_MAX_SKILL_FILE_BYTES,
+    maxSkillFileBytes: resolveMaxSkillFileBytes(config),
   };
 }
 

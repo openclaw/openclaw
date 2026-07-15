@@ -32,7 +32,7 @@ function hasNonAscii(value: string): boolean {
   return false;
 }
 
-type SkillArchiveInstallPolicy = {
+export type SkillArchiveInstallPolicy = {
   config?: OpenClawConfig;
   installId?: string;
   origin: InstallPolicyOrigin;
@@ -41,11 +41,32 @@ type SkillArchiveInstallPolicy = {
 };
 
 /** Result shape for installing a skill archive into a workspace skills dir. */
-type SkillArchiveInstallResult =
+export type SkillArchiveInstallResult =
   | { ok: true; targetDir: string }
   | { ok: false; error: string; failureKind: SkillArchiveInstallFailureKind };
 
 export type SkillArchiveInstallFailureKind = "invalid-request" | "unavailable";
+
+export type InstallExtractedSkillRootInput = {
+  workspaceDir: string;
+  slug: string;
+  extractedRoot: string;
+  mode: "install" | "update";
+  timeoutMs?: number;
+  logger?: ArchiveLogger;
+  policy?: SkillArchiveInstallPolicy;
+  rootMarkers?: readonly string[];
+};
+
+export type InstallSkillArchiveFromPathInput = {
+  archivePath: string;
+  workspaceDir: string;
+  slug: string;
+  force?: boolean;
+  timeoutMs?: number;
+  logger?: ArchiveLogger;
+  policy?: SkillArchiveInstallPolicy;
+};
 
 /** Normalizes a tracked slug without accepting traversal or path separators. */
 export function normalizeTrackedSkillSlug(raw: string): string {
@@ -128,16 +149,9 @@ function archiveFailureKind(error: string): SkillArchiveInstallFailureKind {
   return "invalid-request";
 }
 
-export async function installExtractedSkillRoot(params: {
-  workspaceDir: string;
-  slug: string;
-  extractedRoot: string;
-  mode: "install" | "update";
-  timeoutMs?: number;
-  logger?: ArchiveLogger;
-  policy?: SkillArchiveInstallPolicy;
-  rootMarkers?: readonly string[];
-}): Promise<SkillArchiveInstallResult> {
+export async function installExtractedSkillRoot(
+  params: InstallExtractedSkillRootInput,
+): Promise<SkillArchiveInstallResult> {
   try {
     if (
       !(await hasSkillArchiveRoot(
@@ -201,15 +215,9 @@ export async function installExtractedSkillRoot(params: {
   }
 }
 
-export async function installSkillArchiveFromPath(params: {
-  archivePath: string;
-  workspaceDir: string;
-  slug: string;
-  force?: boolean;
-  timeoutMs?: number;
-  logger?: ArchiveLogger;
-  policy?: SkillArchiveInstallPolicy;
-}): Promise<SkillArchiveInstallResult> {
+export async function installSkillArchiveFromPath(
+  params: InstallSkillArchiveFromPathInput,
+): Promise<SkillArchiveInstallResult> {
   const result = await withExtractedArchiveRoot({
     archivePath: params.archivePath,
     tempDirPrefix: "openclaw-skill-archive-",

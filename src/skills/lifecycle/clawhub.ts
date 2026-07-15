@@ -30,9 +30,9 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import { readJsonIfExists, tryReadJson, writeJson } from "../../infra/json-files.js";
+import { skillsWriteService } from "../api/index.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
-  installExtractedSkillRoot,
   normalizeTrackedSkillSlug,
   resolveWorkspaceSkillInstallDir,
   validateRequestedSkillSlug,
@@ -1167,7 +1167,8 @@ async function installArchiveResolution(params: {
     timeoutMs: 120_000,
     rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
     onExtracted: async (rootDir) =>
-      await installExtractedSkillRoot({
+      await skillsWriteService.installBundle({
+        kind: "directory",
         workspaceDir: params.workspaceDir,
         slug: params.slug,
         extractedRoot: rootDir,
@@ -1215,7 +1216,8 @@ async function installGitHubResolution(params: {
     tempDirPrefix: "openclaw-skill-clawhub-github-",
     timeoutMs: 120_000,
     onExtracted: async (repoRoot) =>
-      await installExtractedSkillRoot({
+      await skillsWriteService.installBundle({
+        kind: "directory",
         workspaceDir: params.workspaceDir,
         slug: params.slug,
         extractedRoot: resolveGitHubSkillSourceDir(repoRoot, params.sourcePath),
@@ -1511,6 +1513,8 @@ async function performClawHubSkillInstall(
         ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
         version,
       }).catch(() => undefined);
+
+      skillsWriteService.refreshSnapshot(params.workspaceDir);
 
       return {
         ok: true,

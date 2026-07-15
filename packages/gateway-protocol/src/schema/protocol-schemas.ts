@@ -537,7 +537,7 @@ import {
   SessionsSendParamsSchema,
   SessionsUsageParamsSchema,
 } from "./sessions.js";
-import { SkillWorkshopProtocolSchemas } from "./skill-protocol-schemas.js";
+import { SkillProtocolSchemas } from "./skill-protocol-schemas.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import { SystemInfoParamsSchema, SystemInfoResultSchema } from "./system-info.js";
 import { TalkSessionAcknowledgeMarkParamsSchema } from "./talk-marks.js";
@@ -1013,7 +1013,7 @@ export const ProtocolSchemas = {
   SkillsCuratorActionResult: SkillsCuratorActionResultSchema,
   SkillsCuratorStatusParams: SkillsCuratorStatusParamsSchema,
   SkillsCuratorStatusResult: SkillsCuratorStatusResultSchema,
-  ...SkillWorkshopProtocolSchemas,
+  ...SkillProtocolSchemas,
   SkillsProposalInspectParams: SkillsProposalInspectParamsSchema,
   SkillsProposalInspectResult: SkillsProposalInspectResultSchema,
   SkillsProposalCreateParams: SkillsProposalCreateParamsSchema,

@@ -23,6 +23,11 @@ type WorkspaceSkillWriteTargetParams = {
 
 type PreviousSupportFile = { path: string; existed: boolean; previousContent?: string };
 
+export type WorkspaceSkillWriteRollback = {
+  previousContent: string | null;
+  supportFiles: PreviousSupportFile[];
+};
+
 export function normalizeWorkspaceSkillSupportPath(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -68,14 +73,17 @@ export function assertWorkspaceSkillSupportPathSetIsFileOnly(paths: readonly str
   }
 }
 
-export async function readWorkspaceSkillFile(filePath: string): Promise<string | null> {
+export async function readWorkspaceSkillFile(
+  filePath: string,
+  options: { maxBytes?: number } = {},
+): Promise<string | null> {
   if (!(await pathExists(filePath))) {
     return null;
   }
   const skillRoot = await root(path.dirname(filePath));
   const read = await skillRoot.read(path.basename(filePath), {
     hardlinks: "reject",
-    maxBytes: 1024 * 1024,
+    maxBytes: options.maxBytes ?? 1024 * 1024,
     symlinks: "reject",
   });
   return read.buffer.toString("utf8");
@@ -111,16 +119,18 @@ export async function writeWorkspaceSkill(params: {
   content: string;
   supportFiles?: readonly WorkspaceSkillSupportFileWrite[];
   mode: "create" | "update";
+  maxPreviousSkillFileBytes?: number;
   symlinkPolicy: WorkspaceSkillSymlinkWritePolicy;
-}): Promise<void> {
+}): Promise<WorkspaceSkillWriteRollback> {
   assertInsideWorkspace(params.workspaceDir, params.skillDir, "skill directory");
   const supportFiles = normalizeSupportFiles(params.supportFiles ?? []);
-  const previousSupportFiles = await prepareWorkspaceSkillWrite({
+  const previous = await prepareWorkspaceSkillWrite({
     mode: params.mode,
     workspaceDir: params.workspaceDir,
     skillDir: params.skillDir,
     skillFile: params.skillFile,
     supportFiles,
+    maxPreviousSkillFileBytes: params.maxPreviousSkillFileBytes,
     symlinkPolicy: params.symlinkPolicy,
   });
   const writtenSupportPaths: string[] = [];
@@ -148,11 +158,12 @@ export async function writeWorkspaceSkill(params: {
       workspaceDir: params.workspaceDir,
       skillDir: params.skillDir,
       writtenSupportPaths,
-      previousSupportFiles,
+      previousSupportFiles: previous.supportFiles,
       symlinkPolicy: params.symlinkPolicy,
     });
     throw error;
   }
+  return previous;
 }
 
 function normalizeSupportFiles(
@@ -172,14 +183,17 @@ async function prepareWorkspaceSkillWrite(params: {
   skillDir: string;
   skillFile: string;
   supportFiles: readonly WorkspaceSkillSupportFileWrite[];
+  maxPreviousSkillFileBytes?: number;
   symlinkPolicy: WorkspaceSkillSymlinkWritePolicy;
-}): Promise<PreviousSupportFile[]> {
+}): Promise<WorkspaceSkillWriteRollback> {
   await resolveWorkspaceSkillWriteTarget({
     workspaceDir: params.workspaceDir,
     filePath: params.skillFile,
     symlinkPolicy: params.symlinkPolicy,
   });
-  const previousContent = await readWorkspaceSkillFile(params.skillFile);
+  const previousContent = await readWorkspaceSkillFile(params.skillFile, {
+    maxBytes: params.maxPreviousSkillFileBytes,
+  });
   if (params.mode === "create" && previousContent !== null) {
     throw new Error(`Target skill already exists: ${params.skillFile}`);
   }
@@ -195,7 +209,11 @@ async function prepareWorkspaceSkillWrite(params: {
       filePath,
       symlinkPolicy: params.symlinkPolicy,
     });
-    if (params.mode === "update") {
+    if (params.mode === "create") {
+      // Create writes use overwrite=false, so any pre-existing target aborts before this
+      // metadata is returned; a successful create can safely remove these files on rollback.
+      previousSupportFiles.push({ path: file.path, existed: false });
+    } else {
       const previousSupportContent = await readWorkspaceSupportFile({
         skillDir: params.skillDir,
         relativePath: file.path,
@@ -207,7 +225,7 @@ async function prepareWorkspaceSkillWrite(params: {
       );
     }
   }
-  return previousSupportFiles;
+  return { previousContent, supportFiles: previousSupportFiles };
 }
 
 async function writeWorkspaceFile(params: {

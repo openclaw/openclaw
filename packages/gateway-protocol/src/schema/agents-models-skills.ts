@@ -3,6 +3,13 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import {
+  SkillProposalContentString,
+  SkillProposalScanSchema,
+  SkillProposalScanStateSchema,
+  SkillProposalSupportFileInputSchema,
+  SkillSha256String,
+} from "./skill-shared.js";
 
 /**
  * Agent, model, skill, and tool catalog schemas.
@@ -295,11 +302,6 @@ export const SkillsBinsResultSchema = closedObject({
   bins: Type.Array(NonEmptyString),
 });
 
-const Sha256String = Type.String({
-  minLength: 64,
-  maxLength: 64,
-  pattern: "^[a-fA-F0-9]{64}$",
-});
 const SkillUploadIdempotencyKeyString = Type.String({
   minLength: 1,
   maxLength: 2048,
@@ -314,7 +316,7 @@ export const SkillsUploadBeginParamsSchema = closedObject({
   kind: Type.Literal("skill-archive"),
   slug: NonEmptyString,
   sizeBytes: Type.Integer({ minimum: 1 }),
-  sha256: Type.Optional(Sha256String),
+  sha256: Type.Optional(SkillSha256String),
   force: Type.Optional(Type.Boolean()),
   idempotencyKey: Type.Optional(SkillUploadIdempotencyKeyString),
 });
@@ -329,7 +331,7 @@ export const SkillsUploadChunkParamsSchema = closedObject({
 /** Commits a completed skill archive upload. */
 export const SkillsUploadCommitParamsSchema = closedObject({
   uploadId: NonEmptyString,
-  sha256: Type.Optional(Sha256String),
+  sha256: Type.Optional(SkillSha256String),
 });
 
 /** Installs a skill from legacy install id, ClawHub, or uploaded archive. */
@@ -362,7 +364,7 @@ export const SkillsInstallParamsSchema = Type.Union([
     uploadId: NonEmptyString,
     slug: NonEmptyString,
     force: Type.Optional(Type.Boolean()),
-    sha256: Type.Optional(Sha256String),
+    sha256: Type.Optional(SkillSha256String),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
   }),
 ]);
@@ -520,51 +522,19 @@ const SkillProposalStatusSchema = Type.Union([
 /** Skill proposal operation type: new skill or update to an existing skill. */
 const SkillProposalKindSchema = Type.Union([Type.Literal("create"), Type.Literal("update")]);
 /** Scan state for proposed skill content before it can be applied. */
-const SkillProposalScanStateSchema = Type.Union([
-  Type.Literal("pending"),
-  Type.Literal("clean"),
-  Type.Literal("failed"),
-  Type.Literal("quarantined"),
-]);
 /** Source that created the skill proposal record. */
 const SkillProposalSourceSchema = Type.Union([
   Type.Literal("skill-workshop"),
   Type.Literal("cli"),
   Type.Literal("gateway"),
 ]);
-const SkillProposalContentString = Type.String({ minLength: 1, maxLength: 1_048_576 });
-/** Support file payload accepted from proposal create/revise requests. */
-const SkillProposalSupportFileInputSchema = closedObject({
-  path: NonEmptyString,
-  content: Type.String({ maxLength: 262_144 }),
-});
 /** Stored support file metadata, including target conflict hashes for updates. */
 const SkillProposalSupportFileSchema = closedObject({
   path: NonEmptyString,
   sizeBytes: Type.Integer({ minimum: 0, maximum: 262_144 }),
-  hash: Sha256String,
+  hash: SkillSha256String,
   targetExisted: Type.Optional(Type.Boolean()),
-  targetContentHash: Type.Optional(Sha256String),
-});
-
-/** One static-scan finding against proposed skill content. */
-const SkillProposalFindingSchema = closedObject({
-  ruleId: NonEmptyString,
-  severity: Type.Union([Type.Literal("info"), Type.Literal("warn"), Type.Literal("critical")]),
-  file: NonEmptyString,
-  line: Type.Integer({ minimum: 1 }),
-  message: NonEmptyString,
-  evidence: Type.String(),
-});
-
-/** Aggregated scan report attached to a proposal record. */
-const SkillProposalScanSchema = closedObject({
-  state: SkillProposalScanStateSchema,
-  scannedAt: NonEmptyString,
-  critical: Type.Integer({ minimum: 0 }),
-  warn: Type.Integer({ minimum: 0 }),
-  info: Type.Integer({ minimum: 0 }),
-  findings: Type.Array(SkillProposalFindingSchema),
+  targetContentHash: Type.Optional(SkillSha256String),
 });
 
 /** Skill file target that a proposal creates or updates. */
