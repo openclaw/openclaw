@@ -659,6 +659,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     },
     messaging: {
       targetPrefixes: ["slack"],
+      directTargetStyle: "user-prefixed",
+      targetIdComparison: "lowercase",
       normalizeTarget: normalizeSlackMessagingTarget,
       // Session and delivery identities stay folded; Slack API boundaries restore ID casing.
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
