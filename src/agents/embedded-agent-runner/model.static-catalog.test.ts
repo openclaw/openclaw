@@ -183,6 +183,18 @@ function setConditionalSuppressionAliasPlugin(params?: { unconditional?: boolean
   });
 }
 
+function expectManifestAliasResolution(
+  params: Parameters<typeof canonicalizeManifestModelCatalogProviderAlias>[0],
+  expected: {
+    provider: string;
+    transport: ReturnType<typeof resolveManifestModelCatalogProviderTransport>;
+  },
+  transportParams = params,
+) {
+  expect(canonicalizeManifestModelCatalogProviderAlias(params)).toBe(expected.provider);
+  expect(resolveManifestModelCatalogProviderTransport(transportParams)).toEqual(expected.transport);
+}
+
 beforeEach(() => {
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReset();
   manifestMocks.listOpenClawPluginManifestMetadata.mockReset();
@@ -339,15 +351,14 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
     };
     manifestMocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [plugin] });
 
-    expect(
-      canonicalizeManifestModelCatalogProviderAlias({
+    expectManifestAliasResolution(
+      {
         provider: "azure-openai-responses",
         modelId: "gpt-5.5",
         cfg: {},
-      }),
-    ).toBe("openai");
-    expect(
-      resolveManifestModelCatalogProviderTransport({
+      },
+      { provider: "openai", transport: { api: "azure-openai-responses" } },
+      {
         provider: "azure-openai-responses",
         modelId: "gpt-5.5",
         cfg: {
@@ -360,25 +371,22 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
             },
           },
         },
-      }),
-    ).toEqual({ api: "azure-openai-responses" });
-    expect(
-      canonicalizeManifestModelCatalogProviderAlias({
+      },
+    );
+    expectManifestAliasResolution(
+      {
         provider: "azure-openai-fixed-endpoint",
         modelId: "gpt-5.5",
         cfg: {},
-      }),
-    ).toBe("azure-openai-fixed-endpoint");
-    expect(
-      resolveManifestModelCatalogProviderTransport({
+      },
+      {
         provider: "azure-openai-fixed-endpoint",
-        modelId: "gpt-5.5",
-        cfg: {},
-      }),
-    ).toEqual({
-      api: "azure-openai-responses",
-      baseUrl: "https://manifest-alias.example.com/openai/v1",
-    });
+        transport: {
+          api: "azure-openai-responses",
+          baseUrl: "https://manifest-alias.example.com/openai/v1",
+        },
+      },
+    );
   });
 
   it.each([
@@ -400,20 +408,14 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
         },
       };
 
-      expect(
-        canonicalizeManifestModelCatalogProviderAlias({
+      expectManifestAliasResolution(
+        {
           provider: "conditional-alias",
           modelId: "conditional-model",
           cfg,
-        }),
-      ).toBe("conditional-alias");
-      expect(
-        resolveManifestModelCatalogProviderTransport({
-          provider: "conditional-alias",
-          modelId: "conditional-model",
-          cfg,
-        }),
-      ).toEqual({ api: "openai-responses" });
+        },
+        { provider: "conditional-alias", transport: { api: "openai-responses" } },
+      );
     },
   );
 
@@ -431,20 +433,14 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
       },
     };
 
-    expect(
-      canonicalizeManifestModelCatalogProviderAlias({
+    expectManifestAliasResolution(
+      {
         provider: "conditional-alias",
         modelId: "conditional-model",
         cfg,
-      }),
-    ).toBe("target-provider");
-    expect(
-      resolveManifestModelCatalogProviderTransport({
-        provider: "conditional-alias",
-        modelId: "conditional-model",
-        cfg,
-      }),
-    ).toBeUndefined();
+      },
+      { provider: "target-provider", transport: undefined },
+    );
   });
 
   it("ignores inactive workspace claims that collide with a bundled transport alias", () => {
@@ -460,20 +456,14 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
       },
     };
 
-    expect(
-      canonicalizeManifestModelCatalogProviderAlias({
+    expectManifestAliasResolution(
+      {
         provider: "azure-openai-responses",
         modelId: "gpt-5.4-mini",
         cfg,
-      }),
-    ).toBe("azure-openai-responses");
-    expect(
-      resolveManifestModelCatalogProviderTransport({
-        provider: "azure-openai-responses",
-        modelId: "gpt-5.4-mini",
-        cfg,
-      }),
-    ).toEqual({ api: "azure-openai-responses" });
+      },
+      { provider: "azure-openai-responses", transport: { api: "azure-openai-responses" } },
+    );
   });
 
   it("accepts activated config-load-path alias owners", () => {
@@ -496,23 +486,20 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
       ],
     });
 
-    expect(
-      canonicalizeManifestModelCatalogProviderAlias({
+    expectManifestAliasResolution(
+      {
         provider: "custom-openai-alias",
         modelId: "custom-model",
         cfg: {},
-      }),
-    ).toBe("custom-openai-alias");
-    expect(
-      resolveManifestModelCatalogProviderTransport({
+      },
+      {
         provider: "custom-openai-alias",
-        modelId: "custom-model",
-        cfg: {},
-      }),
-    ).toEqual({
-      api: "openai-responses",
-      baseUrl: "https://config-provider.example.com/v1",
-    });
+        transport: {
+          api: "openai-responses",
+          baseUrl: "https://config-provider.example.com/v1",
+        },
+      },
+    );
   });
 
   it("fails closed when activated plugins claim the same provider alias", () => {
@@ -533,20 +520,14 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
       },
     };
 
-    expect(
-      canonicalizeManifestModelCatalogProviderAlias({
+    expectManifestAliasResolution(
+      {
         provider: "azure-openai-responses",
         modelId: "gpt-5.4-mini",
         cfg,
-      }),
-    ).toBe("azure-openai-responses");
-    expect(
-      resolveManifestModelCatalogProviderTransport({
-        provider: "azure-openai-responses",
-        modelId: "gpt-5.4-mini",
-        cfg,
-      }),
-    ).toBeUndefined();
+      },
+      { provider: "azure-openai-responses", transport: undefined },
+    );
   });
 });
 
