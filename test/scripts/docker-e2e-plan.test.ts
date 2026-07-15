@@ -780,7 +780,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "tilde-log-path",
         "versioned-runtime-deps",
       ]
-        .map((scenario) => JSON.stringify(scenario))
+        .map((scenario) => `'${scenario}'`)
         .join(",\n")}\n]);\nconst unrelated = "acpx-openclaw-tools-bridge";\n`,
     );
     const plan = planFor({
@@ -832,6 +832,39 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
 
     expect(plan.lanes).toEqual([]);
+  });
+
+  it("fails closed when a frozen target scenario contract is not a literal set", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-indirect-scenario-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(
+      assertionsFile,
+      'const supported = ["base"];\nconst SCENARIOS = new Set(supported);\n',
+    );
+
+    expect(() =>
+      planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorScenarios: "reported-issues",
+        upgradeSurvivorTargetRoot: targetRoot,
+      }),
+    ).toThrow("expected const SCENARIOS = new Set([<string literals>])");
+  });
+
+  it("fails closed when a frozen target scenario contract is mutable", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-mutable-scenario-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(assertionsFile, 'let SCENARIOS = new Set(["base"]);\n');
+
+    expect(() =>
+      planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorScenarios: "reported-issues",
+        upgradeSurvivorTargetRoot: targetRoot,
+      }),
+    ).toThrow("expected const SCENARIOS = new Set([<string literals>])");
   });
 
   it("skips plugin dependency cleanup for baselines without packaged plugin dirs", () => {

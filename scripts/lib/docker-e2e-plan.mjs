@@ -3,6 +3,7 @@
 // lane plan. It intentionally does not define scenario commands.
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import ts from "typescript";
 import {
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
   DEFAULT_LIVE_RETRIES,
@@ -102,11 +103,53 @@ function filterUpgradeSurvivorScenariosForTarget(scenarios, targetRoot) {
     return [];
   }
   const assertionsSource = readFileSync(assertionsFile, "utf8");
-  const scenariosInitializer =
-    /const SCENARIOS = new Set\(\[([\s\S]*?)\]\);/u.exec(assertionsSource)?.[1] ?? "";
-  const supportedScenarios = new Set(
-    [...scenariosInitializer.matchAll(/"([^"]+)"/gu)].map((match) => match[1]),
+  const sourceFile = ts.createSourceFile(
+    assertionsFile,
+    assertionsSource,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
   );
+  const parseDiagnostic = sourceFile.parseDiagnostics[0];
+  if (parseDiagnostic) {
+    throw new Error(
+      `cannot parse frozen upgrade-survivor scenarios from ${assertionsFile}: ${ts.flattenDiagnosticMessageText(parseDiagnostic.messageText, "\n")}`,
+    );
+  }
+  let scenarioDeclaration;
+  for (const statement of sourceFile.statements) {
+    if (
+      !ts.isVariableStatement(statement) ||
+      (statement.declarationList.flags & ts.NodeFlags.Const) === 0
+    ) {
+      continue;
+    }
+    scenarioDeclaration = statement.declarationList.declarations.find(
+      (declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === "SCENARIOS",
+    );
+    if (scenarioDeclaration) {
+      break;
+    }
+  }
+  const initializer = scenarioDeclaration?.initializer;
+  const scenarioArray =
+    initializer &&
+    ts.isNewExpression(initializer) &&
+    ts.isIdentifier(initializer.expression) &&
+    initializer.expression.text === "Set" &&
+    initializer.arguments?.length === 1 &&
+    ts.isArrayLiteralExpression(initializer.arguments[0])
+      ? initializer.arguments[0]
+      : undefined;
+  if (
+    !scenarioArray ||
+    scenarioArray.elements.some((element) => !ts.isStringLiteralLike(element))
+  ) {
+    throw new Error(
+      `cannot read frozen upgrade-survivor scenarios from ${assertionsFile}: expected const SCENARIOS = new Set([<string literals>])`,
+    );
+  }
+  const supportedScenarios = new Set(scenarioArray.elements.map((element) => element.text));
   return scenarios.filter((scenario) => supportedScenarios.has(scenario));
 }
 
