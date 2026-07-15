@@ -34,6 +34,16 @@ function buildResumeMessage(
   recoveredUserMessage?: string,
   hasPendingToolCalls?: boolean,
 ): string {
+  // Pending final delivery takes precedence over recovered request replay:
+  // the agent produced a complete response before the restart, so deliver
+  // that rather than redoing work.
+  const sanitizedPendingText =
+    typeof pendingFinalDeliveryText === "string"
+      ? sanitizePendingFinalDeliveryText(pendingFinalDeliveryText)
+      : "";
+  if (sanitizedPendingText) {
+    return `${RESTART_RECOVERY_RESUME_MESSAGE}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`;
+  }
   if (recoveredUserMessage) {
     // Delimit the recovered user text inside an untrusted prompt-data block so
     // it cannot blend with the system recovery instruction or the idempotency
@@ -61,13 +71,6 @@ function buildResumeMessage(
       idempotencyGuard +
       "Continue from the existing transcript. Do not ask the user to repeat themselves."
     );
-  }
-  const sanitizedPendingText =
-    typeof pendingFinalDeliveryText === "string"
-      ? sanitizePendingFinalDeliveryText(pendingFinalDeliveryText)
-      : "";
-  if (sanitizedPendingText) {
-    return `${RESTART_RECOVERY_RESUME_MESSAGE}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`;
   }
   return RESTART_RECOVERY_RESUME_MESSAGE;
 }
