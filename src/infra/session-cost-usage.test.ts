@@ -17,6 +17,10 @@ import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
 import * as formatDatetime from "./format-time/format-datetime.js";
 import {
+  acquireSessionCostUsageRefreshLock,
+  isSessionCostUsageRefreshRunning,
+} from "./session-cost-usage-cache.sqlite.js";
+import {
   discoverAllSessions,
   loadCostUsageSummary,
   loadCostUsageSummaryFromCache,
@@ -2115,6 +2119,84 @@ example
     const logs = await loadSessionLogs({ sessionFile, limit: 2 });
 
     expect(logs?.map((log) => log.content)).toEqual(["third", "fourth"]);
+  });
+});
+
+describe("usage-cost background refresh", () => {
+  const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-usage-refresh-" });
+
+  it("completes a background refresh for a first-time agent without hanging", async () => {
+    const root = await suiteRootTracker.make("first-time");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root, HOME: root }, async () => {
+      const t0 = Date.now();
+      const s = await loadCostUsageSummaryFromCache({
+        startMs: Date.now() - 86_400_000,
+        endMs: Date.now(),
+        agentId: "proof-background-1",
+        config: {},
+        requestRefresh: true,
+        refreshMode: "background",
+      });
+      const ms = Date.now() - t0;
+
+      // First-time agent with no transcripts: the cache is empty but
+      // the call must not hang or throw. A background refresh is queued
+      // through the Promise.race path.
+      expect(s).toBeDefined();
+      expect(s.totals).toBeDefined();
+      expect(s.totals.input).toBe(0);
+      expect(ms).toBeLessThan(60_000);
+    });
+  });
+
+  it("does not deadlock when called again before the first refresh settles", async () => {
+    const root = await suiteRootTracker.make("concurrent");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root, HOME: root }, async () => {
+      // First call starts a background refresh.
+      await loadCostUsageSummaryFromCache({
+        startMs: Date.now() - 86_400_000,
+        endMs: Date.now(),
+        agentId: "proof-background-2",
+        config: {},
+        requestRefresh: true,
+        refreshMode: "background",
+      });
+
+      // Second call — refresh may still be queued/scheduled. Must not
+      // deadlock even with the same agent id.
+      const t0 = Date.now();
+      const s = await loadCostUsageSummaryFromCache({
+        startMs: Date.now() - 86_400_000,
+        endMs: Date.now(),
+        agentId: "proof-background-2",
+        config: {},
+        requestRefresh: true,
+        refreshMode: "background",
+      });
+      const ms = Date.now() - t0;
+
+      expect(s).toBeDefined();
+      expect(ms).toBeLessThan(60_000);
+    });
+  });
+
+  it("correctly reports running state across lock acquire and release", async () => {
+    const root = await suiteRootTracker.make("lock-lifecycle");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root, HOME: root }, async () => {
+      // Before any lock: no refresh running.
+      expect(isSessionCostUsageRefreshRunning("proof-lock-1")).toBe(false);
+
+      const held = acquireSessionCostUsageRefreshLock("proof-lock-1");
+      expect(held.acquired).toBe(true);
+      // While lock is held: refresh is running.
+      expect(isSessionCostUsageRefreshRunning("proof-lock-1")).toBe(true);
+      // Another caller receives busy.
+      expect(acquireSessionCostUsageRefreshLock("proof-lock-1").acquired).toBe(false);
+
+      held.release();
+      // After release: no longer running.
+      expect(isSessionCostUsageRefreshRunning("proof-lock-1")).toBe(false);
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -147,6 +147,12 @@ function parseRefreshLock(raw: string | null): SessionCostUsageRefreshLock | nul
   }
 }
 
+/** A healthy refresh scan completes in well under 2 minutes. A lock older than
+ *  this threshold is considered stale regardless of its pid — it was leaked by
+ *  an in-process restart (same pid, abandoned holder) or a hung I/O operation
+ *  whose queue-level timeout already released the queue (#103910). */
+const STALE_REFRESH_LOCK_THRESHOLD_MS = 2 * 60_000;
+
 function isProcessRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -156,10 +162,20 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+function isRefreshLockLive(lock: SessionCostUsageRefreshLock): boolean {
+  if (!isProcessRunning(lock.pid)) {
+    return false;
+  }
+  // A lock held past the threshold is dead regardless of pid — the holder
+  // either abandoned it (in-process restart) or is stuck (I/O hang whose
+  // queue-level timeout already released state).
+  return Date.now() - lock.startedAt <= STALE_REFRESH_LOCK_THRESHOLD_MS;
+}
+
 export function isSessionCostUsageRefreshRunning(agentId?: string, databasePath?: string): boolean {
   const raw = readCacheValue(agentId, REFRESH_LOCK_KEY, databasePath);
   const lock = parseRefreshLock(raw);
-  if (lock && isProcessRunning(lock.pid)) {
+  if (lock && isRefreshLockLive(lock)) {
     return true;
   }
   if (raw !== null) {
@@ -184,7 +200,7 @@ export function acquireSessionCostUsageRefreshLock(
   const previousLock = parseRefreshLock(previousRaw);
   // Process liveness is resolved before BEGIN. The transaction only compares
   // the authoritative row and commits the prepared replacement synchronously.
-  const previousOwnerIsRunning = previousLock ? isProcessRunning(previousLock.pid) : false;
+  const previousOwnerIsRunning = previousLock ? isRefreshLockLive(previousLock) : false;
   const lock: SessionCostUsageRefreshLock = {
     pid: process.pid,
     startedAt: Date.now(),

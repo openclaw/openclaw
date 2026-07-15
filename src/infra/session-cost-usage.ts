@@ -122,9 +122,18 @@ type UsageCostRefreshState = {
   running: boolean;
   sessionsDir: string;
   timer?: ReturnType<typeof setTimeout>;
+  /** Consecutive timeout/busy cycles for progressive backoff. */
+  consecutiveStalls: number;
 };
 
 type UsageCostRefreshResult = "refreshed" | "busy";
+
+/** Individual refresh batch must not hang indefinitely. If a scan or write
+ *  stalls past this window the queue releases running, keeps pending files,
+ *  and retries with progressive backoff (#103910). */
+const USAGE_REFRESH_BATCH_TIMEOUT_MS = 45_000;
+const USAGE_REFRESH_MAX_BACKOFF_MS = 30_000;
+const USAGE_REFRESH_BASE_BACKOFF_MS = 50;
 
 const usageCostRefreshes = new Map<string, UsageCostRefreshState>();
 
@@ -1950,6 +1959,7 @@ function requestCostUsageCacheRefresh(params?: {
     pendingSessionFiles: new Set(),
     running: false,
     sessionsDir: resolveSessionTranscriptsDirForAgent(params?.agentId),
+    consecutiveStalls: 0,
   };
   mergeUsageCostRefreshRequest(state, params);
   usageCostRefreshes.set(refreshKey, state);
@@ -2000,36 +2010,73 @@ async function runQueuedUsageCostRefresh(
   state: UsageCostRefreshState,
 ): Promise<void> {
   state.running = true;
-  let retryDelayMs = 0;
+  let retryDelayMs = USAGE_REFRESH_BASE_BACKOFF_MS;
   try {
     while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
       const fullRefreshRequested = state.fullRefreshRequested;
-      const sessionFiles = fullRefreshRequested ? [] : [...state.pendingSessionFiles];
-      if (!fullRefreshRequested) {
-        state.pendingSessionFiles.clear();
-      }
       state.fullRefreshRequested = false;
-      const result = await refreshCostUsageCacheForAgent({
-        config: state.config,
-        agentId: state.agentId,
-        databasePath: state.databasePath,
-        sessionsDir: state.sessionsDir,
-        sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
-      });
-      if (result === "busy") {
-        if (fullRefreshRequested) {
-          state.fullRefreshRequested = true;
-        } else {
-          for (const sessionFile of sessionFiles) {
-            state.pendingSessionFiles.add(sessionFile);
-          }
-        }
-        retryDelayMs = 50;
+      // Snapshot the pending set before the async I/O batch so a timeout or
+      // failure does not lose work: only drain concrete entries after the
+      // batch succeeds (#103910).
+      const snapshot = fullRefreshRequested
+        ? []
+        : [...state.pendingSessionFiles].slice(0, USAGE_COST_CACHE_CHECKPOINT_FILES);
+
+      const result = await Promise.race([
+        refreshCostUsageCacheForAgent({
+          config: state.config,
+          agentId: state.agentId,
+          databasePath: state.databasePath,
+          sessionsDir: state.sessionsDir,
+          sessionFiles: fullRefreshRequested ? undefined : snapshot,
+        }),
+        new Promise<"timed_out">((resolve) => {
+          setTimeout(resolve, USAGE_REFRESH_BATCH_TIMEOUT_MS, "timed_out").unref?.();
+        }),
+      ]);
+
+      if (result === "timed_out") {
+        // The batch stalled past the timeout window. Keep every snapshot file
+        // in pending for the next retry cycle and back off progressively.
+        logger.warn(
+          `background refresh timed out for agent ${state.agentId ?? "default"} (${snapshot.length} files pending)`,
+        );
+        state.consecutiveStalls += 1;
+        retryDelayMs = Math.min(
+          USAGE_REFRESH_BASE_BACKOFF_MS * 2 ** (state.consecutiveStalls - 1),
+          USAGE_REFRESH_MAX_BACKOFF_MS,
+        );
         break;
+      }
+
+      if (result === "busy") {
+        state.consecutiveStalls += 1;
+        retryDelayMs = Math.min(
+          USAGE_REFRESH_BASE_BACKOFF_MS * 2 ** (state.consecutiveStalls - 1),
+          USAGE_REFRESH_MAX_BACKOFF_MS,
+        );
+        break;
+      }
+
+      // Batch succeeded. Drain the processed files from pending and reset
+      // the stall counter so the next cycle starts fresh.
+      state.consecutiveStalls = 0;
+      retryDelayMs = 0;
+      for (const sessionFile of snapshot) {
+        state.pendingSessionFiles.delete(sessionFile);
+      }
+      if (!fullRefreshRequested && state.pendingSessionFiles.size === 0) {
+        state.fullRefreshRequested = false;
       }
     }
   } catch (error) {
+    // Leave pending files untouched so the next retry re-processes them.
     logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
+    state.consecutiveStalls += 1;
+    retryDelayMs = Math.min(
+      USAGE_REFRESH_BASE_BACKOFF_MS * 2 ** (state.consecutiveStalls - 1),
+      USAGE_REFRESH_MAX_BACKOFF_MS,
+    );
   } finally {
     state.running = false;
     if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
