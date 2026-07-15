@@ -217,14 +217,14 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
       storePath: "/tmp/sessions.sqlite",
     });
 
-    expect(activeSessionStore.main).toBe(staleAutoEntry);
+    expect(activeSessionStore.main).not.toBe(staleAutoEntry);
     expect(activeSessionStore.main).toMatchObject({
       authProfileOverride: "openai:fallback",
       authProfileOverrideSource: "user",
       providerOverride: probe.fallbackProvider,
       modelOverride: probe.fallbackModel,
-      updatedAt: 3,
     });
+    expect(activeSessionStore.main.updatedAt).toBeGreaterThanOrEqual(3);
   });
 
   it("preserves a value-identical same-session cache replacement", async () => {
@@ -400,6 +400,7 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
         const persistedEntry = structuredClone(staleAutoEntry);
         const patch = await update(persistedEntry);
         staleAutoEntry.cliSessionBindings!.codex!.sessionId = "new-cli-session";
+        staleAutoEntry.updatedAt = 2;
         return { ...persistedEntry, ...(patch as Partial<SessionEntry>) };
       },
     );
@@ -418,8 +419,9 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
       storePath: "/tmp/sessions.sqlite",
     });
 
-    expect(activeSessionStore.main).toBe(staleAutoEntry);
+    expect(activeSessionStore.main).not.toBe(staleAutoEntry);
     expect(activeSessionStore.main.cliSessionBindings?.codex?.sessionId).toBe("new-cli-session");
-    expect(activeSessionStore.main.modelOverride).toBe(probe.fallbackModel);
+    expect(activeSessionStore.main.updatedAt).toBeGreaterThanOrEqual(2);
+    expect(activeSessionStore.main.modelOverride).toBeUndefined();
   });
 });

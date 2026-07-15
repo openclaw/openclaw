@@ -9,11 +9,20 @@ import {
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import type { FollowupRun } from "./queue.js";
 
 function sessionEntryMatchesSnapshot(entry: SessionEntry, snapshot: SessionEntry): boolean {
   return isDeepStrictEqual(entry, snapshot);
+}
+
+function sessionEntryOnlyUpdatedAtChanged(entry: SessionEntry, snapshot: SessionEntry): boolean {
+  if (entry.updatedAt === snapshot.updatedAt) {
+    return false;
+  }
+  const entryWithoutUpdatedAt = { ...entry, updatedAt: snapshot.updatedAt };
+  return isDeepStrictEqual(entryWithoutUpdatedAt, snapshot);
 }
 
 /** Decides whether to retry after rechecking auto-fallback primary probe state. */
@@ -161,12 +170,26 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
     return;
   }
   const currentEntry = currentCachedEntry ?? (cachedSessionEntry ? undefined : activeSessionEntry);
-  if (!currentEntry || !sessionEntryMatchesSnapshot(currentEntry, activeSessionEntryBeforeUpdate)) {
+  if (!currentEntry) {
     return;
   }
   if (authoritativeEntry) {
-    params.activeSessionStore[params.sessionKey] = authoritativeEntry;
-  } else {
+    if (sessionEntryMatchesSnapshot(currentEntry, activeSessionEntryBeforeUpdate)) {
+      params.activeSessionStore[params.sessionKey] = authoritativeEntry;
+      return;
+    }
+    if (
+      currentEntry.sessionId !== activeSessionEntryBeforeUpdate.sessionId ||
+      sessionEntryOnlyUpdatedAtChanged(currentEntry, activeSessionEntryBeforeUpdate)
+    ) {
+      return;
+    }
+    params.activeSessionStore[params.sessionKey] = mergeSessionSnapshotChanges({
+      initial: activeSessionEntryBeforeUpdate,
+      next: authoritativeEntry,
+      current: currentEntry,
+    });
+  } else if (sessionEntryMatchesSnapshot(currentEntry, activeSessionEntryBeforeUpdate)) {
     delete params.activeSessionStore[params.sessionKey];
   }
 }
