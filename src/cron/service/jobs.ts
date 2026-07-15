@@ -136,19 +136,9 @@ function computeStaggeredCronNextRunAtMs(job: CronJob, nowMs: number) {
 
   // Shift the schedule cursor backwards by the per-job offset so we can still
   // target the current schedule window if its staggered slot has not passed yet.
-  let cursorMs = Math.max(0, nowMs - offsetMs);
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const baseNext = computeNextRunAtMs(job.schedule, cursorMs);
-    if (baseNext === undefined) {
-      return undefined;
-    }
-    const shifted = baseNext + offsetMs;
-    if (shifted > nowMs) {
-      return shifted;
-    }
-    cursorMs = Math.max(cursorMs + 1, baseNext + 1_000);
-  }
-  return undefined;
+  const cursorMs = Math.max(0, nowMs - offsetMs);
+  const baseNext = computeNextRunAtMs(job.schedule, cursorMs);
+  return baseNext !== undefined ? baseNext + offsetMs : undefined;
 }
 
 function computeStaggeredCronPreviousRunAtMs(job: CronJob, nowMs: number) {
@@ -164,19 +154,9 @@ function computeStaggeredCronPreviousRunAtMs(job: CronJob, nowMs: number) {
 
   // Shift the cursor backwards by the same per-job offset used for next-run
   // math so previous-run lookup matches the effective staggered schedule.
-  let cursorMs = Math.max(0, nowMs - offsetMs);
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const basePrevious = computePreviousRunAtMs(job.schedule, cursorMs);
-    if (basePrevious === undefined) {
-      return undefined;
-    }
-    const shifted = basePrevious + offsetMs;
-    if (shifted <= nowMs) {
-      return shifted;
-    }
-    cursorMs = Math.max(0, basePrevious - 1_000);
-  }
-  return undefined;
+  const cursorMs = Math.max(0, nowMs - offsetMs);
+  const basePrevious = computePreviousRunAtMs(job.schedule, cursorMs);
+  return basePrevious !== undefined ? basePrevious + offsetMs : undefined;
 }
 
 function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
