@@ -60,7 +60,6 @@ describe("session.maintenance.pruneAfter zero-duration migration", () => {
 
   it("detects numeric zero", () => {
     expect(rule.match?.({ pruneAfter: 0 }, {} as Record<string, unknown>)).toBe(true);
-    expect(rule.match?.({ pruneAfter: 0.0 }, {} as Record<string, unknown>)).toBe(true);
   });
 
   it("does not match numeric positive durations", () => {
@@ -96,15 +95,13 @@ describe("session.maintenance.pruneAfter zero-duration migration", () => {
   });
 
   it("removes numeric zero and reports change", () => {
-    for (const val of [0, 0.0]) {
-      const changes: string[] = [];
-      const raw = { session: { maintenance: { pruneAfter: val } } };
-      migration.apply(raw, changes);
+    const changes: string[] = [];
+    const raw = { session: { maintenance: { pruneAfter: 0 } } };
+    migration.apply(raw, changes);
 
-      expect(raw.session?.maintenance).not.toHaveProperty("pruneAfter");
-      expect(changes).toHaveLength(1);
-      expect(changes[0]).toContain(String(val));
-    }
+    expect(raw.session?.maintenance).not.toHaveProperty("pruneAfter");
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toContain("0");
   });
 
   it("preserves numeric positive values", () => {
