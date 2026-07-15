@@ -1493,6 +1493,7 @@ export function createExecTool(
         sessionKey: defaults?.sessionKey ?? context?.hookContext?.sessionKey,
         messageProvider: defaults?.messageProvider,
         channelId: defaults?.currentChannelId ?? context?.hookContext?.channelId,
+        accountId: defaults?.accountId ?? context?.hookContext?.accountId,
         ...(defaults?.channelContext ? { channelContext: defaults.channelContext } : {}),
       },
     );
