@@ -1,10 +1,9 @@
 // Unit tests for agent-behavior governance policy.
 
+import { describe, it, expect } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { describe, it, assert } from "../test-utils/testing.js";
 import {
   type BehaviorPolicyRule,
-  type ResolvedBehaviorRule,
   resolveBehaviorPolicy,
   resolveBehaviorRules,
   buildBehaviorPolicyPrompt,
@@ -39,59 +38,59 @@ function makeConfig(rules?: BehaviorPolicyRule[], exec?: Record<string, unknown>
 describe("behavior-policy", () => {
   describe("resolveBehaviorPolicy", () => {
     it("returns undefined when config is undefined", () => {
-      assert.strictEqual(resolveBehaviorPolicy(undefined), undefined);
+      expect(resolveBehaviorPolicy(undefined)).toBeUndefined();
     });
 
     it("returns undefined when behaviorPolicy is absent", () => {
-      assert.strictEqual(resolveBehaviorPolicy({}), undefined);
+      expect(resolveBehaviorPolicy({})).toBeUndefined();
     });
 
     it("returns undefined when behaviorPolicy is not enabled", () => {
       const cfg = {
         security: { behaviorPolicy: { enabled: false } },
       } as unknown as OpenClawConfig;
-      assert.strictEqual(resolveBehaviorPolicy(cfg), undefined);
+      expect(resolveBehaviorPolicy(cfg)).toBeUndefined();
     });
 
     it("returns the policy config when enabled", () => {
       const cfg = makeConfig([SAMPLE_RULE]);
       const policy = resolveBehaviorPolicy(cfg);
-      assert.ok(policy);
-      assert.strictEqual(policy.enabled, true);
+      expect(policy).toBeDefined();
+      expect(policy!.enabled).toBe(true);
     });
   });
 
   describe("resolveBehaviorRules", () => {
     it("returns undefined when policy is disabled", () => {
-      assert.strictEqual(resolveBehaviorRules(undefined), undefined);
+      expect(resolveBehaviorRules(undefined)).toBeUndefined();
     });
 
     it("returns undefined when no rules are defined", () => {
       const cfg = {
         security: { behaviorPolicy: { enabled: true } },
       } as unknown as OpenClawConfig;
-      assert.strictEqual(resolveBehaviorRules(cfg), undefined);
+      expect(resolveBehaviorRules(cfg)).toBeUndefined();
     });
 
     it("returns resolved rules with defaults applied", () => {
       const cfg = makeConfig([SAMPLE_RULE, SAMPLE_RULE_GUIDE]);
       const rules = resolveBehaviorRules(cfg);
-      assert.ok(rules);
-      assert.strictEqual(rules.length, 2);
-      assert.strictEqual(rules[0].id, "test-no-secrets");
-      assert.strictEqual(rules[0].mode, "enforce");
-      assert.strictEqual(rules[1].id, "test-politeness");
-      assert.strictEqual(rules[1].mode, "guide");
+      expect(rules).toBeDefined();
+      expect(rules!).toHaveLength(2);
+      expect(rules![0].id).toBe("test-no-secrets");
+      expect(rules![0].mode).toBe("enforce");
+      expect(rules![1].id).toBe("test-politeness");
+      expect(rules![1].mode).toBe("guide");
     });
   });
 
   describe("buildBehaviorPolicyPrompt", () => {
     it("returns empty string for undefined rules", () => {
-      assert.strictEqual(buildBehaviorPolicyPrompt(undefined), "");
+      expect(buildBehaviorPolicyPrompt(undefined)).toBe("");
     });
 
     it("returns empty string for empty rules", () => {
-      assert.strictEqual(buildBehaviorPolicyPrompt([]), "");
+      expect(buildBehaviorPolicyPrompt([])).toBe("");
     });
 
     it("builds enforce block for a single rule", () => {
@@ -104,9 +103,9 @@ describe("behavior-policy", () => {
         },
       ];
       const prompt = buildBehaviorPolicyPrompt(rules);
-      assert.ok(prompt.includes('<enforce id="r1">'));
-      assert.ok(prompt.includes("Do the thing"));
-      assert.ok(prompt.includes("MUST comply"));
+      expect(prompt).toContain('<enforce id="r1">');
+      expect(prompt).toContain("Do the thing");
+      expect(prompt).toContain("MUST comply");
     });
 
     it("uses guide tag for guide-mode rules", () => {
@@ -114,8 +113,8 @@ describe("behavior-policy", () => {
         { id: "r2", description: "", enforce: "Be polite", mode: "guide" },
       ];
       const prompt = buildBehaviorPolicyPrompt(rules);
-      assert.ok(prompt.includes('<guide id="r2">'));
-      assert.ok(prompt.includes("Be polite"));
+      expect(prompt).toContain('<guide id="r2">');
+      expect(prompt).toContain("Be polite");
     });
 
     it("includes multiple rules", () => {
@@ -124,8 +123,8 @@ describe("behavior-policy", () => {
         { id: "b", description: "", enforce: "Rule B", mode: "guide" },
       ];
       const prompt = buildBehaviorPolicyPrompt(rules);
-      assert.ok(prompt.includes("Rule A"));
-      assert.ok(prompt.includes("Rule B"));
+      expect(prompt).toContain("Rule A");
+      expect(prompt).toContain("Rule B");
     });
 
     it("escapes XML in rule content", () => {
@@ -138,8 +137,8 @@ describe("behavior-policy", () => {
         },
       ];
       const prompt = buildBehaviorPolicyPrompt(rules);
-      assert.ok(prompt.includes("&lt;script&gt;"));
-      assert.ok(!prompt.includes("<script>"));
+      expect(prompt).toContain("&lt;script&gt;");
+      expect(prompt).not.toContain("<script>");
     });
   });
 
@@ -149,7 +148,7 @@ describe("behavior-policy", () => {
         rules: undefined,
         output: "hello",
       });
-      assert.strictEqual(result.kind, "pass");
+      expect(result.kind).toBe("pass");
     });
 
     it("returns pass when rules are empty", async () => {
@@ -157,59 +156,63 @@ describe("behavior-policy", () => {
         rules: [],
         output: "hello",
       });
-      assert.strictEqual(result.kind, "pass");
+      expect(result.kind).toBe("pass");
     });
 
     it("returns pass for clean output with enforce rules", async () => {
-      const rules: ResolvedBehaviorRule[] = [
+      const rules = [
         {
           id: "no-secrets",
           description: "",
           enforce: "Never disclose API keys",
-          mode: "enforce",
+          mode: "enforce" as const,
         },
       ];
       const result = await validateBehaviorOutput({
         rules,
         output: "Here is some general help.",
       });
-      assert.strictEqual(result.kind, "pass");
+      expect(result.kind).toBe("pass");
     });
 
     it("returns pass with violations suggestion for potential rule conflicts", async () => {
-      const rules: ResolvedBehaviorRule[] = [
+      const rules = [
         {
           id: "no-secrets",
           description: "",
           enforce: "Never disclose API keys",
-          mode: "enforce",
+          mode: "enforce" as const,
         },
       ];
       const result = await validateBehaviorOutput({
         rules,
         output: "My API key is sk-abc123",
       });
-      assert.strictEqual(result.kind, "pass");
-      assert.ok(result.violations);
-      assert.strictEqual(result.violations.length, 1);
-      assert.strictEqual(result.violations[0].ruleId, "no-secrets");
+      expect(result.kind).toBe("pass");
+      if (result.kind === "pass") {
+        expect(result.violations).toBeDefined();
+        expect(result.violations!.length).toBe(1);
+        expect(result.violations![0].ruleId).toBe("no-secrets");
+      }
     });
 
     it("skips heuristic check for guide-mode rules", async () => {
-      const rules: ResolvedBehaviorRule[] = [
+      const rules = [
         {
           id: "polite",
           description: "",
           enforce: "Never be rude",
-          mode: "guide",
+          mode: "guide" as const,
         },
       ];
       const result = await validateBehaviorOutput({
         rules,
         output: "You are an idiot",
       });
-      assert.strictEqual(result.kind, "pass");
-      assert.strictEqual(result.violations?.length ?? 0, 0);
+      expect(result.kind).toBe("pass");
+      if (result.kind === "pass") {
+        expect(result.violations?.length ?? 0).toBe(0);
+      }
     });
   });
 });

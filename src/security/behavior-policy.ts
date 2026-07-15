@@ -146,17 +146,6 @@ export type BehaviorPolicyViolation = {
   evidence?: string;
 };
 
-export type BehaviorPolicyEnforcement =
-  | {
-      blocked: false;
-      violations?: BehaviorPolicyViolation[];
-    }
-  | {
-      blocked: true;
-      violations: BehaviorPolicyViolation[];
-      reason: string;
-    };
-
 export type BehaviorPolicyOutputResult =
   | { kind: "pass"; violations?: BehaviorPolicyViolation[] }
   | { kind: "block"; reason: string; violations: BehaviorPolicyViolation[] }
