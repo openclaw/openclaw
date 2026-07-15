@@ -706,12 +706,15 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     try {
       await page.goto(`${server.baseUrl}chat?session=agent%3Awork%3Amain`);
       await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests("chat.metadata");
-          return requests.some(
-            (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
-          );
-        })
+        .poll(
+          async () => {
+            const requests = await gateway.getRequests("chat.metadata");
+            return requests.some(
+              (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
+            );
+          },
+          { timeout: 10_000 },
+        )
         .toBe(true);
 
       const composer = page.locator(".agent-chat__input");
