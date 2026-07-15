@@ -446,13 +446,23 @@ describeNonWin("exec script preflight", () => {
     expect(text).toBe("ok");
   });
 
-  it("skips preflight file reads for script paths outside the workdir", async () => {
+  it("validates script paths outside the workdir", async () => {
     await withTempDir("openclaw-exec-preflight-parent-", async (parent) => {
       const outsidePath = path.join(parent, "outside.js");
       const workdir = path.join(parent, "workdir");
       await fs.mkdir(workdir, { recursive: true });
-      await fs.writeFile(outsidePath, "const value = $DM_JSON;", "utf-8");
 
+      // 1. Outside script with shell bleed should be blocked
+      await fs.writeFile(outsidePath, "const value = $DM_JSON;", "utf-8");
+      await expect(
+        validateExecScriptPreflight({
+          command: "node ../outside.js",
+          workdir,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+
+      // 2. Outside script without shell bleed should be allowed
+      await fs.writeFile(outsidePath, "console.log('safe');", "utf-8");
       await expect(
         runExecPreflight({
           command: "node ../outside.js",
