@@ -264,10 +264,16 @@ export class TranscriptsStore {
       }
       throw err;
     }
-    return raw
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as TranscriptUtterance);
+    const utterances: TranscriptUtterance[] = [];
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line) continue;
+      try {
+        utterances.push(JSON.parse(line) as TranscriptUtterance);
+      } catch {
+        // Skip malformed transcript lines (matching the streaming path).
+      }
+    }
+    return utterances;
   }
 
   /** Mark a transcript session as stopped when metadata exists. */
