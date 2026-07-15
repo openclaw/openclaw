@@ -43,7 +43,7 @@ function formatEnabled(value: boolean): string {
 function formatPhaseGuide(): string {
   return [
     "- implementation detail: each sweep runs light -> REM -> deep.",
-    "- deep is the only stage that writes durable entries to MEMORY.md.",
+    "- deep archives durable excerpts and updates the compact MEMORY.md pointer.",
     "- DREAMS.md is for human-readable dreaming summaries and diary entries.",
   ].join("\n");
 }

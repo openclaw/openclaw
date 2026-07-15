@@ -78,6 +78,8 @@ describe("memory host event journal integration", () => {
       throw new Error("expected promotion event");
     }
     expect(promotionEvent.applied).toBe(1);
+    expect(promotionEvent.archivePath).toBe(applied.archivePath);
+    expect(promotionEvent.archiveRelativePath).toBe(applied.archiveRelativePath);
   });
 
   it("records skipped recall events for durable memory hits excluded from short-term promotion", async () => {

@@ -43,6 +43,10 @@ export type MemoryHostPromotionAppliedEvent = {
   type: "memory.promotion.applied";
   timestamp: string;
   memoryPath: string;
+  // Optional for compatibility with historical event records emitted before
+  // archive-first promotion added explicit archive destinations.
+  archivePath?: string;
+  archiveRelativePath?: string;
   applied: number;
   candidates: Array<{
     key: string;

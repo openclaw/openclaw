@@ -3,13 +3,13 @@ summary: "CLI reference for `openclaw memory` (status/index/search/promote/promo
 read_when:
   - You want to index or search semantic memory
   - You're debugging memory availability or indexing
-  - You want to promote recalled short-term memory into `MEMORY.md`
+  - You want to archive promoted short-term memory while keeping `MEMORY.md` compact
 title: "Memory"
 ---
 
 # `openclaw memory`
 
-Manage semantic memory indexing, search, and promotion into `MEMORY.md`.
+Manage semantic memory indexing, search, and archive-backed promotion.
 Provided by the bundled `memory-core` plugin, available when
 `plugins.slots.memory` selects `memory-core` (the default). Other memory
 plugins expose their own CLI namespaces.
@@ -66,23 +66,23 @@ openclaw memory search [query] [--query <text>] [--agent <id>] [--max-results <n
 
 ## `memory promote`
 
-Rank short-term candidates from `memory/YYYY-MM-DD.md` and optionally append
-top entries to `MEMORY.md`.
+Rank short-term candidates from `memory/YYYY-MM-DD.md` and optionally archive
+top entries while keeping a compact pointer in `MEMORY.md`.
 
 ```bash
 openclaw memory promote [--agent <id>] [--limit <n>] [--min-score <n>] \
   [--min-recall-count <n>] [--min-unique-queries <n>] [--apply] [--include-promoted] [--json]
 ```
 
-| Flag                       | Default      | Effect                                                            |
-| -------------------------- | ------------ | ----------------------------------------------------------------- |
-| `--limit <n>`              |              | Max candidates to return/apply.                                   |
-| `--min-score <n>`          | `0.75`       | Minimum weighted promotion score.                                 |
-| `--min-recall-count <n>`   | `3`          | Minimum recall count required.                                    |
-| `--min-unique-queries <n>` | `2`          | Minimum distinct query count required.                            |
-| `--apply`                  | preview only | Append selected candidates to `MEMORY.md` and mark them promoted. |
-| `--include-promoted`       |              | Include candidates already promoted in previous cycles.           |
-| `--json`                   |              | Print JSON.                                                       |
+| Flag                       | Default      | Effect                                                                               |
+| -------------------------- | ------------ | ------------------------------------------------------------------------------------ |
+| `--limit <n>`              |              | Max candidates to return/apply.                                                      |
+| `--min-score <n>`          | `0.75`       | Minimum weighted promotion score.                                                    |
+| `--min-recall-count <n>`   | `3`          | Minimum recall count required.                                                       |
+| `--min-unique-queries <n>` | `2`          | Minimum distinct query count required.                                               |
+| `--apply`                  | preview only | Archive selected candidates, update the `MEMORY.md` pointer, and mark them promoted. |
+| `--include-promoted`       |              | Include candidates already promoted in previous cycles.                              |
+| `--json`                   |              | Print JSON.                                                                          |
 
 These CLI defaults differ from the scheduled dreaming sweep's deep-phase
 thresholds (see [Dreaming](#dreaming) below); pass explicit flags to match
@@ -94,6 +94,26 @@ from both memory recalls and daily-ingestion passes, plus a light/REM phase
 reinforcement boost for repeated dreaming revisits. Before writing, promotion
 re-reads the live daily note, so edits or deletions to short-term snippets
 since ranking are respected instead of promoting from a stale snapshot.
+
+Applied details are written to
+`memory/archived/YYYY-Q#/memory-promoted-short-term-dump-YYYY-MM-DD.md`.
+`MEMORY.md` keeps one managed pointer to the latest dump instead of cumulative
+dated promotion blocks.
+
+The deprecated `memoryFileMaxChars` input remains accepted for compatibility,
+but it no longer limits archive retention, disk usage, or locally indexed
+promotion history.
+
+<Warning>
+Promotion archives are durable memory history and may contain sensitive
+excerpts. If the workspace is version-controlled, decide deliberately whether
+these files belong in the repository. For local-only history, ignore
+`memory/archived/*/memory-promoted-short-term-dump-*.md`.
+Ignoring archives in version control does not stop local memory indexing, and
+archives inherit the workspace's existing memory-tree visibility. Keep the
+generated directory and filename pattern when relying on marker reconciliation;
+renamed or moved dump files are not scanned as managed promotion archives.
+</Warning>
 
 ## `memory promote-explain`
 
@@ -144,7 +164,8 @@ openclaw memory rem-backfill --rollback [--rollback-short-term] [--json]
 Dreaming is the background memory consolidation system with three cooperative
 phases, run in order on one schedule: **light** (sort/stage short-term
 material), **REM** (reflect and surface themes), **deep** (promote durable
-facts into `MEMORY.md`). Only deep writes to `MEMORY.md`.
+excerpts into archives and update the compact `MEMORY.md` pointer). Only deep
+writes these durable promotion outputs.
 
 - Enable with `plugins.entries.memory-core.config.dreaming.enabled: true`
   (default `false`); `memory-core` auto-manages the sweep cron job, no manual

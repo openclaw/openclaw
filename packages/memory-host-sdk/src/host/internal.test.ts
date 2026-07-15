@@ -176,6 +176,20 @@ describe("memory host SDK package internals", () => {
     ]);
   });
 
+  it("includes nested promotion archives in memory indexing", async () => {
+    const tmpDir = getTmpDir();
+    const archiveDir = path.join(tmpDir, "memory", "archived", "2026-Q2");
+    const archivePath = path.join(archiveDir, "memory-promoted-short-term-dump-2026-04-30.md");
+    fsSync.mkdirSync(archiveDir, { recursive: true });
+    fsSync.writeFileSync(archivePath, "# Promoted memory archive\n");
+
+    const files = await listMemoryFiles(tmpDir);
+
+    expect(files.map((file) => path.relative(tmpDir, file))).toContain(
+      path.join("memory", "archived", "2026-Q2", "memory-promoted-short-term-dump-2026-04-30.md"),
+    );
+  });
+
   it("allows top-level dreams path casing variants", () => {
     expect(isMemoryPath("dreams.md")).toBe(true);
     expect(isMemoryPath("DREAMS.md")).toBe(true);

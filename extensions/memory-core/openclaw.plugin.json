@@ -152,7 +152,7 @@
                   "maxPromotedSnippetTokens": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Maximum estimated token count for each short-term recall snippet promoted into MEMORY.md. Provenance metadata remains attached to the entry."
+                    "description": "Maximum estimated token count for each archived short-term promotion excerpt. Provenance metadata remains attached to the entry."
                   },
                   "execution": {
                     "type": "object",

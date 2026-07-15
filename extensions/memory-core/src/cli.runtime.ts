@@ -1501,6 +1501,8 @@ export async function runMemoryPromote(
                 appended: applyResult.appended,
                 reconciledExisting: applyResult.reconciledExisting,
                 memoryPath: applyResult.memoryPath,
+                archivePath: applyResult.archivePath,
+                archiveRelativePath: applyResult.archiveRelativePath,
                 appliedCandidates: applyResult.appliedCandidates,
               }
             : undefined,
@@ -1551,7 +1553,7 @@ export async function runMemoryPromote(
         if (applyResult.applied > 0) {
           lines.push(
             success(
-              `Processed ${applyResult.applied} candidate(s) for ${shortenHomePath(applyResult.memoryPath)}.`,
+              `Archived ${applyResult.applied} candidate(s) to ${applyResult.archiveRelativePath.replaceAll("\\", "/")} while keeping ${shortenHomePath(applyResult.memoryPath)} compact.`,
             ),
           );
           lines.push(

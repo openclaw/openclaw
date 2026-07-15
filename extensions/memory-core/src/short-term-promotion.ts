@@ -1,5 +1,6 @@
 // Memory Core plugin module implements short term promotion behavior.
 import { createHash } from "node:crypto";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -12,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
@@ -39,7 +41,6 @@ import {
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
-import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
@@ -269,32 +270,30 @@ type ApplyShortTermPromotionsOptions = {
   nowMs?: number;
   timezone?: string;
   /**
-   * Maximum size of MEMORY.md on disk after a promotion write, in
-   * characters. When the post-write size would exceed this budget, the
-   * oldest auto-promotion sections are compacted out before write so the
-   * file stays bounded and bootstrap injection keeps reaching new
-   * sessions. Pass `0` to disable compaction. Defaults to
-   * `DEFAULT_MEMORY_FILE_MAX_CHARS`. See #73691.
+   * Deprecated compatibility knob from the former root-MEMORY promotion
+   * flow. Detailed promotion excerpts are now written to archives, leaving
+   * MEMORY.md with only a compact pointer section, so this option is ignored.
    */
   memoryFileMaxChars?: number;
   /**
-   * Maximum visible size of each promoted short-term snippet in MEMORY.md, in
-   * estimated tokens. This keeps daily journal ranges from being copied
-   * wholesale into long-term memory while preserving the candidate's provenance
-   * metadata.
+   * Maximum visible size of each promoted short-term snippet in the archive,
+   * in estimated tokens. This keeps daily journal ranges from being copied
+   * wholesale while preserving the candidate's provenance metadata.
    */
   maxPromotedSnippetTokens?: number;
 };
 
 type ApplyShortTermPromotionsResult = {
   memoryPath: string;
+  archivePath: string;
+  archiveRelativePath: string;
   applied: number;
   appended: number;
   reconciledExisting: number;
   appliedCandidates: PromotionCandidate[];
-  /** Number of older promotion sections compacted out to honor the budget. */
+  /** Number of detailed promotion sections removed from MEMORY.md into archives. */
   compactedSections: number;
-  /** Dates of the compacted promotion sections, oldest first. */
+  /** Dates of archived root promotion sections, oldest first when available. */
   compactedDates: string[];
 };
 
@@ -2289,7 +2288,7 @@ function lineRangeOverlapsDreamingFence(
       // The marker line itself is managed-block content. A relocated range
       // that includes a `<!-- openclaw:dreaming:*:start/end -->` marker would
       // build its snippet from raw lines that contain that marker text and
-      // leak it into MEMORY.md alongside any adjacent fenced content captured
+      // leak it into the durable promotion archive alongside any adjacent fenced content captured
       // by the same window. (#80613)
       if (oneIndexed >= safeStart && oneIndexed <= safeEnd) {
         return true;
@@ -2328,7 +2327,7 @@ async function rehydratePromotionCandidate(
     // Managed dreaming blocks in daily memory files are scratchwork, not durable
     // content. If rehydration lands inside an openclaw:dreaming fence (for example
     // because file edits shifted lines between ranking and apply), refuse the
-    // candidate so dream artifacts cannot be promoted into MEMORY.md.
+    // candidate so dream artifacts cannot be promoted into the durable archive.
     if (lineRangeOverlapsDreamingFence(lines, relocated.startLine, relocated.endLine)) {
       continue;
     }
@@ -2355,7 +2354,7 @@ function buildPromotionSection(
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
     const metadata = `[score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
-    // Cap only the visible MEMORY.md text. The recall store keeps the full
+    // Cap only the archived promoted excerpt. The recall store keeps the full
     // rehydrated snippet so ranking, provenance, and dream narratives remain
     // tied to the source entry instead of this presentation budget.
     lines.push(
@@ -2404,6 +2403,124 @@ function formatPromotedSnippetForMemory(rawSnippet: string, maxTokens: number): 
   return truncatePromotedSnippet(normalized || "(no snippet captured)", maxTokens);
 }
 
+// Keep detailed promotion excerpts out of root MEMORY.md by bucketing them
+// into quarterly archive dumps. The day follows the same dreaming timezone
+// used for promotion headings so the pointer and archive filename agree.
+function resolvePromotionArchiveRelativePath(nowMs: number, timezone?: string): string {
+  const sectionDate = formatMemoryDreamingDay(nowMs, timezone);
+  const year = sectionDate.slice(0, 4);
+  const month = Number(sectionDate.slice(5, 7));
+  const quarter = Number.isFinite(month) ? Math.floor((month - 1) / 3) + 1 : 1;
+  return path.join(
+    "memory",
+    "archived",
+    `${year}-Q${Math.max(1, Math.min(4, quarter))}`,
+    `memory-promoted-short-term-dump-${sectionDate}.md`,
+  );
+}
+
+function buildPromotionArchiveHeader(nowMs: number, timezone?: string): string {
+  const sectionDate = formatMemoryDreamingDay(nowMs, timezone);
+  return [
+    `# Promoted From Short-Term Memory Dump — ${sectionDate}`,
+    "",
+    `**Created:** ${sectionDate}`,
+    "**Status:** Archived reference",
+    "**Reason:** Managed short-term promotions write detailed durable excerpts to archive files so `MEMORY.md` stays index-like.",
+    "**Related:** `MEMORY.md`",
+    "",
+    "---",
+    "",
+  ].join("\n");
+}
+
+function buildPromotionPointerSection(archiveRelativePath: string): string {
+  const normalizedArchivePath = archiveRelativePath.replaceAll(path.sep, "/");
+  return [
+    "## Promoted From Short-Term Memory",
+    "",
+    "- Archive pattern: `memory/archived/YYYY-Q#/memory-promoted-short-term-dump-YYYY-MM-DD.md`.",
+    `- Latest promotion archive: \`${normalizedArchivePath}\`.`,
+    "- Retrieval: use memory search for promoted detail; do not enumerate daily dumps in root.",
+    "- Invariant: root stays index-only; detailed blocks or cumulative dated pointers are invalid managed output.",
+  ].join("\n");
+}
+
+function isManagedPromotionPointerSection(section: string): boolean {
+  return /Latest promotion archive:|Archive pattern:/i.test(section);
+}
+
+function ensurePromotionPointerSection(memoryText: string, archiveRelativePath: string): string {
+  const pointerSection = buildPromotionPointerSection(archiveRelativePath);
+  const baseText = memoryText.trimEnd().length > 0 ? memoryText.trimEnd() : "# Long-Term Memory";
+  const sectionPattern =
+    /(?:^|\n)## Promoted From Short-Term Memory(?: \([^)]+\))?\n[\s\S]*?(?=\n## |\n<!-- OPENCLAW_CACHE_BOUNDARY -->|$)/g;
+  // On first apply after upgrade, collapse existing managed promotion output
+  // into the stable pointer-only section. Unmarked human-written sections with
+  // the same heading are preserved as normal MEMORY.md content.
+  for (const match of baseText.matchAll(sectionPattern)) {
+    const section = match[0] ?? "";
+    if (!section.includes(PROMOTION_MARKER_PREFIX) && !isManagedPromotionPointerSection(section)) {
+      continue;
+    }
+    const index = match.index ?? 0;
+    const prefix = section.startsWith("\n") ? "\n" : "";
+    return `${baseText.slice(0, index)}${prefix}${pointerSection}${baseText.slice(
+      index + section.length,
+    )}\n`;
+  }
+
+  const cacheBoundary = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->";
+  const boundaryIndex = baseText.indexOf(cacheBoundary);
+  if (boundaryIndex >= 0) {
+    const before = baseText.slice(0, boundaryIndex).trimEnd();
+    const after = baseText.slice(boundaryIndex);
+    return `${before}\n\n${pointerSection}${after}\n`;
+  }
+  const headings = [...baseText.matchAll(/\n## /g)];
+  const finalHeadingIndex = headings.at(-1)?.index;
+  if (typeof finalHeadingIndex === "number" && finalHeadingIndex > 0) {
+    const before = baseText.slice(0, finalHeadingIndex).trimEnd();
+    const after = baseText.slice(finalHeadingIndex).trimStart();
+    return `${before}\n\n${pointerSection}\n\n${after}\n`;
+  }
+  return `${baseText}\n\n${pointerSection}\n`;
+}
+
+function extractPromotionSectionDates(sections: string[]): string[] {
+  const dates: string[] = [];
+  for (const section of sections) {
+    const match = section.match(/^## Promoted From Short-Term Memory \((\d{4}-\d{2}-\d{2})\)/m);
+    if (match?.[1]) {
+      dates.push(match[1]);
+    }
+  }
+  return dates;
+}
+
+function extractDetailedPromotionSections(memoryText: string): {
+  memoryText: string;
+  sections: string[];
+} {
+  const sectionPattern =
+    /(?:^|\n)## Promoted From Short-Term Memory(?: \([^)]+\))?\n[\s\S]*?(?=\n## |\n<!-- OPENCLAW_CACHE_BOUNDARY -->|$)/g;
+  const sections: string[] = [];
+  let cleaned = "";
+  let lastIndex = 0;
+  for (const match of memoryText.matchAll(sectionPattern)) {
+    const section = match[0] ?? "";
+    const index = match.index ?? 0;
+    if (!section.includes(PROMOTION_MARKER_PREFIX)) {
+      continue;
+    }
+    cleaned += memoryText.slice(lastIndex, index);
+    lastIndex = index + section.length;
+    sections.push(section.trim());
+  }
+  cleaned += memoryText.slice(lastIndex);
+  return { memoryText: cleaned.trimEnd(), sections };
+}
+
 function withTrailingNewline(content: string): string {
   if (!content) {
     return "";
@@ -2426,6 +2543,158 @@ function extractPromotionMarkers(memoryText: string): Set<string> {
   return markers;
 }
 
+function extractCompletePromotionMarkers(archiveText: string): Set<string> {
+  const markers = new Set<string>();
+  const lines = archiveText.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const key = lines[index]
+      ?.match(/^\s*<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->\s*$/i)?.[1]
+      ?.trim();
+    if (!key) {
+      continue;
+    }
+    let detailIndex = index + 1;
+    while (detailIndex < lines.length && !lines[detailIndex]?.trim()) {
+      detailIndex += 1;
+    }
+    const detail = lines[detailIndex]?.trim() ?? "";
+    if (/^[-*+]\s+\S/.test(detail)) {
+      markers.add(key);
+    }
+  }
+  return markers;
+}
+
+function filterPromotionSectionForMissingArchiveMarkers(
+  section: string,
+  archivedMarkers: Set<string>,
+): string | null {
+  const sectionMarkers = extractPromotionMarkers(section);
+  if (sectionMarkers.size === 0) {
+    return section;
+  }
+  if ([...sectionMarkers].every((key) => archivedMarkers.has(key))) {
+    return null;
+  }
+  if ([...sectionMarkers].every((key) => !archivedMarkers.has(key))) {
+    return section;
+  }
+
+  const keptLines: string[] = [];
+  let skippingArchivedMarkerBlock = false;
+  let keptMarker = false;
+  for (const line of section.split("\n")) {
+    const marker = line.match(/<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->/i)?.[1]?.trim();
+    if (marker) {
+      skippingArchivedMarkerBlock = archivedMarkers.has(marker);
+      if (!skippingArchivedMarkerBlock) {
+        keptMarker = true;
+        keptLines.push(line);
+      }
+      continue;
+    }
+    if (!skippingArchivedMarkerBlock) {
+      keptLines.push(line);
+    }
+  }
+
+  if (!keptMarker) {
+    return null;
+  }
+  const filtered = keptLines.join("\n").trim();
+  return filtered.length > 0 ? filtered : null;
+}
+
+function filterPromotionSectionsForMissingArchiveMarkers(
+  sections: string[],
+  archivedMarkers: Set<string>,
+): string[] {
+  const filtered: string[] = [];
+  for (const section of sections) {
+    const next = filterPromotionSectionForMissingArchiveMarkers(section, archivedMarkers);
+    if (next) {
+      filtered.push(next);
+    }
+  }
+  return filtered;
+}
+
+// Promotion is infrequent and lock-protected, so a bounded quarterly archive
+// scan is acceptable for now. If archives grow large, replace this with a
+// marker manifest instead of putting detailed excerpts back into MEMORY.md.
+async function collectArchivedPromotionMarkerLocations(
+  workspaceDir: string,
+): Promise<Map<string, string>> {
+  const markerLocations = new Map<string, string>();
+  const archiveRoot = path.join(workspaceDir, "memory", "archived");
+  let quarters: Dirent[];
+  try {
+    quarters = await fs.readdir(archiveRoot, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return markerLocations;
+    }
+    throw err;
+  }
+
+  const promotionArchivePattern = /^memory-promoted-short-term-dump-\d{4}-\d{2}-\d{2}\.md$/;
+  for (const quarter of quarters
+    .filter((entry) => entry.isDirectory() && /^\d{4}-Q[1-4]$/.test(entry.name))
+    .toSorted((a, b) => a.name.localeCompare(b.name))) {
+    const quarterDir = path.join(archiveRoot, quarter.name);
+    let files: Dirent[];
+    try {
+      files = await fs.readdir(quarterDir, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+    for (const file of files
+      .filter((entry) => entry.isFile() && promotionArchivePattern.test(entry.name))
+      .toSorted((a, b) => a.name.localeCompare(b.name))) {
+      const archiveRelativePath = path.join("memory", "archived", quarter.name, file.name);
+      const text = await fs
+        .readFile(path.join(quarterDir, file.name), "utf-8")
+        .catch((err: unknown) => {
+          if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+            return "";
+          }
+          throw err;
+        });
+      // A marker commits an archive record only when its promoted-detail line
+      // is structurally complete. A torn or hand-edited marker must not
+      // suppress the surviving root/store copy during recovery.
+      for (const key of extractCompletePromotionMarkers(text)) {
+        // Later sorted archives are closer to the visible latest pointer and
+        // are the safest self-heal target for duplicate legacy roots.
+        markerLocations.set(key, archiveRelativePath);
+      }
+    }
+  }
+  return markerLocations;
+}
+
+function latestArchivedPromotionPathForMarkers(
+  markers: Set<string>,
+  markerLocations: Map<string, string>,
+): string | null {
+  let latest: string | null = null;
+  for (const marker of markers) {
+    const archiveRelativePath = markerLocations.get(marker);
+    if (!archiveRelativePath) {
+      continue;
+    }
+    const normalizedArchivePath = archiveRelativePath.replaceAll(path.sep, "/");
+    const normalizedLatest = latest?.replaceAll(path.sep, "/");
+    if (!normalizedLatest || normalizedArchivePath.localeCompare(normalizedLatest) > 0) {
+      latest = archiveRelativePath;
+    }
+  }
+  return latest;
+}
+
 export async function applyShortTermPromotions(
   options: ApplyShortTermPromotionsOptions,
 ): Promise<ApplyShortTermPromotionsResult> {
@@ -2446,6 +2715,8 @@ export async function applyShortTermPromotions(
   );
   const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
+  const archiveRelativePath = resolvePromotionArchiveRelativePath(nowMs, options.timezone);
+  const archivePath = path.join(workspaceDir, archiveRelativePath);
 
   return await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
@@ -2485,9 +2756,41 @@ export async function applyShortTermPromotions(
       }
     }
 
-    if (rehydratedSelected.length === 0) {
+    const existingMemory = await fs.readFile(memoryPath, "utf-8").catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+        return "";
+      }
+      throw err;
+    });
+    const migrated = extractDetailedPromotionSections(existingMemory);
+    const migratedMarkers = extractPromotionMarkers(migrated.sections.join("\n\n"));
+    const archivedMarkerLocations = await collectArchivedPromotionMarkerLocations(workspaceDir);
+    const archivedMarkers = new Set(archivedMarkerLocations.keys());
+    const existingMarkers = new Set([
+      ...extractPromotionMarkers(existingMemory),
+      ...archivedMarkers,
+    ]);
+
+    // File writes complete before the recall store is persisted. If a prior
+    // apply stopped in that window, recover archived entries and the root
+    // pointer even when ranking no longer selects the candidate.
+    const recoveredStoreKeys = new Set<string>();
+    for (const [key, entry] of Object.entries(store.entries)) {
+      if (!entry.promotedAt && archivedMarkers.has(key)) {
+        entry.promotedAt = nowIso;
+        recoveredStoreKeys.add(key);
+      }
+    }
+
+    if (
+      rehydratedSelected.length === 0 &&
+      migrated.sections.length === 0 &&
+      recoveredStoreKeys.size === 0
+    ) {
       return {
         memoryPath,
+        archivePath,
+        archiveRelativePath,
         applied: 0,
         appended: 0,
         reconciledExisting: 0,
@@ -2497,44 +2800,69 @@ export async function applyShortTermPromotions(
       };
     }
 
-    const existingMemory = await fs.readFile(memoryPath, "utf-8").catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-        return "";
-      }
-      throw err;
-    });
-    const existingMarkers = extractPromotionMarkers(existingMemory);
     const alreadyWritten = rehydratedSelected.filter((candidate) =>
       existingMarkers.has(candidate.key),
     );
     const toAppend = rehydratedSelected.filter((candidate) => !existingMarkers.has(candidate.key));
+    const alreadyWrittenKeys = new Set(alreadyWritten.map((candidate) => candidate.key));
+    const reconciledExistingKeys = new Set([
+      ...alreadyWrittenKeys,
+      ...migratedMarkers,
+      ...recoveredStoreKeys,
+    ]);
+    const selfHealArchiveRelativePath = latestArchivedPromotionPathForMarkers(
+      new Set([...migratedMarkers, ...alreadyWrittenKeys, ...recoveredStoreKeys]),
+      archivedMarkerLocations,
+    );
 
-    let compactedDates: string[] = [];
-    if (toAppend.length > 0) {
-      const section = buildPromotionSection(
-        toAppend,
-        nowMs,
-        options.timezone,
-        options.maxPromotedSnippetTokens,
-      );
-      const budgetChars =
-        typeof options.memoryFileMaxChars === "number" &&
-        Number.isFinite(options.memoryFileMaxChars)
-          ? Math.max(0, Math.floor(options.memoryFileMaxChars))
-          : DEFAULT_MEMORY_FILE_MAX_CHARS;
-      const compaction = compactMemoryForBudget({
-        existingMemory,
-        newSection: section,
-        budgetChars,
+    const compactedDates = extractPromotionSectionDates(migrated.sections);
+    let effectiveArchiveRelativePath = archiveRelativePath;
+    let effectiveArchivePath = archivePath;
+    if (toAppend.length > 0 || migrated.sections.length > 0 || selfHealArchiveRelativePath) {
+      const existingArchive = await fs.readFile(archivePath, "utf-8").catch((err: unknown) => {
+        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+          return "";
+        }
+        throw err;
       });
-      compactedDates = compaction.droppedDates;
-      const baseMemory = compaction.compacted;
-      const header = baseMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
-      await fs.writeFile(
-        memoryPath,
-        `${header}${withTrailingNewline(baseMemory)}${section}`,
-        "utf-8",
+      const sections = filterPromotionSectionsForMissingArchiveMarkers(
+        migrated.sections,
+        archivedMarkers,
       );
+      if (toAppend.length > 0) {
+        sections.push(
+          buildPromotionSection(
+            toAppend,
+            nowMs,
+            options.timezone,
+            options.maxPromotedSnippetTokens,
+          ).trim(),
+        );
+      }
+      if (sections.length > 0) {
+        // Atomic archive replacement completes before atomic root replacement.
+        // A process interruption between them leaves the prior root/store copy
+        // recoverable; the next apply reconciles complete markers and repairs
+        // the pointer without truncating prior same-day archive records.
+        const archiveHeader =
+          existingArchive.trim().length > 0
+            ? ""
+            : buildPromotionArchiveHeader(nowMs, options.timezone);
+        await fs.mkdir(path.dirname(archivePath), { recursive: true });
+        await replaceFileAtomic({
+          filePath: archivePath,
+          content: `${archiveHeader}${withTrailingNewline(existingArchive)}${sections.join("\n\n")}\n`,
+          preserveExistingMode: true,
+        });
+      } else {
+        effectiveArchiveRelativePath = selfHealArchiveRelativePath ?? archiveRelativePath;
+        effectiveArchivePath = path.join(workspaceDir, effectiveArchiveRelativePath);
+      }
+      await replaceFileAtomic({
+        filePath: memoryPath,
+        content: ensurePromotionPointerSection(migrated.memoryText, effectiveArchiveRelativePath),
+        preserveExistingMode: true,
+      });
     }
 
     for (const candidate of rehydratedSelected) {
@@ -2553,6 +2881,8 @@ export async function applyShortTermPromotions(
       type: "memory.promotion.applied",
       timestamp: nowIso,
       memoryPath,
+      archivePath: effectiveArchivePath,
+      archiveRelativePath: effectiveArchiveRelativePath,
       applied: rehydratedSelected.length,
       candidates: rehydratedSelected.map((candidate) => ({
         key: candidate.key,
@@ -2566,11 +2896,13 @@ export async function applyShortTermPromotions(
 
     return {
       memoryPath,
+      archivePath: effectiveArchivePath,
+      archiveRelativePath: effectiveArchiveRelativePath,
       applied: rehydratedSelected.length,
       appended: toAppend.length,
-      reconciledExisting: alreadyWritten.length,
+      reconciledExisting: reconciledExistingKeys.size,
       appliedCandidates: rehydratedSelected,
-      compactedSections: compactedDates.length,
+      compactedSections: migrated.sections.length,
       compactedDates,
     };
   });

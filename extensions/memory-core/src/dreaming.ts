@@ -155,7 +155,7 @@ function formatRepairSummary(repair: {
 function resolveManagedCronDescription(config: ShortTermPromotionDreamingConfig): string {
   const recencyHalfLifeDays =
     config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
-  return `${MANAGED_DREAMING_CRON_TAG} Promote weighted short-term recalls into MEMORY.md (limit=${config.limit}, minScore=${config.minScore.toFixed(3)}, minRecallCount=${config.minRecallCount}, minUniqueQueries=${config.minUniqueQueries}, recencyHalfLifeDays=${recencyHalfLifeDays}, maxAgeDays=${config.maxAgeDays ?? "none"}).`;
+  return `${MANAGED_DREAMING_CRON_TAG} Archive weighted short-term recalls; keep MEMORY.md compact (limit=${config.limit}, minScore=${config.minScore.toFixed(3)}, minRecallCount=${config.minRecallCount}, minUniqueQueries=${config.minUniqueQueries}, recencyHalfLifeDays=${recencyHalfLifeDays}, maxAgeDays=${config.maxAgeDays ?? "none"}).`;
 }
 
 function buildManagedDreamingCronJob(
@@ -635,7 +635,9 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
         nowMs: sweepNowMs,
       });
       totalApplied += applied.applied;
-      reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
+      reportLines.push(
+        `- Archived ${applied.applied} candidate(s) to durable memory dump; MEMORY.md stays compact.`,
+      );
       if (params.config.verboseLogging) {
         const appliedSummary =
           applied.appliedCandidates.length > 0

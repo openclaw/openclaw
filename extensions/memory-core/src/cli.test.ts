@@ -38,6 +38,25 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
+async function readPromotionArchiveText(workspaceDir: string): Promise<string> {
+  const archiveRoot = path.join(workspaceDir, "memory", "archived");
+  const quarterEntries = await fs.readdir(archiveRoot, { withFileTypes: true });
+  const files: string[] = [];
+  for (const quarter of quarterEntries) {
+    if (!quarter.isDirectory()) {
+      continue;
+    }
+    const quarterDir = path.join(archiveRoot, quarter.name);
+    for (const entry of await fs.readdir(quarterDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.startsWith("memory-promoted-short-term-dump-")) {
+        files.push(path.join(quarterDir, entry.name));
+      }
+    }
+  }
+  const contents = await Promise.all(files.toSorted().map((file) => fs.readFile(file, "utf-8")));
+  return contents.join("\n");
+}
+
 vi.mock("./cli.host.runtime.js", async () => {
   const [runtimeCli, runtimeCore, runtimeFiles] = await Promise.all([
     import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
@@ -551,7 +570,9 @@ describe("memory cli", () => {
     expect(helpText).toContain('openclaw memory search --query "deployment" --max-results 20');
     expect(helpText).toContain("Limit results for focused troubleshooting.");
     expect(helpText).toContain("openclaw memory promote --apply");
-    expect(helpText).toContain("Append top-ranked short-term candidates into MEMORY.md.");
+    expect(helpText).toContain(
+      "Archive top-ranked short-term candidates while keeping MEMORY.md compact.",
+    );
     expect(helpText).toContain('openclaw memory promote-explain "router vlan"');
     expect(helpText).toContain("Explain why a specific candidate would or would not promote.");
     expect(helpText).toContain("openclaw memory rem-harness --json");
@@ -2197,7 +2218,7 @@ describe("memory cli", () => {
     });
   });
 
-  it("applies top promote candidates into MEMORY.md", async () => {
+  it("archives top promote candidates while keeping MEMORY.md compact", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
         "line 1",
@@ -2250,11 +2271,64 @@ describe("memory cli", () => {
 
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       const memoryText = await fs.readFile(memoryPath, "utf-8");
+      const archiveText = await readPromotionArchiveText(workspaceDir);
       expect(memoryText).toContain("Promoted From Short-Term Memory");
-      expect(memoryText).toContain("openclaw-memory-promotion:");
-      expect(memoryText).toContain("memory/2026-04-01.md:10-10");
-      expectLogged(log, `Processed 1 candidate(s) for ${memoryPath}.`);
+      expect(memoryText).toContain("Latest promotion archive:");
+      expect(memoryText).not.toContain("openclaw-memory-promotion:");
+      expect(archiveText).toContain("openclaw-memory-promotion:");
+      expect(archiveText).toContain("memory/2026-04-01.md:10-10");
+      expectLogged(log, "Archived 1 candidate(s) to");
       expectLogged(log, "appended=1 reconciledExisting=0");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("includes archive destinations in promote apply json output", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "Gateway host uses local mode and binds loopback port 18789",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "network setup",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.91,
+            snippet: "Gateway host uses local mode and binds loopback port 18789",
+            source: "memory",
+          },
+        ],
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli([
+        "promote",
+        "--apply",
+        "--json",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "0",
+        "--min-unique-queries",
+        "0",
+      ]);
+
+      const payload = firstWrittenJsonArg<{
+        apply?: { archivePath?: string; archiveRelativePath?: string };
+      }>(writeJson);
+      expect(payload?.apply?.archivePath).toContain(path.join(workspaceDir, "memory", "archived"));
+      expect(payload?.apply?.archiveRelativePath).toMatch(
+        /memory[\\/]archived[\\/]\d{4}-Q[1-4][\\/]memory-promoted-short-term-dump-\d{4}-\d{2}-\d{2}\.md/,
+      );
       expect(close).toHaveBeenCalled();
     });
   });

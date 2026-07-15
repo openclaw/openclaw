@@ -147,7 +147,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreLoca
           ],
           [
             "openclaw memory promote --apply",
-            "Append top-ranked short-term candidates into MEMORY.md.",
+            "Archive top-ranked short-term candidates while keeping MEMORY.md compact.",
           ],
           [
             'openclaw memory promote-explain "router vlan"',
@@ -211,7 +211,9 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreLoca
 
   memory
     .command("promote")
-    .description("Rank short-term recalls and optionally append top entries to MEMORY.md")
+    .description(
+      "Rank short-term recalls and optionally archive top entries outside compact MEMORY.md",
+    )
     .option("--agent <id>", "Agent id (default: default agent)")
     .option("--limit <n>", "Max candidates", (value: string) =>
       parseMemoryCliPositiveIntegerOption(value, "--limit"),
@@ -231,7 +233,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreLoca
       `Minimum distinct query count (default: ${DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES})`,
       (value: string) => parseMemoryCliNonNegativeIntegerOption(value, "--min-unique-queries"),
     )
-    .option("--apply", "Append selected candidates to MEMORY.md", false)
+    .option("--apply", "Archive selected candidates and keep MEMORY.md compact", false)
     .option("--include-promoted", "Include already promoted candidates", false)
     .option("--json", "Print JSON")
     .action(async (opts: MemoryPromoteCommandOptions) => {

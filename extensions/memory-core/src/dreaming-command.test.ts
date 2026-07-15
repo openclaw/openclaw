@@ -95,7 +95,7 @@ describe("memory-core /dreaming command", () => {
     expect(result.text).toContain("Dreaming status:");
     expect(result.text).toContain("- implementation detail: each sweep runs light -> REM -> deep.");
     expect(result.text).toContain(
-      "- deep is the only stage that writes durable entries to MEMORY.md.",
+      "- deep archives durable excerpts and updates the compact MEMORY.md pointer.",
     );
   });
 
