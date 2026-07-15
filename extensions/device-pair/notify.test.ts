@@ -64,12 +64,17 @@ describe("device-pair notify persistence", () => {
     });
   }
 
-  function createApi() {
+  function createApi(sendText?: ReturnType<typeof vi.fn>) {
     return createTestPluginApi({
       runtime: {
         state: {
           resolveStateDir: () => stateDir,
           openKeyedStore: openStore,
+        },
+        channel: {
+          outbound: {
+            loadAdapter: vi.fn(async () => (sendText ? { sendText } : undefined)),
+          },
         },
       } as never,
     });
@@ -118,6 +123,63 @@ describe("device-pair notify persistence", () => {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(listDevicePairingMock).toHaveBeenCalledTimes(4);
+
+    await service.stop?.({} as never);
+  });
+
+  it("delivers each request once when a service reload interrupts a slow send", async () => {
+    vi.useFakeTimers();
+    const firstSend = createDeferred<unknown>();
+    const sendText = vi
+      .fn()
+      .mockImplementationOnce(() => firstSend.promise)
+      .mockResolvedValue({ channel: "telegram", to: "chat-123" });
+    const firstRequest = {
+      requestId: "request-1",
+      deviceId: "device-1",
+      displayName: "First device",
+    };
+    const secondRequest = {
+      requestId: "request-2",
+      deviceId: "device-2",
+      displayName: "Second device",
+    };
+    const api = createApi(sendText);
+    await handleNotifyCommand({
+      api,
+      ctx: {
+        channel: "telegram",
+        senderId: "chat-123",
+      },
+      action: "on",
+    });
+    listDevicePairingMock.mockResolvedValueOnce({ pending: [] }).mockResolvedValue({
+      pending: [firstRequest],
+    });
+    let service = createPairingNotifierService(api);
+
+    await service.start({} as never);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sendText).toHaveBeenCalledTimes(1);
+
+    await service.stop?.({} as never);
+    service = createPairingNotifierService(createApi(sendText));
+    await service.start({} as never);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(sendText).toHaveBeenCalledTimes(1);
+
+    firstSend.resolve({ channel: "telegram", to: "chat-123" });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sendText).toHaveBeenCalledTimes(1);
+
+    listDevicePairingMock.mockResolvedValue({ pending: [firstRequest, secondRequest] });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sendText).toHaveBeenCalledTimes(2);
+    expect(sendText.mock.calls[1]?.[0]).toMatchObject({
+      to: "chat-123",
+      text: expect.stringContaining("ID: request-2"),
+    });
 
     await service.stop?.({} as never);
   });
