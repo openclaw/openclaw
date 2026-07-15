@@ -270,12 +270,13 @@ function formatQaSuiteRunStartProgress(params: {
 }
 
 async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     try {
       const { response, release } = await fetchWithSsrFGuard({
         url: `${baseUrl}/readyz`,
         policy: { allowPrivateNetwork: true },
+        timeoutMs: Math.max(1, deadline - Date.now()),
         auditContext: "qa-lab-suite-wait-for-lab-ready",
       });
       try {
@@ -288,7 +289,10 @@ async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
     } catch {
       // retry
     }
-    await sleep(100);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      await sleep(Math.min(100, remainingMs));
+    }
   }
   throw new Error(`timed out after ${timeoutMs}ms waiting for qa-lab ready`);
 }
