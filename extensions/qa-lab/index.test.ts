@@ -14,4 +14,11 @@ describe("QA Lab plugin entrypoint", () => {
     expect(plugin.id).toBe("qa-lab");
     expect(qaChannelLoads).not.toHaveBeenCalled();
   });
+
+  it("loads the package Telegram harness without the private QA transport runtime", async () => {
+    const { runQaTelegramSuite } = await import("./src/live-transports/telegram/cli.runtime.js");
+
+    expect(runQaTelegramSuite).toBeTypeOf("function");
+    expect(qaChannelLoads).not.toHaveBeenCalled();
+  });
 });
