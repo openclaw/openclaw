@@ -137,6 +137,13 @@ import { isHeartbeatEnabledForAgent, resolveHeartbeatIntervalMs } from "./heartb
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
+  inferHeartbeatWakeSourceFromReason,
+  isConfiguredHeartbeatAgent,
+  isTargetedImmediateSystemEventWake,
+  resolveHeartbeatWakePayloadFlags,
+  type HeartbeatWakePayloadFlags,
+} from "./heartbeat-wake-policy.js";
+import {
   areHeartbeatsEnabled,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_LANES_BUSY,
@@ -922,12 +929,6 @@ function normalizeHeartbeatToolNotification(
   };
 }
 
-type HeartbeatWakePayloadFlags = {
-  isExecEventWake: boolean;
-  isCronWake: boolean;
-  isWakePayload: boolean;
-};
-
 type HeartbeatSkipReason = "empty-heartbeat-file";
 
 function buildCommitmentDeliveryKey(commitment: CommitmentRecord): string {
@@ -999,43 +1000,6 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   tasks?: HeartbeatTask[];
   heartbeatFileContent?: string;
 };
-
-function inferHeartbeatWakeSourceFromReason(reason?: string): HeartbeatWakeSource | undefined {
-  const trimmed = (reason ?? "").trim();
-  if (trimmed === "exec-event") {
-    return "exec-event";
-  }
-  if (trimmed.startsWith("cron:")) {
-    return "cron";
-  }
-  if (trimmed === "wake" || trimmed.startsWith("hook:")) {
-    return "hook";
-  }
-  if (trimmed.startsWith("acp:spawn:")) {
-    return "acp-spawn";
-  }
-  if (trimmed.startsWith("session-state:")) {
-    return "session-state";
-  }
-  return undefined;
-}
-
-function resolveHeartbeatWakePayloadFlags(params: {
-  source?: HeartbeatWakeSource;
-  reason?: string;
-}): HeartbeatWakePayloadFlags {
-  const source = params.source ?? inferHeartbeatWakeSourceFromReason(params.reason);
-  const reason = (params.reason ?? "").trim();
-  return {
-    isExecEventWake: source === "exec-event",
-    isCronWake: source === "cron",
-    isWakePayload:
-      source === "hook" ||
-      source === "acp-spawn" ||
-      source === "session-state" ||
-      reason === "wake",
-  };
-}
 
 async function resolveHeartbeatPreflight(params: {
   cfg: OpenClawConfig;
@@ -1445,18 +1409,20 @@ export async function runHeartbeatOnce(opts: {
     mergeRequestedHeartbeat: opts.source === "cron",
   });
   const runScope = opts.runScope ?? "global";
+  const allowsUnscheduledTarget =
+    isTargetedImmediateSystemEventWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+  if (!allowsUnscheduledTarget && !isHeartbeatEnabledForAgent(cfg, agentId)) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+  if (!allowsUnscheduledTarget && !resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
     return { status: "skipped", reason: "disabled" };
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  if (!allowsUnscheduledTarget && !isWithinActiveHours(cfg, heartbeat, startedAt)) {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
@@ -2645,22 +2611,35 @@ export function startHeartbeatRunner(opts: {
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (state.agents.size === 0) {
+
+    const reason = params.reason;
+    const intent = params.intent;
+    const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+    const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+    const requestedHeartbeat = params.heartbeat;
+    const wakeConfig = readCurrentConfig();
+    const requestedTargetAgentId =
+      requestedAgentId ??
+      (requestedSessionKey ? resolveAgentIdFromSessionKey(requestedSessionKey) : undefined);
+    const allowsUnscheduledTarget =
+      requestedTargetAgentId !== undefined &&
+      isConfiguredHeartbeatAgent(wakeConfig, requestedTargetAgentId) &&
+      isTargetedImmediateSystemEventWake({
+        source: params.source,
+        intent,
+        reason,
+        sessionKey: requestedSessionKey,
+      });
+    if (state.agents.size === 0 && !allowsUnscheduledTarget) {
       return {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
 
-    const reason = params?.reason;
-    const intent = params.intent;
-    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
-    const requestedHeartbeat = params?.heartbeat;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
-    const wakeConfig = readCurrentConfig();
     let ran = false;
     // Track retryable busy skips so we can skip re-arm in finally — the wake
     // layer handles retry for this case (DEFAULT_RETRY_MS = 1 s).
@@ -2668,24 +2647,28 @@ export function startHeartbeatRunner(opts: {
 
     try {
       if (requestedSessionKey || requestedAgentId) {
-        const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
+        const targetAgentId = requestedTargetAgentId ?? resolveDefaultAgentId(wakeConfig);
         const targetAgent = state.agents.get(targetAgentId);
-        if (!targetAgent) {
+        // A user-present targeted event may wake an unscheduled agent once. It
+        // must not enroll that agent in the recurring heartbeat scheduler.
+        if (!targetAgent && !allowsUnscheduledTarget) {
           return { status: "skipped", reason: "disabled" };
         }
-        const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent);
-        if (deferral.defer) {
-          advanceStaleScheduleAfterDeferral(targetAgent, now, reason, deferral);
-          return { status: "skipped", reason: deferral.reason };
+        if (targetAgent) {
+          const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent);
+          if (deferral.defer) {
+            advanceStaleScheduleAfterDeferral(targetAgent, now, reason, deferral);
+            return { status: "skipped", reason: deferral.reason };
+          }
         }
         try {
           const res = await runOnce({
             cfg: wakeConfig,
-            agentId: targetAgent.agentId,
+            agentId: targetAgentId,
             heartbeat: resolveHeartbeatForWake({
               cfg: wakeConfig,
-              agentId: targetAgent.agentId,
-              configuredHeartbeat: targetAgent.heartbeat,
+              agentId: targetAgentId,
+              configuredHeartbeat: targetAgent?.heartbeat,
               requestedHeartbeat,
               source: params.source,
               mergeRequestedHeartbeat: true,
@@ -2708,8 +2691,10 @@ export function startHeartbeatRunner(opts: {
           // Non-retryable outcome (ran, disabled, failed-but-not-busy). Record
           // bookkeeping and move the due slot so scheduleNext() cannot hot-loop
           // on a stale past-due agent.
-          recordRunBookkeeping(targetAgent, now);
-          advanceAgentSchedule(targetAgent, now, reason);
+          if (targetAgent) {
+            recordRunBookkeeping(targetAgent, now);
+            advanceAgentSchedule(targetAgent, now, reason);
+          }
           return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
         } catch (err) {
           const errMsg = formatErrorMessage(err);
@@ -2719,8 +2704,10 @@ export function startHeartbeatRunner(opts: {
           // Throw counts as a non-retryable terminal attempt for cooldown
           // purposes — record bookkeeping so the wake layer doesn't tight-loop
           // on the same reason.
-          recordRunBookkeeping(targetAgent, now);
-          advanceAgentSchedule(targetAgent, now, reason);
+          if (targetAgent) {
+            recordRunBookkeeping(targetAgent, now);
+            advanceAgentSchedule(targetAgent, now, reason);
+          }
           return { status: "failed", reason: errMsg };
         }
       }
@@ -2887,3 +2874,4 @@ export function startHeartbeatRunner(opts: {
 
   return { stop: cleanup, updateConfig };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

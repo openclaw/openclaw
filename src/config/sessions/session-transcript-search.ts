@@ -21,7 +21,7 @@ const SEARCH_SNIPPET_MAX_CHARS = 500;
 const SEARCH_LIMIT_MAX = 25;
 const SEARCH_QUERY_MAX_CHARS = 4096;
 
-export type SessionTranscriptSearchHit = {
+type SessionTranscriptSearchHit = {
   sessionKey: string;
   sessionId: string;
   messageId: string;
@@ -31,7 +31,7 @@ export type SessionTranscriptSearchHit = {
   score: number;
 };
 
-export type SessionTranscriptSearchResult = {
+type SessionTranscriptSearchResult = {
   hits: SessionTranscriptSearchHit[];
   indexing: boolean;
   truncated: boolean;
@@ -44,7 +44,7 @@ const runningReconciles = new Map<string, Promise<void>>();
  * sweeps orphaned index rows. One write transaction per session keeps the
  * agent DB responsive to live appends between rebuilds.
  */
-export async function reconcileSessionTranscriptIndex(params: {
+async function reconcileSessionTranscriptIndex(params: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
@@ -205,14 +205,4 @@ export function searchSessionTranscripts(params: {
     ];
   });
   return { hits: hits.slice(0, limit), indexing, truncated: hits.length > limit };
-}
-
-/** Await active reconcile passes in focused tests. */
-export async function waitForSessionTranscriptReconcileForTest(): Promise<void> {
-  await Promise.all(runningReconciles.values());
-}
-
-/** Reset process-local reconcile state between focused tests. */
-export function resetSessionTranscriptSearchForTest(): void {
-  runningReconciles.clear();
 }

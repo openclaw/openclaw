@@ -1,5 +1,7 @@
 // Node invoke wake tests cover APNs wake attempts, reconnect waits, nudge
 // throttling, command policy, and foreground-restricted command handling.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
@@ -104,6 +106,7 @@ type MockCallSource = {
 type TestNodeSession = {
   nodeId: string;
   commands: string[];
+  declaredCommands?: string[];
   platform?: string;
 };
 
@@ -344,7 +347,10 @@ async function invokeNode(params: {
     info: vi.fn(),
     warn: vi.fn(),
   };
-  await nodeHandlers["node.invoke"]({
+  await expectDefined(
+    nodeHandlers["node.invoke"],
+    'nodeHandlers["node.invoke"] test invariant',
+  )({
     params: makeNodeInvokeParams(params.requestParams),
     respond: respond as never,
     context: {
@@ -425,7 +431,10 @@ function createMissingNodeRegistry() {
 
 async function pullPending(nodeId: string, commands?: string[]) {
   const respond = vi.fn();
-  await nodeHandlers["node.pending.pull"]({
+  await expectDefined(
+    nodeHandlers["node.pending.pull"],
+    'nodeHandlers["node.pending.pull"] test invariant',
+  )({
     params: {},
     respond: respond as never,
     context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
@@ -438,7 +447,10 @@ async function pullPending(nodeId: string, commands?: string[]) {
 
 async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   const respond = vi.fn();
-  await nodeHandlers["node.pending.ack"]({
+  await expectDefined(
+    nodeHandlers["node.pending.ack"],
+    'nodeHandlers["node.pending.ack"] test invariant',
+  )({
     params: { ids },
     respond: respond as never,
     context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
@@ -466,7 +478,10 @@ describe("node plugin surface refresh", () => {
       },
     };
 
-    await nodeHandlers["node.pluginSurface.refresh"]({
+    await expectDefined(
+      nodeHandlers["node.pluginSurface.refresh"],
+      'nodeHandlers["node.pluginSurface.refresh"] test invariant',
+    )({
       req: { type: "req", id: "r1", method: "node.pluginSurface.refresh", params: {} },
       params: { surface: "canvas" },
       client: client as never,
@@ -617,6 +632,68 @@ describe("node.invoke APNs wake path", () => {
     expect(call[0]).toBe(false);
     expect(call[2]?.message).toBe(
       'node command not allowed: "sms.search" requires explicit gateway.nodes.allowCommands opt-in',
+    );
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("explains when a declared node command surface awaits approval", async () => {
+    mocks.isNodeCommandAllowed.mockReturnValue({
+      ok: false,
+      reason: "node did not declare commands",
+    });
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "linux-node",
+        commands: [],
+        declaredCommands: ["system.notify", "camera.list", "location.get"],
+        platform: "linux",
+      })),
+      invoke: vi.fn(),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "linux-node",
+        command: "system.notify",
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe(
+      "node command not allowed: the node's declared command surface is pending approval; run `openclaw nodes pending`, then `openclaw nodes approve <requestId>`",
+    );
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("does not claim approval can add an undeclared command", async () => {
+    mocks.isNodeCommandAllowed.mockReturnValue({
+      ok: false,
+      reason: "node did not declare commands",
+    });
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "linux-node",
+        commands: [],
+        declaredCommands: ["camera.list"],
+        platform: "linux",
+      })),
+      invoke: vi.fn(),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "linux-node",
+        command: "system.notify",
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe(
+      "node command not allowed: the node did not declare any supported commands",
     );
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
@@ -959,7 +1036,10 @@ describe("node.invoke APNs wake path", () => {
       }),
     };
 
-    await nodeHandlers["node.invoke"]({
+    await expectDefined(
+      nodeHandlers["node.invoke"],
+      'nodeHandlers["node.invoke"] test invariant',
+    )({
       params: {
         nodeId: "android-talk-node",
         command: "talk.ptt.start",
@@ -1234,3 +1314,4 @@ describe("node.invoke APNs wake path", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

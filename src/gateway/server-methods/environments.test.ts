@@ -6,7 +6,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { listNodePairing } from "../../infra/node-pairing.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
-import type { WorkerTunnelStatus } from "../worker-environments/tunnel.js";
+import type { WorkerTunnelStatus } from "../worker-environments/tunnel-contract.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
 
 vi.mock("../../infra/device-pairing.js", () => ({
@@ -28,8 +28,14 @@ type TestWorkerService = {
   destroy: (environmentId: string) => Promise<TestWorkerRecord>;
 };
 
-function mockContext(workerEnvironmentService?: TestWorkerService) {
+function mockContext(
+  workerEnvironmentService?: TestWorkerService,
+  reconcileActive: (environmentId?: string) => Promise<void> = vi.fn(async () => {}),
+) {
   return {
+    logGateway: {
+      warn: vi.fn(),
+    },
     nodeRegistry: {
       listConnected: () => [
         {
@@ -44,6 +50,19 @@ function mockContext(workerEnvironmentService?: TestWorkerService) {
       ],
     },
     workerEnvironmentService,
+    ...(workerEnvironmentService
+      ? {
+          workerPlacementDispatchService: { dispatch: vi.fn(), reconcileActive },
+          getRuntimeConfig: () => ({
+            cloudWorkers: {
+              profiles: {
+                zeta: { provider: "static-ssh", settings: {} },
+                aws: { provider: "crabbox", settings: {} },
+              },
+            },
+          }),
+        }
+      : {}),
   };
 }
 
@@ -91,13 +110,16 @@ async function callEnvironmentMethod(
     | "environments.create"
     | "environments.destroy",
   params: unknown,
-  options: { service?: TestWorkerService } = {},
+  options: {
+    service?: TestWorkerService;
+    reconcileActive?: (environmentId?: string) => Promise<void>;
+  } = {},
 ) {
   const respond = vi.fn();
   await environmentsHandlers[method]?.({
     params: params as Record<string, unknown>,
     respond,
-    context: mockContext(options.service),
+    context: mockContext(options.service, options.reconcileActive),
   } as never);
   const call = respond.mock.calls.at(0);
   if (call === undefined) {
@@ -178,6 +200,10 @@ describe("environment gateway methods", () => {
 
     expect(ok).toBe(true);
     expect(payload).toMatchObject({
+      profiles: [
+        { id: "aws", providerId: "crabbox" },
+        { id: "zeta", providerId: "static-ssh" },
+      ],
       environments: [
         { id: "gateway", type: "local" },
         { id: "node:node-live", type: "node" },
@@ -398,6 +424,39 @@ describe("environment gateway methods", () => {
       worker: { state: "destroyed" },
     });
     expect(destroy).toHaveBeenCalledTimes(2);
+  });
+
+  it("reconciles active placements before returning destroyed worker state", async () => {
+    const service = workerService();
+    const reconcileActive = vi.fn(async () => {});
+
+    const [ok, payload] = await callEnvironmentMethod(
+      "environments.destroy",
+      { environmentId: "worker-1" },
+      { service, reconcileActive },
+    );
+
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ worker: { state: "destroyed" } });
+    expect(reconcileActive).toHaveBeenCalledExactlyOnceWith("worker-1");
+    expect(service.destroy).toHaveBeenCalledBefore(reconcileActive);
+  });
+
+  it("preserves destroyed worker success when placement reconciliation fails", async () => {
+    const service = workerService();
+    const reconcileActive = vi.fn(async () => {
+      throw new Error("temporary reconciliation failure");
+    });
+
+    const [ok, payload] = await callEnvironmentMethod(
+      "environments.destroy",
+      { environmentId: "worker-1" },
+      { service, reconcileActive },
+    );
+
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ worker: { state: "destroyed" } });
+    expect(reconcileActive).toHaveBeenCalledExactlyOnceWith("worker-1");
   });
 
   it("rejects an unknown worker environment on destroy", async () => {

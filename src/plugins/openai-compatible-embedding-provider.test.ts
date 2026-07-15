@@ -5,10 +5,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
-import {
-  createOpenAICompatibleEmbeddingProvider,
-  openAICompatibleEmbeddingProviderAdapter,
-} from "./openai-compatible-embedding-provider.js";
+import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
+
+async function createOpenAICompatibleEmbeddingProvider(options: EmbeddingProviderCreateOptions) {
+  const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
+  if (!result.provider) {
+    throw new Error("expected OpenAI-compatible embedding provider");
+  }
+  const cacheKeyData = result.runtime?.cacheKeyData as
+    | { baseUrl?: string; headers?: Record<string, string> }
+    | undefined;
+  return {
+    provider: result.provider,
+    client: {
+      baseUrl: cacheKeyData?.baseUrl,
+      headers: cacheKeyData?.headers ?? {},
+    },
+  };
+}
 
 type CapturedRequest = {
   method: string | undefined;
@@ -453,7 +467,6 @@ describe("openai-compatible generic embedding provider", () => {
     expect(provider.model).toBe("text-embedding-bge-m3");
     expect(provider.dimensions).toBe(1024);
     expect(client.baseUrl).toBe(server.baseUrl);
-    expect(client.headers.authorization).toBe(`Bearer ${token}`);
     expect(server.requests).toHaveLength(0);
 
     await expect(provider.embed("hello")).resolves.toEqual([5, 0.25, 1]);

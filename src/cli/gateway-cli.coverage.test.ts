@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -260,6 +261,43 @@ describe("gateway-cli coverage", () => {
     expect(costCall?.params).toEqual({ days: 7, agentScope: "all" });
   });
 
+  it("prints the provider/model breakdown for missing costs", async () => {
+    callGateway.mockResolvedValue({
+      updatedAt: 1,
+      days: 7,
+      daily: [],
+      totals: {
+        input: 12,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 12,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 12,
+        missingCostByModel: {
+          "openai/gpt-5.6-sol": 10,
+          "openai-codex/gpt-5.5": 2,
+        },
+      },
+      cacheStatus: {
+        status: "fresh",
+        cachedFiles: 1,
+        pendingFiles: 0,
+        staleFiles: 0,
+      },
+    });
+
+    await runGatewayCommand(["gateway", "usage-cost", "--days", "7"]);
+
+    expect(runtimeLogs.join("\n")).toContain(
+      "Missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2)",
+    );
+  });
+
   it("waits for real all-agent usage caches before printing totals", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-cost-cli-"));
     const config = {
@@ -318,7 +356,10 @@ describe("gateway-cli coverage", () => {
               observedStatuses.push(summary.cacheStatus?.status);
               resolve(payload);
             };
-            const result = usageHandlers["usage.cost"]({
+            const result = expectDefined(
+              usageHandlers["usage.cost"],
+              'usageHandlers["usage.cost"] test invariant',
+            )({
               respond,
               params: request.params ?? {},
               context: { getRuntimeConfig: () => config },
@@ -335,12 +376,9 @@ describe("gateway-cli coverage", () => {
         const costCalls = callGateway.mock.calls.map(
           ([raw]) => raw as { method?: string; timeoutMs?: number },
         );
-        for (const call of costCalls) {
-          expect(call.method).toBe("usage.cost");
-          expect(typeof call.timeoutMs).toBe("number");
-          expect(call.timeoutMs).toBeGreaterThan(0);
-          expect(call.timeoutMs).toBeLessThanOrEqual(10_000);
-        }
+        expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
+        expect(costCalls.every((call) => (call.timeoutMs ?? 0) > 0)).toBe(true);
+        expect(costCalls.every((call) => (call.timeoutMs ?? 0) <= 10_000)).toBe(true);
         expect(costCalls[0]?.timeoutMs).toBe(10_000);
         expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -371,16 +409,15 @@ describe("gateway-cli coverage", () => {
         "--json",
       ]);
 
+      // A fast host can fit a second poll inside the 50ms budget; the contract
+      // is the budget bound on every call, not the poll count.
       expect(callGateway.mock.calls.length).toBeGreaterThanOrEqual(1);
       const costCalls = callGateway.mock.calls.map(
         ([raw]) => raw as { method?: string; timeoutMs?: number },
       );
-      for (const call of costCalls) {
-        expect(call.method).toBe("usage.cost");
-        expect(typeof call.timeoutMs).toBe("number");
-        expect(call.timeoutMs).toBeGreaterThan(0);
-        expect(call.timeoutMs).toBeLessThanOrEqual(50);
-      }
+      expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
+      expect(costCalls.every((call) => (call.timeoutMs ?? 0) > 0)).toBe(true);
+      expect(costCalls.every((call) => (call.timeoutMs ?? 0) <= 50)).toBe(true);
       expect(runtimeErrors.join("\n")).toContain("Timed out waiting for usage cost cache refresh");
     },
   );

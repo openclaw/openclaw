@@ -11,6 +11,7 @@ type QaRuntimeGatewayClient = {
   getProcessCpuMs?: () => number | null;
   getProcessRssBytes?: () => number | null;
   logs?: () => string;
+  restart?: () => Promise<void>;
   restartAfterStateMutation?: (
     mutateState: (context: {
       configPath: string;
@@ -23,6 +24,7 @@ type QaRuntimeGatewayClient = {
     method: string,
     params?: unknown,
     options?: {
+      expectFinal?: boolean;
       timeoutMs?: number;
     },
   ) => Promise<unknown>;
@@ -30,6 +32,7 @@ type QaRuntimeGatewayClient = {
 
 export type QaSuiteRuntimeEnv = {
   gateway: QaRuntimeGatewayClient;
+  outputDir: string;
   transport: QaTransportAdapter;
   repoRoot: string;
   providerMode: QaProviderMode;

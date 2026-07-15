@@ -996,11 +996,13 @@ describe("executeSendAction", () => {
         dryRun: false,
         sessionKey: "discord-session",
         inboundEventKind: "room_event",
+        conversationReadOrigin: "delegated",
       },
       to: "channel:123",
       message: "hello",
       payload: { text: "hello", presentation },
       replyToId: "reply-1",
+      replyToIdSource: "explicit",
       threadId: "thread-1",
     });
 
@@ -1010,6 +1012,7 @@ describe("executeSendAction", () => {
           sessionKey: "discord-session",
           inboundEventKind: "room_event",
         }),
+        replyToIdSource: "explicit",
       }),
     );
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
@@ -1018,6 +1021,7 @@ describe("executeSendAction", () => {
       queuePolicy: "best_effort",
       replyToId: "reply-1",
       threadId: "thread-1",
+      conversationReadOrigin: "delegated",
     });
     const [payload] = requireArray(sendArgs.payloads, "send payloads");
     expectFields(requireRecord(payload, "prepared payload"), {
@@ -1162,3 +1166,4 @@ describe("executeSendAction", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

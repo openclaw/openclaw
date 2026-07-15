@@ -259,7 +259,7 @@ export const zh_CN = {
       invalidConfigUnknown: "- 无法解析配置。",
       manualChoice: "你想如何连接 AI？",
       nextSteps:
-        "工作区：{workspace}\n添加频道：`openclaw channels add`\n更喜欢聊天？运行 `openclaw crestodian`，然后说 `connect telegram`（或 `connect slack`）。\n打开 dashboard：`openclaw dashboard`\n稍后聊天：`openclaw`",
+        "工作区：{workspace}\n添加频道：`openclaw channels add`\n更喜欢聊天？运行 `openclaw setup`，然后说 `connect telegram`（或 `connect slack`）。\n打开 dashboard：`openclaw dashboard`\n稍后聊天：`openclaw`",
       nextStepsWithoutAi:
         "工作区：{workspace}\n稍后添加 AI：重新运行 `openclaw onboard`\n连接 AI 后添加频道：`openclaw channels add`\n打开 dashboard：`openclaw dashboard`",
       nextStepsTitle: "下一步",
@@ -621,6 +621,25 @@ export const zh_CN = {
       helpCreateBot: "2) 创建 bot 并复制它的 token",
       helpOpenConsole: "1) Mattermost System Console -> Integrations -> Bot Accounts",
     },
+    clickclack: {
+      baseUrlPrompt: "ClickClack 服务器 URL",
+      botToken: "ClickClack bot token",
+      botTokenInput: "输入 ClickClack bot token",
+      botTokenKeep: "ClickClack bot token 已配置。保留当前值？",
+      botTokenTitle: "ClickClack bot token",
+      connectionFailed: "连接检查失败：{error}。设置已保存；修复连接后重新运行设置。",
+      connectionTitle: "ClickClack 连接",
+      connected: "已连接为 @{handle} — 工作区 {workspace} 已解析。",
+      envPrompt: "检测到 CLICKCLACK_BOT_TOKEN。使用环境变量？",
+      helpCreateToken:
+        "在 ClickClack 中：工作区设置 → Integrations → OpenClaw → 创建 bot → 复制 token",
+      invalidToken: "ClickClack 拒绝了 bot token（401）。复制当前 token 后重新运行设置。",
+      validationWarningTitle: "ClickClack 连接检查",
+      workspaceHelp: "可使用 wsp_… ID、工作区 slug 或显示名称。",
+      workspaceNotFound:
+        "找不到工作区“{workspace}”。请检查 ID、slug 或名称，列出可用工作区后重新运行设置。",
+      workspacePrompt: "工作区（ID、slug 或名称）",
+    },
     nextcloudTalk: {
       allowFromPrompt: "Nextcloud Talk allowFrom（用户 ID）",
       apiPassword: "API 密码",
@@ -968,7 +987,7 @@ export const zh_CN = {
       dashboardWhenReady: "准备好后运行：{command}",
       daemonRuntime: "Gateway 服务运行时",
       daemonRuntimeNode: "Node（推荐）",
-      daemonRuntimeNodeHint: "WhatsApp + Telegram 需要使用。Bun 重新连接时可能造成内存损坏。",
+      daemonRuntimeNodeHint: "OpenClaw 状态使用 node:sqlite，因此必须使用 Node；Bun 无法运行网关。",
       editBootstrap: "之后可编辑 BOOTSTRAP.md 来修改 agent 的自我介绍方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次终端聊天会发送："醒醒，我的朋友！"',

@@ -16,8 +16,10 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
+import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
 
@@ -39,7 +41,7 @@ type TranscriptRepairResult = {
   reason?: string;
 };
 
-export type SessionTranscriptHealthIssue = TranscriptRepairResult & {
+type SessionTranscriptHealthIssue = TranscriptRepairResult & {
   broken: true;
 };
 
@@ -278,7 +280,7 @@ async function writeTranscriptEntries(params: {
 }
 
 /** Repairs one transcript file by keeping the active branch and backing up the original file. */
-export async function repairBrokenSessionTranscriptFile(params: {
+async function repairBrokenSessionTranscriptFile(params: {
   filePath: string;
   shouldRepair: boolean;
 }): Promise<TranscriptRepairResult> {
@@ -432,6 +434,7 @@ export function sessionTranscriptIssueToRepairEffect(
 
 /** Scans session transcript files and reports or repairs legacy/broken transcript state. */
 export async function noteSessionTranscriptHealth(params?: {
+  cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   sessionSqlite?: boolean;
   shouldRepair?: boolean;
@@ -483,6 +486,7 @@ export async function noteSessionTranscriptHealth(params?: {
 
   if (params?.sessionDirs === undefined || params.sessionSqlite === true) {
     await noteSessionSqliteMigrationHealth({
+      cfg: params?.cfg,
       env: params?.env ?? process.env,
       shouldRepair,
     });
@@ -490,17 +494,27 @@ export async function noteSessionTranscriptHealth(params?: {
 }
 
 async function noteSessionSqliteMigrationHealth(params: {
+  cfg?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
 }): Promise<void> {
   // Public doctor owns the operator-facing SQLite import; the targeted
   // --session-sqlite subcommand remains the diagnostic/proof surface.
   const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
-  const report = await runDoctorSessionSqlite({
-    allAgents: true,
-    env: params.env,
-    mode: params.shouldRepair ? "import" : "dry-run",
-  });
+  const runSessionSqlite = async () =>
+    await runDoctorSessionSqlite({
+      allAgents: true,
+      ...(params.cfg ? { cfg: params.cfg } : {}),
+      env: params.env,
+      mode: params.shouldRepair ? "import" : "dry-run",
+    });
+  const report = params.shouldRepair
+    ? await withDoctorSqliteMaintenanceLock({
+        env: params.env,
+        operation: "session SQLite import",
+        run: runSessionSqlite,
+      })
+    : await runSessionSqlite();
   if (
     report.totals.legacyEntries === 0 &&
     report.totals.unreferencedJsonlFiles === 0 &&

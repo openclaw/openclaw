@@ -8,11 +8,12 @@ import {
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
-  emitInternalSessionTranscriptUpdate,
+  emitSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
-import { createTaskRecord, resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import { createTaskRecord } from "../tasks/task-registry.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
+import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
 import {
   createChatRunState,
@@ -168,7 +169,7 @@ describe("startGatewayEventSubscriptions", () => {
   it("logs transcript handler failures", async () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
-    emitInternalSessionTranscriptUpdate({
+    emitSessionTranscriptUpdate({
       sessionFile: "/tmp/sess.jsonl",
       sessionKey: "agent:main:main",
     } as InternalSessionTranscriptUpdate);

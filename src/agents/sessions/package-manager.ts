@@ -4,11 +4,9 @@
  * Resolves extension, skill, prompt, and theme sources from npm, git, local paths, and project manifests.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, globSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { globSync } from "glob";
-import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 import { CONFIG_DIR_NAME } from "../config.js";
@@ -169,8 +167,7 @@ function collectFiles(
   }
 
   const root = rootDir ?? dir;
-  const ig = ignoreMatcher ?? ignore();
-  addIgnoreRules(ig, dir, root);
+  const ig = addIgnoreRules(dir, root, ignoreMatcher);
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -229,8 +226,7 @@ function collectSkillEntries(
   }
 
   const root = rootDir ?? dir;
-  const ig = ignoreMatcher ?? ignore();
-  addIgnoreRules(ig, dir, root);
+  const ig = addIgnoreRules(dir, root, ignoreMatcher);
 
   try {
     const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -361,8 +357,7 @@ function collectTopLevelAutoResourceEntries(
     return entries;
   }
 
-  const ig = ignore();
-  addIgnoreRules(ig, dir, dir);
+  const ig = addIgnoreRules(dir, dir);
 
   try {
     const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -456,8 +451,7 @@ function collectAutoExtensionEntries(dir: string): string[] {
   }
 
   // Otherwise, discover extensions from directory contents
-  const ig = ignore();
-  addIgnoreRules(ig, dir, dir);
+  const ig = addIgnoreRules(dir, dir);
 
   try {
     const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -542,34 +536,25 @@ function isRealPathWithinRoot(root: string, candidate: string): boolean {
   );
 }
 
-function matchesAnyPattern(filePath: string, patterns: string[], baseDir: string): boolean {
-  const rel = toPosixPath(relative(baseDir, filePath));
+function getMatchCandidates(filePath: string, baseDir: string, includeNames: boolean): string[] {
   const name = basename(filePath);
-  const filePathPosix = toPosixPath(filePath);
-  const isSkillFile = name === "SKILL.md";
-  const parentDir = isSkillFile ? dirname(filePath) : undefined;
-  const parentRel = isSkillFile ? toPosixPath(relative(baseDir, parentDir!)) : undefined;
-  const parentName = isSkillFile ? basename(parentDir!) : undefined;
-  const parentDirPosix = isSkillFile ? toPosixPath(parentDir!) : undefined;
+  const candidates = [toPosixPath(relative(baseDir, filePath)), toPosixPath(filePath)];
+  if (includeNames) {
+    candidates.push(name);
+  }
+  if (name === "SKILL.md") {
+    const parentDir = dirname(filePath);
+    candidates.push(toPosixPath(relative(baseDir, parentDir)), toPosixPath(parentDir));
+    if (includeNames) {
+      candidates.push(basename(parentDir));
+    }
+  }
+  return candidates;
+}
 
-  return patterns.some((pattern) => {
-    const normalizedPattern = toPosixPath(pattern);
-    if (
-      minimatch(rel, normalizedPattern) ||
-      minimatch(name, normalizedPattern) ||
-      minimatch(filePathPosix, normalizedPattern)
-    ) {
-      return true;
-    }
-    if (!isSkillFile) {
-      return false;
-    }
-    return (
-      minimatch(parentRel!, normalizedPattern) ||
-      minimatch(parentName!, normalizedPattern) ||
-      minimatch(parentDirPosix!, normalizedPattern)
-    );
-  });
+function matchesAnyPattern(filePath: string, patterns: string[], baseDir: string): boolean {
+  const candidates = getMatchCandidates(filePath, baseDir, true);
+  return patterns.some((pattern) => minimatch.match(candidates, toPosixPath(pattern)).length > 0);
 }
 
 function normalizeExactPattern(pattern: string): string {
@@ -579,58 +564,12 @@ function normalizeExactPattern(pattern: string): string {
 }
 
 function matchesAnyExactPattern(filePath: string, patterns: string[], baseDir: string): boolean {
-  if (patterns.length === 0) {
-    return false;
-  }
-  const rel = toPosixPath(relative(baseDir, filePath));
-  const name = basename(filePath);
-  const filePathPosix = toPosixPath(filePath);
-  const isSkillFile = name === "SKILL.md";
-  const parentDir = isSkillFile ? dirname(filePath) : undefined;
-  const parentRel = isSkillFile ? toPosixPath(relative(baseDir, parentDir!)) : undefined;
-  const parentDirPosix = isSkillFile ? toPosixPath(parentDir!) : undefined;
-
-  return patterns.some((pattern) => {
-    const normalized = normalizeExactPattern(pattern);
-    if (normalized === rel || normalized === filePathPosix) {
-      return true;
-    }
-    if (!isSkillFile) {
-      return false;
-    }
-    return normalized === parentRel || normalized === parentDirPosix;
-  });
-}
-
-function getOverridePatterns(entries: string[]): string[] {
-  return entries.filter(
-    (pattern) => pattern.startsWith("!") || pattern.startsWith("+") || pattern.startsWith("-"),
-  );
+  const candidates = new Set(getMatchCandidates(filePath, baseDir, false));
+  return patterns.some((pattern) => candidates.has(normalizeExactPattern(pattern)));
 }
 
 function isEnabledByOverrides(filePath: string, patterns: string[], baseDir: string): boolean {
-  const overrides = getOverridePatterns(patterns);
-  const excludes = overrides
-    .filter((pattern) => pattern.startsWith("!"))
-    .map((pattern) => pattern.slice(1));
-  const forceIncludes = overrides
-    .filter((pattern) => pattern.startsWith("+"))
-    .map((pattern) => pattern.slice(1));
-  const forceExcludes = overrides
-    .filter((pattern) => pattern.startsWith("-"))
-    .map((pattern) => pattern.slice(1));
-
-  let enabled = true;
-  if (excludes.length > 0 && matchesAnyPattern(filePath, excludes, baseDir)) {
-    enabled = false;
-  }
-  if (forceIncludes.length > 0 && matchesAnyExactPattern(filePath, forceIncludes, baseDir)) {
-    enabled = true;
-  }
-  if (forceExcludes.length > 0 && matchesAnyExactPattern(filePath, forceExcludes, baseDir)) {
-    enabled = false;
-  }
-  return enabled;
+  return applyPatterns([filePath], patterns.filter(isOverridePattern), baseDir).has(filePath);
 }
 
 /**
@@ -1221,12 +1160,9 @@ export class DefaultPackageManager implements PackageManager {
         return [resolve(root, entry)];
       }
 
-      return globSync(entry, {
-        cwd: root,
-        absolute: true,
-        dot: false,
-        nodir: false,
-      }).map((match) => resolve(match));
+      // The supported Node floor has stable fs globbing; its defaults exclude
+      // hidden paths and retain directories, matching package manifests.
+      return globSync(entry, { cwd: root }).map((match) => resolve(root, match));
     });
     return this.collectFilesFromPaths(
       this.filterManifestResourcePaths(resolved, root),
@@ -1526,3 +1462,4 @@ export class DefaultPackageManager implements PackageManager {
     };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

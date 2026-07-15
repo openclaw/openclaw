@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   EnvironmentsCreateResultSchema,
   EnvironmentsDestroyResultSchema,
+  EnvironmentsListResultSchema,
   EnvironmentSummarySchema,
   validateEnvironmentsCreateParams,
   validateEnvironmentsDestroyParams,
@@ -93,6 +94,21 @@ describe("worker environment protocol schemas", () => {
     expect(Value.Check(EnvironmentSummarySchema, requested)).toBe(true);
     expect(Value.Check(EnvironmentsCreateResultSchema, requested)).toBe(true);
     expect(Value.Check(EnvironmentsDestroyResultSchema, destroyed)).toBe(true);
+  });
+
+  it("lists configured worker profiles without provider settings", () => {
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [{ id: "aws", providerId: "crabbox" }],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [{ id: "aws", providerId: "crabbox", settings: { token: "hidden" } }],
+      }),
+    ).toBe(false);
   });
 
   it("preserves summaries without worker metadata and rejects malformed worker metadata", () => {

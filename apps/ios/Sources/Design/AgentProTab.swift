@@ -1,4 +1,5 @@
 import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 
 struct AgentProTab: View {
@@ -11,6 +12,7 @@ struct AgentProTab: View {
     @State var overview: AgentOverviewSnapshot?
     @State var overviewErrorText: String?
     @State var overviewLoading: Bool = false
+    @State var overviewRefreshGate = AgentOverviewRefreshGate()
     @State var agentRosterFilter: AgentRosterFilter = .all
     @State var agentSearchPresented = false
     @State var agentSearchText = ""
@@ -29,7 +31,11 @@ struct AgentProTab: View {
     @State var clawHubErrorText: String?
     @State var clawHubInstallSlug: String?
     @State var cronActionBusyIDs: Set<String> = []
+    @State var pendingCronRuns = AgentAutomationPendingRunRegistry()
     @State var cronActionStatusText: String?
+    @State var automationQuery = ""
+    @State var automationListFilter: AutomationListFilter = .all
+    @State var automationEditorSelection: AutomationEditorSelection?
 
     enum AgentRoute: Hashable {
         case agents
@@ -54,11 +60,11 @@ struct AgentProTab: View {
 
         var title: String {
             switch self {
-            case .all: "All"
-            case .enabled: "Enabled"
-            case .off: "Off"
-            case .setup: "Setup"
-            case .blocked: "Blocked"
+            case .all: String(localized: "All")
+            case .enabled: String(localized: "Enabled")
+            case .off: String(localized: "Off")
+            case .setup: String(localized: "Setup")
+            case .blocked: String(localized: "Blocked")
             }
         }
     }
@@ -74,9 +80,9 @@ struct AgentProTab: View {
 
         var title: String {
             switch self {
-            case .all: "All"
-            case .online: "Online"
-            case .ready: "Ready"
+            case .all: String(localized: "All")
+            case .online: String(localized: "Online")
+            case .ready: String(localized: "Ready")
             }
         }
 
@@ -85,6 +91,24 @@ struct AgentProTab: View {
             case .all: "person.2"
             case .online: "antenna.radiowaves.left.and.right"
             case .ready: "checkmark.circle"
+            }
+        }
+    }
+
+    enum AutomationListFilter: String, CaseIterable, Identifiable {
+        case all
+        case active
+        case paused
+
+        var id: Self {
+            self
+        }
+
+        var title: String {
+            switch self {
+            case .all: String(localized: "All")
+            case .active: String(localized: "Active")
+            case .paused: String(localized: "Paused")
             }
         }
     }
@@ -109,6 +133,15 @@ struct AgentProTab: View {
 
     struct SkillEditorSelection: Identifiable {
         let id: String
+    }
+
+    struct AutomationEditorSelection: Identifiable {
+        let initialJob: CronJob
+        let sourceGatewayID: String
+
+        var id: String {
+            self.initialJob.id
+        }
     }
 
     struct SkillEditorMessage {
@@ -150,6 +183,22 @@ struct AgentProTab: View {
             } else {
                 self.missingSkillEditorSheet
             }
+        }
+        .sheet(item: self.$automationEditorSelection) { selection in
+            AgentAutomationDetailScreen(
+                initialJob: selection.initialJob,
+                sourceGatewayID: selection.sourceGatewayID,
+                pendingRunRegistry: self.pendingCronRuns,
+                onRunQueued: { runID, processInstanceID in
+                    self.reservePendingCronRun(
+                        jobID: selection.initialJob.id,
+                        runID: runID,
+                        processInstanceID: processInstanceID,
+                        sourceGatewayID: selection.sourceGatewayID)
+                },
+                onChanged: {
+                    Task { await self.refreshOverview(force: true) }
+                })
         }
     }
 

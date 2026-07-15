@@ -28,6 +28,7 @@ import { paneSessionAgentId } from "./chat-session-workspace.ts";
 
 export type BackgroundTasksProps = {
   agentId: string;
+  statusRowId: string;
   collapsed: boolean;
   /** Pane too narrow for a side rail: presentation moves to a bottom strip
    * (mirrors the workspace rail's narrow mode). */
@@ -59,6 +60,9 @@ type BackgroundTasksState = {
   loading: boolean;
   pendingReload: boolean;
   requestId: number;
+  // wa-tooltip anchors by document id, so the status row's id must stay unique
+  // per pane: two panes on the same agent would otherwise cross-anchor.
+  statusRowId: string;
   tasks: TaskSummary[] | null;
 };
 
@@ -79,12 +83,15 @@ export type BackgroundTasksHost = {
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
 
+let nextStatusRowId = 0;
+
 function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksState {
   const agentId = paneSessionAgentId(host);
   const current = host.backgroundTasksState;
   if (current?.agentId === agentId) {
     return current;
   }
+  nextStatusRowId += 1;
   const next: BackgroundTasksState = {
     agentId,
     cancellingTaskIds: new Set(),
@@ -97,6 +104,7 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     loading: false,
     pendingReload: false,
     requestId: 0,
+    statusRowId: `chat-tasks-status-${nextStatusRowId}`,
     tasks: null,
   };
   host.backgroundTasksState = next;
@@ -263,7 +271,7 @@ async function cancelBackgroundTask(
   }
 }
 
-export function toggleBackgroundTasks(host: BackgroundTasksHost) {
+function toggleBackgroundTasks(host: BackgroundTasksHost) {
   const state = getBackgroundTasksState(host);
   state.collapsed = !state.collapsed;
   host.requestUpdate?.();
@@ -291,6 +299,7 @@ export function createBackgroundTasksProps(
   }
   return {
     agentId: state.agentId,
+    statusRowId: state.statusRowId,
     collapsed: state.collapsed,
     narrowLayout: opts.narrowLayout === true,
     connected: host.connected,
@@ -314,7 +323,7 @@ export function createBackgroundTasksProps(
 
 /** Active-count badge shown on the collapsed-rail toggles; 0 until the task
  * list has loaded for the pane's agent. */
-export function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
+function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
   return props?.tasks?.filter(isActiveTask).length ?? 0;
 }
 
@@ -347,7 +356,8 @@ export function renderBackgroundTasksToggle(
 
 // Status tone drives the meta line's colored word and the running pulse dot;
 // pill chips read too heavy at rail width, so tone is typographic only.
-const STATUS_TONES = {
+// Shared with the status row's hover preview (chat-background-tasks-status.ts).
+export const STATUS_TONES = {
   queued: "warn",
   running: "warn",
   completed: "ok",
