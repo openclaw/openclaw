@@ -7,6 +7,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
+import { syncClickClackCommandMenu } from "./command-menu.js";
 import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { resolveWorkspaceId } from "./resolve.js";
@@ -186,6 +187,9 @@ export async function startClickClackGatewayAccount(
     workspace: workspaceId,
     botUserId: configuredAccount.botUserId ?? me.id,
   };
+  if (account.commandMenu !== false) {
+    await syncClickClackCommandMenu({ cfg: ctx.cfg, client, log: ctx.log });
+  }
   ctx.setStatus({
     accountId: account.accountId,
     running: true,
