@@ -4,6 +4,7 @@
  */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
@@ -297,9 +298,15 @@ export async function startClickClackGatewayAccount(
         });
       });
       if (!ctx.abortSignal.aborted) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, account.reconnectMs);
-        });
+        try {
+          // The gateway abort owns both the active socket and its reconnect delay;
+          // otherwise shutdown can remain pending for the full configured backoff.
+          await sleepWithAbort(account.reconnectMs, ctx.abortSignal);
+        } catch (error) {
+          if (!ctx.abortSignal.aborted) {
+            throw error;
+          }
+        }
       }
     }
   } finally {
