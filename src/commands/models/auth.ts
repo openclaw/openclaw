@@ -137,12 +137,12 @@ async function readPipedStdin(): Promise<string> {
   const chunks: string[] = [];
   let bytes = 0;
   for await (const chunk of process.stdin) {
-    const text = String(chunk);
-    bytes += Buffer.byteLength(text, "utf8");
+    const chunkText = String(chunk);
+    bytes += Buffer.byteLength(chunkText, "utf8");
     if (bytes > PIPED_SECRET_MAX_BYTES) {
       throw new Error(`Piped secret input exceeds ${PIPED_SECRET_MAX_BYTES} bytes.`);
     }
-    chunks.push(text);
+    chunks.push(chunkText);
   }
   return chunks.join("");
 }
