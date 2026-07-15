@@ -12,6 +12,7 @@ import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import {
   formatDurationCompact,
+  formatDurationHuman,
   formatRelativeTimestamp,
   formatMs,
   formatTokens,
@@ -318,7 +319,7 @@ function renderRun(
           <div class="muted">
             ${typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)
               ? (formatDurationCompact(entry.durationMs, { spaced: true }) ??
-                `${entry.durationMs}ms`)
+                formatDurationHuman(entry.durationMs))
               : t("common.na")}
           </div>
           ${typeof entry.nextRunAtMs === "number"
