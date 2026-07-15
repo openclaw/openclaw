@@ -1000,18 +1000,19 @@ async function writeQaSuiteArtifacts(params: {
   const crablineRuntime = crablineChannelDriverSelection
     ? await import("@openclaw/crabline")
     : undefined;
-  const runCrablineChannelDriverSmoke =
-    params.runCrablineChannelDriverSmoke ?? crablineRuntime?.runOpenClawCrablineChannelDriverSmoke;
-  if (crablineChannelDriverSelection && !runCrablineChannelDriverSmoke) {
-    throw new Error("Crabline runtime did not provide its channel-driver smoke helper.");
+  let crablineChannelDriverSmoke: QaCrablineChannelDriverSmokeResult | undefined;
+  if (crablineChannelDriverSelection) {
+    const runCrablineChannelDriverSmoke =
+      params.runCrablineChannelDriverSmoke ??
+      crablineRuntime?.runOpenClawCrablineChannelDriverSmoke;
+    if (!runCrablineChannelDriverSmoke) {
+      throw new Error("Crabline runtime did not provide its channel-driver smoke helper.");
+    }
+    crablineChannelDriverSmoke = await runCrablineChannelDriverSmoke({
+      outputDir: params.outputDir,
+      selection: crablineChannelDriverSelection,
+    });
   }
-  const crablineChannelDriverSmoke: QaCrablineChannelDriverSmokeResult | undefined =
-    crablineChannelDriverSelection
-      ? await runCrablineChannelDriverSmoke({
-          outputDir: params.outputDir,
-          selection: crablineChannelDriverSelection,
-        })
-      : undefined;
   const crablineChannelDriverArtifactPaths = resolveQaCrablineChannelDriverArtifactPaths({
     result: crablineChannelDriverSmoke,
     selection: crablineChannelDriverSelection,
