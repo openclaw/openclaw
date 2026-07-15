@@ -265,7 +265,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +3: question-gateway-runtime resolver plus request/result types.
       // +1: async memory prompt preparation registration.
-      8153,
+      // +1: DiagnosticRunExecutionPhaseEvent, exported like run.attempt/run.progress siblings (compat mirror).
+      8154,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -320,7 +321,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +24: narrowed drain seam compat mirrors in the channel-message
       // deprecation-window barrels (#108656).
       // Harvest: retired dual-field plan payload builder -1; lower-only drift -8.
-      3005,
+      // +1: DiagnosticRunExecutionPhaseEvent mirrored by deprecated compat barrel.
+      3006,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
