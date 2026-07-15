@@ -49,11 +49,11 @@ const MEMEX_BASE_URL = "https://memex.tlon.network";
 /** Max bytes to read from the Memex upload JSON response. */
 const MEMEX_UPLOAD_RESPONSE_MAX_BYTES = 64 * 1024;
 
-/** Timeout for the Memex upload URL lookup request. */
+/** Total deadline for the Memex upload URL lookup, including DNS and response reading. */
 const TLON_MEMEX_UPLOAD_URL_TIMEOUT_MS = 30_000;
 
-/** Timeout for the actual file upload to Memex or a custom S3 target. */
-const TLON_UPLOAD_TIMEOUT_MS = 120_000;
+/** Total deadline for Memex and custom S3 PUTs, including DNS and the full upload. */
+const TLON_UPLOAD_TIMEOUT_MS = 300_000;
 
 let currentClientConfig: ClientConfig | null = null;
 

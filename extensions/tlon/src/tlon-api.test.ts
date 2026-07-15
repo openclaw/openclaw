@@ -157,7 +157,7 @@ describe("uploadFile memex upload hardening", () => {
     expect(secondCall?.auditContext).toBe("tlon-memex-upload");
     expect(secondCall?.capture).toBe(false);
     expect(secondCall?.maxRedirects).toBe(0);
-    expect(secondCall?.timeoutMs).toBe(120_000);
+    expect(secondCall?.timeoutMs).toBe(300_000);
     expect(secondCall?.init?.body).toBeInstanceOf(Blob);
     expect(mockRelease).toHaveBeenCalledTimes(2);
   });
@@ -506,7 +506,7 @@ describe("uploadFile custom S3 upload hardening", () => {
     expect(uploadCall?.auditContext).toBe("tlon-custom-s3-upload");
     expect(uploadCall?.capture).toBe(false);
     expect(uploadCall?.maxRedirects).toBe(0);
-    expect(uploadCall?.timeoutMs).toBe(120_000);
+    expect(uploadCall?.timeoutMs).toBe(300_000);
     expect(uploadCall?.policy).toBeUndefined();
     expect(mockRelease).toHaveBeenCalledTimes(1);
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
