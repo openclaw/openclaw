@@ -1988,8 +1988,10 @@ jobs:
 
       - name: Install iOS Swift tooling
         run: |
-          brew install xcodegen swiftlint
-          brew install --HEAD swiftformat
+          set -euo pipefail
+          brew install xcodegen swiftlint mint
+          mint install nicklockwood/SwiftFormat@main
+          swiftformat --version
 
       - name: Build iOS app
         run: pnpm ios:build
