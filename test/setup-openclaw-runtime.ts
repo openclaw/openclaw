@@ -32,7 +32,7 @@ type WorkerCleanupHelpers = {
   resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
   resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
   resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
-  resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").resetSessionWriteLockStateForTest;
+  resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.test-support.js").resetSessionWriteLockStateForTest;
 };
 
 type ReplyToModeResolver = NonNullable<
@@ -79,6 +79,9 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
     vi.importActual<typeof import("../src/agents/session-write-lock.js")>(
       "../src/agents/session-write-lock.js",
     ),
+    vi.importActual<typeof import("../src/agents/session-write-lock.test-support.js")>(
+      "../src/agents/session-write-lock.test-support.js",
+    ),
     vi.importActual<typeof import("../src/config/sessions/store-cache.js")>(
       "../src/config/sessions/store-cache.js",
     ),
@@ -91,6 +94,7 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       contextRuntimeState,
       modelsConfigState,
       sessionWriteLock,
+      sessionWriteLockTestSupport,
       sessionStoreCache,
       sessionStoreWriterState,
       fileLock,
@@ -103,7 +107,8 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       resetContextWindowCacheForTest: contextRuntimeState.resetContextWindowCacheForTest,
       resetFileLockStateForTest: fileLock.resetFileLockStateForTest,
       resetModelsJsonReadyCacheForTest: modelsConfigState.resetModelsJsonReadyCacheForTest,
-      resetSessionWriteLockStateForTest: sessionWriteLock.resetSessionWriteLockStateForTest,
+      resetSessionWriteLockStateForTest:
+        sessionWriteLockTestSupport.resetSessionWriteLockStateForTest,
     }),
   );
   return globalState[WORKER_CLEANUP_HELPERS];
