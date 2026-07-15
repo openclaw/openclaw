@@ -50,6 +50,7 @@ import {
 import { collectGatewayConfigFindings as collectGatewayConfigFindingsBase } from "./audit-gateway-config.js";
 import {
   readBoundedMcporterRegistry,
+  type McporterRegistryReadOutcome,
   type McporterRegistryRejectReason,
 } from "./audit-mcporter-registry.js";
 import type {
@@ -1072,7 +1073,7 @@ function listConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
 type GlobalMcporterRegistrySummary =
   | { status: "source"; summary: McpServerSourceSummary }
   | { status: "absent" }
-  | { status: "rejected"; reason: McporterRegistryRejectReason };
+  | Extract<McporterRegistryReadOutcome, { status: "rejected" }>;
 
 async function readGlobalMcporterRegistrySummary(
   stateDir: string,
@@ -1107,6 +1108,10 @@ function describeMcporterRegistryRejection(reason: McporterRegistryRejectReason)
       return "not a regular file";
     case "malformed":
       return "not valid JSON";
+    default: {
+      const exhaustive: never = reason;
+      return exhaustive;
+    }
   }
 }
 
