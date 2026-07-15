@@ -622,6 +622,7 @@ const token = process.env.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN || process.env.OPENCLA
 const response = await fetch("https://slack.com/api/auth.test", {
   method: "POST",
   headers: { authorization: \`Bearer \${token}\` },
+  signal: AbortSignal.timeout(15_000),
 });
 const body = await response.json();
 process.stdout.write(JSON.stringify({ ok: body.ok, team_id: body.team_id, user_id: body.user_id }));
