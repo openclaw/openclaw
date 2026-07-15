@@ -194,10 +194,11 @@ function resolveSuiteExecutionPlan(params: QaSuiteRunParams | undefined): QaSuit
     scenarios.push(scenario);
     testFileScenariosByKind.set(scenario.execution.kind, scenarios);
   }
-  const requiresChannelPartitions =
+  const requiresFlowPartitions =
     resolveQaFlowChannelGroups(params, flowScenarios).filter((group) => group.scenarios.length > 0)
-      .length > 1;
-  if (testFileScenariosByKind.size === 0 && !requiresChannelPartitions) {
+      .length > 1 ||
+    (flowScenarios.length > 1 && flowScenarios.some(scenarioRequiresIsolatedQaSuiteWorker));
+  if (testFileScenariosByKind.size === 0 && !requiresFlowPartitions) {
     return { kind: "flow" };
   }
   return {
@@ -207,7 +208,6 @@ function resolveSuiteExecutionPlan(params: QaSuiteRunParams | undefined): QaSuit
     testFileScenariosByKind,
   };
 }
-
 async function runQaTestFileSuiteFromRuntime(params: {
   runParams: QaSuiteRunParams | undefined;
   scenarios: readonly QaTestFileScenario[];

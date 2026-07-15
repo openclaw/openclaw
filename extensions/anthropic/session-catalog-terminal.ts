@@ -1,9 +1,9 @@
 // Claude catalog terminal ownership: validated local and paired-node resume plans.
 import fs from "node:fs/promises";
-import { resolveExecutableFromPathEnv } from "openclaw/plugin-sdk/node-host";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionCatalogTerminalPlan } from "openclaw/plugin-sdk/session-catalog";
 import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
+import { resolveClaudeTerminalExecutable } from "./session-catalog-executable.js";
 import {
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_TERMINAL_RESUME_COMMAND,
@@ -25,7 +25,8 @@ type ClaudeTerminalDependencies = {
 };
 
 export function isClaudeCliAvailable(pathEnv = process.env.PATH ?? ""): boolean {
-  return resolveExecutableFromPathEnv("claude", pathEnv) !== undefined;
+  const env = { ...process.env, PATH: pathEnv };
+  return resolveClaudeTerminalExecutable(env) !== undefined;
 }
 
 export function claudeNodeTerminalCapability(node: {
@@ -90,14 +91,15 @@ export async function openClaudeCatalogTerminal(
     if (!source?.isFile()) {
       throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
     }
-    const executable = resolveExecutableFromPathEnv("claude", process.env.PATH ?? "");
-    if (!executable) {
+    const resolution = resolveClaudeTerminalExecutable();
+    if (!resolution) {
       throw new ClaudeCatalogParamsError("Claude CLI is unavailable");
     }
     return {
       kind: "local",
-      argv: [executable, "--resume", params.threadId],
+      argv: [resolution.executable, "--resume", params.threadId],
       ...(record.cwd ? { cwd: record.cwd } : {}),
+      ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
       title,
     };
   }

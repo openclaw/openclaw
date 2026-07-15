@@ -5,6 +5,7 @@
   "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner",
   "type": "module",
   "dependencies": {
+    "@openclaw/matrix": "workspace:*",
     "@copilotkit/aimock": "1.35.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "p-limit": "7.3.0",

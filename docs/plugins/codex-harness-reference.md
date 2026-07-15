@@ -197,6 +197,7 @@ For an already-running app-server, use WebSocket transport:
 | `headers`                                     | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                               |
 | `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                                                             |
 | `remoteWorkspaceRoot`                         | unset                                                  | Remote Codex app-server workspace root. When set, OpenClaw infers the local workspace root from the resolved OpenClaw workspace, preserves the current cwd suffix under this remote root, and sends only the final app-server cwd to Codex. If the cwd is outside the resolved OpenClaw workspace root, OpenClaw fails closed instead of sending a gateway-local path to the remote app-server. |
+| `loopDetectionPreToolUseRelay`                | `true`                                                 | Install the Codex `PreToolUse` subprocess used only for OpenClaw loop detection and its explicit no-policy marker. Set `false` to reduce per-tool process fan-out. Before-tool plugin hooks and trusted-tool policy still install their required relay.                                                                                                                                         |
 | `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                     |
 | `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                                                                                                    |
 | `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle and progress guard used after a tool handoff, native tool completion, post-tool raw assistant progress, raw reasoning completion, or reasoning progress while OpenClaw waits for `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget.                                |
@@ -467,9 +468,9 @@ and `HOME` stays inherited so subprocesses can use normal user-home state.
 ## Dynamic tools
 
 Codex dynamic tools default to `searchable` loading, exposed under the
-`openclaw` namespace with `deferLoading: true`. OpenClaw does not expose
-dynamic tools that duplicate Codex-native workspace operations or Codex's own
-tool-search surface:
+`openclaw` namespace with `deferLoading: true`. OpenClaw normally does not
+expose dynamic tools that duplicate Codex-native workspace operations or
+Codex's own tool-search surface:
 
 - `read`
 - `write`
@@ -482,6 +483,11 @@ tool-search surface:
 - `tool_describe`
 - `tool_search`
 - `tool_search_code`
+
+When a finite runtime allowlist disables native Code Mode, OpenClaw sends an
+empty execution-environment selection. In that direct, unsandboxed case,
+OpenClaw keeps its policy-filtered `exec` and `process` tools as the shell
+fallback. Runtime allowlists and `codexDynamicToolsExclude` still apply.
 
 Most remaining OpenClaw integration tools, such as messaging, media, cron,
 browser, nodes, gateway, `heartbeat_respond`, and `web_search`, are available

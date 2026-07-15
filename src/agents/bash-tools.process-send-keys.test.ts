@@ -93,3 +93,14 @@ test("process send-keys redacts secret-shaped flag values before deriving detail
   expect(JSON.stringify(details)).not.toContain("abcdefghijklmnopqrstuvwxyz1234567890");
   expect(details.name).toContain("sk-pro…7890");
 });
+
+test("process send-keys reports the UTF-8 byte count", async () => {
+  const result = await handleProcessSendKeys({
+    sessionId: "sess-literal-bytes",
+    session: createProcessSessionFixture({ id: "sess-literal-bytes", command: "cat" }),
+    stdin: createWritableStdinStub(),
+    literal: "你好😀",
+  });
+
+  expectTextContent(result.content[0], "Sent 10 bytes to session sess-literal-bytes");
+});

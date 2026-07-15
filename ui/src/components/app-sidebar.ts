@@ -124,7 +124,11 @@ import {
 } from "./lobster-pet.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
-import { type CloudPlacementState, renderSessionRowBadges } from "./session-row-badges.ts";
+import {
+  type CloudPlacementState,
+  isStoppableCloudWorkerPlacement,
+  renderSessionRowBadges,
+} from "./session-row-badges.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
@@ -147,6 +151,7 @@ type SidebarRecentSession = {
   workSession?: boolean;
   worktreeId?: string;
   placementState?: CloudPlacementState;
+  cloudWorkerActive: boolean;
   hasAutomation: boolean;
   unread: boolean;
 };
@@ -1045,6 +1050,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         workSession: Boolean(row.worktree || row.execNode),
         worktreeId: row.worktree?.id,
         placementState: row.placement?.state,
+        cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
         hasAutomation: row.hasAutomation === true,
         unread: row.unread === true,
       };
@@ -1843,7 +1849,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       this.sessionDropTarget = null;
       return;
     }
-    if (!sessionDragActive(dataTransfer) || sectionId === "pinned") {
+    if (!sessionDragActive(dataTransfer)) {
       return;
     }
     event.preventDefault();
@@ -1884,7 +1890,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     return undefined;
   }
 
-  private handleSessionSectionDrop(event: DragEvent, category?: string) {
+  private handleSessionSectionDrop(event: DragEvent, sectionId: string, category?: string) {
     event.preventDefault();
     const sourceGroup = readSessionGroupDragData(event.dataTransfer);
     if (sourceGroup && category && sourceGroup !== category) {
@@ -1898,9 +1904,19 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       // Rows can be dragged out of a browsed (non-active) agent section, so the
       // lookup must cover every agent's cached rows, not just the active scope.
       const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
-      const nextCategory = category ?? null;
-      if (session && (session.category !== nextCategory || session.pinned)) {
-        this.assignSessionCategory(session, nextCategory, session.pinned ? { pinned: false } : {});
+      if (session && sectionId === "pinned") {
+        if (!session.pinned) {
+          void this.patchSession(session, { pinned: true });
+        }
+      } else if (session) {
+        const nextCategory = category ?? null;
+        if (session.category !== nextCategory || session.pinned) {
+          this.assignSessionCategory(
+            session,
+            nextCategory,
+            session.pinned ? { pinned: false } : {},
+          );
+        }
       }
     }
     this.draggingSessionKey = null;
@@ -2014,6 +2030,34 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   }
 
+  private async stopCloudWorker(session: SidebarRecentSession) {
+    if (
+      !session.cloudWorkerActive ||
+      session.hasActiveRun ||
+      !window.confirm(t("sessionsView.stopCloudWorkerConfirm", { session: session.label }))
+    ) {
+      return;
+    }
+    const scope = this.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+    try {
+      await scope.client.request(
+        "sessions.reclaim",
+        { key: session.key, agentId },
+        { timeoutMs: 10 * 60_000 },
+      );
+      if (!this.isSessionMutationScopeCurrent(scope)) {
+        return;
+      }
+      await scope.sessions.refresh({ agentId, force: true });
+    } catch (error) {
+      this.publishSessionMutationError(scope, error);
+    }
+  }
+
   private renderCustomizeMenu() {
     const position = this.customizeMenuPosition;
     const trigger = this.customizeMenuTrigger;
@@ -2119,6 +2163,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           .disabled=${!this.connected}
           .forkDisabled=${this.sessionsLoading || session.modelSelectionLocked}
           .archiveAllowed=${archiveAllowed}
+          .cloudWorkerStopAllowed=${Boolean(
+            !batchRows &&
+            session.cloudWorkerActive &&
+            !session.hasActiveRun &&
+            context &&
+            isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.reclaim") === true,
+          )}
           .groups=${this.knownSessionGroups()}
           .canOpenChat=${true}
           .work=${batchRows ? null : this.sessionMenuWork}
@@ -2170,6 +2221,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 break;
               case "toggle-archived":
                 void this.patchSession(session, { archived: true });
+                break;
+              case "stop-cloud-worker":
+                void this.stopCloudWorker(session);
                 break;
               case "delete":
                 void this.deleteSession(session);
@@ -2536,14 +2590,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           : group
             ? group
             : t("chat.sidebar.chats");
-    // Smart channel/work sections classify rows automatically; only custom
-    // groups and Chats accept manual drops (a drop means category assignment).
+    // Smart channel/work sections classify rows automatically. Pinned accepts
+    // pin drops; custom groups and Chats accept category assignment drops.
     // Custom group headers drag as a whole (mirroring whole-row session drags);
     // the dot handle inside is a pure visual affordance.
     const acceptsSessions =
-      !isPinned &&
-      this.sessionsGrouping === "category" &&
-      (section.id === "ungrouped" || Boolean(group));
+      isPinned ||
+      (this.sessionsGrouping === "category" && (section.id === "ungrouped" || Boolean(group)));
     const sectionClass = [
       "sidebar-recent-sessions__group",
       collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
@@ -2568,7 +2621,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           ? (event: DragEvent) => this.handleSessionSectionDragLeave(event, section.id, group)
           : nothing}
         @drop=${acceptsSessions || group
-          ? (event: DragEvent) => this.handleSessionSectionDrop(event, group)
+          ? (event: DragEvent) => this.handleSessionSectionDrop(event, section.id, group)
           : nothing}
       >
         ${showHeader

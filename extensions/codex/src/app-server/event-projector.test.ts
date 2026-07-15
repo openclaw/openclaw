@@ -140,6 +140,13 @@ function buildEmptyToolTelemetry(): CodexAppServerToolTelemetry {
   };
 }
 
+function expectUsageLimitPromptError(value: unknown): Error & { status: 429 } {
+  expect(value).toBeInstanceOf(Error);
+  const error = value as Error & { status?: unknown };
+  expect(error.status).toBe(429);
+  return error as Error & { status: 429 };
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Expected ${label}`);
@@ -1851,9 +1858,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
-    expect(result.promptError).toContain("Wait until the reset time");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
+    expect(promptError.message).toContain("Wait until the reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1880,8 +1888,9 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1920,8 +1929,9 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1946,9 +1956,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
-    expect(result.promptError).not.toContain("Codex did not return a reset time");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
+    expect(promptError.message).not.toContain("Codex did not return a reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 

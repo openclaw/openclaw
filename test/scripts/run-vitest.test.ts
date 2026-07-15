@@ -169,6 +169,21 @@ describe("scripts/run-vitest", () => {
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
 
+  it("isolates mixed explicit directory targets across Vitest projects", () => {
+    expect(resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host"])).toEqual([
+      "extensions/linux-canvas",
+      "src/node-host",
+      "--isolate",
+    ]);
+    expect(resolveImplicitVitestArgs(["src/node-host"])).toEqual(["src/node-host"]);
+    expect(
+      resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host", "--no-isolate"]),
+    ).toEqual(["extensions/linux-canvas", "src/node-host", "--no-isolate"]);
+    expect(
+      resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host", "--", "--no-isolate"]),
+    ).toEqual(["extensions/linux-canvas", "src/node-host", "--isolate", "--", "--no-isolate"]);
+  });
+
   it("routes explicit tooling tests through the tooling config", () => {
     expect(resolveImplicitVitestArgs(["run", "test/scripts/run-vitest.test.ts"])).toEqual([
       "run",

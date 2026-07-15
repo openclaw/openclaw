@@ -11,8 +11,9 @@ import {
   emitSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
-import { createTaskRecord, resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import { createTaskRecord } from "../tasks/task-registry.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
+import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
 import {
   createChatRunState,

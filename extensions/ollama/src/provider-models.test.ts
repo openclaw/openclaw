@@ -8,14 +8,12 @@ import {
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   queryOllamaModelShowInfo,
-  resetOllamaModelShowInfoCacheForTest,
   resolveOllamaApiBase,
   type OllamaTagModel,
 } from "./provider-models.js";
 
 describe("ollama provider models", () => {
   afterEach(() => {
-    resetOllamaModelShowInfoCacheForTest();
     vi.unstubAllGlobals();
   });
 
@@ -253,16 +251,16 @@ describe("ollama provider models", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const first = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [
-      { name: "qwen3:32b", digest: "sha256:abc123" },
+      { name: "qwen3:32b", digest: "sha256:refresh-old" },
     ]);
     const second = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [
-      { name: "qwen3:32b", digest: "sha256:def456" },
+      { name: "qwen3:32b", digest: "sha256:refresh-new" },
     ]);
 
     expect(first).toEqual([
       {
         name: "qwen3:32b",
-        digest: "sha256:abc123",
+        digest: "sha256:refresh-old",
         contextWindow: 131072,
         capabilities: ["thinking", "tools"],
       },
@@ -270,7 +268,7 @@ describe("ollama provider models", () => {
     expect(second).toEqual([
       {
         name: "qwen3:32b",
-        digest: "sha256:def456",
+        digest: "sha256:refresh-new",
         contextWindow: 262144,
         capabilities: ["vision", "thinking", "tools"],
       },
@@ -290,14 +288,14 @@ describe("ollama provider models", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    const model: OllamaTagModel = { name: "qwen3:32b", digest: "sha256:abc123" };
+    const model: OllamaTagModel = { name: "qwen3:32b", digest: "sha256:retry-empty" };
     const first = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [model]);
     const second = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [model]);
 
     expect(first).toEqual([
       {
         name: "qwen3:32b",
-        digest: "sha256:abc123",
+        digest: "sha256:retry-empty",
         contextWindow: undefined,
         capabilities: undefined,
       },
@@ -305,7 +303,7 @@ describe("ollama provider models", () => {
     expect(second).toEqual([
       {
         name: "qwen3:32b",
-        digest: "sha256:abc123",
+        digest: "sha256:retry-empty",
         contextWindow: 131072,
         capabilities: ["thinking", "tools"],
       },
@@ -314,7 +312,7 @@ describe("ollama provider models", () => {
   });
 
   it("normalizes /v1 base URLs before fetching and reuses the same cache entry", async () => {
-    const model: OllamaTagModel = { name: "qwen3:32b", digest: "sha256:abc123" };
+    const model: OllamaTagModel = { name: "qwen3:32b", digest: "sha256:normalized-base" };
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       expect(requestUrl(input)).toBe("http://127.0.0.1:11434/api/show");
       expect(JSON.parse(requestBodyText(init?.body))).toEqual({ name: "qwen3:32b" });
