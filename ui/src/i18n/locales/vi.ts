@@ -1600,7 +1600,7 @@ export const vi: TranslationMap = {
     addFiles: "Thêm tệp vào terminal",
     dropFiles: "Thả tệp để thêm",
     uploading: "Đang tải tệp lên…",
-    uploadProgress: "Đang tải lên {current}/{total}",
+    uploadProgress: "Đang tải lên {current} / {total}",
     uploadFailed: "Tải lên thất bại",
     retryUpload: "Thử lại",
     closeSession: "Close terminal session",
@@ -3455,6 +3455,8 @@ export const vi: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Có bản cập nhật",
+      updateMacAndGateway: "Cập nhật ứng dụng Mac + Gateway",
+      updateGateway: "Cập nhật Gateway",
       allSessions: "Tất cả phiên",
       chats: "Cuộc trò chuyện",
       openSessionMenu: "Open session menu",

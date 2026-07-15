@@ -3377,6 +3377,8 @@ export const zh_CN: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "有可用更新",
+      updateMacAndGateway: "更新 Mac App 和 Gateway",
+      updateGateway: "更新 Gateway",
       allSessions: "所有会话",
       chats: "聊天",
       openSessionMenu: "Open session menu",

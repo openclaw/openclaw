@@ -3398,6 +3398,8 @@ export const th: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "มีการอัปเดตพร้อมใช้งาน",
+      updateMacAndGateway: "อัปเดตแอป Mac + Gateway",
+      updateGateway: "อัปเดต Gateway",
       allSessions: "เซสชันทั้งหมด",
       chats: "แชท",
       openSessionMenu: "Open session menu",

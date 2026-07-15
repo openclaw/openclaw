@@ -1606,7 +1606,7 @@ export const uk: TranslationMap = {
     addFiles: "Додати файли до термінала",
     dropFiles: "Перетягніть файли, щоб додати їх",
     uploading: "Завантаження файлів…",
-    uploadProgress: "Завантаження {current} з {total}",
+    uploadProgress: "Завантаження: {current} із {total}",
     uploadFailed: "Не вдалося завантажити",
     retryUpload: "Повторити",
     closeSession: "Close terminal session",
@@ -3468,6 +3468,8 @@ export const uk: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Доступне оновлення",
+      updateMacAndGateway: "Оновити застосунок для Mac і Gateway",
+      updateGateway: "Оновити Gateway",
       allSessions: "Усі сеанси",
       chats: "Чати",
       openSessionMenu: "Open session menu",

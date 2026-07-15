@@ -1600,7 +1600,7 @@ export const id: TranslationMap = {
     dropFiles: "Letakkan file untuk menambahkannya",
     uploading: "Mengunggah file…",
     uploadProgress: "Mengunggah {current} dari {total}",
-    uploadFailed: "Unggahan gagal",
+    uploadFailed: "Pengunggahan gagal",
     retryUpload: "Coba lagi",
     closeSession: "Close terminal session",
     sessions: "Sesi terminal",
@@ -3459,6 +3459,8 @@ export const id: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Pembaruan tersedia",
+      updateMacAndGateway: "Perbarui aplikasi Mac + Gateway",
+      updateGateway: "Perbarui Gateway",
       allSessions: "Semua sesi",
       chats: "Chat",
       openSessionMenu: "Open session menu",

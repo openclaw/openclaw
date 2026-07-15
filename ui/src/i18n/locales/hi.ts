@@ -1590,7 +1590,7 @@ export const hi: TranslationMap = {
     dropFiles: "फ़ाइलें जोड़ने के लिए उन्हें यहाँ छोड़ें",
     uploading: "फ़ाइलें अपलोड की जा रही हैं…",
     uploadProgress: "{total} में से {current} अपलोड हो रहा है",
-    uploadFailed: "अपलोड विफल",
+    uploadFailed: "अपलोड विफल रहा",
     retryUpload: "पुनः प्रयास करें",
     closeSession: "Close terminal session",
     sessions: "टर्मिनल सत्र",
@@ -3421,6 +3421,8 @@ export const hi: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "अपडेट उपलब्ध है",
+      updateMacAndGateway: "Mac ऐप + Gateway अपडेट करें",
+      updateGateway: "Gateway अपडेट करें",
       allSessions: "सभी सत्र",
       chats: "चैट",
       openSessionMenu: "Open session menu",

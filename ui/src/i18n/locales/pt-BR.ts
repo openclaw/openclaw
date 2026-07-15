@@ -3472,6 +3472,8 @@ export const pt_BR: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Atualização disponível",
+      updateMacAndGateway: "Atualizar o app para Mac + Gateway",
+      updateGateway: "Atualizar o Gateway",
       allSessions: "Todas as sessões",
       chats: "Conversas",
       openSessionMenu: "Open session menu",

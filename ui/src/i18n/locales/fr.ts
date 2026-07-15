@@ -3523,6 +3523,8 @@ export const fr: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Mise à jour disponible",
+      updateMacAndGateway: "Mettre à jour l’app Mac + Gateway",
+      updateGateway: "Mettre à jour Gateway",
       allSessions: "Toutes les sessions",
       chats: "Discussions",
       openSessionMenu: "Open session menu",

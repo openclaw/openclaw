@@ -1607,7 +1607,7 @@ export const ja_JP: TranslationMap = {
     addFiles: "ターミナルにファイルを追加",
     dropFiles: "ファイルをドロップして追加",
     uploading: "ファイルをアップロード中…",
-    uploadProgress: "{total} 個中 {current} 個をアップロード中",
+    uploadProgress: "{total} 件中 {current} 件をアップロード中",
     uploadFailed: "アップロードに失敗しました",
     retryUpload: "再試行",
     closeSession: "Close terminal session",
@@ -3472,6 +3472,8 @@ export const ja_JP: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "アップデートがあります",
+      updateMacAndGateway: "Macアプリ + Gatewayをアップデート",
+      updateGateway: "Gatewayをアップデート",
       allSessions: "すべてのセッション",
       chats: "チャット",
       openSessionMenu: "Open session menu",

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import { createTestStorePath, FakeProvider } from "./manager.test-harness.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./runtime-state.js";
+import { setVoiceCallStateRuntime } from "./runtime-state.js";
 import type { WebhookContext, WebhookParseOptions } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 
@@ -148,7 +148,6 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
   });
 
   afterEach(() => {
-    clearVoiceCallStateRuntime();
     resetPluginStateStoreForTests();
   });
 
