@@ -144,7 +144,7 @@ export async function runCommandWithTimeout(
     buffer: false,
     cancelSignal: cancelController.signal,
     cwd,
-    detached: Boolean(killProcessTree && process.platform !== "win32"),
+    detached: killProcessTree && process.platform !== "win32",
     encoding: "buffer",
     baseEnv,
     env,
@@ -177,7 +177,7 @@ export async function runCommandWithTimeout(
       noOutputTimer = undefined;
     }
   };
-  const ownsExitedProcessTree = Boolean(killProcessTree && process.platform !== "win32");
+  const ownsExitedProcessTree = killProcessTree && process.platform !== "win32";
   const cancel = (reason: Exclude<CommandTerminationReason, "exit">) => {
     // Direct exit ends ordinary timer/abort ownership; releaseChildProcessOutputAfterExit
     // still bounds inherited pipes. POSIX tree mode must reap descendants, while
