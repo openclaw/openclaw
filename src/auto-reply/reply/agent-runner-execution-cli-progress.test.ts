@@ -490,9 +490,17 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     }));
     state.runCliAgentMock.mockImplementationOnce(
       async (params: { runId: string; emitCommentaryText?: boolean }) => {
-        // With no commentary lane or headline consumer, pre-tool text stays in
-        // the assistant stream instead of being split into progress events.
-        expect(params.emitCommentaryText).toBe(false);
+        expect(params.emitCommentaryText).toBe(true);
+        const agentEvents = await import("../../infra/agent-events.js");
+        agentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-1",
+            progressText: "Checking privately.",
+          },
+        });
         return { payloads: [{ text: "done" }], meta: {} };
       },
     );

@@ -1230,19 +1230,21 @@ export function createFollowupRunner(params: {
                           cliToolSummaryTracker.noteToolEvent(payload),
                         ]);
                       },
-                      onCommentaryText:
-                        progressOpts?.onItemEvent && shouldBridgeCliPreambleEvents(progressOpts)
-                          ? async ({ text, itemId }) => {
-                              await forwardFollowupProgressEvent({
-                                evt: {
-                                  stream: "item",
-                                  data: { kind: "preamble", progressText: text, itemId },
-                                },
-                                opts: progressOpts,
-                                detailMode: toolProgressDetail,
-                              });
+                      onCommentaryText: progressOpts?.onItemEvent
+                        ? async ({ text, itemId }) => {
+                            if (!shouldBridgeCliPreambleEvents(progressOpts)) {
+                              return;
                             }
-                          : undefined,
+                            await forwardFollowupProgressEvent({
+                              evt: {
+                                stream: "item",
+                                data: { kind: "preamble", progressText: text, itemId },
+                              },
+                              opts: progressOpts,
+                              detailMode: toolProgressDetail,
+                            });
+                          }
+                        : undefined,
                       onFastModeAutoProgress: async (payload) => {
                         await enqueueProgressDelivery(async () => {
                           // Mirrors direct dispatch progress suppression: ambient

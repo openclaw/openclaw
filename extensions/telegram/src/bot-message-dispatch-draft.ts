@@ -1,6 +1,5 @@
 // Telegram plugin module owns answer/reasoning draft lanes and rotation state.
 import type { Bot } from "grammy";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import type {
   OpenClawConfig,
   ReplyToMode,
@@ -22,6 +21,7 @@ import { createTelegramDraftStream, type TelegramDraftPreview } from "./draft-st
 import { renderTelegramHtmlText } from "./format.js";
 import type { DraftLaneState, LaneName } from "./lane-delivery.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
+import { resolveTelegramBlockStreamingEnabled } from "./preview-streaming.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 import { buildTelegramRichMarkdown, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 
@@ -77,14 +77,17 @@ export function createTelegramDraftController(params: {
   threadSpec: TelegramThreadSpec;
 }) {
   const streamDeliveryEnabled = !params.isRoomEvent && params.streamMode !== "off";
-  const accountBlockStreamingEnabled =
-    resolveChannelStreamingBlockEnabled(params.telegramCfg) ??
-    params.cfg.agents?.defaults?.blockStreamingDefault === "on";
-  const canStreamAnswerDraft =
+  const previewAvailable =
     streamDeliveryEnabled &&
     !params.hasTelegramQuoteReply &&
-    !accountBlockStreamingEnabled &&
     !params.forceBlockStreamingForReasoning;
+  const accountBlockStreamingEnabled = resolveTelegramBlockStreamingEnabled({
+    account: params.telegramCfg,
+    previewAvailable,
+    streamMode: params.streamMode,
+    legacyBlockStreamingDefault: params.cfg.agents?.defaults?.blockStreamingDefault,
+  });
+  const canStreamAnswerDraft = previewAvailable && !accountBlockStreamingEnabled;
   const streamReasoningDraft = params.resolvedReasoningLevel === "stream";
   const streamReasoningInProgressDraft =
     streamReasoningDraft && params.streamMode === "progress" && canStreamAnswerDraft;
