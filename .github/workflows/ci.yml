@@ -1705,7 +1705,25 @@ jobs:
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency }}
         shell: bash
-        run: node scripts/ci-run-node-test-shard.mjs
+        run: |
+          set -euo pipefail
+          runner="scripts/ci-run-node-test-shard.mjs"
+          if [[ ! -f "$runner" ]]; then
+            # Frozen release targets can predate the workflow-owned shard runner.
+            # Load only that runner from the exact trusted workflow commit while
+            # keeping its child tests rooted in the checked-out candidate.
+            harness_root="${RUNNER_TEMP}/openclaw-ci-shard-runner"
+            git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+            for file in \
+              scripts/ci-run-node-test-shard.mjs \
+              scripts/lib/direct-run.mjs \
+              scripts/lib/local-heavy-check-runtime.mjs; do
+              mkdir -p "${harness_root}/$(dirname "$file")"
+              git show "${GITHUB_SHA}:${file}" > "${harness_root}/${file}"
+            done
+            runner="${harness_root}/${runner}"
+          fi
+          node "$runner"
 
   # Types, lint, and format check shards.
   check-shard:
