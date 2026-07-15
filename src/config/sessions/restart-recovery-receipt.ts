@@ -1,5 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasRestartRecoveryTerminalRun } from "./restart-recovery-state.js";
+import {
+  hasActiveRestartRecoverySourceClaim,
+  hasRestartRecoveryTerminalRun,
+} from "./restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "./session-accessor.js";
 import type { SessionEntry } from "./types.js";
 
@@ -23,9 +26,7 @@ function hasActiveClaim(
 ): entry is SessionEntry {
   return (
     entry?.sessionId === scope.sessionId &&
-    entry.status === "running" &&
-    normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== undefined &&
-    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) === scope.sourceTurnId
+    hasActiveRestartRecoverySourceClaim(entry, scope.sourceTurnId)
   );
 }
 

@@ -34,7 +34,10 @@ import {
   resolveSessionPluginTraceLines,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
+import {
+  hasActiveRestartRecoverySourceClaim,
+  hasRestartRecoveryTerminalRun,
+} from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   formatSqliteSessionFileMarker,
@@ -1273,10 +1276,11 @@ export async function runReplyAgent(params: {
       : activeSessionEntry;
   if (
     restartRecoverySourceTurnId &&
-    hasRestartRecoveryTerminalRun(restartRecoveryEntry, restartRecoverySourceTurnId)
+    (hasRestartRecoveryTerminalRun(restartRecoveryEntry, restartRecoverySourceTurnId) ||
+      hasActiveRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId))
   ) {
-    // Terminal source IDs are durable ingress tombstones. Stop before hooks or
-    // maintenance can repeat model/tool effects for a provider redelivery.
+    // Terminal tombstones and active source ownership both identify provider redelivery.
+    // Stop before hooks or queues; the active owner retains its recovery claim.
     typing.cleanup();
     return undefined;
   }
@@ -1784,7 +1788,7 @@ export async function runReplyAgent(params: {
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
     const userTurnAdmission = await admitUserTurn(followupRun.userTurnTranscriptRecorder);
-    if (userTurnAdmission === "duplicate-terminal-source") {
+    if (userTurnAdmission === "duplicate-source") {
       return returnWithQueuedFollowupDrain(undefined);
     }
     // Adoption marks run start and must never be spool-replayed (would re-run tools).

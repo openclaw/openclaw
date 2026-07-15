@@ -1132,6 +1132,68 @@ describe("runReplyAgent pending final delivery capture", () => {
     ]);
   });
 
+  it("drops a redelivered active channel source before hooks or queue work", async () => {
+    const sessionCtx = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:24680",
+      MessageSid: "redelivered-active-message",
+    } as const;
+    const sourceTurnId = requireBuiltChannelSourceTurnId({
+      provider: "discord",
+      conversationId: "channel:24680",
+      messageId: "redelivered-active-message",
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      status: "running",
+      restartRecoveryDeliveryRunId: "active-recovery-run",
+      restartRecoveryDeliverySourceRunId: sourceTurnId,
+      restartRecoveryDeliveryContext: {
+        channel: "discord",
+        to: "channel:24680",
+      },
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const beforeAgentReply = vi.fn(async () => undefined);
+    const onTurnAdopted = vi.fn();
+    const duplicate = createMinimalRun({
+      beforeAgentReply,
+      isActive: true,
+      shouldSteer: true,
+      opts: { onTurnAdopted },
+      sessionCtx,
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun: duplicate.followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId: duplicate.sourceTurnId,
+      storePath,
+      text: "execute once",
+    });
+
+    await expect(duplicate.run()).resolves.toBeUndefined();
+
+    expect(duplicate.sourceTurnId).toBe(sourceTurnId);
+    expect(beforeAgentReply).not.toHaveBeenCalled();
+    expect(onTurnAdopted).not.toHaveBeenCalled();
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(await readStoredMainSession(storePath)).toMatchObject({
+      status: "running",
+      restartRecoveryDeliveryRunId: "active-recovery-run",
+      restartRecoveryDeliverySourceRunId: sourceTurnId,
+    });
+  });
+
   it("atomically replaces a terminal stale recovery claim for the next run", async () => {
     const sessionEntry: SessionEntry = {
       abortedLastRun: false,

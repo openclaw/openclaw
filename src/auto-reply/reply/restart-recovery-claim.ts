@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   buildRestartRecoveryClaimCleanupPatch,
+  hasActiveRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
   sameRestartRecoveryTerminalRunIds,
 } from "../../config/sessions/restart-recovery-state.js";
@@ -19,7 +20,7 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 type ReplyRestartRecoveryClaimController = {
   admitUserTurn: (
     recorder?: UserTurnTranscriptRecorder,
-  ) => Promise<"admitted" | "duplicate-terminal-source">;
+  ) => Promise<"admitted" | "duplicate-source">;
   checkpointBeforeAgentReply: (params: {
     state: Exclude<RestartRecoveryBeforeAgentReplyState, "pending">;
     pendingFinalDelivery?: {
@@ -170,8 +171,12 @@ export function createReplyRestartRecoveryClaimController(params: {
     }
     const admissionRunId = normalizeOptionalString(params.admissionRunId);
     const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
-    if (sourceTurnId && hasRestartRecoveryTerminalRun(entry, sourceTurnId)) {
-      return "duplicate-terminal-source";
+    if (
+      sourceTurnId &&
+      (hasRestartRecoveryTerminalRun(entry, sourceTurnId) ||
+        hasActiveRestartRecoverySourceClaim(entry, sourceTurnId))
+    ) {
+      return "duplicate-source";
     }
     const activeClaimRunId = normalizeOptionalString(entry?.restartRecoveryDeliveryRunId);
     const isTranscriptOnlyClaim =

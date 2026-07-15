@@ -182,6 +182,19 @@ export function hasRestartRecoveryTerminalRun(
   );
 }
 
+export function hasActiveRestartRecoverySourceClaim(
+  entry: SessionEntry | null | undefined,
+  sourceTurnId: string,
+): entry is SessionEntry {
+  const normalizedSourceTurnId = normalizeRunId(sourceTurnId);
+  return (
+    normalizedSourceTurnId !== undefined &&
+    entry?.status === "running" &&
+    normalizeRunId(entry.restartRecoveryDeliveryRunId) !== undefined &&
+    normalizeRunId(entry.restartRecoveryDeliverySourceRunId) === normalizedSourceTurnId
+  );
+}
+
 /** Clears exact active ownership and optionally records its client source as terminal. */
 export function buildRestartRecoveryClaimCleanupPatch(params: {
   entry: SessionEntry;
