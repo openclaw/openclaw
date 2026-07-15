@@ -534,7 +534,7 @@ struct DashboardWindowSmokeTests {
         #expect(
             openedSplitWidth - dividerThickness - openedLinkBrowserWidth >=
                 DashboardWindowLayout.mainBrowserMinWidth)
-        #expect(controller._testLinkBrowserMaximumThickness == NSSplitViewItemUnspecifiedDimension)
+        #expect(controller._testLinkBrowserMaximumThickness == NSSplitViewItem.unspecifiedDimension)
 
         defaults.set(Double(openedLinkBrowserWidth + 37), forKey: key)
         controller._testCompleteLinkBrowserDividerDrag()
