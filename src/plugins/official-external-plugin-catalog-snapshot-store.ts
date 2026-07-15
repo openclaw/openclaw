@@ -188,11 +188,20 @@ function rowToSnapshot(
     ...(row.last_modified ? { lastModified: row.last_modified } : {}),
   };
   const trust = rowToTrustState(row);
+  const storedMonotonic = trust ? readMonotonicStateFromBody(row.body) : undefined;
+  const monotonic = storedMonotonic?.generatedAt
+    ? {
+        mode: "signed-feed" as const,
+        sequence: storedMonotonic.sequence,
+        generatedAt: storedMonotonic.generatedAt,
+      }
+    : undefined;
   return {
     body: row.body,
     metadata,
     savedAt: row.saved_at,
     ...(trust ? { trust } : {}),
+    ...(monotonic ? { monotonic } : {}),
   };
 }
 
