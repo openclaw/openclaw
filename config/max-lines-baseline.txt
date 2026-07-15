@@ -89,7 +89,6 @@ extensions/device-pair/index.test.ts
 extensions/device-pair/index.ts
 extensions/diagnostics-otel/src/service.test.ts
 extensions/diagnostics-prometheus/src/service.ts
-extensions/discord/src/actions/runtime.guild.ts
 extensions/discord/src/actions/runtime.test.ts
 extensions/discord/src/channel.ts
 extensions/discord/src/monitor.test.ts
