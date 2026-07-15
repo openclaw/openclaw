@@ -14,7 +14,7 @@ import {
   parseFiniteNumber as readFiniteNumber,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
-import { normalizeElevenLabsRealtimeBaseUrl } from "./shared.js";
+import { DEFAULT_ELEVENLABS_BASE_URL, normalizeElevenLabsBaseUrl } from "./shared.js";
 
 type ElevenLabsRealtimeTranscriptionProviderConfig = {
   apiKey?: string;
@@ -130,10 +130,44 @@ function normalizeProviderConfig(
   };
 }
 
+function normalizeElevenLabsRealtimeBaseUrl(value?: string): string {
+  const resolved = normalizeOptionalString(value);
+  if (!resolved) {
+    return DEFAULT_ELEVENLABS_BASE_URL;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(resolved);
+  } catch {
+    throw new Error("Invalid ElevenLabs realtime baseUrl: value is not a valid URL");
+  }
+  const { protocol } = parsed;
+  if (protocol !== "http:" && protocol !== "https:" && protocol !== "ws:" && protocol !== "wss:") {
+    throw new Error(
+      `Invalid ElevenLabs realtime baseUrl: unsupported scheme "${protocol}" ` +
+        "(expected http, https, ws, or wss)",
+    );
+  }
+  // Strip query and fragment so they don't absorb the realtime path.
+  // Preserve userinfo so proxy credentials survive normalization.
+  const auth = parsed.username
+    ? `${parsed.username}${parsed.password ? `:${parsed.password}` : ""}@`
+    : "";
+  const clean = `${protocol}//${auth}${parsed.host}${parsed.pathname}`.replace(/\/+$/u, "");
+  return clean || `${protocol}//${parsed.host}`;
+}
+
 function toElevenLabsRealtimeWsUrl(config: ElevenLabsRealtimeTranscriptionSessionConfig): string {
   const url = new URL(
     `${normalizeElevenLabsRealtimeBaseUrl(config.baseUrl)}/v1/speech-to-text/realtime`,
   );
+  // Translate HTTP schemes to WebSocket; preserve direct WS/WSS endpoints
+  // so self-hosted realtime servers keep their contract.
+  if (url.protocol === "http:") {
+    url.protocol = "ws:";
+  } else if (url.protocol === "https:") {
+    url.protocol = "wss:";
+  }
   url.searchParams.set("model_id", config.modelId);
   url.searchParams.set("audio_format", config.audioFormat);
   url.searchParams.set("commit_strategy", config.commitStrategy);
@@ -285,3 +319,8 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
     },
   };
 }
+export const testing = {
+  normalizeProviderConfig,
+  normalizeElevenLabsRealtimeBaseUrl,
+  toElevenLabsRealtimeWsUrl,
+};
