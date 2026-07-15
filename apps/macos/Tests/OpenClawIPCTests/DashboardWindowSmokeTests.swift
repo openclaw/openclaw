@@ -535,13 +535,11 @@ struct DashboardWindowSmokeTests {
             openedSplitWidth - dividerThickness - openedLinkBrowserWidth >=
                 DashboardWindowLayout.mainBrowserMinWidth)
 
-        // Hosted macOS runners may constrain the window to their 1024px screen,
-        // leaving exactly the two minimum pane widths. Exercise the largest
-        // feasible drag there while the pure layout checks above cover 400px.
-        let requestedWidth = DashboardWindowLayout.linkBrowserWidth(
-            splitWidth: openedSplitWidth,
-            dividerThickness: dividerThickness,
-            persistedWidth: 400)
+        // Shrinking the browser is feasible even when a hosted runner cannot
+        // grow the window. Pure layout checks above cover an exact 400px restore.
+        let requestedWidth = max(
+            DashboardWindowLayout.linkBrowserMinWidth,
+            openedLinkBrowserWidth - 80)
         if DashboardWindowLayout.dividerMoved(
             from: openedLinkBrowserWidth,
             to: requestedWidth)
