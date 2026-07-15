@@ -456,6 +456,12 @@ cp "$openclaw_package_dir/package.json" /app/package.json
 node scripts/e2e/lib/npm-telegram-live/prepare-package.mjs \
   /app/package.json \
   /app/node_modules/openclaw/package.json
+# QA Lab is mounted from source, so install its external runtime-only harness dependency
+# separately from the package candidate under test.
+crabline_version="$(
+  node -e 'process.stdout.write(require("./extensions/qa-lab/package.json").devDependencies["@openclaw/crabline"])'
+)"
+npm install -g "@openclaw/crabline@$crabline_version" --no-fund --no-audit
 for deps_dir in "$openclaw_package_dir/node_modules" /npm-global/lib/node_modules; do
   [ -d "$deps_dir" ] || continue
   for dependency_dir in "$deps_dir"/*; do

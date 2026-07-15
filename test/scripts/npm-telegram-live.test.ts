@@ -267,6 +267,17 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain("zod");
   });
 
+  it("installs the mounted QA harness Crabline runtime dependency", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      'require("./extensions/qa-lab/package.json").devDependencies["@openclaw/crabline"]',
+    );
+    expect(script).toContain(
+      'npm install -g "@openclaw/crabline@$crabline_version" --no-fund --no-audit',
+    );
+  });
+
   it("lets npm-specific credential aliases override shared QA env", () => {
     expect(
       testing.resolveCredentialSource({
