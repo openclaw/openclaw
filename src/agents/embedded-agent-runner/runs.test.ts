@@ -6,10 +6,10 @@ import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  testing as replyRunTesting,
   createReplyOperation,
   isReplyRunActiveForSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
