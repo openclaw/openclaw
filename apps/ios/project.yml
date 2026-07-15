@@ -91,7 +91,7 @@ targets:
           - $(SRCROOT)/SwiftSources.input.xcfilelist
         script: |
           set -euo pipefail
-          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          export PATH="$HOME/.mint/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
           if ! command -v swiftformat >/dev/null 2>&1; then
             echo "error: swiftformat not found (brew install swiftformat)" >&2
             exit 1
@@ -105,7 +105,7 @@ targets:
           - $(SRCROOT)/SwiftSources.input.xcfilelist
         script: |
           set -euo pipefail
-          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          export PATH="$HOME/.mint/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
           if ! command -v swiftlint >/dev/null 2>&1; then
             echo "error: swiftlint not found (brew install swiftlint)" >&2
             exit 1
