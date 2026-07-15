@@ -1658,7 +1658,7 @@ function updateCachedLiveStream(
   input: BuildChatItemsProps,
 ): boolean {
   const item = items[index];
-  if (!item?.isStreaming) {
+  if (item?.kind !== "stream" || !item.isStreaming) {
     return false;
   }
   const expectedKey = `stream:${input.sessionKey}:${input.streamStartedAt ?? "live"}`;
