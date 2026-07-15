@@ -42,9 +42,9 @@ function markReply(text: string): CommandHandlerResult {
 }
 
 function resolveMarkLanguage(entry: SessionEntry | undefined): MarkLanguage {
-  return entry?.markLanguage === MARK_LANGUAGE_ENGLISH
-    ? MARK_LANGUAGE_ENGLISH
-    : MARK_LANGUAGE_CHINESE;
+  return entry?.markLanguage === MARK_LANGUAGE_CHINESE
+    ? MARK_LANGUAGE_CHINESE
+    : MARK_LANGUAGE_ENGLISH;
 }
 
 function markText(language: MarkLanguage, chinese: string, english: string): string {

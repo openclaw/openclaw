@@ -94,7 +94,7 @@ describe("mark command", () => {
     const storePath = await createStorePath();
     await seedSession(storePath);
     const result = await runMark(storePath, "/mark");
-    expect(result?.reply?.text).toContain("🚧");
+    expect(result?.reply?.text).toContain("Available marks");
     expect(result?.reply?.text).toContain("/mark clear");
     expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
       label: "测试会话",
@@ -127,6 +127,19 @@ describe("mark command", () => {
       pinnedAt,
     });
     expect(cleared?.sessionMark).toBeUndefined();
+  });
+
+  it("defaults to English until the session explicitly selects Chinese", async () => {
+    const storePath = await createStorePath();
+    await seedSession(storePath);
+
+    const defaultError = await runMark(storePath, "/mark nonexistent");
+    expect(defaultError?.reply?.text).toContain("No mark matches");
+    expect(loadSessionEntry({ storePath, sessionKey })?.markLanguage).toBeUndefined();
+
+    await runMark(storePath, "/mark 中文");
+    const chineseError = await runMark(storePath, "/mark nonexistent");
+    expect(chineseError?.reply?.text).toContain("没有匹配");
   });
 
   it("switches reply language without changing the label or pinnedAt", async () => {
