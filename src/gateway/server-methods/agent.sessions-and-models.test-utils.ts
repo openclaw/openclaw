@@ -11,6 +11,7 @@ import {
 } from "../../agents/subagent-registry.js";
 import {
   getDetachedTaskLifecycleRuntime,
+  resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/detached-task-runtime.js";
 import {
@@ -2009,42 +2010,46 @@ describe("gateway agent handler", () => {
       const finalizeTaskRunByRunIdSpy = vi.fn(() => {
         throw finalizeError;
       });
-      setDetachedTaskLifecycleRuntime({
-        ...defaultRuntime,
-        finalizeTaskRunByRunId: finalizeTaskRunByRunIdSpy,
-      });
-
-      const context = makeContext();
-      const respond = vi.fn();
-
-      await invokeAgent(
-        {
-          message: "finalize throw seam task",
-          sessionKey: "agent:main:main",
-          idempotencyKey: "task-registry-finalize-throw",
-        },
-        { context, respond, reqId: "task-registry-finalize-throw" },
-      );
-
-      await waitForAssertion(() => {
-        // Finalize threw, but the run must still complete (second res frame with ok status).
-        expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledTimes(1);
-        const completed = respond.mock.calls.some(([ok, payload]) => {
-          return ok === true && (payload as { status?: string } | undefined)?.status === "ok";
+      try {
+        setDetachedTaskLifecycleRuntime({
+          ...defaultRuntime,
+          finalizeTaskRunByRunId: finalizeTaskRunByRunIdSpy,
         });
-        expect(completed).toBe(true);
 
-        // The swallowed finalize error stays observable via a warn log.
-        const warnMock = context.logGateway.warn as ReturnType<typeof vi.fn>;
-        const loggedFinalizeError = warnMock.mock.calls.some(([message]) => {
-          return (
-            typeof message === "string" &&
-            message.includes("failed to finalize tracked agent task") &&
-            message.includes("finalize boom")
-          );
+        const context = makeContext();
+        const respond = vi.fn();
+
+        await invokeAgent(
+          {
+            message: "finalize throw seam task",
+            sessionKey: "agent:main:main",
+            idempotencyKey: "task-registry-finalize-throw",
+          },
+          { context, respond, reqId: "task-registry-finalize-throw" },
+        );
+
+        await waitForAssertion(() => {
+          // Finalize threw, but the run must still complete (second res frame with ok status).
+          expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledTimes(1);
+          const completed = respond.mock.calls.some(([ok, payload]) => {
+            return ok === true && (payload as { status?: string } | undefined)?.status === "ok";
+          });
+          expect(completed).toBe(true);
+
+          // The swallowed finalize error stays observable via a warn log.
+          const warnMock = context.logGateway.warn as ReturnType<typeof vi.fn>;
+          const loggedFinalizeError = warnMock.mock.calls.some(([message]) => {
+            return (
+              typeof message === "string" &&
+              message.includes("failed to finalize tracked agent task") &&
+              message.includes("finalize boom")
+            );
+          });
+          expect(loggedFinalizeError).toBe(true);
         });
-        expect(loggedFinalizeError).toBe(true);
-      });
+      } finally {
+        resetDetachedTaskLifecycleRuntimeForTests();
+      }
     });
   });
 });
