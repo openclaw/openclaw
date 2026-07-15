@@ -130,9 +130,8 @@ async function downloadFile(params: {
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
-    const pipelineStreams: NodeJS.ReadableStream[] = [readable];
-    // Track cumulative bytes to cap unbounded chunked responses.
     if (params.maxBytes !== undefined) {
+      // Track cumulative bytes to cap unbounded chunked responses.
       let downloadedBytes = 0;
       const maxBytes = params.maxBytes;
       const byteCounter = new Transform({
@@ -147,10 +146,10 @@ async function downloadFile(params: {
           }
         },
       });
-      pipelineStreams.push(byteCounter);
+      await pipeline(readable, byteCounter, file);
+    } else {
+      await pipeline(readable, file);
     }
-    pipelineStreams.push(file);
-    await pipeline(...pipelineStreams);
     const root = await fsRoot(params.rootDir);
     await root.copyIn(params.relativePath, tempPath);
     const stat = await fs.promises.stat(destPath);
