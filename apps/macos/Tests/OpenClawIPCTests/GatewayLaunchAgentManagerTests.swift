@@ -3,6 +3,28 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayLaunchAgentManagerTests {
+    @Test func `reads Gateway service ownership command directly from launchd`() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-gateway-\(UUID().uuidString).plist")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let arguments = [
+            "/Users/Test/.openclaw/tools/node/bin/node",
+            "/Users/Test/.openclaw/lib/node_modules/openclaw/dist/index.js",
+            "gateway",
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: ["ProgramArguments": arguments],
+            format: .xml,
+            options: 0)
+        try data.write(to: url, options: .atomic)
+
+        #expect(GatewayLaunchAgentManager._testLaunchdProgramArguments(plistURL: url) == arguments)
+        try Data("not a plist".utf8).write(to: url, options: .atomic)
+        #expect(GatewayLaunchAgentManager._testLaunchdProgramArguments(plistURL: url) == nil)
+        try FileManager.default.removeItem(at: url)
+        #expect(GatewayLaunchAgentManager._testLaunchdProgramArguments(plistURL: url) == [])
+    }
+
     @Test func `daemon status exposes only a loaded running gateway pid`() {
         #expect(GatewayLaunchAgentManager._testRunningGatewayPID(from: """
         {

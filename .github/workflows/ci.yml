@@ -1399,7 +1399,7 @@ jobs:
             // isolate each scenario so one invocation cannot pin a profile part.
             const compatibilityScenarioIds = new Set([
               "control-ui-chat-flow-playwright",
-              "crestodian-ring-zero-setup",
+              "system-agent-ring-zero-setup",
               "dreaming-shadow-trial-report",
               "gateway-smoke",
               "group-visible-reply-tool",

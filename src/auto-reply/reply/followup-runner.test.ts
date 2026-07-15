@@ -1077,7 +1077,7 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     const pending = runner(
       createQueuedRun({
-        onFollowupAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
+        onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
         run: {
           sessionId: "queued-session",
           sessionKey: "main",

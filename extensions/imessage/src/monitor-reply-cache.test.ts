@@ -1,18 +1,26 @@
 // Imessage tests cover monitor reply cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  findLatestIMessageEntryForChat,
-  isIMessageCurrentMessageInChat,
-  isKnownFromMeIMessageMessageId,
-  rememberIMessageReplyCache,
-  resetIMessageShortIdState,
-  resolveIMessageMessageId,
-} from "./monitor-reply-cache.js";
-import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
+import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
 
-beforeEach(() => {
-  installIMessageStateRuntimeForTest();
-  resetIMessageShortIdState();
+type ReplyCacheModule = typeof import("./monitor-reply-cache.js");
+let findLatestIMessageEntryForChat: ReplyCacheModule["findLatestIMessageEntryForChat"];
+let isIMessageCurrentMessageInChat: ReplyCacheModule["isIMessageCurrentMessageInChat"];
+let isKnownFromMeIMessageMessageId: ReplyCacheModule["isKnownFromMeIMessageMessageId"];
+let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
+let resolveIMessageMessageId: ReplyCacheModule["resolveIMessageMessageId"];
+
+async function loadReplyCache(options?: { preservePersistentState?: boolean }): Promise<void> {
+  ({
+    findLatestIMessageEntryForChat,
+    isIMessageCurrentMessageInChat,
+    isKnownFromMeIMessageMessageId,
+    rememberIMessageReplyCache,
+    resolveIMessageMessageId,
+  } = await loadFreshIMessageReplyCacheForTest(options));
+}
+
+beforeEach(async () => {
+  await loadReplyCache();
 });
 
 afterEach(() => {
@@ -311,7 +319,7 @@ describe("findLatestIMessageEntryForChat", () => {
 });
 
 describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
-  it("hydrates SQLite state before resolving a short id whose mapping predates this run", () => {
+  it("hydrates SQLite state before resolving a short id whose mapping predates this run", async () => {
     // Issue-then-restart contract: a shortId we issued before a gateway
     // restart must still resolve afterwards. The first resolve call after
     // process boot would otherwise miss the persisted mapping because the
@@ -328,7 +336,7 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
 
     // Simulate a restart: clear only the process-local maps and leave the
     // SQLite plugin-state rows intact.
-    resetIMessageShortIdState({ clearPersistent: false });
+    await loadReplyCache({ preservePersistentState: true });
 
     // Now resolve the short id we issued before the "restart". Without the
     // hydrate-on-resolve fix this throws "no longer available" because the
@@ -342,7 +350,7 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
     ).toBe("outbound-guid-pre-restart");
   });
 
-  it("persists entries when optional chat fields are explicitly undefined", () => {
+  it("persists entries when optional chat fields are explicitly undefined", async () => {
     const issued = rememberIMessageReplyCache({
       accountId: "default",
       messageId: "guid-with-undefined-optionals",
@@ -352,7 +360,7 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
       timestamp: Date.now(),
     });
 
-    resetIMessageShortIdState({ clearPersistent: false });
+    await loadReplyCache({ preservePersistentState: true });
 
     expect(
       resolveIMessageMessageId(issued.shortId, {
@@ -362,7 +370,7 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
     ).toBe("guid-with-undefined-optionals");
   });
 
-  it("does not reuse short ids after cached rows expire", () => {
+  it("does not reuse short ids after cached rows expire", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-08T00:00:00Z"));
     const first = rememberIMessageReplyCache({
@@ -373,7 +381,7 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
     expect(first.shortId).toBe("1");
 
     vi.setSystemTime(new Date("2026-05-08T07:00:00Z"));
-    resetIMessageShortIdState({ clearPersistent: false });
+    await loadReplyCache({ preservePersistentState: true });
     const second = rememberIMessageReplyCache({
       accountId: "default",
       messageId: "new-guid",

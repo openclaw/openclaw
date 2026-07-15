@@ -196,6 +196,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         if nextEnabled {
             controller.add(self.updateMessageHandler, name: Self.updateMessageHandlerName)
         }
+        // The handler is the dashboard's ownership probe. Notify the live page so
+        // its update target stays correct when connection mode or ownership changes.
+        self.webView.evaluateJavaScript(
+            "window.dispatchEvent(new CustomEvent('openclaw:native-update-availability-changed'))")
     }
 
     // MARK: - WKUIDelegate

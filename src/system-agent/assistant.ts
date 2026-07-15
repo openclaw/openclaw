@@ -169,7 +169,7 @@ async function requireVerifiedPlannerRoute(
 }
 
 async function createTempPlannerDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-openclaw-planner-"));
+  return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-planner-"));
 }
 
 async function removeTempPlannerDir(dir: string): Promise<void> {

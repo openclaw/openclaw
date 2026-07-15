@@ -17024,6 +17024,36 @@
       "translated": "Gateway \\(found) ऐप \\(required) से मेल नहीं खाता। सेटअप इसे अपडेट करेगा।"
     },
     {
+      "id": "native.apple.86e7c86924ad0c70",
+      "source": "Repairing the OpenClaw Gateway update…",
+      "translated": "OpenClaw Gateway अपडेट की मरम्मत की जा रही है…"
+    },
+    {
+      "id": "native.apple.b59713e1e3e7ee65",
+      "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
+      "translated": "OpenClaw Gateway को \\(targetVersion) पर अपडेट किया जा रहा है…"
+    },
+    {
+      "id": "native.apple.7772913c171b78ac",
+      "source": "Gateway update needs attention.",
+      "translated": "Gateway अपडेट पर ध्यान देने की आवश्यकता है।"
+    },
+    {
+      "id": "native.apple.e831aa3b0ced39d4",
+      "source": "Gateway update failed.",
+      "translated": "Gateway अपडेट विफल रहा।"
+    },
+    {
+      "id": "native.apple.681e41736dc87c67",
+      "source": "Gateway update finished, but verification failed.",
+      "translated": "Gateway अपडेट पूरा हो गया, लेकिन सत्यापन विफल रहा।"
+    },
+    {
+      "id": "native.apple.66f44c526206f5de",
+      "source": "OpenClaw Gateway \\(installedVersion) is installed.",
+      "translated": "OpenClaw Gateway \\(installedVersion) इंस्टॉल है।"
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "कैमरा"
@@ -19604,11 +19634,6 @@
       "translated": "फिर से जाँचें"
     },
     {
-      "id": "native.apple.f179b0447a18bbf4",
-      "source": "Connect with an API key or token instead…",
-      "translated": "इसके बजाय API key या token से कनेक्ट करें…"
-    },
-    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "किसी प्रदाता से साइन इन करें"
@@ -19622,6 +19647,11 @@
       "id": "native.apple.14b23c357d7a9eff",
       "source": "More sign-in options",
       "translated": "अधिक साइन-इन विकल्प"
+    },
+    {
+      "id": "native.apple.634c5b2f1e8ec40f",
+      "source": "API Keys",
+      "translated": "API Keys"
     },
     {
       "id": "native.apple.10971b41012d4f36",
@@ -20537,6 +20567,201 @@
       "id": "native.apple.1f5015480ea0f783",
       "source": "Share location when requested by the agent",
       "translated": "एजेंट द्वारा अनुरोध किए जाने पर स्थान साझा करें"
+    },
+    {
+      "id": "native.apple.65c21de72f06fd33",
+      "source": "OpenClaw updated",
+      "translated": "OpenClaw अपडेट हो गया"
+    },
+    {
+      "id": "native.apple.6197fc2d1ebd6b2e",
+      "source": "Finishing your OpenClaw update",
+      "translated": "आपका OpenClaw अपडेट पूरा किया जा रहा है"
+    },
+    {
+      "id": "native.apple.226b698fbbfc3cc4",
+      "source": "Checking the Mac app and Gateway…",
+      "translated": "Mac ऐप और Gateway की जाँच की जा रही है…"
+    },
+    {
+      "id": "native.apple.3a2e38e488490964",
+      "source": "The Mac app is updated. Gateway setup is not configured on this Mac.",
+      "translated": "Mac ऐप अपडेट हो गया है। इस Mac पर Gateway सेटअप कॉन्फ़िगर नहीं है।"
+    },
+    {
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "Gateway की जाँच नहीं की जा सकी।"
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClaw, Gateway सेवा के स्वामित्व का रिकॉर्ड नहीं पढ़ सका। Gateway LaunchAgent की जाँच करने के बाद फिर से प्रयास करें।"
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "Mac नोड की जाँच नहीं की जा सकी।"
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClaw, नोड सेवा के स्वामित्व का रिकॉर्ड नहीं पढ़ सका। नोड LaunchAgent की जाँच करने के बाद फिर से प्रयास करें।"
+    },
+    {
+      "id": "native.apple.1c57b3fcc10eabe7",
+      "source": "The Mac app is updated. Gateway \\(found) is newer than app \\(required), so OpenClaw left it unchanged.",
+      "translated": "Mac ऐप अपडेट हो गया है। Gateway \\(found), ऐप \\(required) से नया है, इसलिए OpenClaw ने इसमें कोई बदलाव नहीं किया।"
+    },
+    {
+      "id": "native.apple.e9b1899627402a15",
+      "source": "Gateway recovery failed.",
+      "translated": "Gateway रिकवरी विफल रही।"
+    },
+    {
+      "id": "native.apple.91debe404bb7affc",
+      "source": "The managed OpenClaw runtime could not be reinstalled.",
+      "translated": "प्रबंधित OpenClaw रनटाइम को फिर से इंस्टॉल नहीं किया जा सका।"
+    },
+    {
+      "id": "native.apple.3522be8112301d9f",
+      "source": "The Mac app is updated. This Gateway is managed separately, so OpenClaw left it unchanged.",
+      "translated": "Mac ऐप अपडेट हो गया है। यह Gateway अलग से प्रबंधित होता है, इसलिए OpenClaw ने इसमें कोई बदलाव नहीं किया।"
+    },
+    {
+      "id": "native.apple.1cc391ec928070c4",
+      "source": "Restarting and verifying the Gateway…",
+      "translated": "Gateway को पुनः आरंभ और सत्यापित किया जा रहा है…"
+    },
+    {
+      "id": "native.apple.37fe23aa33d9e76b",
+      "source": "Verifying the Mac node runtime…",
+      "translated": "Mac नोड रनटाइम सत्यापित किया जा रहा है…"
+    },
+    {
+      "id": "native.apple.73e001baeae8e873",
+      "source": "Letting your agent know you’re back…",
+      "translated": "आपके एजेंट को बताया जा रहा है कि आप वापस आ गए हैं…"
+    },
+    {
+      "id": "native.apple.3b2db6e4144742dd",
+      "source": "Welcome back",
+      "translated": "वापसी पर स्वागत है"
+    },
+    {
+      "id": "native.apple.69b54e24b90414dd",
+      "source": "OpenClaw \\(receipt.toVersion) and its Gateway are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) और इसका Gateway तैयार हैं।"
+    },
+    {
+      "id": "native.apple.f9d6fa6d7aaf23b6",
+      "source": "OpenClaw \\(receipt.toVersion) and its Mac node runtime are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) और इसका Mac नोड रनटाइम तैयार हैं।"
+    },
+    {
+      "id": "native.apple.a3fa88f5fd3c2732",
+      "source": "Your agent could not be notified yet. OpenClaw will retry after the next app launch.",
+      "translated": "आपके एजेंट को अभी सूचित नहीं किया जा सका। अगली बार ऐप लॉन्च होने के बाद OpenClaw फिर से प्रयास करेगा।"
+    },
+    {
+      "id": "native.apple.e9020028ddab1ba6",
+      "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
+      "translated": "OpenClaw आपके एजेंट को स्वचालित रूप से सूचित नहीं कर सका। ऐप और Gateway का अपडेट पूरा हो गया है।"
+    },
+    {
+      "id": "native.apple.afc120cf0a96ea30",
+      "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
+      "translated": "OpenClaw आपके एजेंट को स्वचालित रूप से सूचित नहीं कर सका। ऐप और Mac नोड का अपडेट पूरा हो गया है।"
+    },
+    {
+      "id": "native.apple.71ad85442725f45c",
+      "source": "OpenClaw could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
+      "translated": "OpenClaw एजेंट की सूचना की पुष्टि नहीं कर सका। डुप्लिकेट स्वागत संदेश से बचने के लिए यह दोबारा प्रयास नहीं करेगा।"
+    },
+    {
+      "id": "native.apple.a3deea03e4870dd0",
+      "source": "The remote Gateway is older than this Mac app, so OpenClaw skipped the agent notification.",
+      "translated": "रिमोट Gateway इस Mac ऐप से पुराना है, इसलिए OpenClaw ने एजेंट की सूचना छोड़ दी।"
+    },
+    {
+      "id": "native.apple.3636a8b503ff00d2",
+      "source": "The Gateway remains paused, so OpenClaw did not wake your agent.",
+      "translated": "Gateway अभी भी रुका हुआ है, इसलिए OpenClaw ने आपके एजेंट को सक्रिय नहीं किया।"
+    },
+    {
+      "id": "native.apple.0f533623878f3d67",
+      "source": "Gateway verification failed.",
+      "translated": "Gateway का सत्यापन विफल रहा।"
+    },
+    {
+      "id": "native.apple.3ab92d342b4fa00b",
+      "source": "The managed runtime does not match the updated Mac app.",
+      "translated": "प्रबंधित रनटाइम अपडेट किए गए Mac ऐप से मेल नहीं खाता।"
+    },
+    {
+      "id": "native.apple.2cfad583503a9a41",
+      "source": "The Mac node did not restart.",
+      "translated": "Mac नोड पुनः आरंभ नहीं हुआ।"
+    },
+    {
+      "id": "native.apple.5b9061db451b644a",
+      "source": "The Mac node did not become ready.",
+      "translated": "Mac नोड तैयार नहीं हुआ।"
+    },
+    {
+      "id": "native.apple.54e76dabec1eb1c1",
+      "source": "The node service restarted but did not remain running.",
+      "translated": "नोड सेवा पुनः आरंभ हुई, लेकिन चलती नहीं रही।"
+    },
+    {
+      "id": "native.apple.51fe0a453f99f5ad",
+      "source": "The Gateway did not start.",
+      "translated": "Gateway शुरू नहीं हुआ।"
+    },
+    {
+      "id": "native.apple.9e9e4278e553c144",
+      "source": "The update is installed, but Gateway health did not become ready.",
+      "translated": "अपडेट इंस्टॉल हो गया है, लेकिन Gateway की स्थिति तैयार नहीं हुई।"
+    },
+    {
+      "id": "native.apple.91a105faed454e5a",
+      "source": "The Gateway could not reconnect.",
+      "translated": "Gateway दोबारा कनेक्ट नहीं हो सका।"
+    },
+    {
+      "id": "native.apple.9ac2dfa295929a92",
+      "source": "OpenClaw installed the update but could not verify the Gateway connection.",
+      "translated": "OpenClaw ने अपडेट इंस्टॉल कर दिया, लेकिन Gateway कनेक्शन सत्यापित नहीं कर सका।"
+    },
+    {
+      "id": "native.apple.8bf292892311882e",
+      "source": "Mac app updated",
+      "translated": "Mac ऐप अपडेट किया गया"
+    },
+    {
+      "id": "native.apple.d0f712a2ed470a3e",
+      "source": "Gateway update needs help",
+      "translated": "Gateway अपडेट के लिए सहायता चाहिए"
+    },
+    {
+      "id": "native.apple.3a6aaa0aa0be82e7",
+      "source": "Ask Discord",
+      "translated": "Discord से पूछें"
+    },
+    {
+      "id": "native.apple.11b9ee23142b1060",
+      "source": "Retry",
+      "translated": "पुनः प्रयास करें"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "अपडेट गाइड"
+    },
+    {
+      "id": "native.apple.144b21229f65f2a4",
+      "source": "Continue",
+      "translated": "जारी रखें"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",

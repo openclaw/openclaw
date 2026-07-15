@@ -28,7 +28,6 @@ const {
   clearSignalApprovalReactionTargetsForTest,
   resolveSignalApprovalReactionTargetWithPersistence,
 } = await import("./approval-reactions.js");
-const { clearSignalReplyAuthorsForTest } = await import("./reply-authors.js");
 const { sendMessageSignal } = await import("./send.js");
 
 const SIGNAL_TEST_CFG = {
@@ -45,9 +44,8 @@ const SIGNAL_TEST_CFG = {
 };
 
 describe("sendMessageSignal receipts", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     clearSignalApprovalReactionTargetsForTest();
-    await clearSignalReplyAuthorsForTest();
     signalRpcRequestMock.mockReset();
     resolveOutboundAttachmentFromUrlMock.mockClear();
   });

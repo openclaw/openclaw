@@ -357,7 +357,3 @@ export async function buildOllamaProvider(
     ),
   };
 }
-
-export function resetOllamaModelShowInfoCacheForTest(): void {
-  ollamaModelShowInfoCache.clear();
-}

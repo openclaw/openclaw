@@ -37,6 +37,7 @@ export * from "./schema/sessions-catalog.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/snapshot.js";
 export * from "./schema/system-info.js";
+export * from "./schema/system-event.js";
 export * from "./schema/task-suggestions.js";
 export * from "./schema/tasks.js";
 export * from "./schema/terminal.js";

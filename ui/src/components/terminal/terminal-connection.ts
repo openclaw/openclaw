@@ -2,7 +2,7 @@
 
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 
-type TerminalRequestOptions = { timeoutMs?: number | null };
+type TerminalRequestOptions = { timeoutMs?: number | null; signal?: AbortSignal };
 
 /** Minimal gateway surface the terminal needs; GatewayBrowserClient satisfies it. */
 export interface TerminalGatewayClient {

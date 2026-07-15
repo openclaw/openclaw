@@ -88,7 +88,7 @@ type SystemAgentRunCliAgent = (
   },
 ) => ReturnType<typeof import("../agents/cli-runner.js").runCliAgent>;
 
-export type SystemAgentTurnDeps = SystemAgentVerifiedInferenceDeps & {
+type SystemAgentTurnDeps = SystemAgentVerifiedInferenceDeps & {
   runEmbeddedAgent?: SystemAgentRunEmbeddedAgent;
   runCliAgent?: SystemAgentRunCliAgent;
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
