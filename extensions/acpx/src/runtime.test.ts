@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AcpRuntimeError,
   type AcpRuntime,
+  type AcpRuntimeCapabilities,
   type AcpRuntimeEvent,
   type AcpRuntimeTurn,
 } from "../runtime-api.js";
@@ -40,6 +41,7 @@ function makeRuntime(
     ensureSession: AcpRuntime["ensureSession"];
     startTurn: NonNullable<AcpRuntime["startTurn"]>;
     runTurn: AcpRuntime["runTurn"];
+    getCapabilities: NonNullable<AcpRuntime["getCapabilities"]>;
     getStatus: NonNullable<AcpRuntime["getStatus"]>;
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
     isHealthy(): boolean;
@@ -83,6 +85,7 @@ function makeRuntime(
           ensureSession: AcpRuntime["ensureSession"];
           startTurn: NonNullable<AcpRuntime["startTurn"]>;
           runTurn: AcpRuntime["runTurn"];
+          getCapabilities: NonNullable<AcpRuntime["getCapabilities"]>;
           getStatus: NonNullable<AcpRuntime["getStatus"]>;
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
           isHealthy(): boolean;
@@ -1068,6 +1071,111 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
+  it("forwards getCapabilities input handles and injects non-mutating reasoning aliases", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const delegateCapabilities: AcpRuntimeCapabilities = {
+      controls: ["session/set_config_option"],
+      configOptionKeys: ["reasoning_effort", "model"],
+    };
+    const getCapabilities = vi
+      .spyOn(delegate, "getCapabilities")
+      .mockResolvedValue(delegateCapabilities);
+
+    const handle: Parameters<NonNullable<AcpRuntime["getCapabilities"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
+    const input = { handle };
+
+    const result = await runtime.getCapabilities?.(input);
+
+    expect(getCapabilities).toHaveBeenCalledWith(input);
+    expect(result?.configOptionKeys).toEqual([
+      "reasoning_effort",
+      "model",
+      "thinking",
+      "thought_level",
+    ]);
+    expect(result?.configOptionKeys).not.toContain("effort");
+    // Delegate-owned arrays remain unchanged.
+    expect(delegateCapabilities.configOptionKeys).toEqual(["reasoning_effort", "model"]);
+  });
+
+  it("does not inject aliases when reasoning_effort is not advertised", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:claude:acp:test",
+        agentCommand: "npx @agentclientprotocol/claude-agent-acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const getCapabilities = vi.spyOn(delegate, "getCapabilities").mockResolvedValue({
+      controls: ["session/set_config_option"],
+      configOptionKeys: ["model", "timeout_seconds"],
+    });
+
+    const handle: Parameters<NonNullable<AcpRuntime["getCapabilities"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:test",
+      acpxRecordId: "agent:claude:acp:test",
+    };
+
+    const result = await runtime.getCapabilities?.({ handle });
+
+    expect(getCapabilities).toHaveBeenCalledWith({ handle });
+    expect(result?.configOptionKeys).toEqual(["model", "timeout_seconds"]);
+    expect(result?.configOptionKeys).not.toContain("thinking");
+    expect(result?.configOptionKeys).not.toContain("thought_level");
+    expect(result?.configOptionKeys).not.toContain("effort");
+  });
+
+  it("does not inject aliases for non-Codex agents even when reasoning_effort is advertised", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:claude:acp:test",
+        agentCommand: "npx @agentclientprotocol/claude-agent-acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const delegateCapabilities: AcpRuntimeCapabilities = {
+      controls: ["session/set_config_option"],
+      configOptionKeys: ["reasoning_effort", "model"],
+    };
+    const getCapabilities = vi
+      .spyOn(delegate, "getCapabilities")
+      .mockResolvedValue(delegateCapabilities);
+
+    const handle: Parameters<NonNullable<AcpRuntime["getCapabilities"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:test",
+      acpxRecordId: "agent:claude:acp:test",
+    };
+
+    const result = await runtime.getCapabilities?.({ handle });
+
+    expect(getCapabilities).toHaveBeenCalledWith({ handle });
+    // Non-Codex agents should NOT get aliases — the acpx setConfigOption
+    // only translates thinking/thought_level for Codex ACP sessions.
+    expect(result?.configOptionKeys).toEqual(["reasoning_effort", "model"]);
+    expect(result?.configOptionKeys).not.toContain("thinking");
+    expect(result?.configOptionKeys).not.toContain("thought_level");
+    // Delegate-owned arrays remain unchanged.
+    expect(delegateCapabilities.configOptionKeys).toEqual(["reasoning_effort", "model"]);
+  });
+
   it("normalizes Codex ACP thinking config controls to reasoning effort", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
@@ -1095,6 +1203,44 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       handle,
       key: "reasoning_effort",
       value: "low",
+    });
+  });
+
+  it("forwards unsupported thinking config rejection for non-Codex ACP sessions", async () => {
+    const unsupportedThinkingError = new AcpRuntimeError(
+      "ACP_BACKEND_UNSUPPORTED_CONTROL",
+      "unsupported thinking",
+    );
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:gemini:acp:test",
+        agentCommand: "gemini --experimental-acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi
+      .spyOn(delegate, "setConfigOption")
+      .mockRejectedValue(unsupportedThinkingError);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:gemini:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:gemini:acp:test",
+      acpxRecordId: "agent:gemini:acp:test",
+    };
+
+    await expect(
+      runtime.setConfigOption({
+        handle,
+        key: "thinking",
+        value: "high",
+      }),
+    ).rejects.toBe(unsupportedThinkingError);
+
+    expect(setConfigOption).toHaveBeenCalledWith({
+      handle,
+      key: "thinking",
+      value: "high",
     });
   });
 

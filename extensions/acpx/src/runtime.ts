@@ -1269,8 +1269,31 @@ export class AcpxRuntime implements AcpRuntime {
     };
   }
 
-  getCapabilities(): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
-    return this.delegate.getCapabilities();
+  async getCapabilities(
+    input?: Parameters<NonNullable<AcpRuntime["getCapabilities"]>>[0],
+  ): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
+    const raw = this.delegate.getCapabilities(input);
+    const caps = raw instanceof Promise ? await raw : raw;
+    const keys = caps.configOptionKeys ? [...caps.configOptionKeys] : undefined;
+    // Only inject thinking aliases for Codex ACP sessions — the acpx
+    // setConfigOption only translates thinking/thought_level to
+    // reasoning_effort for Codex ACP, so advertising aliases to
+    // non-Codex agents would claim support that doesn't exist.
+    if (keys?.includes("reasoning_effort") && input?.handle) {
+      const command = await this.resolveCommandForHandle(input.handle);
+      if (isCodexAcpCommand(command)) {
+        const aliases = ["thinking", "thought_level"];
+        for (const alias of aliases) {
+          if (!keys.includes(alias)) {
+            keys.push(alias);
+          }
+        }
+      }
+    }
+    return {
+      ...caps,
+      ...(keys ? { configOptionKeys: keys } : {}),
+    };
   }
 
   async getStatus(
@@ -1337,7 +1360,6 @@ export class AcpxRuntime implements AcpRuntime {
     }
     await delegate.setConfigOption(input);
   }
-
   async cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {
     const record = await this.sessionStore.load(
       input.handle.acpxRecordId ?? input.handle.sessionKey,
