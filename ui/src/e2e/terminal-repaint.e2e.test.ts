@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Locator } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -18,6 +19,11 @@ const screenshotPath = process.env.OPENCLAW_TERMINAL_REPAINT_SCREENSHOT?.trim();
 
 let browser: Browser;
 let server: ControlUiE2eServer;
+
+async function terminalCanvasDigest(canvas: Locator): Promise<string> {
+  const png = await canvas.screenshot({ animations: "disabled", caret: "hide" });
+  return createHash("sha256").update(png).digest("hex");
+}
 
 describeControlUiE2e("Control UI terminal repaint", () => {
   beforeAll(async () => {
@@ -71,21 +77,25 @@ describeControlUiE2e("Control UI terminal repaint", () => {
       await gateway.waitForRequest("connect");
       await page.keyboard.press("Control+Backquote");
       await gateway.waitForRequest("terminal.open");
-      await gateway.emitGatewayEvent("terminal.data", {
-        sessionId: "terminal-repaint-e2e",
-        seq: 0,
-        data: "terminal repaint sentinel\r\n$ ",
-      });
 
       const hideTerminal = page.getByRole("button", { name: "Hide terminal" });
       const terminalCanvas = page.locator(".tp-host canvas");
       await terminalCanvas.waitFor({ state: "visible" });
+      const blankCanvasDigest = await terminalCanvasDigest(terminalCanvas);
+      await gateway.emitGatewayEvent("terminal.data", {
+        sessionId: "terminal-repaint-e2e",
+        seq: 0,
+        data: "\u001b[?25lterminal repaint sentinel\r\n$ ",
+      });
+      await expect.poll(() => terminalCanvasDigest(terminalCanvas)).not.toBe(blankCanvasDigest);
+      const renderedCanvasDigest = await terminalCanvasDigest(terminalCanvas);
 
       for (let cycle = 0; cycle < 3; cycle += 1) {
         await hideTerminal.click();
         await expect.poll(() => terminalCanvas.count()).toBe(0);
         await page.keyboard.press("Control+Backquote");
         await terminalCanvas.waitFor({ state: "visible" });
+        await expect.poll(() => terminalCanvasDigest(terminalCanvas)).toBe(renderedCanvasDigest);
       }
 
       await terminalCanvas.click();
