@@ -466,7 +466,7 @@ describe("noteAuthProfileHealth", () => {
     );
   });
 
-  it("passes the target agent dir when refreshing OAuth profiles", async () => {
+  it("forces refresh for expiring OAuth profiles in the target agent dir", async () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const coderDir = path.join(tempDir, "coder-agent");
@@ -477,7 +477,7 @@ describe("noteAuthProfileHealth", () => {
     );
     authProfileMocks.ensureAuthProfileStore.mockImplementation((agentDir) => {
       if (agentDir === coderDir) {
-        return expiredStore("openai-codex:coder", now - 60_000);
+        return expiredStore("openai-codex:coder", now + 60 * 60_000);
       }
       return { version: 1, profiles: {} };
     });
@@ -501,6 +501,7 @@ describe("noteAuthProfileHealth", () => {
     expect(authProfileMocks.resolveApiKeyForProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: coderDir,
+        forceRefresh: true,
         profileId: "openai-codex:coder",
       }),
     );

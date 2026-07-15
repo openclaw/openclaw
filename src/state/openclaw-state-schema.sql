@@ -243,7 +243,7 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
   resolution_ref TEXT NOT NULL CHECK (
     length(resolution_ref) = 43 AND resolution_ref NOT GLOB '*[^A-Za-z0-9_-]*'
   ),
-  kind TEXT NOT NULL CHECK (kind IN ('exec', 'plugin')),
+  kind TEXT NOT NULL CHECK (kind IN ('exec', 'plugin', 'system-agent')),
   status TEXT NOT NULL CHECK (status IN ('pending', 'allowed', 'denied', 'expired', 'cancelled')),
   presentation_json TEXT NOT NULL,
   requested_by_device_id TEXT,

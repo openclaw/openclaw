@@ -175,7 +175,10 @@ SDK.
     runtime-neutral middleware:
 
     ```typescript
-    // OpenClaw and Codex runtime dynamic tools
+    // OpenClaw runtime tools and Codex runtime dynamic tools (result may be
+    // transformed). Codex-native tool results are also relayed for observation,
+    // but their transformed output never reaches the model: the Codex
+    // PostToolUse hook contract cannot replace a native tool response.
     api.registerAgentToolResultMiddleware(async (event) => {
       return compactToolResult(event);
     }, {
@@ -546,7 +549,6 @@ SDK.
   | `plugin-sdk/memory-host-markdown` | Managed markdown helpers | Shared managed-markdown helpers for memory-adjacent plugins |
   | `plugin-sdk/memory-host-search` | Active memory search facade | Lazy active-memory search-manager runtime facade |
   | `plugin-sdk/memory-host-status` | Deprecated memory host status alias | Use `plugin-sdk/memory-core-host-status` |
-  | `plugin-sdk/testing` | Test utilities | Repo-local deprecated compatibility barrel; use focused repo-local test subpaths such as `plugin-sdk/plugin-test-runtime`, `plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`, `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures` |
 </Accordion>
 
 This table is the common migration subset, not the full SDK surface. The
@@ -564,6 +566,16 @@ through generic SDK contracts such as `plugin-sdk/gateway-runtime`,
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask maintainers which generic
 contract should own it.
+
+## Removed compatibility surfaces
+
+### Private testing barrel
+
+`openclaw/plugin-sdk/testing` was repo-local and excluded from shipped package
+artifacts, so it was removed before its 2026-07-28 `removeAfter` date. Repository
+tests use focused subpaths such as `plugin-sdk/plugin-test-runtime`,
+`plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`,
+`plugin-sdk/test-env`, and `plugin-sdk/test-fixtures`.
 
 ## Active deprecations
 
@@ -1020,11 +1032,22 @@ apps own device capture/playback UX.
 
 ## Removal timeline
 
-| When                                        | What happens                                                                                                                           |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **Now**                                     | Deprecated surfaces emit runtime warnings.                                                                                             |
-| **Each compat record's `removeAfter` date** | That specific surface is eligible for removal; `pnpm plugins:boundary-report --fail-on-eligible-compat` fails CI once the date passes. |
-| **Next major release**                      | Any surfaces still not migrated are removed; plugins still using them will fail.                                                       |
+| When                                        | What happens                                                                                                                              |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **Now**                                     | Warning-capable deprecated surfaces emit runtime warnings; repository guards reject deprecated SDK imports from core and bundled plugins. |
+| **Each compat record's `removeAfter` date** | That specific surface is eligible for removal; `pnpm plugins:boundary-report --fail-on-eligible-compat` fails CI once the date passes.    |
+| **Next major release**                      | Any surfaces still not migrated are removed; plugins still using them will fail.                                                          |
+
+The deprecated public SDK subpaths below have registry-backed removal windows.
+They do not currently emit a runtime warning when an external plugin imports
+them; `scripts/check-deprecated-api-usage.mjs` only diagnoses imports from core
+and bundled plugin source.
+
+| `removeAfter` | Deprecated SDK subpaths                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-07-30`  | `agent-dir-compat`, `channel-envelope`, `channel-inbound-roots`, `channel-location`, `channel-message-runtime`, `channel-pairing-paths`, `channel-reply-options-runtime`, `config-schema`, `config-types`, `direct-dm`, `direct-dm-access`, `mattermost`, `media-generation-runtime-shared`, `memory-core`, `memory-core-engine-runtime`, `memory-core-host-events`, `memory-core-host-multimodal`, `memory-core-host-query`, `memory-host-files`, `memory-host-status`, `music-generation-core`, `outbound-runtime`, `outbound-send-deps`, `provider-auth-login`, `provider-zai-endpoint`, `reply-dedupe`, `runtime-logger`, `runtime-secret-resolution`, `self-hosted-provider-setup`, `setup-adapter-runtime`, `telegram-command-config`, `webhook-path`, `zalouser` |
+| `2026-08-15`  | `agent-config-primitives`, `channel-logging`, `channel-secret-runtime`, `channel-streaming`, `group-access`, `inbound-reply-dispatch`, `matrix`, `text-runtime`, `zod`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `2026-09-01`  | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 All core plugins have already migrated. External plugins should migrate
 before the next major release. Run `pnpm plugins:boundary-report` to see which

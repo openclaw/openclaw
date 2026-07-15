@@ -500,6 +500,7 @@ export const nl: TranslationMap = {
       "Cloudworkers hebben een beveiligde browsercontext nodig, zodat herstel je taak kan beschermen.",
     cloudStartFailed:
       "De sessie is lokaal aangemaakt, maar het opstarten in de cloud is mislukt: {error}",
+    cloudSyncsFolder: "Synchroniseert {folder} met de cloudworker",
     folder: "Map",
     folderPlaceholder: "Agent-werkruimte",
     browse: "Door mappen bladeren",
@@ -3401,6 +3402,9 @@ export const nl: TranslationMap = {
     sendShortcut: "Sneltoets voor verzenden",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "Vervolgberichten terwijl de agent bezig is",
+    followUpModeQueue: "In wachtrij plaatsen totdat de uitvoering is voltooid",
+    followUpModeSteer: "Bijsturen tijdens de actieve uitvoering",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",

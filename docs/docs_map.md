@@ -2821,23 +2821,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Reporting
   - H2: Related docs
 
-## concepts/qa-matrix.md
-
-- Route: /concepts/qa-matrix
-- Headings:
-  - H2: Quick start
-  - H2: What the lane does
-  - H2: CLI
-  - H3: Common flags
-  - H3: Provider flags
-  - H2: Profiles
-  - H2: Scenarios
-  - H2: Environment variables
-  - H2: Output artifacts
-  - H2: Triage tips
-  - H2: Live transport contract
-  - H2: Related
-
 ## concepts/queue-steering.md
 
 - Route: /concepts/queue-steering
@@ -4727,8 +4710,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Restart the gateway
   - H3: Verify
   - H2: Rollback
-  - H3: Pin a version (npm)
-  - H3: Pin a commit (source)
+  - H3: Before updating: create a verified backup
+  - H3: Roll back a package install
+  - H3: Roll back a source checkout
+  - H3: Downgrading across the session SQLite migration
+  - H3: Restore state only when necessary
+  - H3: Verify the rollback
   - H2: If you are stuck
   - H2: Related
 
@@ -5984,6 +5971,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Policy tiers and approvals
   - H2: Inspect status and audit history
   - H2: 1Password CLI behavior
+  - H2: Error codes
 
 ## plugins/plugin-inventory.md
 
@@ -6892,14 +6880,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
 
-## plugins/reference/qa-matrix.md
-
-- Route: /plugins/reference/qa-matrix
-- Headings:
-  - H1: QA Matrix plugin
-  - H2: Distribution
-  - H2: Surface
-
 ## plugins/reference/qianfan.md
 
 - Route: /plugins/reference/qianfan
@@ -7377,6 +7357,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Compatibility policy
   - H2: How to migrate
   - H2: Import path reference
+  - H2: Removed compatibility surfaces
+  - H3: Private testing barrel
   - H2: Active deprecations
   - H2: Talk and realtime voice migration
   - H2: Removal timeline

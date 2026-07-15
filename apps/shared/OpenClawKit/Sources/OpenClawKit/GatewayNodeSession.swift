@@ -1316,7 +1316,7 @@ extension GatewayNodeSession {
         }
 
         let receiptID = UUID()
-        let task = Task {
+        let task = Task { [self] in
             await Self.invokeWithTimeout(
                 request: request,
                 timeoutMs: timeoutMs,

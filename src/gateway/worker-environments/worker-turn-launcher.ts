@@ -340,10 +340,10 @@ async function executeWorkerTurn(params: {
   const processResult = await processPromise;
   if (processResult.code !== 0 || processResult.signal !== null || processResult.killed) {
     // Boxes are destroyed on failure, so the redacted stderr tail is the only forensics.
-    const detail = redactSensitiveText(processResult.stderr, { mode: "tools" })
-      .replace(/\s+/gu, " ")
-      .trim()
-      .slice(0, 400);
+    const detail = truncateUtf16Safe(
+      redactSensitiveText(processResult.stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim(),
+      400,
+    );
     throw new Error(
       detail
         ? `Cloud worker process failed before completing the turn: ${detail}`

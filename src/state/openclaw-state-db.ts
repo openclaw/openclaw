@@ -32,6 +32,7 @@ import {
 } from "../infra/sqlite-wal.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import {
   ensureColumn,
   tableExists,
@@ -104,27 +105,20 @@ export type OpenClawStateDatabase = {
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };
-
 /** Options for resolving or overriding the shared state database path. */
 export type OpenClawStateDatabaseOptions = {
   env?: NodeJS.ProcessEnv;
   path?: string;
 };
-
-export type OpenClawStateDatabaseSchemaMigration =
-  | {
-      kind: "agent-databases-composite-primary-key";
-      path: string;
-    }
-  | {
-      kind: "audit-events-v2";
-      path: string;
-    };
-
+export type OpenClawStateDatabaseSchemaMigration = {
+  kind:
+    | "agent-databases-composite-primary-key"
+    | "audit-events-v2"
+    | "operator-approvals-system-agent";
+  path: string;
+};
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
-
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
-
 function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
@@ -136,7 +130,6 @@ function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void 
     );
   }
 }
-
 /** Require the canonical shared-state owner and schema before offline file maintenance. */
 export function assertOpenClawStateDatabaseForMaintenance(
   database: DatabaseSync,
@@ -237,7 +230,10 @@ function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
       "UPDATE operator_approvals SET resolution_ref = ? WHERE approval_id = ?",
     );
     for (const row of rows) {
-      if (typeof row.approval_id !== "string" || (row.kind !== "exec" && row.kind !== "plugin")) {
+      if (
+        typeof row.approval_id !== "string" ||
+        !operatorApprovalMigration.isCanonicalOperatorApprovalKind(row.kind)
+      ) {
         throw new Error("operator approval row cannot be assigned a transport reference");
       }
       const resolutionRef = buildApprovalResolutionRef({
@@ -741,6 +737,7 @@ function markCurrentStateSchemaVersion(db: DatabaseSync): void {
 }
 
 function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
+  operatorApprovalMigration.assertCanonicalOperatorApprovalKinds(db, pathname);
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     throw new Error(
       `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
@@ -757,7 +754,6 @@ function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): vo
     );
   }
 }
-
 export function detectOpenClawStateDatabaseSchemaMigrations(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabaseSchemaMigration[] {
@@ -775,6 +771,9 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
     if (!hasCanonicalAuditEventsSchema(db)) {
       migrations.push({ kind: "audit-events-v2", path: pathname });
     }
+    migrations.push(
+      ...operatorApprovalMigration.detectOperatorApprovalSchemaMigration(db, pathname),
+    );
     return migrations;
   } finally {
     db.close();
@@ -808,6 +807,7 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
             `Migrated shared state audit event ledger → versioned message lifecycle schema`,
           );
         }
+        applied.push(...operatorApprovalMigration.repairOperatorApprovalSchema(db));
         assertCanonicalStateSchemaShape(db, pathname);
         markCurrentStateSchemaVersion(db);
         return applied;

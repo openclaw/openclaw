@@ -412,7 +412,10 @@ The branch already has a real shared SQLite base:
   payload, but typed columns are authoritative for hot queue routing/state.
 - TUI last-session restore pointers now live in typed shared
   `tui_last_sessions` rows keyed by the hashed TUI connection/session scope.
-  The old TUI JSON file is doctor migration input only.
+  Runtime reads and writes only SQLite, atomically upserts each scope, and
+  excludes heartbeat sessions. `openclaw doctor --fix` strictly validates the
+  old TUI JSON file, keeps newer SQLite rows, verifies the canonical result,
+  and removes the unchanged legacy file instead of leaving an archive.
 - Default TTS prefs now live in shared plugin-state SQLite rows keyed under the
   `speech-core` plugin. The old `settings/tts.json` file is doctor migration
   input only; runtime no longer reads or writes TTS prefs JSON files, and the
@@ -1015,7 +1018,7 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   on their existing private credential-file boundary.
 - Matrix sync cache state moved from `bot-storage.json` to SQLite plugin
   state. Doctor imports legacy raw or wrapped sync payloads and removes the
-  source file. Active Matrix and QA Matrix clients pass a SQLite sync-store root
+  source file. Active Matrix and QA Lab Matrix adapter clients pass a SQLite sync-store root
   directory, not a fake `sync-store.json` or `bot-storage.json` path.
 - Matrix legacy crypto migration status moved from
   `legacy-crypto-migration.json` to SQLite plugin state. Doctor imports the
@@ -1041,8 +1044,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   file remains file-backed, recovery snapshots stay next to the config file,
   and durable config audit/health state belongs to the Gateway SQLite store.
 - System-agent rescue pending approvals now use core SQLite plugin state instead
-  of `crestodian/rescue-pending/*.json`. Doctor imports legacy pending approval
-  files and removes them after successful import.
+  of `crestodian/rescue-pending/*.json` or `openclaw/rescue-pending/*.json`.
+  These short-lived security capabilities are never imported; doctor discards
+  both retired directories so an upgrade cannot reactivate a stale write.
 - Phone Control temporary arm state now uses SQLite plugin state instead of
   `plugins/phone-control/armed.json`. Doctor imports the legacy armed-state
   file into the `phone-control/arm-state` namespace and removes the file.
@@ -2046,7 +2050,7 @@ restore` validates before extraction, uses the verifier's normalized
   Matrix sync state now uses the SQLite plugin-state store directly. Active
   client/runtime contracts pass an account storage root, not a `bot-storage.json`
   path, and doctor imports legacy `bot-storage.json` into SQLite before deleting
-  the source. QA Matrix restart/destructive scenarios now mutate the SQLite sync
+  the source. QA Lab Matrix restart/destructive scenarios now mutate the SQLite sync
   row directly instead of creating or deleting fake `bot-storage.json` files, and
   the E2EE substrate passes a sync-store root instead of a fake
   `sync-store.json` path.
@@ -2235,6 +2239,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `audit/file-transfer.jsonl`
 - `audit/crestodian.jsonl`
 - `crestodian/rescue-pending/*.json`
+- `openclaw/rescue-pending/*.json`
 - `plugins/phone-control/armed.json`
 - Memory Wiki `.openclaw-wiki/log.jsonl`
 - Memory Wiki `.openclaw-wiki/state.json`

@@ -467,9 +467,9 @@ and `HOME` stays inherited so subprocesses can use normal user-home state.
 ## Dynamic tools
 
 Codex dynamic tools default to `searchable` loading, exposed under the
-`openclaw` namespace with `deferLoading: true`. OpenClaw does not expose
-dynamic tools that duplicate Codex-native workspace operations or Codex's own
-tool-search surface:
+`openclaw` namespace with `deferLoading: true`. OpenClaw normally does not
+expose dynamic tools that duplicate Codex-native workspace operations or
+Codex's own tool-search surface:
 
 - `read`
 - `write`
@@ -482,6 +482,11 @@ tool-search surface:
 - `tool_describe`
 - `tool_search`
 - `tool_search_code`
+
+When a finite runtime allowlist disables native Code Mode, OpenClaw sends an
+empty execution-environment selection. In that direct, unsandboxed case,
+OpenClaw keeps its policy-filtered `exec` and `process` tools as the shell
+fallback. Runtime allowlists and `codexDynamicToolsExclude` still apply.
 
 Most remaining OpenClaw integration tools, such as messaging, media, cron,
 browser, nodes, gateway, `heartbeat_respond`, and `web_search`, are available

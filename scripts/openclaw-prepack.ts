@@ -6,7 +6,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
-import { writePackageDistInventory } from "./lib/package-dist-inventory.ts";
+import { writePackageDistInventoryForPublish } from "./lib/package-dist-inventory.ts";
 import { preparePackageChangelog } from "./package-changelog.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
@@ -292,7 +292,7 @@ function runBuildSmoke(): void {
 }
 
 async function writeDistInventory(): Promise<void> {
-  await writePackageDistInventory(process.cwd());
+  await writePackageDistInventoryForPublish(process.cwd());
 }
 
 export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.env): Promise<void> {

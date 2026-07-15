@@ -6,9 +6,9 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
-import "../../components/web-awesome-select.ts";
 import { t } from "../../i18n/index.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -42,6 +42,15 @@ import { renderAgentSelect, renderFolderSelect, renderWhereSelect } from "./targ
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
+function renderDraftError(message: string) {
+  return html`
+    <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
+      <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
+      <span class="callout__content new-session-page__alert-message">${message}</span>
+    </div>
+  `;
+}
+
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
 
@@ -72,6 +81,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private browserTarget: BrowserTarget | null = null;
   @state() private wherePopoverOpen = false;
   @state() private wherePopoverHiding = false;
+  @state() private agentPopoverOpen = false;
+  @state() private agentPopoverHiding = false;
   @state() private folderPopoverHiding = false;
   // Live head input; absolute paths stay applicable even without fs.listDir.
   @state() private browserPathDraft = "";
@@ -384,8 +395,9 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.agentSelectedByUser = false;
     }
     const keepSelectedFolder = options.preserveSelectedFolder && this.folderSelectedByUser;
-    // A node cwd belongs to node discovery, not agent workspace refresh.
-    if (!this.execNode && !keepSelectedFolder) {
+    // A node cwd belongs to node discovery, and a locked cloud-recovery draft
+    // shows its staged repo; neither may be replaced by a workspace refresh.
+    if (!this.execNode && !keepSelectedFolder && !this.pendingCloud.sessionKey) {
       this.folder = this.workspacePath();
       this.folderSelectedByUser = false;
     }
@@ -417,6 +429,8 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.agentId = this.pendingCloud.agentId;
       this.cloudProfileId = this.pendingCloud.profileId;
       this.worktree = true;
+      // Show the staged repo (not the agent workspace) while the draft is locked.
+      this.folder = this.pendingCloud.createParams?.cwd ?? "";
       this.pendingCloud.restored = false;
       this.message = this.pendingCloud.message;
       this.attachmentDraft.replace(restoreChatApiAttachments(this.pendingCloud.attachments));
@@ -426,8 +440,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     this.error = null;
     this.wherePopoverHiding = false;
+    this.agentPopoverHiding = false;
     this.folderPopoverHiding = false;
     this.closeWherePopover();
+    this.closeAgentPopover();
     this.closeBrowser();
     this.adoptAgentDefaults();
     void this.updateComplete.then(() => {
@@ -467,6 +483,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.agentId = recovery.agentId;
     this.cloudProfileId = recovery.profileId;
     this.worktree = true;
+    // Show the staged repo (not the agent workspace) while the draft is locked.
+    this.folder = recovery.createParams?.cwd ?? "";
     this.message = recovery.message;
     this.attachmentDraft.replace(restoreChatApiAttachments(recovery.attachments));
   }
@@ -669,6 +687,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.error = null;
     // Retire hidden pickers before their late requests can mutate this submitted draft.
     this.closeWherePopover();
+    this.closeAgentPopover();
     this.closeBrowser();
     for (const dropdown of this.querySelectorAll<HTMLElement & { open: boolean }>(
       "wa-dropdown[open]",
@@ -877,19 +896,35 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.maybeLoadBranches();
   }
 
+  /**
+   * Loaded branch data already covers the effective Gateway repo selection.
+   * Branch data is always Gateway-owned: maybeLoadBranches clears and never
+   * requests while a node is selected, so a path match cannot cross hosts.
+   */
+  private branchesMatchCurrentRepo(): boolean {
+    if (this.execNode) {
+      return false;
+    }
+    const repoRoot = this.folder.trim() || this.workspacePath();
+    return this.branches?.repoRoot === repoRoot;
+  }
+
   private applyFolder(folder: string, execNode = this.execNode) {
     if (this.submitting || this.pendingCloud.sessionKey) {
       return;
     }
     this.execNode = execNode;
-    this.cloudProfileId = "";
+    if (execNode) {
+      // Node sessions run on that device; a cloud worker cannot sync a node path.
+      this.cloudProfileId = "";
+    }
     this.error = null;
     this.folder = folder.trim();
     this.folderSelectedByUser = true;
     if (this.execNode) {
       this.worktree = false;
-    } else if (this.usesCustomFolder()) {
-      // Explicit host paths only materialize through a managed worktree.
+    } else if (this.usesCustomFolder() || this.cloudProfileId) {
+      // Explicit host paths and cloud dispatch only materialize through a managed worktree.
       this.worktree = true;
     }
     this.maybeLoadBranches();
@@ -902,14 +937,21 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (execNode === this.execNode && !this.cloudProfileId) {
       return;
     }
+    // Turning a cloud selection back into a plain Gateway session keeps the
+    // picked repo; only a host change retires the folder path.
+    const keepGatewayFolder = !execNode && !this.execNode;
     this.execNode = execNode;
     this.cloudProfileId = "";
-    // Folder paths belong to one host; never carry a Gateway or node path to another host.
-    this.folder = execNode ? "" : this.workspacePath();
-    this.folderSelectedByUser = false;
-    this.worktree = false;
+    if (!keepGatewayFolder) {
+      // Folder paths belong to one host; never carry a Gateway or node path to another host.
+      this.folder = execNode ? "" : this.workspacePath();
+      this.folderSelectedByUser = false;
+    }
+    this.worktree = keepGatewayFolder && this.usesCustomFolder();
     this.closeBrowser();
-    this.maybeLoadBranches();
+    if (!this.branchesMatchCurrentRepo()) {
+      this.maybeLoadBranches();
+    }
   }
 
   private selectCloudProfile(profileId: string) {
@@ -921,14 +963,17 @@ class NewSessionPage extends OpenClawLightDomElement {
     ) {
       return;
     }
+    // worktreeAvailable() is false for node targets, so this transition always
+    // starts from a Gateway selection and the folder is a Gateway path. It
+    // stays selected: its repo is what the managed worktree checks out and the
+    // dispatch tunnel syncs to the cloud worker.
     this.cloudProfileId = profileId;
     this.error = null;
-    this.execNode = "";
-    this.folder = this.workspacePath();
-    this.folderSelectedByUser = false;
     this.worktree = true;
     this.closeBrowser();
-    this.maybeLoadBranches();
+    if (!this.branchesMatchCurrentRepo()) {
+      this.maybeLoadBranches();
+    }
   }
 
   private browseAvailable(): boolean {
@@ -965,6 +1010,16 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.wherePopoverOpen = false;
     const popover = this.querySelector<HTMLElement & { open: boolean }>(
       ".new-session-page__where-popover",
+    );
+    if (popover) {
+      popover.open = false;
+    }
+  }
+
+  private closeAgentPopover() {
+    this.agentPopoverOpen = false;
+    const popover = this.querySelector<HTMLElement & { open: boolean }>(
+      ".new-session-page__agent-popover",
     );
     if (popover) {
       popover.open = false;
@@ -1103,6 +1158,17 @@ class NewSessionPage extends OpenClawLightDomElement {
       agents,
       agentId: this.agentId,
       disabled: this.submitting || Boolean(this.pendingCloud.sessionKey),
+      popoverOpen: this.agentPopoverOpen,
+      popoverHiding: this.agentPopoverHiding,
+      onGuardTransition: (event) => this.guardPopoverTransition(event, this.agentPopoverHiding),
+      onPopoverOpenChange: (open) => {
+        this.agentPopoverOpen = open;
+      },
+      onPopoverHidingChange: (hiding) => {
+        this.agentPopoverHiding = hiding;
+      },
+      onRestoreTrigger: () =>
+        this.restorePopoverTrigger("new-session-agent-trigger", ".new-session-page__agent-popover"),
       onSelect: (agentId) => this.selectAgentId(agentId),
     });
   }
@@ -1116,6 +1182,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       cloudProfiles: this.isAdmin() ? cloudProfiles : [],
       cloudProfileId: this.cloudProfileId,
       execNode: this.execNode,
+      syncFolder: this.folder.trim() || this.workspacePath(),
       worktree: this.worktree,
       worktreeAvailable: this.worktreeAvailable(),
       customFolder: this.usesCustomFolder(),
@@ -1215,12 +1282,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     return html`
       <div class="new-session-page__draft" aria-busy=${String(this.submitting)}>
         ${this.renderTargetBar()}
-        ${worktreeNameInvalid
-          ? html`<div class="new-session-page__error">${t("newSession.worktreeNameInvalid")}</div>`
-          : nothing}
-        ${this.error ? html`<div class="new-session-page__error">${this.error}</div>` : nothing}
+        ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
+        ${this.error ? renderDraftError(this.error) : nothing}
         ${this.submissionOutcomeUnknown
-          ? html`<div class="new-session-page__error">${t("newSession.createOutcomeUnknown")}</div>`
+          ? renderDraftError(t("newSession.createOutcomeUnknown"))
           : nothing}
         ${renderNewSessionDraftComposer({
           agentDefaultModel: this.selectedAgent()?.model?.primary,
