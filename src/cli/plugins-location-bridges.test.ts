@@ -164,6 +164,34 @@ describe("listPersistedBundledPluginLocationBridges", () => {
     ]);
   });
 
+  it("targets the renamed official plugin id when externalizing a bundled plugin", async () => {
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(
+      makeIndex({
+        pluginId: "qqbot",
+        manifestPath: "/app/dist/extensions/qqbot/openclaw.plugin.json",
+        manifestHash: "hash",
+        source: "/app/dist/extensions/qqbot/index.js",
+        rootDir: "/app/dist/extensions/qqbot",
+        origin: "bundled",
+        enabled: true,
+        startup: startupInfo,
+        compat: [],
+        packageInstall: { warnings: [] },
+      }),
+    );
+    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry("qqbot"));
+
+    await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([
+      {
+        bundledPluginId: "qqbot",
+        pluginId: "openclaw-qqbot",
+        preferredSource: "npm",
+        npmSpec: "@tencent-connect/openclaw-qqbot@2.0.0",
+        channelIds: ["qqbot"],
+      },
+    ]);
+  });
+
   it("does not create a relocation bridge without persisted or official install metadata", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(
       makeIndex({

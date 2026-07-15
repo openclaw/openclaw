@@ -546,6 +546,7 @@
           ]
         },
         "channelHostConfig": {
+          "compatibilityMigration": "qqbot.tencent-2.0-compatibility",
           "schemaAllOf": [
             {
               "not": { "required": ["defaultAccount"] },
