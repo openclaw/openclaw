@@ -40,7 +40,7 @@ function requirePeer(raw: string): string {
   return peer;
 }
 
-export function resolveReefIdentityScope(config: ReefChannelConfig): string {
+function resolveReefIdentityScope(config: ReefChannelConfig): string {
   if (!config.handle) {
     throw new Error("Reef handle is required before opening peer trust state");
   }
