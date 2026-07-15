@@ -264,6 +264,30 @@ describe("Pi session catalog", () => {
     ]);
   });
 
+  it("keeps search term truncation UTF-16 safe at the boundary", async () => {
+    let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
+    registerPiSessionCatalog({
+      pluginConfig: {},
+      runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
+      registerSessionCatalog: (value: NonNullable<typeof provider>) => {
+        provider = value;
+      },
+      registerNodeHostCommand: vi.fn(),
+      registerNodeInvokePolicy: vi.fn(),
+    } as unknown as OpenClawPluginApi);
+    // Place an emoji exactly on the 500-char boundary so raw
+    // .slice(0, 500) would split its surrogate pair and produce a
+    // dangling replacement character.
+    const MAX_SEARCH = 500;
+    const prefix = "x".repeat(MAX_SEARCH - 2);
+    const emoji = "😀";
+    const searchWithEmojiAtBoundary = prefix + emoji;
+    // The truncated search won't match any sessions, but the key assertion
+    // is that truncation completes without throwing — a dangling surrogate
+    // half from raw .slice would cause a crash downstream.
+    await expect(provider!.list({ search: searchWithEmojiAtBoundary })).resolves.toBeDefined();
+  });
+
   it("summarizes and pages a large session within transport limits", async () => {
     await createPiStore("x".repeat(600 * 1024));
     const listed = await listLocalPiSessionPage({ limit: 20 });
