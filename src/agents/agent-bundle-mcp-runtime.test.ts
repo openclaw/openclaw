@@ -4697,4 +4697,71 @@ process.on("SIGINT", shutdown);`,
     },
   );
 });
+
+describe("MCP connect retry at session bind", () => {
+  type FakeClient = Parameters<typeof testing.connectWithRetry>[0];
+  type FakeTransport = Parameters<typeof testing.connectWithRetry>[1];
+  const fakeTransport = {} as FakeTransport;
+
+  function makeClient(connect: () => Promise<void>): { client: FakeClient; calls: () => number } {
+    let calls = 0;
+    const client = {
+      connect: () => {
+        calls += 1;
+        return connect();
+      },
+    } as unknown as FakeClient;
+    return { client, calls: () => calls };
+  }
+
+  it("retries a transient connect failure and succeeds without retiring the server", async () => {
+    // Mirrors an OAuth transport losing a race against an in-flight token
+    // refresh at bind: the first attempt throws, the retry succeeds.
+    const { client, calls } = makeClient(() => {
+      if (calls() === 1) {
+        return Promise.reject(new Error("fetch failed: token refresh in flight"));
+      }
+      return Promise.resolve();
+    });
+
+    await expect(testing.connectWithRetry(client, fakeTransport, 1_000)).resolves.toBeUndefined();
+    expect(calls()).toBe(2);
+  });
+
+  it("gives up after exhausting the bounded retries", async () => {
+    const { client, calls } = makeClient(() => Promise.reject(new Error("connect refused")));
+
+    await expect(testing.connectWithRetry(client, fakeTransport, 1_000)).rejects.toThrow(
+      "connect refused",
+    );
+    expect(calls()).toBe(3);
+  });
+
+  it("does not retry a clearly-permanent auth error", async () => {
+    const { client, calls } = makeClient(() =>
+      Promise.reject(
+        new Error(
+          'MCP server "linear" requires OAuth authorization. Run openclaw mcp login linear.',
+        ),
+      ),
+    );
+
+    await expect(testing.connectWithRetry(client, fakeTransport, 1_000)).rejects.toThrow(
+      "Run openclaw mcp login",
+    );
+    expect(calls()).toBe(1);
+  });
+
+  it("classifies permanent vs transient connect errors", () => {
+    expect(testing.isPermanentMcpConnectError(new Error("Run openclaw mcp login linear"))).toBe(
+      true,
+    );
+    expect(testing.isPermanentMcpConnectError(new Error("HTTP 401 Unauthorized"))).toBe(true);
+    expect(testing.isPermanentMcpConnectError(new Error("invalid_grant"))).toBe(true);
+    expect(testing.isPermanentMcpConnectError(new Error("fetch failed"))).toBe(false);
+    expect(
+      testing.isPermanentMcpConnectError(new Error("MCP server connection timed out after 1000ms")),
+    ).toBe(false);
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

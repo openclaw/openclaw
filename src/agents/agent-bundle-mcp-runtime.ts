@@ -15,6 +15,7 @@ import { toErrorObject } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { sleep } from "../utils/sleep.js";
 import { mergeMcpToolCatalogs } from "./agent-bundle-mcp-combined.js";
 import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
 import {
@@ -83,6 +84,12 @@ const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
 const BUNDLE_MCP_DISPOSE_TIMEOUT_MS = 5_000;
 const BUNDLE_MCP_CATALOG_CONNECT_CONCURRENCY = 6;
+// A transport bind can lose a race against an in-flight OAuth token refresh and
+// fail transiently even though the stored credentials are healthy. Retry the
+// connect a few times with short backoff before letting the server retire, so a
+// refresh-in-flight does not drop the server for the whole session.
+const BUNDLE_MCP_CONNECT_MAX_ATTEMPTS = 3;
+const BUNDLE_MCP_CONNECT_RETRY_BACKOFF_MS = [300, 600] as const;
 let bundleMcpCatalogListTimeoutMs: number | undefined;
 const BUNDLE_MCP_TEST_STATE_KEY = Symbol.for("openclaw.bundleMcpTestState");
 type BundleMcpTestState = { disposeTimeoutMs?: number };
@@ -135,6 +142,45 @@ function connectWithTimeout(
 
 function redactErrorUrls(error: unknown): string {
   return redactSensitiveUrlLikeString(String(error));
+}
+
+// A permanent connect failure means the stored credentials are unusable and no
+// amount of retrying at bind will help: the user must re-authorize. These are
+// the actionable OAuth errors surfaced by mcp-oauth.ts plus the standard OAuth
+// protocol / HTTP auth signals. Everything else (network blips, transports
+// racing an in-flight token refresh) is treated as transient and retried.
+function isPermanentMcpConnectError(error: unknown): boolean {
+  const message = String(error);
+  return (
+    /openclaw mcp login/i.test(message) ||
+    /\binvalid_grant\b/i.test(message) ||
+    /\binvalid_client\b/i.test(message) ||
+    /\b(401|403)\b/.test(message) ||
+    /\b(unauthorized|forbidden)\b/i.test(message)
+  );
+}
+
+// Bind can transiently fail when it loses a race against an in-flight OAuth
+// token refresh even though the credentials are healthy. Retry a bounded number
+// of times with short backoff instead of retiring the server for the session;
+// give up immediately on a clearly-permanent auth error, or once attempts are
+// exhausted.
+async function connectWithRetry(
+  client: Client,
+  transport: Transport,
+  timeoutMs: number,
+): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await connectWithTimeout(client, transport, timeoutMs);
+      return;
+    } catch (error) {
+      if (attempt >= BUNDLE_MCP_CONNECT_MAX_ATTEMPTS || isPermanentMcpConnectError(error)) {
+        throw error;
+      }
+      await sleep(BUNDLE_MCP_CONNECT_RETRY_BACKOFF_MS[attempt - 1] ?? 0);
+    }
+  }
 }
 
 async function listAllTools(client: Client, timeoutMs: number) {
@@ -455,7 +501,7 @@ export function createSessionMcpRuntime(params: {
     if (session.connected) {
       return;
     }
-    session.connectPromise ??= connectWithTimeout(
+    session.connectPromise ??= connectWithRetry(
       session.client,
       session.transport,
       connectionTimeoutMs,
@@ -967,6 +1013,8 @@ export { mergeMcpToolCatalogs };
 
 export const testing = {
   buildMcpClientCapabilities,
+  connectWithRetry,
+  isPermanentMcpConnectError,
   createSessionMcpRuntimeManager,
   async resetSessionMcpRuntimeManager() {
     await disposeAllSessionMcpRuntimes();
