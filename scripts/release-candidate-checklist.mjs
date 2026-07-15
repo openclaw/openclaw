@@ -516,11 +516,6 @@ function runFromTrustedTooling(argv, { targetRoot, workflowRef }) {
       cwd: targetRoot,
     });
     worktreeAdded = true;
-    // Build an isolated trusted dependency tree. Lifecycle scripts stay disabled;
-    // the frozen lockfile and prefer-offline store keep setup deterministic.
-    run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
-      cwd: toolingRoot,
-    });
     const result = spawnSync(
       process.execPath,
       [join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv],
@@ -1240,6 +1235,11 @@ async function runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths
   if (options.skipParallels) {
     return { status: "skipped", reason: "operator skipped --skip-parallels" };
   }
+  // This function runs inside trusted tooling, not the frozen target checkout.
+  // Prepare its isolated dependencies here before importing the Parallels harness.
+  run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
+    cwd: TOOLING_ROOT,
+  });
   const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
     capture: true,
   }).trim();
