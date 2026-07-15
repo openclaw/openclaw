@@ -196,6 +196,331 @@ describe("skill workshop proposals", () => {
     },
   );
 
+  it("rejects update proposals that are delta notes instead of full skill bodies", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "blog-publishing");
+    const originalBody = [
+      "# Blog Publishing",
+      "",
+      "## Workflow",
+      "Read the canonical protocol before publishing.",
+      "",
+      "## Sanitization",
+      "Fail closed on private evidence.",
+      "",
+      "## Optimization",
+      "Run the optimization pass.",
+      "",
+      "## Closeout",
+      "Verify live outputs before final status.",
+      "",
+    ].join("\n");
+    await writeSkill({
+      dir: skillDir,
+      name: "blog-publishing",
+      description: "Publish sanitized blog posts",
+      body: originalBody,
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "blog-publishing",
+      description: "Harden dogfood audit trail",
+      content: [
+        "# Update Proposal: blog-publishing — Dogfood Hardening",
+        "",
+        "## Context",
+        "The previous run exposed audit gaps.",
+        "",
+        "## Proposed skill changes",
+        "Add the following subsection under optimization.",
+        "",
+      ].join("\n"),
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("delta/proposal note, not a complete replacement SKILL.md");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "## Sanitization",
+    );
+    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("pending");
+  });
+
+  it("rejects update proposal wrappers with proposed changes to SKILL.md", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "ppt-deck-builder");
+    await writeSkill({
+      dir: skillDir,
+      name: "ppt-deck-builder",
+      description: "Build and validate decks",
+      body: [
+        "# PPT Deck Builder",
+        "",
+        "Use a route-first workflow.",
+        "",
+        "## Route the request before editing slides",
+        "Keep mode selection here.",
+        "",
+        "## Optional visual support",
+        "Generate supporting visuals only when appropriate.",
+        "",
+        "## Validation",
+        "Render and inspect outputs.",
+        "",
+      ].join("\n"),
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "ppt-deck-builder",
+      description: "Add image lane and evidence loop",
+      content: [
+        "# ppt-deck-builder update proposal: image lane + evidence-first artifact loop",
+        "",
+        "## Intent",
+        "Keep `ppt-deck-builder` as the primary deck skill while adding an optional image lane.",
+        "",
+        "## Proposed changes to `SKILL.md`",
+        "",
+        "### 1) Add a route under mode selection",
+        "Use this lane only when full-slide images are acceptable.",
+        "",
+      ].join("\n"),
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("delta/proposal note, not a complete replacement SKILL.md");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "## Validation",
+    );
+  });
+
+  it("applies complete update proposals that intentionally rewrite section structure", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "sectioned-skill");
+    const originalBody = [
+      "# Sectioned Skill",
+      "",
+      "## One",
+      "Keep this.",
+      "",
+      "## Two",
+      "Keep this.",
+      "",
+      "## Three",
+      "Keep this.",
+      "",
+      "## Four",
+      "Keep this.",
+      "",
+    ].join("\n");
+    await writeSkill({
+      dir: skillDir,
+      name: "sectioned-skill",
+      description: "Has several sections",
+      body: originalBody,
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "sectioned-skill",
+      content: [
+        "# Sectioned Skill",
+        "",
+        "## Proposed skill changes",
+        "This is a complete replacement section, not a delta note.",
+        "It intentionally consolidates the old section structure.",
+        "",
+      ].join("\n"),
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).resolves.toMatchObject({ record: { id: proposal.record.id } });
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "This is a complete replacement section",
+    );
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.not.toContain(
+      "## Four",
+    );
+  });
+
+  it("rejects update proposals with no replacement skill body", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "empty-body-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "empty-body-skill",
+      description: "Has body",
+      body: "# Empty Body Skill\n\nKeep me.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "empty-body-skill",
+      content: "---\nname: empty-body-skill\n---\n",
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("complete replacement SKILL.md body");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Keep me.",
+    );
+  });
+
+  it("allows update proposals whose preserved heading adds emoji decoration", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "emoji-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "emoji-skill",
+      description: "Has emoji heading",
+      body: "# Emoji Skill\n\nOriginal body.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "emoji-skill",
+      content: "# 🚀 Emoji Skill\n\nUpdated body.\n",
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).resolves.toMatchObject({ record: { id: proposal.record.id } });
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Updated body.",
+    );
+  });
+
+  it("allows complete updates whose preserved heading contains update proposal", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "update-proposal-reviewer");
+    await writeSkill({
+      dir: skillDir,
+      name: "update-proposal-reviewer",
+      description: "Reviews update proposals",
+      body: "# Update Proposal Reviewer\n\nOriginal review workflow.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "update-proposal-reviewer",
+      content:
+        "# Update Proposal Reviewer\n\n" +
+        "## Proposed changes\n\n" +
+        "Updated complete review workflow.\n",
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).resolves.toMatchObject({ record: { id: proposal.record.id } });
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Updated complete review workflow.",
+    );
+  });
+
+  it("rejects update-proposal H1 drafts for existing valid skills without H1 headings", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "h1-less-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "h1-less-skill",
+      description: "No markdown heading",
+      body: "Use this skill when the workflow has frontmatter and prose only.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "h1-less-skill",
+      content: [
+        "# Update Proposal: h1-less skill hardening",
+        "",
+        "Keep the original prose but add one extra instruction.",
+        "",
+      ].join("\n"),
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("delta/proposal note, not a complete replacement SKILL.md");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "frontmatter and prose only",
+    );
+  });
+
+  it("rejects skill-update-proposal H1 drafts for existing valid skills without H1 headings", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "skill-update-proposal-h1-less");
+    await writeSkill({
+      dir: skillDir,
+      name: "skill-update-proposal-h1-less",
+      description: "No markdown heading",
+      body: "Use this skill when the workflow has frontmatter and prose only.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "skill-update-proposal-h1-less",
+      content: [
+        "# Skill Update Proposal: h1-less skill hardening",
+        "",
+        "Keep the original prose but add one extra instruction.",
+        "",
+      ].join("\n"),
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("delta/proposal note, not a complete replacement SKILL.md");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "frontmatter and prose only",
+    );
+  });
+
+  it("allows complete updates for existing valid skills without H1 headings", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "h1-less-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "h1-less-skill",
+      description: "No markdown heading",
+      body: "Use this skill when the workflow has frontmatter and prose only.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "h1-less-skill",
+      content: "Use this updated skill when the workflow remains frontmatter and prose only.\n",
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).resolves.toMatchObject({ record: { id: proposal.record.id } });
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "updated skill",
+    );
+  });
+
+  it("allows complete updates that intentionally remove an H1 heading", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "headed-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "headed-skill",
+      description: "Has a decorative heading",
+      body: "# Headed Skill\n\nLegacy body.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "headed-skill",
+      content: "Use this updated skill when identity is carried by frontmatter-only prose.\n",
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).resolves.toMatchObject({ record: { id: proposal.record.id } });
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "frontmatter-only prose",
+    );
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.not.toContain(
+      "# Headed Skill",
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "blocks trusted workspace skills symlink writes until workshop writes are enabled",
     async () => {

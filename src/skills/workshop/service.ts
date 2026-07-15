@@ -593,6 +593,12 @@ export async function applySkillProposal(
     });
 
     const skillContent = stripProposalFrontmatterForSkill(content);
+    if (record.kind === "update" && targetState.previousContent !== null) {
+      assertCompleteSkillUpdateDraft({
+        previousContent: targetState.previousContent,
+        proposedContent: skillContent,
+      });
+    }
     await writeWorkspaceSkill({
       workspaceDir: input.workspaceDir,
       skillDir: record.target.skillDir,
@@ -690,6 +696,117 @@ async function readApplyTargetState(
     }
   }
   return { previousContent, previousSupportFiles };
+}
+
+function assertCompleteSkillUpdateDraft(params: {
+  previousContent: string;
+  proposedContent: string;
+}): void {
+  const previousBody = stripSkillFrontmatter(params.previousContent);
+  const proposedBody = stripSkillFrontmatter(params.proposedContent);
+  const previousH1 = firstMarkdownHeading(previousBody, 1);
+  const proposedH1 = firstMarkdownHeading(proposedBody, 1);
+  if (!proposedBody.trim()) {
+    throw new Error(
+      "Skill update proposal content must include a complete replacement SKILL.md body.",
+    );
+  }
+  const proposedBodyLower = proposedBody.toLowerCase();
+  const proposalLikeMarkers = [
+    "# update proposal",
+    "# skill update proposal",
+    "## proposed skill changes",
+    "## proposed changes",
+    "## evidence from",
+    "add the following subsection",
+    "add this subsection",
+  ];
+  const preservesSkillHeading =
+    previousH1 !== undefined &&
+    proposedH1 !== undefined &&
+    normalizeHeadingForComparison(previousH1) === normalizeHeadingForComparison(proposedH1);
+  const markerBodyForCounting =
+    preservesSkillHeading && proposedH1 !== undefined && isUpdateProposalHeading(proposedH1)
+      ? proposedBodyLower.replace(/^#\s+.*\bupdate proposal\b.*(?:\r?\n|$)/im, "")
+      : proposedBodyLower;
+  const proposalMarkerHits = proposalLikeMarkers.filter((marker) =>
+    markerBodyForCounting.includes(marker),
+  ).length;
+  const hasStrongProposalMarker =
+    (!preservesSkillHeading && /^#\s+.*\bupdate proposal\b/im.test(proposedBody)) ||
+    /^#{2,}\s+proposed changes\s+to\s+`?skill\.md`?\b/im.test(proposedBody);
+  if (hasStrongProposalMarker || proposalMarkerHits >= 2) {
+    throw new Error(
+      "Skill update proposal content appears to be a delta/proposal note, " +
+        "not a complete replacement SKILL.md. Revise the proposal with the full " +
+        "updated skill body before applying.",
+    );
+  }
+  if (!previousH1 && proposedH1 && isUpdateProposalHeading(proposedH1)) {
+    throw new Error(
+      "Skill update proposal content appears to be a delta/proposal note, " +
+        "not a complete replacement SKILL.md. Revise the proposal with the full " +
+        "updated skill body before applying.",
+    );
+  }
+  if (previousH1 && proposedH1 && !preservesSkillHeading) {
+    throw new Error(
+      "Skill update proposal content appears to replace the existing skill identity " +
+        `(${previousH1}) with ${proposedH1}. Revise the proposal with a complete ` +
+        "replacement SKILL.md that preserves the existing skill heading, or create a new skill.",
+    );
+  }
+}
+
+function stripSkillFrontmatter(content: string): string {
+  const normalized = content
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+  if (!normalized.startsWith("---\n")) {
+    return normalized;
+  }
+  const endIndex = normalized.indexOf("\n---", 4);
+  if (endIndex === -1) {
+    return normalized;
+  }
+  return normalized.slice(endIndex + "\n---".length).replace(/^\n+/, "");
+}
+
+function firstMarkdownHeading(content: string, level: number): string | undefined {
+  return markdownHeadings(content, level)[0];
+}
+
+function markdownHeadings(content: string, level: number): string[] {
+  const prefix = "#".repeat(level);
+  const re = new RegExp(`^${prefix}\\s+(?!#)(.+?)\\s*#*\\s*$`, "gm");
+  const out: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(content)) !== null) {
+    const heading = match[1]?.trim();
+    if (heading) {
+      out.push(heading);
+    }
+  }
+  return out;
+}
+
+function normalizeHeadingForComparison(heading: string): string {
+  return heading
+    .toLowerCase()
+    .replace(/[`*_~]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function isUpdateProposalHeading(heading: string): boolean {
+  const normalized = normalizeHeadingForComparison(heading);
+  return (
+    normalized === "update-proposal" ||
+    normalized.startsWith("update-proposal-") ||
+    normalized === "skill-update-proposal" ||
+    normalized.startsWith("skill-update-proposal-")
+  );
 }
 
 async function assertCanCreatePendingProposal(
