@@ -105,7 +105,7 @@ describe("Reef configuration boundary", () => {
     const account = reefPlugin.config.resolveAccount(cfg, "default");
 
     expect(reefPlugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([]);
-    expect(reefPlugin.config.describeAccount?.(account)).toMatchObject({
+    expect(reefPlugin.config.describeAccount?.(account, cfg)).toMatchObject({
       extra: { friendCount: 0 },
     });
     expect(
