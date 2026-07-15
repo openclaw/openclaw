@@ -127,9 +127,143 @@ describe("createChannelProgressDraftCompositor", () => {
       update,
     });
 
+    expect(progress.suppressDefaultToolProgressMessages).toBe(false);
+
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
 
     expect(update).toHaveBeenCalledWith("Shelling", { flush: true, lines: [] });
+    expect(progress.suppressDefaultToolProgressMessages).toBe(true);
+  });
+
+  it("suppresses default tool messages only after progress drafts become visible", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress" } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    expect(progress.suppressDefaultToolProgressMessages).toBe(false);
+
+    await progress.pushToolProgress("Exec started");
+
+    expect(update).not.toHaveBeenCalled();
+    expect(progress.hasStarted).toBe(false);
+    expect(progress.suppressDefaultToolProgressMessages).toBe(false);
+
+    await progress.pushToolProgress("Exec finished");
+
+    expect(update).toHaveBeenCalled();
+    expect(progress.hasStarted).toBe(true);
+    expect(progress.suppressDefaultToolProgressMessages).toBe(true);
+  });
+
+  it("does not suppress default tool messages when progress drafts stay empty", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { label: false, toolProgress: false } },
+      },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(progress.suppressDefaultToolProgressMessages).toBe(false);
+  });
+
+  it("materializes a label-only progress draft after upstream answer activity", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = vi.fn();
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update,
+      });
+
+      await progress.noteActivity();
+      expect(update).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
+
+      expect(update).toHaveBeenCalledWith("Shelling", { flush: true, lines: [] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not materialize delayed answer activity after final delivery starts or lands", async () => {
+    vi.useFakeTimers();
+    try {
+      for (const markFinal of ["markFinalReplyStarted", "markFinalReplyDelivered"] as const) {
+        const update = vi.fn();
+        const progress = createChannelProgressDraftCompositor({
+          entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+          mode: "progress",
+          active: true,
+          seed: "test",
+          update,
+        });
+
+        await progress.noteActivity();
+        progress[markFinal]();
+        await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
+
+        expect(update).not.toHaveBeenCalled();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts a label-only progress draft on repeated upstream answer activity", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.noteActivity();
+    await progress.noteActivity();
+
+    expect(update).toHaveBeenCalledWith("Shelling", { flush: true, lines: [] });
+  });
+
+  it("passes structured progress lines to draft updates", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+    const line = {
+      kind: "tool" as const,
+      text: "🛠️ Exec: git status",
+      label: "Exec",
+      icon: "🛠️",
+      detail: "git status",
+    };
+
+    await progress.pushToolProgress(line, { startImmediately: true });
+
+    expect(update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec: git status", {
+      flush: true,
+      lines: [line],
+    });
   });
 
   it("gates window thinking on its own flag, independent of tool progress", async () => {

@@ -106,12 +106,15 @@ export function createDiscordDraftPreviewController(params: {
   const narrationHideCommandText =
     narrationProgressEnabled &&
     resolveChannelStreamingPreviewCommandText(params.discordConfig) === "status";
-  const suppressDefaultToolProgressMessages =
+  const canSuppressDefaultToolProgressMessages =
     Boolean(draftStream) &&
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.discordConfig, {
       draftStreamActive: true,
       previewToolProgressEnabled,
     });
+  const suppressDefaultToolProgressImmediately =
+    canSuppressDefaultToolProgressMessages &&
+    (discordStreamMode !== "progress" || !previewToolProgressEnabled);
   const progressSeed = `${params.accountId}:${params.deliverChannelId}`;
   const progressDraft = createChannelProgressDraftCompositor({
     entry: params.discordConfig,
@@ -171,7 +174,13 @@ export function createDiscordDraftPreviewController(params: {
     narrationProgressEnabled,
     narrationHideCommandText,
     commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
-    suppressDefaultToolProgressMessages,
+    get suppressDefaultToolProgressMessages() {
+      return (
+        suppressDefaultToolProgressImmediately ||
+        hasStreamedMessage ||
+        progressDraft.suppressDefaultToolProgressMessages
+      );
+    },
     get isProgressMode() {
       return discordStreamMode === "progress";
     },
@@ -189,6 +198,12 @@ export function createDiscordDraftPreviewController(params: {
     markProgressDraftCollapsed() {
       progressDraftCollapsed = true;
       progressDraftStartedBeforeFinal = false;
+    },
+    get shouldSuppressBlockReplies() {
+      return hasStreamedMessage;
+    },
+    get shouldDeferProgressBlockReplies() {
+      return canSuppressDefaultToolProgressMessages && discordStreamMode === "progress";
     },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
