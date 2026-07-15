@@ -1,18 +1,30 @@
 // Line tests cover download plugin behavior.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { Readable } from "node:stream";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getMessageContentMock = vi.hoisted(() => vi.fn());
+const getMessageContentWithHttpInfoMock = vi.hoisted(() => vi.fn());
 const saveMediaStreamMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@line/bot-sdk", () => ({
   messagingApi: {
     MessagingApiBlobClient: class {
-      getMessageContent(messageId: string) {
-        return getMessageContentMock(messageId);
+      getMessageContentWithHttpInfo(messageId: string) {
+        return getMessageContentWithHttpInfoMock(messageId);
       }
     },
   },
 }));
+
+function httpInfo(status: number, body: unknown): unknown {
+  return { httpResponse: { status } as unknown as Response, body };
+}
+
+// A `202 Accepted` (still preparing) response carries an empty, destroyable body,
+// mirroring what the SDK hands back before LINE finishes preparing the content.
+function stillPreparing(): unknown {
+  return httpInfo(202, Readable.from([]));
+}
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => {
@@ -70,10 +82,20 @@ describe("downloadLineMedia", () => {
     vi.resetModules();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
     getMessageContentMock.mockReset();
+    getMessageContentWithHttpInfoMock.mockReset();
     saveMediaStreamMock.mockReset();
+    // By default the content is ready on first request (HTTP 200); the body is
+    // whatever the content mock is primed to return for the case.
+    getMessageContentWithHttpInfoMock.mockImplementation(async (messageId: string) =>
+      httpInfo(200, await getMessageContentMock(messageId)),
+    );
     saveMediaStreamMock.mockImplementation(
       async (stream: AsyncIterable<Buffer>, contentType?: string, subdir?: string) => {
         const chunksLocal: Buffer[] = [];
@@ -173,5 +195,39 @@ describe("downloadLineMedia", () => {
     saveMediaStreamMock.mockRejectedValueOnce(new Error("Media exceeds 0MB limit"));
 
     await expect(downloadLineMedia("mid-bad", "token")).rejects.toThrow(/Media exceeds/i);
+  });
+
+  it("retries 202 (still preparing) responses until the content is ready", async () => {
+    const m4aHeader = Buffer.from([
+      0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20,
+    ]);
+    // Preparing twice (202) before the content becomes downloadable (200).
+    getMessageContentWithHttpInfoMock
+      .mockResolvedValueOnce(stillPreparing())
+      .mockResolvedValueOnce(stillPreparing())
+      .mockResolvedValueOnce(httpInfo(200, chunks([m4aHeader])));
+
+    vi.useFakeTimers();
+    const pending = downloadLineMedia("mid-preparing", "token");
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(getMessageContentWithHttpInfoMock).toHaveBeenCalledTimes(3);
+    expect(result.contentType).toBe("audio/x-m4a");
+    expect(result.size).toBe(m4aHeader.length);
+  });
+
+  it("throws instead of saving an empty file when content never becomes ready", async () => {
+    // Fresh empty body per attempt so each retry destroys its own stream.
+    getMessageContentWithHttpInfoMock.mockImplementation(async () => stillPreparing());
+
+    vi.useFakeTimers();
+    const pending = downloadLineMedia("mid-stuck", "token");
+    const rejection = expect(pending).rejects.toThrow(/still preparing/i);
+    await vi.runAllTimersAsync();
+    await rejection;
+
+    expect(getMessageContentWithHttpInfoMock).toHaveBeenCalledTimes(6);
+    expect(saveMediaStreamMock).not.toHaveBeenCalled();
   });
 });
