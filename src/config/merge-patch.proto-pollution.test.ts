@@ -30,29 +30,40 @@ describe("applyMergePatch prototype pollution guard", () => {
     expect(Object.hasOwn(result, "prototype")).toBe(false);
   });
 
-  it("ignores legacy object accessor keys in shallow and nested patches", () => {
-    const legacyKeys = [
+  it("preserves accessor method names as schema-owned auth profile ids", () => {
+    const profileIds = [
       "__defineGetter__",
       "__defineSetter__",
       "__lookupGetter__",
       "__lookupSetter__",
     ] as const;
-    const patch = Object.fromEntries([
-      ["safe", true],
-      ...legacyKeys.map((key) => [key, { polluted: true }]),
-      ["nested", Object.fromEntries(legacyKeys.map((key) => [key, { polluted: true }]))],
-    ]);
-    const result = applyMergePatch({ nested: { keep: true } }, patch) as {
-      nested: Record<string, unknown>;
-      safe?: boolean;
+    const profile = {
+      provider: "openai",
+      mode: "api_key",
+      constructor: { polluted: true },
+      prototype: { polluted: true },
     };
+    const result = applyMergePatch(
+      { auth: { profiles: {} } },
+      {
+        auth: {
+          profiles: Object.fromEntries(profileIds.map((profileId) => [profileId, profile])),
+        },
+      },
+    ) as { auth?: { profiles?: Record<string, Record<string, unknown>> } };
 
-    expect(result.safe).toBe(true);
-    expect(result.nested.keep).toBe(true);
-    for (const key of legacyKeys) {
-      expect(Object.hasOwn(result, key)).toBe(false);
-      expect(Object.hasOwn(result.nested, key)).toBe(false);
+    const profiles = result.auth?.profiles ?? {};
+    for (const profileId of profileIds) {
+      expect(profiles[profileId]?.provider).toBe("openai");
+      expect(profiles[profileId]?.mode).toBe("api_key");
+      expect(Object.hasOwn(profiles[profileId] ?? {}, "constructor")).toBe(false);
+      expect(Object.hasOwn(profiles[profileId] ?? {}, "prototype")).toBe(false);
     }
+    const removed = applyMergePatch(result, {
+      auth: { profiles: Object.fromEntries(profileIds.map((profileId) => [profileId, null])) },
+    }) as { auth?: { profiles?: Record<string, unknown> } };
+    expect(Object.keys(removed.auth?.profiles ?? {})).toEqual([]);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   it("ignores __proto__ in nested patches", () => {

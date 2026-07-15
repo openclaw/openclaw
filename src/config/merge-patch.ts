@@ -10,13 +10,6 @@ type MergePatchOptions = {
   path?: string;
 };
 
-const MERGE_PATCH_ACCESSOR_METHOD_KEYS = new Set([
-  "__defineGetter__",
-  "__defineSetter__",
-  "__lookupGetter__",
-  "__lookupSetter__",
-]);
-
 function isObjectWithStringId(value: unknown): value is Record<string, unknown> & { id: string } {
   if (!isPlainObject(value)) {
     return false;
@@ -34,10 +27,7 @@ function formatMergePatchArrayEntryPath(arrayPath: string): string {
 
 /** Whether a merge-patch key is safe at its exact config path. */
 export function isMergePatchObjectKeyAllowed(key: string, parentPath?: string): boolean {
-  // These accessor method names do not mutate prototypes through ordinary writes,
-  // so they stay out of the shared key helper. Merge patches are an untrusted
-  // config boundary, so this path still drops them as defense-in-depth.
-  if (!isBlockedObjectKey(key) && !MERGE_PATCH_ACCESSOR_METHOD_KEYS.has(key)) {
+  if (!isBlockedObjectKey(key)) {
     return true;
   }
   // Browser profile names are schema-validated map ids. Their values still
