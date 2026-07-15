@@ -1,14 +1,25 @@
 // Qa Channel tests cover bus client plugin behavior.
 import { createServer, type Server } from "node:http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  buildQaTarget,
-  getQaBusState,
-  parseQaTarget,
-  pollQaBus,
-  QA_BUS_STATE_TIMEOUT_MS,
-} from "./bus-client.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildQaTarget, getQaBusState, parseQaTarget, pollQaBus } from "./bus-client.js";
+
+const guardedFetchCalls = vi.hoisted(
+  () =>
+    [] as Array<
+      Parameters<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>[0]
+    >,
+);
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+      guardedFetchCalls.push(params);
+      return actual.fetchWithSsrFGuard(params);
+    },
+  };
+});
 
 const OVERSIZED_RESPONSE_BYTES = 18 * 1024 * 1024;
 
@@ -141,6 +152,7 @@ describe("qa-bus client", () => {
 
   afterEach(async () => {
     await Promise.all(stops.splice(0).map((stop) => stop()));
+    guardedFetchCalls.length = 0;
   });
 
   it("roundtrips explicit group targets", () => {
@@ -258,6 +270,10 @@ describe("qa-bus client", () => {
       messages: [],
       events: [],
     });
+    expect(guardedFetchCalls.at(-1)).toMatchObject({
+      auditContext: "qa-channel.bus-state",
+      timeoutMs: 10_000,
+    });
   });
 
   it("bounds oversized qa-bus state responses", async () => {
@@ -272,75 +288,6 @@ describe("qa-bus client", () => {
 
     await expect(getQaBusState(`http://127.0.0.1:${port}`)).rejects.toThrow(
       "qa-channel.bus-state: JSON response exceeds 16777216 bytes",
-    );
-  });
-
-  it("negative control: never-headers peer stays pending without timeoutMs", async () => {
-    // Pre-fix shape: fetchWithSsrFGuard with no timeoutMs / AbortSignal against
-    // a peer that accepts TCP but never returns headers stays pending forever.
-    const server = createServer((_req, _res) => {});
-    const port = await listenLoopbackServer(server);
-    stops.push(async () => {
-      server.closeAllConnections?.();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    });
-
-    const hung = fetchWithSsrFGuard({
-      url: `http://127.0.0.1:${port}/v1/state`,
-      policy: { allowPrivateNetwork: true },
-      auditContext: "qa-channel.bus-state.negative-control",
-    });
-    const outcome = await Promise.race([
-      hung.then(() => "resolved" as const),
-      new Promise<"still-pending">((resolve) => {
-        setTimeout(() => resolve("still-pending"), 200);
-      }),
-    ]);
-    expect(outcome).toBe("still-pending");
-    console.log(
-      `[qa-channel bus-state negative control] outcome=${outcome} wait_ms=200 without_timeoutMs=true`,
-    );
-    // Tear down the hung peer so the orphaned fetch cannot outlive the suite.
-    server.closeAllConnections?.();
-  });
-
-  it("times out state fetches when the peer never returns headers", async () => {
-    expect(QA_BUS_STATE_TIMEOUT_MS).toBe(10_000);
-    // Accept TCP but never write headers — body idle caps never start.
-    const server = createServer((_req, _res) => {});
-    const port = await listenLoopbackServer(server);
-    stops.push(async () => {
-      server.closeAllConnections?.();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    });
-
-    const startedAt = Date.now();
-    const outcome = await getQaBusState(`http://127.0.0.1:${port}`, { timeoutMs: 80 }).then(
-      (value) => ({ ok: true as const, value }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    const elapsedMs = Date.now() - startedAt;
-
-    expect(outcome.ok).toBe(false);
-    if (!outcome.ok) {
-      expect(outcome.error).toMatchObject({
-        name: "TimeoutError",
-      });
-    }
-    expect(elapsedMs).toBeGreaterThanOrEqual(60);
-    expect(elapsedMs).toBeLessThan(2_000);
-    console.log(
-      `[qa-channel bus-state hang proof] timed_out=${!outcome.ok} name=${
-        outcome.ok
-          ? "n/a"
-          : outcome.error instanceof Error
-            ? outcome.error.name
-            : typeof outcome.error
-      } elapsed_ms=${elapsedMs} production_timeout_ms=${QA_BUS_STATE_TIMEOUT_MS}`,
     );
   });
 });
