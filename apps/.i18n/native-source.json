@@ -1899,15 +1899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 210,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/tools/ToolDisplay.kt",
-      "source": "${firstLine.take(157)}…",
-      "surface": "android",
-      "id": "native.android.f7a4f3bbcb0b2090"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 221,
+      "line": 227,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/tools/ToolDisplay.kt",
       "source": "$preview…",
       "surface": "android",

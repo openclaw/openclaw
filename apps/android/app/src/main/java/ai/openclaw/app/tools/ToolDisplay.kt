@@ -208,8 +208,12 @@ object ToolDisplayRegistry {
             ?.trim()
             .orEmpty()
         if (firstLine.isEmpty()) return null
+        if (firstLine.length <= 160) {
+          return firstLine
+        }
         // Keep the 160-code-unit preview cap without splitting a surrogate pair.
-        return if (firstLine.length > 160) "${firstLine.takeUtf16Safe(157)}…" else firstLine
+        val preview = firstLine.takeUtf16Safe(157)
+        return "$preview…"
       }
       val raw = value.contentOrNull?.trim().orEmpty()
       raw.toBooleanStrictOrNull()?.let { return it.toString() }
