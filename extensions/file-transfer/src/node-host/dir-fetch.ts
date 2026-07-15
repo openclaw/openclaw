@@ -1,6 +1,8 @@
 // File Transfer plugin module implements dir fetch behavior.
 import crypto from "node:crypto";
+import path from "node:path";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   classifyFsSafeReadError,
   readAbsolutePath,
@@ -93,12 +95,22 @@ async function listTarEntries(tarBuffer: Buffer): Promise<string[] | null> {
   if (!result || result.termination !== "exit" || result.code !== 0) {
     return null;
   }
-  return result.stdout
-    .toString("utf8")
-    .split("\n")
-    .map((line) => line.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, ""))
-    .filter((line) => line.length > 0)
-    .toSorted((left, right) => left.localeCompare(right));
+  const entries: string[] = [];
+  const output = result.stdout.toString("utf8");
+  let start = 0;
+  while (start <= output.length) {
+    const end = output.indexOf("\n", start);
+    const rawLine = output.slice(start, end === -1 ? output.length : end);
+    const line = rawLine.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, "");
+    if (line.length > 0) {
+      entries.push(line);
+    }
+    if (end === -1) {
+      break;
+    }
+    start = end + 1;
+  }
+  return entries.toSorted((left, right) => left.localeCompare(right));
 }
 
 type TarArchiveResult = Buffer | "TOO_LARGE" | "TIMEOUT" | "ERROR";
@@ -128,6 +140,29 @@ async function createTarArchive(
   return result.termination === "exit" && result.code === 0 ? result.stdout : "ERROR";
 }
 
+async function listTreeEntries(root: string, maxEntries: number): Promise<string[] | "TOO_MANY"> {
+  const results: string[] = [];
+  const rootHandle = await fsRoot(root);
+  async function visit(relativeDir: string): Promise<boolean> {
+    const entries = await rootHandle.list(relativeDir, { withFileTypes: true });
+    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
+      const rel = path.posix.join(relativeDir === "." ? "" : relativeDir, entry.name);
+      results.push(rel);
+      if (results.length > maxEntries) {
+        return false;
+      }
+      if (entry.isDirectory) {
+        const ok = await visit(rel);
+        if (!ok) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+  return (await visit(".")) ? results : "TOO_MANY";
+}
+
 export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchResult> {
   const requestedPath = readAbsolutePath(params.path);
   if (typeof requestedPath !== "string") {
@@ -155,6 +190,27 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   }
 
   if (preflightOnly) {
+    let entries: string[] | "TOO_MANY";
+    try {
+      entries = await listTreeEntries(canonical, 5000);
+    } catch (err) {
+      const code = classifyFsError(err);
+      return {
+        ok: false,
+        code,
+        message: `preflight readdir failed: ${String(err)}`,
+        canonicalPath: canonical,
+      };
+    }
+    if (entries === "TOO_MANY") {
+      return {
+        ok: false,
+        code: "TREE_TOO_LARGE",
+        message: "directory tree exceeds 5000 entries during preflight",
+        canonicalPath: canonical,
+      };
+    }
+
     const tarBuffer = await createTarArchive(canonical, maxBytes);
     if (tarBuffer === "TOO_LARGE") {
       return {
@@ -173,27 +229,14 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
       };
     }
     if (tarBuffer === "ERROR") {
+      const currentDirectory = await statRequiredDirectory(canonical, classifyFsError);
+      if (!currentDirectory.ok) {
+        return currentDirectory;
+      }
       return {
         ok: false,
         code: "READ_ERROR",
         message: "tar command failed",
-        canonicalPath: canonical,
-      };
-    }
-    const entries = await listTarEntries(tarBuffer);
-    if (entries === null) {
-      return {
-        ok: false,
-        code: "READ_ERROR",
-        message: "tar entry listing failed",
-        canonicalPath: canonical,
-      };
-    }
-    if (entries.length > 5000) {
-      return {
-        ok: false,
-        code: "TREE_TOO_LARGE",
-        message: "directory tree exceeds 5000 entries during preflight",
         canonicalPath: canonical,
       };
     }
