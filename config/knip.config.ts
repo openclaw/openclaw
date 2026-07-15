@@ -55,6 +55,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "@a2ui/lit",
   "@azure/identity",
   "@clawdbot/lobster",
+  "@discord/embedded-app-sdk",
   "@discordjs/opus",
   "@homebridge/ciao",
   "@lit/context",

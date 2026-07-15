@@ -50,6 +50,7 @@ import {
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
+import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
 import { promptSnapshot } from "./user-prompt-message.js";
 
 export { CodexNativeToolLifecycleProjector };
@@ -575,14 +576,14 @@ export class CodexAppServerEventProjector {
     }
     this.completedTurn = turn;
     if (turn.status === "failed") {
-      this.promptError =
-        formatCodexUsageLimitErrorMessage({
-          message: turn.error?.message,
-          codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-          rateLimits: this.options.readRecentRateLimits?.(),
-        }) ??
-        turn.error?.message ??
-        "codex app-server turn failed";
+      const usageLimitMessage = formatCodexUsageLimitErrorMessage({
+        message: turn.error?.message,
+        codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
+        rateLimits: this.options.readRecentRateLimits?.(),
+      });
+      this.promptError = usageLimitMessage
+        ? createCodexUsageLimitPromptError(usageLimitMessage)
+        : (turn.error?.message ?? "codex app-server turn failed");
       this.promptErrorSource = "prompt";
     }
     const turnItems = turn.items ?? [];
@@ -674,15 +675,16 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private formatCodexErrorMessage(params: JsonObject): string | undefined {
+  private formatCodexErrorMessage(params: JsonObject): string | Error | undefined {
     const error = isJsonObject(params.error) ? params.error : undefined;
-    return (
-      formatCodexUsageLimitErrorMessage({
-        message: error ? readString(error, "message") : undefined,
-        codexErrorInfo: error?.codexErrorInfo,
-        rateLimits: this.options.readRecentRateLimits?.(),
-      }) ?? readCodexErrorNotificationMessage(params)
-    );
+    const usageLimitMessage = formatCodexUsageLimitErrorMessage({
+      message: error ? readString(error, "message") : undefined,
+      codexErrorInfo: error?.codexErrorInfo,
+      rateLimits: this.options.readRecentRateLimits?.(),
+    });
+    return usageLimitMessage
+      ? createCodexUsageLimitPromptError(usageLimitMessage)
+      : readCodexErrorNotificationMessage(params);
   }
 
   private emitAgentEvent(

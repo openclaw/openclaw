@@ -1093,11 +1093,12 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   the typed row columns as source of truth; `entry_json` is only a replay/debug
   copy.
 - Commitments now use a typed shared `commitments` table instead of a
-  whole-store JSON blob. Snapshot saves upsert by commitment id and delete only
-  missing rows instead of clearing and reinserting the table. Runtime loads
-  commitments from typed scope, delivery-window, status, attempt, and text
-  columns; `record_json` is only a replay/debug copy. Doctor imports legacy
-  `commitments.json` and removes it after a successful import.
+  whole-store JSON blob. Runtime uses indexed scope, delivery-window, rolling
+  cap, status, and attempt queries plus synchronous SQLite transactions;
+  `record_json` is only a replay/debug copy. Explicit doctor repair validates
+  the complete legacy `commitments.json`, keeps newer SQLite rows, verifies the
+  result, and only then removes the unchanged source. Runtime never reads or
+  writes the retired file.
 - Cron job definitions, schedule state, and run history no longer have runtime
   JSON writers or readers. Runtime uses `cron_jobs` rows with typed schedule,
   payload, delivery, failure-alert, session, status, and runtime-state columns plus

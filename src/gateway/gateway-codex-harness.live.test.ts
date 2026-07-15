@@ -60,6 +60,9 @@ const CODEX_HARNESS_GUARDIAN_PROBE = isTruthyEnvValue(
 const CODEX_HARNESS_CODE_MODE_ONLY = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_CODE_MODE_ONLY,
 );
+const CODEX_HARNESS_DISABLE_LOOP_RELAY = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY,
+);
 const CODEX_HARNESS_SUBAGENT_ONLY =
   CODEX_HARNESS_SUBAGENT_PROBE &&
   !CODEX_HARNESS_CHAT_IMAGE_PROBE &&
@@ -272,6 +275,7 @@ async function assertCodexHarnessTranscriptModelIdentity(params: {
 async function writeLiveGatewayConfig(params: {
   codexAppServerMode?: "guardian" | "yolo";
   codeModeOnly?: boolean;
+  loopDetectionPreToolUseRelay?: boolean;
   configPath: string;
   modelKey: string;
   port: number;
@@ -294,6 +298,9 @@ async function writeLiveGatewayConfig(params: {
             appServer: {
               mode: params.codexAppServerMode ?? "yolo",
               ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
+              ...(params.loopDetectionPreToolUseRelay === false
+                ? { loopDetectionPreToolUseRelay: false }
+                : {}),
             },
           },
         },
@@ -1171,6 +1178,7 @@ describeLive("gateway live (Codex harness)", () => {
         workspace,
         codexAppServerMode: CODEX_HARNESS_GUARDIAN_PROBE ? "guardian" : "yolo",
         codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
+        ...(CODEX_HARNESS_DISABLE_LOOP_RELAY ? { loopDetectionPreToolUseRelay: false } : {}),
       });
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
         displayName: "vitest-codex-harness-live",
