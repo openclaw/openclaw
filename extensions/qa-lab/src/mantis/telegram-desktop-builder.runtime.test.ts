@@ -119,6 +119,13 @@ describe("mantis Telegram desktop builder runtime", () => {
     expect(remoteScript).toContain("openclaw gateway run");
     expect(remoteScript).toContain("telegram-ready-message.json");
     expect(remoteScript).toContain("telegram-desktop-builder.mp4");
+    expect(remoteScript).toContain(
+      "const response = await fetch(`https://api.telegram.org/bot${token}/getMe`, {\n  signal: AbortSignal.timeout(15_000),\n});",
+    );
+    expect(remoteScript).toContain(
+      'const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {\n  method: "POST",\n  headers: { "content-type": "application/json" },\n  body: JSON.stringify({ chat_id: chatId, text, disable_notification: true }),\n  signal: AbortSignal.timeout(15_000),\n});',
+    );
+    expect(remoteScript?.match(/signal: AbortSignal\.timeout\(15_000\)/gu)?.length).toBe(2);
     expect(
       commands.some((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "stop"),
     ).toBe(false);
