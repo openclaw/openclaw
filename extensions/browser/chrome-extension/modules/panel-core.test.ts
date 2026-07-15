@@ -215,6 +215,12 @@ describe("gatewayUrlFromRelayUrl", () => {
     );
   });
 
+  it("accepts a plain ws:// gateway-hosted relay, not only wss://", () => {
+    expect(gatewayUrlFromRelayUrl("ws://gw.example.com/browser/extension")).toBe(
+      "ws://gw.example.com",
+    );
+  });
+
   it("returns null for loopback relay ports and malformed input", () => {
     expect(gatewayUrlFromRelayUrl("ws://127.0.0.1:18797/extension")).toBeNull();
     expect(gatewayUrlFromRelayUrl("http://gw.example.com/browser/extension")).toBeNull();
