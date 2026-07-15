@@ -117,7 +117,6 @@ export function createTelegramDraftController(params: {
           markdownSource: { text, tableMode: params.tableMode },
         };
 
-  let lanes: Record<LaneName, DraftLaneState>;
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const stream = enabled
       ? (params.telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
@@ -148,7 +147,7 @@ export function createTelegramDraftController(params: {
       retainedPromptContextPages: [],
     };
   };
-  lanes = {
+  const lanes: Record<LaneName, DraftLaneState> = {
     answer: createDraftLane("answer", canStreamAnswerDraft),
     reasoning: createDraftLane("reasoning", canStreamReasoningDraft),
   };

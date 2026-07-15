@@ -299,8 +299,7 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning =
     resolvedReasoningLevel === "on" && streamMode !== "progress";
   const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
-  let fence: ReturnType<typeof createTelegramReplyFenceController> | undefined;
-  const isDispatchSuperseded = () => fence?.isSuperseded() ?? false;
+  const isDispatchSuperseded = () => fence.isSuperseded();
   const draft = createTelegramDraftController({
     accountId: dispatchContext.route.accountId,
     bot,
@@ -368,7 +367,7 @@ export const dispatchTelegramMessage = async ({
     delivery,
     draft,
     fence: {
-      generation: () => fence?.generation(),
+      generation: () => fence.generation(),
       isSuperseded: isDispatchSuperseded,
     },
     progress,
@@ -379,13 +378,13 @@ export const dispatchTelegramMessage = async ({
   });
 
   let isFirstTurnInSession = false;
-  let dispatchWasSuperseded = false;
-  let turnDispatched = true;
+  let dispatchWasSuperseded: boolean;
+  let turnDispatched: boolean | undefined;
   const isDmTopic =
     !dispatchContext.isGroup &&
     dispatchContext.threadSpec.scope === "dm" &&
     dispatchContext.threadSpec.id != null;
-  fence = createTelegramReplyFenceController({
+  const fence = createTelegramReplyFenceController({
     context: dispatchContext,
     onTurnAdopted,
     onTurnDeferred,
@@ -454,7 +453,7 @@ export const dispatchTelegramMessage = async ({
     fence.release();
   }
 
-  if (!turnDispatched) {
+  if (turnDispatched === false) {
     return { kind: "completed" };
   }
   if (dispatchWasSuperseded) {
