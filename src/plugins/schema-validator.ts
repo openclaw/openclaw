@@ -326,6 +326,38 @@ function formatValidationErrors(
   });
 }
 
+export function rewriteMissingConfigDiagnostics(params: {
+  originalValue: unknown;
+  errors: JsonSchemaValidationError[];
+  schema: JsonSchemaValue;
+}): JsonSchemaValidationError[] {
+  if (params.originalValue !== undefined) {
+    return params.errors;
+  }
+  const allRequiredErrors = params.errors.every(
+    (error) =>
+      error.message.startsWith("must have required property") || error.message === "invalid config",
+  );
+  if (!allRequiredErrors || params.errors.length === 0) {
+    return params.errors;
+  }
+  const requiredFields: string[] = [];
+  for (const error of params.errors) {
+    const match = error.message.match(/^must have required property '([^']+)'/);
+    if (match?.[1]) {
+      requiredFields.push(match[1]);
+    }
+  }
+  const fieldList = requiredFields.length > 0 ? `: ${requiredFields.join(", ")}` : "";
+  return [
+    {
+      path: "<root>",
+      message: `missing required config${fieldList}`,
+      text: `<root>: missing required config${fieldList}`,
+    },
+  ];
+}
+
 /**
  * Validate a plugin-owned value against a JSON Schema, optionally hydrating schema defaults.
  * The cache key is caller-owned so repeated plugin/schema validations can reuse compiled TypeBox validators.

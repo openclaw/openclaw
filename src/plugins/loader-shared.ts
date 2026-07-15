@@ -33,7 +33,7 @@ import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
 import { clearMemoryPluginState } from "./memory-state.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
+import { validateJsonSchemaValue, rewriteMissingConfigDiagnostics } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
@@ -220,9 +220,14 @@ export function validatePluginConfig(params: {
     value: value ?? {},
     applyDefaults: true,
   });
-  return result.ok
-    ? ok(result.value as Record<string, unknown> | undefined)
-    : resultError(result.errors.map((error) => error.text));
+  if (result.ok) {
+    return ok(result.value as Record<string, unknown> | undefined);
+  }
+  const errors =
+    value === undefined
+      ? rewriteMissingConfigDiagnostics({ originalValue: undefined, errors: result.errors, schema })
+      : result.errors;
+  return resultError(errors.map((error) => error.text));
 }
 
 function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
