@@ -158,6 +158,9 @@ export async function recoverStuckDiagnosticSession(
     let aborted = false;
     let drained = true;
     let forceCleared = false;
+    // Attempt drain may hand the same reply to model fallback. Keep its lane
+    // until the combined embedded/reply registry no longer reports an owner.
+    let activeWorkStillOwned = false;
     const staleActiveProgressAbortMs = resolveStaleActiveProgressAbortMs(params);
     const staleActiveLaneTaskReleaseMs = resolveStaleActiveLaneTaskReleaseMs(params);
 
@@ -204,6 +207,7 @@ export async function recoverStuckDiagnosticSession(
       aborted = result.aborted;
       drained = result.drained;
       forceCleared = result.forceCleared;
+      activeWorkStillOwned = isEmbeddedAgentRunActive(activeSessionId);
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedAgentRunActive(activeWorkSessionId)) {
@@ -249,6 +253,7 @@ export async function recoverStuckDiagnosticSession(
         drained = result.drained;
         forceCleared = result.forceCleared;
         activeSessionId = activeWorkSessionId;
+        activeWorkStillOwned = isEmbeddedAgentRunActive(activeWorkSessionId);
       } else {
         const outcome: StuckSessionRecoveryOutcome = {
           status: "skipped",
@@ -302,6 +307,12 @@ export async function recoverStuckDiagnosticSession(
       }
     }
 
+    if (sessionLane && aborted && drained && !activeWorkStillOwned) {
+      // Let an immediately-aborted lane owner finish its promise turn and pump
+      // queued work before comparing task ids; fresh work must not be reset.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+
     const queuedCount = sessionLane ? getCommandLaneSnapshot(sessionLane).queuedCount : 0;
     // A task id active now but not before the abort means the lane already
     // unwedged and pumped fresh work; resetting it would double-run the lane.
@@ -313,6 +324,7 @@ export async function recoverStuckDiagnosticSession(
     const hasQueuedSessionWork = (params.queueDepth ?? 0) > 0;
     const released =
       sessionLane &&
+      !activeWorkStillOwned &&
       !laneStartedFreshTask &&
       (queuedCount > 0 || hasQueuedSessionWork || !activeSessionId || !aborted || !drained)
         ? resetCommandLane(sessionLane)

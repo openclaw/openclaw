@@ -437,7 +437,7 @@ describe("stuck session recovery", () => {
   it("aborts stale reply work without an embedded handle when active abort recovery is enabled", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
-    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunActive.mockReturnValueOnce(true).mockReturnValueOnce(false);
     mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
     mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
@@ -496,7 +496,7 @@ describe("stuck session recovery", () => {
   it("releases the session lane when abort+drain succeeds but queued messages remain (ghost run + queued messages)", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("ghost-run-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
-    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunActive.mockReturnValueOnce(true).mockReturnValueOnce(false);
     mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
     mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
@@ -532,7 +532,7 @@ describe("stuck session recovery", () => {
   it("reports queued lane work when aborting active work releases a lane", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
-    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunActive.mockReturnValueOnce(true).mockReturnValueOnce(false);
     mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
     mocks.abortEmbeddedAgentRun.mockReturnValue(false);
     mocks.forceClearEmbeddedAgentRun.mockReturnValue(true);
