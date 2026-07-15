@@ -108,6 +108,77 @@ describe("session message cache", () => {
     });
   });
 
+  it("keeps deeper same-session history when another pane saves only the latest tail", () => {
+    const host = createHost();
+    const cache: ChatMessageCache = new Map();
+    const retained = Array.from({ length: 140 }, (_, index) => ({
+      content: `retained-${index + 1}`,
+      __openclaw: { seq: index + 1 },
+    }));
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: retained,
+        pagination: { hasMore: false, totalMessages: 140 },
+        sessionId: "session-1",
+      },
+    );
+    const refreshedTail = Array.from({ length: 40 }, (_, index) => ({
+      content: `fresh-${index + 101}`,
+      __openclaw: { seq: index + 101 },
+    }));
+
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: refreshedTail,
+        pagination: { hasMore: true, nextOffset: 40, totalMessages: 140 },
+        sessionId: "session-1",
+      },
+    );
+
+    const snapshot = readChatSessionSnapshot(cache, host, { sessionKey: "home" });
+    expect(snapshot?.messages).toHaveLength(140);
+    expect(snapshot?.messages[99]).toBe(retained[99]);
+    expect(snapshot?.messages[100]).toBe(refreshedTail[0]);
+    expect(snapshot?.pagination).toEqual({ hasMore: false, totalMessages: 140 });
+  });
+
+  it("does not retain history across backing session changes", () => {
+    const host = createHost();
+    const cache: ChatMessageCache = new Map();
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: [{ content: "old", __openclaw: { seq: 1 } }],
+        pagination: { hasMore: false, totalMessages: 1 },
+        sessionId: "session-1",
+      },
+    );
+    const replacement = [{ content: "new", __openclaw: { seq: 1 } }];
+
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: replacement,
+        pagination: { hasMore: false, totalMessages: 1 },
+        sessionId: "session-2",
+      },
+    );
+
+    expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })?.messages).toEqual(
+      replacement,
+    );
+  });
+
   it("reuses retained message weights when snapshot metadata changes", () => {
     const host = createHost();
     const cache: ChatMessageCache = new Map();

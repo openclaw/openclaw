@@ -177,13 +177,77 @@ export function cacheChatSessionSnapshot(
     cache.delete(cacheKey);
     return;
   }
-  const bounded = boundChatSessionSnapshot(snapshot);
+  const bounded = boundChatSessionSnapshot(
+    mergeRetainedSessionDepth(existing?.snapshot ?? null, snapshot),
+  );
   if (!bounded) {
     cache.delete(cacheKey);
     return;
   }
   setSessionCacheValue(cache, cacheKey, bounded);
   trimChatSessionSnapshotCache(cache);
+}
+
+function mergeRetainedSessionDepth(
+  existing: ChatSessionSnapshot | null,
+  incoming: ChatSessionSnapshot,
+): ChatSessionSnapshot {
+  if (
+    !existing ||
+    !existing.sessionId ||
+    existing.sessionId !== incoming.sessionId ||
+    existing.messages.length === 0 ||
+    incoming.messages.length === 0
+  ) {
+    return incoming;
+  }
+  const existingBounds = transcriptSequenceBounds(existing.messages);
+  const incomingBounds = transcriptSequenceBounds(incoming.messages);
+  const existingTotal = existing.pagination.totalMessages;
+  const incomingTotal = incoming.pagination.totalMessages;
+  if (
+    !existingBounds ||
+    !incomingBounds ||
+    typeof existingTotal !== "number" ||
+    typeof incomingTotal !== "number" ||
+    incomingTotal < existingTotal ||
+    incomingBounds.oldest <= existingBounds.oldest ||
+    incomingBounds.newest < existingBounds.newest ||
+    incomingBounds.oldest > existingBounds.newest + 1
+  ) {
+    return incoming;
+  }
+  const overlapStart = existing.messages.findIndex((message) => {
+    const sequence = readTranscriptSequence(message);
+    return sequence !== null && sequence >= incomingBounds.oldest;
+  });
+  const retainedPrefix =
+    overlapStart === -1 ? existing.messages : existing.messages.slice(0, overlapStart);
+  const messages = [...retainedPrefix, ...incoming.messages];
+  const pagination = capSnapshotPagination(incoming.pagination, messages);
+  return pagination
+    ? {
+        messages,
+        pagination,
+        sessionId: incoming.sessionId,
+      }
+    : incoming;
+}
+
+function transcriptSequenceBounds(
+  messages: readonly unknown[],
+): { oldest: number; newest: number } | null {
+  let oldest: number | null = null;
+  let newest: number | null = null;
+  for (const message of messages) {
+    const sequence = readTranscriptSequence(message);
+    if (sequence === null) {
+      continue;
+    }
+    oldest = oldest === null ? sequence : Math.min(oldest, sequence);
+    newest = newest === null ? sequence : Math.max(newest, sequence);
+  }
+  return oldest === null || newest === null ? null : { oldest, newest };
 }
 
 export function readChatSessionSnapshot(
