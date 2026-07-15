@@ -42,7 +42,7 @@ type ActiveSession = {
   target?: ContextEngineSessionTarget;
 };
 
-export type EmbeddedRunOverflowRecoveryOutcome =
+type EmbeddedRunOverflowRecoveryOutcome =
   | { action: "none" }
   | { action: "retry" }
   | {
