@@ -769,7 +769,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     mkdirSync(dirname(assertionsFile), { recursive: true });
     writeFileSync(
       assertionsFile,
-      [
+      `const SCENARIOS = new Set([\n${[
         "base",
         "feishu-channel",
         "bootstrap-persona",
@@ -781,7 +781,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "versioned-runtime-deps",
       ]
         .map((scenario) => JSON.stringify(scenario))
-        .join("\n"),
+        .join(",\n")}\n]);\nconst unrelated = "acpx-openclaw-tools-bridge";\n`,
     );
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
@@ -801,6 +801,22 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.6.11-tilde-log-path",
       "published-upgrade-survivor-2026.6.11-versioned-runtime-deps",
     ]);
+  });
+
+  it("omits survivor lanes when the target exposes none of the requested scenarios", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-empty-upgrade-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(assertionsFile, 'const SCENARIOS = new Set(["unrelated"]);\n');
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.6.11",
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
   });
 
   it("skips plugin dependency cleanup for baselines without packaged plugin dirs", () => {

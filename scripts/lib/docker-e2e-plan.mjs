@@ -102,7 +102,12 @@ function filterUpgradeSurvivorScenariosForTarget(scenarios, targetRoot) {
     return [];
   }
   const assertionsSource = readFileSync(assertionsFile, "utf8");
-  return scenarios.filter((scenario) => assertionsSource.includes(JSON.stringify(scenario)));
+  const scenariosInitializer =
+    /const SCENARIOS = new Set\(\[([\s\S]*?)\]\);/u.exec(assertionsSource)?.[1] ?? "";
+  const supportedScenarios = new Set(
+    [...scenariosInitializer.matchAll(/"([^"]+)"/gu)].map((match) => match[1]),
+  );
+  return scenarios.filter((scenario) => supportedScenarios.has(scenario));
 }
 
 export function normalizeUpgradeSurvivorBaselineSpec(raw) {
@@ -209,21 +214,29 @@ function supportsUpgradeSurvivorAcpToolsBridge(baselineSpec) {
   return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 22 }) >= 0;
 }
 
-function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios, targetRoot) {
+function expandUpgradeSurvivorBaselineLanes(
+  poolLanes,
+  rawBaselineSpecs,
+  targetRoot,
+  rawScenarios = "",
+) {
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
   // Trusted-current planners may know scenarios that a frozen target's Docker
   // harness cannot seed or assert. Filter by the selected tree's concrete
   // harness contract so validation never schedules an impossible target lane.
-  const scenarios = filterUpgradeSurvivorScenariosForTarget(
-    parseUpgradeSurvivorScenarios(rawScenarios),
-    targetRoot,
-  );
+  const requestedScenarios = parseUpgradeSurvivorScenarios(rawScenarios);
+  const scenarios = filterUpgradeSurvivorScenariosForTarget(requestedScenarios, targetRoot);
+  const targetSupportsNoRequestedScenario =
+    Boolean(targetRoot) && requestedScenarios.length > 0 && scenarios.length === 0;
   if (baselineSpecs.length === 0 && scenarios.length === 0) {
     return poolLanes;
   }
   return poolLanes.flatMap((poolLane) => {
     if (poolLane.name !== "published-upgrade-survivor" && poolLane.name !== "update-migration") {
       return [poolLane];
+    }
+    if (targetSupportsNoRequestedScenario) {
+      return [];
     }
     const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];
     const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
@@ -354,6 +367,7 @@ export function findLaneByName(name) {
     expandUpgradeSurvivorBaselineLanes(
       [...allReleasePathLanes({ includeOpenWebUI: true }), ...mainLanes, ...tailLanes],
       process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
+      undefined,
       process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
     ),
   ).find((poolLane) => poolLane.name === name);
@@ -453,8 +467,8 @@ export function resolveDockerE2ePlan(options) {
     expandUpgradeSurvivorBaselineLanes(
       unexpandedSelectableLanes,
       upgradeSurvivorBaselines,
-      upgradeSurvivorScenarios,
       options.upgradeSurvivorTargetRoot,
+      upgradeSurvivorScenarios,
     ),
   );
   const releaseLanes =
@@ -463,8 +477,8 @@ export function resolveDockerE2ePlan(options) {
         ? expandUpgradeSurvivorBaselineLanes(
             allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI, releaseProfile }),
             upgradeSurvivorBaselines,
-            upgradeSurvivorScenarios,
             options.upgradeSurvivorTargetRoot,
+            upgradeSurvivorScenarios,
           )
         : expandUpgradeSurvivorBaselineLanes(
             releasePathChunkLanes(options.releaseChunk, {
@@ -472,8 +486,8 @@ export function resolveDockerE2ePlan(options) {
               releaseProfile,
             }),
             upgradeSurvivorBaselines,
-            upgradeSurvivorScenarios,
             options.upgradeSurvivorTargetRoot,
+            upgradeSurvivorScenarios,
           )
       : undefined;
   const selectedLanes =
@@ -490,8 +504,8 @@ export function resolveDockerE2ePlan(options) {
             return expandUpgradeSurvivorBaselineLanes(
               [unexpandedLane],
               upgradeSurvivorBaselines,
-              upgradeSurvivorScenarios,
               options.upgradeSurvivorTargetRoot,
+              upgradeSurvivorScenarios,
             );
           }
           selectNamedLanes(selectableLanes, [selectedName], "OPENCLAW_DOCKER_ALL_LANES");
