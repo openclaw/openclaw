@@ -190,21 +190,19 @@ describe("hooks CLI process lifecycle", () => {
   it("exits after one-shot outputs when plugins leave ref'd handles", async () => {
     const fixture = await createLingeringPluginFixture();
 
-    // Both command families need real process coverage. Run their expensive CLI
-    // bootstraps together; unit suites cover the individual relay result shapes.
-    const [listResult, relayResult] = await Promise.all([
-      runHooksCli({
-        args: ["hooks", "list", "--json"],
-        env: {
-          LINGER_MARKER: fixture.markerPath,
-          OPENCLAW_CONFIG_PATH: fixture.configPath,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_STATE_DIR: fixture.stateDir,
-        },
-        timeoutMessage: "hooks list did not exit after emitting output",
-      }),
-      runHooksRelay({ event: "pre_tool_use", stdin: "{}" }),
-    ]);
+    // Both command families need real process coverage. Keep their expensive CLI
+    // bootstraps sequential so low-core shards test lifecycle, not startup contention.
+    const listResult = await runHooksCli({
+      args: ["hooks", "list", "--json"],
+      env: {
+        LINGER_MARKER: fixture.markerPath,
+        OPENCLAW_CONFIG_PATH: fixture.configPath,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: fixture.stateDir,
+      },
+      timeoutMessage: "hooks list did not exit after emitting output",
+    });
+    const relayResult = await runHooksRelay({ event: "pre_tool_use", stdin: "{}" });
 
     expect(listResult, listResult.stderr).toMatchObject({ code: 0, signal: null });
     expect(listResult.stderr).not.toContain("Error:");
@@ -218,5 +216,5 @@ describe("hooks CLI process lifecycle", () => {
         permissionDecisionReason: expect.any(String),
       },
     });
-  }, 20_000);
+  }, 35_000);
 });

@@ -235,14 +235,18 @@ vi.mock("./stale-plugin-config.js", () => ({
     channels?: Record<string, unknown>;
   }) => {
     const knownIds = new Set(manifestState.plugins.map((plugin) => plugin.id));
-    const hits = [...(cfg.plugins?.allow ?? []), ...Object.keys(cfg.plugins?.entries ?? {})]
-      .filter((id) => !knownIds.has(id))
-      .map((id) => ({ id, surface: "plugin" }));
+    const hits = [
+      ...(cfg.plugins?.allow ?? []).map((id) => ({ id, surface: "allow" })),
+      ...Object.keys(cfg.plugins?.entries ?? {}).map((id) => ({ id, surface: "entries" })),
+    ].filter((hit) => !knownIds.has(hit.id));
     if (cfg.channels?.["openclaw-weixin"]) {
       hits.push({ id: "openclaw-weixin", surface: "channel" });
     }
     return hits.filter(
-      (hit, index) => hits.findIndex((candidate) => candidate.id === hit.id) === index,
+      (hit, index) =>
+        hits.findIndex(
+          (candidate) => candidate.id === hit.id && candidate.surface === hit.surface,
+        ) === index,
     );
   },
   isStalePluginAutoRepairBlocked: () =>
@@ -251,12 +255,20 @@ vi.mock("./stale-plugin-config.js", () => ({
     autoRepairBlocked,
     doctorFixCommand,
     hits,
+    surfacePreservePluginIds,
   }: {
     autoRepairBlocked: boolean;
     doctorFixCommand: string;
     hits: Array<{ id: string; surface: string }>;
+    surfacePreservePluginIds?: Record<string, ReadonlySet<string>>;
   }) => {
-    const pluginIds = hits
+    const actionableHits = hits.filter(
+      (hit) => !surfacePreservePluginIds?.[hit.surface]?.has(hit.id),
+    );
+    if (actionableHits.length === 0) {
+      return [];
+    }
+    const pluginIds = actionableHits
       .filter((hit) => hit.surface !== "channel")
       .map((hit) => hit.id)
       .toSorted();
@@ -264,7 +276,7 @@ vi.mock("./stale-plugin-config.js", () => ({
       pluginIds.length > 0
         ? `Stale plugin references (plugins.allow/deny/entries): ${pluginIds.join(", ")}.`
         : null,
-      ...hits
+      ...actionableHits
         .filter((hit) => hit.surface === "channel")
         .map((hit) => `channels.${hit.id}: dangling channel config.`),
       autoRepairBlocked
@@ -578,6 +590,19 @@ describe("doctor preview warnings", () => {
     );
     expect(warning).toContain('Run "openclaw doctor --fix"');
     expect(warning).not.toContain("Auto-removal is paused");
+  });
+
+  it("omits stale cleanup warnings for version-bound Codex policy", async () => {
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        plugins: {
+          allow: ["codex"],
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings.join("\n")).not.toContain("Stale plugin references");
   });
 
   it("includes stale channel config warnings without plugin config", async () => {

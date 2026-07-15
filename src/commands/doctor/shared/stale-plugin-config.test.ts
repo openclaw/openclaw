@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./configured-runtime-plugin-installs.js";
 import {
   collectStalePluginConfigWarnings,
   maybeRepairStalePluginConfig,
@@ -141,6 +142,78 @@ describe("doctor stale plugin config helpers", () => {
       memory: "memory-core",
       contextEngine: "legacy",
     });
+  });
+
+  it("stale-plugin-config removes codex from allowlist when called without preservePluginIds (repair-sequencing passes preservePluginIds)", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        allow: ["codex"],
+      },
+    } as OpenClawConfig);
+
+    // maybeRepairStalePluginConfig alone removes codex because it is not in
+    // knownIds. The preservation of version-bound runtime plugins happens at
+    // the caller (repair-sequencing.ts) via preservePluginIds.
+    expect(result.changes).toEqual(["- plugins.allow: removed 1 stale plugin id (codex)"]);
+    expect(result.config.plugins?.allow).toEqual([]);
+  });
+
+  it("preserves codex in policy surfaces while the version-bound plugin is absent", () => {
+    const result = maybeRepairStalePluginConfig(
+      {
+        plugins: {
+          allow: ["codex", "discord"],
+          deny: ["codex"],
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      {
+        surfacePreservePluginIds: {
+          allow: ["codex"],
+          deny: ["codex"],
+          entries: ["codex"],
+        },
+      },
+    );
+
+    expect(result.config.plugins?.allow).toEqual(["codex", "discord"]);
+    expect(result.config.plugins?.deny).toEqual(["codex"]);
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(false);
+    expect(result.changes).toEqual([]);
+  });
+
+  it("does not preserve codex outside policy surfaces", () => {
+    const result = maybeRepairStalePluginConfig(
+      {
+        plugins: {
+          allow: ["codex"],
+          entries: {
+            codex: { enabled: false },
+          },
+          slots: {
+            memory: "codex",
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      {
+        surfacePreservePluginIds: {
+          allow: ["codex"],
+          deny: ["codex"],
+          entries: ["codex"],
+        },
+      },
+    );
+
+    expect(result.config.plugins?.allow).toEqual(["codex"]);
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(false);
+    expect(result.config.plugins?.slots?.memory).toBe("memory-core");
+    expect(result.changes).toEqual([
+      "- plugins.slots: reset 1 stale plugin slot (memory: codex -> memory-core)",
+    ]);
   });
 
   it("does not report slot defaults or none as stale plugin refs", () => {
@@ -397,7 +470,7 @@ describe("doctor stale plugin config helpers", () => {
     expect(warnings.at(-1)).toContain("Auto-removal is paused");
   });
 
-  it("keeps an intentionally unavailable Codex plugin entry out of stale diagnostics", () => {
+  it("filters version-bound Codex policy from actionable stale warnings", () => {
     const cfg = {
       models: {
         providers: {
@@ -417,7 +490,8 @@ describe("doctor stale plugin config helpers", () => {
       },
     } as OpenClawConfig;
 
-    expect(scanStalePluginConfig(cfg)).toEqual([
+    const hits = scanStalePluginConfig(cfg);
+    expect(hits).toEqual([
       {
         pluginId: "codex",
         pathLabel: "plugins.allow",
@@ -433,6 +507,16 @@ describe("doctor stale plugin config helpers", () => {
         pathLabel: "plugins.entries.acpx",
         surface: "entries",
       },
+    ]);
+    expect(
+      collectStalePluginConfigWarnings({
+        hits,
+        doctorFixCommand: "openclaw doctor --fix",
+        surfacePreservePluginIds: VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE,
+      }),
+    ).toEqual([
+      "- Stale plugin references (plugins.allow/deny/entries): acpx.",
+      '- Run "openclaw doctor --fix" to remove stale plugin ids and dangling channel references.',
     ]);
   });
 
