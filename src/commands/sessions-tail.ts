@@ -538,10 +538,13 @@ function readNewFileFollowEvents(state: FileFollowState): TrajectoryEvent[] {
       );
     }
     const buffer = Buffer.alloc(deltaBytes);
-    fs.readSync(fd, buffer, 0, buffer.length, state.offset);
-    state.offset = fileState.size;
+    // Positional reads may return short; advance the cursor only past the
+    // bytes actually read so the next poll re-reads the remainder instead of
+    // skipping it, and decode only those bytes to keep the JSONL lines clean.
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, state.offset);
+    state.offset += bytesRead;
     state.fileState = fileState;
-    const combined = `${state.pending}${state.decoder.write(buffer)}`;
+    const combined = `${state.pending}${state.decoder.write(buffer.subarray(0, bytesRead))}`;
     // Keep an incomplete trailing JSON line until the next poll, matching
     // append-only writers that flush in chunks.
     const lines = combined.split(/\r?\n/u);
