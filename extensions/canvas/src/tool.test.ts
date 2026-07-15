@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { A2UI_JSONL_FILE_MAX_BYTES } from "./a2ui-jsonl.js";
 import { createCanvasTool } from "./tool.js";
 
 const VALID_A2UI_V08_JSONL = [
@@ -79,6 +80,26 @@ describe("Canvas tool", () => {
       expect(mocks.callGatewayTool).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects oversized jsonlPath files before resolving a node", async () => {
+    tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-tool-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    await mkdir(workspaceDir);
+    await writeFile(
+      path.join(workspaceDir, "large.jsonl"),
+      "x".repeat(A2UI_JSONL_FILE_MAX_BYTES + 1),
+    );
+    const tool = createCanvasTool({ workspaceDir });
+
+    await expect(
+      tool.execute("tool-call-1", {
+        action: "a2ui_push",
+        jsonlPath: "large.jsonl",
+      }),
+    ).rejects.toThrow("A2UI JSONL file exceeds");
+    expect(mocks.listNodes).not.toHaveBeenCalled();
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+  });
 
   it("applies configured image limits to canvas snapshots", async () => {
     mocks.callGatewayTool.mockResolvedValue({

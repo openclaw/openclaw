@@ -1,6 +1,11 @@
 /**
  * A2UI JSONL helpers for Canvas text rendering and validation.
  */
+import fs from "node:fs/promises";
+
+export const A2UI_JSONL_FILE_MAX_BYTES = 1024 * 1024;
+const A2UI_JSONL_READ_CHUNK_BYTES = 64 * 1024;
+
 const A2UI_ACTION_KEYS = [
   "beginRendering",
   "surfaceUpdate",
@@ -38,6 +43,34 @@ export function buildA2UITextJsonl(text: string) {
     { beginRendering: { surfaceId, root: rootId } },
   ];
   return payloads.map((payload) => JSON.stringify(payload)).join("\n");
+}
+
+/** Read a Canvas A2UI JSONL file without buffering oversized workspace payloads. */
+export async function readA2UIJsonlFile(filePath: string): Promise<string> {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error("A2UI JSONL path must be a file");
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (true) {
+      const remaining = A2UI_JSONL_FILE_MAX_BYTES + 1 - total;
+      const scratch = Buffer.allocUnsafe(Math.min(A2UI_JSONL_READ_CHUNK_BYTES, remaining));
+      const { bytesRead } = await handle.read(scratch, 0, scratch.length, null);
+      if (bytesRead === 0) {
+        return Buffer.concat(chunks, total).toString("utf8");
+      }
+      total += bytesRead;
+      if (total > A2UI_JSONL_FILE_MAX_BYTES) {
+        throw new Error(`A2UI JSONL file exceeds ${A2UI_JSONL_FILE_MAX_BYTES} bytes`);
+      }
+      chunks.push(scratch.subarray(0, bytesRead));
+    }
+  } finally {
+    await handle.close();
+  }
 }
 
 /** Validates A2UI JSONL and returns the detected dialect/version metadata. */

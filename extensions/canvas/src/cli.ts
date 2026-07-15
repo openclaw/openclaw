@@ -2,7 +2,6 @@
  * Canvas node CLI command registration and runtime dependency wiring.
  */
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { runCommandWithRuntime, theme } from "openclaw/plugin-sdk/cli-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -21,7 +20,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
-import { buildA2UITextJsonl, validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
+import { buildA2UITextJsonl, readA2UIJsonlFile, validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 
 /** Runtime output surface used by Canvas CLI commands. */
@@ -443,7 +442,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
 
           const jsonl = hasText
             ? buildA2UITextJsonl(opts.text ?? "")
-            : await fs.readFile(String(opts.jsonl), "utf8");
+            : await readA2UIJsonlFile(String(opts.jsonl));
           const { messageCount } = validateSupportedA2UIJsonl(jsonl);
           await invokeCanvas(deps, opts, "canvas.a2ui.pushJSONL", { jsonl });
           if (!opts.json) {
