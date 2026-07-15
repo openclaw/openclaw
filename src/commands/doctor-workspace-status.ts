@@ -42,6 +42,7 @@ function collectTaskFlowRecoveryFindings(): TaskFlowRecoveryFinding[] {
       });
     }
     if (
+      flow.endedAt == null &&
       flow.status === "blocked" &&
       flow.blockedTaskId &&
       !tasks.some((task) => task.taskId === flow.blockedTaskId)

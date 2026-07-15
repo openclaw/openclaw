@@ -27,8 +27,6 @@ import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contrac
 import { finalizeTaskRunByRunId, findDetachedTaskRun } from "../tasks/detached-task-runtime.js";
 import { isProvisionalSubagentKillTask } from "../tasks/task-cancellation-state.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import {
   ackLeasedAgentSteeringItemsFromSubagentRuns,
   leasePendingAgentSteeringItemsFromSubagentRuns,
@@ -73,15 +71,10 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   countActiveDescendantRunsFromRuns,
   countActiveRunsForSessionFromRuns,
-  countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
-  isSubagentSessionRunActiveFromRuns,
   listRunsForControllerFromRuns,
   listDescendantRunsForRequesterFromRuns,
-  listRunsForRequesterFromRuns,
-  resolveRequesterForChildSessionFromRuns,
-  shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import {
   createSubagentRunManager,
@@ -113,11 +106,6 @@ import {
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
-export {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-  resolveSubagentSessionStatus,
-} from "./subagent-registry-helpers.js";
 const log = createSubsystemLogger("agents/subagent-registry");
 
 type SubagentAnnounceModule = Pick<
@@ -1731,7 +1719,7 @@ export function registerSubagentRun(params: RegisterSubagentRunParams) {
   subagentRunManager.registerSubagentRun(params);
 }
 
-export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
+function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   clearScheduledResumeTimers();
   for (const timer of resumeRetryTimers) {
     clearTimeout(timer);
@@ -1762,7 +1750,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   }
 }
 
-export const testing = {
+const testing = {
   async sweepOnceForTests() {
     await sweepSubagentRuns();
   },
@@ -1779,11 +1767,11 @@ export const testing = {
   },
 } as const;
 
-export function addSubagentRunForTests(entry: SubagentRunRecord) {
+function addSubagentRunForTests(entry: SubagentRunRecord) {
   subagentRuns.set(entry.runId, entry);
 }
 
-export function releaseSubagentRun(runId: string) {
+function releaseSubagentRun(runId: string) {
   subagentRunManager.releaseSubagentRun(runId);
 }
 
@@ -1798,7 +1786,7 @@ function hasCompleteSubagentTerminalState(entry: SubagentRunRecord | undefined):
   );
 }
 
-export async function finalizeInterruptedSubagentRun(params: {
+async function finalizeInterruptedSubagentRun(params: {
   runId: string;
   error: string;
   endedAt?: number;
@@ -1863,33 +1851,6 @@ export async function finalizeInterruptedSubagentRun(params: {
   }
 }
 
-export function resolveRequesterForChildSession(childSessionKey: string): {
-  requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
-} | null {
-  const runsSnapshot = subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns);
-  const resolved = resolveRequesterForChildSessionFromRuns(runsSnapshot, childSessionKey);
-  if (resolved === null) {
-    return null;
-  }
-  const requesterOrigin = normalizeDeliveryContext(resolved.requesterOrigin);
-  return {
-    requesterSessionKey: resolved.requesterSessionKey,
-    requesterOrigin,
-  };
-}
-
-export function isSubagentSessionRunActive(childSessionKey: string): boolean {
-  return isSubagentSessionRunActiveFromRuns(subagentRuns, childSessionKey);
-}
-
-export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
-  return shouldIgnorePostCompletionAnnounceForSessionFromRuns(
-    subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),
-    childSessionKey,
-  );
-}
-
 export function markSubagentRunTerminated(params: {
   runId?: string;
   childSessionKey?: string;
@@ -1897,13 +1858,6 @@ export function markSubagentRunTerminated(params: {
   suppressTaskDelivery?: boolean;
 }): number {
   return subagentRunManager.markSubagentRunTerminated(params);
-}
-
-export function listSubagentRunsForRequester(
-  requesterSessionKey: string,
-  options?: { requesterRunId?: string },
-): SubagentRunRecord[] {
-  return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
 
 export function leasePendingAgentSteeringItems(params: {
@@ -1996,17 +1950,6 @@ export function countPendingDescendantRuns(rootSessionKey: string): number {
   );
 }
 
-export function countPendingDescendantRunsExcludingRun(
-  rootSessionKey: string,
-  excludeRunId: string,
-): number {
-  return countPendingDescendantRunsExcludingRunFromRuns(
-    subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),
-    rootSessionKey,
-    excludeRunId,
-  );
-}
-
 export function listDescendantRunsForRequester(rootSessionKey: string): SubagentRunRecord[] {
   return listDescendantRunsForRequesterFromRuns(
     subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),
@@ -2046,7 +1989,17 @@ export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
 }
 
-// Importing this module also registers the subagent maintenance preserve-key
-// provider as a side effect (see subagent-registry-maintenance.ts).
-export { listSessionMaintenanceProtectedSubagentSessionKeys } from "./subagent-registry-maintenance.js";
+const SUBAGENT_REGISTRY_TEST_HANDLE = Symbol.for("openclaw.subagentRegistryTestApi");
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[SUBAGENT_REGISTRY_TEST_HANDLE] = {
+    addSubagentRunForTests,
+    finalizeInterruptedSubagentRun,
+    releaseSubagentRun,
+    resetSubagentRegistryForTests,
+    testing,
+  };
+}
+
+// Register the subagent maintenance preserve-key provider as a module side effect.
+import "./subagent-registry-maintenance.js";
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

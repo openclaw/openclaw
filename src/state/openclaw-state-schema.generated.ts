@@ -248,7 +248,7 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
   resolution_ref TEXT NOT NULL CHECK (
     length(resolution_ref) = 43 AND resolution_ref NOT GLOB '*[^A-Za-z0-9_-]*'
   ),
-  kind TEXT NOT NULL CHECK (kind IN ('exec', 'plugin')),
+  kind TEXT NOT NULL CHECK (kind IN ('exec', 'plugin', 'system-agent')),
   status TEXT NOT NULL CHECK (status IN ('pending', 'allowed', 'denied', 'expired', 'cancelled')),
   presentation_json TEXT NOT NULL,
   requested_by_device_id TEXT,
@@ -1122,6 +1122,12 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status_due
 
 CREATE INDEX IF NOT EXISTS idx_commitments_scope_dedupe
   ON commitments(agent_id, session_key, channel, dedupe_key, status);
+
+CREATE INDEX IF NOT EXISTS idx_commitments_agent_due
+  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
+
+CREATE INDEX IF NOT EXISTS idx_commitments_agent_sent
+  ON commitments(agent_id, status, sent_at_ms, session_key);
 
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,

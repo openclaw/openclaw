@@ -434,6 +434,21 @@ describe("qa scenario catalog", () => {
     expect(config?.unavailableNeedles).toContain("not in my available tool surface");
   });
 
+  it("loads Matrix flow provider overrides", () => {
+    expect(readQaScenarioById("matrix-room-block-streaming").execution).toMatchObject({
+      kind: "flow",
+      providerMode: "mock-openai",
+      retryCount: 0,
+      timeoutMs: 75_000,
+    });
+    expect(readQaScenarioById("matrix-voice-preflight-mention").execution).toMatchObject({
+      kind: "flow",
+      providerMode: "live-frontier",
+      retryCount: 0,
+      timeoutMs: 180_000,
+    });
+  });
+
   it("loads live gateway sentinel scenarios for harness self-health", () => {
     const scenarioIds = [
       "plugin-hook-health-sentinel",

@@ -439,7 +439,10 @@ const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
   defaultEnabled: false,
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
-    const detected = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+    const detected = await detectLegacyStateMigrations({
+      cfg: ctx.cfg,
+      doctorOnlyStateMigrations: true,
+    });
     return [
       ...detected.preview.map(
         (line): HealthFinding => ({

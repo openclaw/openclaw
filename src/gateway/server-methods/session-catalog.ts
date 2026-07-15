@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -24,6 +25,15 @@ import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
+
+function normalizeSessionCatalogSearch(search: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(search);
+  return normalized
+    ? truncateUtf16Safe(normalized, SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS)
+    : undefined;
+}
 
 function catalogError(error: unknown): { code: string; message: string } {
   const record =
@@ -178,13 +188,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     if (!resolvedAgent) {
       return;
     }
+    const search = normalizeSessionCatalogSearch(request.search);
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
         const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
         try {
           const hosts = await provider.list({
-            search: request.search,
+            search,
             limitPerHost: request.limitPerHost,
             hostIds: request.hostIds,
             ...("cursors" in request ? { cursors: request.cursors } : {}),

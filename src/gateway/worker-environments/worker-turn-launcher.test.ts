@@ -38,6 +38,13 @@ const BUNDLE_HASH = "a".repeat(64);
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 type WorkerTurnEnvironmentRecord = NonNullable<ReturnType<WorkerTurnEnvironmentService["get"]>>;
 
+function hasLoneSurrogate(value: string): boolean {
+  return Array.from(value).some((char) => {
+    const codePoint = char.codePointAt(0) ?? 0;
+    return codePoint >= 0xd800 && codePoint <= 0xdfff;
+  });
+}
+
 describe("worker turn launcher", () => {
   let root: string;
   let database: OpenClawStateDatabase;
@@ -957,6 +964,73 @@ describe("worker turn launcher", () => {
       "reconcile-before:draining",
       "reconcile-after:reconciling",
     ]);
+  });
+
+  it("keeps redacted process failure details on a valid UTF-16 boundary", async () => {
+    seedActivePlacement();
+    const secret = "$SUPERSECRET123";
+    const redactedPrefix = "DISCORD_BOT_TOKEN=*** ";
+    const padding = "a".repeat(399 - redactedPrefix.length);
+    const retained = `${redactedPrefix}${padding}`;
+    const emoji = String.fromCodePoint(0x1f600);
+    const stderr = `DISCORD_BOT_TOKEN=${secret} ${padding}${emoji}tail`;
+    const stopTunnel = vi.fn(async () => {});
+    const destroy = vi.fn(async () => attachedEnvironment());
+    const environments: WorkerTurnEnvironmentService = {
+      get: vi.fn(() => attachedEnvironment()),
+      acquireTurnCredential: vi.fn(async () => credential()),
+      acknowledgeCredentialDelivery: vi.fn(() => true),
+      startTunnel: vi.fn(async () => ({
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        remoteSocketPath: "/worker/gateway.sock",
+        runWorkspaceCommand: vi.fn(
+          async (): Promise<SpawnResult> => ({
+            stdout: "",
+            stderr,
+            code: 1,
+            signal: null,
+            killed: false,
+            termination: "exit",
+          }),
+        ),
+        syncWorkspace: vi.fn(async () => {
+          throw new Error("unexpected workspace sync");
+        }),
+        stop: vi.fn(async () => {}),
+      })),
+      stopTunnel,
+      destroy,
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const failurePrefix = "Cloud worker process failed before completing the turn: ";
+    let failure: unknown;
+
+    try {
+      await provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-process-failed",
+        },
+        turn("run-process-failed"),
+        async () => ({ meta: { durationMs: 1 } }),
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toBe(`${failurePrefix}${retained}`);
+    expect(message).not.toContain(secret);
+    expect(hasLoneSurrogate(message)).toBe(false);
+    const placement = placements.get(SESSION_ID);
+    expect(placement).toMatchObject({ state: "failed", recoveryError: message, turnClaim: null });
+    expect(hasLoneSurrogate(placement?.recoveryError ?? "")).toBe(false);
+    expect(stopTunnel).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
+    expect(destroy).toHaveBeenCalledWith(ENVIRONMENT_ID);
   });
 
   it("launches only one worker loop for concurrent admission of the same run", async () => {

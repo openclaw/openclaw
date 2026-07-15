@@ -389,6 +389,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
   OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
+  OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
 
 jobs:
   validate_selected_ref:

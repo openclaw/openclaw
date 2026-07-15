@@ -32,7 +32,7 @@ export type SystemAgentToolOptions = {
    * its canonical hash here (host-owned, survives turns), and an armed turn
    * may execute only a call matching that hash. Cleared after use.
    */
-  proposalRef?: { current?: string };
+  proposalRef?: { current?: string; operation?: SystemAgentOperation };
   /**
    * Host handoff channel for actions the tool cannot perform itself
    * (interactive channel setup, external onboarding guidance, opening the
@@ -126,7 +126,7 @@ function directiveForOperation(
 export function resolveSystemAgentProposalTransition(params: {
   args: Record<string, unknown>;
   resultText: string;
-}): { proposal: string | undefined } | null {
+}): { proposal: string | undefined; operation?: SystemAgentOperation } | null {
   let operation: SystemAgentOperation;
   try {
     operation = operationForAction(params.args);
@@ -146,6 +146,7 @@ export function resolveSystemAgentProposalTransition(params: {
       proposal: /^[a-f0-9]{64}$/.test(carriedHash)
         ? carriedHash
         : hashSystemAgentOperation(operation),
+      operation,
     };
   }
   // Executed or errored mutation: an armed approval is single-use either way.
@@ -407,6 +408,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
           if (options.approvalArmed === true) {
             if (options.proposalRef) {
               options.proposalRef.current = undefined;
+              options.proposalRef.operation = undefined;
             }
             return textResult(
               `${SYSTEM_AGENT_APPROVAL_MISMATCH_PREFIX} this call is not the operation the user approved. The approval is void; describe the new change and get a fresh yes before retrying.`,
@@ -415,6 +417,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
           }
           if (options.proposalRef) {
             options.proposalRef.current = operationHash;
+            options.proposalRef.operation = operation;
           }
           return textResult(
             `${SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX}${operationHash}\nThis action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).`,
@@ -424,6 +427,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
         if (options.proposalRef) {
           // One approval, one mutation: re-proposals need a fresh yes.
           options.proposalRef.current = undefined;
+          options.proposalRef.operation = undefined;
         }
         const approvedDirective: SystemAgentToolDirective = {
           kind: "approved-operation",

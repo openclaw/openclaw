@@ -847,13 +847,4 @@ export async function shouldRetainQaGatewayCredentialLease(env: NodeJS.ProcessEn
   }
 }
 
-const testing = {
-  commandLineBytes,
-  normalizeEnvKeys,
-  parseQaGatewayProcessHandoff,
-  parseQaGatewayProcessRuntimeProof,
-  parseQaGatewayProcessSandboxProof,
-};
-
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

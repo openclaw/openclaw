@@ -10,7 +10,26 @@ const nodeHostMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
-  return { ...actual, runNodePtyCommand: nodeHostMocks.runNodePtyCommand };
+  return {
+    ...actual,
+    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
+    resolveNodeHostExecutable: (
+      command: string,
+      options: {
+        env?: NodeJS.ProcessEnv;
+        pathEnv?: string;
+        includeExtensionless?: boolean;
+      },
+    ) => {
+      const env = options.env ?? process.env;
+      return actual.resolveNodeHostExecutable(command, {
+        env,
+        pathEnv: options.pathEnv ?? env.PATH ?? env.Path ?? "",
+        includeExtensionless: options.includeExtensionless,
+        strategy: "direct",
+      });
+    },
+  };
 });
 
 import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
@@ -28,7 +47,10 @@ const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalPath = process.env.PATH;
 
-async function createPiStore(assistantText = "hi"): Promise<string> {
+async function createPiStore(
+  assistantText = "hi",
+  sessionName = "Pi catalog session",
+): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-catalog-"));
   temporaryDirectories.push(directory);
   process.env.PI_CODING_AGENT_SESSION_DIR = directory;
@@ -82,7 +104,7 @@ async function createPiStore(assistantText = "hi"): Promise<string> {
       id: "info-1",
       parentId: "tool-1",
       timestamp: "2026-07-13T10:00:04.000Z",
-      name: "Pi catalog session",
+      name: sessionName,
     },
   ];
   await fs.writeFile(
@@ -256,11 +278,8 @@ describe("Pi session catalog", () => {
     await expect(
       provider!.read({ hostId: "gateway", threadId: "pi-session", limit: 2 }),
     ).resolves.toMatchObject({ threadId: "pi-session", items: expect.any(Array) });
-    await expect(provider!.list({ search: "   " })).resolves.toEqual([
+    await expect(provider!.list({})).resolves.toEqual([
       expect.objectContaining({ hostId: "gateway", sessions: [expect.any(Object)] }),
-    ]);
-    await expect(provider!.list({ search: "x".repeat(501) })).resolves.toEqual([
-      expect.objectContaining({ hostId: "gateway", sessions: [] }),
     ]);
   });
 
@@ -723,11 +742,18 @@ describe("Pi session catalog", () => {
       registerNodeInvokePolicy: vi.fn(),
     } as unknown as OpenClawPluginApi);
 
-    await expect(provider!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
+    await expect(provider!.list({ hostIds: ["node:node-1"], search: "remote" })).resolves.toEqual([
       expect.objectContaining({
         sessions: [expect.objectContaining({ threadId: "pi-remote", canOpenTerminal: true })],
       }),
     ]);
+    expect(invoke).toHaveBeenNthCalledWith(1, {
+      nodeId: "node-1",
+      command: PI_SESSIONS_LIST_COMMAND,
+      params: { searchTerm: "remote" },
+      timeoutMs: 20_000,
+      scopes: ["operator.write"],
+    });
     await expect(
       provider!.openTerminal!({ hostId: "node:node-1", threadId: "pi-remote" }),
     ).resolves.toEqual({
@@ -808,7 +834,7 @@ describe("Pi session catalog", () => {
     registerPiSessionCatalog(api);
     const catalog = provider;
     expect(catalog).toBeDefined();
-    await catalog!.list({ hostIds: ["node:node-1"], search: "   " });
+    await catalog!.list({ hostIds: ["node:node-1"] });
     await catalog!.read({ hostId: "node:node-1", threadId: "pi-remote" });
 
     expect(invoke).toHaveBeenNthCalledWith(1, {

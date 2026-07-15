@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import type { CliBackendConfig, OpenClawConfig } from "../config/types.js";
 import {
@@ -10,7 +10,6 @@ import {
   createSystemAgentSession,
   runSystemAgentTurnWithDeps,
   type SystemAgentSession,
-  type SystemAgentTurnDeps,
 } from "./agent-turn.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
@@ -30,6 +29,7 @@ vi.mock("../agents/harness/runtime-plugin.js", async (importOriginal) => ({
   ),
 }));
 
+type SystemAgentTurnDeps = NonNullable<Parameters<typeof runSystemAgentTurnWithDeps>[1]>;
 type RunCliAgentParams = Parameters<NonNullable<SystemAgentTurnDeps["runCliAgent"]>>[0];
 type RunEmbeddedAgentParams = Parameters<NonNullable<SystemAgentTurnDeps["runEmbeddedAgent"]>>[0];
 
