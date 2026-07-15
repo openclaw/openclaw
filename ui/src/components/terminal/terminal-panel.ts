@@ -80,6 +80,13 @@ const TERMINAL_FONT_FAMILY =
 const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
 const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
 
+function forceTerminalRender(controller: GhosttyTerminalController): void {
+  const term = controller.terminal;
+  if (term.renderer && term.wasmTerm) {
+    term.renderer.render(term.wasmTerm, true, term.viewportY, term);
+  }
+}
+
 /** `<openclaw-terminal-panel>` — the dockable Control UI shell surface. */
 export class OpenClawTerminalPanel extends OpenClawLitElement {
   /** Gateway client used for terminal.* RPCs; null until connected. */
@@ -212,7 +219,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         const term = tab.controller.terminal;
         if (term.renderer && term.wasmTerm) {
           term.renderer.setTheme(theme);
-          term.renderer.render(term.wasmTerm, true, term.viewportY, term);
+          forceTerminalRender(tab.controller);
         }
       }
     }
@@ -227,7 +234,13 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
             viewport.append(tab.host);
           }
         }
-        this.tabs.find((tab) => tab.id === this.activeId)?.controller.fit();
+        const activeTab = this.tabs.find((tab) => tab.id === this.activeId);
+        if (activeTab) {
+          activeTab.controller.fit();
+          // FitAddon skips unchanged dimensions; force dirty-row rendering to
+          // repair a canvas that was detached while the panel was hidden.
+          forceTerminalRender(activeTab.controller);
+        }
       }
     }
     this.syncLayoutReservation();
@@ -773,10 +786,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   private switchTo(tabId: string): void {
     this.activeId = tabId;
     const tab = this.tabs.find((entry) => entry.id === tabId);
-    // Refit after the container becomes visible so cols/rows match the viewport.
+    // Refit and repaint after the container becomes visible. A same-size tab
+    // switch otherwise leaves the newly shown canvas without dirty rows.
     void this.updateComplete.then(() => {
-      tab?.controller.fit();
-      tab?.controller.terminal.focus();
+      if (tab) {
+        tab.controller.fit();
+        forceTerminalRender(tab.controller);
+        tab.controller.terminal.focus();
+      }
     });
   }
 
