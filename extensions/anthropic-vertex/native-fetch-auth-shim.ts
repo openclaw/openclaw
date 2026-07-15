@@ -20,7 +20,7 @@ type GlobalWithOptionalWindow = Omit<typeof globalThis, "window"> & { window?: F
 export function ensureNativeFetchVisibleToGoogleAuth(
   target: GlobalWithOptionalWindow = globalThis as GlobalWithOptionalWindow,
 ): void {
-  if (typeof target.window !== "undefined" || typeof target.fetch !== "function") {
+  if (target.window !== undefined || typeof target.fetch !== "function") {
     return;
   }
   target.window = { fetch: target.fetch };
