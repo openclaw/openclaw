@@ -1,16 +1,14 @@
 // Clickclack tests cover accounts plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   listClickClackAccountIds,
   resolveClickClackAccount,
   resolveDefaultClickClackAccountId,
 } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("ClickClack account resolution", () => {
   afterEach(() => {
@@ -150,29 +148,30 @@ describe("ClickClack account resolution", () => {
     expect(resolveClickClackAccount({ cfg, accountId: "work", env }).token).toBe("");
   });
 
-  it("reads tokenFile credentials without overriding a named account token", () => {
-    const tempDir = tempDirs.make("clickclack-token-");
-    const tokenFile = path.join(tempDir, "token");
-    fs.writeFileSync(tokenFile, "  file-token  \n", "utf8");
-    const cfg = {
-      channels: {
-        clickclack: {
-          enabled: true,
-          baseUrl: "https://app.clickclack.chat",
-          workspace: "wsp_1",
-          tokenFile,
-          accounts: {
-            work: {
-              token: "work-token",
+  it("reads tokenFile credentials without overriding a named account token", async () => {
+    await withTempDir("clickclack-token-", async (tempDir) => {
+      const tokenFile = path.join(tempDir, "token");
+      fs.writeFileSync(tokenFile, "  file-token  \n", "utf8");
+      const cfg = {
+        channels: {
+          clickclack: {
+            enabled: true,
+            baseUrl: "https://app.clickclack.chat",
+            workspace: "wsp_1",
+            tokenFile,
+            accounts: {
+              work: {
+                token: "work-token",
+              },
             },
           },
         },
-      },
-    } satisfies CoreConfig;
+      } satisfies CoreConfig;
 
-    expect(listClickClackAccountIds(cfg)).toEqual(["default", "work"]);
-    expect(resolveClickClackAccount({ cfg }).token).toBe("file-token");
-    expect(resolveClickClackAccount({ cfg, accountId: "work" }).token).toBe("work-token");
+      expect(listClickClackAccountIds(cfg)).toEqual(["default", "work"]);
+      expect(resolveClickClackAccount({ cfg }).token).toBe("file-token");
+      expect(resolveClickClackAccount({ cfg, accountId: "work" }).token).toBe("work-token");
+    });
   });
 
   it("resolves model-mode bot account policy", () => {
