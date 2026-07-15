@@ -98,8 +98,8 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
   if (!params.sessionKey || !params.activeSessionStore) {
     return;
   }
-  const activeSessionEntry =
-    params.activeSessionStore[params.sessionKey] ?? params.getActiveSessionEntry();
+  const cachedSessionEntry = params.activeSessionStore[params.sessionKey];
+  const activeSessionEntry = cachedSessionEntry ?? params.getActiveSessionEntry();
   if (!activeSessionEntry || !entryMatchesAutoFallbackPrimaryProbe(activeSessionEntry, probe)) {
     return;
   }
@@ -144,6 +144,14 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
   // The persisted comparison owns selection freshness. Publish its updated
   // result, or refresh the cache from the entry that rejected this probe.
   const authoritativeEntry = updatedEntry ?? comparedEntry;
+  // A user switch may replace or mutate the cache while persistence runs.
+  // Never publish this older DB result over that newer in-memory selection.
+  if (
+    params.activeSessionStore[params.sessionKey] !== cachedSessionEntry ||
+    !entryMatchesAutoFallbackPrimaryProbe(activeSessionEntry, probe)
+  ) {
+    return;
+  }
   if (authoritativeEntry) {
     params.activeSessionStore[params.sessionKey] = authoritativeEntry;
   } else {
