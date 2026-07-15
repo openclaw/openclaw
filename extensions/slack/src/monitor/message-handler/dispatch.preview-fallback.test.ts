@@ -1230,15 +1230,17 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
-  it("uses the relay identity when the agent has no explicit Slack identity", async () => {
+  it("uses portable draft previews with the resolved Slack identity", async () => {
     const relayIdentity = { username: "Nik Team Claw" };
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage({ relayIdentity }));
 
-    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
-    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
-    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { identity: relayIdentity });
+    expect(createSlackDraftStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({ identity: relayIdentity }),
+    );
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
   });
 
   it("uses supported native Slack streaming authorship when a custom identity is active", async () => {
