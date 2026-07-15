@@ -1,5 +1,5 @@
 // Slack tests cover real probe transport behavior.
-import { createServer, type Server } from "node:http";
+import { createServer, type RequestListener, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { probeSlack } from "./probe.js";
@@ -50,7 +50,7 @@ async function closeServer(server: Server, sockets: Set<Socket>): Promise<void> 
   });
 }
 
-async function startServer(handler: Parameters<typeof createServer>[0]): Promise<TestServer> {
+async function startServer(handler: RequestListener): Promise<TestServer> {
   const server = createServer(handler);
   const sockets = new Set<Socket>();
   server.on("connection", (socket) => {
