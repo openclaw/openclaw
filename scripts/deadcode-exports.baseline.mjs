@@ -219,7 +219,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/logging/diagnostic-run-activity.ts: markDiagnosticToolStartedForTest",
   "src/logging/redact-internal.ts: withFullContextToolPayloadRedaction",
   "src/logging/secret-redaction-registry.ts: resetSecretRedactionRegistryForTest",
-  "src/music-generation/capabilities.ts: resolveMusicGenerationMode",
   "src/node-host/invoke.ts: testing",
   "src/plugin-state/plugin-state-store.sqlite.ts: probePluginStateStore",
   "src/plugin-state/plugin-state-store.sqlite.ts: seedPluginStateDatabaseEntriesForTests",
