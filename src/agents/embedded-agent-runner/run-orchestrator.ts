@@ -41,10 +41,6 @@ import type {
   RunEmbeddedAgentParamsWithSessionFile,
 } from "./run/internal-params.js";
 import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
-import {
-  EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
-  resolveEmbeddedRunLaneTimeoutMs,
-} from "./run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
@@ -212,7 +208,7 @@ async function runEmbeddedAgentInternal(
       startupStages.mark("runtime-plugins");
       notifyExecutionPhase("runtime_plugins");
 
-      let { provider, modelId } = resolveInitialEmbeddedRunModel({
+      const { provider, modelId } = resolveInitialEmbeddedRunModel({
         config: params.config,
         agentId: workspaceResolution.agentId,
         provider: params.provider,
@@ -292,8 +288,3 @@ async function runEmbeddedAgentInternal(
     });
   });
 }
-
-export const testing = {
-  EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
-  resolveEmbeddedRunLaneTimeoutMs,
-};

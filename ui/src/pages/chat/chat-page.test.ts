@@ -15,7 +15,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SplitDropZone } from "./split-drop-zone.ts";
-import { createSplitLayout, type ChatSplitLayout } from "./split-layout.ts";
+import type { ChatSplitLayout } from "./split-layout.ts";
 
 type RenderedPane = HTMLElement & {
   paneId: string;
@@ -30,6 +30,17 @@ type RenderedPane = HTMLElement & {
 };
 
 type RenderedDivider = HTMLElement & { orientation: "horizontal" | "vertical" };
+
+function splitLayout(sessionKey = "main"): ChatSplitLayout {
+  return {
+    columns: [
+      { id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] },
+      { id: "c2", panes: [{ id: "p2", sessionKey }], paneWeights: [1] },
+    ],
+    columnWeights: [0.5, 0.5],
+    activePaneId: "p2",
+  };
+}
 
 function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);
@@ -217,7 +228,7 @@ describe("chat page split layout host", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
     document.body.append(page);
-    setLayout(page, createSplitLayout("main"));
+    setLayout(page, splitLayout());
     await page.updateComplete;
 
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
@@ -241,7 +252,7 @@ describe("chat page split layout host", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
     document.body.append(page);
-    setLayout(page, createSplitLayout("main"));
+    setLayout(page, splitLayout());
     await page.updateComplete;
 
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
@@ -256,7 +267,7 @@ describe("chat page split layout host", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
     document.body.append(page);
-    setLayout(page, createSplitLayout("main"));
+    setLayout(page, splitLayout());
     await page.updateComplete;
 
     const activePane = itemAt(
@@ -302,7 +313,7 @@ describe("chat page split layout host", () => {
     };
     page.data = { sessionKey: "main" };
     document.body.append(page);
-    setLayout(page, createSplitLayout("main"));
+    setLayout(page, splitLayout());
     await page.updateComplete;
 
     const paneTitles = () =>
@@ -400,7 +411,7 @@ describe("chat page split layout host", () => {
   it("inserts and persists a dropped session at a layout edge", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
-    setLayout(page, createSplitLayout("main"));
+    setLayout(page, splitLayout());
     const navigation = setNavigationContext(page);
 
     applySessionDrop(page, "agent:main:work", "p1", { kind: "edge", edge: "down" });
@@ -420,7 +431,7 @@ describe("chat page split layout host", () => {
   it("replaces and activates the pane under a layout center drop", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
-    setLayout(page, createSplitLayout("main"));
+    setLayout(page, splitLayout());
     const navigation = setNavigationContext(page);
 
     applySessionDrop(page, "agent:main:work", "p1", { kind: "center" });
@@ -437,7 +448,7 @@ describe("chat page split layout host", () => {
   it("leaves a same-session center drop unchanged", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
-    const layout = createSplitLayout("main");
+    const layout = splitLayout();
     setLayout(page, layout);
     const navigation = setNavigationContext(page);
 
@@ -452,7 +463,7 @@ describe("chat page split layout host", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
     document.body.append(page);
-    setLayout(page, createSplitLayout("main"));
+    setLayout(page, splitLayout());
     const navigation = setNavigationContext(page);
     await page.updateComplete;
 
@@ -494,7 +505,7 @@ describe("chat page split layout host", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
     document.body.append(page);
-    const layout = createSplitLayout("main");
+    const layout = splitLayout();
     setLayout(page, layout);
     const navigation = setNavigationContext(page);
     await page.updateComplete;

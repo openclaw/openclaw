@@ -70,7 +70,6 @@ import {
   loadOlderChatHistoryPage,
   resolveChatHistoryPagination,
   syncSelectedSessionMessageSubscription,
-  type ChatHistoryPagination,
 } from "./chat-history.ts";
 import { dismissChatError, resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
@@ -144,6 +143,7 @@ import { scheduleChatScroll } from "./scroll.ts";
 import {
   clearChatMessagesFromCache,
   readChatSessionSnapshot,
+  type ChatHistoryPagination,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";

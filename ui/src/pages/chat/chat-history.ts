@@ -65,6 +65,7 @@ import { scheduleChatScroll } from "./scroll.ts";
 import {
   cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
+  type ChatHistoryPagination,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 import {
@@ -376,10 +377,6 @@ export type ChatHistoryResult = {
   agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
 };
-
-export type ChatHistoryPagination =
-  | { hasMore: false; totalMessages?: number; completeSnapshot?: true }
-  | { hasMore: true; nextOffset: number; totalMessages?: number };
 
 export function resolveChatHistoryPagination(
   result: ChatHistoryResult | undefined,

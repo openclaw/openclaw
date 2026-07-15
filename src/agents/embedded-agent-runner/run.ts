@@ -1,4 +1,4 @@
 /**
  * Public embedded-agent run entrypoint.
  */
-export { runEmbeddedAgent, testing } from "./run-orchestrator.js";
+export { runEmbeddedAgent } from "./run-orchestrator.js";
