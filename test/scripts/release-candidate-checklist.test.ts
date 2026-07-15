@@ -443,9 +443,10 @@ describe("release candidate checklist", () => {
   });
 
   it("runs Parallels against the exact prepared candidate tarball", () => {
-    expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz")).toEqual([
-      "test:parallels:npm-update",
-      "--",
+    expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [], "/trusted")).toEqual([
+      "exec",
+      "tsx",
+      "/trusted/scripts/e2e/parallels/npm-update-smoke.ts",
       "--target-tarball",
       ".artifacts/preflight/openclaw.tgz",
       "--json",
@@ -465,12 +466,15 @@ describe("release candidate checklist", () => {
       ),
     ).toContain("'--target-tarball' '.artifacts/preflight/openclaw candidate.tgz'");
     expect(
-      candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [
-        ".artifacts/preflight/openclaw-ai.tgz",
-      ]),
+      candidateParallelsArgs(
+        ".artifacts/preflight/openclaw.tgz",
+        [".artifacts/preflight/openclaw-ai.tgz"],
+        "/trusted",
+      ),
     ).toEqual([
-      "test:parallels:npm-update",
-      "--",
+      "exec",
+      "tsx",
+      "/trusted/scripts/e2e/parallels/npm-update-smoke.ts",
       "--target-tarball",
       ".artifacts/preflight/openclaw.tgz",
       "--dependency-tarball",

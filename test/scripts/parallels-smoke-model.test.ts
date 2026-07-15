@@ -1515,6 +1515,27 @@ exit 0
     expect(calls).toBeLessThan(20);
   });
 
+  it("fails fast when a Windows Parallels VM stops during background work", async () => {
+    const runCommand = vi.fn(() => ({
+      status: 1,
+      stderr:
+        'Unable to perform the operation because "Windows 11" is not started. This operation can be performed for running virtual machines only.',
+      stdout: "",
+    }));
+
+    await expect(
+      runWindowsBackgroundPowerShell({
+        label: "ref-onboard",
+        runCommand,
+        script: "Write-Output ok",
+        timeoutMs: 720_000,
+        vmName: "Windows 11",
+      }),
+    ).rejects.toThrow("ref-onboard failed: Parallels VM stopped");
+
+    expect(runCommand).toHaveBeenCalledTimes(1);
+  });
+
   it("returns timed-out host command status when check is disabled", () => {
     const result = run(
       process.execPath,
