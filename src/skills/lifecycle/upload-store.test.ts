@@ -236,7 +236,9 @@ describe("skill upload store", () => {
     const record = await store.withCommittedUpload(begin.uploadId, async (committedRecord) => {
       materializedPath = committedRecord.archivePath;
       expect(await fs.readFile(materializedPath)).toEqual(archive);
-      expect((await fs.stat(materializedPath)).mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") {
+        expect((await fs.stat(materializedPath)).mode & 0o777).toBe(0o600);
+      }
       return committedRecord;
     });
     expect(record).toMatchObject({
