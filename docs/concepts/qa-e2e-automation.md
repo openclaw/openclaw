@@ -491,11 +491,12 @@ Required env when `--credential-source env`:
 - `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`
 - `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`
 
-Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts`):
+The `release` profile selects the maintained Telegram YAML scenarios; `all`
+adds opt-in session, usage, reply-chain, and streaming stress checks. Explicit
+`--scenario` values override the profile.
 
-- `telegram-canary`
-- `telegram-mention-gating`
-- `telegram-mentioned-message-reply`
+- `channel-canary`
+- `channel-mention-gating`
 - `telegram-help-command`
 - `telegram-commands-command`
 - `telegram-tools-compact-command`
@@ -511,19 +512,21 @@ Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime
 - `telegram-long-final-reuses-preview`
 - `telegram-long-final-three-chunks`
 
-The implicit default set always covers canary, mention gating, native command
+The `release` profile always covers canary, mention gating, native command
 replies, command addressing, and bot-to-bot group replies. `mock-openai`
-defaults also include deterministic reply-chain and final-message streaming
-checks. `telegram-current-session-status-tool` and
+also includes the deterministic long-final preview check.
+`telegram-current-session-status-tool` and
 `telegram-tool-only-usage-footer` remain opt-in: the former is only stable
 when threaded directly after canary, and the latter is a real-Telegram proof
 of the `/usage` footer on tool-only replies. Use `pnpm openclaw qa telegram
 --list-scenarios --provider-mode mock-openai` to print the current
-default/optional split with regression refs.
+default/optional split with regression refs. Use `--profile all` for every
+Telegram scenario and `--fail-fast` to stop after the first failed scenario.
 
 Output artifacts:
 
-- `telegram-qa-report.md`
+- `qa-suite-report.md`
+- `qa-suite-summary.json`
 - `qa-evidence.json` - evidence entries for the live transport checks,
   including profile, coverage, provider, channel, artifacts, result, and RTT
   fields.
@@ -542,7 +545,7 @@ When `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` is set, the package live wrapper
 leases a `kind: "telegram"` credential, exports the leased group/driver/SUT
 bot env into the installed-package run, heartbeats the lease, and releases it
 on shutdown. The package wrapper defaults to 20 RTT checks of
-`telegram-mentioned-message-reply`, a 30s RTT timeout, and Convex role
+`channel-canary`, a 30s RTT timeout, and Convex role
 `maintainer` outside CI when Convex is selected. Override
 `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`, `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`,
 or `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune RTT measurement without

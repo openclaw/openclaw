@@ -1103,6 +1103,16 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   the complete legacy `commitments.json`, keeps newer SQLite rows, verifies the
   result, and only then removes the unchanged source. Runtime never reads or
   writes the retired file.
+- Web Push subscriptions and the generated VAPID identity now use typed shared
+  `web_push_subscriptions` and `web_push_vapid_keys` rows. Runtime registration,
+  expiry cleanup, and first-use key generation use row-level SQLite
+  transactions. Explicit Doctor repair validates both retired JSON stores,
+  claims them before the SQLite write, imports them atomically, rejects
+  conflicting VAPID identities, verifies the result, and only then removes the
+  claims. Doctor holds the state-directory maintenance lock for the complete
+  import so an older Gateway cannot recreate the retired files. Registration,
+  delivery, deletion, and key resolution fail closed until Doctor resolves
+  pending legacy sources or interrupted claims.
 - Cron job definitions, schedule state, and run history no longer have runtime
   JSON writers or readers. Runtime uses `cron_jobs` rows with typed schedule,
   payload, delivery, failure-alert, session, status, and runtime-state columns plus
@@ -2181,8 +2191,8 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `nodes/pending.json` / `nodes/paired.json` (retired 2026.7: folded into paired device records at gateway startup)
 - `identity/device.json`
 - `identity/device-auth.json`
-- `push/web-push-subscriptions.json`
-- `push/vapid-keys.json`
+- `push/web-push-subscriptions.json` (retired; Doctor-only import into `web_push_subscriptions`)
+- `push/vapid-keys.json` (retired; Doctor-only import into `web_push_vapid_keys`)
 - `push/apns-registrations.json`
 - `process-leases.json`
 - `gateway-instance-id`

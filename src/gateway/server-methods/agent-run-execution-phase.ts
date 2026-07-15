@@ -317,6 +317,8 @@ export function startAgentRunExecution(params: {
             : params.request.sourceReplyDeliveryMode,
           disableMessageTool: params.request.disableMessageTool,
           forceRestartSafeTools: params.request.forceRestartSafeTools,
+          internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
+          internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
           suppressPromptPersistence:
             params.requestedPromptPersistenceSuppression ||
             shouldSuppressAgentPromptPersistence({

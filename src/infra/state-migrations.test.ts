@@ -21,6 +21,12 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import {
+  createWebPushVapidKeyPair,
+  hashWebPushEndpoint,
+  listWebPushSubscriptions,
+  readPersistedVapidKeyPair,
+} from "./push-web-store.js";
+import {
   autoMigrateLegacyState,
   autoMigrateLegacyPluginDoctorState,
   detectLegacyStateMigrations,
@@ -2066,6 +2072,62 @@ describe("state migrations", () => {
     expect(detectedStateDirs).toStrictEqual([canonicalStateDir]);
     expect(migratedStateDirs).toStrictEqual([canonicalStateDir]);
     await expect(fs.access(path.join(canonicalStateDir, "legacy.txt"))).resolves.toBeUndefined();
+  });
+
+  it("routes explicit Doctor repair through the Web Push SQLite importer", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const endpoint = "https://push.example.com/doctor-integration";
+    const subscription = {
+      subscriptionId: "c0a80101-0000-4000-8000-000000000001",
+      endpoint,
+      keys: { p256dh: "doctor-p256dh", auth: "doctor-auth" },
+      createdAtMs: 1,
+      updatedAtMs: 2,
+    };
+    const pushDir = path.join(stateDir, "push");
+    const subscriptionsPath = path.join(pushDir, "web-push-subscriptions.json");
+    const vapidKeysPath = path.join(pushDir, "vapid-keys.json");
+    await fs.mkdir(pushDir, { recursive: true });
+    await fs.writeFile(
+      subscriptionsPath,
+      JSON.stringify({
+        subscriptionsByEndpointHash: {
+          [hashWebPushEndpoint(endpoint)]: subscription,
+        },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      vapidKeysPath,
+      JSON.stringify(
+        createWebPushVapidKeyPair("doctor-public", "doctor-private", "https://openclaw.ai"),
+      ),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.webPush.hasLegacy).toBe(true);
+    expect(detected.preview).toContain(
+      "- Web Push subscriptions and VAPID identity: legacy JSON → shared SQLite state",
+    );
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(listWebPushSubscriptions(stateDir)).toStrictEqual([subscription]);
+    expect(readPersistedVapidKeyPair(stateDir)).toStrictEqual(
+      createWebPushVapidKeyPair("doctor-public", "doctor-private", "https://openclaw.ai"),
+    );
+    await expectMissingPath(subscriptionsPath);
+    await expectMissingPath(vapidKeysPath);
   });
 
   it("migrates legacy update-check JSON into shared SQLite state", async () => {

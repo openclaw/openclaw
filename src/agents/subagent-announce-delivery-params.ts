@@ -18,10 +18,15 @@ export type SendSubagentAnnounceDirectlyParams = {
   sourceTool?: string;
   requesterIsSubagent: boolean;
   announceTarget?: SubagentAnnounceTarget;
+  durableGeneratedMediaHandoff?: boolean;
+  allowGeneratedMediaDirectFallback: boolean;
   signal?: AbortSignal;
 };
 
-export type DeliverSubagentAnnouncementParams = SendSubagentAnnounceDirectlyParams & {
+export type DeliverSubagentAnnouncementParams = Omit<
+  SendSubagentAnnounceDirectlyParams,
+  "allowGeneratedMediaDirectFallback"
+> & {
   announceId?: string;
   steerMessage: string;
   summaryLine?: string;

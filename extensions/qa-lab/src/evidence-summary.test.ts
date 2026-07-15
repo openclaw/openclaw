@@ -152,7 +152,7 @@ describe("evidence summary", () => {
     const evidence = buildLiveTransportEvidenceSummary({
       artifactPaths: [
         { kind: "summary", path: QA_EVIDENCE_FILENAME },
-        { kind: "report", path: "telegram-qa-report.md" },
+        { kind: "report", path: "qa-suite-report.md" },
       ],
       env: {
         OPENCLAW_QA_RUNNER: "crabbox",
@@ -218,7 +218,7 @@ describe("evidence summary", () => {
             },
             {
               kind: "report",
-              path: "telegram-qa-report.md",
+              path: "qa-suite-report.md",
               source: "telegram-live-transport",
             },
           ],
@@ -244,9 +244,9 @@ describe("evidence summary", () => {
       providerMode: "live-frontier",
       checks: [
         {
-          id: "telegram-mentioned-message-reply",
+          id: "channel-canary",
           coverageIds: ["channels.telegram.mention-gating"],
-          title: "Telegram mentioned message gets a reply",
+          title: "Channel transport canary",
           status: "pass",
           details: "5 samples collected.",
           rttMs: 2000,
