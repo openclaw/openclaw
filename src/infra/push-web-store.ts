@@ -15,8 +15,8 @@ import {
 
 export const WEB_PUSH_VAPID_KEY_ID = "default";
 export const DEFAULT_WEB_PUSH_VAPID_SUBJECT = "https://openclaw.ai";
-export const WEB_PUSH_MAX_ENDPOINT_LENGTH = 2048;
-export const WEB_PUSH_MAX_KEY_LENGTH = 512;
+const WEB_PUSH_MAX_ENDPOINT_LENGTH = 2048;
+const WEB_PUSH_MAX_KEY_LENGTH = 512;
 
 export type WebPushSubscription = {
   subscriptionId: string;
@@ -44,11 +44,11 @@ export type WebPushDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "web_push_subscriptions" | "web_push_vapid_keys"
 >;
-export type WebPushSubscriptionRow = Selectable<WebPushDatabase["web_push_subscriptions"]>;
-export type WebPushSubscriptionInsert = Insertable<WebPushDatabase["web_push_subscriptions"]>;
-export type WebPushVapidKeyInsert = Insertable<WebPushDatabase["web_push_vapid_keys"]>;
+type WebPushSubscriptionRow = Selectable<WebPushDatabase["web_push_subscriptions"]>;
+type WebPushSubscriptionInsert = Insertable<WebPushDatabase["web_push_subscriptions"]>;
+type WebPushVapidKeyInsert = Insertable<WebPushDatabase["web_push_vapid_keys"]>;
 
-export function webPushStateDatabaseOptions(stateDir?: string): OpenClawStateDatabaseOptions {
+function webPushStateDatabaseOptions(stateDir?: string): OpenClawStateDatabaseOptions {
   return stateDir
     ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }
     : { env: process.env };
