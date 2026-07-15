@@ -9,6 +9,14 @@ vi.mock("./in-process-gateway.js", () => ({
 
 const callGateway = vi.mocked(callInProcessGatewayTool);
 
+function createTestDelegateTool(options: Parameters<typeof createOpenClawDelegateToolsForRun>[0]) {
+  const [tool, ...extraTools] = createOpenClawDelegateToolsForRun(options);
+  if (!tool || extraTools.length > 0) {
+    throw new Error("expected exactly one OpenClaw delegate tool");
+  }
+  return tool;
+}
+
 beforeEach(() => {
   callGateway.mockReset();
 });
@@ -22,7 +30,7 @@ describe("openclaw delegation tool", () => {
       needsApproval: true,
       proposalId: "system-agent:proposal-1",
     });
-    const [tool] = createOpenClawDelegateToolsForRun({
+    const tool = createTestDelegateTool({
       sessionAgentId: "main",
       runSessionKey: "agent:main:dm:one",
       agentChannel: "webchat",
@@ -52,7 +60,7 @@ describe("openclaw delegation tool", () => {
       sessionId: params.sessionId,
       reply: "Done.",
     }));
-    const [tool] = createOpenClawDelegateToolsForRun({
+    const tool = createTestDelegateTool({
       sessionAgentId: "main",
       runSessionKey: "agent:main:main",
     });
