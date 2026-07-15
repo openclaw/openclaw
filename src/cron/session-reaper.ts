@@ -17,7 +17,21 @@ const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
 /** Minimum interval between reaper sweeps (avoid running every timer tick). */
 const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
+/** Maximum backoff interval after consecutive persistence failures. */
+const MAX_BACKOFF_MS = 60 * 60_000; // 1 hour
+
 const lastSweepAtMsByStore = new Map<string, number>();
+const consecutiveFailuresByStore = new Map<string, number>();
+
+/** Resolves the effective sweep interval, applying exponential backoff after consecutive failures. */
+function effectiveSweepIntervalMs(storePath: string): number {
+  const failures = consecutiveFailuresByStore.get(storePath) ?? 0;
+  if (failures === 0) {
+    return MIN_SWEEP_INTERVAL_MS;
+  }
+  const backoff = MIN_SWEEP_INTERVAL_MS * 2 ** (failures - 1);
+  return Math.min(backoff, MAX_BACKOFF_MS);
+}
 
 /** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
 function resolveRetentionMs(cronConfig?: CronConfig): number | null {
@@ -61,7 +75,10 @@ export async function sweepCronRunSessions(params: {
 
   // Timer ticks can be frequent; throttle per store path to avoid repeated
   // session-store I/O while preserving a force path for deterministic tests.
-  if (!params.force && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
+  // After consecutive failures, the interval grows exponentially up to
+  // MAX_BACKOFF_MS so a broken store does not consume CPU every 5 minutes.
+  const interval = effectiveSweepIntervalMs(storePath);
+  if (!params.force && now - lastSweepAtMs < interval) {
     return { swept: false, pruned: 0 };
   }
 
@@ -127,6 +144,7 @@ export async function sweepCronRunSessions(params: {
     }
   } catch (err) {
     params.log.warn({ err: String(err) }, "cron-reaper: failed to sweep session store");
+    consecutiveFailuresByStore.set(storePath, (consecutiveFailuresByStore.get(storePath) ?? 0) + 1);
     return { swept: false, pruned: 0 };
   }
 
@@ -144,10 +162,13 @@ export async function sweepCronRunSessions(params: {
     );
   }
 
+  consecutiveFailuresByStore.delete(storePath);
+
   return { swept: true, pruned };
 }
 
 /** Resets per-store reaper throttles between tests. */
 export function resetReaperThrottle(): void {
   lastSweepAtMsByStore.clear();
+  consecutiveFailuresByStore.clear();
 }

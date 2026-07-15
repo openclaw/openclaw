@@ -447,4 +447,162 @@ describe("sweepCronRunSessions", () => {
       listSpy.mockRestore();
     }
   });
+
+  it("applies exponential backoff on consecutive persistence failures (#106577)", async () => {
+    const now = Date.now();
+    const warn = vi.fn();
+    const failingLog: Logger = { ...log, warn };
+    const eacces = Object.assign(new Error("EACCES: permission denied, open 'sessions.json'"), {
+      code: "EACCES",
+    });
+    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation(() => {
+      throw eacces;
+    });
+
+    try {
+      // Failure 1 at t=0; next backoff = 5min (5*2^0)
+      await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log: failingLog });
+      expect(listSpy).toHaveBeenCalledTimes(1);
+
+      // Failure 2 at t=5min; next backoff = 10min (5*2^1)
+      await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now + 5 * 60_000,
+        log: failingLog,
+      });
+      expect(listSpy).toHaveBeenCalledTimes(2);
+
+      // t=10min is still within 10min backoff from failure 2 → throttled
+      warn.mockClear();
+      await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now + 10 * 60_000,
+        log: failingLog,
+      });
+      expect(warn).not.toHaveBeenCalled();
+      expect(listSpy).toHaveBeenCalledTimes(2);
+
+      // Failure 3 at t=15min (5+10=15); next backoff = 20min (5*2^2)
+      await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now + 15 * 60_000,
+        log: failingLog,
+      });
+      expect(listSpy).toHaveBeenCalledTimes(3);
+
+      // t=25min is within 20min backoff from failure 3 (15+20=35) → throttled
+      await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now + 25 * 60_000,
+        log: failingLog,
+      });
+      expect(listSpy).toHaveBeenCalledTimes(3);
+
+      // Failure 4 at t=35min (15+20=35); next backoff = 40min (5*2^3)
+      await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now + 35 * 60_000,
+        log: failingLog,
+      });
+      expect(listSpy).toHaveBeenCalledTimes(4);
+    } finally {
+      listSpy.mockRestore();
+    }
+  });
+
+  it("resets backoff after a successful sweep (#106577)", async () => {
+    const now = Date.now();
+    const warn = vi.fn();
+    const failingLog: Logger = { ...log, warn };
+    const eacces = Object.assign(new Error("EACCES: permission denied, open 'sessions.json'"), {
+      code: "EACCES",
+    });
+
+    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntries");
+
+    try {
+      // First call fails
+      listSpy.mockImplementationOnce(() => {
+        throw eacces;
+      });
+      await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log: failingLog });
+      expect(listSpy).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      // Second call succeeds (returns no entries), resetting backoff
+      listSpy.mockImplementationOnce(() => []);
+      const result = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now + 5 * 60_000,
+        log: failingLog,
+      });
+      expect(result.swept).toBe(true);
+      expect(result.pruned).toBe(0);
+
+      // After success, the next sweep at normal 5min interval should work
+      listSpy.mockImplementationOnce(() => []);
+      const result2 = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now + 10 * 60_000,
+        log,
+      });
+      expect(result2.swept).toBe(true);
+
+      // Immediate retry should be throttled at the normal 5min interval
+      const throttled = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now + 10 * 60_000 + 1_000,
+        log,
+      });
+      expect(throttled.swept).toBe(false);
+    } finally {
+      listSpy.mockRestore();
+    }
+  });
+
+  it("caps backoff at MAX_BACKOFF_MS (1 hour) (#106577)", async () => {
+    const now = Date.now();
+    const warn = vi.fn();
+    const failingLog: Logger = { ...log, warn };
+    const eacces = Object.assign(new Error("EACCES: permission denied, open 'sessions.json'"), {
+      code: "EACCES",
+    });
+    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation(() => {
+      throw eacces;
+    });
+
+    try {
+      // Drive 5 consecutive failures so backoff reaches the 60min cap.
+      // After failure N, effectiveSweepIntervalMs = min(5*2^(N-1), 60) min.
+      // lastSweepAtMs is set at the start of each attempt, not after success.
+      let t = now;
+      const intervals = [5, 10, 20, 40, 60];
+      let lastSweepTime = 0;
+      for (const interval of intervals) {
+        await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: t, log: failingLog });
+        lastSweepTime = t;
+        t += interval * 60_000;
+      }
+      // 5 failures; next backoff = min(5*2^4, 60) = 60min
+      const callsAfterLoop = listSpy.mock.calls.length;
+
+      // Attempt at lastSweepTime + 59min is still within 60min backoff → throttled
+      await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: lastSweepTime + 59 * 60_000,
+        log: failingLog,
+      });
+      expect(listSpy.mock.calls.length).toBe(callsAfterLoop);
+
+      // Attempt at lastSweepTime + 60min should proceed
+      await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: lastSweepTime + 60 * 60_000,
+        log: failingLog,
+      });
+      expect(listSpy.mock.calls.length).toBe(callsAfterLoop + 1);
+    } finally {
+      listSpy.mockRestore();
+    }
+  });
 });
