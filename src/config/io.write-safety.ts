@@ -3,11 +3,7 @@ import path from "node:path";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
-import {
-  hashConfigRaw,
-  parseConfigJson5,
-  resolveConfigSnapshotHash,
-} from "./io.read-helpers.js";
+import { hashConfigRaw, parseConfigJson5, resolveConfigSnapshotHash } from "./io.read-helpers.js";
 import type { ConfigWriteOptions } from "./io.types.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { resolveStateDir } from "./paths.js";
