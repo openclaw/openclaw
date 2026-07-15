@@ -1991,6 +1991,8 @@ jobs:
           set -euo pipefail
           brew install xcodegen swiftlint mint
           mint install nicklockwood/SwiftFormat@main
+          echo "$HOME/.mint/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.mint/bin:$PATH"
           swiftformat --version
 
       - name: Build iOS app
