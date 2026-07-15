@@ -42,6 +42,13 @@ describe("install runtime enforcement", () => {
     },
   );
 
+  it.each(["24.15.0-rc.1", "25.9.1-nightly.20260714", "24.15"])(
+    "rejects non-release Node version %s",
+    (version) => {
+      expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(false);
+    },
+  );
+
   it("blocks unsupported Node before package replacement", () => {
     const reportError = vi.fn();
     expect(
