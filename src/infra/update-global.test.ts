@@ -720,6 +720,7 @@ describe("update global helpers", () => {
       "pnpm",
       "add",
       "-g",
+      "--allow-build=openclaw",
       "openclaw@latest",
     ]);
     expect(globalInstallArgs("pnpm", "github:openclaw/openclaw#release/2026.5.12")).toEqual([
@@ -733,6 +734,7 @@ describe("update global helpers", () => {
       "bun",
       "add",
       "-g",
+      "--trust",
       "openclaw@latest",
     ]);
     expect(globalInstallFallbackArgs("npm", "openclaw@latest")).toEqual([

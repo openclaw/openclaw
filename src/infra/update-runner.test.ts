@@ -3100,7 +3100,7 @@ describe("runGatewayUpdate", () => {
 
       const { calls, runCommand } = createGlobalInstallHarness({
         pkgRoot,
-        installCommand: "bun add -g openclaw@latest",
+        installCommand: "bun add -g --trust openclaw@latest",
         onInstall: async () => {
           await writeGlobalPackageVersion(pkgRoot);
         },
@@ -3112,7 +3112,7 @@ describe("runGatewayUpdate", () => {
       expect(result.mode).toBe("bun");
       expect(result.before?.version).toBe("1.0.0");
       expect(result.after?.version).toBe("2.0.0");
-      expect(calls).toContain("bun add -g openclaw@latest");
+      expect(calls).toContain("bun add -g --trust openclaw@latest");
     });
   });
 
