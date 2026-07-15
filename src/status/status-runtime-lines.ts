@@ -16,19 +16,12 @@ export function buildStatusUptimeLine(): string {
   return `⏱️ Uptime: gateway ${format(gatewayMs)} · system ${format(systemMs)}`;
 }
 
-export async function resolveSessionCostLine(
-  params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-    sessionEntry?: SessionEntry;
-    storePath?: string;
-  },
-  deps: {
-    load?: typeof loadSessionCostSummariesFromCache;
-    now?: () => number;
-    timeoutMs?: number;
-  } = {},
-): Promise<string | undefined> {
+async function resolveSessionCostLine(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionEntry?: SessionEntry;
+  storePath?: string;
+}): Promise<string | undefined> {
   const sessionId = params.sessionEntry?.sessionId?.trim();
   if (!sessionId) {
     return undefined;
@@ -51,14 +44,13 @@ export async function resolveSessionCostLine(
   if (!sessionFile) {
     return undefined;
   }
-  const now = deps.now?.() ?? Date.now();
+  const now = Date.now();
   const date = new Date(now);
   const startMs = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  const timeoutMs = deps.timeoutMs ?? 3_500;
   let timeout: NodeJS.Timeout | undefined;
   try {
     const loaded = await Promise.race([
-      (deps.load ?? loadSessionCostSummariesFromCache)({
+      loadSessionCostSummariesFromCache({
         sessions: [{ sessionId, sessionFile }],
         config: params.cfg,
         agentId: params.agentId,
@@ -68,7 +60,7 @@ export async function resolveSessionCostLine(
         requestRefresh: false,
       }),
       new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error("session cost timeout")), timeoutMs);
+        timeout = setTimeout(() => reject(new Error("session cost timeout")), 3_500);
       }),
     ]).finally(() => {
       if (timeout) {

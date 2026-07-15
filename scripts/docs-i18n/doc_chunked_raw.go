@@ -97,6 +97,9 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
 		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
 	}
+	if !sameStringMultiset(sourceStructure.inlineCodeSpans, translatedStructure.inlineCodeSpans) {
+		return fmt.Errorf("inline code mismatch: source=%d translated=%d", len(sourceStructure.inlineCodeSpans), len(translatedStructure.inlineCodeSpans))
+	}
 	if !slices.Equal(sourceStructure.fencedPlaceholders, translatedStructure.fencedPlaceholders) {
 		return fmt.Errorf("fenced placeholder mismatch: source=%d translated=%d", len(sourceStructure.fencedPlaceholders), len(translatedStructure.fencedPlaceholders))
 	}

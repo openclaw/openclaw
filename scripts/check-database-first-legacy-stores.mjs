@@ -109,10 +109,7 @@ const allowedRuntimeMigrationPaths = [
   "src/commands/doctor-state-migrations.test.ts",
 ];
 
-const allowedFixturePaths = new Set([
-  "extensions/qa-lab/src/providers/shared/auth-store.ts",
-  "extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts",
-]);
+const allowedFixturePaths = new Set(["extensions/qa-lab/src/providers/shared/auth-store.ts"]);
 
 const allowedCurrentLegacyWriteViolations = [
   "extensions/memory-wiki/src/compile.ts:legacy store filesystem write:root.write(relativePath, content)",

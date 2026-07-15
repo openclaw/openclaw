@@ -278,6 +278,7 @@ async function prepareNpmGitSourceInstallSpec(params: {
   installCwd?: string;
 }): Promise<{
   installSpec: string;
+  installCwd: string | null;
   packDir: string | null;
   steps: PackageUpdateStepResult[];
   failedStep: PackageUpdateStepResult | null;
@@ -286,7 +287,13 @@ async function prepareNpmGitSourceInstallSpec(params: {
     params.installTarget.manager !== "npm" ||
     !isNpmGitSourceInstallSpec(params.installSpec, params.packageName)
   ) {
-    return { installSpec: params.installSpec, packDir: null, steps: [], failedStep: null };
+    return {
+      installSpec: params.installSpec,
+      installCwd: params.installCwd ?? null,
+      packDir: null,
+      steps: [],
+      failedStep: null,
+    };
   }
 
   const packDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-pack-"));
@@ -307,6 +314,7 @@ async function prepareNpmGitSourceInstallSpec(params: {
   if (packStep.exitCode !== 0) {
     return {
       installSpec: params.installSpec,
+      installCwd: params.installCwd ?? null,
       packDir,
       steps: [packStep],
       failedStep: packStep,
@@ -326,6 +334,7 @@ async function prepareNpmGitSourceInstallSpec(params: {
     };
     return {
       installSpec: params.installSpec,
+      installCwd: params.installCwd ?? null,
       packDir,
       steps: [packStep, failedStep],
       failedStep,
@@ -334,6 +343,7 @@ async function prepareNpmGitSourceInstallSpec(params: {
 
   return {
     installSpec: tarball,
+    installCwd: packDir,
     packDir,
     steps: [packStep],
     failedStep: null,
@@ -575,7 +585,6 @@ export async function runGlobalPackageUpdateSteps(params: {
   afterVersion: string | null;
   failedStep: PackageUpdateStepResult | null;
 }> {
-  const installCwd = params.installCwd === undefined ? {} : { cwd: params.installCwd };
   const installEnv = params.env === undefined ? {} : { env: params.env };
   let stagedInstall: StagedNpmInstall | null | undefined;
   let packedInstallDir: string | null = null;
@@ -626,8 +635,9 @@ export async function runGlobalPackageUpdateSteps(params: {
         preparedSpec.installSpec,
         undefined,
         installLocation,
+        preparedSpec.installCwd,
       ),
-      ...installCwd,
+      ...(preparedSpec.installCwd ? { cwd: preparedSpec.installCwd } : {}),
       ...installEnv,
       timeoutMs: params.timeoutMs,
     });
@@ -657,12 +667,13 @@ export async function runGlobalPackageUpdateSteps(params: {
         preparedSpec.installSpec,
         undefined,
         stagedInstall?.prefix,
+        preparedSpec.installCwd,
       );
       if (fallbackArgv) {
         const fallbackStep = await params.runStep({
           name: "global update (omit optional)",
           argv: fallbackArgv,
-          ...installCwd,
+          ...(preparedSpec.installCwd ? { cwd: preparedSpec.installCwd } : {}),
           ...installEnv,
           timeoutMs: params.timeoutMs,
         });

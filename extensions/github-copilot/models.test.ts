@@ -1,8 +1,10 @@
 // Github Copilot tests cover models plugin behavior.
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CachedCopilotToken } from "./token.js";
 import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
@@ -416,6 +418,48 @@ describe("github-copilot token", () => {
       "identity",
     );
     expect(jsonStoreMocks.saveJsonFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps exchanges per source credential in plugin state", async () => {
+    const values = new Map<string, CachedCopilotToken>();
+    const register = vi.fn((key: string, value: CachedCopilotToken) => {
+      values.set(key, value);
+    });
+    const store = {
+      lookup: vi.fn((key: string) => values.get(key)),
+      register,
+    } as unknown as PluginStateSyncKeyedStore<CachedCopilotToken>;
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const source = new Headers(init?.headers).get("authorization")?.replace(/^Bearer\s+/u, "");
+      const exchange = `exchange-${source};proxy-ep=proxy.individual.githubcopilot.com;`;
+      return new Response(
+        JSON.stringify(
+          Object.fromEntries([
+            ["token", exchange],
+            ["expires_at", 2_000_000_000],
+          ]),
+        ),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    const resolve = (githubToken: string) =>
+      resolveCopilotApiToken({
+        githubToken,
+        fetchImpl: fetchImpl as typeof fetch,
+        openCacheStore: () => store,
+      });
+
+    const firstA = await resolve("source-a");
+    const firstB = await resolve("source-b");
+    const secondA = await resolve("source-a");
+
+    expect(firstA.token).toContain("exchange-source-a");
+    expect(firstB.token).toContain("exchange-source-b");
+    expect(secondA.token).toBe(firstA.token);
+    expect(secondA.source).toBe("cache:plugin-state");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(register).toHaveBeenCalledTimes(2);
+    expect(values.size).toBe(2);
   });
 });
 

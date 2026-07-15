@@ -17,38 +17,18 @@ vi.mock("./whatsapp/cli.runtime.js", () => ({ runQaWhatsAppCommand: runWhatsApp 
 
 import { listLiveTransportQaAdapterFactories, listLiveTransportQaCliRegistrations } from "./cli.js";
 
-const matrixFactory = {
-  id: "matrix",
-  scenarioIds: ["channel-chat-baseline"],
-  matches: vi.fn(() => true),
-  create: vi.fn(),
-};
-
 describe("live transport QA contributions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listQaRunnerCliContributions.mockReturnValue([
-      {
-        pluginId: "qa-matrix",
-        commandName: "matrix",
-        status: "available",
-        registration: {
-          commandName: "matrix",
-          adapterFactory: matrixFactory,
-          register(qa) {
-            qa.command("matrix").action(() => undefined);
-          },
-        },
-      },
-    ]);
+    listQaRunnerCliContributions.mockReturnValue([]);
   });
 
-  it("discovers all four canonical live adapter factories without changing CLI ownership", () => {
+  it("discovers all four shared live adapter factories without changing CLI ownership", () => {
     expect(listLiveTransportQaAdapterFactories().map((factory) => factory.id)).toEqual([
       "telegram",
+      "matrix",
       "slack",
       "whatsapp",
-      "matrix",
     ]);
   });
 

@@ -31,7 +31,6 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "phone-control",
   "qa-channel",
   "qa-lab",
-  "qa-matrix",
   "qqbot",
   "reef",
   "tlon",

@@ -12998,6 +12998,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let fastmodevalue: AnyCodable?
     public var fastmode: Bool? { fastmodevalue?.value as? Bool }
     public let fastautoonseconds: Int?
+    public let queuemode: String?
     public let deliver: Bool?
     public let originatingchannel: String?
     public let originatingto: String?
@@ -13019,6 +13020,7 @@ public struct ChatSendParams: Codable, Sendable {
         thinking: String? = nil,
         fastmodevalue: AnyCodable? = nil,
         fastautoonseconds: Int? = nil,
+        queuemode: String? = nil,
         deliver: Bool? = nil,
         originatingchannel: String? = nil,
         originatingto: String? = nil,
@@ -13039,6 +13041,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.thinking = thinking
         self.fastmodevalue = fastmodevalue
         self.fastautoonseconds = fastautoonseconds
+        self.queuemode = queuemode
         self.deliver = deliver
         self.originatingchannel = originatingchannel
         self.originatingto = originatingto
@@ -13060,6 +13063,7 @@ public struct ChatSendParams: Codable, Sendable {
         message: String,
         thinking: String? = nil,
         fastmode: Bool?,
+        queuemode: String? = nil,
         deliver: Bool? = nil,
         originatingchannel: String? = nil,
         originatingto: String? = nil,
@@ -13081,6 +13085,7 @@ public struct ChatSendParams: Codable, Sendable {
             thinking: thinking,
             fastmodevalue: fastmode.map { AnyCodable($0) },
             fastautoonseconds: nil,
+            queuemode: queuemode,
             deliver: deliver,
             originatingchannel: originatingchannel,
             originatingto: originatingto,
@@ -13103,6 +13108,7 @@ public struct ChatSendParams: Codable, Sendable {
         case thinking
         case fastmodevalue = "fastMode"
         case fastautoonseconds = "fastAutoOnSeconds"
+        case queuemode = "queueMode"
         case deliver
         case originatingchannel = "originatingChannel"
         case originatingto = "originatingTo"
