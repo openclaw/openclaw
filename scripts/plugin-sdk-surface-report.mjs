@@ -93,14 +93,18 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
   health: 1,
-  lmstudio: 1,
+  "command-gating": 5,
+  lmstudio: 37,
+  "lmstudio-runtime": 27,
   "provider-setup": 1,
   "self-hosted-provider-setup": 14,
   routing: 1,
   runtime: 3,
   "runtime-logger": 3,
   "runtime-secret-resolution": 5,
+  "secret-provider-integration": 4,
   "setup-adapter-runtime": 1,
+  "skills-runtime": 5,
   "channel-streaming": 49,
   "approval-gateway-runtime": 1,
   "approval-handler-runtime": 1,
@@ -233,7 +237,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       // +2: group scope encoder/key builder mirrored by deprecated compat.
       // Harvest: channel-ingress -8; dead channel-message dispatch aliases -23.
-      3262,
+      // +77: five zero-consumer subpaths enter their removal window.
+      3339,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

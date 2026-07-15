@@ -28,6 +28,8 @@ export const ReefChannelConfigSchema = z
       .optional(),
     stateDir: z.string().min(1).optional(),
     requestPolicy: z.enum(["code-only", "friends-of-friends", "open"]).default("code-only"),
+    // Upgrade-only snapshot. Runtime trust is SQLite-backed; doctor imports valid rows.
+    friends: z.unknown().optional(),
   })
   .strict();
 

@@ -656,6 +656,8 @@ export const vi: TranslationMap = {
     archiveSession: "Lưu trữ phiên",
     archiveSessionCount: "Lưu trữ {count}",
     restoreSession: "Khôi phục phiên",
+    stopCloudWorker: "Dừng worker đám mây…",
+    stopCloudWorkerConfirm: 'Dừng worker đám mây cho "{session}"?',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Xóa {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

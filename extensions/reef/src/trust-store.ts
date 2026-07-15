@@ -12,7 +12,8 @@ import {
 } from "./friend-types.js";
 import type { RelayFriend } from "./types.js";
 
-const MAX_TRUSTED_PEERS = 4_096;
+export const REEF_TRUST_STORE_MAX_ENTRIES = 4_096;
+export const REEF_TRUST_STORE_NAMESPACE = "peer-state";
 const REEF_PAIRING_APPROVAL_PREFIX = "reef-approval-v1:";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 const ReefOutboundRequestSchema = z.record(z.uuid(), z.number().int().nonnegative());
@@ -39,7 +40,7 @@ function requirePeer(raw: string): string {
   return peer;
 }
 
-function resolveIdentityScope(config: ReefChannelConfig): string {
+function resolveReefIdentityScope(config: ReefChannelConfig): string {
   if (!config.handle) {
     throw new Error("Reef handle is required before opening peer trust state");
   }
@@ -48,6 +49,10 @@ function resolveIdentityScope(config: ReefChannelConfig): string {
   return createHash("sha256")
     .update(`${new URL(config.relayUrl).origin}\n${config.handle}`)
     .digest("hex");
+}
+
+export function resolveReefTrustStoreKey(config: ReefChannelConfig, peer: string): string {
+  return `${resolveReefIdentityScope(config)}:${requirePeer(peer)}`;
 }
 
 function resolvePairingKeyDigest(friend: RelayFriend, trustRevision: number): string {
@@ -65,8 +70,8 @@ export function isReefPairingApprovalToken(raw: string): boolean {
 function openStores(openStore: PluginRuntime["state"]["openSyncKeyedStore"]): ReefTrustStores {
   return {
     peers: openStore<ReefPeerStateSnapshot>({
-      namespace: "peer-state",
-      maxEntries: MAX_TRUSTED_PEERS,
+      namespace: REEF_TRUST_STORE_NAMESPACE,
+      maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
       overflowPolicy: "reject-new",
     }),
   };
@@ -81,7 +86,7 @@ export class ReefTrustStore {
     readonly stores: ReefTrustStores,
     config: ReefChannelConfig,
   ) {
-    this.#identityScope = resolveIdentityScope(config);
+    this.#identityScope = resolveReefIdentityScope(config);
     this.#prefix = `${this.#identityScope}:`;
   }
 
