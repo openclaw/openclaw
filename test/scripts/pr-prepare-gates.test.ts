@@ -508,12 +508,12 @@ describe("prepare sync-head transitions", () => {
 });
 
 describe("GraphQL fork publication", () => {
-  it("accepts fixups appended to the hosted head", () => {
+  it("accepts appended fixups and preserves the commit body", () => {
     const { repoDir, headSha } = makeRetryRepo();
     writeFileSync(join(repoDir, "fixup.ts"), "export const fixed = true;\n");
     for (const args of [
       ["add", "fixup.ts"],
-      ["commit", "-qm", "reviewed fixup"],
+      ["commit", "-qm", "reviewed fixup\n\nCo-authored-by: Helper <helper@example.com>"],
     ]) {
       const commit = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
       expect(commit.status, commit.stderr).toBe(0);
@@ -521,15 +521,45 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        'gh() { touch .local/gh-called; printf \'%s\\n\' \'{"data":{"createCommitOnBranch":{"commit":{"oid":"signed-head","url":"https://example.test/commit"}}}}\'; }',
+        'gh() { cat > .local/graphql-payload.json; printf \'%s\\n\' \'{"data":{"createCommitOnBranch":{"commit":{"oid":"signed-head","url":"https://example.test/commit"}}}}\'; }',
         `graphql_push_to_fork example/repo topic ${headSha}`,
-        "test -e .local/gh-called",
+        'test "$(jq -r .variables.input.message.headline .local/graphql-payload.json)" = "reviewed fixup"',
+        'test "$(jq -r .variables.input.message.body .local/graphql-payload.json)" = "Co-authored-by: Helper <helper@example.com>"',
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
     );
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("signed-head");
+  });
+
+  it("rejects merge commits before encoding files or calling GitHub", () => {
+    const { repoDir, headSha } = makeRetryRepo();
+    const baseBranch = spawnSync("git", ["branch", "--show-current"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    for (const args of [
+      ["checkout", "-qb", "other"],
+      ["commit", "-qm", "other", "--allow-empty"],
+      ["checkout", "-q", baseBranch],
+      ["merge", "-q", "--no-ff", "other", "-m", "merge other"],
+    ]) {
+      const command = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
+      expect(command.status, command.stderr).toBe(0);
+    }
+
+    const result = runGatesBash(
+      [
+        "gh() { touch .local/gh-called; return 99; }",
+        `graphql_push_to_fork example/repo topic ${headSha}`,
+      ].join("\n"),
+      { cwd: repoDir, sourcePush: true },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("cannot preserve merge ancestry");
+    expect(existsSync(join(repoDir, ".local", "gh-called"))).toBe(false);
   });
 
   it("rejects rewritten history before encoding files or calling GitHub", () => {
@@ -569,6 +599,46 @@ describe("GraphQL fork publication", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("refused rewritten history");
     expect(existsSync(join(repoDir, ".local", "gh-called"))).toBe(false);
+  });
+});
+
+describe("fork publication transport", () => {
+  it("uses git transport automatically for a verified signed prep commit", () => {
+    const { repoDir } = makeRetryRepo();
+    const result = runGatesBash(
+      [
+        "PR_HEAD_OWNER=contributor",
+        "PR_HEAD_REPO_NAME=repo",
+        "git() { printf '%s\\n' \"$*\" >> .local/git-calls; case \"$1\" in rev-list) printf '%s\\n' prepared;; esac; return 0; }",
+        "graphql_push_to_fork() { touch .local/graphql-called; return 99; }",
+        "push_prep_head_once topic hosted prepared",
+        "grep -F 'verify-commit prepared' .local/git-calls",
+        "grep -F 'push --force-with-lease=refs/heads/topic:hosted prhead prepared:refs/heads/topic' .local/git-calls",
+        "test ! -e .local/graphql-called",
+      ].join("\n"),
+      { cwd: repoDir, sourcePush: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("prepared");
+  });
+
+  it("keeps unsigned single-parent fixups on GitHub-signed GraphQL publication", () => {
+    const { repoDir } = makeRetryRepo();
+    const result = runGatesBash(
+      [
+        "PR_HEAD_OWNER=contributor",
+        "PR_HEAD_REPO_NAME=repo",
+        "git() { case \"$1\" in rev-list) printf '%s\\n' prepared;; verify-commit) return 1;; esac; return 0; }",
+        "graphql_push_to_fork() { touch .local/graphql-called; printf '%s\\n' signed-head; }",
+        "push_prep_head_once topic hosted prepared",
+        "test -e .local/graphql-called",
+      ].join("\n"),
+      { cwd: repoDir, sourcePush: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("signed-head");
   });
 });
 

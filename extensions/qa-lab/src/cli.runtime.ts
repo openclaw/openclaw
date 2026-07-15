@@ -110,17 +110,14 @@ const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
   "ETIMEDOUT",
   "UND_ERR_SOCKET",
 ]);
-
 type InterruptibleServer = {
   baseUrl: string;
   stop(): Promise<void>;
 };
-
 export type QaLabSelfCheckCommandOptions = {
   repoRoot?: string;
   output?: string;
 };
-
 type QaScenarioProviderCommandOptions = {
   transportId?: string;
   providerMode?: QaProviderModeInput;
@@ -128,15 +125,14 @@ type QaScenarioProviderCommandOptions = {
   alternateModel?: string;
   fastMode?: boolean;
 };
-
 type QaScenarioRunCommandOptions = QaScenarioProviderCommandOptions & {
   evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
   outputDir?: string;
   concurrency?: number;
   allowFailures?: boolean;
+  failFast?: boolean;
 };
-
 export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
   profile: string;
   surface?: string;
@@ -161,6 +157,7 @@ export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
   preflight?: boolean;
   runtimePair?: string;
   runtimeParityTier?: string[];
+  sutAccountId?: string;
 };
 
 function normalizeQaSuiteChannelDriver(
@@ -817,6 +814,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
       fastMode: opts.fastMode,
+      failFast: opts.failFast,
       scenarioIds: scenarios.map((scenario) => scenario.id),
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
@@ -1120,6 +1118,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
             channelId: liveChannelId,
             adapterOptions: {
               repoRoot,
+              sutAccountId: opts.sutAccountId,
             },
           }
         : {}),
@@ -1128,6 +1127,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       primaryModel,
       alternateModel,
       fastMode: opts.fastMode,
+      failFast: opts.failFast,
       ...(thinkingDefault ? { thinkingDefault } : {}),
       ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
       scenarioIds: liveChannelId ? liveScenarioIds : hostScenarioIds,

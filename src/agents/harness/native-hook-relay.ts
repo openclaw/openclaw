@@ -31,6 +31,7 @@ import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import {
@@ -44,9 +45,11 @@ import {
 import { stableStringify } from "../stable-stringify.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeToolName } from "../tool-policy.js";
+import { payloadTextResult } from "../tools/common.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
+import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -616,7 +619,7 @@ function nativeHookRelayEventHasLocalWork(
     return hasBeforeToolCallPolicy() || nativePreToolUseMayRunLoopDetection(registration);
   }
   if (event === "post_tool_use") {
-    return hasGlobalHooks("after_tool_call");
+    return hasGlobalHooks("after_tool_call") || listAgentToolResultMiddlewares("codex").length > 0;
   }
   if (event === "before_agent_finalize") {
     return hasGlobalHooks("before_agent_finalize");
@@ -1528,6 +1531,28 @@ async function runNativeHookRelayPostToolUse(params: {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolCallId =
     params.invocation.toolUseId ?? `${params.invocation.event}:${params.invocation.receivedAt}`;
+  const startArgs = params.adapter.readToolInput(params.invocation.rawPayload);
+  const rawResult = params.adapter.readToolResponse(params.invocation.rawPayload);
+  // Native results are observe-only for middleware: codex-rs PostToolUse hooks
+  // cannot replace tool_response (PostToolUseOutcome has no result field), so a
+  // transformed result reaches only after_tool_call observers, never the model.
+  const hasToolResultMiddleware = listAgentToolResultMiddlewares("codex").length > 0;
+  const result = !hasToolResultMiddleware
+    ? rawResult
+    : await createAgentToolResultMiddlewareRunner({
+        runtime: "codex",
+        ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+        sessionId: params.registration.sessionId,
+        ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+        runId: params.registration.runId,
+      }).applyToolResultMiddleware({
+        turnId: params.invocation.turnId,
+        toolCallId,
+        toolName,
+        args: startArgs,
+        ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
+        result: payloadTextResult(rawResult),
+      });
   await runAgentHarnessAfterToolCallHook({
     toolName,
     toolCallId,
@@ -1536,8 +1561,8 @@ async function runNativeHookRelayPostToolUse(params: {
     sessionId: params.registration.sessionId,
     ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
     ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
-    startArgs: params.adapter.readToolInput(params.invocation.rawPayload),
-    result: params.adapter.readToolResponse(params.invocation.rawPayload),
+    startArgs,
+    result,
   });
   return params.adapter.renderNoopResponse(params.invocation.event);
 }

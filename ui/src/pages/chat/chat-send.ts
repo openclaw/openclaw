@@ -254,6 +254,7 @@ async function requestChatSend(
     runId: string;
     sessionKey?: string;
     agentId?: string;
+    queueMode?: "steer";
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
@@ -269,6 +270,7 @@ async function requestChatSend(
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
     deliver: false,
+    ...(params.queueMode ? { queueMode: params.queueMode } : {}),
     idempotencyKey: params.runId,
     attachments: buildChatApiAttachments(params.attachments),
   });
@@ -352,8 +354,11 @@ async function sendChatMessageWithGeneratedRunId(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
-  canApplyError: () => boolean = () => true,
-  runIdOverride?: string,
+  options: {
+    canApplyError?: () => boolean;
+    queueMode?: "steer";
+    runId?: string;
+  } = {},
 ): Promise<ChatSendAck | null> {
   if (!state.client || !state.connected) {
     return null;
@@ -363,12 +368,18 @@ async function sendChatMessageWithGeneratedRunId(
   if (!msg && !hasAttachments) {
     return null;
   }
+  const canApplyError = options.canApplyError ?? (() => true);
   if (canApplyError()) {
     setChatError(state, null);
   }
-  const runId = runIdOverride ?? generateUUID();
+  const runId = options.runId ?? generateUUID();
   try {
-    return await requestChatSend(state, { message: msg, attachments, runId });
+    return await requestChatSend(state, {
+      message: msg,
+      attachments,
+      runId,
+      ...(options.queueMode ? { queueMode: options.queueMode } : {}),
+    });
   } catch (err) {
     if (canApplyError()) {
       setChatError(state, formatConnectError(err));
@@ -383,7 +394,7 @@ async function sendDetachedChatMessage(
   attachments?: ChatAttachment[],
   runId?: string,
 ): Promise<ChatSendAck | null> {
-  return sendChatMessageWithGeneratedRunId(state, message, attachments, () => true, runId);
+  return sendChatMessageWithGeneratedRunId(state, message, attachments, { runId });
 }
 
 function isChatResetCommand(text: string) {
@@ -1364,7 +1375,10 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     host as unknown as ChatState,
     message,
     hasAttachments ? attachments : undefined,
-    () => visibleSessionMatches(host, itemSessionKey, item.agentId),
+    {
+      canApplyError: () => visibleSessionMatches(host, itemSessionKey, item.agentId),
+      queueMode: "steer",
+    },
   );
   const pendingStillVisible = activeRunId
     ? host.chatQueue.some((entry) => entry.id === id && entry.pendingRunId === activeRunId)
