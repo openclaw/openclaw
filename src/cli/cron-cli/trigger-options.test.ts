@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../../runtime.js";
 
 const callGatewayFromCli = vi.fn();
 
@@ -78,17 +79,51 @@ describe("cron trigger CLI options", () => {
     );
   });
 
-  it("rejects oversized trigger script files before reading the body", async () => {
+  it("accepts trigger script files at the byte limit", async () => {
+    const scriptPath = path.join(fixtureRoot, "at-limit.js");
+    await fs.writeFile(scriptPath, "x".repeat(65_536), "utf8");
+
+    await expect(readCronTriggerScript(scriptPath)).resolves.toHaveLength(65_536);
+  });
+
+  it("stops oversized trigger script files before the gateway call", async () => {
     const scriptPath = path.join(fixtureRoot, "oversized.js");
-    const stat = vi.fn(async () => ({ size: 65_537 }));
-    const readFile = vi.fn(async () => "json({ fire: true })");
+    await fs.writeFile(scriptPath, "x".repeat(65_537), "utf8");
+    const program = new Command().exitOverride();
+    registerCronAddCommand(program);
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new Error(`exit:${code}`);
+    });
 
-    await expect(readCronTriggerScript(scriptPath, { stat, readFile })).rejects.toThrow(
-      "Trigger script exceeds 65536 bytes",
-    );
+    try {
+      await expect(
+        program.parseAsync(
+          [
+            "add",
+            "--name",
+            "oversized",
+            "--every",
+            "30s",
+            "--trigger-script",
+            scriptPath,
+            "--system-event",
+            "changed",
+            "--session",
+            "main",
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("exit:1");
 
-    expect(stat).toHaveBeenCalledWith(scriptPath);
-    expect(readFile).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Trigger script exceeds 65536 bytes"),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
   });
 
   it("maps --clear-trigger to a nullable edit patch", async () => {
