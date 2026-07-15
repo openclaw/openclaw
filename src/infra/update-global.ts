@@ -108,6 +108,68 @@ function isExplicitPackageInstallSpec(value: string): boolean {
   );
 }
 
+function isRelativePackageInstallPath(value: string): boolean {
+  return /^(?:\.{1,2})(?:[\\/]|$)/u.test(value);
+}
+
+function resolveNpmInstallScriptsAllowFlag(spec: string, installCwd?: string | null): string {
+  const normalized = normalizePackageTarget(spec);
+  const unaliased = stripPrimaryPackageAlias(normalized);
+  let identity =
+    isExplicitPackageInstallSpec(normalized) ||
+    isExplicitPackageInstallSpec(unaliased) ||
+    isRelativePackageInstallPath(unaliased) ||
+    path.isAbsolute(normalized) ||
+    path.isAbsolute(unaliased)
+      ? unaliased
+      : PRIMARY_PACKAGE_NAME;
+  identity = resolveNpmAliasPackageName(identity) ?? identity;
+  if (installCwd && path.isAbsolute(identity)) {
+    // npm resolves relative allow-scripts identities against its cwd. Relativize
+    // first so commas in ancestor directories do not split the policy value.
+    const relativeIdentity = path.relative(installCwd, identity) || ".";
+    identity =
+      path.isAbsolute(relativeIdentity) ||
+      relativeIdentity === "." ||
+      relativeIdentity === ".." ||
+      relativeIdentity.startsWith(`..${path.sep}`)
+        ? relativeIdentity
+        : `./${relativeIdentity}`;
+  }
+  if (identity.includes(",")) {
+    throw new Error(
+      "npm cannot allow lifecycle scripts for an install target containing a comma; rename the package or source path",
+    );
+  }
+  return `--allow-scripts=${identity || PRIMARY_PACKAGE_NAME}`;
+}
+
+function resolveNpmAliasPackageName(spec: string): string | null {
+  if (!/^npm:/i.test(spec)) {
+    return null;
+  }
+  const target = spec.slice(spec.indexOf(":") + 1).trim();
+  if (target.startsWith("@")) {
+    const scopeSeparator = target.indexOf("/");
+    if (scopeSeparator <= 1) {
+      return null;
+    }
+    const versionSeparator = target.indexOf("@", scopeSeparator + 1);
+    return versionSeparator === -1 ? target : target.slice(0, versionSeparator);
+  }
+  const versionSeparator = target.indexOf("@");
+  const packageName = versionSeparator === -1 ? target : target.slice(0, versionSeparator);
+  return packageName || null;
+}
+
+function stripPrimaryPackageAlias(spec: string): string {
+  const normalized = normalizePackageTarget(spec);
+  const prefix = `${PRIMARY_PACKAGE_NAME}@`;
+  return normalized.toLowerCase().startsWith(prefix)
+    ? normalized.slice(prefix.length).trim()
+    : normalized;
+}
+
 /**
  * Extracts a pinned installed version from package specs like `openclaw@1.2.3`.
  * Moving tags, URLs, git refs, and aliases return null because they cannot be
@@ -905,6 +967,7 @@ export function globalInstallArgs(
   spec: string,
   pkgRoot?: string | null,
   installPrefix?: string | null,
+  installCwd?: string | null,
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager === "pnpm") {
@@ -924,6 +987,7 @@ export function globalInstallArgs(
     resolved.command,
     "i",
     "-g",
+    resolveNpmInstallScriptsAllowFlag(spec, installCwd),
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     spec,
     ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
@@ -942,6 +1006,7 @@ export function globalInstallFallbackArgs(
   spec: string,
   pkgRoot?: string | null,
   installPrefix?: string | null,
+  installCwd?: string | null,
 ): string[] | null {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager !== "npm") {
@@ -951,6 +1016,7 @@ export function globalInstallFallbackArgs(
     resolved.command,
     "i",
     "-g",
+    resolveNpmInstallScriptsAllowFlag(spec, installCwd),
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     spec,
     "--omit=optional",

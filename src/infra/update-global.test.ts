@@ -431,6 +431,7 @@ describe("update global helpers", () => {
         "npm",
         "i",
         "-g",
+        "--allow-scripts=openclaw",
         "openclaw@latest",
         "--no-fund",
         "--no-audit",
@@ -682,6 +683,7 @@ describe("update global helpers", () => {
       "npm",
       "i",
       "-g",
+      "--allow-scripts=openclaw",
       "--prefix",
       "/tmp/stage",
       "openclaw@latest",
@@ -694,6 +696,7 @@ describe("update global helpers", () => {
       "npm",
       "i",
       "-g",
+      "--allow-scripts=openclaw",
       "--prefix",
       "/tmp/stage",
       "openclaw@latest",
@@ -705,11 +708,39 @@ describe("update global helpers", () => {
     ]);
   });
 
+  it("allows only the resolved npm candidate lifecycle identity", () => {
+    expect(globalInstallArgs("npm", "/tmp/openclaw-2026.7.2.tgz")).toContain(
+      "--allow-scripts=/tmp/openclaw-2026.7.2.tgz",
+    );
+    expect(globalInstallArgs("npm", "openclaw@npm:@vendor/openclaw@1.2.3")).toContain(
+      "--allow-scripts=@vendor/openclaw",
+    );
+    expect(globalInstallArgs("npm", "openclaw@npm:vendor-openclaw@1.2.3")).toContain(
+      "--allow-scripts=vendor-openclaw",
+    );
+    expect(globalInstallArgs("npm", "./openclaw-candidate")).toContain(
+      "--allow-scripts=./openclaw-candidate",
+    );
+  });
+
+  it("keeps commas in ancestor directories out of npm's lifecycle policy", () => {
+    expect(
+      globalInstallArgs(
+        "npm",
+        "/tmp/build,cache/openclaw-candidate",
+        null,
+        null,
+        "/tmp/build,cache",
+      ),
+    ).toContain("--allow-scripts=./openclaw-candidate");
+  });
+
   it("builds global install argv for each supported manager", () => {
     expect(globalInstallArgs("npm", "openclaw@latest")).toEqual([
       "npm",
       "i",
       "-g",
+      "--allow-scripts=openclaw",
       "openclaw@latest",
       "--no-fund",
       "--no-audit",
@@ -741,6 +772,7 @@ describe("update global helpers", () => {
       "npm",
       "i",
       "-g",
+      "--allow-scripts=openclaw",
       "openclaw@latest",
       "--omit=optional",
       "--no-fund",

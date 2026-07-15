@@ -164,7 +164,9 @@ Node version during `preinstall`; only then does OpenClaw verify the packaged
 `dist` inventory and swap the clean package tree into the real global prefix. A
 packed completion guard is omitted from the expected inventory and removed only
 after `preinstall` succeeds, so skipped lifecycle scripts also fail before the
-swap. This avoids npm overlaying a new package onto stale files from the old one. If the install
+swap. On npm 12 and newer, the updater approves only the candidate OpenClaw
+lifecycle; transitive dependency scripts remain blocked. This avoids npm
+overlaying a new package onto stale files from the old one. If the install
 command fails, OpenClaw retries once with `--omit=optional`, which helps hosts
 where native optional dependencies cannot compile.
 
