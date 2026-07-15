@@ -15,7 +15,7 @@ import {
   trackDropdownKeyboardDismissal,
 } from "./web-awesome.ts";
 
-export type SidebarSessionGroupMenuAction = "rename-group" | "new-group" | "delete-group";
+type SidebarSessionGroupMenuAction = "rename-group" | "new-group" | "delete-group";
 
 export function renderSidebarSessionGroupMenu(params: {
   menu: SidebarSessionGroupMenuState | null;
