@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import ignore from "ignore";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadSkillsFromDir } from "../skills/loading/session.js";
 import { addIgnoreRules } from "./ignore-rules.js";
 
 describe("addIgnoreRules", () => {
@@ -38,14 +39,30 @@ describe("addIgnoreRules", () => {
     expect(ig.ignores("ignored-file")).toBe(true);
   });
 
-  it("silently skips a ignore file that exceeds the byte cap", () => {
+  it("fails closed and excludes the subtree when an ignore file exceeds the byte cap", () => {
     const oversized = "ignored-file\n".repeat(1_000_000); // ~13 MB, over 4 MB cap
     fs.writeFileSync(path.join(tempDir, ".gitignore"), oversized, "utf-8");
 
     const ig = ignore();
     addIgnoreRules(tempDir, tempDir, ig);
 
-    expect(ig.ignores("ignored-file")).toBe(false);
+    expect(ig.ignores("ignored-file")).toBe(true);
+  });
+
+  it("does not discover a skill when an oversized .gitignore cannot be parsed", () => {
+    const skillDir = path.join(tempDir, "ignored-skill");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: ignored-skill\ndescription: hidden by gitignore\n---\n# Body\n",
+      "utf-8",
+    );
+    const oversized = "ignored-skill/\n".repeat(400_000); // ~5.6 MB, over 4 MB cap
+    fs.writeFileSync(path.join(tempDir, ".gitignore"), oversized, "utf-8");
+
+    const result = loadSkillsFromDir({ dir: tempDir, source: "test" });
+
+    expect(result.skills).toEqual([]);
   });
 
   it("follows a symlinked .gitignore to a regular file", () => {
