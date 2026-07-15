@@ -4,7 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
+import {
+  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  writePackageDistInventory,
+  writePackageDistInventoryForPublish,
+} from "../../scripts/lib/package-dist-inventory.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -805,6 +809,22 @@ describe("update global helpers", () => {
       );
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
         "unexpected packaged dist file dist/stale-CJUAgRQR.js",
+      );
+    });
+  });
+
+  it("rejects a staged package when lifecycle scripts leave the install guard", async () => {
+    await withTempDir({ prefix: "openclaw-update-global-guard-" }, async (packageRoot) => {
+      await writeGlobalPackageJson(packageRoot, "2026.7.2");
+      for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
+        const absolutePath = path.join(packageRoot, relativePath);
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        await fs.writeFile(absolutePath, "export {};\n", "utf8");
+      }
+      await writePackageDistInventoryForPublish(packageRoot);
+
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+        `unexpected packaged dist file ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
       );
     });
   });

@@ -175,6 +175,7 @@ describe("release candidate checklist", () => {
     expect(source).toContain(
       '["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"]',
     );
+    expect(source).toContain("cwd: TOOLING_ROOT");
     expect(source).toContain("`+refs/heads/${workflowRef}:${remoteRef}`");
     expect(source).toContain('"worktree", "add", "--detach", toolingRoot, trustedToolingSha');
     expect(source).toContain(

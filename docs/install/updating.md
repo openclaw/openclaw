@@ -159,9 +159,12 @@ openclaw doctor --lint --json
 ```
 
 When `openclaw update` manages a global npm install, it installs the target
-into a temporary npm prefix first, verifies the packaged `dist` inventory, then
-swaps the clean package tree into the real global prefix — avoiding npm
-overlaying a new package onto stale files from the old one. If the install
+into a temporary npm prefix first. The candidate package validates the host
+Node version during `preinstall`; only then does OpenClaw verify the packaged
+`dist` inventory and swap the clean package tree into the real global prefix. A
+packed completion guard is omitted from the expected inventory and removed only
+after `preinstall` succeeds, so skipped lifecycle scripts also fail before the
+swap. This avoids npm overlaying a new package onto stale files from the old one. If the install
 command fails, OpenClaw retries once with `--omit=optional`, which helps hosts
 where native optional dependencies cannot compile.
 
