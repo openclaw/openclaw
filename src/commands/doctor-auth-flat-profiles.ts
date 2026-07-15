@@ -562,7 +562,8 @@ function mergeImportedAuthProfileState(params: {
   state: AuthProfileState;
   existingState: AuthProfileState;
 }): AuthProfileStore {
-  // Preserve current SQLite state over imported JSON state; old files are backup-only after import.
+  // Preserve existing state (SQLite or already-merged) over newly imported state.
+  // A provider is skipped if it already exists in either existingState OR params.store.
   return {
     ...params.store,
     ...(params.state.order
@@ -571,7 +572,8 @@ function mergeImportedAuthProfileState(params: {
             ...params.store.order,
             ...Object.fromEntries(
               Object.entries(params.state.order).filter(
-                ([provider]) => !params.existingState.order?.[provider],
+                ([provider]) =>
+                  !params.existingState.order?.[provider] && !params.store.order?.[provider],
               ),
             ),
           },
@@ -583,7 +585,8 @@ function mergeImportedAuthProfileState(params: {
             ...params.store.lastGood,
             ...Object.fromEntries(
               Object.entries(params.state.lastGood).filter(
-                ([provider]) => !params.existingState.lastGood?.[provider],
+                ([provider]) =>
+                  !params.existingState.lastGood?.[provider] && !params.store.lastGood?.[provider],
               ),
             ),
           },
@@ -595,7 +598,9 @@ function mergeImportedAuthProfileState(params: {
             ...params.store.usageStats,
             ...Object.fromEntries(
               Object.entries(params.state.usageStats).filter(
-                ([profileId]) => !params.existingState.usageStats?.[profileId],
+                ([profileId]) =>
+                  !params.existingState.usageStats?.[profileId] &&
+                  !params.store.usageStats?.[profileId],
               ),
             ),
           },
@@ -926,6 +931,11 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           existingProfileIds,
         });
       }
+      // Merge auth-state.json state first to give it precedence over auth-profiles.json state.
+      // SQLite state is already in `next` (via existing/existingState) and takes ultimate precedence.
+      if (hasAuthProfileState(state)) {
+        next = mergeImportedAuthProfileState({ store: next, state, existingState });
+      }
       if (canonicalStore) {
         for (const profileId of Object.keys(canonicalStore.profiles)) {
           importedProfileIds.add(profileId);
@@ -939,6 +949,8 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           profiles: canonicalStore.profiles,
           existingProfileIds,
         });
+        // Merge canonicalStore.state after state — if state already has a provider,
+        // canonicalStore.state will be filtered out by mergeImportedAuthProfileState.
         next = mergeImportedAuthProfileState({
           store: next,
           state: coerceAuthProfileState(canonicalStore),
@@ -957,9 +969,6 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           existingProfileIds: new Set(Object.keys(next.profiles)),
           replaceExistingWithoutCredential: true,
         });
-      }
-      if (hasAuthProfileState(state)) {
-        next = mergeImportedAuthProfileState({ store: next, state, existingState });
       }
 
       if (canonicalStore || configCanonicalStore || legacyStore || hasAuthProfileState(state)) {
