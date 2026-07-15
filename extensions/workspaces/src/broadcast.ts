@@ -25,8 +25,3 @@ export function rememberWorkspaceBroadcast(broadcast: WorkspaceBroadcast): void 
 export function workspaceBroadcast(): WorkspaceBroadcast | undefined {
   return handle;
 }
-
-/** Test-only: clear the remembered handle between cases. */
-export function resetWorkspaceBroadcastForTest(): void {
-  handle = undefined;
-}

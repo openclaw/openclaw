@@ -48,7 +48,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "extensions/telegram/src/topic-name-cache.ts: resetTopicNameCacheForTest",
   "extensions/telegram/src/topic-name-cache.ts: setTelegramTopicNameStoreFactoryForTest",
   "extensions/telegram/src/update-offset-store.ts: setTelegramUpdateOffsetStoreForTest",
-  "extensions/workspaces/src/broadcast.ts: resetWorkspaceBroadcastForTest",
   "src/acp/control-plane/active-turns.ts: resetAcpActiveTurnsForTests",
   "src/acp/runtime/registry.ts: AcpRuntimeBackend",
   "src/agents/agent-hooks/compaction-safeguard.ts: testing",

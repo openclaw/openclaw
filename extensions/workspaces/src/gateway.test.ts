@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
-import { workspaceBroadcast, resetWorkspaceBroadcastForTest } from "./broadcast.js";
 import { registerWorkspaceGatewayMethods } from "./gateway.js";
 import { WorkspaceStore } from "./store.js";
 
@@ -279,12 +278,17 @@ describe("workspace gateway methods", () => {
 
 describe("workspace broadcast handle", () => {
   it("remembers the server broadcast so agent tools can announce changes off-request", async () => {
-    resetWorkspaceBroadcastForTest();
+    // Isolate the singleton broadcast module so this assertion is not coupled
+    // to state left behind by earlier test files.
+    vi.resetModules();
+    const { workspaceBroadcast } = await import("./broadcast.js");
     expect(workspaceBroadcast()).toBeUndefined();
 
+    const { registerWorkspaceGatewayMethods: registerWorkspaceGatewayMethodsForTest } =
+      await import("./gateway.js");
     await withTempStateDir(async (stateDir) => {
       const { api, methods } = createApi();
-      registerWorkspaceGatewayMethods({ api, store: new WorkspaceStore({ stateDir }) });
+      registerWorkspaceGatewayMethodsForTest({ api, store: new WorkspaceStore({ stateDir }) });
       const broadcast = vi.fn();
 
       // A read populates the slot; agent turns started from a channel or cron have
