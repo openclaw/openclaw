@@ -3,13 +3,13 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer as createNoisyPngFixtureBuffer,
   createSolidPngBuffer,
 } from "../../test/helpers/image-fixtures.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -27,6 +27,7 @@ const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
 const resolveSessionHistoryTranscriptPathMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
@@ -279,7 +280,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
   let stateDir: string;
 
   beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-images-"));
+    stateDir = tempDirs.make("managed-images-");
     vi.clearAllMocks();
   });
 
@@ -319,10 +320,8 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
   it("keeps serving and deleting an original after the configured media root changes", async () => {
     const fixture = await createFixture(stateDir);
-    const externalConfigDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "managed-image-moved-config-"),
-    );
-    const isolatedHome = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-moved-home-"));
+    const externalConfigDir = tempDirs.make("managed-image-moved-config-");
+    const isolatedHome = tempDirs.make("managed-image-moved-home-");
 
     try {
       await withEnvAsync(
@@ -626,7 +625,7 @@ describe("createManagedOutgoingImageBlocks", () => {
   let stateDir: string;
 
   beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-blocks-"));
+    stateDir = tempDirs.make("managed-image-blocks-");
     vi.clearAllMocks();
   });
 
@@ -816,8 +815,8 @@ describe("createManagedOutgoingImageBlocks", () => {
   });
 
   it("serves managed originals from a split config-path media root", async () => {
-    const openClawHome = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-home-"));
-    const externalConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-config-"));
+    const openClawHome = tempDirs.make("managed-image-home-");
+    const externalConfigDir = tempDirs.make("managed-image-config-");
     const splitStateDir = path.join(openClawHome, ".openclaw");
     const sourcePath = path.join(splitStateDir, "workspace", "fixtures", "dot.png");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
@@ -981,7 +980,7 @@ describe("createManagedOutgoingImageBlocks", () => {
   });
 
   it("rejects local image paths outside allowed roots", async () => {
-    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-outside-"));
+    const outsideDir = tempDirs.make("managed-image-outside-");
     const outsidePath = path.join(outsideDir, "outside.png");
     await fs.writeFile(outsidePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
@@ -1152,7 +1151,7 @@ describe("attachManagedOutgoingImagesToMessage", () => {
   let stateDir: string;
 
   beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-attach-"));
+    stateDir = tempDirs.make("managed-image-attach-");
     vi.clearAllMocks();
   });
 
@@ -1186,7 +1185,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   let stateDir: string;
 
   beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-cleanup-"));
+    stateDir = tempDirs.make("managed-image-cleanup-");
     vi.clearAllMocks();
     getRuntimeConfigMock.mockReturnValue({});
   });

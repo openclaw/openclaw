@@ -1,9 +1,9 @@
 // Doctor migration tests cover strict managed-image import and source retirement.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   insertManagedImageRecord,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
@@ -20,6 +20,8 @@ import {
   detectLegacyManagedOutgoingImages,
   migrateLegacyManagedOutgoingImages,
 } from "./state-migrations.managed-outgoing-images.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type LegacyRecord = Omit<ManagedImageRecord, "original"> & {
   original: Omit<ManagedImageRecord["original"], "mediaId" | "mediaRoot" | "mediaSubdir"> & {
@@ -85,7 +87,7 @@ describe("legacy managed outgoing image migration", () => {
   let stateDir: string;
 
   beforeEach(async () => {
-    stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), "managed-image-migration-"));
+    stateDir = tempDirs.make("managed-image-migration-");
   });
 
   afterEach(async () => {

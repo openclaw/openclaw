@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -23,6 +24,8 @@ import {
   type ManagedImageRecord,
   type ManagedImageRecordDatabase,
 } from "./managed-image-record-store.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function record(overrides: Partial<ManagedImageRecord> = {}): ManagedImageRecord {
   return {
@@ -51,7 +54,7 @@ describe("managed image record SQLite store", () => {
   let stateDir: string;
 
   beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-record-store-"));
+    stateDir = tempDirs.make("managed-image-record-store-");
   });
 
   afterEach(async () => {
