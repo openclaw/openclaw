@@ -28,8 +28,14 @@ type TestWorkerService = {
   destroy: (environmentId: string) => Promise<TestWorkerRecord>;
 };
 
-function mockContext(workerEnvironmentService?: TestWorkerService) {
+function mockContext(
+  workerEnvironmentService?: TestWorkerService,
+  reconcileActive: (environmentId?: string) => Promise<void> = vi.fn(async () => {}),
+) {
   return {
+    logGateway: {
+      warn: vi.fn(),
+    },
     nodeRegistry: {
       listConnected: () => [
         {
@@ -46,7 +52,7 @@ function mockContext(workerEnvironmentService?: TestWorkerService) {
     workerEnvironmentService,
     ...(workerEnvironmentService
       ? {
-          workerPlacementDispatchService: { dispatch: vi.fn() },
+          workerPlacementDispatchService: { dispatch: vi.fn(), reconcileActive },
           getRuntimeConfig: () => ({
             cloudWorkers: {
               profiles: {
@@ -104,13 +110,16 @@ async function callEnvironmentMethod(
     | "environments.create"
     | "environments.destroy",
   params: unknown,
-  options: { service?: TestWorkerService } = {},
+  options: {
+    service?: TestWorkerService;
+    reconcileActive?: (environmentId?: string) => Promise<void>;
+  } = {},
 ) {
   const respond = vi.fn();
   await environmentsHandlers[method]?.({
     params: params as Record<string, unknown>,
     respond,
-    context: mockContext(options.service),
+    context: mockContext(options.service, options.reconcileActive),
   } as never);
   const call = respond.mock.calls.at(0);
   if (call === undefined) {
@@ -415,6 +424,39 @@ describe("environment gateway methods", () => {
       worker: { state: "destroyed" },
     });
     expect(destroy).toHaveBeenCalledTimes(2);
+  });
+
+  it("reconciles active placements before returning destroyed worker state", async () => {
+    const service = workerService();
+    const reconcileActive = vi.fn(async () => {});
+
+    const [ok, payload] = await callEnvironmentMethod(
+      "environments.destroy",
+      { environmentId: "worker-1" },
+      { service, reconcileActive },
+    );
+
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ worker: { state: "destroyed" } });
+    expect(reconcileActive).toHaveBeenCalledExactlyOnceWith("worker-1");
+    expect(service.destroy).toHaveBeenCalledBefore(reconcileActive);
+  });
+
+  it("preserves destroyed worker success when placement reconciliation fails", async () => {
+    const service = workerService();
+    const reconcileActive = vi.fn(async () => {
+      throw new Error("temporary reconciliation failure");
+    });
+
+    const [ok, payload] = await callEnvironmentMethod(
+      "environments.destroy",
+      { environmentId: "worker-1" },
+      { service, reconcileActive },
+    );
+
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ worker: { state: "destroyed" } });
+    expect(reconcileActive).toHaveBeenCalledExactlyOnceWith("worker-1");
   });
 
   it("rejects an unknown worker environment on destroy", async () => {

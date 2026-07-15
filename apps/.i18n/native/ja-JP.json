@@ -20584,36 +20584,6 @@
       "translated": "MacアプリとGatewayを確認しています…"
     },
     {
-      "id": "native.apple.3a2e38e488490964",
-      "source": "The Mac app is updated. Gateway setup is not configured on this Mac.",
-      "translated": "Macアプリはアップデートされました。このMacではGatewayのセットアップが構成されていません。"
-    },
-    {
-      "id": "native.apple.3abafcfb64b362fb",
-      "source": "The Gateway could not be checked.",
-      "translated": "Gatewayを確認できませんでした。"
-    },
-    {
-      "id": "native.apple.00e3d2037782506c",
-      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
-      "translated": "OpenClawはGatewayサービスの所有権レコードを読み取れませんでした。GatewayのLaunchAgentを確認してから再試行してください。"
-    },
-    {
-      "id": "native.apple.c4b8806a570dad31",
-      "source": "The Mac node could not be checked.",
-      "translated": "Macノードを確認できませんでした。"
-    },
-    {
-      "id": "native.apple.0483bf19d612560b",
-      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
-      "translated": "OpenClawはノードサービスの所有権レコードを読み取れませんでした。ノードのLaunchAgentを確認してから再試行してください。"
-    },
-    {
-      "id": "native.apple.1c57b3fcc10eabe7",
-      "source": "The Mac app is updated. Gateway \\(found) is newer than app \\(required), so OpenClaw left it unchanged.",
-      "translated": "Macアプリはアップデートされました。Gateway \\(found) はアプリ \\(required) より新しいため、OpenClawは変更しませんでした。"
-    },
-    {
       "id": "native.apple.e9b1899627402a15",
       "source": "Gateway recovery failed.",
       "translated": "Gatewayの復旧に失敗しました。"
@@ -20622,11 +20592,6 @@
       "id": "native.apple.91debe404bb7affc",
       "source": "The managed OpenClaw runtime could not be reinstalled.",
       "translated": "管理対象のOpenClawランタイムを再インストールできませんでした。"
-    },
-    {
-      "id": "native.apple.3522be8112301d9f",
-      "source": "The Mac app is updated. This Gateway is managed separately, so OpenClaw left it unchanged.",
-      "translated": "Macアプリはアップデートされました。このGatewayは個別に管理されているため、OpenClawは変更しませんでした。"
     },
     {
       "id": "native.apple.1cc391ec928070c4",
@@ -20734,14 +20699,34 @@
       "translated": "OpenClaw はアップデートをインストールしましたが、Gateway への接続を確認できませんでした。"
     },
     {
-      "id": "native.apple.8bf292892311882e",
-      "source": "Mac app updated",
-      "translated": "Mac アプリを更新しました"
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "Gatewayを確認できませんでした。"
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClawはGatewayサービスの所有権レコードを読み取れませんでした。GatewayのLaunchAgentを確認してから再試行してください。"
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "Macノードを確認できませんでした。"
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClawはノードサービスの所有権レコードを読み取れませんでした。ノードのLaunchAgentを確認してから再試行してください。"
     },
     {
       "id": "native.apple.d0f712a2ed470a3e",
       "source": "Gateway update needs help",
       "translated": "Gateway のアップデートに対応が必要です"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "アップデートガイド"
     },
     {
       "id": "native.apple.3a6aaa0aa0be82e7",
@@ -20752,11 +20737,6 @@
       "id": "native.apple.11b9ee23142b1060",
       "source": "Retry",
       "translated": "再試行"
-    },
-    {
-      "id": "native.apple.e2ffc7753f75e1b8",
-      "source": "Update guide",
-      "translated": "アップデートガイド"
     },
     {
       "id": "native.apple.144b21229f65f2a4",

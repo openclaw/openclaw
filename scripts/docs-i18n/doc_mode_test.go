@@ -744,6 +744,95 @@ func TestValidateDocChunkTranslationAcceptsReorderedInlineCode(t *testing.T) {
 	}
 }
 
+func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
+	t.Parallel()
+
+	source := strings.Join([]string{
+		"- A Windows path can end in a backslash: `C:\\`.",
+		"- **`command`-typed actions** render as `` label: `command` `` so users can copy it.",
+		"- **`callback`-typed actions** and legacy **`value`** fields render label-only.",
+		"",
+	}, "\n")
+	state := NewPlaceholderState(source)
+	placeholders := []string{}
+	mapping := map[string]string{}
+	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+
+	wantLiterals := []string{"`command`", "`` label: `command` ``", "`callback`", "`value`", "`C:\\`"}
+	for _, literal := range wantLiterals {
+		if strings.Contains(masked, literal) {
+			t.Fatalf("expected %q to be masked:\n%s", literal, masked)
+		}
+	}
+	for _, prose := range []string{"typed actions", "so users can copy it", "fields render label-only", "A Windows path can end in a backslash"} {
+		if !strings.Contains(masked, prose) {
+			t.Fatalf("expected translatable prose %q to remain visible:\n%s", prose, masked)
+		}
+	}
+	maskedLiterals := []string{}
+	for _, value := range mapping {
+		if strings.HasPrefix(value, "`") {
+			maskedLiterals = append(maskedLiterals, value)
+		}
+	}
+	if !sameStringMultiset(wantLiterals, maskedLiterals) {
+		t.Fatalf("masked inline literals = %v, want %v", maskedLiterals, wantLiterals)
+	}
+	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+		t.Fatalf("inline-code round trip changed source:\n%s\nwant:\n%s", restored, source)
+	}
+}
+
+func TestMaskMarkdownDocSyntaxProtectsProductLinkLabelsInsideRawHTML(t *testing.T) {
+	t.Parallel()
+
+	source := strings.Join([]string{
+		`<div className="maturity-category-docs">`,
+		"",
+		"Use `channel links`: [Discord](/channels/discord), [Render](https://render.com/docs), [Groups](/channels/groups).",
+		"[Render](/guides/pre-render) the page first.",
+		"",
+		`</div>`,
+		"",
+	}, "\n")
+	state := NewPlaceholderState(source)
+	placeholders := []string{}
+	mapping := map[string]string{}
+	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+
+	if strings.Contains(masked, "[Discord]") {
+		t.Fatalf("expected protected link label %q to be masked:\n%s", "Discord", masked)
+	}
+	if strings.Contains(masked, "[Render](https://render.com/docs)") {
+		t.Fatalf("expected contextual product link label %q to be masked:\n%s", "Render", masked)
+	}
+	if !strings.Contains(masked, "[Groups]") {
+		t.Fatalf("expected ordinary link label to remain translatable:\n%s", masked)
+	}
+	if !strings.Contains(masked, "[Render](/guides/pre-render)") {
+		t.Fatalf("expected contextual ordinary-word label to remain translatable:\n%s", masked)
+	}
+	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+		t.Fatalf("protected link-label round trip changed source:\n%s\nwant:\n%s", restored, source)
+	}
+}
+
+func TestValidateDocBodyRejectsTranslatedInlineCode(t *testing.T) {
+	t.Parallel()
+
+	source := "- **`callback`-typed actions** and legacy **`value`** fields render label-only.\n"
+	translated := "- **`कॉलबैक`-typed actions** and legacy **`मान`** fields render label-only.\n"
+	err := validateDocBodyFencedLiterals(source, translated)
+	if err == nil || !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected final-document inline-code mismatch, got %v", err)
+	}
+
+	preserved := "- **`callback`-प्रकार की कार्रवाइयाँ** और पुराने **`value`** फ़ील्ड केवल लेबल दिखाते हैं।\n"
+	if err := validateDocBodyFencedLiterals(source, preserved); err != nil {
+		t.Fatalf("expected translated prose with preserved inline code to pass: %v", err)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsTranslatedMultiBacktickCode(t *testing.T) {
 	t.Parallel()
 
@@ -2329,8 +2418,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 28") {
-		t.Fatalf("expected prompt version 28 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 30") {
+		t.Fatalf("expected prompt version 30 in output metadata:\n%s", text)
 	}
 }
 

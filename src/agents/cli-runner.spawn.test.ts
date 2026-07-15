@@ -4,11 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  testing as replyRunTesting,
-  createReplyOperation,
-  replyRunRegistry,
-} from "../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation, replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import {
   markMcpLoopbackToolCallFinished,
   markMcpLoopbackToolCallStarted,
@@ -44,26 +41,45 @@ import {
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import {
-  buildClaudeLiveArgs,
   getClaudeLiveSessionGenerationForOwner,
-  resetClaudeLiveSessionsForTest,
   runClaudeLiveSessionTurn,
 } from "./cli-runner/claude-live-session.js";
+import {
+  buildClaudeLiveArgs,
+  resetClaudeLiveSessionsForTest,
+} from "./cli-runner/claude-live-session.test-support.js";
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
+import { executePreparedCliRun } from "./cli-runner/execute.js";
 import {
   buildCliEnvAuthLog,
   buildCliExecLogLine,
-  executePreparedCliRun,
   setCliRunnerExecuteTestDeps,
-} from "./cli-runner/execute.js";
+} from "./cli-runner/execute.test-support.js";
 import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
-import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
+import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.test-support.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
+
+// Gateway unit coverage owns quiet-admission timing. These spawn cases only
+// need to drain calls already in flight, so skip the repeated 250 ms quiet window.
+vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/mcp-http.loopback-runtime.js")>();
+  return {
+    ...actual,
+    waitForMcpLoopbackToolCallCaptureIdle: (
+      captureKey: string,
+      options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
+    ) =>
+      actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
+        ...options,
+        admissionGraceMs: 0,
+      }),
+  };
+});
 
 vi.mock("../plugin-sdk/anthropic-cli.js", () => ({
   CLAUDE_CLI_BACKEND_ID: "claude-cli",

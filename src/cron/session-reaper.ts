@@ -148,6 +148,12 @@ export async function sweepCronRunSessions(params: {
 }
 
 /** Resets per-store reaper throttles between tests. */
-export function resetReaperThrottle(): void {
+function resetReaperThrottle(): void {
   lastSweepAtMsByStore.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronSessionReaperTestApi")] = {
+    resetReaperThrottle,
+  };
 }

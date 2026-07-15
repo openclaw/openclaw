@@ -2,6 +2,7 @@
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
@@ -733,6 +734,16 @@ export function createAgentEventHandler({
         // Some local lifecycle sources only carry the aborted flag. Preserve
         // that terminal state instead of misclassifying the run as a timeout.
         const terminalStopReason = evtStopReason ?? (lifecycleAborted ? "aborted" : undefined);
+        const yieldedWaiting = isAgentLifecycleYieldedWaiting({
+          phase: lifecyclePhase,
+          yielded: evt.data?.yielded,
+          livenessState: evt.data?.livenessState,
+          stopReason: terminalStopReason,
+          aborted: lifecycleAborted,
+          status: evt.data?.status,
+          timeoutPhase: evt.data?.timeoutPhase,
+          error: evt.data?.error,
+        });
         const terminalOutcome = buildAgentRunTerminalOutcome({
           status: lifecyclePhase === "error" ? "error" : lifecycleAborted ? "timeout" : "ok",
           error: evt.data?.error,
@@ -765,6 +776,7 @@ export function createAgentEventHandler({
               controlUiVisible: isControlUiVisible,
               firstAssistantTimingEntry: finished,
               abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
+              yielded: yieldedWaiting ? true : undefined,
             },
           );
         }
@@ -1046,6 +1058,7 @@ export function createAgentEventHandler({
       controlUiVisible?: boolean;
       firstAssistantTimingEntry?: ChatRunEntry;
       abortErrorMessage?: string;
+      yielded?: true;
     },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
@@ -1070,6 +1083,7 @@ export function createAgentEventHandler({
           ? { errorMessage: opts.abortErrorMessage }
           : {}),
         ...(stopReason && { stopReason }),
+        ...(jobState === "done" && opts?.yielded ? { yielded: true as const } : {}),
         message:
           text && !shouldSuppressSilent
             ? {

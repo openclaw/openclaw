@@ -503,6 +503,7 @@ export const de: TranslationMap = {
       "Cloud-Worker benötigen einen sicheren Browserkontext, damit die Wiederherstellung Ihre Aufgabe schützen kann.",
     cloudStartFailed:
       "Die Sitzung wurde lokal erstellt, aber der Cloud-Start ist fehlgeschlagen: {error}",
+    cloudSyncsFolder: "Synchronisiert {folder} mit dem Cloud-Worker",
     folder: "Ordner",
     folderPlaceholder: "Agent-Arbeitsbereich",
     browse: "Ordner durchsuchen",
@@ -1624,6 +1625,9 @@ export const de: TranslationMap = {
     attachSession: "Sitzung verbinden",
     attachFailed: "Terminalsitzung konnte nicht verbunden werden",
     starting: "Starting terminal…",
+    connecting: "Verbindung zur Sitzung wird hergestellt…",
+    connectionTimedOut:
+      "Die Verbindung zur Sitzung wurde nicht innerhalb von 30 Sekunden hergestellt.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",
@@ -3425,6 +3429,9 @@ export const de: TranslationMap = {
     sendShortcut: "Tastenkürzel zum Senden",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "Folgenachrichten, während der Agent arbeitet",
+    followUpModeQueue: "Bis zum Ende des Durchlaufs in die Warteschlange stellen",
+    followUpModeSteer: "In den aktiven Durchlauf eingreifen",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
@@ -3501,6 +3508,8 @@ export const de: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Update verfügbar",
+      updateMacAndGateway: "Mac-App + Gateway aktualisieren",
+      updateGateway: "Gateway aktualisieren",
       allSessions: "Alle Sitzungen",
       chats: "Chats",
       openSessionMenu: "Open session menu",
