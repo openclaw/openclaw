@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
-  hasCanonicalOperatorApprovalKinds,
+  assertCanonicalOperatorApprovalKinds,
   repairOperatorApprovalSchemaInTransaction,
 } from "./openclaw-state-db-operator-approval-migration.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
@@ -50,11 +50,13 @@ describe("repairOperatorApprovalKinds", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(legacyTwoKindCreateSql());
     seedRow(db, "exec");
-    expect(hasCanonicalOperatorApprovalKinds(db)).toBe(false);
+    expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).toThrow(
+      "legacy operator approval schema",
+    );
 
     expect(repairOperatorApprovalKinds(db)).toBe(true);
 
-    expect(hasCanonicalOperatorApprovalKinds(db)).toBe(true);
+    expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
     const rows = db.prepare("SELECT approval_id, kind FROM operator_approvals").all();
     expect(rows).toEqual([{ approval_id: "a1", kind: "exec" }]);
     db.close();

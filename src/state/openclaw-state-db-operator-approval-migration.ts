@@ -40,7 +40,7 @@ function tableSql(db: DatabaseSync): string | undefined {
   return typeof row?.sql === "string" ? row.sql : undefined;
 }
 
-export function hasCanonicalOperatorApprovalKinds(db: DatabaseSync): boolean {
+function hasCanonicalOperatorApprovalKinds(db: DatabaseSync): boolean {
   if (!tableExists(db, "operator_approvals")) {
     return true;
   }
