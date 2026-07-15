@@ -1012,9 +1012,9 @@ describe("session MCP runtime", () => {
 
       // Broken server: no server entry, only diagnostic
       expect(catalog.servers.broken).toBeUndefined();
-      expect(catalog.diagnostics?.some(
-        (d) => d.serverName === "broken" && d.message.length > 0,
-      )).toBe(true);
+      expect(
+        catalog.diagnostics?.some((d) => d.serverName === "broken" && d.message.length > 0),
+      ).toBe(true);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
