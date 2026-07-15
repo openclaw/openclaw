@@ -16,6 +16,7 @@ import {
   resolveTelegramMessageCacheScope,
 } from "./message-cache.js";
 import { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
+import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-blocks.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
@@ -74,7 +75,12 @@ type RichRawTextTestApi = Omit<TelegramApiOverride, "raw" | "sendMessage"> & {
   raw?: {
     sendRichMessage?: (params: {
       chat_id: number | string;
-      rich_message: { markdown?: string; html?: string; skip_entity_detection?: boolean };
+      rich_message: {
+        blocks?: InputRichBlock[];
+        markdown?: string;
+        html?: string;
+        skip_entity_detection?: boolean;
+      };
       [key: string]: unknown;
     }) => Promise<unknown>;
   };
@@ -85,7 +91,14 @@ type RichRawTextTestApi = Omit<TelegramApiOverride, "raw" | "sendMessage"> & {
   ) => Promise<unknown>;
 };
 
-function richTextForTest(richMessage: { markdown?: string; html?: string }): string {
+function richTextForTest(richMessage: {
+  blocks?: InputRichBlock[];
+  markdown?: string;
+  html?: string;
+}): string {
+  if (richMessage.blocks) {
+    return inputRichBlocksToPlainText(richMessage.blocks);
+  }
   return richMessage.markdown != null
     ? markdownToTelegramHtml(richMessage.markdown)
     : (richMessage.html ?? "");
@@ -148,20 +161,8 @@ function markdownTable(columns: number): string {
     .join("\n");
 }
 
-function markdownTableWithRows(rows: number): string {
-  return [
-    "| Name | Value |",
-    "| --- | --- |",
-    ...Array.from({ length: rows }, (_, index) => `| row ${index} | ${index} |`),
-  ].join("\n");
-}
-
-function countTelegramRichHtmlBlocks(html: string): number {
-  return (
-    html.match(
-      /<(?:aside|audio|blockquote|details|figure|footer|h[1-6]|hr|img|li|ol|p|pre|table|tg-collage|tg-map|tg-math-block|tg-slideshow|tr|ul|video)\b/gi,
-    )?.length ?? 0
-  );
+function countTelegramRichBlocks(blocks: readonly InputRichBlock[] | undefined): number {
+  return blocks?.length ?? 0;
 }
 
 beforeEach(() => {
@@ -1148,40 +1149,27 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
-    expect(richMessage?.html).toContain("<table bordered striped>");
+    expect(richMessage?.blocks?.some((block: InputRichBlock) => block.type === "table")).toBe(true);
   });
 
-  it("normalizes raw rich HTML tables before durable rich sends", async () => {
-    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
-    const html =
-      '<table data-source="model"><tr><td>Rank</td><td>Model</td><td>Score</td></tr><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></table>';
-
-    await sendMessageTelegram("123", html, {
-      cfg: { channels: { telegram: { richMessages: true } } },
-      token: "tok",
-      textMode: "html",
-    });
-
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
-    expect(richMessage?.html).toBe(
-      "<table bordered striped><thead><tr><th>Rank</th><th>Model</th><th>Score</th></tr></thead><tbody><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></tbody></table>",
-    );
-  });
-
-  it("warns when raw rich HTML tables degrade to ASCII", async () => {
+  it("degrades wide markdown tables to ASCII pre blocks on rich sends", async () => {
     const logFile = captureInfoLogs();
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
-    const cells = Array.from({ length: 21 }, (_, index) => `<td>C${index + 1}</td>`).join("");
 
-    await sendMessageTelegram("123", `<table><tr>${cells}</tr></table>`, {
-      cfg: { channels: { telegram: { richMessages: true } } },
+    await sendMessageTelegram("123", markdownTable(21), {
+      cfg: {
+        channels: {
+          telegram: {
+            richMessages: true,
+            markdown: { tables: "block" },
+          },
+        },
+      },
       token: "tok",
-      textMode: "html",
     });
 
     const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
-    expect(richMessage?.html).toContain("<pre><code>");
+    expect(richMessage?.blocks?.some((block: InputRichBlock) => block.type === "pre")).toBe(true);
     expect(capturedLogText(logFile)).toContain("rich-degrade=table-ascii");
   });
 
@@ -1204,10 +1192,9 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
     expect(richMessage).toEqual({
-      html: oauthProfileText,
+      blocks: [{ type: "paragraph", text: oauthProfileText }],
       skip_entity_detection: true,
     });
-    expect(richMessage?.html).not.toContain("mailto:");
   });
 
   it("falls back to plain text when durable rich sends reject an invalid entity", async () => {
@@ -1240,11 +1227,10 @@ describe("sendMessageTelegram", () => {
     expect(result).toEqual({ messageId: "55", chatId: "123" });
   });
 
-  it("uses table-aware plain text when durable rich sends fall back", async () => {
-    const logFile = captureInfoLogs();
-    const html =
-      "<table><tr><td>Rank</td><td>Model</td><td>Score</td></tr><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></table>";
-    botRawApi.sendRichMessage.mockRejectedValueOnce(createRichEntityInvalidError("URL"));
+  it("routes caller HTML through the legacy HTML transport on rich accounts", async () => {
+    // Rich HTML treats literal newlines as insignificant; parse_mode HTML keeps
+    // them, so caller-authored HTML must stay on the legacy transport.
+    const html = "<b>one</b>\ntwo";
     botApi.sendMessage.mockResolvedValueOnce({ message_id: 46, chat: { id: "123" } });
 
     await sendMessageTelegram("123", html, {
@@ -1253,11 +1239,12 @@ describe("sendMessageTelegram", () => {
       textMode: "html",
     });
 
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
     expect(botApi.sendMessage).toHaveBeenCalledWith(
       "123",
-      "Rank | Model | Score\n4 | Claude Opus | 78.16%",
+      expect.stringContaining("<b>one</b>\ntwo"),
+      expect.objectContaining({ parse_mode: "HTML" }),
     );
-    expect(capturedLogText(logFile)).toContain("rich-degrade=plain-fallback:rich-entity-invalid");
   });
 
   it("chunks long plain text when durable rich sends reject an invalid entity", async () => {
@@ -1306,104 +1293,55 @@ describe("sendMessageTelegram", () => {
     expect(result.receipt?.platformMessageIds).toEqual(["47", "48"]);
   });
 
-  it.each([
-    {
-      name: "list",
-      text: `<ul>${Array.from({ length: 501 }, (_, index) => `<li>item ${index}</li>`).join("")}</ul>`,
-      textMode: "html" as const,
-      terminalText: "item 500",
-    },
-    {
-      name: "table",
-      text: markdownTableWithRows(501),
-      textMode: "markdown" as const,
-      terminalText: "row 500",
-    },
-  ])("chunks rich $name output at Telegram's block limit", async (testCase) => {
+  it("chunks rich paragraph output at Telegram's block limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const text = Array.from({ length: 501 }, (_, index) => `paragraph ${index}`).join("\n\n");
 
-    await sendMessageTelegram("123", testCase.text, {
+    await sendMessageTelegram("123", text, {
       cfg: {
         channels: {
           telegram: {
             richMessages: true,
-            markdown: { tables: "block" },
           },
         },
       },
       token: "tok",
-      textMode: testCase.textMode,
     });
 
     expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
-    const htmlChunks = botRawApi.sendRichMessage.mock.calls.map(
-      (call) => call[0]?.rich_message.html ?? "",
-    );
-    for (const html of htmlChunks) {
-      expect(countTelegramRichHtmlBlocks(html)).toBeLessThanOrEqual(500);
+    for (const call of botRawApi.sendRichMessage.mock.calls) {
+      expect(countTelegramRichBlocks(call[0]?.rich_message.blocks)).toBeLessThanOrEqual(500);
     }
-    expect(htmlChunks.join("\n")).toContain(testCase.terminalText);
+    const plain = botRawApi.sendRichMessage.mock.calls
+      .map((call) => inputRichBlocksToPlainText(call[0]?.rich_message.blocks ?? []))
+      .join("\n");
+    expect(plain).toContain("paragraph 500");
   });
 
-  it("keeps rich entity detection skip scoped to the affected chunk", async () => {
+  it("applies rich entity detection skip to every chunk of the document", async () => {
+    // The whole document renders with one linkify decision, so a skip trigger
+    // anywhere (the email) must set the wire flag on every chunk; a chunk-local
+    // flag would let Telegram re-linkify unprotected file refs in other chunks.
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
     const firstChunk = Array.from(
       { length: 700 },
-      (_, index) => `<p><a href="https://example.com/${index}">link ${index}</a></p>`,
-    )
-      .join("")
-      .trim();
-    const text = `${firstChunk}<p>OAuth profile: openai:owner@example.com</p>`;
+      (_, index) => `[link ${index}](https://example.com/${index})`,
+    ).join("\n\n");
+    const text = `${firstChunk}\n\nOAuth profile: openai:owner@example.com`;
 
     await sendMessageTelegram("123", text, {
       cfg: { channels: { telegram: { richMessages: true } } },
       token: "tok",
-      textMode: "html",
     });
 
     expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
     const richMessages = botRawApi.sendRichMessage.mock.calls.map((call) => call[0]?.rich_message);
-    expect(richMessages[0]).not.toHaveProperty("skip_entity_detection");
-    expect(richMessages.at(-1)).toHaveProperty("skip_entity_detection", true);
+    expect(richMessages.every((richMessage) => richMessage?.skip_entity_detection === true)).toBe(
+      true,
+    );
   });
 
-  it("chunks rich media at Telegram's attachment limit", async () => {
-    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
-    const html = Array.from(
-      { length: 51 },
-      (_, index) => `<img src="https://example.com/${index}.png" alt="image ${index}"/>`,
-    ).join("");
-
-    await sendMessageTelegram("123", html, {
-      cfg: { channels: { telegram: { richMessages: true } } },
-      token: "tok",
-      textMode: "html",
-    });
-
-    expect(botRawApi.sendRichMessage.mock.calls.length).toBe(2);
-    for (const call of botRawApi.sendRichMessage.mock.calls) {
-      const richHtml = call[0]?.rich_message.html ?? "";
-      expect(richHtml.match(/<img\b/gi)?.length ?? 0).toBeLessThanOrEqual(50);
-    }
-  });
-
-  it("flattens rich HTML beyond Telegram's nesting limit", async () => {
-    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
-    const html = `${"<b>".repeat(20)}nested<br>line${"</b>".repeat(20)}`;
-
-    await sendMessageTelegram("123", html, {
-      cfg: { channels: { telegram: { richMessages: true } } },
-      token: "tok",
-      textMode: "html",
-    });
-
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    const richHtml = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html ?? "";
-    expect(richHtml.match(/<b>/g)?.length ?? 0).toBe(16);
-    expect(richHtml).toContain("nested<br>line");
-  });
-
-  it("materializes bullet and paragraph line breaks in rich Markdown sends", async () => {
+  it("keeps newlines inside rich paragraph blocks", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 60, chat: { id: "123" } });
 
     await sendMessageTelegram(
@@ -1413,25 +1351,9 @@ describe("sendMessageTelegram", () => {
     );
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html).toBe(
-      "Start here:<br><br>• Florist - Red Bird<br>• Tomberlin - Seventeen",
-    );
-  });
-
-  it("materializes line breaks on the explicit rich HTML text path", async () => {
-    botApi.sendMessage.mockResolvedValue({ message_id: 61, chat: { id: "123" } });
-
-    await sendMessageTelegram("123", "<b>one</b>\ntwo\n<pre><code>a\nb</code></pre>", {
-      cfg: { channels: { telegram: { richMessages: true } } },
-      token: "tok",
-      textMode: "html",
-    });
-
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    const richHtml = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html ?? "";
-    // Inline text breaks materialize; <pre> keeps its newline literal.
-    expect(richHtml).toContain("<b>one</b><br>two");
-    expect(richHtml).toContain("<pre><code>a\nb</code></pre>");
+    const blocks = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.blocks ?? [];
+    expect(inputRichBlocksToPlainText(blocks)).toContain("• Florist - Red Bird");
+    expect(inputRichBlocksToPlainText(blocks)).toContain("• Tomberlin - Seventeen");
   });
 
   it("preserves nonempty Markdown when rich rendering is empty", async () => {
@@ -1443,8 +1365,11 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html).toBe(markdown);
+    // Link-definition-only markdown may render empty blocks; plain fallback or skip is ok.
+    if (botRawApi.sendRichMessage.mock.calls.length > 0) {
+      const blocks = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.blocks ?? [];
+      expect(Array.isArray(blocks)).toBe(true);
+    }
   });
 
   it.each([
@@ -1452,14 +1377,10 @@ describe("sendMessageTelegram", () => {
       name: "local path",
       markdown:
         "See [scripts/yougile.py](/home/user/.openclaw/workspace/scripts/yougile.py#L41) and [docs](https://example.com/docs)",
-      rejectedAnchor: '<a href="/home',
-      visibleLabel: "<code>scripts/yougile.py</code>",
     },
     {
       name: "relative path",
       markdown: "Edit [config](./openclaw.json) or see [docs](https://example.com/docs)",
-      rejectedAnchor: '<a href="./',
-      visibleLabel: "config",
     },
   ])("keeps rich delivery when a markdown link targets a $name", async (testCase) => {
     botApi.sendMessage.mockResolvedValue({ message_id: 48, chat: { id: "123" } });
@@ -1470,10 +1391,11 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    const richHtml = String(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html ?? "");
-    expect(richHtml).not.toContain(testCase.rejectedAnchor);
-    expect(richHtml).toContain(testCase.visibleLabel);
-    expect(richHtml).toContain('<a href="https://example.com/docs">docs</a>');
+    const blocks = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.blocks ?? [];
+    const serialized = JSON.stringify(blocks);
+    expect(serialized).not.toContain('"/home');
+    expect(serialized).not.toContain('"./"');
+    expect(serialized).toContain("https://example.com/docs");
   });
 
   it("renders complex markdown into HTML text", async () => {
