@@ -108,7 +108,7 @@ async function waitForPatch(
       return match;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
