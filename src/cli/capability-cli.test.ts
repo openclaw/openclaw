@@ -2006,6 +2006,95 @@ describe("capability cli", () => {
     expect(inputImages[0]?.mimeType).toBe("image/png");
   });
 
+  it("passes --file inputs through to the image generate runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      images: [
+        { buffer: Buffer.from("gen-png"), mimeType: "image/png", fileName: "branded-cover.png" },
+      ],
+    });
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-gen-input-${Date.now()}.png`);
+    await fs.writeFile(inputPath, Buffer.from("reference-logo"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--file",
+        inputPath,
+        "--prompt",
+        "create a branded cover using this logo",
+        "--model",
+        "openai/gpt-image-1.5",
+        "--json",
+      ],
+    });
+
+    const generationCall = firstImageGenerationCall();
+    const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
+    expect(generationCall?.prompt).toBe("create a branded cover using this logo");
+    expect(generationCall?.modelOverride).toBe("openai/gpt-image-1.5");
+    expect(inputImages).toHaveLength(1);
+    expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
+  });
+
+  it("rejects non-image files for image generate with a clear error", async () => {
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-gen-notimage-${Date.now()}.txt`);
+    await fs.writeFile(inputPath, "this is not an image");
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--file",
+          inputPath,
+          "--prompt",
+          "make a cover",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Only image files are supported"),
+    );
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects extensionless or unknown files when MIME detection returns undefined", async () => {
+    // Create a file with no discernible format (.bin extension, random content).
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-gen-nomime-${Date.now()}.bin`);
+    await fs.writeFile(inputPath, Buffer.from([0x00, 0x01, 0x02, 0x03]));
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--file",
+          inputPath,
+          "--prompt",
+          "make a cover",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Only image files are supported"),
+    );
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
   it("reports the expanded image.edit flags in capability inspect", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -2041,6 +2130,7 @@ describe("capability cli", () => {
     expect(firstJsonOutput()?.id).toBe("image.generate");
     expect(firstJsonOutput()?.flags).toEqual([
       "--prompt",
+      "--file",
       "--model",
       "--count",
       "--size",
