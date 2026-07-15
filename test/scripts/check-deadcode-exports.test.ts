@@ -41,6 +41,43 @@ describe("check-deadcode-exports", () => {
   });
 
   it.each([
+    "amazon-bedrock-mantle",
+    "cohere",
+    "featherless",
+    "fireworks",
+    "huggingface",
+    "kilocode",
+    "nvidia",
+    "qianfan",
+    "qwen",
+    "senseaudio",
+    "tencent",
+    "vllm",
+    "xiaomi",
+  ])("removes the bundled-plugin root catch-all from migrated %s workspace", (pluginId) => {
+    const workspace = (
+      knipConfig.workspaces as Record<string, { readonly entry: readonly string[] }>
+    )[`extensions/${pluginId}`];
+    if (!workspace) {
+      throw new Error(`missing Knip workspace for ${pluginId}`);
+    }
+    const entries = workspace.entry;
+    expect(entries).not.toContain("*.ts!");
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        "index.ts!",
+        "setup-entry.ts!",
+        "*-api.ts!",
+        "cli-metadata.ts!",
+        "channel-entry.ts!",
+        "provider-discovery.ts!",
+        "{web-search,web-fetch}-provider.ts!",
+      ]),
+    );
+    expect(knipConfig.workspaces["extensions/*"].entry).toContain("*.ts!");
+  });
+
+  it.each([
     "packages/agent-core",
     "packages/markdown-core",
     "packages/media-core",
