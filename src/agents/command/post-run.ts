@@ -35,6 +35,10 @@ export async function finalizeEmbeddedAgentCommand(params: {
   suppressVisibleSessionEffects: boolean;
   preserveUserFacingSessionModelState: boolean;
   currentRunDeliveryContext?: DeliveryContext;
+  sessionOwnership: {
+    runOwnedSessionId: string;
+    sessionReboundDuringRun: boolean;
+  };
   trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
   onSessionOwnershipChanged: (ownership: {
     runOwnedSessionId: string;
@@ -76,8 +80,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
   const { skillsSnapshot, runContext } = params.embeddedSessionState;
   const effectiveCwd = cwd ?? workspaceDir;
   let sessionEntry = params.sessionEntry;
-  let sessionReboundDuringRun = false;
-  let runOwnedSessionId = sessionId;
+  let { runOwnedSessionId, sessionReboundDuringRun } = params.sessionOwnership;
   const publishSessionOwnership = () => {
     // Outer restart-recovery cleanup runs even after later delivery failures.
     params.onSessionOwnershipChanged({ runOwnedSessionId, sessionReboundDuringRun });
@@ -139,7 +142,10 @@ export async function finalizeEmbeddedAgentCommand(params: {
       (transcriptPersistenceRunner === undefined &&
         Boolean(result.meta.finalAssistantVisibleText?.trim()));
     let persistedCliTurnTranscript = false;
-    if (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill) {
+    if (
+      !sessionReboundDuringRun &&
+      (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill)
+    ) {
       try {
         const transcriptResult = await attemptExecutionRuntime.persistCliTurnTranscript({
           body,

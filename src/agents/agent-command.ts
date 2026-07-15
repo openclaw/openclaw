@@ -357,6 +357,7 @@ async function agentCommandInternal(
         suppressVisibleSessionEffects,
         preserveUserFacingSessionModelState,
         currentRunDeliveryContext,
+        sessionOwnership: { runOwnedSessionId, sessionReboundDuringRun },
         trackInternalModelRunTarget,
         onSessionOwnershipChanged: (ownership) => {
           runOwnedSessionId = ownership.runOwnedSessionId;
