@@ -376,6 +376,18 @@ export function createSubagentRegistryLifecycleController(params: {
           ? (delivery.visibleDeliveryError ?? delivery.error ?? null)
           : undefined;
     }
+    if (
+      delivery.terminal === true &&
+      delivery.requesterWakeStatus === "delivered" &&
+      delivery.visibleDeliveryRequired === true &&
+      delivery.visibleDeliveryStatus === "failed"
+    ) {
+      // A terminal requester turn must survive restart as cleanup-only state;
+      // replaying it can duplicate tools or visible output.
+      deliveryState.status = "failed";
+      deliveryState.lastError =
+        delivery.visibleDeliveryError ?? delivery.error ?? "visible delivery failed";
+    }
     if (delivery.delivered) {
       const deliveredAt =
         typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
@@ -1306,7 +1318,17 @@ export function createSubagentRegistryLifecycleController(params: {
       return false;
     }
     const cleanup = entry.cleanup;
-    if (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered") {
+    const delivery = entry.delivery;
+    const hasTerminalVisibleFailure =
+      delivery?.status === "failed" &&
+      typeof delivery.requesterWakeDeliveredAt === "number" &&
+      delivery.visibleRequired === true &&
+      delivery.visibleStatus === "failed";
+    if (
+      typeof delivery?.announcedAt === "number" ||
+      delivery?.status === "delivered" ||
+      hasTerminalVisibleFailure
+    ) {
       if (!beginSubagentCleanup(runId)) {
         return false;
       }

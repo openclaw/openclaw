@@ -2451,6 +2451,7 @@ describe("subagent registry lifecycle hardening", () => {
       delivered: true,
       path: "direct",
       deliveredAt: 12_300,
+      terminal: true,
       requesterWakeStatus: "delivered",
       visibleDeliveryRequired: true,
       visibleDeliveryStatus: "failed",
@@ -2490,6 +2491,77 @@ describe("subagent registry lifecycle hardening", () => {
       deliveryStatus: "failed",
       error: "completion agent did not use the message tool",
     });
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay the requester turn after persisting terminal visible failure", async () => {
+    let entry!: SubagentRunRecord;
+    let persistedFailedDelivery: SubagentRunRecord["delivery"];
+    const persist = vi.fn(() => {
+      if (entry.delivery?.status === "failed") {
+        persistedFailedDelivery = structuredClone(entry.delivery);
+      }
+    });
+    entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "final answer" },
+      outcome: { status: "ok" },
+      retainAttachmentsOnKeep: true,
+    });
+    let releaseFirstCleanup!: () => void;
+    const firstCleanupStalled = new Promise<void>((resolve) => {
+      releaseFirstCleanup = resolve;
+    });
+    const firstAnnounce: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: true,
+          path: "direct",
+          deliveredAt: 12_300,
+          terminal: true,
+          requesterWakeStatus: "delivered",
+          visibleDeliveryRequired: true,
+          visibleDeliveryStatus: "failed",
+          visibleDeliveryError: "completion agent did not use the message tool",
+          error: "completion agent did not use the message tool",
+        });
+        await firstCleanupStalled;
+        return true;
+      },
+    );
+    const firstController = createLifecycleController({
+      entry,
+      persist,
+      runSubagentAnnounceFlow: firstAnnounce,
+    });
+
+    expect(firstController.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+    await vi.waitFor(() => expect(entry.delivery?.status).toBe("failed"));
+    expect(entry.delivery?.requesterWakeDeliveredAt).toBe(12_300);
+    expect(entry.delivery?.visibleStatus).toBe("failed");
+    expect(persistedFailedDelivery?.status).toBe("failed");
+
+    const restoredEntry = structuredClone(entry);
+    restoredEntry.delivery = persistedFailedDelivery;
+    restoredEntry.cleanupHandled = false;
+    restoredEntry.cleanupCompletedAt = undefined;
+    const restoredAnnounce = vi.fn(async () => true);
+    const restoredController = createLifecycleController({
+      entry: restoredEntry,
+      runSubagentAnnounceFlow: restoredAnnounce,
+    });
+
+    expect(
+      restoredController.startSubagentAnnounceCleanupFlow(restoredEntry.runId, restoredEntry),
+    ).toBe(true);
+    await vi.waitFor(() => expect(restoredEntry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(restoredAnnounce).not.toHaveBeenCalled();
+    expect(restoredEntry.delivery?.status).toBe("failed");
+    expect(restoredEntry.delivery?.visibleStatus).toBe("failed");
+
+    releaseFirstCleanup();
+    await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
   });
 
   it("preserves restored terminal failed delivery during cleanup replay", async () => {
@@ -2502,6 +2574,10 @@ describe("subagent registry lifecycle hardening", () => {
         status: "failed",
         announcedAt: 12_300,
         deliveredAt: 12_300,
+        requesterWakeDeliveredAt: 12_300,
+        visibleRequired: true,
+        visibleStatus: "failed",
+        visibleError: "completion agent did not use the message tool",
         lastError: "completion agent did not use the message tool",
       },
       outcome: { status: "ok" },
