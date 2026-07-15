@@ -22,7 +22,7 @@ const TELEGRAM_QA_SUT_RUNTIME_EXECUTABLE_ENV = "OPENCLAW_QA_TELEGRAM_SUT_RUNTIME
 const TELEGRAM_QA_SUT_PRELOAD_PATH_ENV = "OPENCLAW_QA_TELEGRAM_SUT_PRELOAD_PATH";
 const TELEGRAM_QA_SUT_FORWARDED_ENV_KEYS_ENV = "OPENCLAW_QA_TELEGRAM_SUT_FORWARDED_ENV_KEYS";
 
-function parseSutId(env: NodeJS.ProcessEnv, key: string) {
+export function parseSutId(env: NodeJS.ProcessEnv, key: string) {
   const value = env[key]?.trim();
   // Match qa-lab CLI numeric flags: reject hex/exponent so UID/GID/timeouts stay decimal.
   const parsed = value ? parseStrictPositiveInteger(value) : undefined;

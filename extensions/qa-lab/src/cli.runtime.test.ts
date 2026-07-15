@@ -102,7 +102,8 @@ import {
 } from "./cli.runtime.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
-import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
+import { loadNonYamlScenarioRefs } from "./live-transports/shared/live-transport-scenarios.js";
+import { parseSutId, runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import type { QaProviderModeInput } from "./run-config.js";
 
@@ -1146,6 +1147,86 @@ describe("qa cli runtime", () => {
     ).rejects.toThrow("OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND must be an absolute file path.");
 
     expect(runQaFlowSuiteFromRuntime).not.toHaveBeenCalled();
+  });
+
+  describe("telegram SUT strict id parsing", () => {
+    const key = "OPENCLAW_QA_TELEGRAM_SUT_UID";
+
+    it("rejects hex value 0x3e9", () => {
+      expect(() => parseSutId({ [key]: "0x3e9" }, key)).toThrow(
+        "OPENCLAW_QA_TELEGRAM_SUT_UID must be a positive integer.",
+      );
+    });
+
+    it("rejects exponent value 1e3", () => {
+      expect(() => parseSutId({ [key]: "1e3" }, key)).toThrow();
+    });
+
+    it("rejects fraction value 1001.5", () => {
+      expect(() => parseSutId({ [key]: "1001.5" }, key)).toThrow();
+    });
+
+    it("rejects empty string", () => {
+      expect(() => parseSutId({ [key]: "" }, key)).toThrow();
+    });
+
+    it("rejects whitespace-only string", () => {
+      expect(() => parseSutId({ [key]: "  " }, key)).toThrow();
+    });
+
+    it("rejects zero", () => {
+      expect(() => parseSutId({ [key]: "0" }, key)).toThrow();
+    });
+
+    it("rejects negative value", () => {
+      expect(() => parseSutId({ [key]: "-1" }, key)).toThrow();
+    });
+
+    it("rejects missing env key", () => {
+      expect(() => parseSutId({}, key)).toThrow();
+    });
+
+    it("accepts decimal string 1001", () => {
+      expect(parseSutId({ [key]: "1001" }, key)).toBe(1001);
+    });
+
+    it("accepts decimal string 1", () => {
+      expect(parseSutId({ [key]: "1" }, key)).toBe(1);
+    });
+
+    it("accepts decimal string with whitespace", () => {
+      expect(parseSutId({ [key]: " 1001 " }, key)).toBe(1001);
+    });
+
+    it("accepts SUT_GID decimal value", () => {
+      expect(
+        parseSutId({ OPENCLAW_QA_TELEGRAM_SUT_GID: "1002" }, "OPENCLAW_QA_TELEGRAM_SUT_GID"),
+      ).toBe(1002);
+    });
+
+    it("accepts SUT_CLEANUP_TIMEOUT_MS decimal value", () => {
+      expect(
+        parseSutId(
+          { OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS: "60000" },
+          "OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS",
+        ),
+      ).toBe(60000);
+    });
+
+    it("rejects SUT_GID hex value", () => {
+      expect(() =>
+        parseSutId({ OPENCLAW_QA_TELEGRAM_SUT_GID: "0x3e9" }, "OPENCLAW_QA_TELEGRAM_SUT_GID"),
+      ).toThrow("OPENCLAW_QA_TELEGRAM_SUT_GID must be a positive integer.");
+    });
+
+    it("rejects SUT_CLEANUP_TIMEOUT_MS hex value", () => {
+      expect(() =>
+        parseSutId(
+          { OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS: "0x3e8" },
+          "OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS",
+        ),
+      ).toThrow("OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS must be a positive integer.");
+    });
   });
 
   it.each(["0x3e9", "1e3", "1001.5"])(
