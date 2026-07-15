@@ -278,6 +278,7 @@ async function runMessageActionRequest(
           expiresAtMs: number;
           sessionId?: string;
           sourceReplyFinal?: boolean;
+          sourceReplyToolCallId?: string;
           requesterAccountId?: string;
           requesterSenderId?: string;
           toolContext?: Record<string, unknown>;
