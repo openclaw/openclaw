@@ -14,8 +14,7 @@ function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): 
   const variables = (process.config as { variables?: Record<string, unknown> } | undefined)
     ?.variables;
   const isShared =
-    variables?.node_shared_sqlite === true ||
-    variables?.node_shared_sqlite === "true";
+    variables?.node_shared_sqlite === true || variables?.node_shared_sqlite === "true";
   const wording = isShared ? "uses shared system" : "embeds";
   const remediation = isShared
     ? "Upgrade the system SQLite library to 3.51.3+ (or patched 3.50.7+/3.44.6+), or use a Node build embedding a safe version."
