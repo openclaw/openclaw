@@ -162,8 +162,12 @@ describe("markdownToTelegramHtml - file reference wrapping", () => {
   });
 
   it("preserves explicit markdown links even when href looks like a file ref", () => {
-    const result = markdownToTelegramHtml("[docs](http://README.md)");
-    expect(result).toContain('<a href="http://README.md">docs</a>');
+    expect(markdownToTelegramHtml("[docs](http://README.md)")).toContain(
+      '<a href="http://README.md">docs</a>',
+    );
+    expect(markdownToTelegramHtml("[main.ts](https://main.ts)")).toContain(
+      '<a href="https://main.ts">main.ts</a>',
+    );
   });
 
   it("wraps file ref after real URL in same message", () => {

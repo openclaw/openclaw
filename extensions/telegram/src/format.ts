@@ -49,7 +49,11 @@ function isTelegramRichLinkHref(href: string): boolean {
  *
  * Excluded: .ai, .io, .tv, .fm (popular domain TLDs like x.ai, vercel.io, github.io)
  */
-function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
+function buildTelegramLink(
+  link: MarkdownLinkSpan,
+  text: string,
+  context: { origin: "authored" | "linkify" },
+) {
   const href = link.href.trim();
   if (!href) {
     return null;
@@ -64,7 +68,7 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   }
   // Suppress auto-linkified file references (e.g. README.md → http://README.md)
   const label = text.slice(link.start, link.end);
-  if (isAutoLinkedFileRef(href, label)) {
+  if (context.origin === "linkify" && isAutoLinkedFileRef(href, label)) {
     return null;
   }
   const safeHref = escapeHtmlAttr(href);
