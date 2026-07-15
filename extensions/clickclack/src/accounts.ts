@@ -10,6 +10,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
   normalizeSecretInputString,
   normalizeResolvedSecretInputString,
@@ -31,7 +32,7 @@ const {
     const channel = cfg.channels?.clickclack;
     return Boolean(
       channel?.baseUrl?.trim() &&
-      hasConfiguredAccountValue(channel.token) &&
+      (hasConfiguredAccountValue(channel.token) || Boolean(channel.tokenFile?.trim())) &&
       channel.workspace?.trim(),
     );
   },
@@ -55,9 +56,22 @@ function resolveMergedClickClackAccountConfig(
 function resolveClickClackToken(params: {
   cfg: CoreConfig;
   value: unknown;
+  tokenFile?: string;
   accountId: string;
   env?: NodeJS.ProcessEnv;
 }): string {
+  const tokenFile = params.tokenFile?.trim();
+  if (tokenFile) {
+    return (
+      tryReadSecretFileSync(
+        tokenFile,
+        params.accountId === DEFAULT_ACCOUNT_ID
+          ? "channels.clickclack.tokenFile"
+          : `channels.clickclack.accounts.${params.accountId}.tokenFile`,
+        { rejectSymlink: true },
+      ) ?? ""
+    );
+  }
   const resolved = resolveSecretInputString({
     value: params.value,
     path:
@@ -68,6 +82,9 @@ function resolveClickClackToken(params: {
     mode: "inspect",
   });
   if (resolved.status !== "available") {
+    if (resolved.status === "missing" && params.accountId === DEFAULT_ACCOUNT_ID) {
+      return normalizeSecretInputString((params.env ?? process.env).CLICKCLACK_BOT_TOKEN) ?? "";
+    }
     if (resolved.status === "configured_unavailable" && resolved.ref.source === "env") {
       const providerConfig = params.cfg.secrets?.providers?.[resolved.ref.provider];
       if (providerConfig) {
@@ -118,6 +135,7 @@ export function resolveClickClackAccount(params: {
   const token = resolveClickClackToken({
     cfg: params.cfg,
     value: merged.token,
+    tokenFile: merged.tokenFile,
     accountId,
     env: params.env,
   });

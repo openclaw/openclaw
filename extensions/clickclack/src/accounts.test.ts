@@ -1,4 +1,7 @@
 // Clickclack tests cover accounts plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   listClickClackAccountIds,
@@ -118,6 +121,48 @@ describe("ClickClack account resolution", () => {
       toolsAllow: undefined,
       workspace: "wsp_1",
     });
+  });
+
+  it("uses the default ClickClack env token only for the default account", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          accounts: {
+            work: {},
+          },
+        },
+      },
+    } satisfies CoreConfig;
+    const env = { CLICKCLACK_BOT_TOKEN: "  default-env-token  " };
+
+    expect(resolveClickClackAccount({ cfg, env }).token).toBe("default-env-token");
+    expect(resolveClickClackAccount({ cfg, accountId: "work", env }).token).toBe("");
+  });
+
+  it("reads tokenFile credentials and treats them as an implicit default account", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "clickclack-token-"));
+    const tokenFile = path.join(tempDir, "token");
+    fs.writeFileSync(tokenFile, "  file-token  \n", "utf8");
+    try {
+      const cfg = {
+        channels: {
+          clickclack: {
+            enabled: true,
+            baseUrl: "https://app.clickclack.chat",
+            workspace: "wsp_1",
+            tokenFile,
+          },
+        },
+      } satisfies CoreConfig;
+
+      expect(listClickClackAccountIds(cfg)).toEqual(["default"]);
+      expect(resolveClickClackAccount({ cfg }).token).toBe("file-token");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("resolves model-mode bot account policy", () => {
