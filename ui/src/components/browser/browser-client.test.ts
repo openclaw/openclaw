@@ -77,4 +77,49 @@ describe("fetchBrowserScreenshotDataUrl", () => {
     await outcome;
     expect(init?.signal?.aborted).toBe(true);
   });
+
+  it("aborts a stalled screenshot body after the request deadline", async () => {
+    vi.useFakeTimers();
+    let bodyReadStarted = false;
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("missing screenshot fetch signal");
+      }
+      return {
+        ok: true,
+        blob: async () => {
+          bodyReadStarted = true;
+          return await new Promise<Blob>((_resolve, reject) => {
+            const rejectWithAbortReason = () => reject(signal.reason as Error);
+            if (signal.aborted) {
+              rejectWithAbortReason();
+              return;
+            }
+            signal.addEventListener("abort", rejectWithAbortReason, { once: true });
+          });
+        },
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const request = fetchBrowserScreenshotDataUrl({
+      basePath: "/openclaw",
+      authToken: null,
+      path: "/tmp/browser shot.png",
+    });
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(bodyReadStarted).toBe(true);
+    expect(init?.signal?.aborted).toBe(false);
+
+    const outcome = expect(request).rejects.toMatchObject({ name: "TimeoutError" });
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(init?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await outcome;
+    expect(init?.signal?.aborted).toBe(true);
+  });
 });
