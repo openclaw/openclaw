@@ -5,12 +5,17 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  killMatrixQaCliChild,
+  resolveMatrixQaOpenClawCliEntryPath,
+} from "./scenario-runtime-cli-process.js";
+import {
   formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,
   runMatrixQaOpenClawCli,
   startMatrixQaOpenClawCli,
-  testing,
 } from "./scenario-runtime-cli.js";
+
+const testing = { killMatrixQaCliChild, resolveMatrixQaOpenClawCliEntryPath };
 
 function isProcessRunning(pid: number): boolean {
   try {

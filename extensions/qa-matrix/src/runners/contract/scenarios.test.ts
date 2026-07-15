@@ -53,21 +53,45 @@ vi.mock("./scenario-runtime-cli.js", () => ({
 }));
 
 import {
+  collectLiveTransportStandardScenarioCoverage,
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
+import {
+  MATRIX_QA_DRIVER_DM_ROOM_KEY,
+  MATRIX_QA_MEDIA_ROOM_KEY,
+  buildMatrixQaE2eeScenarioRoomKey,
+  buildMatrixQaTopologyForScenarios,
+  findMatrixQaScenarios,
+  resolveMatrixQaScenarioRoomId,
+} from "./scenario-catalog.js";
 import {
   MATRIX_QA_MEDIA_TYPE_COVERAGE_CASES,
   MATRIX_QA_VOICE_PREFLIGHT_FILENAME,
   MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER,
 } from "./scenario-media-fixtures.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
-import {
-  testing as scenarioTesting,
-  MATRIX_QA_SCENARIOS,
-  runMatrixQaScenario,
-} from "./scenarios.js";
+import { buildMatrixReplyArtifact, buildMentionPrompt } from "./scenario-runtime-shared.js";
+import { MATRIX_QA_SCENARIOS, runMatrixQaScenario } from "./scenarios.js";
+
+const MATRIX_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
+  alwaysOnStandardScenarioIds: ["canary"],
+  scenarios: MATRIX_QA_SCENARIOS,
+});
+
+const scenarioTesting = {
+  MATRIX_QA_DRIVER_DM_ROOM_KEY,
+  MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY: "driver-dm-shared",
+  MATRIX_QA_MEDIA_ROOM_KEY,
+  MATRIX_QA_STANDARD_SCENARIO_IDS,
+  buildMatrixQaE2eeScenarioRoomKey,
+  buildMatrixQaTopologyForScenarios,
+  buildMatrixReplyArtifact,
+  buildMentionPrompt,
+  findMatrixQaScenarios,
+  resolveMatrixQaScenarioRoomId,
+};
 
 function sha256Hex32(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 32);
