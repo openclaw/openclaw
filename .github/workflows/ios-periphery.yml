@@ -95,7 +95,12 @@ jobs:
           install-bun: "false"
 
       - name: Install iOS Swift tooling
-        run: brew install xcodegen swiftformat swiftlint periphery
+        run: |
+          set -euo pipefail
+          brew install xcodegen swiftlint periphery mint
+          mint install nicklockwood/SwiftFormat@0.62.1
+          sudo ln -sf "$HOME/.mint/bin/swiftformat" /opt/homebrew/bin/swiftformat
+          swiftformat --version
 
       - name: Generate iOS project
         run: |
