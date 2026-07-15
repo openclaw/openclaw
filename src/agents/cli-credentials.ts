@@ -79,7 +79,7 @@ export type CodexCliCredential = {
 };
 
 /** Credential shape parsed from MiniMax portal CLI storage. */
-export type MiniMaxCliCredential = {
+type MiniMaxCliCredential = {
   type: "oauth";
   provider: "minimax-portal";
   access: string;
@@ -492,7 +492,7 @@ function withClaudeAccountEmail(
 }
 
 /** Reads Claude CLI credentials from macOS Keychain or the CLI credential file. */
-export function readClaudeCliCredentials(options?: {
+function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
   homeDir?: string;

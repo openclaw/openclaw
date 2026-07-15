@@ -7,6 +7,7 @@ import {
   pluginStateClear,
   pluginStateConsume,
   pluginStateDelete,
+  pluginStateDeleteIf,
   pluginStateEntries,
   pluginStateLookup,
   pluginStateRegister,
@@ -320,6 +321,16 @@ function createKeyedStoreForPluginId<T>(
         ...(env ? { env } : {}),
       });
     },
+    async deleteIf(key, predicate) {
+      const normalizedKey = validateKey(key, "delete");
+      return pluginStateDeleteIf({
+        pluginId,
+        namespace,
+        key: normalizedKey,
+        predicate: (current) => predicate(current as T),
+        ...(env ? { env } : {}),
+      });
+    },
     async lookup(key) {
       const normalizedKey = validateKey(key, "lookup");
       return pluginStateLookup({
@@ -417,6 +428,16 @@ function createSyncKeyedStoreForPluginId<T>(
             ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
           };
         },
+        ...(env ? { env } : {}),
+      });
+    },
+    deleteIf(key, predicate) {
+      const normalizedKey = validateKey(key, "delete");
+      return pluginStateDeleteIf({
+        pluginId,
+        namespace,
+        key: normalizedKey,
+        predicate: (current) => predicate(current as T),
         ...(env ? { env } : {}),
       });
     },

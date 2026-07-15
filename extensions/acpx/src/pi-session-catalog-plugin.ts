@@ -19,7 +19,6 @@ import type {
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   listLocalPiSessionPage,
   optionalPiString,
@@ -37,7 +36,6 @@ const LOCAL_HOST_ID = "gateway";
 const MAX_PAGE_LIMIT = 100;
 const MAX_HOSTS = 100;
 const MAX_CURSOR_LENGTH = 128;
-const MAX_SEARCH_LENGTH = 500;
 const NODE_TIMEOUT_MS = 20_000;
 const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 const TRANSCRIPT_ITEM_TYPES = new Set([
@@ -251,9 +249,7 @@ async function listPiNodeHost(
       command: PI_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
-        ...(query.search?.trim()
-          ? { searchTerm: truncateUtf16Safe(query.search.trim(), MAX_SEARCH_LENGTH) }
-          : {}),
+        ...(query.search ? { searchTerm: query.search } : {}),
         ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,
@@ -321,9 +317,6 @@ async function listPiHosts(
   query: Parameters<SessionCatalogProvider["list"]>[0],
 ): Promise<SessionCatalogHost[]> {
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
-  const searchTerm = query.search
-    ? truncateUtf16Safe(query.search.trim(), MAX_SEARCH_LENGTH) || undefined
-    : undefined;
   const hosts: SessionCatalogHost[] = [];
   if ((!requested || requested.has(LOCAL_HOST_ID)) && piSessionStoreAvailable(process.env)) {
     try {
@@ -334,7 +327,7 @@ async function listPiHosts(
         connected: true,
         ...(await listLocalPiSessionPage({
           limit: query.limitPerHost,
-          ...(searchTerm ? { searchTerm } : {}),
+          ...(query.search ? { searchTerm: query.search } : {}),
           cursor: query.cursors?.[LOCAL_HOST_ID],
         }).then((page) =>
           setTerminalCapability(
