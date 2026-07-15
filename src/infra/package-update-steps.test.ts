@@ -772,6 +772,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       const globalRoot = path.join(globalDir, "v11");
       const ownerBinDir = path.join(base, "custom-global-bin");
       const pathBinDir = path.join(base, "path-pnpm-home", "bin");
+      const callerProjectDir = path.join(base, "caller-project");
       const oldPackageRoot = path.join(globalRoot, "old", "node_modules", "openclaw");
       const newPackageRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
       await fs.mkdir(ownerBinDir, { recursive: true });
@@ -802,6 +803,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       };
       const runStep = vi.fn(async ({ name, argv, cwd, env }): Promise<PackageUpdateStepResult> => {
         if (name === "global update") {
+          expect(cwd).toBe(globalRoot);
           expect(env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
           expect(argv).toEqual([
             "pnpm",
@@ -895,6 +897,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         runStep,
         timeoutMs: 1000,
         env: { PATH: `${pathBinDir}${path.delimiter}${ownerBinDir}` },
+        installCwd: callerProjectDir,
         postVerifyStep,
       });
 
@@ -953,6 +956,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         };
         const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
           expect(name).toBe("global update");
+          expect(cwd).toBe(globalRoot);
           await fs.rm(activeLink);
           await fs.mkdir(path.dirname(newPackageRoot), { recursive: true });
           await Promise.all([
@@ -995,6 +999,113 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(runStep).toHaveBeenCalledOnce();
       },
     );
+  });
+
+  it("preserves pnpm local specs before mutating from the owner root", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-pnpm-relative-spec-" }, async (base) => {
+      const globalDir = path.join(base, "pnpm-home", "global");
+      const globalRoot = path.join(globalDir, "v11");
+      const globalBinDir = path.join(base, "pnpm-home", "bin");
+      const callerProjectDir = path.join(base, "caller-project");
+      const candidateTarball = path.join(callerProjectDir, "candidate.tgz");
+      const candidateTar = path.join(callerProjectDir, "candidate.tar");
+      const cases: Array<{
+        installSpec: string;
+        expectedInstallSpec: string;
+        installCwd?: string;
+      }> = [
+        {
+          installSpec: "file:./candidate.tgz",
+          expectedInstallSpec: `file:${candidateTarball}`,
+        },
+        {
+          installSpec: "openclaw@link:./candidate",
+          expectedInstallSpec: `openclaw@link:${path.join(callerProjectDir, "candidate")}`,
+        },
+        {
+          installSpec: "git+file:./candidate#main",
+          expectedInstallSpec: "git+file:///C:/caller/candidate#main",
+          installCwd: "C:\\caller",
+        },
+        { installSpec: "./candidate.tar", expectedInstallSpec: candidateTar },
+        {
+          installSpec: "openclaw@file:./candidate.tar",
+          expectedInstallSpec: `openclaw@file:${candidateTar}`,
+        },
+        { installSpec: "candidate.tar", expectedInstallSpec: "candidate.tar" },
+        { installSpec: "openclaw@candidate.tar", expectedInstallSpec: "openclaw@candidate.tar" },
+        { installSpec: "file:~/candidate.tgz", expectedInstallSpec: "file:~/candidate.tgz" },
+        { installSpec: "~/candidate.tgz", expectedInstallSpec: "~/candidate.tgz" },
+      ];
+      const { packageRoot } = await writePnpmIsolatedPackage({
+        globalRoot,
+        installName: "install",
+        version: "1.0.0",
+      });
+      await fs.mkdir(callerProjectDir, { recursive: true });
+      await fs.writeFile(candidateTarball, "fixture", "utf8");
+      await fs.writeFile(candidateTar, "fixture", "utf8");
+      const runCommand: CommandRunner = async (argv, options) => {
+        expect(options.cwd).toBe(globalRoot);
+        const command = argv.join(" ");
+        if (command === "pnpm root -g") {
+          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+        }
+        if (command === "pnpm bin -g") {
+          return { stdout: `${globalBinDir}\n`, stderr: "", code: 0 };
+        }
+        if (command === "pnpm --version") {
+          return { stdout: "11.4.0\n", stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${command}`);
+      };
+      let expectedInstallSpec = "";
+      const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+        expect(name).toBe("global update");
+        expect(cwd).toBe(globalRoot);
+        expect(argv).toEqual([
+          "pnpm",
+          "add",
+          "-g",
+          "--global-dir",
+          globalDir,
+          "--global-bin-dir",
+          globalBinDir,
+          "--allow-build=openclaw",
+          expectedInstallSpec,
+        ]);
+        return {
+          name,
+          command: argv.join(" "),
+          cwd: cwd ?? process.cwd(),
+          durationMs: 1,
+          exitCode: 1,
+          stderrTail: "fixture stop",
+        };
+      });
+
+      for (const testCase of cases) {
+        expectedInstallSpec = testCase.expectedInstallSpec;
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: {
+            manager: "pnpm",
+            command: "pnpm",
+            pnpmIsolated: { layoutVersion: 11 },
+            globalRoot,
+            packageRoot,
+          },
+          installSpec: testCase.installSpec,
+          packageName: "openclaw",
+          packageRoot,
+          runCommand,
+          runStep,
+          timeoutMs: 1000,
+          installCwd: testCase.installCwd ?? callerProjectDir,
+        });
+        expect(result.failedStep?.name).toBe("global update");
+      }
+      expect(runStep).toHaveBeenCalledTimes(cases.length);
+    });
   });
 
   it("probes pnpm from its owner root before rejecting a mismatched major", async () => {

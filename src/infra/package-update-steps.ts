@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
@@ -443,6 +444,49 @@ function isNpmGitSourceInstallSpec(spec: string, packageName: string): boolean {
   );
 }
 
+function resolvePnpmInstallSpecFromCwd(
+  spec: string,
+  packageName: string,
+  sourceCwd: string,
+): string {
+  const trimmed = spec.trim();
+  const aliasPrefix = `${packageName.trim()}@`;
+  const hasAlias = trimmed.toLowerCase().startsWith(aliasPrefix.toLowerCase());
+  const targetSpec = hasAlias ? trimmed.slice(aliasPrefix.length).trim() : trimmed;
+  const restoreAlias = (target: string) => (hasAlias ? `${aliasPrefix}${target}` : target);
+  if (/^~[\\/]/u.test(targetSpec)) {
+    return spec;
+  }
+  const localProtocol = /^(file:|git\+file:|link:)(.*)$/iu.exec(targetSpec);
+  if (localProtocol) {
+    const protocol = localProtocol[1] ?? "";
+    const target = localProtocol[2]?.trim() ?? "";
+    const fragmentIndex = protocol.toLowerCase() === "git+file:" ? target.indexOf("#") : -1;
+    const targetPath = fragmentIndex >= 0 ? target.slice(0, fragmentIndex) : target;
+    const fragment = fragmentIndex >= 0 ? target.slice(fragmentIndex) : "";
+    if (
+      targetPath &&
+      !/^~[\\/]/u.test(targetPath) &&
+      !path.isAbsolute(targetPath) &&
+      !path.win32.isAbsolute(targetPath)
+    ) {
+      const windowsPath = /^[a-z]:[\\/]/iu.test(sourceCwd) || /^\\\\/u.test(sourceCwd);
+      const resolvedTarget = (windowsPath ? path.win32 : path).resolve(sourceCwd, targetPath);
+      if (protocol.toLowerCase() === "git+file:") {
+        return restoreAlias(
+          `git+${pathToFileURL(resolvedTarget, { windows: windowsPath }).href}${fragment}`,
+        );
+      }
+      return restoreAlias(`${protocol}${resolvedTarget}`);
+    }
+    return spec;
+  }
+  // pnpm treats scheme-less tar-like values as registry names or tags. Only
+  // explicit dot paths are caller-relative and must move with the command cwd.
+  const isRelativePath = /^\.{1,2}(?:[\\/]|$)/u.test(targetSpec);
+  return isRelativePath ? restoreAlias(path.resolve(sourceCwd, targetSpec)) : spec;
+}
+
 async function createStagedNpmInstall(
   installTarget: ResolvedGlobalInstallTarget,
   packageName: string,
@@ -869,16 +913,28 @@ export async function runGlobalPackageUpdateSteps(params: {
       (installCommandTarget.manager === "pnpm"
         ? resolvePnpmGlobalDirFromGlobalRoot(installCommandTarget.globalRoot)
         : null);
+    // pnpm selects its version from cwd. Keep every pnpm mutation beside its
+    // detected global root, after preserving caller-relative package specs.
+    const pnpmMutationCwd =
+      installCommandTarget.manager === "pnpm" ? installCommandTarget.globalRoot : null;
+    const updateCwd = pnpmMutationCwd ?? preparedSpec.installCwd;
+    const updateInstallSpec = pnpmMutationCwd
+      ? resolvePnpmInstallSpecFromCwd(
+          preparedSpec.installSpec,
+          params.packageName,
+          preparedSpec.installCwd ?? process.cwd(),
+        )
+      : preparedSpec.installSpec;
     const updateStep = await params.runStep({
       name: "global update",
       argv: globalInstallArgs(
         installCommandTarget,
-        preparedSpec.installSpec,
+        updateInstallSpec,
         undefined,
         installLocation,
         preparedSpec.installCwd,
       ),
-      ...(preparedSpec.installCwd ? { cwd: preparedSpec.installCwd } : {}),
+      ...(updateCwd ? { cwd: updateCwd } : {}),
       ...installEnv,
       timeoutMs: params.timeoutMs,
     });
