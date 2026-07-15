@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
@@ -42,17 +43,35 @@ const {
 
 export { DEFAULT_ACCOUNT_ID, listClickClackAccountIds, resolveDefaultClickClackAccountId };
 
-function resolveMergedClickClackAccountConfig(
+export function resolveClickClackAccountConfig(
   cfg: CoreConfig,
   accountId: string,
 ): ClickClackAccountConfig {
-  return resolveMergedAccountConfig<ClickClackAccountConfig>({
+  const channel = cfg.channels?.clickclack;
+  const merged = resolveMergedAccountConfig<ClickClackAccountConfig>({
     channelConfig: cfg.channels?.clickclack as ClickClackAccountConfig | undefined,
-    accounts: cfg.channels?.clickclack?.accounts,
+    accounts: channel?.accounts,
     accountId,
     omitKeys: ["defaultAccount"],
     normalizeAccountId,
   });
+  const account = resolveNormalizedAccountEntry(channel?.accounts, accountId, normalizeAccountId);
+  const accountTokenFile = account?.tokenFile?.trim();
+  if (accountTokenFile) {
+    return {
+      ...merged,
+      token: account.token,
+      tokenFile: accountTokenFile,
+    };
+  }
+  if (hasConfiguredAccountValue(account?.token)) {
+    return {
+      ...merged,
+      token: account?.token,
+      tokenFile: undefined,
+    };
+  }
+  return merged;
 }
 
 function resolveClickClackToken(params: {
@@ -130,7 +149,7 @@ export function resolveClickClackAccount(params: {
   env?: NodeJS.ProcessEnv;
 }): ResolvedClickClackAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const merged = resolveMergedClickClackAccountConfig(params.cfg, accountId);
+  const merged = resolveClickClackAccountConfig(params.cfg, accountId);
   const baseEnabled = params.cfg.channels?.clickclack?.enabled !== false;
   const enabled = baseEnabled && merged.enabled !== false;
   const baseUrl = merged.baseUrl?.trim().replace(/\/$/, "") ?? "";

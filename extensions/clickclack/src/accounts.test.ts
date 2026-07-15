@@ -148,7 +148,7 @@ describe("ClickClack account resolution", () => {
     expect(resolveClickClackAccount({ cfg, accountId: "work", env }).token).toBe("");
   });
 
-  it("reads tokenFile credentials and treats them as an implicit default account", () => {
+  it("reads tokenFile credentials without overriding a named account token", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "clickclack-token-"));
     const tokenFile = path.join(tempDir, "token");
     fs.writeFileSync(tokenFile, "  file-token  \n", "utf8");
@@ -160,12 +160,18 @@ describe("ClickClack account resolution", () => {
             baseUrl: "https://app.clickclack.chat",
             workspace: "wsp_1",
             tokenFile,
+            accounts: {
+              work: {
+                token: "work-token",
+              },
+            },
           },
         },
       } satisfies CoreConfig;
 
-      expect(listClickClackAccountIds(cfg)).toEqual(["default"]);
+      expect(listClickClackAccountIds(cfg)).toEqual(["default", "work"]);
       expect(resolveClickClackAccount({ cfg }).token).toBe("file-token");
+      expect(resolveClickClackAccount({ cfg, accountId: "work" }).token).toBe("work-token");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

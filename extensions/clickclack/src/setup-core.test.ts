@@ -77,6 +77,19 @@ describe("ClickClack setup adapter", () => {
         input: { useEnv: true },
       }),
     ).toBeNull();
+    expect(
+      validate({
+        cfg: {
+          channels: {
+            clickclack: {
+              baseUrl: "ssh://clickclack.example",
+              workspace: "default",
+            },
+          },
+        } as OpenClawConfig,
+        input: { useEnv: true },
+      }),
+    ).toBe("ClickClack base URL must be a valid http(s) URL.");
   });
 
   it("rejects malformed base URLs before writing config", () => {
@@ -88,7 +101,7 @@ describe("ClickClack setup adapter", () => {
           workspace: "default",
         },
       }),
-    ).toBe("ClickClack --base-url must be a valid http(s) URL.");
+    ).toBe("ClickClack base URL must be a valid http(s) URL.");
   });
 
   it("writes normalized default and named account config", () => {
@@ -221,7 +234,8 @@ describe("ClickClack setup adapter", () => {
       cfg: {
         channels: {
           clickclack: {
-            ...base.channels?.clickclack,
+            baseUrl: "https://clickclack.example/",
+            workspace: " default ",
             token: "ccb_old",
             tokenFile: "/run/secrets/old-token",
           },
@@ -232,6 +246,34 @@ describe("ClickClack setup adapter", () => {
     });
     expect(withEnv.channels?.clickclack).not.toHaveProperty("token");
     expect(withEnv.channels?.clickclack).not.toHaveProperty("tokenFile");
+    expect(withEnv.channels?.clickclack).toMatchObject({
+      baseUrl: "https://clickclack.example",
+      workspace: "default",
+    });
+
+    const namedWithToken = clickClackSetupAdapter.applyAccountConfig({
+      cfg: {
+        channels: {
+          clickclack: {
+            baseUrl: "https://clickclack.example",
+            workspace: "default",
+            tokenFile: "/run/secrets/default-token",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+      input: {
+        token: "ccb_work",
+        baseUrl: "https://clickclack.example",
+        workspace: "work",
+      },
+    });
+    expect(namedWithToken.channels?.clickclack).not.toHaveProperty("tokenFile");
+    expect(namedWithToken.channels?.clickclack?.accounts).toMatchObject({
+      default: { tokenFile: "/run/secrets/default-token" },
+      work: { token: "ccb_work" },
+    });
+    expect(namedWithToken.channels?.clickclack?.accounts?.work).not.toHaveProperty("tokenFile");
   });
 
   it("preserves credentials when a partial patch does not select an auth mode", () => {

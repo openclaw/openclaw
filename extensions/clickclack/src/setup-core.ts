@@ -6,14 +6,16 @@ import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
+  moveSingleAccountChannelSectionToDefaultAccount,
 } from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
-import { resolveClickClackAccount } from "./accounts.js";
+import { resolveClickClackAccountConfig } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "clickclack" as const;
 const REQUIRED_INPUT_ERROR =
   "ClickClack requires --token, --base-url, and --workspace (or --use-env).";
+const INVALID_BASE_URL_ERROR = "ClickClack base URL must be a valid http(s) URL.";
 
 export function normalizeClickClackBaseUrl(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -37,14 +39,22 @@ export function applyClickClackSetupConfigPatch(params: {
   name?: string;
   patch: Record<string, unknown>;
 }): OpenClawConfig {
+  const accountId = normalizeAccountId(params.accountId);
+  const scopedConfig =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? params.cfg
+      : moveSingleAccountChannelSectionToDefaultAccount({
+          cfg: params.cfg,
+          channelKey: channel,
+        });
   const namedConfig = applyAccountNameToChannelSection({
-    cfg: params.cfg,
+    cfg: scopedConfig,
     channelKey: channel,
-    accountId: params.accountId,
+    accountId,
     name: params.name,
   });
   const next =
-    params.accountId !== DEFAULT_ACCOUNT_ID
+    accountId !== DEFAULT_ACCOUNT_ID
       ? migrateBaseNameToDefaultAccount({
           cfg: namedConfig,
           channelKey: channel,
@@ -53,7 +63,7 @@ export function applyClickClackSetupConfigPatch(params: {
   return applySetupAccountConfigPatch({
     cfg: next,
     channelKey: channel,
-    accountId: params.accountId,
+    accountId,
     patch: params.patch,
   });
 }
@@ -157,27 +167,31 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
     validate: ({ cfg, accountId, input }) => {
       const baseUrl = normalizeClickClackBaseUrl(input.baseUrl);
       if (input.baseUrl && !baseUrl) {
-        return "ClickClack --base-url must be a valid http(s) URL.";
+        return INVALID_BASE_URL_ERROR;
       }
       if (!input.useEnv) {
         return null;
       }
-      const resolved = resolveClickClackAccount({
-        cfg: cfg as CoreConfig,
-        accountId,
-      });
-      if (!baseUrl && !resolved.baseUrl) {
+      const existing = resolveClickClackAccountConfig(cfg as CoreConfig, accountId);
+      const existingBaseUrl = normalizeClickClackBaseUrl(existing.baseUrl);
+      if (!baseUrl && existing.baseUrl?.trim() && !existingBaseUrl) {
+        return INVALID_BASE_URL_ERROR;
+      }
+      if (!baseUrl && !existingBaseUrl) {
         return REQUIRED_INPUT_ERROR;
       }
-      if (!input.workspace?.trim() && !resolved.workspace) {
+      if (!input.workspace?.trim() && !existing.workspace?.trim()) {
         return REQUIRED_INPUT_ERROR;
       }
       return null;
     },
   }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
-    const baseUrl = normalizeClickClackBaseUrl(input.baseUrl);
-    const workspace = input.workspace?.trim();
+    const existing = input.useEnv
+      ? resolveClickClackAccountConfig(cfg as CoreConfig, accountId)
+      : undefined;
+    const baseUrl = normalizeClickClackBaseUrl(input.baseUrl ?? existing?.baseUrl);
+    const workspace = input.workspace?.trim() || existing?.workspace?.trim();
     const tokenFile = input.tokenFile?.trim();
     const token = input.token?.trim();
     const next = applyClickClackSetupConfigPatch({
