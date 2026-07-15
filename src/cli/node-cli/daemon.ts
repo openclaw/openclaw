@@ -85,7 +85,7 @@ async function checkSystemdLingerForNodeInstall(warnings: string[], json: boolea
   if (!status || status.linger === "yes") {
     return;
   }
-  const cmd = `loginctl enable-linger ${status.user}`;
+  const cmd = `sudo loginctl enable-linger ${status.user}`;
   const message =
     `Systemd lingering is not enabled for user ${status.user}. ` +
     `The node service will stop when you log out. ` +
@@ -207,6 +207,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     }
   };
 
+  // Check systemd lingering before emitting terminal success so the warning
+  // is included in the JSON/text response, not logged after the emitted output.
+  await checkSystemdLingerForNodeInstall(warnings, json);
+
   await installDaemonServiceAndEmit({
     serviceNoun: "Node",
     service,
@@ -226,8 +230,6 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       });
     },
   });
-
-  await checkSystemdLingerForNodeInstall(warnings, json);
 }
 
 export async function runNodeDaemonUninstall(opts: NodeDaemonLifecycleOptions = {}) {
