@@ -19,14 +19,12 @@ describe("startStaleCallReaper", () => {
       endCall: vi.fn(),
     };
 
-    expect(startStaleCallReaper({ manager: manager as never })).toBeNull();
-    expect(
-      startStaleCallReaper({ manager: manager as never, staleCallReaperSeconds: 0 }),
-    ).toBeNull();
+    expect(startStaleCallReaper({ manager })).toBeNull();
+    expect(startStaleCallReaper({ manager, staleCallReaperSeconds: 0 })).toBeNull();
   });
 
   it("reaps stale calls and ignores fresh ones", async () => {
-    const endCall = vi.fn(async () => {});
+    const endCall = vi.fn(async () => ({ success: true }));
     const manager = {
       getActiveCalls: vi.fn(() => [
         {
@@ -44,7 +42,7 @@ describe("startStaleCallReaper", () => {
     };
 
     const stop = startStaleCallReaper({
-      manager: manager as never,
+      manager,
       staleCallReaperSeconds: 60,
     });
 
@@ -56,17 +54,15 @@ describe("startStaleCallReaper", () => {
     stop?.();
   });
 
-  it("does not overlap stale-call reaps and retries after the pending attempt fails", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const endCallError = new Error("network");
-    let rejectFirstEndCall!: (error: Error) => void;
-    const firstEndCall = new Promise<void>((_resolve, reject) => {
-      rejectFirstEndCall = reject;
+  it("does not overlap stale-call reaps and retries after an unsuccessful attempt settles", async () => {
+    let resolveFirstEndCall!: (result: { success: false; error: string }) => void;
+    const firstEndCall = new Promise<{ success: false; error: string }>((resolve) => {
+      resolveFirstEndCall = resolve;
     });
     const endCall = vi
       .fn()
       .mockImplementationOnce(() => firstEndCall)
-      .mockResolvedValue(undefined);
+      .mockResolvedValue({ success: true });
     const manager = {
       getActiveCalls: vi.fn(() => [
         {
@@ -79,7 +75,7 @@ describe("startStaleCallReaper", () => {
     };
 
     const stop = startStaleCallReaper({
-      manager: manager as never,
+      manager,
       staleCallReaperSeconds: 60,
     });
 
@@ -88,15 +84,11 @@ describe("startStaleCallReaper", () => {
 
     expect(endCall).toHaveBeenCalledTimes(1);
 
-    rejectFirstEndCall(endCallError);
-    await firstEndCall.catch(() => {});
+    resolveFirstEndCall({ success: false, error: "network" });
+    await firstEndCall;
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(warn).toHaveBeenCalledWith(
-      "[voice-call] Reaper failed to end call call-stale:",
-      endCallError,
-    );
     expect(endCall).toHaveBeenCalledTimes(2);
     expect(endCall).toHaveBeenNthCalledWith(2, "call-stale");
 
@@ -106,7 +98,7 @@ describe("startStaleCallReaper", () => {
   it.each(["speaking", "listening"] as const)(
     "does not reap live %s calls without answeredAt",
     async (state) => {
-      const endCall = vi.fn(async () => {});
+      const endCall = vi.fn(async () => ({ success: true }));
       const manager = {
         getActiveCalls: vi.fn(() => [
           {
@@ -119,7 +111,7 @@ describe("startStaleCallReaper", () => {
       };
 
       const stop = startStaleCallReaper({
-        manager: manager as never,
+        manager,
         staleCallReaperSeconds: 60,
       });
 
@@ -134,6 +126,9 @@ describe("startStaleCallReaper", () => {
   it("logs and swallows endCall failures", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const endCallError = new Error("network");
+    const endCall = vi.fn(async () => {
+      throw endCallError;
+    });
     const manager = {
       getActiveCalls: vi.fn(() => [
         {
@@ -142,13 +137,11 @@ describe("startStaleCallReaper", () => {
           state: "active",
         },
       ]),
-      endCall: vi.fn(async () => {
-        throw endCallError;
-      }),
+      endCall,
     };
 
     const stop = startStaleCallReaper({
-      manager: manager as never,
+      manager,
       staleCallReaperSeconds: 60,
     });
 
@@ -159,6 +152,12 @@ describe("startStaleCallReaper", () => {
       "[voice-call] Reaper failed to end call call-stale:",
       endCallError,
     );
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+
+    expect(endCall).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(2);
 
     stop?.();
   });
