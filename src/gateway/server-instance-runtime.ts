@@ -4,35 +4,18 @@ import type {
   GatewayApprovalEventSubscriber,
   GatewayApprovalRequest,
   GatewayApprovalResolved,
-  GatewayNativeApprovalRuntime,
 } from "../infra/approval-gateway-runtime.types.js";
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
+import type {
+  GatewayApprovalEventPublisher,
+  GatewayInstanceRuntime,
+  GatewayRecoveryRuntime,
+} from "./server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-
-export type GatewayApprovalEventPublisher = {
-  publishRequested: (kind: GatewayApprovalEventKind, request: unknown) => number;
-  publishResolved: (kind: GatewayApprovalEventKind, resolved: unknown) => void;
-};
-
-export type GatewayRecoveryRuntime = {
-  dispatchAgent: <T = unknown>(params: Record<string, unknown>, timeoutMs?: number) => Promise<T>;
-  waitForAgent: <T = unknown>(params: Record<string, unknown>, timeoutMs?: number) => Promise<T>;
-  sendRecoveryNotice: <T = unknown>(
-    params: Record<string, unknown>,
-    timeoutMs?: number,
-  ) => Promise<T>;
-};
-
-export type GatewayInstanceRuntime = {
-  approvalEvents: GatewayApprovalEventPublisher;
-  nativeApprovals: GatewayNativeApprovalRuntime;
-  recovery: GatewayRecoveryRuntime;
-  close: () => void;
-};
 
 type GatewayInstanceRuntimeOptions = {
   getContext: () => GatewayRequestContext;

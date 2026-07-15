@@ -13,7 +13,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { callGateway } from "../gateway/call.js";
-import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.js";
+import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import {
   getAgentEventLifecycleGeneration,
   registerAgentRunContext,

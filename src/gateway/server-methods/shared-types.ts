@@ -42,7 +42,7 @@ import type { GatewayCronServiceContract } from "../server-cron-contract.js";
 import type {
   GatewayApprovalEventPublisher,
   GatewayRecoveryRuntime,
-} from "../server-instance-runtime.js";
+} from "../server-instance-runtime.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";

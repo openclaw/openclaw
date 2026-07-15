@@ -5,7 +5,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.js";
+import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";

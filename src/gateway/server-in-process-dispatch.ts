@@ -12,7 +12,7 @@ export type GatewayMethodDispatchResponse = {
   meta?: Record<string, unknown>;
 };
 
-export type InProcessGatewayDispatchOptions = {
+type InProcessGatewayDispatchOptions = {
   client: GatewayRequestOptions["client"];
   context: GatewayRequestOptions["context"];
   expectFinal?: boolean;

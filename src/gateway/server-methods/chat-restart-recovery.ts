@@ -25,7 +25,7 @@ import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-ke
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
-import type { GatewayRecoveryRuntime } from "../server-instance-runtime.js";
+import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export { hasRestartRecoveryTerminalRun };
