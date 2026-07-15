@@ -426,9 +426,34 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}new`);
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.waitFor();
+      expect(
+        await page.locator('.new-session-page__composer [data-chat-model-select="true"]').count(),
+      ).toBe(1);
+      expect(
+        await page.locator('.new-session-page__triggers [data-chat-model-select="true"]').count(),
+      ).toBe(0);
       await modelSelect.click();
+      const modelTriggerBox = await modelSelect.boundingBox();
+      const modelMenuBox = await page
+        .locator(".chat-controls__inline-select-menu--combined")
+        .boundingBox();
+      expect(modelTriggerBox).not.toBeNull();
+      expect(modelMenuBox).not.toBeNull();
+      expect(modelMenuBox?.x ?? 0).toBeLessThan(modelTriggerBox?.x ?? 0);
+      expect((modelMenuBox?.x ?? 0) + (modelMenuBox?.width ?? 0)).toBeCloseTo(
+        (modelTriggerBox?.x ?? 0) + (modelTriggerBox?.width ?? 0),
+        0,
+      );
       await page.locator('[data-chat-model-provider="anthropic"]').click();
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await modelSelect.click();
+      await expect
+        .poll(() =>
+          modelSelect.evaluate(
+            (element) => element.closest("details")?.hasAttribute("open") ?? false,
+          ),
+        )
+        .toBe(false);
       await page.locator(".new-session-page__message").fill("use this model");
       await page.getByRole("button", { name: "Start session" }).click();
 
@@ -513,15 +538,45 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const heroBox = await page.locator(".agent-chat__welcome h2").boundingBox();
       const triggersBox = await page.locator(".new-session-page__triggers").boundingBox();
       const composerBox = await page.locator(".new-session-page__composer").boundingBox();
+      const modelBox = await page.locator('[data-chat-model-select="true"]').boundingBox();
+      const modelWrapperBox = await page
+        .locator(".new-session-page__composer .chat-composer-model-control")
+        .boundingBox();
+      const footerBox = await page
+        .locator(".new-session-page__composer .agent-chat__composer-footer")
+        .boundingBox();
       expect(heroBox).not.toBeNull();
       expect(triggersBox).not.toBeNull();
       expect(composerBox).not.toBeNull();
+      expect(modelBox).not.toBeNull();
+      expect(modelWrapperBox).not.toBeNull();
+      expect(footerBox).not.toBeNull();
       expect((heroBox?.y ?? 0) + (heroBox?.height ?? 0)).toBeLessThanOrEqual(
         (triggersBox?.y ?? 0) + 1,
       );
       expect((triggersBox?.y ?? 0) + (triggersBox?.height ?? 0)).toBeLessThanOrEqual(
         (composerBox?.y ?? 0) + 1,
       );
+      expect(
+        await page.locator(".new-session-page__composer .agent-chat__composer-footer").count(),
+      ).toBe(1);
+      expect(
+        await page
+          .locator('[data-chat-model-select="true"]')
+          .evaluate((element) => element.closest(".agent-chat__composer-footer") != null),
+      ).toBe(true);
+      expect(modelWrapperBox?.x ?? 0).toBeGreaterThan(
+        (footerBox?.x ?? 0) + (footerBox?.width ?? 0) / 2,
+      );
+      expect(
+        (footerBox?.x ?? 0) +
+          (footerBox?.width ?? 0) -
+          ((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)),
+      ).toBeLessThanOrEqual(12);
+      expect(triggersBox?.x).toBeCloseTo(composerBox?.x ?? 0, 0);
+      expect(triggersBox?.width).toBeCloseTo(composerBox?.width ?? 0, 0);
+      expect(composerBox?.width).toBeCloseTo(48 * 16, 0);
+      expect(await page.locator(".new-session-page__message").getAttribute("rows")).toBe("1");
 
       // The folder trigger labels the workspace and opens the browser menu.
       const folderSelect = page.locator(".new-session-page__select--folder");
@@ -1492,6 +1547,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => runtime.textContent()).toContain("Claude Code");
       expect(await runtime.getAttribute("title")).toBe(model);
       expect(await page.locator('.new-session-page__trigger[title="Agent"]').count()).toBe(0);
+      expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
 
       await page.locator(".new-session-page__message").fill("use Claude Code");
       await page.getByRole("button", { name: "Start session" }).click();
