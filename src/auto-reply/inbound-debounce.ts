@@ -408,7 +408,8 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     } catch (error) {
       rawDecision = Promise.reject(error);
     }
-    const isSynchronousBypass = rawDecision?.action === "bypass";
+    const isSynchronousBypass =
+      rawDecision !== undefined && "action" in rawDecision && rawDecision.action === "bypass";
     const rawDecisionPromise = Promise.resolve(rawDecision);
     // Decisions start eagerly, so observe rejection before an earlier same-key
     // item finishes applying. The returned enqueue task still carries the error.
