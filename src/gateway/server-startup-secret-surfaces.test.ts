@@ -27,7 +27,8 @@ describe("gateway startup secret surfaces", () => {
 
     expect(projection.sourceConfig).toBe(config);
     expect(projection.sourceConfig.channels).toBeDefined();
-    expect(projection.assignmentConfig.channels).toBeUndefined();
+    expect(projection.assignmentConfig).toBeDefined();
+    expect(projection.assignmentConfig?.channels).toBeUndefined();
   });
 
   it.each(["reload", "restart-check"] as const)(
@@ -45,7 +46,7 @@ describe("gateway startup secret surfaces", () => {
       });
 
       expect(projection.sourceConfig).toBe(config);
-      expect(projection.assignmentConfig).toBe(config);
+      expect(projection.assignmentConfig).toBeUndefined();
     },
   );
 
@@ -59,7 +60,7 @@ describe("gateway startup secret surfaces", () => {
     });
 
     expect(projection.sourceConfig).toBe(config);
-    expect(projection.assignmentConfig).toBe(config);
+    expect(projection.assignmentConfig).toBeUndefined();
   });
 
   it("preserves explicit skip behavior", () => {
@@ -70,6 +71,6 @@ describe("gateway startup secret surfaces", () => {
     });
 
     expect(projection.sourceConfig.channels).toBeUndefined();
-    expect(projection.assignmentConfig).toBe(projection.sourceConfig);
+    expect(projection.assignmentConfig).toBeUndefined();
   });
 });
