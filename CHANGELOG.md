@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Feishu document image reads:** bound remote document-image headers and stalled bodies with the selected account timeout, parse document Markdown through the plugin's MDAST pipeline, preserve image/block alignment, and reject failed upload input before creating empty image blocks. Thanks @Alix-007.
 - **ClawHub registry reads:** retry bounded HTTP 500 responses alongside other transient gateway failures so multi-package release scans survive isolated registry errors.
 - **Slack Socket Mode health:** report connected Socket Mode transports as degraded when `auth.test` fails or the configured bot token resolves to a user without `bot_id`, while preserving healthy enterprise-org installs. Thanks @zw-xysk.
 - **Synology Chat response limits:** bound user-list response reads, stop oversized streams immediately, and retain stale cached identities when a NAS exceeds the supported envelope. Thanks @zw-xysk.
