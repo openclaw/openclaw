@@ -31,7 +31,9 @@ function collectUrls(text: RichText, out: string[] = []): string[] {
   if (text.type === "url") {
     out.push(text.url);
   }
-  collectUrls(text.text, out);
+  if ("text" in text) {
+    collectUrls(text.text, out);
+  }
   return out;
 }
 
@@ -42,7 +44,7 @@ function hasStyle(text: RichText, style: string): boolean {
   if (Array.isArray(text)) {
     return text.some((part) => hasStyle(part, style));
   }
-  return text.type === style || hasStyle(text.text, style);
+  return text.type === style || ("text" in text && hasStyle(text.text, style));
 }
 
 describe("markdownToTelegramRichBlocks", () => {

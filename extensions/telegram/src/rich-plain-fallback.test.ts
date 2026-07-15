@@ -17,8 +17,17 @@ describe("buildTelegramPlainFallbackPlan", () => {
     "Bad Request: RICH_MESSAGE_DEPTH_INVALID",
     "Bad Request: RICH_MESSAGE_TEXT_TOO_LONG",
     "Bad Request: RICH_MESSAGE_MEDIA_TOO_MANY",
+    "Bad Request: RICH_MESSAGE_TABLE_COLS_TOO_MANY",
   ])("degrades structural rejection %s to plain text", (message) => {
     expect(planFor(message)?.chunks).toEqual(["fallback body"]);
+  });
+
+  it("degrades wire-shape parse rejections to plain text", () => {
+    expect(
+      planFor(
+        'Bad Request: can\'t parse InputRichBlock: Field "custom_emoji_id" must be a valid Number',
+      )?.chunks,
+    ).toEqual(["fallback body"]);
   });
 
   it("rethrows unrelated errors", () => {
