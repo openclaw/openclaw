@@ -30,12 +30,12 @@ describe("startStaleCallReaper", () => {
         {
           callId: "call-stale",
           startedAt: Date.now() - 61_000,
-          state: "active",
+          state: "active" as const,
         },
         {
           callId: "call-fresh",
           startedAt: Date.now() - 10_000,
-          state: "active",
+          state: "active" as const,
         },
       ]),
       endCall,
@@ -68,7 +68,7 @@ describe("startStaleCallReaper", () => {
         {
           callId: "call-stale",
           startedAt: Date.now() - 61_000,
-          state: "active",
+          state: "active" as const,
         },
       ]),
       endCall,
@@ -134,7 +134,7 @@ describe("startStaleCallReaper", () => {
         {
           callId: "call-stale",
           startedAt: Date.now() - 61_000,
-          state: "active",
+          state: "active" as const,
         },
       ]),
       endCall,
