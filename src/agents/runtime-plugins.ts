@@ -3,7 +3,7 @@
  * plugin IDs from metadata scope the load when available.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import { getLoadedRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
@@ -42,13 +42,6 @@ export function ensureRuntimePluginsLoaded(params: {
   if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
     return;
   }
-  // Activating a replacement registry retires the active one and runs its
-  // plugin host cleanup, which cron.remove()s persistent plugin-scheduled
-  // jobs the replacement hasn't re-registered yet (async, still in flight).
-  // Once a registry is active there is nothing left for this call to do.
-  if (getActiveRuntimePluginRegistry()) {
-    return;
-  }
   const workspaceDir =
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
       ? resolveUserPath(params.workspaceDir)
@@ -60,16 +53,34 @@ export function ensureRuntimePluginsLoaded(params: {
   const allowGatewaySubagentBinding =
     params.allowGatewaySubagentBinding === true ||
     getActivePluginRuntimeSubagentMode() === "gateway-bindable";
+  const loadOptions = {
+    config: params.config,
+    workspaceDir,
+    ...(startupPluginIds === undefined ? {} : { onlyPluginIds: startupPluginIds }),
+    ...(startupPluginIds === undefined ? {} : { forceFullRuntimeForChannelPlugins: true }),
+    runtimeOptions: allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : undefined,
+  };
+  // Activating a replacement registry retires the active one and runs its
+  // plugin host cleanup, which cron.remove()s persistent plugin-scheduled
+  // jobs the replacement hasn't re-registered yet (async, still in flight).
+  // Skip the reload ONLY when an active registry is already compatible with
+  // THIS call's workspace/plugin-scope/config/runtime-mode — reusing the
+  // existing loader cache-key compatibility rules via
+  // getLoadedRuntimePluginRegistry. A presence-only check (any registry active
+  // => skip) is unsafe: a later call requesting a different workspace could
+  // silently keep an unrelated workspace's registry active instead of loading
+  // its own (found in upstream review of this exact fix, PR #107752).
+  if (
+    getLoadedRuntimePluginRegistry({
+      loadOptions,
+      workspaceDir,
+      requiredPluginIds: startupPluginIds,
+    })
+  ) {
+    return;
+  }
   ensureStandaloneRuntimePluginRegistryLoaded({
     requiredPluginIds: startupPluginIds,
-    loadOptions: {
-      config: params.config,
-      workspaceDir,
-      ...(startupPluginIds === undefined ? {} : { onlyPluginIds: startupPluginIds }),
-      ...(startupPluginIds === undefined ? {} : { forceFullRuntimeForChannelPlugins: true }),
-      runtimeOptions: allowGatewaySubagentBinding
-        ? { allowGatewaySubagentBinding: true }
-        : undefined,
-    },
+    loadOptions,
   });
 }
