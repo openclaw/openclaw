@@ -484,7 +484,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         mediaUnavailable = true;
         logVerbose(`line: media exceeds size limit for message ${message.id}`);
       } else {
-        throw new LineRetryableWebhookError(`failed to download media for ${message.id}`, {
+        throw new Error(`failed to download media for ${message.id}`, {
           cause: err,
         });
       }
@@ -594,12 +594,15 @@ type LineWebhookEventTask = {
 };
 
 function resolveLineWebhookConversationKey(event: WebhookEvent): string | undefined {
-  const { groupId, roomId } = getLineSourceInfo(event.source);
+  const { userId, groupId, roomId } = getLineSourceInfo(event.source);
   if (groupId) {
     return `group:${groupId}`;
   }
   if (roomId) {
     return `room:${roomId}`;
+  }
+  if (userId) {
+    return `user:${userId}`;
   }
   return undefined;
 }
@@ -609,6 +612,7 @@ function startLineWebhookEvent(
   context: LineHandlerContext,
 ): LineWebhookEventTask {
   let eventAccepted = false;
+  let eventAcceptance: Promise<void> | undefined;
   let acceptanceSettled = false;
   let resolveAcceptance!: () => void;
   let rejectAcceptance!: (error: unknown) => void;
@@ -635,15 +639,24 @@ function startLineWebhookEvent(
     if (eventAccepted) {
       return;
     }
-    eventAccepted = true;
-    await context.onEventAccepted?.(event);
-    // The reply lane now owns this event durably. Resolve replay claims here,
-    // rather than after the full turn, so a redelivered batch can retry its
-    // other events without waiting for this turn to settle.
-    if (replayCandidate) {
-      await replayCandidate.cache.commit(replayCandidate.key);
+    eventAcceptance ??= (async () => {
+      await context.onEventAccepted?.(event);
+      // The reply lane now owns this event durably. Resolve replay claims here,
+      // rather than after the full turn, so a redelivered batch can retry its
+      // other events without waiting for this turn to settle.
+      if (replayCandidate) {
+        await replayCandidate.cache.commit(replayCandidate.key);
+      }
+      eventAccepted = true;
+      resolveEventAcceptance();
+    })();
+    try {
+      await eventAcceptance;
+    } catch (error) {
+      // Let a later call retry the acceptance work after the claim is released.
+      eventAcceptance = undefined;
+      throw error;
     }
-    resolveEventAcceptance();
   };
   const eventContext = { ...context, onEventAccepted: acceptEvent };
   const completion = (async () => {
@@ -720,13 +733,17 @@ export async function handleLineWebhookEvents(
     const acceptance = task.then(async (started) => await started.acceptance);
     const completion = task.then(async (started) => await started.completion);
     if (conversationKey) {
-      const acceptanceTail = acceptance.catch(() => undefined);
-      conversationAcceptances.set(conversationKey, acceptanceTail);
-      void acceptanceTail.finally(() => {
+      let acceptanceTail: Promise<void>;
+      acceptanceTail = acceptance.finally(() => {
         if (conversationAcceptances.get(conversationKey) === acceptanceTail) {
           conversationAcceptances.delete(conversationKey);
         }
       });
+      conversationAcceptances.set(conversationKey, acceptanceTail);
+      // Preserve rejection for the next same-conversation event so it cannot
+      // overtake a failed predecessor. This observer only prevents an
+      // unhandled rejection after the tail has performed its cleanup.
+      void acceptanceTail.catch(() => undefined);
     }
     void completion.catch(() => {});
     acceptances.push(acceptance);

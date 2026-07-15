@@ -12,6 +12,8 @@ import {
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
+  LINE_WEBHOOK_RESPONSE_DEADLINE_MS,
+  assertLineWebhookResponseDeadline,
   type LineWebhookDispatchHandler,
   waitForLineWebhookDispatchAcceptance,
 } from "./webhook-ack.js";
@@ -66,6 +68,7 @@ export function createLineNodeWebhookHandler(params: {
       return;
     }
 
+    const responseDeadlineAt = Date.now() + LINE_WEBHOOK_RESPONSE_DEADLINE_MS;
     let receiveContext: MessageReceiveContext<webhook.CallbackRequest> | undefined;
     try {
       const signatureHeader = req.headers["x-line-signature"];
@@ -87,8 +90,12 @@ export function createLineNodeWebhookHandler(params: {
       const rawBody = await readBody(
         req,
         Math.min(maxBodyBytes, LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES),
-        LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
+        Math.max(
+          1,
+          Math.min(LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS, responseDeadlineAt - Date.now()),
+        ),
       );
+      assertLineWebhookResponseDeadline(responseDeadlineAt);
 
       if (!validateLineSignature(rawBody, signature, params.channelSecret)) {
         logVerbose("line: webhook signature validation failed");
@@ -130,6 +137,7 @@ export function createLineNodeWebhookHandler(params: {
       await waitForLineWebhookDispatchAcceptance({
         body,
         dispatch: params.bot.handleWebhook,
+        responseDeadlineAt,
         runtime: params.runtime,
       });
       await receiveContext.ack();

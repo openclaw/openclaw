@@ -1,10 +1,12 @@
 // Line tests cover webhook node plugin behavior.
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { webhook } from "@line/bot-sdk";
 import type { NextFunction, Request, Response } from "express";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
+import { waitForLineWebhookDispatchAcceptance } from "./webhook-ack.js";
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
 import { createLineWebhookMiddleware } from "./webhook.js";
 
@@ -31,6 +33,44 @@ function createRes() {
 }
 
 const SECRET = "secret";
+
+it("bounds stalled LINE webhook acceptance before the upstream response deadline", async () => {
+  vi.useFakeTimers();
+  try {
+    const body = {
+      events: [{ type: "message" }],
+    } as unknown as webhook.CallbackRequest;
+    const acceptance = waitForLineWebhookDispatchAcceptance({
+      body,
+      dispatch: async () => await new Promise<void>(() => {}),
+      runtime: createRuntimeMock(),
+    });
+    const rejection = expect(acceptance).rejects.toThrow(
+      "LINE webhook response deadline elapsed before acceptance",
+    );
+
+    await vi.advanceTimersByTimeAsync(1_500);
+    await rejection;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("does not dispatch after the LINE webhook response deadline", async () => {
+  const dispatch = vi.fn(async () => {});
+  const body = {
+    events: [{ type: "message" }],
+  } as unknown as webhook.CallbackRequest;
+
+  await expect(
+    waitForLineWebhookDispatchAcceptance({
+      body,
+      dispatch,
+      responseDeadlineAt: Date.now() - 1,
+    }),
+  ).rejects.toThrow("LINE webhook response deadline elapsed before acceptance");
+  expect(dispatch).not.toHaveBeenCalled();
+});
 
 type ParsedLineWebhookPayload = {
   events: unknown;
@@ -394,13 +434,14 @@ describe("createLineNodeWebhookHandler", () => {
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
-  it("uses strict pre-auth limits for signed POST requests", async () => {
+  it("bounds signed POST body reads by the LINE response deadline", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     const bot = { handleWebhook: vi.fn(async () => {}) };
     const runtime = createRuntimeMock();
     const readBody = vi.fn(async (_req: IncomingMessage, maxBytes: number, timeoutMs?: number) => {
       expect(maxBytes).toBe(64 * 1024);
-      expect(timeoutMs).toBe(5_000);
+      expect(timeoutMs).toBeGreaterThan(0);
+      expect(timeoutMs).toBeLessThanOrEqual(1_500);
       return rawBody;
     });
     const handler = createLineNodeWebhookHandler({

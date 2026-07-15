@@ -36,7 +36,10 @@ openclaw plugins install ./path/to/local/line-plugin
 2. Create (or pick) a Provider and add a **Messaging API** channel.
 3. Copy the **Channel access token** and **Channel secret** from the channel settings.
 4. Enable **Use webhook** in the Messaging API settings.
-5. Set the webhook URL to your gateway endpoint (HTTPS required):
+5. Enable **Webhook redelivery**. LINE disables redelivery by default; when it
+   is enabled, LINE retries webhook requests that do not receive a `2xx`
+   response.
+6. Set the webhook URL to your gateway endpoint (HTTPS required):
 
 ```text
 https://gateway-host/line/webhook
@@ -45,10 +48,12 @@ https://gateway-host/line/webhook
 The Gateway answers LINE's webhook verification (GET) immediately. For signed
 inbound events (POST), it returns success only after every event is either
 accepted by the durable reply lane or completes without an agent dispatch;
-agent processing then continues asynchronously. Enable
-[Webhook redelivery](https://developers.line.biz/en/docs/messaging-api/receiving-messages/#redelivery)
-in the LINE Developers Console so LINE retries a non-success response caused by
-an early validation, media, routing, or reply-lane admission failure.
+agent processing then continues asynchronously. OpenClaw stops waiting after
+1.5 seconds so it can return a non-success response before LINE's 2-second
+request timeout; any already-started processing may still finish, and replay
+deduplication prevents the redelivery from running an accepted event twice. See LINE's
+[Webhook redelivery documentation](https://developers.line.biz/en/docs/messaging-api/receiving-messages/#redelivery)
+for the upstream retry contract.
 If you need a custom path, set `channels.line.webhookPath` or
 `channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 

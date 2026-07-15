@@ -27,7 +27,6 @@ import {
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
-import { LineRetryableWebhookError } from "./bot-handlers.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
@@ -48,7 +47,11 @@ import {
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
-import { waitForLineWebhookDispatchAcceptance } from "./webhook-ack.js";
+import {
+  LINE_WEBHOOK_RESPONSE_DEADLINE_MS,
+  assertLineWebhookResponseDeadline,
+  waitForLineWebhookDispatchAcceptance,
+} from "./webhook-ack.js";
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
@@ -153,12 +156,21 @@ export async function monitorLineProvider(
 
       const { ctxPayload, replyToken, route } = ctx;
       let eventAccepted = false;
+      let eventAcceptance: Promise<void> | undefined;
       const acceptEvent = async () => {
         if (eventAccepted) {
           return;
         }
-        eventAccepted = true;
-        await ctx.onEventAccepted?.();
+        eventAcceptance ??= (async () => {
+          await ctx.onEventAccepted?.();
+          eventAccepted = true;
+        })();
+        try {
+          await eventAcceptance;
+        } catch (error) {
+          eventAcceptance = undefined;
+          throw error;
+        }
       };
 
       const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
@@ -285,7 +297,7 @@ export async function monitorLineProvider(
         if (!eventAccepted) {
           // Returning a non-2xx response asks LINE to redeliver this event.
           // Its reply token is one-use, so do not consume it before the retry.
-          throw new LineRetryableWebhookError("line event failed before reply-lane adoption", {
+          throw new Error("line event failed before reply-lane adoption", {
             cause: err,
           });
         }
@@ -352,6 +364,7 @@ export async function monitorLineProvider(
           return;
         }
 
+        const responseDeadlineAt = Date.now() + LINE_WEBHOOK_RESPONSE_DEADLINE_MS;
         let receiveContext: MessageReceiveContext<webhook.CallbackRequest> | undefined;
         try {
           const signatureHeader = req.headers["x-line-signature"];
@@ -373,8 +386,12 @@ export async function monitorLineProvider(
           const rawBody = await readLineWebhookRequestBody(
             req,
             LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES,
-            LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
+            Math.max(
+              1,
+              Math.min(LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS, responseDeadlineAt - Date.now()),
+            ),
           );
+          assertLineWebhookResponseDeadline(responseDeadlineAt);
           const match = resolveSingleWebhookTarget(targets, (target) =>
             validateLineSignature(rawBody, signature, target.channelSecret),
           );
@@ -423,6 +440,7 @@ export async function monitorLineProvider(
           await waitForLineWebhookDispatchAcceptance({
             body,
             dispatch: match.target.bot.handleWebhook,
+            responseDeadlineAt,
             runtime: match.target.runtime,
           });
           await receiveContext.ack();

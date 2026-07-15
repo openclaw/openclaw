@@ -19,7 +19,7 @@ const {
   registerWebhookTargetWithPluginRouteMock,
   unregisterHttpMock,
 } = vi.hoisted(() => ({
-  createLineBotMock: vi.fn(() => ({
+  createLineBotMock: vi.fn((_options?: unknown) => ({
     account: { accountId: "default" },
     handleWebhook: vi.fn<LineHandleWebhook>(),
   })),

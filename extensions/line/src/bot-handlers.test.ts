@@ -344,12 +344,17 @@ describe("handleLineWebhookEvents", () => {
       releaseProcessing = resolve;
     });
     const onEventAccepted = vi.fn();
-    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+    const processMessage = vi.fn<LineWebhookContext["processMessage"]>(async (message) => {
       await message.onEventAccepted?.();
       await processing;
     });
     const event = createTestMessageEvent({
-      message: { id: "m-accepted-before-settle", type: "text", text: "hello" },
+      message: {
+        id: "m-accepted-before-settle",
+        type: "text",
+        text: "hello",
+        quoteToken: "test-token-placeholder",
+      },
       source: { type: "group", groupId: "group-accepted", userId: "user-accepted" },
       webhookEventId: "evt-accepted-before-settle",
     });
@@ -377,19 +382,29 @@ describe("handleLineWebhookEvents", () => {
       releaseFirstProcessing = resolve;
     });
     const onEventAccepted = vi.fn();
-    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+    const processMessage = vi.fn<LineWebhookContext["processMessage"]>(async (message) => {
       await message.onEventAccepted?.();
       if (processMessage.mock.calls.length === 1) {
         await firstProcessing;
       }
     });
     const firstEvent = createTestMessageEvent({
-      message: { id: "m-batch-first", type: "text", text: "first" },
+      message: {
+        id: "m-batch-first",
+        type: "text",
+        text: "first",
+        quoteToken: "test-token-placeholder",
+      },
       source: { type: "group", groupId: "group-batch", userId: "user-batch" },
       webhookEventId: "evt-batch-first",
     });
     const secondEvent = createTestMessageEvent({
-      message: { id: "m-batch-second", type: "text", text: "second" },
+      message: {
+        id: "m-batch-second",
+        type: "text",
+        text: "second",
+        quoteToken: "test-token-placeholder",
+      },
       source: { type: "group", groupId: "group-batch-other", userId: "user-batch" },
       webhookEventId: "evt-batch-second",
     });
@@ -417,19 +432,29 @@ describe("handleLineWebhookEvents", () => {
       releaseFirstProcessing = resolve;
     });
     const onEventAccepted = vi.fn();
-    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+    const processMessage = vi.fn<LineWebhookContext["processMessage"]>(async (message) => {
       await message.onEventAccepted?.();
       if (processMessage.mock.calls.length === 1) {
         await firstProcessing;
       }
     });
     const firstEvent = createTestMessageEvent({
-      message: { id: "m-group-first", type: "text", text: "first" },
+      message: {
+        id: "m-group-first",
+        type: "text",
+        text: "first",
+        quoteToken: "test-token-placeholder",
+      },
       source: { type: "group", groupId: "group-serial", userId: "user-serial" },
       webhookEventId: "evt-group-first",
     });
     const secondEvent = createTestMessageEvent({
-      message: { id: "m-group-second", type: "text", text: "second" },
+      message: {
+        id: "m-group-second",
+        type: "text",
+        text: "second",
+        quoteToken: "test-token-placeholder",
+      },
       source: { type: "group", groupId: "group-serial", userId: "user-serial" },
       webhookEventId: "evt-group-second",
     });
@@ -454,6 +479,59 @@ describe("handleLineWebhookEvents", () => {
     expect(onEventAccepted.mock.calls.map(([event]) => event)).toEqual([firstEvent, secondEvent]);
   });
 
+  it("serializes direct events from the same user until earlier admission", async () => {
+    let allowFirstAdmission: (() => void) | undefined;
+    const firstAdmission = new Promise<void>((resolve) => {
+      allowFirstAdmission = resolve;
+    });
+    const onEventAccepted = vi.fn();
+    const processMessage = vi.fn<LineWebhookContext["processMessage"]>(async (message) => {
+      if (processMessage.mock.calls.length === 1) {
+        await firstAdmission;
+      }
+      await message.onEventAccepted?.();
+    });
+    const firstEvent = createTestMessageEvent({
+      message: {
+        id: "m-dm-first",
+        type: "text",
+        text: "first",
+        quoteToken: "test-token-placeholder",
+      },
+      source: { type: "user", userId: "user-serial" },
+      webhookEventId: "evt-dm-first",
+    });
+    const secondEvent = createTestMessageEvent({
+      message: {
+        id: "m-dm-second",
+        type: "text",
+        text: "second",
+        quoteToken: "test-token-placeholder",
+      },
+      source: { type: "user", userId: "user-serial" },
+      webhookEventId: "evt-dm-second",
+    });
+    const task = handleLineWebhookEvents(
+      [firstEvent, secondEvent],
+      createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+        onEventAccepted,
+      }),
+    );
+
+    await vi.waitFor(() => expect(processMessage).toHaveBeenCalledOnce());
+    expect(onEventAccepted).not.toHaveBeenCalled();
+    if (!allowFirstAdmission) {
+      throw new Error("Expected first LINE direct admission release callback");
+    }
+    allowFirstAdmission();
+    await task;
+
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(onEventAccepted.mock.calls.map(([event]) => event)).toEqual([firstEvent, secondEvent]);
+  });
+
   it("preserves later group history after an earlier turn is durably adopted", async () => {
     let releaseFirstProcessing: (() => void) | undefined;
     const firstProcessing = new Promise<void>((resolve) => {
@@ -462,7 +540,7 @@ describe("handleLineWebhookEvents", () => {
     const groupHistories = new Map<string, HistoryEntry[]>([
       ["group-history-ordered", [{ sender: "user:earlier", body: "earlier", timestamp: 1 }]],
     ]);
-    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+    const processMessage = vi.fn<LineWebhookContext["processMessage"]>(async (message) => {
       await message.onEventAccepted?.();
       await firstProcessing;
     });
@@ -477,7 +555,12 @@ describe("handleLineWebhookEvents", () => {
       webhookEventId: "evt-history-first",
     });
     const secondEvent = createTestMessageEvent({
-      message: { id: "m-history-second", type: "text", text: "second" },
+      message: {
+        id: "m-history-second",
+        type: "text",
+        text: "second",
+        quoteToken: "test-token-placeholder",
+      },
       source: { type: "group", groupId: "group-history-ordered", userId: "user-history" },
       webhookEventId: "evt-history-second",
     });
@@ -516,7 +599,7 @@ describe("handleLineWebhookEvents", () => {
       ["group-history-requests", [{ sender: "user:earlier", body: "earlier", timestamp: 1 }]],
     ]);
     const conversationAcceptanceTails = new Map<string, Promise<void>>();
-    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+    const processMessage = vi.fn<LineWebhookContext["processMessage"]>(async (message) => {
       await firstAdmission;
       await message.onEventAccepted?.();
       await firstProcessing;
@@ -532,7 +615,12 @@ describe("handleLineWebhookEvents", () => {
       webhookEventId: "evt-request-history-first",
     });
     const secondEvent = createTestMessageEvent({
-      message: { id: "m-request-history-second", type: "text", text: "second" },
+      message: {
+        id: "m-request-history-second",
+        type: "text",
+        text: "second",
+        quoteToken: "test-token-placeholder",
+      },
       source: { type: "group", groupId: "group-history-requests", userId: "user-history" },
       webhookEventId: "evt-request-history-second",
     });
@@ -566,6 +654,52 @@ describe("handleLineWebhookEvents", () => {
     }
     releaseFirstProcessing();
     await firstRequest;
+  });
+
+  it("blocks later same-group events when an earlier event fails before acceptance", async () => {
+    buildLineMessageContextMock.mockRejectedValueOnce(new Error("first admission failed"));
+    const processMessage = vi.fn();
+    const onEventAccepted = vi.fn();
+    const firstEvent = createTestMessageEvent({
+      message: {
+        id: "m-ordered-failure-first",
+        type: "text",
+        text: "first",
+        quoteToken: "test-token-placeholder",
+      },
+      source: { type: "group", groupId: "group-ordered-failure", userId: "user-order" },
+      webhookEventId: "evt-ordered-failure-first",
+    });
+    const secondEvent = createTestMessageEvent({
+      message: {
+        id: "m-ordered-failure-second",
+        type: "text",
+        text: "second",
+        quoteToken: "test-token-placeholder",
+      },
+      source: { type: "group", groupId: "group-ordered-failure", userId: "user-order" },
+      webhookEventId: "evt-ordered-failure-second",
+    });
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: false,
+      onEventAccepted,
+      replayCache: createLineWebhookReplayCache(),
+      conversationAcceptanceTails: new Map(),
+    });
+
+    await expect(handleLineWebhookEvents([firstEvent, secondEvent], context)).rejects.toThrow(
+      "first admission failed",
+    );
+    expect(buildLineMessageContextMock).toHaveBeenCalledOnce();
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(onEventAccepted).not.toHaveBeenCalled();
+
+    await handleLineWebhookEvents([firstEvent, secondEvent], context);
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(3);
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(onEventAccepted.mock.calls.map(([event]) => event)).toEqual([firstEvent, secondEvent]);
   });
 
   beforeEach(() => {
@@ -1003,37 +1137,13 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("commits in-flight failures so concurrent duplicates do not retry", async () => {
-    let rejectFirst: ((err: Error) => void) | undefined;
-    const firstDone = new Promise<void>((_, reject) => {
-      rejectFirst = reject;
-    });
-    const processMessage = vi.fn(async () => {
-      await firstDone;
-    });
-    const event = createReplayMessageEvent({
-      messageId: "m-inflight-fail",
-      groupId: "group-inflight",
-      userId: "user-inflight",
-      webhookEventId: "evt-inflight-fail-1",
-      isRedelivery: true,
-    });
-    const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
-    const firstFailure = expect(firstRun).rejects.toThrow("transient inflight failure");
-    rejectFirst?.(new Error("transient inflight failure"));
-
-    await firstFailure;
-    await expect(secondRun).resolves.toBeUndefined();
-    expect(processMessage).toHaveBeenCalledTimes(1);
-  });
-
   it("acknowledges an in-flight redelivery after durable adoption", async () => {
     let releaseFirst: (() => void) | undefined;
     const firstDone = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
     const onEventAccepted = vi.fn();
-    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+    const processMessage = vi.fn<LineWebhookContext["processMessage"]>(async (message) => {
       await message.onEventAccepted?.();
       await firstDone;
     });
@@ -1065,7 +1175,7 @@ describe("handleLineWebhookEvents", () => {
     await firstRun;
   });
 
-  it("mirrors in-flight retryable replay failures so concurrent duplicates also fail", async () => {
+  it("mirrors in-flight pre-acceptance failures so concurrent duplicates also fail", async () => {
     let rejectFirst: ((err: Error) => void) | undefined;
     const firstDone = new Promise<void>((_, reject) => {
       rejectFirst = reject;
@@ -1083,10 +1193,42 @@ describe("handleLineWebhookEvents", () => {
     const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
     const firstFailure = expect(firstRun).rejects.toThrow("transient inflight failure");
     const secondFailure = expect(secondRun).rejects.toThrow("transient inflight failure");
-    rejectFirst?.(new LineRetryableWebhookError("transient inflight failure"));
+    rejectFirst?.(new Error("transient inflight failure"));
 
     await Promise.all([firstFailure, secondFailure]);
     expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the replay claim when the acceptance callback rejects", async () => {
+    const onEventAccepted = vi
+      .fn<(event: webhook.Event) => void | Promise<void>>()
+      .mockRejectedValueOnce(new Error("acceptance callback failed"))
+      .mockResolvedValueOnce(undefined);
+    const processMessage = vi.fn<LineWebhookContext["processMessage"]>(async (message) => {
+      await message.onEventAccepted?.();
+    });
+    const event = createReplayMessageEvent({
+      messageId: "m-acceptance-callback-failure",
+      groupId: "group-acceptance-callback-failure",
+      userId: "user-acceptance-callback-failure",
+      webhookEventId: "evt-acceptance-callback-failure",
+      isRedelivery: true,
+    });
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: false,
+      onEventAccepted,
+      replayCache: createLineWebhookReplayCache(),
+    });
+
+    await expect(handleLineWebhookEvents([event], context)).rejects.toThrow(
+      "acceptance callback failed",
+    );
+    await handleLineWebhookEvents([event], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(onEventAccepted).toHaveBeenCalledTimes(2);
   });
 
   it("deduplicates redeliveries by LINE message id when webhookEventId changes", async () => {
@@ -1390,8 +1532,8 @@ describe("handleLineWebhookEvents", () => {
       replayCache: createLineWebhookReplayCache(),
     });
 
-    await expect(handleLineWebhookEvents([event], context)).rejects.toBeInstanceOf(
-      LineRetryableWebhookError,
+    await expect(handleLineWebhookEvents([event], context)).rejects.toThrow(
+      "failed to download media for image-failed-1",
     );
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
     expect(processMessage).not.toHaveBeenCalled();
@@ -1414,7 +1556,7 @@ describe("handleLineWebhookEvents", () => {
 
   it("retries ordinary pre-acceptance failures instead of committing their replay claim", async () => {
     buildLineMessageContextMock.mockRejectedValueOnce(new Error("temporary context failure"));
-    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+    const processMessage = vi.fn<LineWebhookContext["processMessage"]>(async (message) => {
       await message.onEventAccepted?.();
     });
     const onEventAccepted = vi.fn();
@@ -1445,6 +1587,7 @@ describe("handleLineWebhookEvents", () => {
         id: "image-too-large-1",
         type: "image",
         contentProvider: { type: "line" },
+        quoteToken: "test-token-placeholder",
       },
       source: { type: "user", userId: "user-image-too-large" },
       webhookEventId: "evt-image-too-large",

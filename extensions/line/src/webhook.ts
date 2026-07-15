@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
+  LINE_WEBHOOK_RESPONSE_DEADLINE_MS,
   type LineWebhookDispatchHandler,
   waitForLineWebhookDispatchAcceptance,
 } from "./webhook-ack.js";
@@ -43,6 +44,9 @@ export function createLineWebhookMiddleware(
   const { channelSecret, onEvents, runtime } = options;
 
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
+    // This compatibility middleware receives an already captured raw body, so
+    // its budget starts here. Gateway-owned Node routes start before body read.
+    const responseDeadlineAt = Date.now() + LINE_WEBHOOK_RESPONSE_DEADLINE_MS;
     let receiveContext: MessageReceiveContext<webhook.CallbackRequest> | undefined;
     try {
       const signature = req.headers["x-line-signature"];
@@ -95,6 +99,7 @@ export function createLineWebhookMiddleware(
       await waitForLineWebhookDispatchAcceptance({
         body,
         dispatch: onEvents,
+        responseDeadlineAt,
         runtime,
       });
       await receiveContext.ack();
