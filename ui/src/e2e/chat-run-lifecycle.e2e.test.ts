@@ -71,7 +71,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await gateway.waitForRequest("chat.send");
     await currentPage.locator(".chat-working-indicator").waitFor();
 
-    await currentPage.clock.runFor(177_000);
+    await currentPage.clock.fastForward(177_000);
 
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
@@ -184,7 +184,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
     await gateway.resolveDeferred("sessions.list");
 
-    await currentPage.clock.runFor(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
+    await currentPage.clock.fastForward(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     expect(await mainSession.locator(".session-run-spinner").count()).toBe(0);
 
@@ -209,7 +209,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
 
     // Re-publish after the former 10-second suppression window. The completed
     // run identity stays terminal until the Gateway publishes different state.
-    await currentPage.clock.runFor(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
+    await currentPage.clock.fastForward(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
     const lateStaleActiveUpdatedAt = await currentPage.evaluate(() => Date.now());
     const sessionListsBeforeLateStaleActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");

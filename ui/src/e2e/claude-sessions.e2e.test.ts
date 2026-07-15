@@ -361,7 +361,7 @@ suite("Claude native session catalog", () => {
       await openClaudeCatalogTerminal(page);
       await gateway.waitForRequest("terminal.open");
       await page.getByRole("status").filter({ hasText: "Connecting to session" }).waitFor();
-      await page.clock.runFor(30_001);
+      await page.clock.fastForward(30_001);
 
       await page.getByText("Session did not connect within 30 seconds.", { exact: true }).waitFor();
       const close = await gateway.waitForRequest("terminal.close");
