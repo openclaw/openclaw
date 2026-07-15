@@ -235,9 +235,15 @@ describe("dynamic tool execution helpers", () => {
   });
 
   it.each([
+    // Malformed string forms fall to zero-duration baseline
     ["wait", "0x10", 120_000],
     ["hold_key", "1e2", 150_000],
+    // Decimal strings are honored
     ["wait", "100", 220_000],
+    // Fractional numeric values preserve sub-second precision
+    ["wait", 0.5, 120_500],
+    // Fractional string forms are rejected
+    ["wait", "0.5", 120_000],
   ] as const)(
     "maps computer %s duration %j to a %d ms deadline",
     (action, duration, expectedMs) => {
