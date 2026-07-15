@@ -16,6 +16,7 @@ import {
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { runHeartbeatOnce, testing, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
@@ -414,6 +415,95 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         preview: warning,
         channel: "telegram",
       });
+    });
+  });
+
+  it("retains composite pending-final content after delivering only its terminal warning", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      const warning = "⚠️ Message failed";
+      const pendingText = `Original exec completion\n\n${warning}`;
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockImplementation(async () => {
+        await patchSessionEntry(
+          { storePath, sessionKey },
+          () => ({
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: pendingText,
+            pendingFinalDeliveryCreatedAt: Date.now(),
+          }),
+          { preserveActivity: true },
+        );
+        return createTerminalToolFailureReply(
+          { outcome: "no_change", notify: false, summary: "Message delivery was denied." },
+          warning,
+        );
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      await expect(
+        runHeartbeatOnce({
+          cfg,
+          deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+        }),
+      ).resolves.toEqual({ status: "failed", reason: "agent-tool-failure" });
+
+      const sessionStore = readSessionStoreForTest<{
+        pendingFinalDelivery?: boolean;
+        pendingFinalDeliveryText?: string;
+      }>(storePath);
+      expectTelegramSend(sendTelegram, { text: warning, cfg });
+      expect(sessionStore[sessionKey]).toMatchObject({
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: pendingText,
+      });
+    });
+  });
+
+  it("clears an exact pending-final warning after delivering it", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      const warning = "⚠️ Message failed";
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockImplementation(async () => {
+        await patchSessionEntry(
+          { storePath, sessionKey },
+          () => ({
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: warning,
+            pendingFinalDeliveryCreatedAt: Date.now(),
+          }),
+          { preserveActivity: true },
+        );
+        return createTerminalToolFailureReply(
+          { outcome: "no_change", notify: false, summary: "Message delivery was denied." },
+          warning,
+        );
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      await expect(
+        runHeartbeatOnce({
+          cfg,
+          deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+        }),
+      ).resolves.toEqual({ status: "failed", reason: "agent-tool-failure" });
+
+      const sessionStore = readSessionStoreForTest<{
+        pendingFinalDelivery?: boolean;
+        pendingFinalDeliveryText?: string;
+      }>(storePath);
+      expectTelegramSend(sendTelegram, { text: warning, cfg });
+      expect(sessionStore[sessionKey]?.pendingFinalDelivery).toBeUndefined();
+      expect(sessionStore[sessionKey]?.pendingFinalDeliveryText).toBeUndefined();
     });
   });
 

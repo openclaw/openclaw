@@ -20,7 +20,7 @@ export async function handleHeartbeatTerminalToolFailure(params: {
   checkReady?: () => Promise<{ ok: boolean; reason?: string }>;
   deliver?: () => Promise<"sent" | "suppressed">;
   onDeliveryError?: (error: unknown) => void;
-  clearSatisfiedPendingFinalDelivery: () => Promise<void>;
+  clearSatisfiedPendingFinalDelivery?: () => Promise<void>;
   onChannelNotReady: (reason: string | undefined) => void;
 }) {
   await params.restoreUpdatedAt();
@@ -68,7 +68,7 @@ export async function handleHeartbeatTerminalToolFailure(params: {
     params.onDeliveryError?.(error);
   }
   if (deliveryStatus === "sent") {
-    await params.clearSatisfiedPendingFinalDelivery();
+    await params.clearSatisfiedPendingFinalDelivery?.();
   }
   emitFailure(
     params.delivery.channel,

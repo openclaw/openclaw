@@ -44,6 +44,7 @@ import {
 import { copyReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
+import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -1723,7 +1724,7 @@ export async function runHeartbeatOnce(opts: {
   // pre-normalization (no responsePrefix), so a byte compare would leave
   // prefixed agents permanently stuck. Ownership is gated on createdAt instead,
   // so an older final this run did not produce is preserved, not erased.
-  const clearSatisfiedPendingFinalDelivery = async () => {
+  const clearSatisfiedPendingFinalDelivery = async (expectedText?: string) => {
     await patchSessionEntry(
       { storePath, sessionKey },
       (current, context) => {
@@ -1734,6 +1735,14 @@ export async function runHeartbeatOnce(opts: {
           return null;
         }
         if (!heartbeatRunOwnsPendingFinalDelivery(current, startedAt)) {
+          return null;
+        }
+        // A terminal failure can send only the last payload while recovery owns
+        // several. Clear only when the delivered payload represents the whole final.
+        if (
+          expectedText !== undefined &&
+          normalizeOptionalString(current.pendingFinalDeliveryText) !== expectedText
+        ) {
           return null;
         }
         return CLEARED_PENDING_FINAL_DELIVERY_FIELDS;
@@ -2025,6 +2034,9 @@ export async function runHeartbeatOnce(opts: {
     if (heartbeatTerminalToolFailure) {
       const failureChannel = delivery.channel;
       const failureTarget = delivery.to;
+      const terminalPendingFinalText = replyPayload
+        ? buildRecoverablePendingFinalDeliveryText([replyPayload])
+        : undefined;
       const heartbeatPlugin =
         failureChannel !== "none" ? resolveHeartbeatChannelPlugin(failureChannel) : undefined;
       const checkReady = heartbeatPlugin?.heartbeat?.checkReady;
@@ -2078,7 +2090,13 @@ export async function runHeartbeatOnce(opts: {
               },
             }
           : {}),
-        clearSatisfiedPendingFinalDelivery,
+        ...(terminalPendingFinalText
+          ? {
+              clearSatisfiedPendingFinalDelivery: async () => {
+                await clearSatisfiedPendingFinalDelivery(terminalPendingFinalText);
+              },
+            }
+          : {}),
         onChannelNotReady: (reason) => {
           log.info("heartbeat: channel not ready for terminal tool failure", {
             channel: failureChannel,
