@@ -73,7 +73,7 @@ export type WorktreeCleanupLimits = {
 };
 
 type ManagedWorktreeGcParams = {
-  isOwnerActive?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
+  shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
   limits?: WorktreeCleanupLimits;
 };
 
@@ -789,7 +789,7 @@ export class ManagedWorktreeService {
           expiresWhenIdle &&
           now - record.lastActiveAt > IDLE_GC_MS
         ) {
-          if (await this.isProtectedFromAutoRemoval(record, params.isOwnerActive)) {
+          if (await this.isProtectedFromAutoRemoval(record, params.shouldProtectOwner)) {
             continue;
           }
           await this.remove({ id: record.id, reason: "idle-gc" });
@@ -820,16 +820,16 @@ export class ManagedWorktreeService {
   }
 
   /**
-   * Shared auto-removal guard for idle and limit cleanup: active owners, live run
-   * leases, and live/foreign git locks all veto removal; a dead lock is cleared.
+   * Shared auto-removal guard for idle and limit cleanup: owner protection, live
+   * run leases, and live/foreign git locks veto removal; a dead lock is cleared.
    */
   private async isProtectedFromAutoRemoval(
     record: ManagedWorktreeRecord,
-    isOwnerActive?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean,
+    shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean,
   ): Promise<boolean> {
     if (
       record.ownerId !== undefined &&
-      isOwnerActive?.(record.ownerKind, record.ownerId) === true
+      shouldProtectOwner?.(record.ownerKind, record.ownerId) === true
     ) {
       return true;
     }
@@ -917,7 +917,7 @@ export class ManagedWorktreeService {
         continue;
       }
       try {
-        if (await this.isProtectedFromAutoRemoval(record, params.isOwnerActive)) {
+        if (await this.isProtectedFromAutoRemoval(record, params.shouldProtectOwner)) {
           continue;
         }
         await this.remove({ id: record.id, reason: "limit-gc" });
