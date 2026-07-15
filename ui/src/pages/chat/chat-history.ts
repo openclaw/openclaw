@@ -43,6 +43,7 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   isRetryableStartupUnavailable,
   isUnknownGatewayMethodError,
@@ -376,10 +377,6 @@ export type ChatHistoryResult = {
   agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
 };
-
-export type ChatHistoryPagination =
-  | { hasMore: false; totalMessages?: number; completeSnapshot?: true }
-  | { hasMore: true; nextOffset: number; totalMessages?: number };
 
 export function resolveChatHistoryPagination(
   result: ChatHistoryResult | undefined,
