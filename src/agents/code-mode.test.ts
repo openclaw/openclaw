@@ -6,19 +6,21 @@ import { isRecord } from "../../packages/normalization-core/src/record-coerce.js
 import { setPluginToolMeta } from "../plugins/tools.js";
 import {
   clearCodeModeNamespacesForPlugin,
-  clearCodeModeNamespacesForTest,
   createCodeModeNamespaceTool,
-  listCodeModeNamespaces,
   registerCodeModeNamespaceForPlugin,
 } from "./code-mode-namespaces.js";
+import {
+  clearCodeModeNamespacesForTest,
+  listCodeModeNamespaces,
+} from "./code-mode-namespaces.test-support.js";
 import {
   applyCodeModeCatalog,
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
   createCodeModeTools,
   resolveCodeModeConfig,
-  testing,
 } from "./code-mode.js";
+import { testing } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef, type ToolSearchCatalogRef } from "./tool-search.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,

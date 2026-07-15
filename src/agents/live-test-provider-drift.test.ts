@@ -21,6 +21,30 @@ describe("live test provider drift", () => {
     expect(isLiveAuthDrift("invalid x-api-key")).toBe(true);
   });
 
+  it("classifies Anthropic 402 payloads without matching unrelated prose", () => {
+    for (const sample of [
+      "HTTP 402 Payment Required",
+      "status: 402",
+      "error code 402",
+      '{"status":402,"type":"error"}',
+      '{"code":402,"message":"payment required"}',
+      '{"error":{"code":402,"message":"billing hard limit reached"}}',
+      "got a 402 from the API",
+      "returned 402",
+      "received a 402 response",
+    ]) {
+      expect(isLiveBillingDrift(sample)).toBe(true);
+    }
+    for (const sample of [
+      "Use a 402 stainless bolt",
+      "Book a 402 room",
+      "There is a 402 near me",
+      "The building at 402 Main Street",
+    ]) {
+      expect(isLiveBillingDrift(sample)).toBe(false);
+    }
+  });
+
   it("classifies API-key rate-limit drift", () => {
     expect(isLiveRateLimitDrift("resource exhausted")).toBe(true);
   });

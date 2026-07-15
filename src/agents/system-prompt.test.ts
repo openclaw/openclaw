@@ -1085,20 +1085,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("style primary|success|danger");
   });
 
-  it("describes Telegram rich text only for rich Telegram runtimes", () => {
+  it("does not embed Telegram rich-text authoring guidance in core messaging", () => {
     const telegramPrompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
       runtimeInfo: {
         channel: "telegram",
-        capabilities: ["richText"],
-      },
-    });
-    const discordPrompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["message"],
-      runtimeInfo: {
-        channel: "discord",
         capabilities: ["richText"],
       },
     });
@@ -1110,49 +1102,23 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(telegramPrompt).toContain("Telegram rich ON");
-    expect(telegramPrompt).toContain("Bot API 10.2 blocks");
-    expect(telegramPrompt).toContain("<details><summary>");
-    expect(telegramPrompt).toContain("caption/colspan/rowspan/align");
-    expect(telegramPrompt).toContain("block/pull quotes");
-    expect(telegramPrompt).toContain('<input type="checkbox" checked/>');
-    expect(telegramPrompt).toContain('anchors `<a name="x"></a>` + `<a href="#x">label</a>`');
-    expect(telegramPrompt).toContain(
-      "Math: `<tg-math>` inline, `<tg-math-block>` block; never `$...$`/`\\(...\\)`",
-    );
-    expect(telegramPrompt).toContain("collages/slideshows");
-    expect(telegramPrompt).toContain('<tg-map lat="" long="" zoom=""/>');
-    expect(telegramPrompt).toContain("Collapse=`<details>` (not expandable blockquote)");
-    expect(telegramPrompt).toContain("structured bullets=`<ul><li>` (not literal bullets)");
-    expect(telegramPrompt).toContain('block media e.g. `<img src="https://..."/>`');
-    expect(telegramPrompt).toContain("captions/credits when useful");
-    expect(telegramPrompt).toContain("media https URLs only, block-level only");
-    expect(telegramPrompt).toContain("Not MarkdownV2/parse_mode");
-    expect(telegramPrompt).toContain("OpenClaw maps markdown + these HTML islands to typed blocks");
-    expect(telegramPrompt).toContain("buttons plain text");
-    expect(telegramPrompt.indexOf("Telegram rich ON")).toBeGreaterThan(
-      telegramPrompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
-    );
-    expect(discordPrompt).not.toContain("Telegram rich ON");
+    expect(telegramPrompt).not.toContain("Telegram rich ON");
+    expect(telegramPrompt).not.toContain("Telegram rich OFF");
     expect(plainTelegramPrompt).not.toContain("Telegram rich ON");
-    expect(plainTelegramPrompt).toContain("Telegram rich OFF");
-    expect(plainTelegramPrompt).toContain("no rich tables");
-    expect(plainTelegramPrompt).toContain("enable rich messages for this account/channel");
+    expect(plainTelegramPrompt).not.toContain("Telegram rich OFF");
+    expect(telegramPrompt).toContain("final text normally routes to source");
   });
 
-  it("describes Telegram rich text for source replies without the message tool", () => {
+  it("describes source replies without the message tool", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
         channel: "telegram",
-        capabilities: ["richText"],
       },
     });
 
     expect(prompt).toContain("final text normally routes to source");
     expect(prompt).toContain("If turn says final private");
-    expect(prompt).toContain("Telegram rich ON");
-    expect(prompt).toContain("headings, tables");
     expect(prompt).not.toContain("### message tool");
   });
 

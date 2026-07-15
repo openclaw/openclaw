@@ -81,7 +81,10 @@ describe("check-database-first-legacy-stores", () => {
   });
 
   it("ignores deeply nested type-only syntax", () => {
-    const nestedType = Array.from({ length: 600 }).reduce((type) => `Readonly<${type}>`, "string");
+    const nestedType = Array.from({ length: 600 }).reduce<string>(
+      (type) => `Readonly<${type}>`,
+      "string",
+    );
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
         type DeepRuntimeSchema = ${nestedType};
@@ -180,6 +183,45 @@ describe("check-database-first-legacy-stores", () => {
         await fs.writeFile(path.join(stateDir, "tui", "last-session.json"), "{}\\n");
       `,
       "src/tui/last-session-writer.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to the retired commitments JSON store", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "commitments", "commitments.json"), "{}\\n");
+      `,
+      "src/commitments/file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to retired managed-image record JSON", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "media", "outgoing", "records", \`\${id}.json\`), "{}\n");
+      `,
+      "src/gateway/managed-image-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to retired skill-upload staging", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "tmp", "skill-uploads", uploadId, "metadata.json"), "{}\n");
+      `,
+      "src/skills/lifecycle/upload-file-store.ts",
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);

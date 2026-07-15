@@ -49,6 +49,23 @@ describe("CodexAppServerClient", () => {
     expect(outbound.method).toBe("model/list");
   });
 
+  it("rejects unbounded guarded thread requests before acquiring the fence", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const guard = vi.fn(async () => () => undefined);
+    harness.client.setThreadSessionRequestGuard(guard);
+
+    await expect(harness.client.request("thread/start", {})).rejects.toThrow(
+      "thread/start requires a positive finite timeout or abort signal",
+    );
+    await expect(
+      harness.client.request("thread/resume", {}, { timeoutMs: Number.POSITIVE_INFINITY }),
+    ).rejects.toThrow("thread/resume requires a positive finite timeout or abort signal");
+
+    expect(guard).not.toHaveBeenCalled();
+    expect(harness.writes).toEqual([]);
+  });
+
   it("removes unpaired surrogate code units from outbound JSON-RPC strings", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);

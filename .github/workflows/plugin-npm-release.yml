@@ -1240,7 +1240,7 @@ jobs:
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
-      - name: Publish approved Meta bootstrap tarball
+      - name: Publish approved bootstrap tarball
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -1251,19 +1251,15 @@ jobs:
           TARBALL_PATH: ${{ steps.publication_evidence.outputs.tarball_path }}
         run: |
           set -euo pipefail
-          [[ "$PACKAGE_NAME" == "@openclaw/meta-provider" && "$PACKAGE_DIR" == "extensions/meta" ]] || {
-            echo "npm token bootstrap is restricted to the approved Meta provider package." >&2
-            exit 1
-          }
           [[ "$PACKAGE_VERSION" == *"-beta."* && "$PUBLISH_TAG" == "beta" ]] || {
-            echo "Meta npm token bootstrap requires an approved beta package and beta tag." >&2
+            echo "npm token bootstrap requires an approved beta package and beta tag." >&2
             exit 1
           }
           [[ -n "${NPM_TOKEN// }" ]] || {
-            echo "Meta npm token bootstrap requires the protected npm release token." >&2
+            echo "npm token bootstrap requires the protected npm release token." >&2
             exit 1
           }
-          publish_home="$(mktemp -d "${RUNNER_TEMP}/meta-npm-bootstrap.XXXXXX")"
+          publish_home="$(mktemp -d "${RUNNER_TEMP}/plugin-npm-bootstrap.XXXXXX")"
           cleanup() {
             rm -rf "$publish_home"
           }
@@ -1287,7 +1283,7 @@ jobs:
               --provenance \
               --tag "$PUBLISH_TAG"
 
-      - name: Verify Meta bootstrap published runtime
+      - name: Verify bootstrap published runtime
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
         env:
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}

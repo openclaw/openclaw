@@ -1727,9 +1727,16 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`, `autoPresence.*`
 - UI: `ui.components.accentColor`
-- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents.enabled`, `agentComponents.ttlMs`, `heartbeat`, `responsePrefix`
+- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents.enabled`, `agentComponents.ttlMs`, `activities`, `heartbeat`, `responsePrefix`
 
 </Accordion>
+
+### Discord Activities
+
+Set `channels.discord.activities` to let agents post self-contained HTML widgets that open inside Discord. The block is opt-in; when absent, OpenClaw registers no Activity routes, tool, or interaction handler. See [Discord Activities](/channels/discord-activities) for the Developer Portal, tunnel, security, and troubleshooting setup.
+
+- `activities.clientSecret`: OAuth2 client secret for the Discord application; falls back to `DISCORD_CLIENT_SECRET`
+- `activities.applicationId`: optional Activity application ID; defaults to the bot application ID learned at gateway startup
 
 ## Safety and operations
 
@@ -1740,6 +1747,9 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 ## Related
 
 <CardGroup cols={2}>
+  <Card title="Discord Activities" icon="window" href="/channels/discord-activities">
+    Launch interactive HTML widgets inside Discord.
+  </Card>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Pair a Discord user to the gateway.
   </Card>
