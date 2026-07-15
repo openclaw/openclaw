@@ -32,6 +32,7 @@ import {
 } from "../../lib/workspace/grid.ts";
 import {
   approveWidget,
+  cancelWorkspaceLoadIntent,
   clearActiveDrag,
   customWidgetName,
   customWidgetStatus,
@@ -44,9 +45,9 @@ import {
   moveWidgetToTab,
   orderedTabs,
   removeWidgetFromTab,
-  resolveActiveSlug,
   registerActiveDrag,
   resolveBinding,
+  setActiveWorkspaceSlug,
   setWidgetCollapsed,
   startBindingPolling,
   subscribeToWorkspaceEvents,
@@ -872,8 +873,12 @@ export function renderWorkspace(props: WorkspaceProps): TemplateResult {
   }
 
   // Deep-link: a changed `?ws=` re-points the active tab without a refetch.
-  if (state.workspace && requestedSlug && requestedSlug !== state.activeSlug) {
-    state.activeSlug = resolveActiveSlug(state.workspace, requestedSlug);
+  if (state.workspace) {
+    if (requestedSlug) {
+      setActiveWorkspaceSlug(state, state.workspace, requestedSlug);
+    } else {
+      cancelWorkspaceLoadIntent(state);
+    }
   }
 
   return html`
@@ -903,7 +908,10 @@ function renderBody(
         <button
           class="btn btn--small"
           type="button"
-          @click=${() => void loadWorkspace(state, props.client)}
+        @click=${() =>
+          void loadWorkspace(state, props.client, {
+            requestedSlug: requestedWorkspaceSlug(window.location.search),
+          })}
         >
           ${t("common.reload")}
         </button>

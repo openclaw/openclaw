@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
+  cancelWorkspaceLoadIntent,
   clearActiveDrag,
   getWorkspaceState,
   hideWidget,
@@ -11,6 +12,7 @@ import {
   registerActiveDrag,
   removeWidgetFromTab,
   resolveBinding,
+  setActiveWorkspaceSlug,
   updateWidgetTitle,
   startBindingPolling,
   stopWorkspace,
@@ -102,6 +104,256 @@ describe("loadWorkspace", () => {
 
     expect(state.workspace?.workspaceVersion).toBe(4);
     expect(state.workspace?.tabs[0]?.title).toBe("Newest");
+  });
+
+  it("preserves requested navigation when a silent reload supersedes it", async () => {
+    const state = getWorkspaceState({});
+    const resolveRequests: Array<(value: unknown) => void> = [];
+    const client = mockClient({
+      request: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveRequests.push(resolve);
+          }),
+      ) as never,
+    });
+
+    const foregroundLoad = loadWorkspace(state, client, { requestedSlug: "archive" });
+    const silentLoad = loadWorkspace(state, client, { requestedSlug: null, silent: true });
+
+    resolveRequests[1]?.({
+      doc: sampleWorkspace({ workspaceVersion: 4 }),
+      workspaceVersion: 4,
+    });
+    await silentLoad;
+    expect(state.activeSlug).toBe("archive");
+
+    resolveRequests[0]?.({ doc: sampleWorkspace(), workspaceVersion: 3 });
+    await foregroundLoad;
+    expect(state.activeSlug).toBe("archive");
+    expect(state.workspace?.workspaceVersion).toBe(4);
+  });
+
+  it("retains requested navigation after a superseding silent failure", async () => {
+    const state = getWorkspaceState({});
+    const requests: Array<{
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const client = mockClient({
+      request: vi.fn(
+        () =>
+          new Promise((resolve, reject) => {
+            requests.push({ resolve, reject });
+          }),
+      ) as never,
+    });
+
+    const requestedLoad = loadWorkspace(state, client, { requestedSlug: "archive" });
+    const failedSilentLoad = loadWorkspace(state, client, { silent: true });
+    requests[1]?.reject(new Error("temporary failure"));
+    await failedSilentLoad;
+
+    const retryLoad = loadWorkspace(state, client, { silent: true });
+    requests[2]?.resolve({
+      doc: sampleWorkspace({ workspaceVersion: 4 }),
+      workspaceVersion: 4,
+    });
+    await retryLoad;
+    expect(state.activeSlug).toBe("archive");
+
+    requests[0]?.resolve({ doc: sampleWorkspace(), workspaceVersion: 3 });
+    await requestedLoad;
+    expect(state.activeSlug).toBe("archive");
+  });
+
+  it("cancels older navigation intent on a newer foreground reload", async () => {
+    const state = getWorkspaceState({});
+    state.workspace = sampleWorkspace();
+    state.activeSlug = "main";
+    const resolveRequests: Array<(value: unknown) => void> = [];
+    const client = mockClient({
+      request: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveRequests.push(resolve);
+          }),
+      ) as never,
+    });
+
+    const requestedLoad = loadWorkspace(state, client, { requestedSlug: "archive" });
+    const foregroundReload = loadWorkspace(state, client, { requestedSlug: null });
+
+    resolveRequests[1]?.({
+      doc: sampleWorkspace({ workspaceVersion: 4 }),
+      workspaceVersion: 4,
+    });
+    await foregroundReload;
+    expect(state.activeSlug).toBe("main");
+
+    resolveRequests[0]?.({ doc: sampleWorkspace(), workspaceVersion: 3 });
+    await requestedLoad;
+    expect(state.activeSlug).toBe("main");
+  });
+
+  it("cancels pending navigation when the deep link returns to the active tab", async () => {
+    const state = getWorkspaceState({});
+    const workspace = sampleWorkspace();
+    state.workspace = workspace;
+    state.activeSlug = "main";
+    let resolveRequest: ((value: unknown) => void) | undefined;
+    const client = mockClient({
+      request: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveRequest = resolve;
+          }),
+      ) as never,
+    });
+
+    const reload = loadWorkspace(state, client, { requestedSlug: "archive" });
+    setActiveWorkspaceSlug(state, workspace, "main");
+    resolveRequest?.({ doc: sampleWorkspace({ workspaceVersion: 4 }), workspaceVersion: 4 });
+    await reload;
+
+    expect(state.activeSlug).toBe("main");
+  });
+
+  it("cancels pending navigation when the deep link is removed", async () => {
+    const state = getWorkspaceState({});
+    const workspace = sampleWorkspace();
+    state.workspace = workspace;
+    state.activeSlug = "main";
+    const client = mockClient({
+      request: vi.fn(async () => ({
+        doc: sampleWorkspace({ workspaceVersion: 4 }),
+        workspaceVersion: 4,
+      })) as never,
+    });
+
+    const reload = loadWorkspace(state, client, { requestedSlug: "archive" });
+    cancelWorkspaceLoadIntent(state);
+    await reload;
+
+    expect(state.activeSlug).toBe("main");
+  });
+
+  it("settles requested navigation against a newer current workspace", async () => {
+    const state = getWorkspaceState({});
+    state.workspace = sampleWorkspace({ workspaceVersion: 5 });
+    state.activeSlug = "main";
+    const client = mockClient({
+      request: vi.fn(async () => ({
+        doc: sampleWorkspace({ workspaceVersion: 4 }),
+        workspaceVersion: 4,
+      })) as never,
+    });
+
+    await loadWorkspace(state, client, { requestedSlug: "archive" });
+
+    expect(state.workspace?.workspaceVersion).toBe(5);
+    expect(state.activeSlug).toBe("archive");
+  });
+
+  it("keeps the active tab when requested navigation fails and retries the intent", async () => {
+    const state = getWorkspaceState({});
+    state.workspace = sampleWorkspace();
+    state.activeSlug = "main";
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("reload failed"))
+      .mockResolvedValueOnce({
+        doc: sampleWorkspace({ workspaceVersion: 4 }),
+        workspaceVersion: 4,
+      });
+    const client = mockClient({ request: request as never });
+
+    await loadWorkspace(state, client, { requestedSlug: "archive" });
+    expect(state.activeSlug).toBe("main");
+
+    await loadWorkspace(state, client, { requestedSlug: "archive" });
+    expect(state.activeSlug).toBe("archive");
+    expect(state.workspace?.workspaceVersion).toBe(4);
+  });
+
+  it("treats a null requested slug as absent during reload", async () => {
+    const state = getWorkspaceState({});
+    state.workspace = sampleWorkspace();
+    state.activeSlug = "archive";
+    const client = mockClient({
+      request: vi.fn(async () => ({
+        doc: sampleWorkspace({ workspaceVersion: 4 }),
+        workspaceVersion: 4,
+      })) as never,
+    });
+
+    await loadWorkspace(state, client, { requestedSlug: null });
+    expect(state.activeSlug).toBe("archive");
+  });
+
+  it("preserves a newer tab selection while requested navigation is pending", async () => {
+    const state = getWorkspaceState({});
+    const workspace = sampleWorkspace({
+      tabs: [
+        ...sampleWorkspace().tabs,
+        { slug: "other", title: "Other", hidden: false, widgets: [] },
+      ],
+    });
+    state.workspace = workspace;
+    state.activeSlug = "main";
+    let resolveRequest: ((value: unknown) => void) | undefined;
+    const client = mockClient({
+      request: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveRequest = resolve;
+          }),
+      ) as never,
+    });
+
+    const reload = loadWorkspace(state, client, { requestedSlug: "archive" });
+    setActiveWorkspaceSlug(state, workspace, "other");
+    setActiveWorkspaceSlug(state, workspace, "main");
+    resolveRequest?.({
+      doc: { ...workspace, workspaceVersion: 4 },
+      workspaceVersion: 4,
+    });
+    await reload;
+
+    expect(state.activeSlug).toBe("main");
+  });
+
+  it("defers matching deep-link reconciliation until the loaded tab exists", async () => {
+    const state = getWorkspaceState({});
+    const currentWorkspace = sampleWorkspace();
+    state.workspace = currentWorkspace;
+    state.activeSlug = "main";
+    let resolveRequest: ((value: unknown) => void) | undefined;
+    const client = mockClient({
+      request: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveRequest = resolve;
+          }),
+      ) as never,
+    });
+
+    const reload = loadWorkspace(state, client, { requestedSlug: "new-tab" });
+    setActiveWorkspaceSlug(state, currentWorkspace, "new-tab");
+    expect(state.activeSlug).toBe("main");
+
+    resolveRequest?.({
+      doc: sampleWorkspace({
+        workspaceVersion: 4,
+        tabs: [
+          ...currentWorkspace.tabs,
+          { slug: "new-tab", title: "New", hidden: false, widgets: [] },
+        ],
+      }),
+      workspaceVersion: 4,
+    });
+    await reload;
+    expect(state.activeSlug).toBe("new-tab");
   });
 
   it("keeps loading owned by the newest foreground reload", async () => {

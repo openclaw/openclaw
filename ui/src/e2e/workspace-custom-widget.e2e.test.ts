@@ -169,6 +169,15 @@ async function newPage(): Promise<Page> {
   return context.newPage();
 }
 
+async function waitForTwoAnimationFrames(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+}
+
 describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -232,6 +241,7 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
       await gotoWorkspaces(page, server);
       const title = page.locator(".workspace-widget__title");
       await expect.poll(() => title.textContent()).toBe("Initial");
+      await waitForTwoAnimationFrames(page);
       const initialRequestCount = (await gateway.getRequests("workspaces.get")).length;
 
       await gateway.deferNext("workspaces.get");
@@ -266,12 +276,7 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
         ok: true,
         payload: workspaceDoc(2, "pending", "Stale"),
       });
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
+      await waitForTwoAnimationFrames(page);
 
       expect(await title.textContent()).toBe("Newest");
 
@@ -307,12 +312,7 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
         ok: false,
         error: { code: "UNAVAILABLE", message: "stale failure" },
       });
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
+      await waitForTwoAnimationFrames(page);
 
       expect(await title.textContent()).toBe("Newest after error");
     } finally {
