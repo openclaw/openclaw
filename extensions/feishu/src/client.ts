@@ -85,12 +85,59 @@ type FeishuHttpInstanceLike = Pick<
   "request" | "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
 >;
 
-async function getWsProxyAgent() {
-  return resolveAmbientNodeProxyAgent<Agent>();
-}
-
 function isManagedProxyActive() {
   return process.env["OPENCLAW_PROXY_ACTIVE"] === "1";
+}
+
+let cachedFeishuProxyAgent: Agent | undefined;
+let pendingFeishuProxyAgent: Promise<Agent | undefined> | undefined;
+let feishuProxyAgentGeneration = 0;
+
+// Ambient proxy configuration is process-stable. Share one dual-protocol agent
+// across REST, bootstrap, and WebSocket traffic so connections stay pooled.
+async function getFeishuProxyAgent(): Promise<Agent | undefined> {
+  if (cachedFeishuProxyAgent) {
+    return cachedFeishuProxyAgent;
+  }
+  if (pendingFeishuProxyAgent) {
+    return pendingFeishuProxyAgent;
+  }
+
+  const generation = feishuProxyAgentGeneration;
+  let resolutionError: unknown;
+  const pending = resolveAmbientNodeProxyAgent<Agent>({
+    onError: (error) => {
+      resolutionError = error;
+    },
+  }).then((agent) => {
+    if (generation !== feishuProxyAgentGeneration) {
+      agent?.destroy();
+      return undefined;
+    }
+    if (!agent && isManagedProxyActive()) {
+      throw new Error("Feishu managed proxy is active but no proxy agent could be created", {
+        cause: resolutionError,
+      });
+    }
+    cachedFeishuProxyAgent = agent;
+    return agent;
+  });
+  pendingFeishuProxyAgent = pending;
+  try {
+    return await pending;
+  } finally {
+    if (pendingFeishuProxyAgent === pending) {
+      pendingFeishuProxyAgent = undefined;
+    }
+  }
+}
+
+/** @internal Resets process-scoped proxy state between tests. */
+export function resetFeishuProxyAgentForTest(): void {
+  feishuProxyAgentGeneration += 1;
+  pendingFeishuProxyAgent = undefined;
+  cachedFeishuProxyAgent?.destroy();
+  cachedFeishuProxyAgent = undefined;
 }
 
 type FeishuProxyAwareHttpRequestOptions<D> = Lark.HttpRequestOptions<D> & {
@@ -131,7 +178,7 @@ function createFeishuHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
     opts?: Lark.HttpRequestOptions<D>,
   ): Promise<FeishuProxyAwareHttpRequestOptions<D>> {
     const next: FeishuProxyAwareHttpRequestOptions<D> = { timeout: defaultTimeoutMs, ...opts };
-    const agent = await getWsProxyAgent();
+    const agent = await getFeishuProxyAgent();
     if (agent) {
       if (isManagedProxyActive()) {
         next.httpAgent = agent;
@@ -231,7 +278,7 @@ export async function createFeishuWSClient(
     throw new Error(`Feishu credentials not configured for account "${accountId}"`);
   }
 
-  const agent = await getWsProxyAgent();
+  const agent = await getFeishuProxyAgent();
   const defaultHttpTimeoutMs = resolveConfiguredHttpTimeoutMs(account);
   return new feishuClientSdk.WSClient({
     appId,
