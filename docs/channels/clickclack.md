@@ -74,7 +74,7 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 | Key                     | Default             | Notes                                                                                   |
 | ----------------------- | ------------------- | --------------------------------------------------------------------------------------- |
 | `baseUrl`               | none (required)     | ClickClack server URL.                                                                  |
-| `token`                 | none (required)     | Plain string or secret ref (`source: "env" \| "file" \| "exec"`).                       |
+| `token`                 | none                | Bot token as a plain string or secret ref (`source: "env" \| "file" \| "exec"`).        |
 | `tokenFile`             | none                | Path to a bot-token file; takes precedence over `token`.                                |
 | `workspace`             | none (required)     | Workspace id, slug, or name.                                                            |
 | `replyMode`             | `"agent"`           | `"agent"` runs the full agent pipeline; `"model"` sends short direct model completions. |
