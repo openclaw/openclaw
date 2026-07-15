@@ -60,7 +60,7 @@ function rebaseOutboundSessionRoute(
   };
 }
 
-export function resolveAgentDeliveryPlan(params: {
+function resolveAgentDeliveryPlan(params: {
   sessionEntry?: SessionEntry;
   requestedChannel?: string;
   explicitTo?: string;
@@ -173,8 +173,8 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   },
 ): Promise<AgentDeliveryPlan> {
   const plan = resolveAgentDeliveryPlan(params);
-  const { resolvedChannel } = plan;
-  if (!params.wantsDelivery || !isDeliverableMessageChannel(resolvedChannel)) {
+  const { resolvedChannel, resolvedTo } = plan;
+  if (!params.wantsDelivery || !resolvedTo || !isDeliverableMessageChannel(resolvedChannel)) {
     return plan;
   }
   const plugin = resolveOutboundChannelPlugin({
@@ -183,7 +183,15 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     allowBootstrap: true,
   });
   const hasPluginSessionRoute = Boolean(plugin?.messaging?.resolveOutboundSessionRoute);
+  const hasPluginTargetResolver = Boolean(plugin?.messaging?.targetResolver);
   if (!plugin) {
+    return plan;
+  }
+  if (
+    !hasPluginSessionRoute &&
+    !hasPluginTargetResolver &&
+    params.sessionRouteMode !== "allow-fallback"
+  ) {
     return plan;
   }
   const resolvedAccountId =

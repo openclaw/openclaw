@@ -114,14 +114,32 @@ vi.mock("../../utils/message-channel.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
-let resolveAgentDeliveryPlan: typeof import("./agent-delivery.js").resolveAgentDeliveryPlan;
+
+const discordChannelDirectoryTarget = {
+  ok: true,
+  target: {
+    to: "channel:1524410080953634829",
+    kind: "channel",
+    source: "directory",
+    resolutionSource: "directory",
+  },
+} as const;
+const telegramGroupDirectoryTarget = {
+  ok: true,
+  target: {
+    to: "telegram:-1002458651455",
+    kind: "group",
+    source: "directory",
+    resolutionSource: "directory",
+  },
+} as const;
+
 let resolveAgentDeliveryPlanWithSessionRoute: typeof import("./agent-delivery.js").resolveAgentDeliveryPlanWithSessionRoute;
 let resolveAgentExplicitRecipientSession: typeof import("./agent-delivery.js").resolveAgentExplicitRecipientSession;
 let resolveAgentOutboundTarget: typeof import("./agent-delivery.js").resolveAgentOutboundTarget;
 
 beforeAll(async () => {
   ({
-    resolveAgentDeliveryPlan,
     resolveAgentDeliveryPlanWithSessionRoute,
     resolveAgentExplicitRecipientSession,
     resolveAgentOutboundTarget,
@@ -148,8 +166,14 @@ beforeEach(() => {
   mocks.resolveSessionDeliveryTarget.mockClear();
 });
 
-function expectDeliveryPlan(params: Parameters<typeof resolveAgentDeliveryPlan>[0]) {
-  return resolveAgentDeliveryPlan(params);
+function expectDeliveryPlan(
+  params: Omit<Parameters<typeof resolveAgentDeliveryPlanWithSessionRoute>[0], "cfg" | "agentId">,
+) {
+  return resolveAgentDeliveryPlanWithSessionRoute({
+    ...params,
+    cfg: {} as OpenClawConfig,
+    agentId: "agent",
+  });
 }
 
 describe("agent delivery helpers", () => {
@@ -223,15 +247,15 @@ describe("agent delivery helpers", () => {
         resolvedTo: undefined,
       },
     },
-  ])("builds delivery plan for %j", ({ params, expected }) => {
-    const plan = expectDeliveryPlan(params);
+  ])("builds delivery plan for %j", async ({ params, expected }) => {
+    const plan = await expectDeliveryPlan(params);
     for (const [key, value] of Object.entries(expected)) {
       expect((plan as Record<string, unknown>)[key]).toEqual(value);
     }
   });
 
-  it("resolves fallback targets when no explicit destination is provided", () => {
-    const plan = resolveAgentDeliveryPlan({
+  it("resolves fallback targets when no explicit destination is provided", async () => {
+    const plan = await expectDeliveryPlan({
       sessionEntry: {
         sessionId: "s2",
         updatedAt: 2,
@@ -254,8 +278,8 @@ describe("agent delivery helpers", () => {
     expect(resolved.resolvedTo).toBe("+1999");
   });
 
-  it("skips outbound target resolution when explicit target validation is disabled", () => {
-    const plan = expectDeliveryPlan({
+  it("skips outbound target resolution when explicit target validation is disabled", async () => {
+    const plan = await expectDeliveryPlan({
       sessionEntry: {
         sessionId: "s3",
         updatedAt: 3,
@@ -760,15 +784,7 @@ describe("agent delivery helpers", () => {
       ok: false,
       error: new Error('Reserved target "current" for Telegram'),
     });
-    mocks.resolveChannelTarget.mockResolvedValueOnce({
-      ok: true,
-      target: {
-        to: "telegram:-1002458651455",
-        kind: "group",
-        source: "directory",
-        resolutionSource: "directory",
-      },
-    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce(telegramGroupDirectoryTarget);
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
       sessionKey: "agent:telegram:group:-1002458651455",
       baseSessionKey: "agent:telegram:group:-1002458651455",
@@ -808,12 +824,7 @@ describe("agent delivery helpers", () => {
       agentId: "agent",
       accountId: "work",
       target: "telegram:-1002458651455",
-      resolvedTarget: {
-        to: "telegram:-1002458651455",
-        kind: "group",
-        source: "directory",
-        resolutionSource: "directory",
-      },
+      resolvedTarget: telegramGroupDirectoryTarget.target,
       currentSessionKey: "agent:main",
       threadId: undefined,
     });
@@ -826,15 +837,7 @@ describe("agent delivery helpers", () => {
       messaging: { resolveOutboundSessionRoute: vi.fn(), targetResolver: {} },
     });
     mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: "channel:general" });
-    mocks.resolveChannelTarget.mockResolvedValueOnce({
-      ok: true,
-      target: {
-        to: "channel:1524410080953634829",
-        kind: "channel",
-        source: "directory",
-        resolutionSource: "directory",
-      },
-    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce(discordChannelDirectoryTarget);
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
 
     const plan = await resolveAgentDeliveryPlanWithSessionRoute({
@@ -858,6 +861,27 @@ describe("agent delivery helpers", () => {
     });
     expect(plan.resolvedTo).toBe("channel:1524410080953634829");
     expect(plan.targetResolutionError).toBeUndefined();
+  });
+
+  it("does not infer a session route for target-resolver-only plugins", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      messaging: { targetResolver: {} },
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: "channel:general" });
+    mocks.resolveChannelTarget.mockResolvedValueOnce(discordChannelDirectoryTarget);
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main",
+      requestedChannel: "workspace",
+      explicitTo: "channel:general",
+      wantsDelivery: true,
+    });
+
+    expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
+    expect(plan.resolvedTo).toBe("channel:1524410080953634829");
+    expect(plan.resolvedSessionKey).toBeUndefined();
   });
 
   it("keeps reserved explicit target errors when directory-capable resolution misses", async () => {
@@ -907,15 +931,7 @@ describe("agent delivery helpers", () => {
       ok: false,
       error: new Error('Reserved target "current" for Telegram'),
     });
-    mocks.resolveChannelTarget.mockResolvedValueOnce({
-      ok: true,
-      target: {
-        to: "telegram:-1002458651455",
-        kind: "group",
-        source: "directory",
-        resolutionSource: "directory",
-      },
-    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce(telegramGroupDirectoryTarget);
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
 
     const plan = await resolveAgentDeliveryPlanWithSessionRoute({
@@ -938,12 +954,7 @@ describe("agent delivery helpers", () => {
       agentId: "agent",
       accountId: "work",
       target: "telegram:-1002458651455",
-      resolvedTarget: {
-        to: "telegram:-1002458651455",
-        kind: "group",
-        source: "directory",
-        resolutionSource: "directory",
-      },
+      resolvedTarget: telegramGroupDirectoryTarget.target,
       currentSessionKey: "agent:main",
       threadId: undefined,
     });
