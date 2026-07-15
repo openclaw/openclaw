@@ -280,6 +280,24 @@ describe("noteMemorySearchHealth", () => {
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 
+  it("still reports a missing memory backend in intentional FTS-only mode", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "none",
+      fallback: "none",
+      local: {},
+      remote: {},
+    });
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).toHaveBeenCalledWith(
+      "No active memory plugin is registered for the current config.",
+      "Memory search",
+    );
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
   it("reports last-known llama.cpp runtime facts from the gateway", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
