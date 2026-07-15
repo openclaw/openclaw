@@ -7,7 +7,6 @@ import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-meta
 import { readJsonIfExists } from "./json-files.js";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
-export const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 const PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY = 32;
 const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
 const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
