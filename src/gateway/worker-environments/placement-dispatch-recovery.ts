@@ -15,7 +15,7 @@ import type { WorkerEnvironmentService } from "./service.js";
 function sameActiveEnvironment(
   placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
   environment: ReturnType<WorkerEnvironmentService["get"]>,
-): environment is NonNullable<typeof environment> {
+): boolean {
   return Boolean(
     environment &&
     environment.state === "attached" &&
