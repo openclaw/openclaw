@@ -509,6 +509,17 @@ function resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs: number): number {
   );
 }
 
+function resolveDiagnosticRecoverySkipHeartbeatDelayMs(stuckSessionAbortMs: number): number {
+  // setInterval callbacks normally arrive a little late. Reuse the liveness
+  // delay budget so ordinary jitter cannot suppress recovery indefinitely.
+  const jitterTolerantHeartbeatMs =
+    DIAGNOSTIC_HEARTBEAT_INTERVAL_MS + DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS;
+  return Math.min(
+    DIAGNOSTIC_HEARTBEAT_DELAY_RECOVERY_SKIP_MS,
+    Math.max(jitterTolerantHeartbeatMs, stuckSessionAbortMs),
+  );
+}
+
 function isStalledEmbeddedRunRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
   activity?: DiagnosticSessionActivitySnapshot;
@@ -1241,8 +1252,10 @@ export function startDiagnosticHeartbeat(
       lastDiagnosticHeartbeatTickAt === undefined ? 0 : now - lastDiagnosticHeartbeatTickAt;
     lastDiagnosticHeartbeatTickAt = now;
     // A late interval tick means the process was stalled, not the sessions.
-    // Acting on inflated ages here can abort healthy runs; the next on-time tick decides.
-    const skipRecoveryThisTick = tickDelayMs > DIAGNOSTIC_HEARTBEAT_DELAY_RECOVERY_SKIP_MS;
+    // Scale the guard down for low abort thresholds, then let an on-time tick decide.
+    const recoverySkipHeartbeatDelayMs =
+      resolveDiagnosticRecoverySkipHeartbeatDelayMs(stuckSessionAbortMs);
+    const skipRecoveryThisTick = tickDelayMs >= recoverySkipHeartbeatDelayMs;
     if (skipRecoveryThisTick) {
       diag.warn(
         `liveness heartbeat delayed ${Math.round(tickDelayMs)}ms; deferring recovery decisions`,
