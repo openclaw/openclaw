@@ -81,7 +81,7 @@ describe("WhatsApp delivery recovery", () => {
         channel: "whatsapp",
         to: "+1555",
         payloads: [{ text: "queued before listener startup" }],
-        queuePolicy: "required",
+        durability: "required",
       });
       expect(initialResult).toMatchObject({
         status: "failed",
