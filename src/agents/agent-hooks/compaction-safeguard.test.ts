@@ -21,7 +21,8 @@ import {
   setCompactionSafeguardCancelReason,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
-import compactionSafeguardExtension, { testing } from "./compaction-safeguard.js";
+import compactionSafeguardExtension from "./compaction-safeguard.js";
+import { testing } from "./compaction-safeguard.test-support.js";
 
 vi.mock("../compaction.js", async () => {
   const actual = await vi.importActual<typeof compactionModule>("../compaction.js");
