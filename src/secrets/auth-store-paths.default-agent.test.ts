@@ -110,6 +110,17 @@ describe("listAgentModelsJsonPaths — default agent ID", () => {
     expect(paths).toContain(path.join(FAKE_STATE_DIR, "agents", "worker", "agent", "models.json"));
   });
 
+  it("does not seed a dead agents/main models.json for a nova-only default config", () => {
+    // Regression for the ClawSweeper P2: with no env override and only "nova"
+    // marked default, the active-agent fallback must resolve to nova, not "main".
+    const cfg = makeNonMainConfig("nova");
+    const paths = listAgentModelsJsonPaths(cfg as never, FAKE_STATE_DIR, {});
+    expect(paths).toContain(path.join(FAKE_STATE_DIR, "agents", "nova", "agent", "models.json"));
+    expect(paths).not.toContain(
+      path.join(FAKE_STATE_DIR, "agents", "main", "agent", "models.json"),
+    );
+  });
+
   it("does not double-add the default agent path when it is also in agents.list", () => {
     const cfg = makeNonMainConfig("nova");
     const paths = listAgentModelsJsonPaths(cfg as never, FAKE_STATE_DIR);

@@ -43,13 +43,18 @@ export function listLegacyAuthJsonPaths(stateDir: string): string[] {
   return out;
 }
 
-function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = process.env): string {
+function resolveActiveAgentDir(
+  stateDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  fallbackAgentId = "main",
+): string {
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env);
   }
-  // Storage scans must include the implicit main agent even before config has agent entries.
-  return path.join(resolveUserPath(stateDir), "agents", "main", "agent");
+  // With no env override, scope to the configured default agent so a non-"main"
+  // default (e.g. `default: true` on "nova") does not seed a dead main path.
+  return path.join(resolveUserPath(stateDir), "agents", fallbackAgentId, "agent");
 }
 
 /**
@@ -67,7 +72,7 @@ export function listAgentModelsJsonPaths(
   // that set `default: true` on a non-"main" agent resolve the correct models.json path.
   const defaultAgentId = resolveDefaultAgentId(config);
   paths.add(path.join(resolvedStateDir, "agents", defaultAgentId, "agent", "models.json"));
-  paths.add(path.join(resolveActiveAgentDir(stateDir, env), "models.json"));
+  paths.add(path.join(resolveActiveAgentDir(stateDir, env, defaultAgentId), "models.json"));
 
   const agentsRoot = path.join(resolvedStateDir, "agents");
   if (fs.existsSync(agentsRoot)) {
