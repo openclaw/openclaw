@@ -11,6 +11,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
+import { resolveGatewayTaskScriptPath } from "../../daemon/paths.js";
 import {
   renderPosixRestartLogSetup,
   resolveGatewayRestartLogPath,
@@ -175,6 +176,8 @@ exit "$status"
       const restartLogPath = resolveGatewayRestartLogPath({ ...process.env, ...env });
       const quotedLogPath = powerShellSingleQuote(restartLogPath);
       const quotedTaskName = powerShellSingleQuote(taskName);
+      const gatewayScriptPath = resolveGatewayTaskScriptPath({ ...process.env, ...env });
+      const quotedGatewayScriptPath = powerShellSingleQuote(gatewayScriptPath);
       filename = `openclaw-restart-${timestamp}.cmd`;
       scriptContent = `@echo off
 REM Standalone restart script - survives parent process termination.
@@ -309,8 +312,114 @@ function Get-OpenClawListenerPids {
   $listenerPids | Sort-Object -Unique
 }
 
+function Split-OpenClawCommandLine {
+  param([string]$CommandLine)
+  @([regex]::Matches($CommandLine, '[^\\s"]+|"([^"]*)"') | ForEach-Object { $_.Value.Trim('"') })
+}
+
+function Normalize-OpenClawProcessArg {
+  param([string]$Arg)
+  ($Arg -replace '/', '\\').ToLowerInvariant()
+}
+
+function Test-OpenClawGatewayBinaryArg {
+  param([string]$NormalizedArg)
+  return $NormalizedArg -match '(?i)(^|\\\\)openclaw-gateway(\\.exe)?$'
+}
+
+function Test-OpenClawEntrypointArg {
+  param([string]$NormalizedArg)
+  # Generic JS entry names are accepted only while reading the trusted installed
+  # launcher; listener verification later requires an exact launcher-derived arg.
+  return (
+    $NormalizedArg -match '(?i)(^|\\\\)openclaw\\.(cmd|ps1|exe)$' -or
+    $NormalizedArg -match '(?i)\\\\node_modules\\\\openclaw\\\\' -or
+    $NormalizedArg -match '(?i)(^|\\\\)openclaw\\.mjs$' -or
+    $NormalizedArg -match '(?i)(^|\\\\)dist\\\\(index|entry)\\.js$' -or
+    $NormalizedArg -match '(?i)(^|\\\\)scripts\\\\run-node\\.mjs$' -or
+    $NormalizedArg -match '(?i)(^|\\\\)src\\\\(index|entry)\\.ts$'
+  )
+}
+
+function Get-OpenClawInstalledGatewayEntrypoints {
+  param([string]$ScriptPath)
+  $entrypoints = @()
+  try {
+    if (-not (Test-Path -LiteralPath $ScriptPath)) {
+      return $entrypoints
+    }
+    foreach ($rawLine in Get-Content -LiteralPath $ScriptPath) {
+      $line = $rawLine.Trim()
+      if (-not $line) {
+        continue
+      }
+      $lower = $line.ToLowerInvariant()
+      if (
+        $lower.StartsWith("@echo") -or
+        $lower.StartsWith("rem ") -or
+        $lower.StartsWith("set ") -or
+        $lower.StartsWith("cd /d ")
+      ) {
+        continue
+      }
+      foreach ($arg in Split-OpenClawCommandLine -CommandLine $line) {
+        $normalizedArg = Normalize-OpenClawProcessArg -Arg $arg
+        if (
+          (Test-OpenClawEntrypointArg -NormalizedArg $normalizedArg) -or
+          (Test-OpenClawGatewayBinaryArg -NormalizedArg $normalizedArg)
+        ) {
+          $entrypoints += $normalizedArg
+        }
+      }
+      break
+    }
+  } catch {
+    Write-RestartLog "openclaw restart could not read installed gateway launcher source=update path=$ScriptPath error=$($_.Exception.Message)"
+  }
+  $entrypoints | Sort-Object -Unique
+}
+
+function Test-OpenClawGatewayListenerProcess {
+  param(
+    [int]$ProcessId,
+    [string[]]$ExpectedEntrypoints
+  )
+  try {
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+    if (-not $process) {
+      return $false
+    }
+
+    $commandLine = [string]$process.CommandLine
+    if (-not $commandLine) {
+      return $false
+    }
+
+    $commandArgs = Split-OpenClawCommandLine -CommandLine $commandLine
+    $hasGatewayCommand = $commandArgs -contains "gateway"
+    $hasGatewayBinary = $false
+    $hasOpenClawEntrypoint = $false
+    foreach ($arg in $commandArgs) {
+      $normalizedArg = Normalize-OpenClawProcessArg -Arg $arg
+      if (Test-OpenClawGatewayBinaryArg -NormalizedArg $normalizedArg) {
+        $hasGatewayBinary = $true
+        break
+      }
+      if ($ExpectedEntrypoints -contains $normalizedArg) {
+        $hasOpenClawEntrypoint = $true
+        break
+      }
+    }
+    return $hasGatewayBinary -or ($hasOpenClawEntrypoint -and $hasGatewayCommand)
+  } catch {
+    Write-RestartLog "openclaw restart could not verify listener owner source=update pid=$ProcessId error=$($_.Exception.Message)"
+    return $false
+  }
+}
+
 function Invoke-OpenClawStartupLauncher {
-  $launcherPath = Join-Path $env:USERPROFILE ".openclaw\\gateway.cmd"
+  param([string]$LauncherPath)
+  $launcherPath = $LauncherPath
   if (-not (Test-Path -LiteralPath $launcherPath)) {
     Write-RestartLog "openclaw restart startup launcher missing source=update path=$launcherPath"
     return 1
@@ -328,6 +437,8 @@ function Invoke-OpenClawStartupLauncher {
 
 $taskName = ${quotedTaskName}
 $port = ${port}
+$gatewayScriptPath = ${quotedGatewayScriptPath}
+$expectedGatewayEntrypoints = @(Get-OpenClawInstalledGatewayEntrypoints -ScriptPath $gatewayScriptPath)
 Write-RestartLog "openclaw restart attempt source=update target=$taskName"
 
 $taskState = Get-OpenClawScheduledTaskState -TaskName $taskName
@@ -348,11 +459,15 @@ for ($attempt = 1; $attempt -le 10; $attempt++) {
 
   if ($attempt -eq 10) {
     foreach ($listenerPid in $listeners) {
-      try {
-        Stop-Process -Id $listenerPid -Force -ErrorAction Stop
-        Write-RestartLog "openclaw restart killed stale listener source=update pid=$listenerPid"
-      } catch {
-        Write-RestartLog "openclaw restart failed to kill stale listener source=update pid=$listenerPid error=$($_.Exception.Message)"
+      if (Test-OpenClawGatewayListenerProcess -ProcessId $listenerPid -ExpectedEntrypoints $expectedGatewayEntrypoints) {
+        try {
+          Stop-Process -Id $listenerPid -Force -ErrorAction Stop
+          Write-RestartLog "openclaw restart killed stale listener source=update pid=$listenerPid"
+        } catch {
+          Write-RestartLog "openclaw restart failed to kill stale listener source=update pid=$listenerPid error=$($_.Exception.Message)"
+        }
+      } else {
+        Write-RestartLog "openclaw restart skipped non-openclaw listener source=update pid=$listenerPid"
       }
     }
     break
@@ -363,7 +478,7 @@ for ($attempt = 1; $attempt -le 10; $attempt++) {
 
 $status = Invoke-OpenClawSchtasksWithTimeout -Arguments @("/Run", "/TN", $taskName) -TimeoutSeconds 30
 if ($status -ne 0) {
-  $status = Invoke-OpenClawStartupLauncher
+  $status = Invoke-OpenClawStartupLauncher -LauncherPath $gatewayScriptPath
 }
 if ($status -eq 0) {
   Write-RestartLog "openclaw restart done source=update"

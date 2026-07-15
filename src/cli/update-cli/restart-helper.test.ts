@@ -90,6 +90,9 @@ exit 0
     const pollLoop = "for ($attempt = 1; $attempt -le 10; $attempt++)";
     const pollCall = `Get-OpenClawListenerPids -Port $port`;
     const forceKillBranch = "if ($attempt -eq 10)";
+    const ownerCheckFunction = "function Test-OpenClawGatewayListenerProcess";
+    const ownerCheckCall =
+      "if (Test-OpenClawGatewayListenerProcess -ProcessId $listenerPid -ExpectedEntrypoints $expectedGatewayEntrypoints)";
     const forceKillCommand = "Stop-Process -Id $listenerPid -Force";
     const runCommand =
       'Invoke-OpenClawSchtasksWithTimeout -Arguments @("/Run", "/TN", $taskName) -TimeoutSeconds 30';
@@ -102,7 +105,9 @@ exit 0
     const pollLoopIndex = content.indexOf(pollLoop, skipEndLogIndex);
     const pollCallIndex = content.indexOf(pollCall, pollLoopIndex);
     const forceKillBranchIndex = content.indexOf(forceKillBranch, pollCallIndex);
-    const forceKillCommandIndex = content.indexOf(forceKillCommand, forceKillBranchIndex);
+    const ownerCheckFunctionIndex = content.indexOf(ownerCheckFunction);
+    const ownerCheckCallIndex = content.indexOf(ownerCheckCall, forceKillBranchIndex);
+    const forceKillCommandIndex = content.indexOf(forceKillCommand, ownerCheckCallIndex);
     const runIndex = content.indexOf(runCommand, forceKillCommandIndex);
 
     expect(stateCheckIndex).toBeGreaterThanOrEqual(0);
@@ -113,7 +118,9 @@ exit 0
     expect(pollLoopIndex).toBeGreaterThan(skipEndLogIndex);
     expect(pollCallIndex).toBeGreaterThan(pollLoopIndex);
     expect(forceKillBranchIndex).toBeGreaterThan(pollCallIndex);
-    expect(forceKillCommandIndex).toBeGreaterThan(forceKillBranchIndex);
+    expect(ownerCheckFunctionIndex).toBeGreaterThanOrEqual(0);
+    expect(ownerCheckCallIndex).toBeGreaterThan(forceKillBranchIndex);
+    expect(forceKillCommandIndex).toBeGreaterThan(ownerCheckCallIndex);
     expect(runIndex).toBeGreaterThan(forceKillCommandIndex);
 
     expect(content).not.toContain("timeout /t 3 /nobreak >nul");
@@ -432,16 +439,118 @@ exit 0
       expect(content).toContain("$taskName = 'OpenClaw Gateway'");
       expect(content).toContain("function Invoke-OpenClawSchtasksWithTimeout");
       expect(content).toContain("function Get-OpenClawScheduledTaskState");
+      expect(content).toContain("function Get-OpenClawInstalledGatewayEntrypoints");
+      expect(content).toContain("function Test-OpenClawGatewayListenerProcess");
       expect(content).toContain("function Invoke-OpenClawStartupLauncher");
       expect(content).toContain("Get-ScheduledTask -TaskName $TaskName");
       expect(content).toContain("openclaw restart skipped schtasks end");
+      expect(content).toContain("$gatewayScriptPath = ");
       expect(content).toContain(
-        '$launcherPath = Join-Path $env:USERPROFILE ".openclaw\\gateway.cmd"',
+        "$expectedGatewayEntrypoints = @(Get-OpenClawInstalledGatewayEntrypoints -ScriptPath $gatewayScriptPath)",
       );
       expect(content).toContain("openclaw restart launched startup fallback");
       expectWindowsRestartWaitOrdering(content);
       expect(content).toContain('del "%~f0" >nul 2>&1');
       expect(content).toContain('rmdir "%OPENCLAW_RESTART_SCRIPT_DIR%" >nul 2>&1');
+      await cleanupScript(scriptPath);
+    });
+
+    it("only force-kills verified OpenClaw gateway listeners on Windows", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+      });
+
+      const ownerCheckIndex = content.indexOf("function Test-OpenClawGatewayListenerProcess");
+      const installedEntrypointsIndex = content.indexOf(
+        "function Get-OpenClawInstalledGatewayEntrypoints",
+      );
+      const entrypointArgIndex = content.indexOf("function Test-OpenClawEntrypointArg");
+      const gatewayBinaryArgIndex = content.indexOf("function Test-OpenClawGatewayBinaryArg");
+      const installedScriptReadIndex = content.indexOf(
+        "Get-Content -LiteralPath $ScriptPath",
+        installedEntrypointsIndex,
+      );
+      const cimIndex = content.indexOf(
+        'Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId"',
+        ownerCheckIndex,
+      );
+      const commandArgsParseIndex = content.indexOf(
+        "Split-OpenClawCommandLine -CommandLine $commandLine",
+        cimIndex,
+      );
+      const entrypointIndex = content.indexOf(
+        "$hasOpenClawEntrypoint = $false",
+        commandArgsParseIndex,
+      );
+      const gatewayBinaryIndex = content.indexOf(
+        "$hasGatewayBinary = $false",
+        commandArgsParseIndex,
+      );
+      const expectedEntrypointsIndex = content.indexOf(
+        "$ExpectedEntrypoints -contains $normalizedArg",
+        entrypointIndex,
+      );
+      const gatewayBinaryRegexIndex = content.indexOf(
+        "(?i)(^|\\\\)openclaw-gateway(\\.exe)?$",
+        gatewayBinaryArgIndex,
+      );
+      const nodeModulesIndex = content.indexOf(
+        "(?i)\\\\node_modules\\\\openclaw\\\\",
+        entrypointArgIndex,
+      );
+      const openclawMjsIndex = content.indexOf("(?i)(^|\\\\)openclaw\\.mjs$", entrypointArgIndex);
+      const sourceDistIndex = content.indexOf(
+        "(?i)(^|\\\\)dist\\\\(index|entry)\\.js$",
+        entrypointArgIndex,
+      );
+      const installedEntrypointCallIndex = content.indexOf(
+        "Test-OpenClawEntrypointArg -NormalizedArg $normalizedArg",
+        installedEntrypointsIndex,
+      );
+      const expectedEntrypointsLoadIndex = content.indexOf(
+        "$expectedGatewayEntrypoints = @(Get-OpenClawInstalledGatewayEntrypoints -ScriptPath $gatewayScriptPath)",
+        openclawMjsIndex,
+      );
+      const gatewayIndex = content.indexOf(
+        '$hasGatewayCommand = $commandArgs -contains "gateway"',
+        cimIndex,
+      );
+      const returnIndex = content.indexOf(
+        "return $hasGatewayBinary -or ($hasOpenClawEntrypoint -and $hasGatewayCommand)",
+        nodeModulesIndex,
+      );
+      const guardedKillIndex = content.indexOf(
+        "if (Test-OpenClawGatewayListenerProcess -ProcessId $listenerPid -ExpectedEntrypoints $expectedGatewayEntrypoints)",
+        returnIndex,
+      );
+      const stopIndex = content.indexOf("Stop-Process -Id $listenerPid -Force", guardedKillIndex);
+
+      expect(entrypointArgIndex).toBeGreaterThanOrEqual(0);
+      expect(gatewayBinaryArgIndex).toBeGreaterThanOrEqual(0);
+      expect(installedEntrypointsIndex).toBeGreaterThanOrEqual(0);
+      expect(installedEntrypointsIndex).toBeGreaterThan(entrypointArgIndex);
+      expect(installedScriptReadIndex).toBeGreaterThan(installedEntrypointsIndex);
+      expect(ownerCheckIndex).toBeGreaterThanOrEqual(0);
+      expect(cimIndex).toBeGreaterThan(ownerCheckIndex);
+      expect(commandArgsParseIndex).toBeGreaterThan(cimIndex);
+      expect(entrypointIndex).toBeGreaterThan(commandArgsParseIndex);
+      expect(gatewayBinaryIndex).toBeGreaterThan(commandArgsParseIndex);
+      expect(gatewayBinaryRegexIndex).toBeGreaterThan(gatewayBinaryArgIndex);
+      expect(expectedEntrypointsIndex).toBeGreaterThan(entrypointIndex);
+      expect(nodeModulesIndex).toBeGreaterThan(entrypointArgIndex);
+      expect(openclawMjsIndex).toBeGreaterThan(entrypointArgIndex);
+      expect(sourceDistIndex).toBeGreaterThan(entrypointArgIndex);
+      expect(installedEntrypointCallIndex).toBeGreaterThan(installedEntrypointsIndex);
+      expect(expectedEntrypointsLoadIndex).toBeGreaterThan(openclawMjsIndex);
+      expect(gatewayIndex).toBeGreaterThan(cimIndex);
+      expect(returnIndex).toBeGreaterThan(nodeModulesIndex);
+      expect(guardedKillIndex).toBeGreaterThan(returnIndex);
+      expect(stopIndex).toBeGreaterThan(guardedKillIndex);
+      expect(content).not.toContain('return ($candidate -match "(?i)\\bopenclaw\\b"');
+      expect(content).toContain("openclaw restart skipped non-openclaw listener");
+      expect(content).toContain("openclaw restart could not verify listener owner");
       await cleanupScript(scriptPath);
     });
 
@@ -457,7 +566,9 @@ exit 0
       expect(content).toContain(
         'Invoke-OpenClawSchtasksWithTimeout -Arguments @("/End", "/TN", $taskName) -TimeoutSeconds 10',
       );
-      expect(content).toContain("$status = Invoke-OpenClawStartupLauncher");
+      expect(content).toContain(
+        "$status = Invoke-OpenClawStartupLauncher -LauncherPath $gatewayScriptPath",
+      );
       expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });
