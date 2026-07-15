@@ -105,10 +105,6 @@ openclaw-chat-pane {
       opacity 0.12s ease;
   }
 
-  .chat-split-view openclaw-chat-pane {
-    animation: chat-pane-in 0.16s ease;
-  }
-
   @keyframes chat-drop-indicator-in {
     from {
       opacity: 0;
@@ -116,13 +112,6 @@ openclaw-chat-pane {
 
     to {
       opacity: 1;
-    }
-  }
-
-  @keyframes chat-pane-in {
-    from {
-      opacity: 0;
-      transform: scale(0.985);
     }
   }
 }

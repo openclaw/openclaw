@@ -135,7 +135,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   types: 6,
   "agent-config-primitives": 2,
   "command-auth": 81,
-  compat: 160,
+  // +2: group scope encoder/key builder mirrored by deprecated compat.
+  compat: 162,
   "direct-dm": 9,
   "direct-dm-access": 5,
   discord: 48,
@@ -205,6 +206,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
     // Its flat channel-groups builder adds one function, also mirrored by compat.
     // Its case-insensitive scope-key resolver adds one function, also mirrored by compat.
+    // Its length-prefixed segment encoder and scope-key builder add two functions, also mirrored.
     // The focused HTML entity runtime and quote-aware HTML tokenizer add one public function each.
     // Plugin service Gateway event scope and emitter types add four facade exports.
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -212,18 +214,21 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: registerMcpServerConnectionResolver context/result/resolver/registration types (#106229).
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
-      10695,
+      // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      10699,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
-      5382,
+      // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      5386,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3292,
+      // +2: group scope encoder/key builder mirrored by deprecated compat.
+      3294,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
