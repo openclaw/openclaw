@@ -412,7 +412,10 @@ The branch already has a real shared SQLite base:
   payload, but typed columns are authoritative for hot queue routing/state.
 - TUI last-session restore pointers now live in typed shared
   `tui_last_sessions` rows keyed by the hashed TUI connection/session scope.
-  The old TUI JSON file is doctor migration input only.
+  Runtime reads and writes only SQLite, atomically upserts each scope, and
+  excludes heartbeat sessions. `openclaw doctor --fix` strictly validates the
+  old TUI JSON file, keeps newer SQLite rows, verifies the canonical result,
+  and removes the unchanged legacy file instead of leaving an archive.
 - Default TTS prefs now live in shared plugin-state SQLite rows keyed under the
   `speech-core` plugin. The old `settings/tts.json` file is doctor migration
   input only; runtime no longer reads or writes TTS prefs JSON files, and the

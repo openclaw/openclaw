@@ -6,6 +6,7 @@ import { parse } from "yaml";
 import {
   buildReleaseCandidateState,
   buildPublishCommand,
+  buildTelegramArtifactInputs,
   candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
@@ -971,6 +972,37 @@ describe("release candidate checklist", () => {
         "openclaw-npm-preflight-",
       ),
     ).toBe("openclaw-npm-preflight-dba00");
+  });
+
+  it("builds the complete immutable Telegram artifact identity tuple", () => {
+    expect(
+      buildTelegramArtifactInputs({
+        artifact: {
+          digest: `sha256:${"a".repeat(64)}`,
+          id: 123,
+          name: "openclaw-npm-preflight-v2026.7.2-beta.1",
+          workflowRunId: 456,
+        },
+        manifest: {
+          packageVersion: "2026.7.2-beta.1",
+          tarballName: "openclaw-2026.7.2-beta.1.tgz",
+          tarballSha256: "b".repeat(64),
+        },
+        runAttempt: 2,
+        runId: "456",
+        sourceSha: "c".repeat(40),
+      }),
+    ).toEqual({
+      package_artifact_digest: "a".repeat(64),
+      package_artifact_id: 123,
+      package_artifact_name: "openclaw-npm-preflight-v2026.7.2-beta.1",
+      package_artifact_run_attempt: 2,
+      package_artifact_run_id: "456",
+      package_file_name: "openclaw-2026.7.2-beta.1.tgz",
+      package_sha256: "b".repeat(64),
+      package_source_sha: "c".repeat(40),
+      package_version: "2026.7.2-beta.1",
+    });
   });
 
   it("bounds GitHub API requests with a timeout signal", async () => {
