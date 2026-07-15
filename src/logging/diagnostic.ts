@@ -1315,6 +1315,11 @@ export function startDiagnosticHeartbeat(
         activity,
         staleMs: stuckSessionWarnMs,
       });
+      // Resolve per-session abort threshold: sessions with a declared timeout budget
+      // (e.g. cron isolated agentTurn) use that budget as the effective abort ceiling
+      // instead of the global stuckSessionAbortMs, preventing premature abort of
+      // long-running cron jobs that are still within their configured timeout.
+      const sessionAbortMs = state.timeoutBudgetMs ?? stuckSessionAbortMs;
       if (
         (state.state === "processing" && ageMs > stuckSessionWarnMs) ||
         idleQueuedRecoverableStall
@@ -1328,7 +1333,7 @@ export function startDiagnosticHeartbeat(
           state: state.state,
           ageMs: attentionAgeMs,
           thresholdMs: stuckSessionWarnMs,
-          abortThresholdMs: stuckSessionAbortMs,
+          abortThresholdMs: sessionAbortMs,
         });
         if (classification?.recoveryEligible && !skipRecoveryThisTick) {
           requestStuckSessionRecovery({
@@ -1342,7 +1347,7 @@ export function startDiagnosticHeartbeat(
               queueDepth: state.queueDepth,
               expectedState: state.state,
               stateGeneration: state.generation,
-              staleActiveProgressAbortMs: stuckSessionAbortMs,
+              staleActiveProgressAbortMs: sessionAbortMs,
               compactionSafetyTimeoutMs,
             },
           });
@@ -1352,7 +1357,7 @@ export function startDiagnosticHeartbeat(
           isActiveAbortRecoveryEligible({
             classification,
             activity,
-            stuckSessionAbortMs,
+            stuckSessionAbortMs: sessionAbortMs,
           })
         ) {
           requestStuckSessionRecovery({

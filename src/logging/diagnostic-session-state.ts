@@ -13,6 +13,8 @@ export type SessionState = {
   state: SessionStateValue;
   queueDepth: number;
   activeQueuedTurn?: boolean;
+  /** Per-session timeout budget override (ms). Cron isolated agentTurn sessions set this to their configured timeoutSeconds; the diagnostic heartbeat uses `max(stuckSessionAbortMs, timeoutBudgetMs)` as the effective abort threshold for that session. Undefined for non-cron sessions, which fall back to the global abort threshold. */
+  timeoutBudgetMs?: number;
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
@@ -118,6 +120,12 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
   // Queue depth is additive when session id/key aliases collapse into one diagnostic entry.
   target.queueDepth += source.queueDepth;
   target.activeQueuedTurn ||= source.activeQueuedTurn;
+  // timeoutBudgetMs: both defined → take smaller (safest constraint); otherwise propagate defined value
+  if (target.timeoutBudgetMs !== undefined && source.timeoutBudgetMs !== undefined) {
+    target.timeoutBudgetMs = Math.min(target.timeoutBudgetMs, source.timeoutBudgetMs);
+  } else {
+    target.timeoutBudgetMs ??= source.timeoutBudgetMs;
+  }
   target.lastStuckWarnAgeMs =
     target.lastStuckWarnAgeMs === undefined || source.lastStuckWarnAgeMs === undefined
       ? undefined
