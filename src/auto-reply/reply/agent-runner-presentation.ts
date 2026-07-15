@@ -7,6 +7,7 @@ import {
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  startsWithNewlineSeparatedSilentToken,
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../tokens.js";
@@ -60,7 +61,14 @@ export function createAgentTurnPresentation(params: {
     ) {
       return { skip: true };
     }
-    if (text && startsWithSilentToken(text, SILENT_REPLY_TOKEN)) {
+    // Also catch newline-separated preambles ("NO_REPLY\n\nWait…") so partial
+    // streaming and draft updates never expose the sentinel while the final
+    // normalized reply strips it. (#103735)
+    if (
+      text &&
+      (startsWithSilentToken(text, SILENT_REPLY_TOKEN) ||
+        startsWithNewlineSeparatedSilentToken(text, SILENT_REPLY_TOKEN))
+    ) {
       text = stripLeadingSilentToken(text, SILENT_REPLY_TOKEN);
     }
     if (!text) {
