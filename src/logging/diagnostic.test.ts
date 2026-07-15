@@ -10,7 +10,11 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
-import { resolveDiagnosticRecoverySkipHeartbeatDelayMs } from "./diagnostic-recovery-skip-delay.js";
+import {
+  DIAGNOSTIC_HEARTBEAT_DELAY_RECOVERY_SKIP_MS,
+  DIAGNOSTIC_HEARTBEAT_INTERVAL_MS,
+  resolveDiagnosticRecoverySkipHeartbeatDelayMs,
+} from "./diagnostic-recovery-skip-delay.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
@@ -465,7 +469,7 @@ describe("stuck session diagnostics threshold", () => {
     expect(resolveDiagnosticRecoverySkipHeartbeatDelayMs(stuckSessionAbortMs)).toBe(
       stuckSessionAbortMs,
     );
-    expect(observerDelayMs).toBeLessThan(90_000);
+    expect(observerDelayMs).toBeLessThan(DIAGNOSTIC_HEARTBEAT_DELAY_RECOVERY_SKIP_MS);
     expect(observerDelayMs).toBeGreaterThan(stuckSessionAbortMs);
 
     vi.setSystemTime(0);
@@ -482,14 +486,72 @@ describe("stuck session diagnostics threshold", () => {
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
 
     vi.setSystemTime(observerDelayMs + 1);
-    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);
 
     expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
     expect(recoverStuckSession).not.toHaveBeenCalled();
 
     // Next on-time tick may recover once ages are observed without observer drift.
-    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);
 
+    expect(recoverStuckSession).toHaveBeenCalled();
+  });
+
+  it("still recovers on ordinary ticks when stuckSessionAbortMs is below the heartbeat interval", () => {
+    const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    // Valid config range allows sub-interval abort; ordinary cadence must not defer forever.
+    const stuckSessionWarnMs = 1_000;
+    const stuckSessionAbortMs = 5_000;
+    expect(resolveDiagnosticRecoverySkipHeartbeatDelayMs(stuckSessionAbortMs)).toBe(
+      DIAGNOSTIC_HEARTBEAT_INTERVAL_MS,
+    );
+
+    vi.setSystemTime(0);
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs,
+          stuckSessionAbortMs,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+    // Two ordinary heartbeat periods (~60s wall) with no observer stall.
+    vi.advanceTimersByTime(DIAGNOSTIC_HEARTBEAT_INTERVAL_MS * 2);
+
+    expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    expect(recoverStuckSession).toHaveBeenCalled();
+  });
+
+  it("still recovers on ordinary ticks when stuckSessionAbortMs equals the heartbeat interval", () => {
+    const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const stuckSessionWarnMs = 10_000;
+    const stuckSessionAbortMs = DIAGNOSTIC_HEARTBEAT_INTERVAL_MS;
+    expect(resolveDiagnosticRecoverySkipHeartbeatDelayMs(stuckSessionAbortMs)).toBe(
+      DIAGNOSTIC_HEARTBEAT_INTERVAL_MS,
+    );
+
+    vi.setSystemTime(0);
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs,
+          stuckSessionAbortMs,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+    vi.advanceTimersByTime(DIAGNOSTIC_HEARTBEAT_INTERVAL_MS * 2);
+
+    expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
     expect(recoverStuckSession).toHaveBeenCalled();
   });
 

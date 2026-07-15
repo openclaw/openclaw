@@ -18,7 +18,10 @@ import {
   getRecentDiagnosticPhases,
   resetDiagnosticPhasesForTest,
 } from "./diagnostic-phase.js";
-import { resolveDiagnosticRecoverySkipHeartbeatDelayMs } from "./diagnostic-recovery-skip-delay.js";
+import {
+  DIAGNOSTIC_HEARTBEAT_INTERVAL_MS,
+  resolveDiagnosticRecoverySkipHeartbeatDelayMs,
+} from "./diagnostic-recovery-skip-delay.js";
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
@@ -1239,7 +1242,8 @@ export function startDiagnosticHeartbeat(
     const tickDelayMs =
       lastDiagnosticHeartbeatTickAt === undefined ? 0 : now - lastDiagnosticHeartbeatTickAt;
     lastDiagnosticHeartbeatTickAt = now;
-    // Late ticks inflate ages; skip when delay > min(90s cap, abort threshold).
+    // Late ticks inflate ages; skip when delay exceeds the abort-scaled gate
+    // (floored at the heartbeat interval, capped at the historical 90s multi-interval guard).
     const skipRecoveryThisTick =
       tickDelayMs > resolveDiagnosticRecoverySkipHeartbeatDelayMs(stuckSessionAbortMs);
     if (skipRecoveryThisTick) {
@@ -1372,7 +1376,7 @@ export function startDiagnosticHeartbeat(
         }
       }
     }
-  }, 30_000);
+  }, DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);
   heartbeatInterval.unref?.();
 }
 
