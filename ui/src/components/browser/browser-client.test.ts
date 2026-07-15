@@ -9,6 +9,7 @@ afterEach(() => {
 
 describe("fetchBrowserScreenshotDataUrl", () => {
   it("returns the fetched screenshot as a data URL", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const screenshot = new Blob(["image-bytes"], { type: "image/png" });
     vi.stubGlobal(
       "fetch",
@@ -22,6 +23,7 @@ describe("fetchBrowserScreenshotDataUrl", () => {
         path: "/tmp/browser shot.png",
       }),
     ).resolves.toBe("data:image/png;base64,aW1hZ2UtYnl0ZXM=");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("rejects unsuccessful screenshot responses", async () => {
