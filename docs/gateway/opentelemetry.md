@@ -207,10 +207,10 @@ bus.
 
 ### Model usage
 
-- `openclaw.tokens` (counter, attrs: `openclaw.token`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`)
-- `openclaw.cost.usd` (counter, attrs: `openclaw.channel`, `openclaw.provider`, `openclaw.model`)
-- `openclaw.run.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.provider`, `openclaw.model`)
-- `openclaw.context.tokens` (histogram, attrs: `openclaw.context`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`)
+- `openclaw.tokens` (counter, attrs: `openclaw.token`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`, `openclaw.plugin`)
+- `openclaw.cost.usd` (counter, attrs: `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`, `openclaw.plugin`)
+- `openclaw.run.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`, `openclaw.plugin`)
+- `openclaw.context.tokens` (histogram, attrs: `openclaw.context`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`, `openclaw.plugin`)
 - `gen_ai.client.token.usage` (histogram, GenAI semantic-conventions metric, attrs: `gen_ai.token.type` = `input`/`output`, `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model`)
 - `gen_ai.client.operation.duration` (histogram, seconds, GenAI semantic-conventions metric, attrs: `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model`, optional `error.type`)
 - `openclaw.model_call.duration_ms` (histogram, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, plus `openclaw.errorCategory` and `openclaw.failureKind` on classified errors)
@@ -330,7 +330,7 @@ Liveness warnings also emit:
 ## Exported spans
 
 - `openclaw.model.usage`
-  - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
+  - `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`, `openclaw.plugin`
   - `openclaw.tokens.*` (input/output/cache_read/cache_write/total)
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
   - `gen_ai.request.model`, `gen_ai.operation.name`, `gen_ai.usage.*`
@@ -383,7 +383,8 @@ subscribe to them directly without OTLP export.
 **Model usage**
 
 - `model.usage` - tokens, cost, duration, context, provider/model/channel,
-  session ids. `usage` is provider/turn accounting for cost and telemetry;
+  plugin id when emitted by plugin-owned runtime calls, and session ids. `usage`
+  is provider/turn accounting for cost and telemetry;
   `context.used` is the current prompt/context snapshot and can be lower than
   provider `usage.total` when cached input or tool-loop calls are involved.
 

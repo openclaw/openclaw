@@ -501,6 +501,7 @@ function recordModelUsage(
     agent: lowCardinalityLabel(evt.agentId),
     channel: lowCardinalityLabel(evt.channel),
     model: lowCardinalityLabel(evt.model),
+    plugin: lowCardinalityLabel(evt.pluginId, "none"),
     provider: lowCardinalityLabel(evt.provider),
   };
   const usage = evt.usage;

@@ -5,8 +5,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { modelKey } from "../../agents/model-ref-shared.js";
 import { normalizeModelRef } from "../../agents/model-selection.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
-import { normalizeUsage } from "../../agents/usage.js";
+import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -24,7 +25,7 @@ import type {
 
 export type RuntimeLlmAuthority = {
   caller?: LlmCompleteCaller;
-  /** Trusted host-derived plugin id used only for config policy lookup. */
+  /** Trusted host-derived owner id used for plugin policy and diagnostics attribution. */
   pluginIdForPolicy?: string;
   sessionKey?: string;
   agentId?: string;
@@ -216,6 +217,45 @@ function buildUsage(params: {
     ...(params.normalized?.total !== undefined ? { totalTokens: params.normalized.total } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
+}
+
+function emitLlmCompleteUsageDiagnostic(params: {
+  cfg: OpenClawConfig;
+  usage: NormalizedUsage | undefined;
+  costUsd?: number;
+  sessionKey?: string;
+  agentId: string;
+  pluginId?: string;
+  provider: string;
+  model: string;
+  durationMs: number;
+}) {
+  if (!isDiagnosticsEnabled(params.cfg) || !hasNonzeroUsage(params.usage)) {
+    return;
+  }
+  const input = params.usage.input ?? 0;
+  const output = params.usage.output ?? 0;
+  const cacheRead = params.usage.cacheRead ?? 0;
+  const cacheWrite = params.usage.cacheWrite ?? 0;
+  const promptTokens = input + cacheRead + cacheWrite;
+  emitTrustedDiagnosticEvent({
+    type: "model.usage",
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    agentId: params.agentId,
+    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+    provider: params.provider,
+    model: params.model,
+    usage: {
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      promptTokens,
+      total: params.usage.total ?? promptTokens + output,
+    },
+    ...(params.costUsd !== undefined ? { costUsd: params.costUsd } : {}),
+    durationMs: params.durationMs,
+  });
 }
 
 function finiteOption(value: number | undefined): number | undefined {
@@ -439,6 +479,7 @@ export function createRuntimeLlm(
         }),
       };
 
+      const completionStartedAt = Date.now();
       const result = await completeWithPreparedSimpleCompletionModel({
         model: prepared.model,
         auth: prepared.auth,
@@ -472,6 +513,19 @@ export function createRuntimeLlm(
         provider: prepared.selection.provider,
         model: prepared.selection.modelId,
         usage,
+      });
+      emitLlmCompleteUsageDiagnostic({
+        cfg,
+        usage: normalizedUsage,
+        costUsd: usage.costUsd,
+        sessionKey: options.authority?.sessionKey,
+        agentId,
+        // The policy owner is host-derived for context engines and runtime-scoped for plugins,
+        // so nested plugin scopes and request-shaped caller data cannot relabel telemetry.
+        pluginId: pluginPolicyId,
+        provider: prepared.selection.provider,
+        model: prepared.selection.modelId,
+        durationMs: Date.now() - completionStartedAt,
       });
 
       return {

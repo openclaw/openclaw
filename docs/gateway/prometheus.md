@@ -98,10 +98,10 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_model_call_total`                      | counter   | `api`, `error_category`, `model`, `outcome`, `provider`, `transport`                      |
 | `openclaw_model_call_duration_seconds`           | histogram | `api`, `error_category`, `model`, `outcome`, `provider`, `transport`                      |
 | `openclaw_model_failover_total`                  | counter   | `from_model`, `from_provider`, `lane`, `reason`, `suspended`, `to_model`, `to_provider`   |
-| `openclaw_model_tokens_total`                    | counter   | `agent`, `channel`, `model`, `provider`, `token_type`                                     |
+| `openclaw_model_tokens_total`                    | counter   | `agent`, `channel`, `model`, `plugin`, `provider`, `token_type`                           |
 | `openclaw_gen_ai_client_token_usage`             | histogram | `model`, `provider`, `token_type`                                                         |
-| `openclaw_model_cost_usd_total`                  | counter   | `agent`, `channel`, `model`, `provider`                                                   |
-| `openclaw_model_usage_duration_seconds`          | histogram | `agent`, `channel`, `model`, `provider`                                                   |
+| `openclaw_model_cost_usd_total`                  | counter   | `agent`, `channel`, `model`, `plugin`, `provider`                                         |
+| `openclaw_model_usage_duration_seconds`          | histogram | `agent`, `channel`, `model`, `plugin`, `provider`                                         |
 | `openclaw_skill_used_total`                      | counter   | `activation`, `agent`, `skill`, `source`                                                  |
 | `openclaw_tool_execution_total`                  | counter   | `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`           |
 | `openclaw_tool_execution_duration_seconds`       | histogram | `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`           |
