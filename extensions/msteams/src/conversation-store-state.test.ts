@@ -7,8 +7,12 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
+import {
+  createAccountScopedMSTeamsConversationStore,
+  createMSTeamsConversationStoreState,
+} from "./conversation-store-state.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
@@ -139,6 +143,39 @@ describe("msteams conversation store (plugin state)", () => {
     });
   });
 
+  it("does not let account ids collide with raw Teams conversation id prefixes", async () => {
+    await withTempDir("openclaw-msteams-store-", async (stateDir) => {
+      const baseStore = createMSTeamsConversationStoreState({ stateDir });
+
+      await baseStore.upsert("19:default@thread.tacv2", {
+        conversation: { conversationType: "personal" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com/default",
+        user: { id: "default-user" },
+      });
+
+      const accountStore = createAccountScopedMSTeamsConversationStore(baseStore, "19");
+      await accountStore.upsert("19:account@thread.tacv2", {
+        conversation: { conversationType: "personal" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com/account",
+        user: { id: "account-user" },
+      });
+
+      await expect(accountStore.findPreferredDmByUserId("default-user")).resolves.toBeNull();
+      await expect(accountStore.findPreferredDmByUserId("account-user")).resolves.toMatchObject({
+        conversationId: "19:account@thread.tacv2",
+        reference: {
+          conversation: { id: "19:account@thread.tacv2" },
+          user: { id: "account-user" },
+        },
+      });
+      await expect(accountStore.list()).resolves.toEqual([
+        expect.objectContaining({ conversationId: "19:account@thread.tacv2" }),
+      ]);
+    });
+  });
+
   it("serializes concurrent upserts so sparse activities preserve independent fields", async () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
     const store = createMSTeamsConversationStoreState({ stateDir });
@@ -170,6 +207,53 @@ describe("msteams conversation store (plugin state)", () => {
     await expect(store.get("conv-race")).resolves.toMatchObject({
       timezone: "Europe/London",
       tenantId: "tenant-1",
+    });
+  });
+
+  it("finds account-scoped personal DMs by AAD object id", async () => {
+    await withTempDir("openclaw-msteams-store-", async (stateDir) => {
+      const store = createMSTeamsConversationStoreState({ stateDir });
+      const defaultStore = createAccountScopedMSTeamsConversationStore(store, "default");
+      const secondaryStore = createAccountScopedMSTeamsConversationStore(store, "secondary");
+
+      await defaultStore.upsert("default-dm", {
+        conversation: { id: "default-dm", conversationType: "personal" },
+        channelId: "msteams",
+        serviceUrl: "https://default.example.com",
+        user: { id: "default-user", aadObjectId: "aad-shared" },
+      });
+      await secondaryStore.upsert("secondary-channel", {
+        conversation: { id: "secondary-channel", conversationType: "channel" },
+        channelId: "msteams",
+        serviceUrl: "https://secondary-channel.example.com",
+        user: { id: "secondary-channel-user", aadObjectId: "aad-shared" },
+      });
+      await secondaryStore.upsert("secondary-dm", {
+        conversation: { id: "secondary-dm", conversationType: "personal" },
+        channelId: "msteams",
+        serviceUrl: "https://secondary.example.com",
+        user: { id: "secondary-user", aadObjectId: "aad-shared" },
+      });
+
+      await expect(secondaryStore.findPreferredDmByUserId("aad-shared")).resolves.toMatchObject({
+        conversationId: "secondary-dm",
+        reference: {
+          conversation: { id: "secondary-dm", conversationType: "personal" },
+          serviceUrl: "https://secondary.example.com",
+          user: { id: "secondary-user", aadObjectId: "aad-shared" },
+        },
+      });
+      await expect(defaultStore.findPreferredDmByUserId("aad-shared")).resolves.toMatchObject({
+        conversationId: "default-dm",
+        reference: {
+          conversation: { id: "default-dm", conversationType: "personal" },
+          serviceUrl: "https://default.example.com",
+          user: { id: "default-user", aadObjectId: "aad-shared" },
+        },
+      });
+      await expect(defaultStore.list()).resolves.toEqual([
+        expect.objectContaining({ conversationId: "default-dm" }),
+      ]);
     });
   });
 

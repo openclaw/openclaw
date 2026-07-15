@@ -5,18 +5,17 @@ import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 import "./message-handler-mock-support.test-support.js";
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
+import {
+  createAttackerGroupActivity,
+  createAttackerPersonalActivity,
+  createChannelThreadActivity,
+  createMessageActivity,
+  createQuoteAttachment,
+  createThreadAllowlistConfig,
+  createThreadMessage,
+} from "./message-handler.authz.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import { createMessageHandlerDeps } from "./message-handler.test-support.js";
-
-type HandlerInput = Parameters<ReturnType<typeof createMSTeamsMessageHandler>>[0];
-type TestThreadUser = {
-  id?: string;
-  displayName: string;
-};
-type TestAttachment = {
-  contentType: string;
-  content: string;
-};
 
 const runtimeApiMockState = getRuntimeApiMockState();
 const graphThreadMockState = vi.hoisted(() => ({
@@ -101,6 +100,7 @@ describe("msteams monitor handler authz", () => {
       shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
       createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
       resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
+      resolveStorePath?: () => string | undefined;
     } = {},
   ) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
@@ -122,6 +122,7 @@ describe("msteams monitor handler authz", () => {
       shouldHandleTextCommands: options.shouldHandleTextCommands,
       createInboundDebouncer: options.createInboundDebouncer,
       resolveInboundDebounceMs: options.resolveInboundDebounceMs,
+      resolveStorePath: options.resolveStorePath,
     });
   }
 
@@ -134,21 +135,6 @@ describe("msteams monitor handler authz", () => {
     graphThreadMockState.fetchChatMessageText.mockClear();
   }
 
-  function createThreadMessage(params: {
-    id: string;
-    user: TestThreadUser;
-    content: string;
-  }): GraphThreadMessage {
-    return {
-      id: params.id,
-      from: { user: params.user },
-      body: {
-        content: params.content,
-        contentType: "text",
-      },
-    };
-  }
-
   function mockThreadContext(params: {
     parent: GraphThreadMessage;
     replies?: GraphThreadMessage[];
@@ -158,137 +144,16 @@ describe("msteams monitor handler authz", () => {
     graphThreadMockState.fetchThreadReplies.mockResolvedValue(params.replies ?? []);
   }
 
-  function createThreadAllowlistConfig(params: {
-    groupAllowFrom: string[];
-    dangerouslyAllowNameMatching?: boolean;
-  }): OpenClawConfig {
-    return {
-      channels: {
-        msteams: {
-          groupPolicy: "allowlist",
-          groupAllowFrom: params.groupAllowFrom,
-          contextVisibility: "allowlist",
-          requireMention: false,
-          ...(params.dangerouslyAllowNameMatching ? { dangerouslyAllowNameMatching: true } : {}),
-          teams: {
-            team123: {
-              channels: {
-                "19:channel@thread.tacv2": { requireMention: false },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-  }
-
-  function createMessageActivity(params: {
-    id: string;
-    text: string;
-    conversation: {
-      id: string;
-      conversationType: "personal" | "groupChat" | "channel";
-      tenantId?: string;
-    };
-    from: {
-      id: string;
-      aadObjectId: string;
-      name: string;
-    };
-    channelData?: Record<string, unknown>;
-    attachments?: TestAttachment[];
-    extraActivity?: Record<string, unknown>;
-  }): HandlerInput {
-    return {
-      activity: {
-        id: params.id,
-        type: "message",
-        text: params.text,
-        from: params.from,
-        recipient: {
-          id: "bot-id",
-          name: "Bot",
-        },
-        conversation: params.conversation,
-        channelData: params.channelData ?? {},
-        attachments: params.attachments ?? [],
-        ...params.extraActivity,
-      },
-      sendActivity: vi.fn(async () => undefined),
-    } as unknown as HandlerInput;
-  }
-
-  function createAttackerGroupActivity(params?: {
-    text?: string;
-    channelData?: Record<string, unknown>;
-  }): HandlerInput {
-    return createMessageActivity({
-      id: "msg-1",
-      text: params?.text ?? "hello",
-      from: {
-        id: "attacker-id",
-        aadObjectId: "attacker-aad",
-        name: "Attacker",
-      },
-      conversation: {
-        id: "19:group@thread.tacv2",
-        conversationType: "groupChat",
-      },
-      channelData: params?.channelData,
-    });
-  }
-
-  function createAttackerPersonalActivity(id: string): HandlerInput {
-    return createMessageActivity({
-      id,
-      text: "hello",
-      from: {
-        id: "attacker-id",
-        aadObjectId: "attacker-aad",
-        name: "Attacker",
-      },
-      conversation: {
-        id: "a:personal-chat",
-        conversationType: "personal",
-      },
-    });
-  }
-
-  function createChannelThreadActivity(params?: { attachments?: TestAttachment[] }): HandlerInput {
-    return createMessageActivity({
-      id: "current-msg",
-      text: "Current message",
-      from: {
-        id: "alice-botframework-id",
-        aadObjectId: "alice-aad",
-        name: "Alice",
-      },
-      conversation: {
-        id: "19:channel@thread.tacv2",
-        conversationType: "channel",
-      },
-      channelData: {
-        team: { id: "team123", name: "Team 123", aadGroupId: "graph-team-123" },
-        channel: { id: "19:graph-channel@thread.tacv2", name: "General" },
-      },
-      extraActivity: { replyToId: currentParentMessageId },
-      attachments: params?.attachments ?? [],
-    });
-  }
-
-  function createQuoteAttachment(): TestAttachment {
-    return {
-      contentType: "text/html",
-      content:
-        '<blockquote itemtype="http://schema.skype.com/Reply"><strong itemprop="mri">Alice</strong><p itemprop="copy">Quoted body</p></blockquote>',
-    };
-  }
-
   async function dispatchQuoteContextWithParent(parent: GraphThreadMessage) {
     mockThreadContext({ parent });
     const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
     const handler = createMSTeamsMessageHandler(deps);
-    await handler(createChannelThreadActivity({ attachments: [createQuoteAttachment()] }));
+    await handler(
+      createChannelThreadActivity({
+        attachments: [createQuoteAttachment()],
+        parentMessageId: currentParentMessageId,
+      }),
+    );
     return firstSettledDispatch().ctxPayload;
   }
 
@@ -739,6 +604,150 @@ describe("msteams monitor handler authz", () => {
     expect(ctxPayload.CommandAuthorized).toBe(true);
   });
 
+  it("serializes immediate same-conversation turns through the inbound debouncer", () => {
+    const createInboundDebouncerSpy = vi.fn(createInboundDebouncer);
+    const { deps } = createDeps(
+      {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+          },
+        },
+      } as OpenClawConfig,
+      {
+        createInboundDebouncer:
+          createInboundDebouncerSpy as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"],
+      },
+    );
+
+    createMSTeamsMessageHandler(deps);
+
+    expect(createInboundDebouncerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serializeImmediate: true,
+      }),
+    );
+  });
+
+  it("serializes dispatch for concurrent turns that resolve to the same Teams session", async () => {
+    resetThreadMocks();
+    let releaseFirstDispatch!: () => void;
+    const firstDispatchStarted = new Promise<void>((resolve) => {
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockImplementationOnce(
+        async (params: { ctxPayload: unknown }) => {
+          resolve();
+          await new Promise<void>((release) => {
+            releaseFirstDispatch = release;
+          });
+          return {
+            queuedFinal: false,
+            counts: {},
+            capturedCtxPayload: params.ctxPayload,
+          };
+        },
+      );
+    });
+    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockImplementation(
+      async (params: { ctxPayload: unknown }) => ({
+        queuedFinal: false,
+        counts: {},
+        capturedCtxPayload: params.ctxPayload,
+      }),
+    );
+    const { deps } = createDeps(
+      {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      { resolveStorePath: () => undefined },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    const first = handler(createAttackerGroupActivity({ text: "first" }));
+    await firstDispatchStarted;
+
+    const second = handler(createAttackerGroupActivity({ text: "second" }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+
+    releaseFirstDispatch();
+    await Promise.all([first, second]);
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      2,
+    );
+  });
+
+  it("does not serialize concurrent turns for different Teams sessions without a store path", async () => {
+    resetThreadMocks();
+    let releaseFirstDispatch!: () => void;
+    const firstDispatchStarted = new Promise<void>((resolve) => {
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockImplementationOnce(
+        async (params: { ctxPayload: unknown }) => {
+          resolve();
+          await new Promise<void>((release) => {
+            releaseFirstDispatch = release;
+          });
+          return {
+            queuedFinal: false,
+            counts: {},
+            capturedCtxPayload: params.ctxPayload,
+          };
+        },
+      );
+    });
+    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockImplementation(
+      async (params: { ctxPayload: unknown }) => ({
+        queuedFinal: false,
+        counts: {},
+        capturedCtxPayload: params.ctxPayload,
+      }),
+    );
+    const { deps } = createDeps(
+      {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      { resolveStorePath: () => undefined },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    const first = handler(
+      createAttackerGroupActivity({
+        text: "first",
+        conversationId: "19:first@thread.tacv2",
+      }),
+    );
+    await firstDispatchStarted;
+
+    const second = handler(
+      createAttackerGroupActivity({
+        text: "second",
+        conversationId: "19:second@thread.tacv2",
+      }),
+    );
+    await second;
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      2,
+    );
+
+    releaseFirstDispatch();
+    await first;
+  });
+
   it("marks skipped channel message system events as non-owner without duplicating body text", async () => {
     resetThreadMocks();
     const { deps, enqueueSystemEvent } = createDeps({
@@ -917,7 +926,7 @@ describe("msteams monitor handler authz", () => {
     const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
 
     const handler = createMSTeamsMessageHandler(deps);
-    await handler(createChannelThreadActivity());
+    await handler(createChannelThreadActivity({ parentMessageId: currentParentMessageId }));
 
     const dispatched = firstSettledDispatch();
     const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
@@ -958,7 +967,7 @@ describe("msteams monitor handler authz", () => {
     );
 
     const handler = createMSTeamsMessageHandler(deps);
-    await handler(createChannelThreadActivity());
+    await handler(createChannelThreadActivity({ parentMessageId: currentParentMessageId }));
 
     const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched?.ctxPayload).BodyForAgent).toBe(

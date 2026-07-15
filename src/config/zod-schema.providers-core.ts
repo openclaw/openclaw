@@ -44,6 +44,7 @@ import {
   DiscordPresenceEventsSchema,
   DiscordSnowflakeStringSchema,
 } from "./zod-schema.discord.js";
+import { refineMSTeamsConfig } from "./zod-schema.msteams-refinement.js";
 import {
   validateSlackSigningSecretRequirements,
   validateTelegramWebhookSecretRequirements,
@@ -1430,21 +1431,9 @@ function isAllowedMSTeamsServiceUrl(value: string): boolean {
   }
 }
 
-function isAzureChinaBotFrameworkServiceUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value.trim());
-    if (parsed.protocol !== "https:") {
-      return false;
-    }
-    const host = parsed.hostname.toLowerCase();
-    return host === "botframework.azure.cn" || host.endsWith(".botframework.azure.cn");
-  } catch {
-    return false;
-  }
-}
-
-export const MSTeamsConfigSchema = z
+const MSTeamsAccountConfigBaseSchema = z
   .object({
+    name: z.string().optional(),
     enabled: z.boolean().optional(),
     capabilities: z.array(z.string()).optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
@@ -1474,11 +1463,11 @@ export const MSTeamsConfigSchema = z
       })
       .strict()
       .optional(),
-    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    dmPolicy: DmPolicySchema.optional(),
     allowFrom: z.array(z.string()).optional(),
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.string()).optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    groupPolicy: GroupPolicySchema.optional(),
     contextVisibility: ContextVisibilityModeSchema.optional(),
     textChunkLimit: z.number().int().positive().optional(),
     streaming: ChannelPreviewStreamingConfigSchema.optional(),
@@ -1520,72 +1509,17 @@ export const MSTeamsConfigSchema = z
       .strict()
       .optional(),
   })
-  .strict()
-  .superRefine((value, ctx) => {
-    requireOpenAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.msteams.dmPolicy="open" requires channels.msteams.allowFrom to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.msteams.dmPolicy="allowlist" requires channels.msteams.allowFrom to contain at least one sender ID',
-    });
-    if (value.sso?.enabled === true && !value.sso.connectionName?.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["sso", "connectionName"],
-        message:
-          "channels.msteams.sso.enabled=true requires channels.msteams.sso.connectionName to identify the Bot Framework OAuth connection",
-      });
-    }
-    if (
-      value.cloud &&
-      value.cloud !== "Public" &&
-      value.cloud !== "China" &&
-      !value.serviceUrl?.trim()
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["serviceUrl"],
-        message:
-          "channels.msteams.cloud requires channels.msteams.serviceUrl for non-public Teams clouds",
-      });
-    }
-    if (
-      value.cloud === "China" &&
-      value.serviceUrl?.trim() &&
-      !isAzureChinaBotFrameworkServiceUrl(value.serviceUrl)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["serviceUrl"],
-        message:
-          "channels.msteams.cloud=China requires channels.msteams.serviceUrl to use an Azure China Bot Framework channel host",
-      });
-    }
-    if (
-      value.cloud !== "China" &&
-      value.serviceUrl?.trim() &&
-      isAzureChinaBotFrameworkServiceUrl(value.serviceUrl)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["cloud"],
-        message: "Azure China Bot Framework serviceUrl hosts require channels.msteams.cloud=China",
-      });
-    }
+  .strict();
 
-    // Federated auth fields (appId, tenantId, certificatePath,
-    // useManagedIdentity) may come from MSTEAMS_* environment variables,
-    // so we cannot require them in the config object itself.
-    // Runtime validation happens in resolveMSTeamsCredentials().
-  });
+const MSTeamsAccountConfigSchema = MSTeamsAccountConfigBaseSchema.extend({
+  dmPolicy: DmPolicySchema.optional().default("pairing"),
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+});
+
+export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
+  accounts: z.record(z.string(), MSTeamsAccountConfigBaseSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
+})
+  .strict()
+  .superRefine(refineMSTeamsConfig);
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

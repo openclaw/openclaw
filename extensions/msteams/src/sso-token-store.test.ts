@@ -1,11 +1,13 @@
 // Msteams tests cover sso token store plugin behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
-import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
+import { createMSTeamsSsoTokenStoreFs, makeMSTeamsSsoTokenStoreKey } from "./sso-token-store.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
 describe("msteams sso token store (plugin state)", () => {
@@ -75,6 +77,53 @@ describe("msteams sso token store (plugin state)", () => {
       }),
     ).toBeNull();
     await expect(fs.access(storePath)).resolves.toBeUndefined();
+  });
+
+  it("keeps default and named account tokens separate", async () => {
+    await withTempDir("openclaw-msteams-sso-account-", async (stateDir) => {
+      const defaultStore = createMSTeamsSsoTokenStoreFs({ stateDir });
+      const namedStore = createMSTeamsSsoTokenStoreFs({ accountId: "secondary", stateDir });
+      const defaultToken = {
+        connectionName: "graph",
+        userId: "aad-user",
+        token: "default-token",
+        updatedAt: "2026-04-10T00:00:00.000Z",
+      } as const;
+      const namedToken = {
+        connectionName: "graph",
+        userId: "aad-user",
+        token: "secondary-token",
+        updatedAt: "2026-04-10T00:00:01.000Z",
+      } as const;
+
+      await defaultStore.save(defaultToken);
+      await namedStore.save(namedToken);
+
+      expect(await defaultStore.get(defaultToken)).toEqual(defaultToken);
+      expect(await namedStore.get(namedToken)).toEqual({
+        ...namedToken,
+        accountId: "secondary",
+      });
+      expect(await defaultStore.remove(defaultToken)).toBe(true);
+      expect(await namedStore.get(namedToken)).toEqual({
+        ...namedToken,
+        accountId: "secondary",
+      });
+    });
+  });
+
+  it("keeps the default account on the legacy plugin-state key", () => {
+    const legacyKey = `v2:${createHash("sha256")
+      .update(JSON.stringify(["graph", "aad-user"]))
+      .digest("hex")}`;
+
+    expect(makeMSTeamsSsoTokenStoreKey("graph", "aad-user")).toBe(legacyKey);
+    expect(makeMSTeamsSsoTokenStoreKey("graph", "aad-user")).toBe(
+      makeMSTeamsSsoTokenStoreKey("graph", "aad-user", "default"),
+    );
+    expect(makeMSTeamsSsoTokenStoreKey("graph", "aad-user", "support")).not.toBe(
+      makeMSTeamsSsoTokenStoreKey("graph", "aad-user"),
+    );
   });
 
   it("keeps plugin-state keys bounded for long Teams identifiers", async () => {
