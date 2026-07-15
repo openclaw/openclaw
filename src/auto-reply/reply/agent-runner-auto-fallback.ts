@@ -11,6 +11,14 @@ import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import type { FollowupRun } from "./queue.js";
 
+function sessionEntryMatchesSnapshot(entry: SessionEntry, snapshot: SessionEntry): boolean {
+  const fields = new Set<keyof SessionEntry>([
+    ...(Object.keys(entry) as Array<keyof SessionEntry>),
+    ...(Object.keys(snapshot) as Array<keyof SessionEntry>),
+  ]);
+  return [...fields].every((field) => Object.is(entry[field], snapshot[field]));
+}
+
 /** Decides whether to retry after rechecking auto-fallback primary probe state. */
 export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   run: FollowupRun["run"];
@@ -103,6 +111,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
   if (!activeSessionEntry || !entryMatchesAutoFallbackPrimaryProbe(activeSessionEntry, probe)) {
     return;
   }
+  const activeSessionEntryBeforeUpdate = { ...activeSessionEntry };
   if (!params.storePath) {
     clearAutoFallbackPrimaryProbeSelection(activeSessionEntry);
     params.activeSessionStore[params.sessionKey] = activeSessionEntry;
@@ -144,12 +153,14 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
   // The persisted comparison owns selection freshness. Publish its updated
   // result, or refresh the cache from the entry that rejected this probe.
   const authoritativeEntry = updatedEntry ?? comparedEntry;
-  // A user switch may replace or mutate the cache while persistence runs.
-  // Never publish this older DB result over that newer in-memory selection.
-  if (
-    params.activeSessionStore[params.sessionKey] !== cachedSessionEntry ||
-    !entryMatchesAutoFallbackPrimaryProbe(activeSessionEntry, probe)
-  ) {
+  const currentCachedEntry = params.activeSessionStore[params.sessionKey];
+  // Object replacement is a new cache generation even when values match.
+  // Preserve it to avoid clearing an identically reselected fallback.
+  if (currentCachedEntry !== cachedSessionEntry) {
+    return;
+  }
+  const currentEntry = currentCachedEntry ?? (cachedSessionEntry ? undefined : activeSessionEntry);
+  if (!currentEntry || !sessionEntryMatchesSnapshot(currentEntry, activeSessionEntryBeforeUpdate)) {
     return;
   }
   if (authoritativeEntry) {
