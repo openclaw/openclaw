@@ -2372,7 +2372,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("passes Telegram rich text capabilities into CLI system prompts", async () => {
+  it("passes Telegram channel context into CLI system prompts without core rich guidance", async () => {
     const { dir, sessionFile } = createSessionFile();
     setActivePluginRegistry(
       createTestRegistry([
@@ -2382,7 +2382,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           plugin: {
             ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
             agentPrompt: {
-              messageToolCapabilities: () => ["richText"],
+              messageToolCapabilities: () => ["inlineButtons"],
             },
           } satisfies ChannelPlugin,
         },
@@ -2398,14 +2398,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         provider: "test-cli",
         model: "test-model",
         timeoutMs: 1_000,
-        runId: "run-test-telegram-rich-text",
+        runId: "run-test-telegram-channel",
         messageChannel: "telegram",
         config: createCliBackendConfig(),
       });
 
       expect(context.systemPrompt).toContain("channel=telegram");
-      expect(context.systemPrompt).toContain("Telegram rich ON");
-      expect(context.systemPrompt).toContain("Not MarkdownV2/parse_mode");
+      expect(context.systemPrompt).not.toContain("Telegram rich ON");
+      expect(context.systemPrompt).not.toContain("Telegram rich OFF");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

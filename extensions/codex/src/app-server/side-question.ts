@@ -288,6 +288,7 @@ export async function runCodexAppServerSideQuestion(
   const clientOptions = {
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
+    authRequirement: preparedRuntimeAuth.plan.modelRoute?.authRequirement,
     ...(startupPreparedAuth
       ? { preparedAuth: startupPreparedAuth }
       : { authProfileId: connection.clientAuthProfileId }),

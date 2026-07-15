@@ -33,6 +33,7 @@ import {
   shouldRunRuntimeSidecarBaselineCheck,
   shouldRunShrinkwrapGuard,
   shouldRunPluginSdkApiBaselineCheck,
+  shouldRunDeprecationHygieneChecks,
   shouldRunPluginSdkSurfaceChecks,
   shouldRunSqliteSessionSchemaBaselineCheck,
   shouldRunTestTempCreationReport,
@@ -1436,6 +1437,8 @@ describe("scripts/changed-lanes", () => {
       "duplicate scan target coverage",
       "dependency pin guard",
       "format changed files",
+      "deprecated API usage",
+      "plugin boundaries",
       "package patch guard",
       "test temp creation report (warning-only)",
       "typecheck core tests",
@@ -1721,6 +1724,8 @@ describe("scripts/changed-lanes", () => {
       "deps:pins:check",
       "format:check",
       "scripts/generate-npm-shrinkwrap.mjs",
+      "check:deprecated-api-usage",
+      "plugins:boundary-report:ci",
       "deps:patches:check",
       "release-metadata:check",
       "android:version:check",
@@ -1924,6 +1929,37 @@ describe("scripts/changed-lanes", () => {
     expect(releaseMetadataPlan.commands.map((command) => command.args[0])).not.toContain(
       "plugin-sdk:check-exports",
     );
+  });
+
+  it("runs deprecation hygiene checks for outcome-changing paths and all lanes", () => {
+    expect(
+      shouldRunDeprecationHygieneChecks([
+        "src/plugin-sdk/core.ts",
+        "extensions/slack/index.ts",
+        "packages/gateway-protocol/src/index.ts",
+        "scripts/lib/plugin-sdk-entries.mjs",
+        "scripts/check-deprecated-api-usage.mjs",
+        "scripts/plugin-boundary-report.ts",
+        "src/plugins/compat/registry.ts",
+        "package.json",
+      ]),
+    ).toBe(true);
+    expect(shouldRunDeprecationHygieneChecks(["docs/plugins/sdk-migration.md"])).toBe(false);
+
+    for (const result of [
+      detectChangedLanes(["extensions/slack/index.ts"]),
+      detectChangedLanes(["unknown-surface.foo"]),
+    ]) {
+      const plan = createChangedCheckPlan(result);
+      expect(plan.commands).toContainEqual({
+        name: "deprecated API usage",
+        args: ["check:deprecated-api-usage"],
+      });
+      expect(plan.commands).toContainEqual({
+        name: "plugin boundaries",
+        args: ["plugins:boundary-report:ci"],
+      });
+    }
   });
 
   it("guards release metadata package changes to the top-level version field", () => {

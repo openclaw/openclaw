@@ -25,9 +25,9 @@ import {
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
+  buildProviderReplayFamilyHooks,
   cloneFirstTemplateModel,
   modelCostsEqual,
-  NATIVE_ANTHROPIC_REPLAY_HOOKS,
   type ProviderPlugin,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
@@ -896,7 +896,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
         : undefined,
     // Publish Claude CLI rows through the provider catalog hook.
     augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
-    ...NATIVE_ANTHROPIC_REPLAY_HOOKS,
+    ...buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }),
     isModernModelRef: ({ provider, modelId }) =>
       matchesAnthropicModernModel(modelId) &&
       (!isAnthropicMandatoryClaude5Model(modelId) ||
