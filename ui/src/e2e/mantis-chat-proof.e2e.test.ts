@@ -123,7 +123,7 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
       await page.screenshot({ fullPage: true, path: path.join(artifactDir, "web-ui-chat.png") });
 
       await gateway.emitChatFinal({ runId: params.idempotencyKey ?? "", text: reply });
-      await page.getByText(reply).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-thread-inner").getByText(reply).waitFor({ timeout: 10_000 });
       await writeFile(
         path.join(artifactDir, "web-ui-chat-proof.json"),
         `${JSON.stringify(

@@ -288,7 +288,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       yielded: true,
     });
 
-    await currentPage.getByText(finalText, { exact: true }).waitFor();
+    await currentPage.locator(".chat-thread-inner").getByText(finalText, { exact: true }).waitFor();
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
     await expect
