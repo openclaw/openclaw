@@ -22,15 +22,10 @@ vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
     },
 }));
 vi.mock("openclaw/plugin-sdk/command-auth-native", () => ({
-  // Precise detector: true only when the body starts with a registered command
-  // alias (mirrors the real registry match against "/status", acceptsArgs).
   hasControlCommand: (text: string) => {
     const body = text.trim().toLowerCase();
     return body === "/status" || body.startsWith("/status ");
   },
-  // Broad detector fires on any inline "/x"/"!x" token (mirrors the real
-  // hasInlineCommandTokens) so tests can tell it apart from hasControlCommand.
-  shouldComputeCommandAuthorized: (text: string) => /(?:^|\s)[/!][a-z]/i.test(text),
   resolveControlCommandGate: ({
     hasControlCommand,
     authorizers,
@@ -514,6 +509,37 @@ describe("handleLineWebhookEvents", () => {
     );
 
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps command authorization for mentioned group text with an inline command token", async () => {
+    const processMessage = vi.fn();
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-bypass-mentioned",
+            type: "text",
+            text: "@Bot please check /status",
+            mention: {
+              mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }],
+            },
+          } as MessageEvent["message"],
+          source: { type: "group", groupId: "group-1", userId: "user-cmd" },
+          webhookEventId: "evt-bypass-mentioned",
+        }),
+      ],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["user-cmd"],
+        requireMention: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ commandAuthorized: true }),
+    );
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -1077,6 +1103,32 @@ describe("handleLineWebhookEvents", () => {
     );
 
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps command authorization for DM text with an inline command token", async () => {
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-command-dm",
+        type: "text",
+        text: "please check /status",
+      },
+      source: { type: "user", userId: "user-dm" },
+      webhookEventId: "evt-command-dm",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ commandAuthorized: true }),
+    );
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
