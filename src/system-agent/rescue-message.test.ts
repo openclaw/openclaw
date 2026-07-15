@@ -276,6 +276,25 @@ describe("OpenClaw rescue message", () => {
     expect(reply).toContain("openclaw onboard");
   });
 
+  it("refuses doctor repairs without creating a pending approval", async () => {
+    await withRescueStateDir("doctor-fix-refused-", async () => {
+      const cfg: OpenClawConfig = { systemAgent: { rescue: { enabled: true } } };
+      const deps = {
+        runDoctor: vi.fn(async () => {
+          throw new Error("remote rescue must not run doctor repair");
+        }),
+      };
+
+      await expect(
+        runRescue("/openclaw doctor fix", cfg, commandContext(), deps),
+      ).resolves.toContain("run `openclaw doctor --fix` in a terminal");
+      await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toBe(
+        "No pending OpenClaw rescue change is waiting for approval.",
+      );
+      expect(deps.runDoctor).not.toHaveBeenCalled();
+    });
+  });
+
   it("drops a pending rescue change on decline", async () => {
     await withRescueStateDir("decline-", async () => {
       const cfg: OpenClawConfig = { systemAgent: { rescue: { enabled: true } } };
