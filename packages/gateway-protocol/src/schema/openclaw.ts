@@ -18,6 +18,17 @@ export const SystemAgentChatParamsSchema = closedObject({
   welcomeVariant: Type.Optional(Type.Union([Type.Literal("onboarding")])),
   /** Drop any in-flight approval/wizard state and start the session over. */
   reset: Type.Optional(Type.Boolean()),
+  /** Host-only regular-agent delegation context. Never model-authored. */
+  delegation: Type.Optional(
+    closedObject({
+      agentId: Type.Optional(NonEmptyString),
+      sessionKey: Type.Optional(NonEmptyString),
+      turnSourceChannel: Type.Optional(NonEmptyString),
+      turnSourceTo: Type.Optional(NonEmptyString),
+      turnSourceAccountId: Type.Optional(NonEmptyString),
+      turnSourceThreadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+    }),
+  ),
 });
 
 /** One OpenClaw reply; `action` tells clients about conversation handoffs. */
@@ -33,6 +44,8 @@ export const SystemAgentChatResultSchema = closedObject({
     Type.Literal("open-agent"),
     Type.Literal("exit"),
   ]),
+  needsApproval: Type.Optional(Type.Boolean()),
+  proposalId: Type.Optional(NonEmptyString),
 });
 
 /**

@@ -538,11 +538,12 @@ export async function runPreparedReply(
   const isHeartbeat = opts?.isHeartbeat === true;
   const heartbeatRunScope = resolveHeartbeatRunScope(opts);
   const explicitThinkingLevelOverride = normalizeThinkLevel(opts?.thinkingLevelOverride);
+  const effectiveQueueMode = opts?.queueModeOverride ?? perMessageQueueMode;
   const traceAttributes = {
     provider,
     hasSessionKey: Boolean(sessionKey),
     isHeartbeat,
-    queueMode: perMessageQueueMode ?? "configured",
+    queueMode: effectiveQueueMode ?? "configured",
   };
   const traceRunPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
     measureDiagnosticsTimelineSpan(name, run, {
@@ -1138,7 +1139,7 @@ export async function runPreparedReply(
         cfg,
         channel: sessionCtx.Provider,
         sessionEntry,
-        inlineMode: perMessageQueueMode,
+        inlineMode: effectiveQueueMode,
         inlineOptions: perMessageQueueOptions,
       });
   const embeddedAgentRuntime = useFastReplyRuntime

@@ -2,11 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import {
-  resolveAgentConfig,
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -26,10 +22,7 @@ import {
 import { buildRecallPrompt } from "./prompt.js";
 import { getModelRef } from "./query.js";
 import { toSingleLineLogValue } from "./recall-state.js";
-import {
-  resolveCanonicalSessionKeyFromSessionId,
-  resolveRecallRunChannelContext,
-} from "./session.js";
+import { resolveRecallRunChannelContext } from "./session.js";
 import {
   attachPartialTimeoutData,
   readMemoryToolResultEvidence,
@@ -49,34 +42,6 @@ import {
   type RecallSubagentResult,
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
-
-function normalizeRecallFastMode(value: unknown): ActiveMemoryFastMode | undefined {
-  return value === true || value === false || value === "auto" ? value : undefined;
-}
-
-function resolveRecallFastMode(params: {
-  api: OpenClawPluginApi;
-  config: ResolvedActiveRecallPluginConfig;
-  agentId: string;
-  parentSessionKey?: string;
-  storePath: string;
-}): ActiveMemoryFastMode | undefined {
-  if (params.config.fastMode !== undefined) {
-    return params.config.fastMode;
-  }
-  const sessionFastMode = params.parentSessionKey
-    ? params.api.runtime.agent.session.getSessionEntry({
-        agentId: params.agentId,
-        sessionKey: params.parentSessionKey,
-        storePath: params.storePath,
-        readConsistency: "latest",
-      })?.fastMode
-    : undefined;
-  return (
-    normalizeRecallFastMode(sessionFastMode) ??
-    normalizeRecallFastMode(resolveAgentConfig(params.api.config, params.agentId)?.fastModeDefault)
-  );
-}
 
 function collectActiveMemoryTranscriptSources(params: {
   artifactSessionFile: string;
@@ -177,7 +142,7 @@ async function runRecallSubagent(params: {
   api: OpenClawPluginApi;
   config: ResolvedActiveRecallPluginConfig;
   agentId: string;
-  sessionKey?: string;
+  parentSessionKey?: string;
   sessionId?: string;
   messageProvider?: string;
   channelId?: string;
@@ -186,6 +151,8 @@ async function runRecallSubagent(params: {
   currentModelProviderId?: string;
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
+  storePath: string;
+  fastMode?: ActiveMemoryFastMode;
   abortSignal?: AbortSignal;
   onTranscriptSources?: (sources: readonly ActiveMemoryTranscriptSource[]) => void;
 }): Promise<RecallSubagentResult> {
@@ -201,13 +168,7 @@ async function runRecallSubagent(params: {
     return { rawReply: "NONE" };
   }
   const subagentSessionId = `active-memory-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
-  const parentSessionKey =
-    params.sessionKey ??
-    resolveCanonicalSessionKeyFromSessionId({
-      api: params.api,
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    });
+  const parentSessionKey = params.parentSessionKey;
   const subagentScope = parentSessionKey ?? params.sessionId ?? crypto.randomUUID();
   const subagentSuffix = `active-memory:${crypto
     .createHash("sha1")
@@ -234,19 +195,7 @@ async function runRecallSubagent(params: {
     persistedDir !== undefined
       ? path.join(persistedDir, `${subagentSessionId}.jsonl`)
       : path.join(requireTransientWorkspaceDir(tempDir), "session.jsonl");
-  const storePath = params.api.runtime.agent.session.resolveStorePath(
-    params.api.config.session?.store,
-    {
-      agentId: params.agentId,
-    },
-  );
-  const fastMode = resolveRecallFastMode({
-    api: params.api,
-    config: params.config,
-    agentId: params.agentId,
-    parentSessionKey,
-    storePath,
-  });
+  const storePath = params.storePath;
   const runtimeSessionFile = formatSqliteSessionFileMarker({
     agentId: params.agentId,
     sessionId: subagentSessionId,
@@ -340,7 +289,7 @@ async function runRecallSubagent(params: {
       bootstrapContextMode: "lightweight",
       verboseLevel: "off",
       thinkLevel: params.config.thinking,
-      fastMode,
+      fastMode: params.fastMode,
       reasoningLevel: "off",
       silentExpected: true,
       authProfileFailurePolicy: "local",
