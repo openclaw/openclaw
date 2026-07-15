@@ -26,9 +26,7 @@ import {
   archiveLegacyPluginStateSidecar,
   hasPendingSqliteSidecarArchive,
   isLegacyPluginStateRowExpired,
-  legacyInstalledPluginIndexMatches,
   legacyPluginStateRowsMatch,
-  mergeLegacyInstalledPluginIndexRecords,
   normalizeLegacySqliteInteger,
   readLegacyInstalledPluginIndex,
   readLegacyPluginStateSidecarRows,
@@ -171,6 +169,15 @@ export async function migrateLegacyInstalledPluginIndex(params: {
 
   const changes: string[] = [];
   const warnings: string[] = [];
+  const storeOptions = { stateDir: params.stateDir };
+  const current = readPersistedInstalledPluginIndexSync(storeOptions);
+  if (current) {
+    // Once the SQLite ledger exists, the retired JSON store has no remaining authority.
+    // Archive it without parsing or reconciling records so startup has one canonical source.
+    archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
+    return { changes, warnings };
+  }
+
   const legacy = readLegacyInstalledPluginIndex(sourcePath);
   if (!legacy) {
     return {
@@ -179,50 +186,17 @@ export async function migrateLegacyInstalledPluginIndex(params: {
     };
   }
 
-  const storeOptions = { stateDir: params.stateDir };
-  const current = readPersistedInstalledPluginIndexSync(storeOptions);
-  if (current && !legacyInstalledPluginIndexMatches(current, legacy)) {
-    const merged = mergeLegacyInstalledPluginIndexRecords(current, legacy);
-    if (merged.addedCount > 0) {
-      try {
-        writePersistedInstalledPluginIndexSync(merged.merged, storeOptions);
-        changes.push(
-          `Merged ${merged.addedCount} legacy plugin install ${merged.addedCount === 1 ? "record" : "records"} → shared SQLite state`,
-        );
-      } catch (err) {
-        return {
-          changes,
-          warnings: [`Failed merging plugin install index ${sourcePath}: ${String(err)}`],
-        };
-      }
-    }
-    if (merged.conflicts.length > 0) {
-      // SQLite owns the install ledger; discovery can omit disabled or currently unloadable plugins.
-      // Archive the retired JSON for recovery instead of blocking startup on conflicting metadata.
-      archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
-      return {
-        changes,
-        warnings,
-        notices: [
-          `Kept canonical shared SQLite plugin install metadata despite differing legacy records for: ${merged.conflicts.join(", ")}`,
-        ],
-      };
-    }
-  }
-
-  if (!current) {
-    try {
-      writePersistedInstalledPluginIndexSync(legacy, storeOptions);
-      const recordCount = Object.keys(legacy.installRecords).length;
-      changes.push(
-        `Migrated plugin install index ${recordCount} ${recordCount === 1 ? "record" : "records"} → shared SQLite state`,
-      );
-    } catch (err) {
-      return {
-        changes,
-        warnings: [`Failed migrating plugin install index ${sourcePath}: ${String(err)}`],
-      };
-    }
+  try {
+    writePersistedInstalledPluginIndexSync(legacy, storeOptions);
+    const recordCount = Object.keys(legacy.installRecords).length;
+    changes.push(
+      `Migrated plugin install index ${recordCount} ${recordCount === 1 ? "record" : "records"} → shared SQLite state`,
+    );
+  } catch (err) {
+    return {
+      changes,
+      warnings: [`Failed migrating plugin install index ${sourcePath}: ${String(err)}`],
+    };
   }
 
   archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
