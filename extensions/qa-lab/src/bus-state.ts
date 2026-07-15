@@ -26,6 +26,7 @@ import type {
   QaBusReadMessageInput,
   QaBusReactToMessageInput,
   QaBusSearchMessagesInput,
+  QaBusSnapshotConversation,
   QaBusStateSnapshot,
   QaBusThread,
   QaBusToolCall,
@@ -70,7 +71,7 @@ type QaBusEventSeed =
     };
 
 export function createQaBusState() {
-  const conversations = new Map<string, QaBusConversation>();
+  const conversations = new Map<string, QaBusSnapshotConversation>();
   const threads = new Map<string, QaBusThread>();
   const messages = new Map<string, QaBusMessage>();
   const events: QaBusEvent[] = [];
@@ -97,7 +98,7 @@ export function createQaBusState() {
   const ensureConversation = (
     accountId: string,
     conversation: QaBusConversation,
-  ): QaBusConversation => {
+  ): QaBusSnapshotConversation => {
     const key = JSON.stringify([accountId, conversation.kind, conversation.id]);
     const existing = conversations.get(key);
     if (existing) {
@@ -106,7 +107,7 @@ export function createQaBusState() {
       }
       return existing;
     }
-    const created = { ...conversation };
+    const created = { ...conversation, accountId };
     conversations.set(key, created);
     return created;
   };
@@ -126,13 +127,17 @@ export function createQaBusState() {
     nativeCommand?: QaBusInboundMessageInput["nativeCommand"];
     toolCalls?: QaBusToolCall[];
   }): QaBusMessage => {
-    const conversation = ensureConversation(params.accountId, params.conversation);
+    const storedConversation = ensureConversation(params.accountId, params.conversation);
     const toolCalls = sanitizeQaBusToolCalls(params.toolCalls);
     const message: QaBusMessage = {
       id: randomUUID(),
       accountId: params.accountId,
       direction: params.direction,
-      conversation: { ...conversation },
+      conversation: {
+        id: storedConversation.id,
+        kind: storedConversation.kind,
+        ...(storedConversation.title ? { title: storedConversation.title } : {}),
+      },
       senderId: params.senderId,
       senderName: params.senderName,
       text: params.text,

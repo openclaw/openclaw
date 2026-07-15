@@ -9,6 +9,7 @@ import type {
   QaBusPollResult,
   QaBusReadMessageInput,
   QaBusSearchMessagesInput,
+  QaBusSnapshotConversation,
   QaBusStateSnapshot,
   QaBusThread,
   QaBusToolCall,
@@ -94,7 +95,7 @@ export function cloneEvent(event: QaBusEvent): QaBusEvent {
 
 export function buildQaBusSnapshot(params: {
   cursor: number;
-  conversations: Map<string, QaBusConversation>;
+  conversations: Map<string, QaBusSnapshotConversation>;
   threads: Map<string, QaBusThread>;
   messages: Map<string, QaBusMessage>;
   events: QaBusEvent[];

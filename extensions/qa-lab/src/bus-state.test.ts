@@ -130,7 +130,13 @@ describe("qa-bus state", () => {
     expect(
       state.readMessage({ accountId: "account-b", messageId: directB.id }).conversation,
     ).toEqual({ id: "shared", kind: "direct", title: "Direct B" });
-    expect(state.getSnapshot().conversations).toHaveLength(3);
+    expect(state.getSnapshot().conversations).toEqual(
+      expect.arrayContaining([
+        { accountId: "account-a", id: "shared", kind: "direct", title: "Direct A" },
+        { accountId: "account-a", id: "shared", kind: "channel" },
+        { accountId: "account-b", id: "shared", kind: "direct", title: "Direct B" },
+      ]),
+    );
   });
 
   it("applies kind and root-thread search scope before limiting results", () => {

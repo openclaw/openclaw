@@ -3,6 +3,7 @@ import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selectio
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { formatErrorMessage } from "./errors.js";
 import { getJson, getJsonNoStore, postJson } from "./http.js";
+import { conversationSelectionKey } from "./ui-conversation-key.js";
 import {
   type Bootstrap,
   type EvidenceEnvelope,
@@ -200,7 +201,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     selectedCaptureSessionIds: [],
     selectedCaptureEventKey: null,
     selectedEvidenceEntryId: null,
-    selectedConversationId: null,
+    selectedConversationKey: null,
     selectedThreadId: null,
     selectedScenarioId: null,
     activeTab: initialUrl.pathname === "/evidence" || initialEvidencePath ? "evidence" : "chat",
@@ -346,8 +347,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
         };
         state.runnerDraftDirty = false;
       }
-      if (!state.selectedConversationId) {
-        state.selectedConversationId = snapshot.conversations[0]?.id ?? null;
+      if (!state.selectedConversationKey) {
+        const firstConversation = snapshot.conversations[0];
+        state.selectedConversationKey = firstConversation
+          ? conversationSelectionKey(firstConversation)
+          : null;
       }
       if (!state.selectedScenarioId) {
         state.selectedScenarioId = bootstrap.scenarios[0]?.id ?? null;
@@ -570,7 +574,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
         text,
         ...(state.selectedThreadId ? { threadId: state.selectedThreadId } : {}),
       });
-      state.selectedConversationId = conversationId;
+      state.selectedConversationKey = conversationSelectionKey({
+        accountId: "default",
+        id: conversationId,
+        kind: state.composer.conversationKind,
+      });
       state.composer.text = "";
       chatScrollLocked = true;
       await refresh();
@@ -789,9 +797,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
     });
 
     /* Conversation chips */
-    root.querySelectorAll<HTMLElement>("[data-conversation-id]").forEach((node) => {
+    root.querySelectorAll<HTMLElement>("[data-conversation-key]").forEach((node) => {
       node.addEventListener("click", () => {
-        state.selectedConversationId = node.dataset.conversationId ?? null;
+        state.selectedConversationKey = node.dataset.conversationKey ?? null;
         state.selectedThreadId = null;
         if (state.activeTab !== "chat") {
           state.activeTab = "chat";
@@ -808,9 +816,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
           state.selectedThreadId = null;
         } else {
           state.selectedThreadId = val ?? null;
-          const conv = node.dataset.threadConv;
-          if (conv) {
-            state.selectedConversationId = conv;
+          const conversationKey = node.dataset.threadConversationKey;
+          if (conversationKey) {
+            state.selectedConversationKey = conversationKey;
           }
         }
         render();

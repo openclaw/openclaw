@@ -11,6 +11,11 @@ export type QaBusConversation = {
   title?: string;
 };
 
+/** Account-qualified conversation record returned in QA bus snapshots. */
+export type QaBusSnapshotConversation = QaBusConversation & {
+  accountId: string;
+};
+
 /** Media/file attachment fixture accepted by QA bus message APIs. */
 export type QaBusAttachment = {
   id: string;
@@ -63,7 +68,7 @@ export type QaBusMessage = {
   }>;
 };
 
-/** Synthetic thread record created inside a QA bus conversation. */
+/** Synthetic thread record created inside a QA bus channel conversation. */
 export type QaBusThread = {
   id: string;
   accountId: string;
@@ -186,7 +191,7 @@ export type QaBusPollResult = {
 /** Complete QA bus state snapshot exposed to tests and diagnostics. */
 export type QaBusStateSnapshot = {
   cursor: number;
-  conversations: QaBusConversation[];
+  conversations: QaBusSnapshotConversation[];
   threads: QaBusThread[];
   messages: QaBusMessage[];
   events: QaBusEvent[];
