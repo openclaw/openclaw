@@ -966,6 +966,53 @@ describe("gateway.tools config", () => {
   });
 });
 
+describe("gateway.controlPlaneWritesPerMinute", () => {
+  it("accepts a raised control-plane write budget", () => {
+    const res = validateConfigObject({
+      gateway: {
+        controlPlaneWritesPerMinute: 60,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects a zero control-plane write budget", () => {
+    const res = validateConfigObject({
+      gateway: {
+        controlPlaneWritesPerMinute: 0,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.controlPlaneWritesPerMinute");
+    }
+  });
+
+  it("rejects fractional control-plane write budgets", () => {
+    const res = validateConfigObject({
+      gateway: {
+        controlPlaneWritesPerMinute: 1.5,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.controlPlaneWritesPerMinute");
+    }
+  });
+
+  it("rejects control-plane write budgets above the 600 per minute ceiling", () => {
+    const res = validateConfigObject({
+      gateway: {
+        controlPlaneWritesPerMinute: 601,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.controlPlaneWritesPerMinute");
+    }
+  });
+});
+
 describe("gateway.channelHealthCheckMinutes", () => {
   it("accepts preauth handshake timeout tuning", () => {
     const res = validateConfigObject({

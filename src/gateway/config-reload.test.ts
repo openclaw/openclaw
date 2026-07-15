@@ -330,6 +330,7 @@ describe("buildGatewayReloadPlan", () => {
     "tui.footer.showRemoteHost",
     "diagnostics.stuckSessionWarnMs",
     "diagnostics.stuckSessionAbortMs",
+    "gateway.controlPlaneWritesPerMinute",
   ])("keeps runtime-irrelevant path as a no-op: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
 

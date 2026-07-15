@@ -11,7 +11,10 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
-import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
+import {
+  consumeControlPlaneWriteBudget,
+  resolveControlPlaneWriteBudgetMaxRequests,
+} from "./control-plane-rate-limit.js";
 import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
@@ -839,7 +842,12 @@ export async function handleGatewayRequest(
     if (!methodRegistry.isControlPlaneWrite(req.method)) {
       return false;
     }
-    const budget = consumeControlPlaneWriteBudget({ client });
+    const budget = consumeControlPlaneWriteBudget({
+      client,
+      // Degrade to the built-in default when runtime config is unavailable
+      // rather than throwing from the rate-limit path.
+      maxRequests: resolveControlPlaneWriteBudgetMaxRequests(context.getRuntimeConfig?.()),
+    });
     if (budget.allowed) {
       return false;
     }
@@ -858,7 +866,7 @@ export async function handleGatewayRequest(
           retryAfterMs: budget.retryAfterMs,
           details: {
             method: req.method,
-            limit: "3 per 60s",
+            limit: `${budget.maxRequests} per 60s`,
           },
         },
       ),

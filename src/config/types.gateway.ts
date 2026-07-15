@@ -599,4 +599,12 @@ export type GatewayConfig = {
    * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
+  /**
+   * Maximum control-plane write RPCs (config.patch, update.run, …) allowed
+   * per minute for each client identity (device id + IP). Raise this for
+   * trusted automation that performs bursts of writes (e.g. a provisioner
+   * applying many config patches during a fleet roll). Range: 1-600.
+   * Default: 3.
+   */
+  controlPlaneWritesPerMinute?: number;
 };

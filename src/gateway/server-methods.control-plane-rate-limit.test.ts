@@ -27,11 +27,12 @@ describe("gateway control-plane write rate limit", () => {
     resetGatewayWorkAdmission();
   });
 
-  function buildContext(logWarn = vi.fn()) {
+  function buildContext(logWarn = vi.fn(), runtimeConfig: object = {}) {
     return {
       logGateway: {
         warn: logWarn,
       },
+      getRuntimeConfig: () => runtimeConfig,
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
   }
 
@@ -119,6 +120,85 @@ describe("gateway control-plane write rate limit", () => {
     expect(error?.code).toBe("UNAVAILABLE");
     expect(error?.retryable).toBe(true);
     expect(logWarn).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors gateway.controlPlaneWritesPerMinute from the runtime config", async () => {
+    const handlerCalls = vi.fn();
+    const handler: GatewayRequestHandler = (opts) => {
+      handlerCalls(opts);
+      opts.respond(true, undefined, undefined);
+    };
+    const logWarn = vi.fn();
+    const context = {
+      logGateway: { warn: logWarn },
+      getRuntimeConfig: () => ({ gateway: { controlPlaneWritesPerMinute: 5 } }),
+    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
+    const client = buildClient();
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await runRequest({ method: "config.patch", context, client, handler });
+    }
+    const blocked = await runRequest({ method: "config.patch", context, client, handler });
+
+    expect(handlerCalls).toHaveBeenCalledTimes(5);
+    const blockedCall = respondCall(blocked);
+    expect(blockedCall[0]).toBe(false);
+    expect(blockedCall[2]?.code).toBe("UNAVAILABLE");
+    expect((blockedCall[2]?.details as { limit?: string })?.limit).toBe("5 per 60s");
+  });
+
+  it("applies a raised budget to every client identity, each bounded separately", async () => {
+    const handler: GatewayRequestHandler = (opts) => {
+      opts.respond(true, undefined, undefined);
+    };
+    const context = buildContext(vi.fn(), { gateway: { controlPlaneWritesPerMinute: 4 } });
+    const clientA = buildClient();
+    clientSequence += 1;
+    const clientB = buildClient();
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await runRequest({ method: "config.patch", context, client: clientA, handler });
+    }
+    const blockedA = await runRequest({
+      method: "config.patch",
+      context,
+      client: clientA,
+      handler,
+    });
+    expect(respondCall(blockedA)[0]).toBe(false);
+
+    // The raised value is gateway-global: the other identity gets the same
+    // budget, counted in its own bucket.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const ok = await runRequest({ method: "config.patch", context, client: clientB, handler });
+      expect(ok).toHaveBeenCalledWith(true, undefined, undefined);
+    }
+    const blockedB = await runRequest({
+      method: "config.patch",
+      context,
+      client: clientB,
+      handler,
+    });
+    expect(respondCall(blockedB)[0]).toBe(false);
+  });
+
+  it("adopts a changed budget on the next write without any reload", async () => {
+    const handler: GatewayRequestHandler = (opts) => {
+      opts.respond(true, undefined, undefined);
+    };
+    const runtimeConfig = { gateway: { controlPlaneWritesPerMinute: 3 } };
+    const context = buildContext(vi.fn(), runtimeConfig);
+    const client = buildClient();
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await runRequest({ method: "config.patch", context, client, handler });
+    }
+    const blocked = await runRequest({ method: "config.patch", context, client, handler });
+    expect(respondCall(blocked)[0]).toBe(false);
+
+    runtimeConfig.gateway.controlPlaneWritesPerMinute = 10;
+    const allowed = await runRequest({ method: "config.patch", context, client, handler });
+    expect(allowed).toHaveBeenCalledWith(true, undefined, undefined);
   });
 
   it("allows the OpenClaw inference ladder to probe more than 3 candidates", async () => {

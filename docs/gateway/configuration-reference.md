@@ -653,6 +653,7 @@ See [Inferred commitments](/concepts/commitments).
 - `gateway.channelHealthCheckMinutes`: channel health-monitor interval in minutes. Set `0` to disable health-monitor restarts globally. Default: `5`.
 - `gateway.channelStaleEventThresholdMinutes`: stale-socket threshold in minutes. Keep this greater than or equal to `gateway.channelHealthCheckMinutes`. Default: `30`.
 - `gateway.channelMaxRestartsPerHour`: maximum health-monitor restarts per channel/account in a rolling hour. Default: `10`.
+- `gateway.controlPlaneWritesPerMinute`: maximum control-plane write RPCs (`config.patch`, `update.run`, …) per minute for each client identity (device id + IP). Raise it for trusted automation that performs bursts of writes, such as a provisioner applying many config patches in one roll. Range: `1`-`600`. Default: `3`.
 - `channels.<provider>.healthMonitor.enabled`: per-channel opt-out for health-monitor restarts while keeping the global monitor enabled.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: per-account override for multi-account channels. When set, it takes precedence over the channel-level override.
 - Local gateway call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.

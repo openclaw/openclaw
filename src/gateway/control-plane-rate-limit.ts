@@ -1,9 +1,10 @@
 // Control-plane rate limiting bounds write-side RPC attempts per device/IP and
 // caps bucket growth against unique-key memory pressure.
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeControlPlaneIdentityPart } from "./control-plane-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
-const CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS = 3;
+const CONTROL_PLANE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 3;
 const CONTROL_PLANE_RATE_LIMIT_WINDOW_MS = 60_000;
 const CONTROL_PLANE_BUCKET_MAX_STALE_MS = 5 * 60_000;
 /** Hard cap to prevent memory DoS from rapid unique-key injection (CWE-400). */
@@ -31,17 +32,30 @@ function resolveControlPlaneRateLimitKey(client: GatewayClient | null): string {
   return `${deviceId}|${clientIp}`;
 }
 
+/**
+ * Resolves the per-identity write budget from `gateway.controlPlaneWritesPerMinute`,
+ * falling back to the built-in default of 3.
+ */
+export function resolveControlPlaneWriteBudgetMaxRequests(
+  cfg: Pick<OpenClawConfig, "gateway"> | undefined,
+): number {
+  return cfg?.gateway?.controlPlaneWritesPerMinute ?? CONTROL_PLANE_RATE_LIMIT_DEFAULT_MAX_REQUESTS;
+}
+
 /** Consumes one write budget unit and reports retry state for gateway error responses. */
 export function consumeControlPlaneWriteBudget(params: {
   client: GatewayClient | null;
   nowMs?: number;
+  maxRequests?: number;
 }): {
   allowed: boolean;
   retryAfterMs: number;
   remaining: number;
   key: string;
+  maxRequests: number;
 } {
   const nowMs = params.nowMs ?? Date.now();
+  const maxRequests = params.maxRequests ?? CONTROL_PLANE_RATE_LIMIT_DEFAULT_MAX_REQUESTS;
   const key = resolveControlPlaneRateLimitKey(params.client);
   const bucket = controlPlaneBuckets.get(key);
 
@@ -64,12 +78,13 @@ export function consumeControlPlaneWriteBudget(params: {
     return {
       allowed: true,
       retryAfterMs: 0,
-      remaining: CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS - 1,
+      remaining: maxRequests - 1,
       key,
+      maxRequests,
     };
   }
 
-  if (bucket.count >= CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS) {
+  if (bucket.count >= maxRequests) {
     const retryAfterMs = Math.max(
       0,
       bucket.windowStartMs + CONTROL_PLANE_RATE_LIMIT_WINDOW_MS - nowMs,
@@ -79,6 +94,7 @@ export function consumeControlPlaneWriteBudget(params: {
       retryAfterMs,
       remaining: 0,
       key,
+      maxRequests,
     };
   }
 
@@ -86,8 +102,9 @@ export function consumeControlPlaneWriteBudget(params: {
   return {
     allowed: true,
     retryAfterMs: 0,
-    remaining: Math.max(0, CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS - bucket.count),
+    remaining: Math.max(0, maxRequests - bucket.count),
     key,
+    maxRequests,
   };
 }
 

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   consumeControlPlaneWriteBudget,
   pruneStaleControlPlaneBuckets,
+  resolveControlPlaneWriteBudgetMaxRequests,
 } from "./control-plane-rate-limit.js";
 
 describe("control-plane-rate-limit", () => {
@@ -62,5 +63,47 @@ describe("control-plane-rate-limit", () => {
     // A fresh budget proves the oldest bucket was evicted, without exposing
     // the internal map solely for tests.
     expect(consume("oldest")).toMatchObject({ allowed: true, remaining: 2 });
+  });
+
+  test("consumeControlPlaneWriteBudget honors a configured maxRequests", () => {
+    const baseMs = 3_000_000;
+    const consume = () =>
+      consumeControlPlaneWriteBudget({
+        client: { connect: { device: { id: "dev-dial" } }, clientIp: "9.9.9.9" } as never,
+        nowMs: baseMs,
+        maxRequests: 5,
+      });
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(consume()).toMatchObject({ allowed: true, maxRequests: 5 });
+    }
+    const blocked = consume();
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.maxRequests).toBe(5);
+    expect(blocked.retryAfterMs).toBeGreaterThan(0);
+  });
+
+  test("consumeControlPlaneWriteBudget keeps the 3-per-window default", () => {
+    const baseMs = 4_000_000;
+    const consume = () =>
+      consumeControlPlaneWriteBudget({
+        client: { connect: { device: { id: "dev-default" } }, clientIp: "8.8.8.8" } as never,
+        nowMs: baseMs,
+      });
+
+    expect(consume()).toMatchObject({ allowed: true, maxRequests: 3, remaining: 2 });
+    consume();
+    consume();
+    expect(consume().allowed).toBe(false);
+  });
+
+  test("resolveControlPlaneWriteBudgetMaxRequests reads gateway config with a default of 3", () => {
+    expect(resolveControlPlaneWriteBudgetMaxRequests(undefined)).toBe(3);
+    expect(resolveControlPlaneWriteBudgetMaxRequests({})).toBe(3);
+    expect(
+      resolveControlPlaneWriteBudgetMaxRequests({
+        gateway: { controlPlaneWritesPerMinute: 60 },
+      }),
+    ).toBe(60);
   });
 });
