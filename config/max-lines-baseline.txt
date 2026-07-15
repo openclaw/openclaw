@@ -577,7 +577,6 @@ src/agents/tools/image-generate-tool.ts
 src/agents/tools/image-tool.test.ts
 src/agents/tools/image-tool.ts
 src/agents/tools/media-generate-background-shared.test.ts
-src/agents/tools/media-generate-background-shared.ts
 src/agents/tools/message-tool.test.ts
 src/agents/tools/message-tool.ts
 src/agents/tools/music-generate-tool.test.ts
