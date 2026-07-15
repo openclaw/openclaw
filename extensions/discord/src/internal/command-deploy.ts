@@ -12,6 +12,7 @@ import {
   overwriteApplicationCommands,
   overwriteGuildApplicationCommands,
 } from "./api.js";
+import { commandsEqual, stableComparableObject } from "./command-comparison.js";
 import type { BaseCommand } from "./commands.js";
 import type { RequestClient } from "./rest.js";
 
@@ -307,139 +308,6 @@ function isApplicationCommandLimitError(error: unknown): boolean {
     error.discordCode === DISCORD_APPLICATION_COMMAND_LIMIT_REACHED
   );
 }
-
-function comparableCommand(value: unknown): unknown {
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const omit = new Set([
-    "application_id",
-    "description_localized",
-    "dm_permission",
-    "guild_id",
-    "id",
-    "name_localized",
-    "nsfw",
-    "version",
-    "default_permission",
-  ]);
-  return stableComparableObject(
-    Object.fromEntries(
-      Object.entries(value).filter(([key, entry]) => !omit.has(key) && entry !== undefined),
-    ),
-  );
-}
-
-const unorderedCommandArrayFields = new Set(["channel_types", "contexts", "integration_types"]);
-const optionComparisonOmittedFields = new Set([
-  "contexts",
-  "default_member_permissions",
-  "description_localized",
-  "integration_types",
-  "name_localized",
-]);
-const nullableLocalizationFields = new Set(["description_localizations", "name_localizations"]);
-
-function stableComparableObject(value: unknown, pathValue: string[] = []): unknown {
-  if (Array.isArray(value)) {
-    const normalized = value.map((entry) => stableComparableObject(entry, pathValue));
-    const key = pathValue.at(-1);
-    if (
-      key &&
-      unorderedCommandArrayFields.has(key) &&
-      normalized.every(
-        (entry) =>
-          typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean",
-      )
-    ) {
-      return normalized.toSorted((left, right) => String(left).localeCompare(String(right)));
-    }
-    return normalized;
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .filter(([key, entry]) => {
-        if (entry === undefined) {
-          return false;
-        }
-        if (entry === null && nullableLocalizationFields.has(key)) {
-          return false;
-        }
-        if (pathValue.includes("options") && optionComparisonOmittedFields.has(key)) {
-          return false;
-        }
-        if ((key === "required" || key === "autocomplete") && entry === false) {
-          return false;
-        }
-        return true;
-      })
-      .toSorted(([a], [b]) => a.localeCompare(b))
-      .map(([key, entry]) => [
-        key,
-        shouldNormalizeDescriptionValue(pathValue, key, entry)
-          ? normalizeDescriptionForComparison(entry)
-          : stableComparableObject(entry, [...pathValue, key]),
-      ]),
-  );
-}
-
-function shouldNormalizeDescriptionValue(
-  pathLocal: string[],
-  key: string,
-  entry: unknown,
-): entry is string {
-  return (
-    typeof entry === "string" &&
-    (key === "description" || pathLocal.at(-1) === "description_localizations")
-  );
-}
-
-/**
- * Normalize a Discord command description for equality comparison.
- *
- * Discord's server-side storage performs two transformations that our local
- * desired descriptors do not:
- *
- * 1. Consecutive whitespace (including `\n`) is collapsed to a single space.
- * 2. Whitespace between two CJK (Chinese, Japanese, Korean) characters is
- *    removed entirely. So a local description `"第一行。\n第二行。"` is stored
- *    as `"第一行。第二行。"` on Discord and returned without the `\n`.
- *
- * Without this normalization every startup for any CJK-heavy deployment reads
- * back Discord's collapsed form, computes a diff against the local `\n`-form,
- * decides the command needs updating, and issues a `PATCH`. Under the global
- * per-application rate limit this quickly produces 429 bursts and some
- * commands silently fail to register (see the Discord deploy 429 reports).
- *
- * Applying the same transformation to both sides before comparison makes the
- * equality check match Discord's storage semantics and prevents spurious
- * reconcile writes on every startup.
- */
-function normalizeDescriptionForComparison(description: string): string {
-  const collapsed = description.replace(/\s+/g, " ");
-  // Matches whitespace surrounded by CJK code points. Run twice because a
-  // single `replace` consumes the boundary characters, which can leave
-  // adjacent matches (e.g. "字 字 字") partially unhandled.
-  const cjkBoundaryWhitespace =
-    /([\u3000-\u303F\u4E00-\u9FFF\uFF00-\uFFEF])\s+([\u3000-\u303F\u4E00-\u9FFF\uFF00-\uFFEF])/g;
-  return collapsed
-    .replace(cjkBoundaryWhitespace, "$1$2")
-    .replace(cjkBoundaryWhitespace, "$1$2")
-    .trim();
-}
-
-function commandsEqual(a: unknown, b: unknown) {
-  return JSON.stringify(comparableCommand(a)) === JSON.stringify(comparableCommand(b));
-}
-
-export const testing = {
-  commandsEqual,
-  comparableCommand,
-  normalizeDescriptionForComparison,
-} as const;
 
 function stableCommandSetHash(commands: SerializedCommand[]): string {
   const stable = commands
