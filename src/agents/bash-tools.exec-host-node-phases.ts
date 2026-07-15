@@ -519,7 +519,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   let allowlistSatisfied = false;
   let durableApprovalSatisfied = false;
   let nodeApprovalsFileKnown = false;
-  let effectiveDenylist = resolveEffectiveExecDenylist({
+  const effectiveDenylist = resolveEffectiveExecDenylist({
     layers: [params.effectiveDenylist],
   });
   const inlineEvalHit =
