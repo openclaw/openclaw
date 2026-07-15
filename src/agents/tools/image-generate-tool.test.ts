@@ -31,7 +31,7 @@ let imageOps: typeof import("../../media/media-services.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
 let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
-let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.js").resetRecentMediaGenerationDuplicateGuardsForTests;
+let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.test-support.js").resetRecentMediaGenerationDuplicateGuardsForTests;
 let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
 let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.js").resolveImageGenerationModelConfigForTool;
 
@@ -336,7 +336,7 @@ describe("createImageGenerateTool", () => {
     mediaStore = await import("../../media/store.js");
     webMedia = await import("../../media/web-media.js");
     ({ resetRecentMediaGenerationDuplicateGuardsForTests } =
-      await import("../media-generation-task-status-shared.js"));
+      await import("../media-generation-task-status-shared.test-support.js"));
     ({ createImageGenerateTool, resolveImageGenerationModelConfigForTool } =
       await import("./image-generate-tool.js"));
   });

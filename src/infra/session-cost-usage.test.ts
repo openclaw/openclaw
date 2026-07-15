@@ -458,6 +458,51 @@ describe("session cost usage", () => {
     });
   });
 
+  it("breaks missing costs down by raw provider and model attribution", async () => {
+    const root = await makeSessionCostRoot("cost-missing-by-model");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-missing-by-model.jsonl");
+    const timestamp = Date.now() - 1_000;
+    const entries = [
+      ["openai", "gpt-5.6-sol"],
+      ["openai", "gpt-5.6-sol"],
+      ["openai-codex", "gpt-5.5"],
+    ].map(([provider, model], index) => ({
+      type: "message",
+      timestamp: new Date(timestamp + index).toISOString(),
+      message: {
+        role: "assistant",
+        provider,
+        model,
+        usage: {
+          input: 1,
+          output: 0,
+          totalTokens: 1,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    }));
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    clearGatewayModelPricingState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary();
+      expect(summary.totals.missingCostEntries).toBe(3);
+      expect(summary.totals.missingCostByModel).toEqual({
+        "openai/gpt-5.6-sol": 2,
+        "openai-codex/gpt-5.5": 1,
+      });
+
+      const sessionSummary = await loadSessionCostSummary({ sessionFile });
+      expect(sessionSummary?.missingCostByModel).toEqual(summary.totals.missingCostByModel);
+    });
+  });
+
   it("uses top-level transcript provider and model when recomputing session-log cost", async () => {
     const root = await makeSessionCostRoot("cost-known-pricing-top-level-metadata");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -992,6 +1037,7 @@ describe("session cost usage", () => {
         refreshMode: "sync-when-empty",
       });
       expect(warmed.cacheStatus?.status).toBe("fresh");
+      expect(warmed.totals.missingCostByModel).toEqual({ "openai/gpt-5.5": 2 });
 
       await loadSessionCostSummariesFromCache({
         sessions,
@@ -1005,6 +1051,10 @@ describe("session cost usage", () => {
             requestRefresh: false,
           });
           expect(cached.cacheStatus.status).toBe("fresh");
+          expect(cached.summaries.map((summary) => summary?.missingCostByModel)).toEqual([
+            { "openai/gpt-5.5": 1 },
+            { "openai/gpt-5.5": 1 },
+          ]);
         },
         { interval: 10, timeout: 2_000 },
       );

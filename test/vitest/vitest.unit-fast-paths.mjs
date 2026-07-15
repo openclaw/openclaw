@@ -306,6 +306,42 @@ const disqualifyingPatterns = [
   },
 ];
 
+const statefulTestHelperImportPattern =
+  /\bfrom\s+["']([^"']*(?:test-support|\.harness)(?:\.js|\.ts)?)["']/gu;
+const statefulTestHelperByKey = new Map();
+
+function importsStatefulTestHelper(cwd, file, source) {
+  for (const match of source.matchAll(statefulTestHelperImportPattern)) {
+    const specifier = match[1];
+    if (!specifier.startsWith(".")) {
+      continue;
+    }
+    const helperPath = path.join(
+      path.dirname(file),
+      specifier.endsWith(".js")
+        ? `${specifier.slice(0, -3)}.ts`
+        : specifier.endsWith(".ts")
+          ? specifier
+          : `${specifier}.ts`,
+    );
+    const cacheKey = `${normalizeRepoPath(cwd)}\0${normalizeRepoPath(helperPath)}`;
+    let stateful = statefulTestHelperByKey.get(cacheKey);
+    if (stateful === undefined) {
+      try {
+        const helperSource = fs.readFileSync(path.join(cwd, helperPath), "utf8");
+        stateful = classifyUnitFastTestFileContent(helperSource).length > 0;
+      } catch {
+        stateful = false;
+      }
+      statefulTestHelperByKey.set(cacheKey, stateful);
+    }
+    if (stateful) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function matchesAnyGlob(file, patterns) {
   return patterns.some((pattern) => path.matchesGlob(file, pattern));
 }
@@ -504,10 +540,18 @@ function analyzeUnitFastTestFile(cwd, file) {
   try {
     const source = fs.readFileSync(path.join(cwd, file), "utf8");
     const reasons = classifyUnitFastTestFileContent(source);
+    if (importsStatefulTestHelper(cwd, file, source)) {
+      // The helper executes in the importing file's module scope, so its mocks and
+      // singleton mutations need the same isolation as stateful code in the test itself.
+      reasons.push("stateful-test-helper");
+    }
     const forced = forcedUnitFastTestFileSet.has(file);
     analysis = {
       file,
-      unitFast: forced || reasons.length === 0,
+      unitFast:
+        forced ||
+        reasons.length === 0 ||
+        reasons.every((reason) => reason === "stateful-test-helper"),
       forced,
       reasons,
     };
@@ -541,6 +585,8 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
 
 let cachedUnitFastTestFiles = null;
 let cachedUnitFastTestFileSet = null;
+let cachedUnitFastIsolatedTestFiles = null;
+let cachedUnitFastIsolatedTestFileSet = null;
 let cachedUnitFastTimerTestFiles = null;
 let cachedUnitFastTimerTestFileSet = null;
 const scopedUnitFastTestFilesByKey = new Map();
@@ -607,6 +653,22 @@ export function getUnitFastTimerTestFiles() {
   return cachedUnitFastTimerTestFiles;
 }
 
+export function getUnitFastIsolatedTestFiles() {
+  if (cachedUnitFastIsolatedTestFiles !== null) {
+    return cachedUnitFastIsolatedTestFiles;
+  }
+  const timerTestFiles = new Set(getUnitFastTimerTestFiles());
+  cachedUnitFastIsolatedTestFiles = collectUnitFastTestFileAnalysis()
+    .filter(
+      (entry) =>
+        entry.unitFast &&
+        !timerTestFiles.has(entry.file) &&
+        (entry.forced || entry.reasons.includes("stateful-test-helper")),
+    )
+    .map((entry) => entry.file);
+  return cachedUnitFastIsolatedTestFiles;
+}
+
 function getUnitFastTestFileSet() {
   if (cachedUnitFastTestFileSet !== null) {
     return cachedUnitFastTestFileSet;
@@ -621,6 +683,14 @@ function getUnitFastTimerTestFileSet() {
   }
   cachedUnitFastTimerTestFileSet = new Set(getUnitFastTimerTestFiles());
   return cachedUnitFastTimerTestFileSet;
+}
+
+function getUnitFastIsolatedTestFileSet() {
+  if (cachedUnitFastIsolatedTestFileSet !== null) {
+    return cachedUnitFastIsolatedTestFileSet;
+  }
+  cachedUnitFastIsolatedTestFileSet = new Set(getUnitFastIsolatedTestFiles());
+  return cachedUnitFastIsolatedTestFileSet;
 }
 
 function isUnitFastTestFileOnDemand(file, cwd = process.cwd()) {
@@ -639,9 +709,16 @@ export function isUnitFastTimerTestFile(file) {
   return getUnitFastTimerTestFileSet().has(normalizeRepoPath(file));
 }
 
+export function isUnitFastIsolatedTestFile(file) {
+  return getUnitFastIsolatedTestFileSet().has(normalizeRepoPath(file));
+}
+
 export function resolveUnitFastTestIncludePattern(file) {
   const normalized = normalizeRepoPath(file);
   if (isUnitFastTimerTestFile(normalized)) {
+    return null;
+  }
+  if (isUnitFastIsolatedTestFile(normalized)) {
     return null;
   }
   if (isUnitFastTestFileOnDemand(normalized)) {
@@ -649,6 +726,9 @@ export function resolveUnitFastTestIncludePattern(file) {
   }
   const siblingTestFile = normalized.replace(/\.ts$/u, ".test.ts");
   if (isUnitFastTimerTestFile(siblingTestFile)) {
+    return null;
+  }
+  if (isUnitFastIsolatedTestFile(siblingTestFile)) {
     return null;
   }
   if (isUnitFastTestFileOnDemand(siblingTestFile)) {
@@ -668,4 +748,13 @@ export function resolveUnitFastTimerTestIncludePattern(file) {
   }
   const siblingTestFile = normalized.replace(/\.ts$/u, ".test.ts");
   return isUnitFastTimerTestFile(siblingTestFile) ? siblingTestFile : null;
+}
+
+export function resolveUnitFastIsolatedTestIncludePattern(file) {
+  const normalized = normalizeRepoPath(file);
+  if (isUnitFastIsolatedTestFile(normalized)) {
+    return normalized;
+  }
+  const siblingTestFile = normalized.replace(/\.ts$/u, ".test.ts");
+  return isUnitFastIsolatedTestFile(siblingTestFile) ? siblingTestFile : null;
 }

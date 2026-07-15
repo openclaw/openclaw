@@ -14,8 +14,10 @@ import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
-import { setMaxPluginStateEntriesPerPluginForTests } from "../plugin-state/plugin-state-store.sqlite.js";
-import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
+import {
+  seedPluginStateEntriesForTests,
+  setMaxPluginStateEntriesPerPluginForTests,
+} from "../plugin-state/plugin-state-store.test-helpers.js";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,

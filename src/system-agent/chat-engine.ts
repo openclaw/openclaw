@@ -30,12 +30,16 @@ import {
   type SystemAgentOperation,
   type SystemAgentOperationResult,
 } from "./operations.js";
+import {
+  resolveOperatorApprovalDecision,
+  resolvePendingOperatorProposal,
+} from "./operator-approval.js";
 import { loadSystemAgentOverview, type SystemAgentOverview } from "./overview.js";
+import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
 import {
   resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
-
 /**
  * One conversation with OpenClaw, independent of transport. The TUI backend
  * and the gateway `openclaw.chat` RPC both drive this engine, so onboarding
@@ -66,8 +70,9 @@ export type SystemAgentChatEngineOptions = {
   ) => Promise<void>;
   /** Exact route/credential that passed the host's live inference gate. */
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
+  /** Delegated chats accept approval only from the operator registry. */
+  operatorApprovalOnly?: boolean;
 };
-
 type SystemAgentChatReplyAction = "none" | "exit" | "open-tui" | "open-setup";
 
 type SystemAgentChatReply = {
@@ -341,7 +346,31 @@ export class SystemAgentChatEngine {
   hasPendingProposal(): boolean {
     return this.pending !== null;
   }
-
+  getPendingOperatorProposal(): { operation: SystemAgentOperation; hash: string } | null {
+    return resolvePendingOperatorProposal(this.pending, this.agentSession.proposalRef);
+  }
+  async resolveOperatorApproval(
+    decision: "allow-once" | "allow-always" | "deny" | null,
+    proposalHash: string,
+  ): Promise<SystemAgentChatReply | null> {
+    const turn = this.turnQueue.then(async () => {
+      const reply = await resolveOperatorApprovalDecision<SystemAgentChatReply>({
+        decision,
+        proposalHash,
+        getProposal: () => this.getPendingOperatorProposal(),
+        clear: () => this.clearPendingProposals(),
+        apply: (message) =>
+          this.pending ? this.applyPendingProposal() : this.resolveAssistantTurn(message, true),
+        denied: () => ({ text: "Denied. No change.", action: "none" }),
+      });
+      if (reply?.text) {
+        this.history.push({ role: "assistant", text: reply.text });
+      }
+      return reply;
+    });
+    this.turnQueue = turn.catch(() => undefined);
+    return await turn;
+  }
   /** Record a host-rendered assistant message (welcome) so AI turns see it. */
   noteAssistantMessage(text: string): void {
     this.history.push({ role: "assistant", text });
@@ -414,13 +443,19 @@ export class SystemAgentChatEngine {
         undefined,
       );
     }
-
+    if (this.opts.operatorApprovalOnly && this.getPendingOperatorProposal()) {
+      return { text: "Approval pending. Human must decide in OpenClaw UI.", action: "none" };
+    }
     // Secret hygiene: an exact `config set` on a sensitive path carries a raw
     // token and must never reach a model. The host handles its redacted
     // proposal + approval directly, matching the wizard's masked-input rules.
     const typed = parseSystemAgentOperation(text);
     if (typed.kind === "config-set" && isSensitiveConfigPath(typed.path)) {
       return await this.runOperation(typed, undefined);
+    }
+    const typedRefusal = this.refuseDelegatedNavigationDirective(typed.kind);
+    if (typedRefusal) {
+      return { text: typedRefusal, action: "none" };
     }
     if (typed.kind === "open-tui") {
       // Exact host navigation must not depend on whether a conversation model
@@ -441,7 +476,9 @@ export class SystemAgentChatEngine {
     // Approval is judged from the user's own words, host-side. The classifier
     // only runs while a proposal is pending, and "other" (questions, new
     // requests) keeps the proposal pending and lets the AI carry on.
-    const intent = await this.classifyApprovalIntent(text);
+    const intent = this.opts.operatorApprovalOnly
+      ? "other"
+      : await this.classifyApprovalIntent(text);
     if (this.pending) {
       if (intent === "approve") {
         // Approval classification may invoke inference. Its result authorizes
@@ -465,9 +502,13 @@ export class SystemAgentChatEngine {
       // A declined agent-loop proposal must never stay armable: void the
       // registered hash now and let the AI acknowledge conversationally.
       this.agentSession.proposalRef.current = undefined;
+      this.agentSession.proposalRef.operation = undefined;
     }
 
-    return await this.resolveAssistantTurn(text, intent === "approve");
+    return await this.resolveAssistantTurn(
+      text,
+      this.opts.operatorApprovalOnly ? false : intent === "approve",
+    );
   }
 
   private async classifyApprovalIntent(text: string): Promise<SystemAgentApprovalIntent> {
@@ -661,6 +702,13 @@ export class SystemAgentChatEngine {
     // Recheck after the model turn: the route may have changed while inference
     // was running, and its stale directive must never cross that boundary.
     await this.requireVerifiedInference();
+    // Setup wizards and TUI/UI handoffs assume a human at the keyboard. In a
+    // delegated request the "user" answering them is the machine agent, so they
+    // would persist channel/config state with no operator decision — refuse.
+    const refusal = this.refuseDelegatedNavigationDirective(loopReply.directive?.kind);
+    if (refusal) {
+      return { text: [loopReply.text, refusal].filter(Boolean).join("\n\n"), action: "none" };
+    }
     if (loopReply.directive?.kind === "approved-operation") {
       const applied = await this.applyApprovedPersistentOperation(loopReply.directive.operation);
       return {
@@ -700,6 +748,24 @@ export class SystemAgentChatEngine {
       };
     }
     return { text: loopReply.text, action: "none" };
+  }
+
+  // Setup wizards and TUI/UI handoffs persist config or need a human at the
+  // keyboard. A delegated (operator-approval-only) request has no human driving
+  // them, so refuse rather than let a machine agent complete setup unattended.
+  private refuseDelegatedNavigationDirective(kind: string | undefined): string | undefined {
+    if (!this.opts.operatorApprovalOnly) {
+      return undefined;
+    }
+    if (
+      kind === "channel-setup" ||
+      kind === "model-setup" ||
+      kind === "open-setup" ||
+      kind === "open-tui"
+    ) {
+      return "Channel, model, and setup flows need a human operator in the OpenClaw app; they cannot run from a delegated agent request.";
+    }
+    return undefined;
   }
 
   private async runOperation(
@@ -870,6 +936,7 @@ export class SystemAgentChatEngine {
     this.pending = null;
     this.hostProposalResolution = undefined;
     this.agentSession.proposalRef.current = undefined;
+    this.agentSession.proposalRef.operation = undefined;
     delete this.agentSession.cliSession;
     if (cancelWizard) {
       this.wizardBridge?.session.cancel();
@@ -888,41 +955,9 @@ export class SystemAgentChatEngine {
    * caught and fixed in the same chat instead of surfacing at gateway start.
    */
   private async verifyConfigAfterWrite(): Promise<string | null> {
-    let issuesText: string;
-    try {
-      const { readConfigFileSnapshot } = await import("../config/config.js");
-      const snapshot = await readConfigFileSnapshot();
-      if (!snapshot.exists) {
-        return this.configVerificationUnavailable("openclaw.json was not found");
-      }
-      if (snapshot.valid) {
-        return null;
-      }
-      const issues = (snapshot.issues ?? []).map(
-        (issue: { path?: string; message: string }) =>
-          `${issue.path ? `${issue.path}: ` : ""}${issue.message}`,
-      );
-      issuesText = issues.length > 0 ? issues.join("\n") : "unknown validation failure";
-    } catch {
-      return this.configVerificationUnavailable("openclaw.json could not be read");
-    }
-    const notice = `⚠ openclaw.json failed validation after that write:\n${issuesText}`;
-    let recovery: SystemAgentChatReply;
-    try {
-      recovery = await this.resolveAssistantTurn(
-        `[config-verify] The config file is now invalid:\n${issuesText}\nPropose one corrective command from the allowed list.`,
-        false,
-      );
-    } catch (error) {
-      if (!isSystemAgentInferenceUnavailableError(error)) {
-        throw error;
-      }
-      return `${notice}\nThe write was applied, but inference could not propose a repair. Run \`openclaw doctor --fix\`, then try again.`;
-    }
-    if (!recovery.text) {
-      return `${notice}\nExit OpenClaw and run \`openclaw doctor --fix\`, or use \`config schema <path>\` to check the expected shape before leaving.`;
-    }
-    return `${notice}\n\n${recovery.text}`;
+    return await verifyConfigAfterSystemAgentWrite((message) =>
+      this.resolveAssistantTurn(message, false),
+    );
   }
 
   private commandDeps(): SystemAgentCommandDeps | undefined {
@@ -938,13 +973,7 @@ export class SystemAgentChatEngine {
   private clearPendingProposals(): void {
     this.pending = null;
     this.agentSession.proposalRef.current = undefined;
-  }
-
-  private configVerificationUnavailable(reason: string): string {
-    return [
-      `⚠ The write was applied, but post-write verification is unavailable: ${reason}.`,
-      "Run `openclaw doctor --fix`, then verify the configuration before continuing.",
-    ].join("\n");
+    this.agentSession.proposalRef.operation = undefined;
   }
 
   private armFollowUp(operation: SystemAgentOperation | undefined): string | null {

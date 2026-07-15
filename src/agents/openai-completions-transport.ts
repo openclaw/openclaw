@@ -1917,7 +1917,7 @@ function hasOpenAICompletionsReasoningUsageActivity(
   );
 }
 
-export const completionsTesting = {
+const completionsTesting = {
   getCompat,
   createSseDoneDetector,
   createOpenAICompletionsClient,
@@ -1926,4 +1926,12 @@ export const completionsTesting = {
   processOpenAICompletionsStream,
   shouldEmitOpenAICompletionsReasoningForModel,
 };
+
+declare global {
+  var openclawOpenAICompletionsTransportTestApi: typeof completionsTesting | undefined;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  globalThis.openclawOpenAICompletionsTransportTestApi = completionsTesting;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

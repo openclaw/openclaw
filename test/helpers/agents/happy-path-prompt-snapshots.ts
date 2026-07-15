@@ -342,7 +342,7 @@ function createExtraSystemPrompt(params: {
   intro?: string;
 }): string {
   return [
-    buildInboundMetaSystemPrompt(params.ctx),
+    buildInboundMetaSystemPrompt(params.ctx, {}),
     params.chatContext,
     params.intro,
     params.ctx.GroupSystemPrompt,

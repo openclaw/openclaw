@@ -10,11 +10,8 @@ import { loadCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
-import {
-  findTaskByRunId,
-  listTaskRecordsUnsorted,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-registry.js";
+import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({

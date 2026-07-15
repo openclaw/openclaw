@@ -51,8 +51,10 @@ import {
   toolingIsolatedTestFiles,
 } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import {
+  getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
   getUnitFastTimerTestFiles,
+  resolveUnitFastIsolatedTestIncludePattern,
   resolveUnitFastTestIncludePattern,
   resolveUnitFastTimerTestIncludePattern,
 } from "../test/vitest/vitest.unit-fast-paths.mjs";
@@ -164,6 +166,7 @@ const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk-light.conf
 const PLUGIN_SDK_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "test/vitest/vitest.plugins.config.ts";
 const UNIT_FAST_VITEST_CONFIG = "test/vitest/vitest.unit-fast.config.ts";
+const UNIT_FAST_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.unit-fast-isolated.config.ts";
 const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-timers.config.ts";
 const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts";
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
@@ -201,6 +204,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.tasks.config.ts", 165],
   [CHANNEL_VITEST_CONFIG, 164],
   [UNIT_FAST_VITEST_CONFIG, 160],
+  [UNIT_FAST_ISOLATED_VITEST_CONFIG, 159],
   [AUTO_REPLY_REPLY_VITEST_CONFIG, 155],
   [INFRA_VITEST_CONFIG, 145],
   ["test/vitest/vitest.secrets.config.ts", 140],
@@ -385,6 +389,7 @@ const VITEST_CONFIG_BY_KIND = {
   pluginSdkLight: PLUGIN_SDK_LIGHT_VITEST_CONFIG,
   process: PROCESS_VITEST_CONFIG,
   unitFast: UNIT_FAST_VITEST_CONFIG,
+  unitFastIsolated: UNIT_FAST_ISOLATED_VITEST_CONFIG,
   unitFastFakeTimers: UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG,
   unitSecurity: UNIT_SECURITY_VITEST_CONFIG,
   unitSrc: UNIT_SRC_VITEST_CONFIG,
@@ -2565,7 +2570,10 @@ function listToolingFullSuiteTestTargets(cwd) {
 
 function listUnitFastFullSuiteTestTargets() {
   const timerTargets = new Set(getUnitFastTimerTestFiles());
-  return getUnitFastTestFiles().filter((file) => !timerTargets.has(file));
+  const isolatedTargets = new Set(getUnitFastIsolatedTestFiles());
+  return getUnitFastTestFiles().filter(
+    (file) => !timerTargets.has(file) && !isolatedTargets.has(file),
+  );
 }
 
 function listAgentsCoreFullSuiteTestTargets(cwd) {
@@ -3798,6 +3806,9 @@ function classifyTarget(arg, cwd) {
   if (resolveUnitFastTimerTestIncludePattern(relative)) {
     return "unitFastFakeTimers";
   }
+  if (resolveUnitFastIsolatedTestIncludePattern(relative)) {
+    return "unitFastIsolated";
+  }
   if (resolveUnitFastTestIncludePattern(relative)) {
     return "unitFast";
   }
@@ -3991,6 +4002,10 @@ function resolveLightLaneIncludePatterns(kind, targetArg, cwd) {
     const includePattern = resolveUnitFastTimerTestIncludePattern(relative);
     return includePattern ? [includePattern] : null;
   }
+  if (kind === "unitFastIsolated") {
+    const includePattern = resolveUnitFastIsolatedTestIncludePattern(relative);
+    return includePattern ? [includePattern] : null;
+  }
   if (kind === "pluginSdkLight") {
     const includePattern = resolvePluginSdkLightIncludePattern(relative);
     return includePattern ? [includePattern] : null;
@@ -4170,6 +4185,7 @@ export function buildVitestRunPlans(
 
   const orderedKinds = [
     "unitFast",
+    "unitFastIsolated",
     "unitFastFakeTimers",
     "default",
     "boundary",

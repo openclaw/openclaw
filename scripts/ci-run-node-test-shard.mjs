@@ -178,13 +178,16 @@ export async function runShardPlans(plans, options = {}) {
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const plans = resolveShardPlans();
+  // Bins holding spawn/signal-timing suites are marked planConcurrency 1 by
+  // the planner; overlapping them with a sibling Vitest run causes flakes.
+  const planConcurrency = Number(process.env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY) || undefined;
   const releaseLock = acquireLocalHeavyCheckLockSync({
     cwd: process.cwd(),
     env: process.env,
     toolName: "test",
   });
   try {
-    process.exitCode = await runShardPlans(plans);
+    process.exitCode = await runShardPlans(plans, { concurrency: planConcurrency });
   } finally {
     releaseLock();
   }

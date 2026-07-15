@@ -12,7 +12,7 @@ let clearShellEnvAppliedKeys: ShellEnvModule["clearShellEnvAppliedKeys"];
 let getShellEnvAppliedKeys: ShellEnvModule["getShellEnvAppliedKeys"];
 let getShellPathFromLoginShell: ShellEnvModule["getShellPathFromLoginShell"];
 let loadShellEnvFallback: ShellEnvModule["loadShellEnvFallback"];
-let resolveExecutableFromUserShellPathWithPathEnv: ShellEnvModule["resolveExecutableFromUserShellPathWithPathEnv"];
+let resolveExecutableFromUserShellPath: ShellEnvModule["resolveExecutableFromUserShellPath"];
 let resolveShellEnvFallbackTimeoutMs: ShellEnvModule["resolveShellEnvFallbackTimeoutMs"];
 let shouldDeferShellEnvFallback: ShellEnvModule["shouldDeferShellEnvFallback"];
 let shouldEnableShellEnvFallback: ShellEnvModule["shouldEnableShellEnvFallback"];
@@ -26,7 +26,7 @@ beforeEach(async () => {
     getShellEnvAppliedKeys,
     getShellPathFromLoginShell,
     loadShellEnvFallback,
-    resolveExecutableFromUserShellPathWithPathEnv,
+    resolveExecutableFromUserShellPath,
     resolveShellEnvFallbackTimeoutMs,
     shouldDeferShellEnvFallback,
     shouldEnableShellEnvFallback,
@@ -572,11 +572,10 @@ describe("shell env fallback", () => {
   it("resolves from the daemon PATH without probing the login shell", () => {
     const exec = vi.fn(() => Buffer.from("PATH=/bin\0"));
 
-    const result = resolveExecutableFromUserShellPathWithPathEnv("sh", {
+    const result = resolveExecutableFromUserShellPath("sh", {
       env: { PATH: "/bin" },
-      exec: exec as unknown as Parameters<
-        typeof resolveExecutableFromUserShellPathWithPathEnv
-      >[1]["exec"],
+      strategy: "fallback",
+      exec: exec as unknown as Parameters<typeof resolveExecutableFromUserShellPath>[1]["exec"],
     });
 
     expect(result).toEqual({ executable: "/bin/sh" });
@@ -586,11 +585,10 @@ describe("shell env fallback", () => {
   it("resolves from the login-shell PATH when the daemon PATH misses the executable", () => {
     const exec = vi.fn(() => Buffer.from("PATH=/bin\0"));
 
-    const result = resolveExecutableFromUserShellPathWithPathEnv("sh", {
+    const result = resolveExecutableFromUserShellPath("sh", {
       env: { PATH: "/missing", SHELL: "/bin/sh" },
-      exec: exec as unknown as Parameters<
-        typeof resolveExecutableFromUserShellPathWithPathEnv
-      >[1]["exec"],
+      strategy: "fallback",
+      exec: exec as unknown as Parameters<typeof resolveExecutableFromUserShellPath>[1]["exec"],
     });
 
     expect(result).toEqual({ executable: "/bin/sh", pathEnv: "/bin" });
@@ -612,12 +610,10 @@ describe("shell env fallback", () => {
     fs.writeFileSync(shellTool, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const exec = vi.fn(() => Buffer.from(`PATH=${shellBin}\0`));
 
-    const result = resolveExecutableFromUserShellPathWithPathEnv("tool", {
+    const result = resolveExecutableFromUserShellPath("tool", {
       env: { PATH: daemonBin, SHELL: "/bin/sh" },
-      exec: exec as unknown as Parameters<
-        typeof resolveExecutableFromUserShellPathWithPathEnv
-      >[1]["exec"],
-      preferLoginShell: true,
+      strategy: "prefer",
+      exec: exec as unknown as Parameters<typeof resolveExecutableFromUserShellPath>[1]["exec"],
     });
 
     expect(result).toEqual({ executable: shellTool, pathEnv: shellBin });
@@ -627,11 +623,10 @@ describe("shell env fallback", () => {
   it("returns the login-shell PATH needed by env-based executable launchers", () => {
     const exec = vi.fn(() => Buffer.from("PATH=/bin\0"));
 
-    const result = resolveExecutableFromUserShellPathWithPathEnv("sh", {
+    const result = resolveExecutableFromUserShellPath("sh", {
       env: { PATH: "/missing", SHELL: "/bin/sh" },
-      exec: exec as unknown as Parameters<
-        typeof resolveExecutableFromUserShellPathWithPathEnv
-      >[1]["exec"],
+      strategy: "fallback",
+      exec: exec as unknown as Parameters<typeof resolveExecutableFromUserShellPath>[1]["exec"],
     });
 
     expect(result).toEqual({ executable: "/bin/sh", pathEnv: "/bin" });

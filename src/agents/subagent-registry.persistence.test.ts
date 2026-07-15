@@ -17,17 +17,6 @@ import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
-  testing,
-  addSubagentRunForTests,
-  clearSubagentRunSteerRestart,
-  getLatestSubagentRunByChildSessionKey,
-  getSubagentRunByChildSessionKey,
-  initSubagentRegistry,
-  listSubagentRunsForRequester,
-  registerSubagentRun,
-  resetSubagentRegistryForTests,
-} from "./subagent-registry.js";
-import {
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
@@ -37,6 +26,17 @@ import {
   loadSubagentRegistryFromDisk,
   resolveSubagentRegistryPath,
 } from "./subagent-registry.store.js";
+import {
+  testing,
+  addSubagentRunForTests,
+  clearSubagentRunSteerRestart,
+  getLatestSubagentRunByChildSessionKey,
+  getSubagentRunByChildSessionKey,
+  initSubagentRegistry,
+  listSubagentRunsForRequester,
+  registerSubagentRun,
+  resetSubagentRegistryForTests,
+} from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const { announceSpy } = vi.hoisted(() => ({
