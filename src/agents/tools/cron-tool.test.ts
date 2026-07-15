@@ -43,8 +43,20 @@ describe("cron tool", () => {
     opts?: Parameters<typeof createCronTool>[0],
   ): ReturnType<typeof createCronTool> {
     return createCronTool(opts, {
-      callGatewayTool: async (method, gatewayOpts, params) =>
-        await callGatewayMock({ method, params }, gatewayOpts),
+      callGatewayTool: async (method, gatewayOpts, params) => {
+        const result = await callGatewayMock({ method, params }, gatewayOpts);
+        if (
+          method === "cron.get" &&
+          result !== null &&
+          typeof result === "object" &&
+          !Array.isArray(result) &&
+          Object.hasOwn(result, "payload") &&
+          !Object.hasOwn(result, "configRevision")
+        ) {
+          return { ...result, configRevision: "sha256:test" };
+        }
+        return result;
+      },
     });
   }
 
@@ -1270,6 +1282,7 @@ describe("cron tool", () => {
       method: "cron.update",
       params: {
         id: "job-trigger",
+        expectedConfigRevision: "sha256:test",
         patch: {
           trigger: { script: "return { fire: false }" },
           payload: {
@@ -2284,6 +2297,7 @@ describe("cron tool", () => {
       method: "cron.update",
       params: {
         id: "job-command",
+        expectedConfigRevision: "sha256:test",
         patch: {
           enabled: false,
           payload: {
@@ -2404,6 +2418,7 @@ describe("cron tool", () => {
       method: "cron.update",
       params: {
         id: "job-flat-system-event-cap",
+        expectedConfigRevision: "sha256:test",
         patch: { payload: { kind: "systemEvent", toolsAllow: ["cron"] } },
       },
     });
@@ -2644,6 +2659,7 @@ describe("cron tool", () => {
       method: "cron.update",
       params: {
         id: "job-system-event",
+        expectedConfigRevision: "sha256:test",
         patch: { payload: { kind: "systemEvent", toolsAllow: ["cron"] } },
       },
     });
@@ -2754,6 +2770,7 @@ describe("cron tool", () => {
       method: "cron.update",
       params: {
         id: "job-9",
+        expectedConfigRevision: "sha256:test",
         patch: {
           enabled: false,
           payload: {
@@ -2789,6 +2806,7 @@ describe("cron tool", () => {
       method: "cron.update",
       params: {
         id: "job-10",
+        expectedConfigRevision: "sha256:test",
         patch: {
           enabled: false,
           payload: {
@@ -2798,6 +2816,83 @@ describe("cron tool", () => {
         },
       },
     });
+  });
+
+  it("retries cap derivation after a concurrent cron job update", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-race",
+        configRevision: "sha256:first",
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["read"] },
+      })
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "cron job definition no longer matches the loaded version",
+          details: {
+            code: "CRON_JOB_CHANGED",
+            expectedConfigRevision: "sha256:first",
+            actualConfigRevision: "sha256:second",
+          },
+        }),
+      )
+      .mockResolvedValueOnce({
+        id: "job-race",
+        configRevision: "sha256:second",
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: [] },
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool({
+      creatorToolAllowlist: ["read", "exec", "cron"],
+    });
+    await tool.execute("call-update-retry-cap-race", {
+      action: "update",
+      id: "job-race",
+      patch: { enabled: false },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(4);
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.update",
+      params: {
+        id: "job-race",
+        expectedConfigRevision: "sha256:first",
+        patch: {
+          enabled: false,
+          payload: { kind: "agentTurn", toolsAllow: ["read"] },
+        },
+      },
+    });
+    expect(readGatewayCall(3)).toEqual({
+      method: "cron.update",
+      params: {
+        id: "job-race",
+        expectedConfigRevision: "sha256:second",
+        patch: {
+          enabled: false,
+          payload: { kind: "agentTurn", toolsAllow: [] },
+        },
+      },
+    });
+  });
+
+  it("fails closed when cron.get omits the update revision", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      id: "job-no-revision",
+      configRevision: null,
+      payload: { kind: "agentTurn", message: "hello", toolsAllow: ["read"] },
+    });
+
+    const tool = createTestCronTool({ creatorToolAllowlist: ["read", "cron"] });
+    await expect(
+      tool.execute("call-update-no-revision", {
+        action: "update",
+        id: "job-no-revision",
+        patch: { enabled: false },
+      }),
+    ).rejects.toThrow("cron.get response is missing configRevision");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
   it("preserves an existing narrower toolsAllow when updating payload fields without toolsAllow", async () => {
@@ -2825,6 +2920,7 @@ describe("cron tool", () => {
       method: "cron.update",
       params: {
         id: "job-11",
+        expectedConfigRevision: "sha256:test",
         patch: {
           payload: {
             kind: "agentTurn",
@@ -2869,6 +2965,7 @@ describe("cron tool", () => {
       method: "cron.update",
       params: {
         id: "job-13",
+        expectedConfigRevision: "sha256:test",
         patch: {
           enabled: false,
           payload: {
@@ -2907,6 +3004,7 @@ describe("cron tool", () => {
       method: "cron.update",
       params: {
         id: "job-12",
+        expectedConfigRevision: "sha256:test",
         patch: {
           sessionTarget: "isolated",
           payload: {

@@ -558,7 +558,7 @@ async function prepareCronJobUpdatePatch(params: {
   creatorToolAllowlist: CronCreatorToolAllowlistEntry[] | undefined;
   gatewayOpts: GatewayCallOptions;
   callGateway: GatewayToolCaller;
-}): Promise<void> {
+}): Promise<string | undefined> {
   const payload = isRecord(params.patch.payload) ? params.patch.payload : undefined;
   const explicitPayloadKind = readCronPayloadKind(payload);
   if (
@@ -572,16 +572,22 @@ async function prepareCronJobUpdatePatch(params: {
       trigger: params.patch.trigger,
       creatorToolAllowlist: params.creatorToolAllowlist,
     });
-    return;
+    return undefined;
   }
   const needsStoredPayloadKind = payload !== undefined && explicitPayloadKind === undefined;
   if (!needsStoredPayloadKind && !params.creatorToolAllowlist) {
-    return;
+    return undefined;
   }
   const existing = await params.callGateway("cron.get", params.gatewayOpts, {
     id: params.id,
   });
   const existingRecord = isRecord(existing) ? existing : undefined;
+  const expectedConfigRevision = existingRecord?.configRevision;
+  if (typeof expectedConfigRevision !== "string" || expectedConfigRevision.length === 0) {
+    throw new Error(
+      "cron.get response is missing configRevision; restart the Gateway before retrying this update",
+    );
+  }
   const existingPayload = existingRecord?.payload;
   const existingPayloadKind = readCronPayloadKind(existingPayload);
   const payloadKind = explicitPayloadKind ?? existingPayloadKind;
@@ -590,13 +596,13 @@ async function prepareCronJobUpdatePatch(params: {
     params.patch.payload = payload;
   }
   if (!params.creatorToolAllowlist) {
-    return;
+    return expectedConfigRevision;
   }
   const patchIncludesTrigger = Object.hasOwn(params.patch, "trigger");
   const trigger = patchIncludesTrigger ? params.patch.trigger : existingRecord?.trigger;
   const writesToolsAllow = payload !== undefined && Object.hasOwn(payload, "toolsAllow");
   if (payloadKind !== "agentTurn" && !hasCronTriggerScript(trigger) && !writesToolsAllow) {
-    return;
+    return expectedConfigRevision;
   }
   const nextPayload: Record<string, unknown> = payload ?? {};
   if (payloadKind !== undefined) {
@@ -612,6 +618,17 @@ async function prepareCronJobUpdatePatch(params: {
         ? existingPayload.toolsAllow
         : undefined,
   });
+  return expectedConfigRevision;
+}
+
+function isCronJobConfigRevisionConflict(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const details = isRecord((error as Error & { details?: unknown }).details)
+    ? (error as Error & { details: Record<string, unknown> }).details
+    : undefined;
+  return details?.code === "CRON_JOB_CHANGED";
 }
 
 function truncateText(input: string, maxLen: number) {
@@ -1188,24 +1205,36 @@ Restricted isolated runs may only self status/list, current get/runs, and remove
               assertCronToolSessionRefsMatchScope(patch, callerScope);
             }
             const callerIncludedPayloadPatch = isRecord(patch.payload);
-            await prepareCronJobUpdatePatch({
-              id,
-              patch,
-              creatorToolAllowlist: opts?.creatorToolAllowlist,
-              gatewayOpts,
-              callGateway,
-            });
-            if (callerIncludedPayloadPatch) {
-              // Kind-less caller payloads inherit the stored kind above. Recheck
-              // those edits, but not a toolsAllow cap synthesized internally.
-              assertNoCronShellExecution(patch);
-            }
-            return jsonResult(
-              await callGateway("cron.update", gatewayOpts, {
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+              const preparedPatch = structuredClone(patch);
+              const expectedConfigRevision = await prepareCronJobUpdatePatch({
                 id,
-                patch,
-              }),
-            );
+                patch: preparedPatch,
+                creatorToolAllowlist: opts?.creatorToolAllowlist,
+                gatewayOpts,
+                callGateway,
+              });
+              if (callerIncludedPayloadPatch) {
+                // Kind-less caller payloads inherit the stored kind above. Recheck
+                // those edits, but not a toolsAllow cap synthesized internally.
+                assertNoCronShellExecution(preparedPatch);
+              }
+              try {
+                return jsonResult(
+                  await callGateway("cron.update", gatewayOpts, {
+                    id,
+                    patch: preparedPatch,
+                    ...(expectedConfigRevision ? { expectedConfigRevision } : {}),
+                  }),
+                );
+              } catch (error) {
+                if (attempt === 0 && isCronJobConfigRevisionConflict(error)) {
+                  continue;
+                }
+                throw error;
+              }
+            }
+            throw new Error("cron update retry exhausted");
           }
           case "remove": {
             const id = readCronJobIdParam(params);
