@@ -3,7 +3,7 @@ scenario:
   id: slack-channel-disabled-warning
   surface: channels
   coverage:
-    primary: [channels.access-control]
+    primary: [channels.access-and-identity]
   execution:
     kind: flow
     channel: slack

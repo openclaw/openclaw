@@ -3,7 +3,7 @@ scenario:
   id: discord-thread-reply-filepath-attachment
   surface: channels
   coverage:
-    primary: [channels.attachments]
+    primary: [channels.media-rich-content]
   execution:
     kind: flow
     channel: discord

@@ -3,7 +3,7 @@ scenario:
   id: discord-voice-autojoin
   surface: channels
   coverage:
-    primary: [channels.voice]
+    primary: [discord.auto-join-and-follow-users]
   execution:
     kind: flow
     channel: discord

@@ -3,7 +3,7 @@ scenario:
   id: slack-table-presentation-native
   surface: channels
   coverage:
-    primary: [channels.rich-content]
+    primary: [channels.media-rich-content]
   execution:
     kind: flow
     channel: slack

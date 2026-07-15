@@ -3,7 +3,7 @@ scenario:
   id: discord-native-help-command-registration
   surface: channels
   coverage:
-    primary: [channels.commands]
+    primary: [discord.native-slash-command-registration]
   execution:
     kind: flow
     channel: discord

@@ -3,7 +3,7 @@ scenario:
   id: slack-reaction-glyph-native
   surface: channels
   coverage:
-    primary: [channels.reactions]
+    primary: [channels.message-actions]
   execution:
     kind: flow
     channel: slack
