@@ -287,7 +287,15 @@ function handleMessage(msg) {
 
 async function handleHelloOk(payload) {
   mainSessionKey = payload.snapshot?.sessionDefaults?.mainSessionKey || null;
-  await bindTabSession();
+  try {
+    await bindTabSession();
+  } catch (err) {
+    // The handshake already reported "Connected"; a failed bind would otherwise
+    // leave the panel looking healthy over a session that never attached.
+    const failure = err instanceof Error ? err.message : String(err);
+    setWsStatus("err", "Session failed");
+    addMessage("system", `Could not start this tab's conversation: ${failure}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -583,6 +591,15 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     pinnedTabId = null;
     tabLbl.textContent = "Tab closed";
     shareBtn.style.display = "none";
+    // The conversation is pinned to a tab that no longer exists. Release its
+    // session and close input, or the panel would keep sending turns into a
+    // thread whose tab the agent can never act on.
+    if (subscribedKey) {
+      sendReq("sessions.messages.unsubscribe", { key: subscribedKey }).catch(() => {});
+      subscribedKey = null;
+    }
+    sessionKey = null;
+    setInputEnabled(false);
   }
 });
 
