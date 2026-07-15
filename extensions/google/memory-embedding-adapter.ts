@@ -11,14 +11,12 @@ import {
   buildGeminiEmbeddingRequest,
   createGeminiEmbeddingProvider,
   DEFAULT_GEMINI_EMBEDDING_MODEL,
+  isGeminiEmbedding2Model,
+  normalizeGeminiModel,
 } from "./embedding-provider.js";
 
 function supportsGeminiMultimodalEmbeddings(model: string): boolean {
-  const normalized = model
-    .trim()
-    .replace(/^models\//, "")
-    .replace(/^(gemini|google)\//, "");
-  return normalized === "gemini-embedding-2-preview";
+  return isGeminiEmbedding2Model(normalizeGeminiModel(model));
 }
 
 export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {

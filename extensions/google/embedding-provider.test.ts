@@ -69,11 +69,11 @@ describe("Gemini embedding request helpers", () => {
       buildGeminiTextEmbeddingRequest({
         text: "hello",
         taskType: "RETRIEVAL_DOCUMENT",
-        modelPath: "models/gemini-embedding-2-preview",
+        modelPath: "models/gemini-embedding-2",
         outputDimensionality: 1536,
       }),
     ).toEqual({
-      model: "models/gemini-embedding-2-preview",
+      model: "models/gemini-embedding-2",
       content: { parts: [{ text: "hello" }] },
       taskType: "RETRIEVAL_DOCUMENT",
       outputDimensionality: 1536,
@@ -88,11 +88,11 @@ describe("Gemini embedding request helpers", () => {
           ],
         },
         taskType: "RETRIEVAL_DOCUMENT",
-        modelPath: "models/gemini-embedding-2-preview",
+        modelPath: "models/gemini-embedding-2",
         outputDimensionality: 1536,
       }),
     ).toEqual({
-      model: "models/gemini-embedding-2-preview",
+      model: "models/gemini-embedding-2",
       content: {
         parts: [
           { text: "Image file: diagram.png" },
@@ -102,31 +102,30 @@ describe("Gemini embedding request helpers", () => {
       taskType: "RETRIEVAL_DOCUMENT",
       outputDimensionality: 1536,
     });
+    expect(GEMINI_EMBEDDING_2_MODELS.has("gemini-embedding-2")).toBe(true);
     expect(GEMINI_EMBEDDING_2_MODELS.has("gemini-embedding-2-preview")).toBe(true);
+    expect(isGeminiEmbedding2Model("gemini-embedding-2")).toBe(true);
     expect(isGeminiEmbedding2Model("gemini-embedding-2-preview")).toBe(true);
     expect(isGeminiEmbedding2Model("gemini-embedding-001")).toBe(false);
     expect(isGeminiEmbedding2Model("text-embedding-004")).toBe(false);
     expect(resolveGeminiOutputDimensionality("gemini-embedding-001")).toBeUndefined();
     expect(resolveGeminiOutputDimensionality("text-embedding-004")).toBeUndefined();
-    expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview")).toBe(3072);
-    expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 768)).toBe(768);
-    expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 1536)).toBe(1536);
-    expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 3072)).toBe(3072);
-    expect(() => resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 512)).toThrow(
-      /Invalid outputDimensionality 512/,
+    expect(resolveGeminiOutputDimensionality("gemini-embedding-2")).toBe(3072);
+    expect(resolveGeminiOutputDimensionality("gemini-embedding-2", 128)).toBe(128);
+    expect(resolveGeminiOutputDimensionality("gemini-embedding-2", 512)).toBe(512);
+    expect(resolveGeminiOutputDimensionality("gemini-embedding-2", 768)).toBe(768);
+    expect(resolveGeminiOutputDimensionality("gemini-embedding-2", 1536)).toBe(1536);
+    expect(resolveGeminiOutputDimensionality("gemini-embedding-2", 3072)).toBe(3072);
+    expect(() => resolveGeminiOutputDimensionality("gemini-embedding-2", 127)).toThrow(
+      /Invalid outputDimensionality 127/,
     );
-    expect(() => resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 1024)).toThrow(
-      /Valid values: 768, 1536, 3072/,
+    expect(() => resolveGeminiOutputDimensionality("gemini-embedding-2", 3073)).toThrow(
+      /Recommended values: 768, 1536, 3072/,
     );
-    expect(normalizeGeminiModel("models/gemini-embedding-2-preview")).toBe(
-      "gemini-embedding-2-preview",
-    );
-    expect(normalizeGeminiModel("gemini/gemini-embedding-2-preview")).toBe(
-      "gemini-embedding-2-preview",
-    );
-    expect(normalizeGeminiModel("google/gemini-embedding-2-preview")).toBe(
-      "gemini-embedding-2-preview",
-    );
+    expect(normalizeGeminiModel("models/gemini-embedding-2")).toBe("gemini-embedding-2");
+    expect(normalizeGeminiModel("gemini/gemini-embedding-2")).toBe("gemini-embedding-2");
+    expect(normalizeGeminiModel("google/gemini-embedding-2")).toBe("gemini-embedding-2");
+    expect(normalizeGeminiModel("models/gemini-embedding-2-preview")).toBe("gemini-embedding-2");
     expect(normalizeGeminiModel("")).toBe(DEFAULT_GEMINI_EMBEDDING_MODEL);
   });
 });
@@ -148,7 +147,7 @@ describe("Gemini embedding provider", () => {
       config: {} as never,
       provider: "gemini",
       remote: { apiKey: "test-key" },
-      model: "gemini-embedding-2-preview",
+      model: "gemini-embedding-2",
       outputDimensionality: 768,
       taskType: "SEMANTIC_SIMILARITY",
       fallback: "none",
@@ -180,7 +179,7 @@ describe("Gemini embedding provider", () => {
     ]);
 
     expect(requireFirstFetchInput(fetchMock)).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent",
     );
     expect(fetchJsonBody(fetchMock, 0)).toEqual({
       outputDimensionality: 768,
@@ -190,7 +189,7 @@ describe("Gemini embedding provider", () => {
     expect(fetchJsonBody(fetchMock, 1)).toEqual({
       requests: [
         {
-          model: "models/gemini-embedding-2-preview",
+          model: "models/gemini-embedding-2",
           content: {
             parts: [
               { text: "Image file: diagram.png" },
@@ -201,7 +200,7 @@ describe("Gemini embedding provider", () => {
           outputDimensionality: 768,
         },
         {
-          model: "models/gemini-embedding-2-preview",
+          model: "models/gemini-embedding-2",
           content: {
             parts: [
               { text: "Audio file: note.wav" },

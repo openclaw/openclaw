@@ -43,20 +43,23 @@ const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v
 const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-004": 2048,
   "gemini-embedding-001": 2048,
+  "gemini-embedding-2": 8192,
   "gemini-embedding-2-preview": 8192,
 };
 
 type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType"]>;
 
-// --- gemini-embedding-2-preview support ---
+// --- gemini-embedding-2 support ---
 
 export const GEMINI_EMBEDDING_2_MODELS = new Set([
+  "gemini-embedding-2",
+  // The public preview id shipped before GA; keep accepting configs that used it.
   "gemini-embedding-2-preview",
-  // Add the GA model name here once released.
 ]);
 
 const GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS = 3072;
-const GEMINI_EMBEDDING_2_VALID_DIMENSIONS = [768, 1536, 3072] as const;
+const GEMINI_EMBEDDING_2_MIN_DIMENSIONS = 128;
+const GEMINI_EMBEDDING_2_MAX_DIMENSIONS = 3072;
 
 type GeminiTextPart = { text: string };
 type GeminiInlinePart = {
@@ -176,10 +179,13 @@ export function resolveGeminiOutputDimensionality(
   if (requested == null) {
     return GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS;
   }
-  const valid: readonly number[] = GEMINI_EMBEDDING_2_VALID_DIMENSIONS;
-  if (!valid.includes(requested)) {
+  if (
+    !Number.isInteger(requested) ||
+    requested < GEMINI_EMBEDDING_2_MIN_DIMENSIONS ||
+    requested > GEMINI_EMBEDDING_2_MAX_DIMENSIONS
+  ) {
     throw new Error(
-      `Invalid outputDimensionality ${requested} for ${model}. Valid values: ${valid.join(", ")}`,
+      `Invalid outputDimensionality ${requested} for ${model}. Valid range: ${GEMINI_EMBEDDING_2_MIN_DIMENSIONS}-${GEMINI_EMBEDDING_2_MAX_DIMENSIONS}. Recommended values: 768, 1536, 3072.`,
     );
   }
   return requested;
@@ -204,13 +210,15 @@ export function normalizeGeminiModel(model: string): string {
     return DEFAULT_GEMINI_EMBEDDING_MODEL;
   }
   const withoutPrefix = trimmed.replace(/^models\//, "");
-  if (withoutPrefix.startsWith("gemini/")) {
-    return withoutPrefix.slice("gemini/".length);
+  const withoutProviderPrefix = withoutPrefix.startsWith("gemini/")
+    ? withoutPrefix.slice("gemini/".length)
+    : withoutPrefix.startsWith("google/")
+      ? withoutPrefix.slice("google/".length)
+      : withoutPrefix;
+  if (withoutProviderPrefix === "gemini-embedding-2-preview") {
+    return "gemini-embedding-2";
   }
-  if (withoutPrefix.startsWith("google/")) {
-    return withoutPrefix.slice("google/".length);
-  }
-  return withoutPrefix;
+  return withoutProviderPrefix;
 }
 
 async function fetchGeminiEmbeddingPayload(params: {
