@@ -255,6 +255,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/hook-runtime` | Deprecated broad barrel for webhook/internal hook pipeline helpers; prefer focused hook/plugin runtime subpaths |
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
     | `plugin-sdk/process-runtime` | Process exec helpers |
+    | `plugin-sdk/node-host` | Node-host executable resolution and PTY resume helpers |
     | `plugin-sdk/cli-runtime` | Deprecated broad barrel for CLI formatting, wait, version, argument-invocation, and lazy command-group helpers; prefer focused CLI/runtime subpaths |
     | `plugin-sdk/qa-live-transport-scenarios` | Shared live transport QA scenario ids, baseline coverage helpers, and scenario-selection helper |
     | `plugin-sdk/qa-runner-runtime` | Supported facade exposing plugin QA scenarios through the CLI command surface |

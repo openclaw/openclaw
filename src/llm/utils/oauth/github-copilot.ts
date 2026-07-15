@@ -331,7 +331,7 @@ async function pollForGitHubAccessToken(
 /**
  * Refresh GitHub Copilot token
  */
-export async function refreshGitHubCopilotToken(
+async function refreshGitHubCopilotToken(
   refreshToken: string,
   enterpriseDomain?: string,
   options: CopilotRequestOptions = {},
@@ -577,12 +577,4 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
     const baseUrl = tokenEndpoint.baseUrl ?? getGitHubCopilotBaseUrl(undefined, domain);
     return models.map((m) => (m.provider === "github-copilot" ? { ...m, baseUrl } : m));
   },
-};
-
-export const testing = {
-  enableGitHubCopilotModel,
-  getGitHubCopilotBaseUrl,
-  listGitHubCopilotModelIds,
-  pollForGitHubAccessToken,
-  startDeviceFlow,
 };

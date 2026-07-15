@@ -15,6 +15,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   type TerminalPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
+import { createTerminalDefaultColorQueryResponder } from "./terminal-color-queries.ts";
 import {
   TerminalConnection,
   type TerminalGatewayClient,
@@ -41,13 +42,14 @@ import {
   type TerminalTabReadinessState,
 } from "./terminal-tab-readiness.ts";
 import { TerminalTaskQueue } from "./terminal-task-queue.ts";
-import { terminalTheme } from "./terminal-theme.ts";
+import { terminalDynamicColors, terminalTheme } from "./terminal-theme.ts";
 
 type TerminalDock = DockPanelSide;
 type TerminalTabState = TerminalPanelTab &
   TerminalTabReadinessState & {
     gatewaySessionId: string;
     pendingInput: StartupInputBuffer;
+    defaultColorQueries: ReturnType<typeof createTerminalDefaultColorQueryResponder>;
     controller: GhosttyTerminalController;
     shell: string;
     host: HTMLDivElement;
@@ -527,6 +529,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       connection,
       () => tabRef.current?.gatewaySessionId,
     );
+    const defaultColorQueries = createTerminalDefaultColorQueryResponder(
+      () => terminalDynamicColors(this.themeMode),
+      (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
+    );
     let controller: GhosttyTerminalController;
     try {
       controller = await this.createTerminal({
@@ -561,6 +567,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       sequence: this.tabSeq,
       gatewaySessionId: "",
       pendingInput: startupInput.buffer,
+      defaultColorQueries,
       shellName: null,
       shell: "",
       agentId: null,
@@ -585,6 +592,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       // connection.open/attach from writing to an already-disposed terminal.
       onData: (data: string) => {
         if (!tab.cancelled) {
+          // ghostty-web 0.4.0's WASM handler ignores all OSC color operations,
+          // including setters. Report the configured renderer colors here so
+          // palette-aware TUIs receive the same defaults as native Ghostty.
+          tab.defaultColorQueries.observe(data);
           tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(data));
           if (data.length > 0) {
             this.readiness.markReady(tab);
@@ -593,8 +604,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       },
       // A replay is authoritative. Reset parser, screen, and scrollback so a
       // gap cannot leave stale cells or a partial escape sequence behind.
-      onReplay: (data: string) => {
+      onReplay: (data: string, newlyObservedFrom: number) => {
         if (!tab.cancelled) {
+          // Suppress complete historical queries, then answer only the suffix
+          // recovered after a sequence gap. A split query may cross the seam.
+          tab.defaultColorQueries.primeFromReplay(data.slice(0, newlyObservedFrom));
+          tab.defaultColorQueries.observe(data.slice(newlyObservedFrom));
           tab.controller.terminal.reset();
           if (data) {
             tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(data));

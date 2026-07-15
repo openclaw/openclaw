@@ -174,9 +174,9 @@ jobs:
             tideclaw_alpha_publish=true
           fi
           sha_pinned_release_publish=false
-          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
+          if [[ "${WORKFLOW_REF}" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
             if [[ "${WORKFLOW_SHA:0:12}" != "${BASH_REMATCH[1]}" ]]; then
-              echo "SHA-pinned release publish branch does not match workflow SHA ${WORKFLOW_SHA}." >&2
+              echo "SHA-pinned release publish tag does not match workflow SHA ${WORKFLOW_SHA}." >&2
               exit 1
             fi
             merge_base_sha="$(
@@ -184,13 +184,13 @@ jobs:
                 --jq '.merge_base_commit.sha | select(test("^[a-f0-9]{40}$"))'
             )"
             if [[ "${merge_base_sha}" != "${WORKFLOW_SHA}" ]]; then
-              echo "SHA-pinned release publish workflow revision is not reachable from current main." >&2
+              echo "SHA-pinned release publish tag revision is not reachable from current main." >&2
               exit 1
             fi
             sha_pinned_release_publish=true
           fi
           if [[ "${WORKFLOW_REF}" != "refs/heads/main" && "${tideclaw_alpha_publish}" != "true" && "${sha_pinned_release_publish}" != "true" ]]; then
-            echo "OpenClaw Release Publish must use trusted main workflow tooling, a SHA-pinned release-publish branch, or a matching Tideclaw alpha branch." >&2
+            echo "OpenClaw Release Publish must use trusted main workflow tooling, a protected SHA-pinned release-publish tag, or a matching Tideclaw alpha branch." >&2
             exit 1
           fi
           if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PLUGIN_PUBLISH_SCOPE}" != "all-publishable" ]]; then
@@ -594,23 +594,31 @@ jobs:
         id: clawhub_plan
         env:
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
-          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          BOOTSTRAP_WORKFLOW_REF: ${{ startsWith(github.ref, 'refs/tags/release-publish/') && github.ref_name || 'main' }}
           GH_TOKEN: ${{ github.token }}
+          PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
           RELEASE_TAG: ${{ inputs.tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
         run: |
           set -euo pipefail
           plan_path="${RUNNER_TEMP}/openclaw-release-clawhub-plan.json"
-          bootstrap_workflow_sha="$(
-            gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-              --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
-          )"
+          if [[ "${BOOTSTRAP_WORKFLOW_REF}" == "main" ]]; then
+            bootstrap_workflow_sha="$(
+              gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+                --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
+            )"
+          else
+            # Protected release-publish tags bind every child to this exact
+            # parent revision, so unrelated main movement cannot change tooling.
+            bootstrap_workflow_sha="${GITHUB_SHA}"
+          fi
           plan_args=(
+            --bootstrap-workflow-ref "${BOOTSTRAP_WORKFLOW_REF}"
             --bootstrap-workflow-sha "${bootstrap_workflow_sha}"
             --release-tag "${RELEASE_TAG}"
             --release-sha "${TARGET_SHA}"
-            --release-publish-branch "${CHILD_WORKFLOW_REF}"
+            --release-publish-branch "${PARENT_WORKFLOW_BRANCH}"
             --release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"
             --release-publish-run-id "${GITHUB_RUN_ID}"
             --plugin-publish-scope "${PLUGIN_PUBLISH_SCOPE}"
@@ -634,14 +642,15 @@ jobs:
           fi
 
           jq -e \
-            --arg branch "${CHILD_WORKFLOW_REF}" \
+            --arg bootstrap_ref "${BOOTSTRAP_WORKFLOW_REF}" \
+            --arg branch "${PARENT_WORKFLOW_BRANCH}" \
             --arg bootstrap_workflow_sha "${bootstrap_workflow_sha}" \
             --arg attempt "${GITHUB_RUN_ATTEMPT}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg tag "${RELEASE_TAG}" \
             --arg target "${TARGET_SHA}" \
             '.bootstrapWorkflowSha == $bootstrap_workflow_sha and
-             .bootstrap.ref == "main" and
+             .bootstrap.ref == $bootstrap_ref and
              .bootstrap.inputs.ref == $target and
              .bootstrap.inputs.bootstrap_workflow_sha == $bootstrap_workflow_sha and
              .bootstrap.inputs.release_tag == $tag and
@@ -667,7 +676,7 @@ jobs:
             workflow: "OpenClaw Release Publish",
             parentRunId: process.env.GITHUB_RUN_ID,
             parentRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
-            workflowBranch: process.env.CHILD_WORKFLOW_REF,
+            workflowBranch: process.env.PARENT_WORKFLOW_BRANCH,
             parentWorkflowSha: process.env.GITHUB_SHA,
             bootstrapWorkflowSha: plan.bootstrapWorkflowSha,
             releaseTag: process.env.RELEASE_TAG,
@@ -761,6 +770,7 @@ jobs:
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
+          PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -883,16 +893,28 @@ jobs:
           }
 
           verify_bootstrap_workflow_sha() {
-            local approved_sha current_sha
+            local approved_ref approved_sha current_main_sha
+            approved_ref="$(jq -er '.bootstrap.ref | select(type == "string" and length > 0)' "${CLAWHUB_PLAN_PATH}")"
             approved_sha="$(jq -er '.bootstrapWorkflowSha | select(test("^[a-f0-9]{40}$"))' "${CLAWHUB_PLAN_PATH}")"
-            current_sha="$(
-              gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-                --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
-            )"
-            [[ "${current_sha}" == "${approved_sha}" ]] || {
-              echo "Trusted main moved from approved ClawHub bootstrap workflow SHA ${approved_sha} to ${current_sha}; rerun release approval." >&2
-              exit 1
-            }
+            if [[ "${approved_ref}" == "main" ]]; then
+              current_main_sha="$(
+                gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+                  --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
+              )"
+              [[ "${approved_sha}" == "${current_main_sha}" ]] || {
+                echo "Trusted main moved from approved ClawHub bootstrap workflow SHA ${approved_sha} to ${current_main_sha}; rerun release approval." >&2
+                exit 1
+              }
+            else
+              [[ "${approved_ref}" == "${CHILD_WORKFLOW_REF}" ]] || {
+                echo "Approved ClawHub bootstrap workflow ref ${approved_ref} does not match protected child workflow ref ${CHILD_WORKFLOW_REF}." >&2
+                exit 1
+              }
+              [[ "${approved_sha}" == "${PARENT_WORKFLOW_SHA}" ]] || {
+                echo "Approved ClawHub bootstrap workflow SHA ${approved_sha} does not match parent workflow SHA ${PARENT_WORKFLOW_SHA}." >&2
+                exit 1
+              }
+            fi
             printf '%s\n' "${approved_sha}"
           }
 
@@ -1657,7 +1679,7 @@ jobs:
             android_release_run_id="$(dispatch_workflow_at_ref "${RELEASE_TAG}" "${TARGET_SHA}" android-release.yml \
               -f tag="${RELEASE_TAG}" \
               -f release_publish_run_id="${GITHUB_RUN_ID}" \
-              -f release_publish_branch="${CHILD_WORKFLOW_REF}" \
+              -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" \
               -f release_target_sha="${TARGET_SHA}" \
               -f direct_release_recovery=false)"
             # Promotion runs in a background subshell; hand the run id to the
@@ -1952,12 +1974,14 @@ jobs:
             fi
           }
 
+          bootstrap_summary_ref="$(jq -er '.bootstrap.ref | select(type == "string" and length > 0)' "${CLAWHUB_PLAN_PATH}")"
+          bootstrap_summary_sha="$(jq -er '.bootstrapWorkflowSha | select(test("^[a-f0-9]{40}$"))' "${CLAWHUB_PLAN_PATH}")"
           {
             echo "### Publish sequence"
             echo
             echo "- Workflow ref: \`${CHILD_WORKFLOW_REF}\`"
             echo "- Normal ClawHub workflow ref: release tag \`${RELEASE_TAG}\`"
-            echo "- ClawHub bootstrap workflow ref: trusted \`main\`, target \`${TARGET_SHA}\`"
+            echo "- ClawHub bootstrap workflow ref: \`${bootstrap_summary_ref}\` at \`${bootstrap_summary_sha}\`"
             echo "- Release tag: \`${RELEASE_TAG}\`"
             echo "- Release SHA: \`${TARGET_SHA}\`"
             echo "- Release approval: this workflow job"

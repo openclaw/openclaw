@@ -44,6 +44,7 @@ import {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
+import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveAgentContextLimitValue } from "./agent-context-limits.js";
@@ -964,8 +965,14 @@ function projectCodexDynamicTools(tools: readonly AnyAgentTool[]): {
       quarantinedTools.push(descriptor.diagnostic);
       continue;
     }
+    const normalizedParameters = normalizeOpenAIToolSchemas({
+      provider: "openai",
+      modelApi: "openai-chatgpt-responses",
+      // The shared normalizer only reads parameters; do not expose unreadable plugin fields.
+      tools: [{ parameters: descriptor.parameters } as AnyAgentTool],
+    })[0]?.parameters;
     const projection = projectRuntimeToolInputSchema(
-      descriptor.parameters,
+      normalizedParameters ?? descriptor.parameters,
       `${descriptor.name}.inputSchema`,
     );
     if (projection.violations.length > 0) {

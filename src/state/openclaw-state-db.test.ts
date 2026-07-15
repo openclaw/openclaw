@@ -1945,6 +1945,43 @@ describe("openclaw state database", () => {
     );
   });
 
+  it("migrates operator approvals to accept system-agent records", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const database = openOpenClawStateDatabase(options);
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    const currentSql = (
+      legacyDb
+        .prepare(
+          "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approvals'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    legacyDb.exec("ALTER TABLE operator_approvals RENAME TO operator_approvals_current");
+    legacyDb.exec(currentSql.replace("'exec', 'plugin', 'system-agent'", "'exec', 'plugin'"));
+    legacyDb.exec("DROP TABLE operator_approvals_current");
+    legacyDb.close();
+
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+      kind: "operator-approvals-system-agent",
+      path: databasePath,
+    });
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: ["Migrated shared state operator approvals → OpenClaw system changes"],
+      warnings: [],
+    });
+
+    const reopened = openOpenClawStateDatabase(options);
+    const migratedSql = reopened.db
+      .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approvals'")
+      .get() as { sql: string };
+    expect(migratedSql.sql).toContain("'system-agent'");
+  });
+
   it("serializes concurrent additive schema upgrades across processes", () => {
     const rootDir = createTempStateDir();
     const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
