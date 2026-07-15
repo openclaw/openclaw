@@ -8,7 +8,6 @@ import {
   createOpenAiCompatibleImageGenerationProvider,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -121,8 +120,7 @@ export function buildXaiImageGenerationProvider(): ImageGenerationProvider {
     },
     defaultBaseUrl: XAI_BASE_URL,
     resolveBaseUrl: ({ req }) => resolveXaiImageBaseUrl(req),
-    resolveAllowPrivateNetwork: ({ req }) =>
-      isPrivateNetworkOptInEnabled(req.cfg?.browser?.ssrfPolicy) ? true : undefined,
+    resolveAllowPrivateNetwork: () => undefined,
     useConfiguredRequest: true,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     buildGenerateRequest: ({ req, inputImages, model, count }) => ({

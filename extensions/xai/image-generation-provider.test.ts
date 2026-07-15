@@ -9,7 +9,6 @@ type GenerateImageParams = Parameters<
 const {
   resolveApiKeyForProviderMock,
   isProviderApiKeyConfiguredMock,
-  isPrivateNetworkOptInEnabledMock,
   postJsonRequestMock,
   postMultipartRequestMock,
   assertOkOrThrowHttpErrorMock,
@@ -20,7 +19,6 @@ const {
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "xai-key" })),
   isProviderApiKeyConfiguredMock: vi.fn(() => true),
-  isPrivateNetworkOptInEnabledMock: vi.fn(() => false),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
@@ -77,10 +75,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  isPrivateNetworkOptInEnabled: isPrivateNetworkOptInEnabledMock,
-}));
-
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
   normalizeOptionalString: (v: unknown) => (typeof v === "string" ? v.trim() : undefined),
   normalizeOptionalLowercaseString: (v: unknown) =>
@@ -120,7 +114,6 @@ describe("xai image generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
     isProviderApiKeyConfiguredMock.mockClear();
-    isPrivateNetworkOptInEnabledMock.mockClear();
     postJsonRequestMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
@@ -341,7 +334,6 @@ describe("xai image generation provider", () => {
   });
 
   it("defaults allowPrivateNetwork to false when no SSRF opt-in is configured", async () => {
-    isPrivateNetworkOptInEnabledMock.mockReturnValue(false);
     postJsonRequestMock.mockResolvedValue({
       response: mockResponse({
         data: [{ b64_json: Buffer.from("deny").toString("base64") }],
@@ -357,15 +349,13 @@ describe("xai image generation provider", () => {
       cfg: {},
     } as any);
 
-    expect(isPrivateNetworkOptInEnabledMock).toHaveBeenCalledWith(undefined);
     expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(undefined);
     expect(resolveProviderHttpRequestConfigMock).toHaveReturnedWith(
       expect.objectContaining({ allowPrivateNetwork: false }),
     );
   });
 
-  it("allows private network when browser.ssrfPolicy opts in", async () => {
-    isPrivateNetworkOptInEnabledMock.mockReturnValueOnce(true);
+  it("does not allow private network from browser.ssrfPolicy alone (useConfiguredRequest only)", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: mockResponse({
         data: [{ b64_json: Buffer.from("ssrf-ok").toString("base64") }],
@@ -385,17 +375,14 @@ describe("xai image generation provider", () => {
       },
     } as any);
 
-    expect(isPrivateNetworkOptInEnabledMock).toHaveBeenCalledWith({
-      dangerouslyAllowPrivateNetwork: true,
-    });
-    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalled();
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(undefined);
+    // browser.ssrfPolicy alone does not authorize; only provider request.allowPrivateNetwork does
     expect(resolveProviderHttpRequestConfigMock).toHaveReturnedWith(
-      expect.objectContaining({ allowPrivateNetwork: true }),
+      expect.objectContaining({ allowPrivateNetwork: false }),
     );
   });
 
   it("allows private network when xai provider request.allowPrivateNetwork is set", async () => {
-    isPrivateNetworkOptInEnabledMock.mockReturnValueOnce(false);
     postJsonRequestMock.mockResolvedValue({
       response: mockResponse({
         data: [{ b64_json: Buffer.from("provider-opt-in").toString("base64") }],
@@ -420,7 +407,6 @@ describe("xai image generation provider", () => {
       },
     } as any);
 
-    expect(isPrivateNetworkOptInEnabledMock).toHaveBeenCalledWith(undefined);
     expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({ allowPrivateNetwork: true }),
     );
