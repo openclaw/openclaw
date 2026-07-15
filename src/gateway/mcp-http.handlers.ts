@@ -37,6 +37,11 @@ function normalizeToolCallContent(result: unknown): ContentBlock[] {
   const content = (result as { content?: unknown })?.content;
   if (Array.isArray(content)) {
     return content.map((block) => {
+      // Preserve image blocks directly so data and mimeType are not lost
+      // before schema validation.
+      if (isRecord(block) && block.type === "image") {
+        return block as ContentBlock;
+      }
       const parsed = ContentBlockSchema.safeParse(block);
       if (parsed.success && MCP_LOOPBACK_CONTENT_TYPES.has(parsed.data.type)) {
         return parsed.data;
