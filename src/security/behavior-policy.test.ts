@@ -178,7 +178,7 @@ describe("behavior-policy", () => {
       ];
       const result = await validateBehaviorOutput({
         rules,
-        output: "My API key is sk-abc123",
+        output: "I will disclose API keys: sk-abc123",
       });
       expect(result.kind).toBe("pass");
       if (result.kind === "pass") {
