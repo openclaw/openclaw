@@ -17,7 +17,7 @@ import {
   applyClickClackSetupConfigPatch,
   normalizeClickClackBaseUrl,
 } from "./setup-core.js";
-import type { CoreConfig } from "./types.js";
+import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const t = createSetupTranslator();
 const channel = "clickclack" as const;
@@ -35,6 +35,20 @@ function isWorkspaceNotFound(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith("ClickClack workspace not found:");
 }
 
+function hasConfiguredClickClackCredential(account: ResolvedClickClackAccount): boolean {
+  return (
+    hasConfiguredSecretInput(account.config.token) || Boolean(account.config.tokenFile?.trim())
+  );
+}
+
+function isClickClackSetupConfigured(account: ResolvedClickClackAccount): boolean {
+  return Boolean(
+    account.baseUrl &&
+    account.workspace &&
+    (account.token || hasConfiguredClickClackCredential(account)),
+  );
+}
+
 export const clickClackSetupWizard: ChannelSetupWizard = {
   channel,
   status: createStandardChannelSetupStatus({
@@ -48,10 +62,12 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
     resolveConfigured: ({ cfg, accountId }) =>
       (accountId ? [accountId] : listClickClackAccountIds(cfg as CoreConfig)).some(
         (resolvedAccountId) =>
-          resolveClickClackAccount({
-            cfg: cfg as CoreConfig,
-            accountId: resolvedAccountId,
-          }).configured,
+          isClickClackSetupConfigured(
+            resolveClickClackAccount({
+              cfg: cfg as CoreConfig,
+              accountId: resolvedAccountId,
+            }),
+          ),
       ),
   }),
   introNote: {
@@ -63,10 +79,12 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
       }),
     ],
     shouldShow: ({ cfg, accountId }) =>
-      !resolveClickClackAccount({
-        cfg: cfg as CoreConfig,
-        accountId,
-      }).configured,
+      !isClickClackSetupConfigured(
+        resolveClickClackAccount({
+          cfg: cfg as CoreConfig,
+          accountId,
+        }),
+      ),
   },
   credentials: [
     {
@@ -83,11 +101,10 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
           cfg: cfg as CoreConfig,
           accountId,
         });
+        const hasConfiguredValue = hasConfiguredClickClackCredential(resolved);
         return {
-          accountConfigured: resolved.configured,
-          hasConfiguredValue:
-            hasConfiguredSecretInput(resolved.config.token) ||
-            Boolean(resolved.config.tokenFile?.trim()),
+          accountConfigured: Boolean(resolved.token) || hasConfiguredValue,
+          hasConfiguredValue,
           resolvedValue: resolved.token || undefined,
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
@@ -148,7 +165,7 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
         }),
     },
   ],
-  finalize: async ({ cfg, accountId, prompter }) => {
+  finalize: async ({ cfg, accountId, credentialValues, prompter }) => {
     const account = resolveClickClackAccount({
       cfg: cfg as CoreConfig,
       accountId,
@@ -156,7 +173,7 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
     try {
       const client = createClickClackClient({
         baseUrl: account.baseUrl,
-        token: account.token,
+        token: credentialValues.token || account.token,
       });
       const me = await client.me();
       const workspaceId = await resolveWorkspaceId(client, account.workspace);

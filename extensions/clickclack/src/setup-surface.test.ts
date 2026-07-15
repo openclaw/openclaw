@@ -12,16 +12,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
+  createClient: vi.fn(),
   me: vi.fn(),
   resolveWorkspaceId: vi.fn(),
   workspaces: vi.fn(),
 }));
 
 vi.mock("./http-client.js", () => ({
-  createClickClackClient: () => ({
-    me: mocks.me,
-    workspaces: mocks.workspaces,
-  }),
+  createClickClackClient: (options: unknown) => {
+    mocks.createClient(options);
+    return {
+      me: mocks.me,
+      workspaces: mocks.workspaces,
+    };
+  },
 }));
 
 vi.mock("./resolve.js", () => ({
@@ -54,6 +58,7 @@ function tokenCredential() {
 
 describe("ClickClack setup wizard", () => {
   beforeEach(() => {
+    mocks.createClient.mockReset();
     mocks.me.mockReset();
     mocks.resolveWorkspaceId.mockReset();
     mocks.workspaces.mockReset();
@@ -126,6 +131,35 @@ describe("ClickClack setup wizard", () => {
       hasConfiguredValue: true,
       resolvedValue: "ccb_file",
     });
+
+    const secretRefAccount = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://clickclack.example",
+          token: { source: "file", provider: "vault", id: "/clickclack/token" },
+          workspace: "default",
+        },
+      },
+    } satisfies CoreConfig;
+    expect(await clickClackSetupWizard.status.resolveConfigured({ cfg: secretRefAccount })).toBe(
+      true,
+    );
+    expect(
+      credential.inspect({
+        cfg: secretRefAccount,
+        accountId: "default",
+      }),
+    ).toMatchObject({
+      accountConfigured: true,
+      hasConfiguredValue: true,
+      resolvedValue: undefined,
+    });
+    expect(
+      clickClackSetupWizard.introNote?.shouldShow?.({
+        cfg: secretRefAccount,
+        accountId: "default",
+      }),
+    ).toBe(false);
   });
 
   it("switches the default account to env auth before URL and workspace prompts", async () => {
@@ -190,6 +224,27 @@ describe("ClickClack setup wizard", () => {
       "Connected as @openclaw — workspace Default resolved.",
       "ClickClack connection",
     );
+  });
+
+  it("uses the resolved setup credential for live validation", async () => {
+    await runSetupWizardFinalize({
+      finalize: clickClackSetupWizard.finalize,
+      cfg: {
+        channels: {
+          clickclack: {
+            baseUrl: "https://clickclack.example",
+            token: { source: "file", provider: "vault", id: "/clickclack/token" },
+            workspace: "default",
+          },
+        },
+      } satisfies CoreConfig,
+      credentialValues: { token: "ccb_resolved" },
+    });
+
+    expect(mocks.createClient).toHaveBeenCalledWith({
+      baseUrl: "https://clickclack.example",
+      token: "ccb_resolved",
+    });
   });
 
   it("keeps setup saved when the token is rejected", async () => {
