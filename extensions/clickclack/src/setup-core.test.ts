@@ -2,7 +2,11 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { clickClackSetupAdapter, normalizeClickClackBaseUrl } from "./setup-core.js";
+import {
+  applyClickClackCredentialConfig,
+  clickClackSetupAdapter,
+  normalizeClickClackBaseUrl,
+} from "./setup-core.js";
 
 function validate(params: {
   cfg?: OpenClawConfig;
@@ -160,6 +164,93 @@ describe("ClickClack setup adapter", () => {
           workspace: "default",
         },
       },
+    });
+  });
+
+  it("clears stale competing credentials when the auth mode changes", () => {
+    const base = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://clickclack.example",
+          workspace: "default",
+        },
+      },
+    } as OpenClawConfig;
+
+    const withToken = clickClackSetupAdapter.applyAccountConfig({
+      cfg: {
+        channels: {
+          clickclack: {
+            ...base.channels?.clickclack,
+            tokenFile: "/run/secrets/old-token",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: {
+        token: "ccb_new",
+        baseUrl: "https://clickclack.example",
+        workspace: "default",
+      },
+    });
+    expect(withToken.channels?.clickclack).toMatchObject({ token: "ccb_new" });
+    expect(withToken.channels?.clickclack).not.toHaveProperty("tokenFile");
+
+    const withFile = clickClackSetupAdapter.applyAccountConfig({
+      cfg: {
+        channels: {
+          clickclack: {
+            ...base.channels?.clickclack,
+            token: "ccb_old",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: {
+        tokenFile: "/run/secrets/new-token",
+        baseUrl: "https://clickclack.example",
+        workspace: "default",
+      },
+    });
+    expect(withFile.channels?.clickclack).toMatchObject({
+      tokenFile: "/run/secrets/new-token",
+    });
+    expect(withFile.channels?.clickclack).not.toHaveProperty("token");
+
+    const withEnv = clickClackSetupAdapter.applyAccountConfig({
+      cfg: {
+        channels: {
+          clickclack: {
+            ...base.channels?.clickclack,
+            token: "ccb_old",
+            tokenFile: "/run/secrets/old-token",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { useEnv: true },
+    });
+    expect(withEnv.channels?.clickclack).not.toHaveProperty("token");
+    expect(withEnv.channels?.clickclack).not.toHaveProperty("tokenFile");
+  });
+
+  it("preserves credentials when a partial patch does not select an auth mode", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          tokenFile: "/run/secrets/clickclack",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      applyClickClackCredentialConfig({
+        cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
+      }).channels?.clickclack,
+    ).toMatchObject({
+      enabled: true,
+      tokenFile: "/run/secrets/clickclack",
     });
   });
 });

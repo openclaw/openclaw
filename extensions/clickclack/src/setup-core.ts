@@ -58,6 +58,86 @@ export function applyClickClackSetupConfigPatch(params: {
   });
 }
 
+function clearClickClackSetupConfigFields(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  fields: string[];
+}): OpenClawConfig {
+  const clickclack = (params.cfg.channels as Record<string, unknown> | undefined)?.clickclack as
+    | (Record<string, unknown> & { accounts?: Record<string, Record<string, unknown>> })
+    | undefined;
+  if (!clickclack) {
+    return params.cfg;
+  }
+  const accountId = normalizeAccountId(params.accountId);
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    const nextClickClack = { ...clickclack };
+    for (const field of params.fields) {
+      delete nextClickClack[field];
+    }
+    return {
+      ...params.cfg,
+      channels: {
+        ...params.cfg.channels,
+        clickclack: nextClickClack,
+      },
+    } as OpenClawConfig;
+  }
+  const currentAccount = clickclack.accounts?.[accountId];
+  if (!currentAccount) {
+    return params.cfg;
+  }
+  const nextAccount = { ...currentAccount };
+  for (const field of params.fields) {
+    delete nextAccount[field];
+  }
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      clickclack: {
+        ...clickclack,
+        accounts: {
+          ...clickclack.accounts,
+          [accountId]: nextAccount,
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+export function applyClickClackCredentialConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  token?: unknown;
+  tokenFile?: string;
+  useEnv?: boolean;
+}): OpenClawConfig {
+  const fieldsToClear = params.useEnv
+    ? ["token", "tokenFile"]
+    : params.tokenFile
+      ? ["token"]
+      : params.token !== undefined
+        ? ["tokenFile"]
+        : [];
+  const next = applyClickClackSetupConfigPatch({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    patch: params.useEnv
+      ? {}
+      : params.tokenFile
+        ? { tokenFile: params.tokenFile }
+        : params.token !== undefined
+          ? { token: params.token }
+          : {},
+  });
+  return clearClickClackSetupConfigFields({
+    cfg: next,
+    accountId: params.accountId,
+    fields: fieldsToClear,
+  });
+}
+
 export const clickClackSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
@@ -100,15 +180,21 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
     const workspace = input.workspace?.trim();
     const tokenFile = input.tokenFile?.trim();
     const token = input.token?.trim();
-    return applyClickClackSetupConfigPatch({
+    const next = applyClickClackSetupConfigPatch({
       cfg,
       accountId,
       name: input.name,
       patch: {
         ...(baseUrl ? { baseUrl } : {}),
         ...(workspace ? { workspace } : {}),
-        ...(!input.useEnv && tokenFile ? { tokenFile } : !input.useEnv && token ? { token } : {}),
       },
+    });
+    return applyClickClackCredentialConfig({
+      cfg: next,
+      accountId,
+      token,
+      tokenFile,
+      useEnv: input.useEnv,
     });
   },
 };
