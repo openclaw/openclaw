@@ -68,6 +68,21 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "requires",
 ] as const;
 
+const BLOCKED_TOOL_ERROR_KEYWORDS = [
+  "blocked",
+  "declined",
+  "denied",
+  "forbidden",
+  "not allowed",
+  "permission denied",
+  "access denied",
+] as const;
+
+function isBlockedToolError(error: string | undefined): boolean {
+  const errorLower = normalizeOptionalLowercaseString(error) ?? "";
+  return BLOCKED_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
+}
+
 const MUTATING_FAILURE_ACTION_PATTERN =
   "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message|run|execute|execution|command|script|shell|bash|exec|tool|action|operation)";
 
@@ -217,19 +232,28 @@ function formatToolErrorWarningText(params: {
   includeDetails: boolean;
   useMarkdown: boolean;
 }): string {
-  if (isExecLikeToolName(params.lastToolError.toolName)) {
+  // For exec/bash-like tools, distinguish between pre-execution blocks ("blocked")
+  // and runtime failures ("failed"). Other tools always use "failed".
+  const isExecLike = isExecLikeToolName(params.lastToolError.toolName);
+  const isBlocked = isExecLike && isBlockedToolError(params.lastToolError.error);
+  const verb = isBlocked ? "blocked" : "failed";
+
+  if (isExecLike) {
     const toolLabel = formatToolAggregate(params.lastToolError.toolName, undefined, {
       markdown: params.useMarkdown,
     });
     const subject = formatExecLikeFailureSubject(params.lastToolError.meta, params.useMarkdown);
-    const conciseExitSuffix = params.includeDetails
-      ? ""
-      : formatConciseExecExitSuffix(params.lastToolError.error);
+    const conciseExitSuffix =
+      params.includeDetails && !isBlocked
+        ? ""
+        : formatConciseExecExitSuffix(params.lastToolError.error);
     const errorSuffix =
-      params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+      params.includeDetails && params.lastToolError.error && !isBlocked
+        ? `: ${params.lastToolError.error}`
+        : "";
     return subject
-      ? `⚠️ ${toolLabel} failed: ${subject}${conciseExitSuffix}${errorSuffix}`
-      : `⚠️ ${toolLabel} failed${conciseExitSuffix}${errorSuffix}`;
+      ? `⚠️ ${toolLabel} ${verb}: ${subject}${conciseExitSuffix}${errorSuffix}`
+      : `⚠️ ${toolLabel} ${verb}${conciseExitSuffix}${errorSuffix}`;
   }
 
   const toolSummary = formatToolAggregate(
@@ -239,7 +263,7 @@ function formatToolErrorWarningText(params: {
   );
   const errorSuffix =
     params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
-  return `⚠️ ${toolSummary} failed${errorSuffix}`;
+  return `⚠️ ${toolSummary} ${verb}${errorSuffix}`;
 }
 
 function formatExecLikeFailureSubject(meta: string | undefined, markdown: boolean): string {
