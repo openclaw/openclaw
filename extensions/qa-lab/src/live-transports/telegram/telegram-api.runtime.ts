@@ -61,7 +61,7 @@ export type TelegramUpdate = Pick<TelegramBotUpdate, "update_id"> & {
   message?: TelegramMessage;
 };
 
-export type TelegramObservedMessage = {
+type TelegramObservedMessage = {
   updateId: number;
   messageId: number;
   chatId: number;
@@ -387,7 +387,7 @@ export async function flushTelegramUpdates(token: string) {
   throw new Error("timed out after 15000ms draining Telegram updates");
 }
 
-export function resolveTelegramQaReadyTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
+function resolveTelegramQaReadyTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
   const raw = env.OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS;
   return raw
     ? (parseStrictPositiveInteger(raw) ?? TELEGRAM_QA_DEFAULT_READY_TIMEOUT_MS)

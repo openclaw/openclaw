@@ -8,12 +8,12 @@ const { runQaFlowSuiteFromRuntime } = vi.hoisted(() => ({
 vi.mock("../../suite-launch.runtime.js", () => ({
   runQaFlowSuiteFromRuntime,
 }));
+import { readQaScenarioPack } from "../../scenario-catalog.js";
 import {
   assertKnownScenarioIds,
   partitionCanonicalScenarioIds,
   WHATSAPP_CANONICAL_SCENARIO_IDS,
   whatsappDefaultCanonicalScenarioIds,
-  listCanonicalScenarios,
   runCanonicalLiveScenarios,
 } from "./canonical-scenarios.js";
 import { loadNonYamlScenarioRefs } from "./live-transport-scenarios.js";
@@ -21,17 +21,15 @@ import { loadNonYamlScenarioRefs } from "./live-transport-scenarios.js";
 describe("canonical live-transport scenarios", () => {
   it("loads every migrated routing, command, and session-context scenario from YAML", () => {
     const whatsAppMockDefaultIds = whatsappDefaultCanonicalScenarioIds("mock-openai");
-    const whatsapp = listCanonicalScenarios({
-      ids: WHATSAPP_CANONICAL_SCENARIO_IDS,
-      defaultIds: whatsAppMockDefaultIds,
-    });
+    const expectedIds = new Set<string>(WHATSAPP_CANONICAL_SCENARIO_IDS);
+    const whatsappIds = new Set(
+      readQaScenarioPack()
+        .scenarios.filter((scenario) => expectedIds.has(scenario.id))
+        .map((scenario) => scenario.id),
+    );
 
-    expect(whatsapp.map(({ id }) => id).toSorted()).toEqual(
-      [...WHATSAPP_CANONICAL_SCENARIO_IDS].toSorted(),
-    );
-    expect(whatsapp.filter(({ defaultEnabled }) => defaultEnabled).map(({ id }) => id)).toEqual(
-      expect.arrayContaining([...whatsAppMockDefaultIds]),
-    );
+    expect([...whatsappIds].toSorted()).toEqual([...WHATSAPP_CANONICAL_SCENARIO_IDS].toSorted());
+    expect([...whatsAppMockDefaultIds].every((id) => whatsappIds.has(id))).toBe(true);
     expect(whatsappDefaultCanonicalScenarioIds("live-frontier")).toEqual(["whatsapp-help-command"]);
   });
 

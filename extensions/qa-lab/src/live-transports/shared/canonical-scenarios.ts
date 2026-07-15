@@ -2,7 +2,6 @@
 import path from "node:path";
 import type { QaGatewayChildCommand } from "../../gateway-child.js";
 import type { QaTransportAdapterFactory } from "../../qa-transport-registry.js";
-import { readQaScenarioPack } from "../../scenario-catalog.js";
 import { runQaFlowSuiteFromRuntime } from "../../suite-launch.runtime.js";
 import type { LiveTransportQaCommandOptions } from "./live-transport-cli.js";
 
@@ -71,23 +70,6 @@ export function partitionCanonicalScenarioIds(
     (canonicalSet.has(scenarioId) ? canonical : legacy).push(scenarioId);
   }
   return { canonical, legacy };
-}
-
-export function listCanonicalScenarios(params: {
-  ids: readonly string[];
-  defaultIds: readonly string[];
-}) {
-  const requestedIds = new Set(params.ids);
-  const defaultIds = new Set(params.defaultIds);
-  return readQaScenarioPack()
-    .scenarios.filter((scenario) => requestedIds.has(scenario.id))
-    .map((scenario) => ({
-      id: scenario.id,
-      title: scenario.title,
-      rationale: scenario.objective,
-      regressionRefs: scenario.regressionRefs ?? [],
-      defaultEnabled: defaultIds.has(scenario.id),
-    }));
 }
 
 export async function runCanonicalLiveScenarios(params: {
