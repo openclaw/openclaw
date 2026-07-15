@@ -235,4 +235,37 @@ describe("config backup rotation", () => {
       await expectPathMissing(`${configPath}.pre-update`);
     });
   });
+
+  it("createPreUpdateConfigSnapshot retries after a transient read failure", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const content = JSON.stringify({ retry: true });
+      await fs.writeFile(configPath, content, { mode: 0o600 });
+
+      let readCallCount = 0;
+      const { existsSync } = await import("node:fs");
+      const flakyFs = {
+        writeFile: fs.writeFile,
+        readFile: (() => {
+          const impl = fs.readFile as typeof fs.readFile;
+          return async (...args: Parameters<typeof impl>) => {
+            readCallCount += 1;
+            if (readCallCount === 1) {
+              throw Object.assign(new Error("transient lock"), { code: "EBUSY" });
+            }
+            return impl(...args);
+          };
+        })(),
+        existsSync,
+      };
+
+      await createPreUpdateConfigSnapshot({ configPath, fs: flakyFs });
+      await expectPathMissing(`${configPath}.pre-update`);
+
+      await createPreUpdateConfigSnapshot({ configPath, fs: flakyFs });
+      const snapshotPath = `${configPath}.pre-update`;
+      await expectRegularFile(snapshotPath);
+      await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(content);
+    });
+  });
 });
