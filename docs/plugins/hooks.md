@@ -547,6 +547,27 @@ session are minted with only the entry's required scopes, not the caller's full
 operator scope set. This keeps plugin UI routes least-privilege unless the entry
 explicitly asks for broader scopes.
 
+In-app entries stay in an origin-isolated `allow-scripts` iframe. For
+authenticated requests after the initial page load, read the
+`openclaw-plugin-ui-bridge` token from the URL fragment, create a
+`MessageChannel`, and transfer one port to the parent:
+
+```javascript
+const token = new URLSearchParams(location.hash.slice(1)).get("openclaw-plugin-ui-bridge");
+if (!token) throw new Error("Missing Control UI bridge token");
+const channel = new MessageChannel();
+channel.port1.start();
+parent.postMessage({ v: 1, type: "openclaw.pluginUi.init", token }, "*", [channel.port2]);
+```
+
+Send `{ v: 1, type: "openclaw.pluginUi.request", id, path, init }` through the
+retained port. The Control UI accepts only canonical paths under the registering
+plugin's `/plugins/<plugin-id>/...` root, strips credential-bearing headers,
+rejects redirects, and replies with
+`{ v: 1, type: "openclaw.pluginUi.response", id, ok, status, statusText, headers, body }`.
+The frame should use this bridge instead of granting `allow-same-origin` or
+trying to read the plugin's HttpOnly session cookie.
+
 ## Message hooks
 
 Use message hooks for channel-level routing and delivery policy:

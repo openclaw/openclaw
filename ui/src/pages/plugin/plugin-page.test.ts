@@ -351,7 +351,7 @@ describe("PluginPage", () => {
     page.entryPointLabel = "Notes";
     (page as unknown as { context: ApplicationContext<RouteId> }).context = {
       gateway: { snapshot, subscribe: () => () => undefined },
-      config: { current: { embedSandboxMode: "strict" } },
+      config: { current: { embedSandboxMode: "scripts" } },
       sessions: { state: { result: { sessions: [], defaults: { contextTokens: 32_000 } } } },
     } as unknown as ApplicationContext<RouteId>;
 
@@ -367,10 +367,11 @@ describe("PluginPage", () => {
         }),
       );
       await vi.waitFor(() =>
-        expect(page.querySelector("iframe")?.getAttribute("src")).toBe(
-          "/plugins/notes?openclaw-entry=launch-token",
+        expect(page.querySelector("iframe")?.getAttribute("src")).toMatch(
+          /^\/plugins\/notes\?openclaw-entry=launch-token#openclaw-plugin-ui-bridge=/,
         ),
       );
+      expect(page.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-scripts");
     } finally {
       page.remove();
     }

@@ -9,6 +9,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { PluginUiBridgeController } from "./plugin-ui-bridge.ts";
 import { pluginEntryPointKey, pluginTabKey } from "./route.ts";
 
 /**
@@ -73,6 +74,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   private gatewaySource?: ApplicationContext<RouteId>["gateway"];
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
+  private readonly pluginUiBridge = new PluginUiBridgeController();
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.gateway,
     (gateway, notify) => gateway.subscribe(notify),
@@ -81,8 +83,17 @@ export class PluginPage extends OpenClawLightDomContentsElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
+    this.pluginUiBridge.clear();
     this.stopBundledView();
     super.disconnectedCallback();
+  }
+
+  override updated() {
+    const frame = this.querySelector<HTMLIFrameElement>(".plugin-ui-entry-frame");
+    const key = this.currentEntryPointKey();
+    this.pluginUiBridge.sync(
+      frame && key ? { frame, key, pluginId: this.pluginId, src: this.entryPointFrameSrc } : null,
+    );
   }
 
   private tabKey(): string {
@@ -260,7 +271,6 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         <section class="plugin-ui-entry-frame-shell">
           <iframe
             class="plugin-ui-entry-frame"
-            src=${this.entryPointFrameSrc}
             title=${this.entryPointLabel || this.tabId}
             sandbox=${resolveEmbedSandbox(context.config.current.embedSandboxMode)}
             referrerpolicy="no-referrer"
