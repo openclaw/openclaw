@@ -1283,9 +1283,9 @@ extension DashboardWindowController {
 
     var _testLinkBrowserSplitWidth: CGFloat {
         let splitView = self.splitViewController.splitView
-        // Hosted runners can constrain the visible window while split-view frames
-        // still reflect the requested size. The content view is the stable layout owner.
-        return self.window?.contentView?.bounds.width ?? splitView.bounds.width
+        // Hosted runners can constrain the visible window while content and split
+        // bounds still reflect the requested size. The window frame is authoritative.
+        return self.window?.frame.width ?? splitView.bounds.width
     }
 
     var _testLinkBrowserDividerThickness: CGFloat {
