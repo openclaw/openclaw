@@ -13,6 +13,8 @@ function ref(kind: "skill" | "plugin", name: string, version: string): Persisted
     source: "clawhub",
     ref: name,
     version,
+    status: "complete",
+    ownership: "claw-installed",
     installedAtMs: 10,
   };
 }
@@ -106,8 +108,7 @@ describe("applyClawPackageUpdate", () => {
       };
       return [ref(details.kind, details.ref, details.version)];
     });
-    const upsertRef = vi.fn();
-    const deleteRef = vi.fn();
+    const replaceExpected = vi.fn();
     const execution = await applyClawPackageUpdate(
       plan([
         {
@@ -140,25 +141,31 @@ describe("applyClawPackageUpdate", () => {
       {
         installPackages,
         readRefs: () => [oldSkill, legacy],
-        upsertRef,
-        deleteRef,
+        replaceExpected,
       },
     );
 
     expect(execution.appliedIds).toEqual(["skill:triage", "plugin:audit", "plugin:legacy"]);
     expect(installPackages).toHaveBeenCalledTimes(2);
-    expect(deleteRef).toHaveBeenCalledTimes(2);
+    expect(replaceExpected).toHaveBeenCalledWith(
+      oldSkill,
+      expect.objectContaining({ version: "2.0.0", status: "pending" }),
+      expect.any(Object),
+    );
+    expect(replaceExpected).toHaveBeenCalledWith(legacy, undefined, expect.any(Object));
 
     await expect(execution.rollback()).rejects.toMatchObject({ partial: true });
-    expect(upsertRef).toHaveBeenCalledWith(oldSkill, expect.any(Object));
-    expect(upsertRef).toHaveBeenCalledWith(legacy, expect.any(Object));
-    expect(deleteRef).toHaveBeenCalledTimes(4);
+    expect(replaceExpected).toHaveBeenCalledWith(undefined, legacy, expect.any(Object));
+    expect(replaceExpected).toHaveBeenCalledWith(
+      expect.objectContaining({ version: "2.0.0", status: "complete" }),
+      oldSkill,
+      expect.any(Object),
+    );
   });
 
   it("reverses reference-only removal without uninstalling or reporting partial state", async () => {
     const legacy = ref("plugin", "legacy", "1.0.0");
-    const upsertRef = vi.fn();
-    const deleteRef = vi.fn();
+    const replaceExpected = vi.fn();
     const execution = await applyClawPackageUpdate(
       plan([
         {
@@ -172,11 +179,12 @@ describe("applyClawPackageUpdate", () => {
       ]),
       { ...manifest, packages: [] },
       { ...addPlan, actions: [] },
-      { readRefs: () => [legacy], upsertRef, deleteRef },
+      { readRefs: () => [legacy], replaceExpected },
     );
 
     await expect(execution.rollback()).resolves.toBeUndefined();
-    expect(upsertRef).toHaveBeenCalledWith(legacy, expect.any(Object));
+    expect(replaceExpected).toHaveBeenNthCalledWith(1, legacy, undefined, expect.any(Object));
+    expect(replaceExpected).toHaveBeenNthCalledWith(2, undefined, legacy, expect.any(Object));
   });
 
   it("does not replace a shared plugin pinned by another Claw", async () => {
@@ -200,6 +208,33 @@ describe("applyClawPackageUpdate", () => {
           installPackages,
           readRefs: (options) => (options?.agentId ? [] : [otherOwner]),
         },
+      ),
+    ).rejects.toMatchObject({ partial: false });
+    expect(installPackages).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke an installer when package ownership changes after planning", async () => {
+    const oldSkill = ref("skill", "triage", "1.0.0");
+    const installPackages = vi.fn();
+    const replaceExpected = vi.fn(() => {
+      throw new Error('Package reference "skill:triage" changed after planning.');
+    });
+
+    await expect(
+      applyClawPackageUpdate(
+        plan([
+          {
+            kind: "package",
+            id: "skill:triage",
+            action: "change",
+            target: "clawhub:triage@2.0.0",
+            blocked: false,
+            reason: "changed",
+          },
+        ]),
+        manifest,
+        addPlan,
+        { installPackages, readRefs: () => [oldSkill], replaceExpected },
       ),
     ).rejects.toMatchObject({ partial: false });
     expect(installPackages).not.toHaveBeenCalled();

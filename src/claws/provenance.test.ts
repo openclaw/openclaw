@@ -11,14 +11,14 @@ import {
 import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
 import { ClawCronInstallError } from "./cron.js";
 import { buildClawAddPlan } from "./lifecycle.js";
-import { ClawMcpInstallError } from "./mcp.js";
-import { ClawPackageInstallError } from "./packages.js";
 import {
   persistClawInstallRecord,
   persistClawPackageRef,
   readClawInstallRecord,
   readClawPackageRefs,
+  replaceClawPackageRefExpected,
   updateClawInstallRecord,
+  updateClawPackageRefStatus,
 } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
@@ -214,6 +214,25 @@ describe("Claw root install provenance", () => {
         version: "2.3.4",
       }),
     ).toEqual([record]);
+  });
+
+  it("rejects a package claim when the persisted reference changed after planning", async () => {
+    const { root, plan } = await makePlan();
+    const options = { env: stateEnv(root) };
+    const pkg = {
+      kind: "plugin" as const,
+      source: "clawhub" as const,
+      ref: "@acme/audit",
+      version: "2.3.4",
+    };
+    const planned = persistClawPackageRef(plan, pkg, { ...options, nowMs: 43 });
+    const current = updateClawPackageRefStatus(planned, "pending", options);
+    const claim = { ...planned, version: "3.0.0", status: "pending" as const };
+
+    expect(() => replaceClawPackageRefExpected(planned, claim, options)).toThrow(
+      "changed after planning",
+    );
+    expect(readClawPackageRefs(options)).toEqual([current]);
   });
 });
 

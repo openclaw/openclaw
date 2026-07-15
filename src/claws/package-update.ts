@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "../agents/stable-stringify.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { installClawPackages } from "./packages.js";
+import { installClawPackages, type PackageInstallerDeps } from "./packages.js";
 import {
-  deleteClawPackageRef,
+  CLAW_PACKAGE_REF_SCHEMA_VERSION,
   readClawPackageRefs,
-  upsertClawPackageRef,
+  replaceClawPackageRefExpected,
   type PersistedClawPackageRef,
 } from "./provenance.js";
 import type { ClawAddPlan, ClawManifest, ClawPackage } from "./types.js";
@@ -41,8 +41,9 @@ export async function applyClawPackageUpdate(
   options: OpenClawStateDatabaseOptions & {
     installPackages?: typeof installClawPackages;
     readRefs?: typeof readClawPackageRefs;
-    upsertRef?: typeof upsertClawPackageRef;
-    deleteRef?: typeof deleteClawPackageRef;
+    replaceExpected?: typeof replaceClawPackageRefExpected;
+    packageDeps?: PackageInstallerDeps;
+    nowMs?: number;
   },
 ): Promise<ClawPackageUpdateExecution> {
   const actions = updatePlan.actions.filter(
@@ -53,8 +54,7 @@ export async function applyClawPackageUpdate(
   }
   const installPackages = options.installPackages ?? installClawPackages;
   const readRefs = options.readRefs ?? readClawPackageRefs;
-  const upsertRef = options.upsertRef ?? upsertClawPackageRef;
-  const deleteRef = options.deleteRef ?? deleteClawPackageRef;
+  const replaceExpected = options.replaceExpected ?? replaceClawPackageRefExpected;
   const currentRefs = new Map(
     readRefs({ ...options, agentId: updatePlan.agentId }).map((ref) => [packageKey(ref), ref]),
   );
@@ -66,7 +66,7 @@ export async function applyClawPackageUpdate(
 
   const rollback = async () => {
     const failures: string[] = [];
-    for (const revert of [...undo].reverse()) {
+    for (const revert of undo.toReversed()) {
       try {
         await revert();
       } catch (error) {
@@ -97,8 +97,8 @@ export async function applyClawPackageUpdate(
             false,
           );
         }
-        deleteRef(previous, options);
-        undo.push(async () => upsertRef(previous, options));
+        replaceExpected(previous, undefined, options);
+        undo.push(async () => replaceExpected(undefined, previous, options));
         appliedIds.push(action.id);
         continue;
       }
@@ -129,8 +129,46 @@ export async function applyClawPackageUpdate(
           false,
         );
       }
+      let claimed: PersistedClawPackageRef = {
+        schemaVersion: CLAW_PACKAGE_REF_SCHEMA_VERSION,
+        agentId: updatePlan.agentId,
+        clawName: targetAddPlan.claw.name,
+        kind: target.kind,
+        source: target.source,
+        ref: target.ref,
+        version: target.version,
+        status: "pending",
+        ownership: "claw-installed",
+        installedAtMs: options.nowMs ?? Date.now(),
+      };
+      replaceExpected(previous, claimed, options);
+      undo.push(async () => replaceExpected(claimed, previous, options));
       externalMutations.push(`${target.kind}:${target.ref}@${target.version}`);
-      const refs = await installPackages({ ...targetAddPlan, actions: [targetAction] }, options);
+      const refs = await installPackages(
+        { ...targetAddPlan, actions: [targetAction] },
+        {
+          ...options,
+          deps: {
+            ...options.packageDeps,
+            persistPackageRef: (_plan, _pkg, persistOptions) => {
+              const next = {
+                ...claimed,
+                status: persistOptions?.status ?? "complete",
+                ownership: persistOptions?.ownership ?? "claw-installed",
+              };
+              replaceExpected(claimed, next, options);
+              claimed = next;
+              return next;
+            },
+            completePackageRef: (ref, status) => {
+              const next = { ...ref, status };
+              replaceExpected(claimed, next, options);
+              claimed = next;
+              return next;
+            },
+          },
+        },
+      );
       const installed = refs.find(
         (ref) => packageKey(ref) === action.id && ref.version === target.version,
       );
@@ -140,14 +178,9 @@ export async function applyClawPackageUpdate(
           true,
         );
       }
-      undo.push(async () => {
-        deleteRef(installed, options);
-        if (previous) {
-          upsertRef(previous, options);
-        }
-      });
-      if (previous) {
-        deleteRef(previous, options);
+      if (digest(installed) !== digest(claimed)) {
+        replaceExpected(claimed, installed, options);
+        claimed = installed;
       }
       appliedIds.push(action.id);
     }

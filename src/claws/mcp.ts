@@ -354,7 +354,6 @@ export function upsertClawMcpServerRef(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
-    ensureMcpRefTable(db);
     db.prepare(
       `INSERT INTO claw_mcp_server_refs (
          agent_id, name, schema_version, config_digest, status, error,

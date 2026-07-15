@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -109,5 +109,10 @@ describe("applyClawWorkspaceUpdate", () => {
       "OLD.md",
       "SOUL.md",
     ]);
+
+    await rm(join(workspace, "OLD.md"));
+    await expect(
+      applyClawWorkspaceUpdate(updatePlan, targetAddPlan, { env, nowMs: 30 }),
+    ).rejects.toThrow("disappeared after planning");
   });
 });

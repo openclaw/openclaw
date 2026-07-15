@@ -77,7 +77,7 @@ export async function applyClawWorkspaceUpdate(
 
   const rollback = async () => {
     const failures: string[] = [];
-    for (const revert of [...undo].reverse()) {
+    for (const revert of undo.toReversed()) {
       try {
         await revert();
       } catch (error) {
@@ -97,6 +97,16 @@ export async function applyClawWorkspaceUpdate(
       const previousContent = existed
         ? await workspace.readBytes(path, { maxBytes: MAX_UPDATE_FILE_BYTES })
         : undefined;
+      if (action.currentPresent === true && !existed) {
+        throw new ClawWorkspaceUpdateError(
+          `Workspace file ${JSON.stringify(path)} disappeared after planning.`,
+        );
+      }
+      if (action.currentPresent === false && existed) {
+        throw new ClawWorkspaceUpdateError(
+          `Workspace file ${JSON.stringify(path)} appeared after planning.`,
+        );
+      }
       if (
         previousContent &&
         action.currentDigest &&
