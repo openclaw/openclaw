@@ -24,11 +24,7 @@ export async function readFileWindowFully(
 }
 
 /** Synchronously fills a bounded positional-read buffer unless the file reaches EOF. */
-export function readFileWindowFullySync(
-  fd: number,
-  buffer: Buffer,
-  position: number,
-): number {
+export function readFileWindowFullySync(fd: number, buffer: Buffer, position: number): number {
   let bytesRead = 0;
   while (bytesRead < buffer.length) {
     const count = fs.readSync(
