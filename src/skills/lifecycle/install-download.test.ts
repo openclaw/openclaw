@@ -13,7 +13,7 @@ import {
 } from "../test-support/install-test-mocks.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
-import { installDownloadSpec } from "./install-download.js";
+import { installDownloadSpec, MANAGED_SKILL_DOWNLOAD_MAX_BYTES } from "./install-download.js";
 
 vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -464,6 +464,7 @@ describe("download byte-limit guard", () => {
           extract: false,
         },
         timeoutMs: 10_000,
+        maxBytes: MANAGED_SKILL_DOWNLOAD_MAX_BYTES,
       });
 
       expect(result.ok).toBe(false);
@@ -513,9 +514,70 @@ describe("download byte-limit guard", () => {
         extract: false,
       },
       timeoutMs: 10_000,
+      maxBytes: MANAGED_SKILL_DOWNLOAD_MAX_BYTES,
     });
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toMatch(/exceeded|exceeds maximum allowed/i);
+  });
+
+  it("allows oversized Content-Length without maxBytes (compat path)", async () => {
+    const oversized = 512 * 1024 * 1024; // 512 MB — above the 256 MB cap
+
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: new Headers({
+          "content-type": "application/octet-stream",
+          "content-length": String(oversized),
+        }),
+        body: Readable.from(["small-payload"]),
+      },
+      release: async () => {},
+    });
+
+    const result = await installDownloadSpec({
+      entry: buildEntry("compat-oversized"),
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/huge.bin",
+        extract: false,
+      },
+      timeoutMs: 10_000,
+      // No maxBytes — compat path, no limit enforced
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("allows oversized chunked streaming without maxBytes (compat path)", async () => {
+    const body = Readable.from(["small"]);
+
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body,
+      },
+      release: async () => {},
+    });
+
+    const result = await installDownloadSpec({
+      entry: buildEntry("compat-oversized-chunked"),
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/huge-chunked.bin",
+        extract: false,
+      },
+      timeoutMs: 10_000,
+      // No maxBytes — compat path, no limit enforced
+    });
+
+    expect(result.ok).toBe(true);
   });
 });

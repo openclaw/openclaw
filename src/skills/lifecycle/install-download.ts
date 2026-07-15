@@ -21,8 +21,8 @@ import type { SkillInstallResult } from "./install-types.js";
 
 const extractModuleLoader = createLazyImportLoader(() => import("./install-extract.js"));
 
-/** Maximum bytes for a single skill download. */
-const SKILL_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024;
+/** Maximum bytes for a single skill download from a managed source. */
+export const MANAGED_SKILL_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024;
 
 async function loadExtractModule() {
   return await extractModuleLoader.load();
@@ -91,6 +91,8 @@ async function downloadFile(params: {
   rootDir: string;
   relativePath: string;
   timeoutMs: number;
+  /** When set, enforce this as the maximum streamed byte cap. Undefined = no limit. */
+  maxBytes?: number;
 }): Promise<{ bytes: number }> {
   const destPath = path.resolve(params.rootDir, params.relativePath);
   const stagingDir = path.join(params.rootDir, ".openclaw-download-staging");
@@ -111,14 +113,16 @@ async function downloadFile(params: {
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
     // Reject downloads that declare an oversized Content-Length upfront.
-    const contentLength = response.headers?.get("content-length");
-    if (contentLength) {
-      const declaredBytes = Number.parseInt(contentLength, 10);
-      if (!Number.isFinite(declaredBytes) || declaredBytes > SKILL_DOWNLOAD_MAX_BYTES) {
-        await cancelIgnoredResponseBody(response);
-        throw new Error(
-          `Download content-length ${declaredBytes} exceeds maximum allowed ${SKILL_DOWNLOAD_MAX_BYTES} bytes`,
-        );
+    if (params.maxBytes !== undefined) {
+      const contentLength = response.headers?.get("content-length");
+      if (contentLength) {
+        const declaredBytes = Number.parseInt(contentLength, 10);
+        if (!Number.isFinite(declaredBytes) || declaredBytes > params.maxBytes) {
+          await cancelIgnoredResponseBody(response);
+          throw new Error(
+            `Download content-length ${declaredBytes} exceeds maximum allowed ${params.maxBytes} bytes`,
+          );
+        }
       }
     }
     const file = fs.createWriteStream(tempPath);
@@ -126,23 +130,27 @@ async function downloadFile(params: {
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
+    const pipelineStreams: NodeJS.ReadableStream[] = [readable];
     // Track cumulative bytes to cap unbounded chunked responses.
-    let downloadedBytes = 0;
-    const byteCounter = new Transform({
-      transform(chunk: Buffer, _encoding, callback) {
-        downloadedBytes += chunk.length;
-        if (downloadedBytes > SKILL_DOWNLOAD_MAX_BYTES) {
-          callback(
-            new Error(
-              `Download exceeded ${SKILL_DOWNLOAD_MAX_BYTES} bytes (${downloadedBytes} received)`,
-            ),
-          );
-        } else {
-          callback(null, chunk);
-        }
-      },
-    });
-    await pipeline(readable, byteCounter, file);
+    if (params.maxBytes !== undefined) {
+      let downloadedBytes = 0;
+      const maxBytes = params.maxBytes;
+      const byteCounter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          downloadedBytes += chunk.length;
+          if (downloadedBytes > maxBytes) {
+            callback(
+              new Error(`Download exceeded ${maxBytes} bytes (${downloadedBytes} received)`),
+            );
+          } else {
+            callback(null, chunk);
+          }
+        },
+      });
+      pipelineStreams.push(byteCounter);
+    }
+    pipelineStreams.push(file);
+    await pipeline(...pipelineStreams);
     const root = await fsRoot(params.rootDir);
     await root.copyIn(params.relativePath, tempPath);
     const stat = await fs.promises.stat(destPath);
@@ -157,6 +165,8 @@ export async function installDownloadSpec(params: {
   entry: SkillEntry;
   spec: SkillInstallSpec;
   timeoutMs: number;
+  /** Optional byte cap for the download. Undefined = no limit. */
+  maxBytes?: number;
 }): Promise<SkillInstallResult> {
   const { entry, spec, timeoutMs } = params;
   const root = resolveSkillToolsRootDir(entry);
@@ -230,6 +240,7 @@ export async function installDownloadSpec(params: {
       rootDir: canonicalRoot,
       relativePath: archiveRelativePath,
       timeoutMs,
+      maxBytes: params.maxBytes,
     });
     downloaded = result.bytes;
   } catch (err) {

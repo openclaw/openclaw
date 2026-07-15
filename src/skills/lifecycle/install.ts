@@ -19,7 +19,7 @@ import {
 import { resolveSkillSource } from "../loading/source.js";
 import { loadWorkspaceSkillEntries as defaultLoadWorkspaceSkillEntries } from "../loading/workspace.js";
 import type { SkillEntry, SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
-import { installDownloadSpec } from "./install-download.js";
+import { installDownloadSpec, MANAGED_SKILL_DOWNLOAD_MAX_BYTES } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult, SkillInstallSkipReason } from "./install-types.js";
 
@@ -751,7 +751,11 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     );
   }
   if (spec.kind === "download") {
-    const downloadResult = await installDownloadSpec({ entry, spec, timeoutMs });
+    // Only enforce a byte cap for skill installs from OpenClaw-managed sources.
+    const maxBytes = trustedInstallSources.has(skillSource)
+      ? MANAGED_SKILL_DOWNLOAD_MAX_BYTES
+      : undefined;
+    const downloadResult = await installDownloadSpec({ entry, spec, timeoutMs, maxBytes });
     return withWarnings(downloadResult, warnings);
   }
 
