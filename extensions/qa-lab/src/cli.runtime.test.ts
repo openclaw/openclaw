@@ -670,6 +670,7 @@ describe("qa cli runtime", () => {
         channelId: "telegram",
         concurrency: 1,
         adapterOptions: expect.objectContaining({
+          explicitScenarioSelection: true,
           repoRoot: path.resolve("/tmp/openclaw-repo"),
         }),
         scenarioIds: ["channel-chat-baseline"],
@@ -685,6 +686,7 @@ describe("qa cli runtime", () => {
 
     expect(runQaSuite).toHaveBeenCalledWith(
       expect.objectContaining({
+        adapterOptions: expect.objectContaining({ explicitScenarioSelection: false }),
         scenarioIds: ["channel-chat-baseline"],
       }),
     );

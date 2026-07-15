@@ -391,7 +391,6 @@ src/agents/acp-spawn.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
-src/agents/agent-command.ts
 src/agents/agent-hooks/compaction-safeguard.test.ts
 src/agents/agent-hooks/compaction-safeguard.ts
 src/agents/agent-scope.test.ts

@@ -1,9 +1,5 @@
 // QA Lab Slack live scenario catalog.
 import { randomUUID } from "node:crypto";
-import {
-  collectLiveTransportStandardScenarioCoverage,
-  selectLiveTransportScenarios,
-} from "../shared/live-transport-scenarios.js";
 import { waitForSlackReaction } from "./slack-live.codex-approval.js";
 import {
   SLACK_QA_REACTION_VERIFY_TIMEOUT_MS,
@@ -389,19 +385,14 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   },
 ];
 
-export const SLACK_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
-  scenarios: SLACK_QA_SCENARIOS,
-});
-
 export function listSlackQaScenarioCatalog() {
   return SLACK_QA_SCENARIOS.map((scenario) => ({ id: scenario.id }));
 }
 
-export function findScenario(ids?: string[]) {
-  const selected = selectLiveTransportScenarios({
-    ids,
-    laneLabel: "Slack",
-    scenarios: SLACK_QA_SCENARIOS,
-  });
-  return ids?.length ? selected : selected.filter((scenario) => scenario.defaultEnabled !== false);
+export function getSlackQaScenarioDefinition(id: string) {
+  const scenario = SLACK_QA_SCENARIOS.find((candidate) => candidate.id === id);
+  if (!scenario) {
+    throw new Error(`unknown Slack QA scenario id: ${id}`);
+  }
+  return scenario;
 }

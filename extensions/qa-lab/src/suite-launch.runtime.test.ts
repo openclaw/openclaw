@@ -166,6 +166,35 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
+  it("runs runtime-specific live scenarios in dedicated workers", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-live-runtime-");
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/live-runtime",
+      channelDriver: "live",
+      channelId: "slack",
+      concurrency: 4,
+      scenarioIds: ["slack-canary", "slack-codex-approval-exec-native"],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "live-runtime", "flow");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "isolated"),
+        forcedRuntime: undefined,
+        scenarioIds: ["slack-canary"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "runtime-codex-1"),
+        forcedRuntime: "codex",
+        scenarioIds: ["slack-codex-approval-exec-native"],
+      }),
+    );
+  });
+
   it("partitions mixed Crabline flow channels into one aggregate suite", async () => {
     const repoRoot = await makeTempRepo("qa-suite-crabline-channels-");
     const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();

@@ -114,7 +114,7 @@ function resolveQaSuiteControlUiEnabled(params: {
 
 export type QaSuiteScenarioResult = {
   name: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
   steps: QaReportCheck[];
   details?: string;
   timing?: QaEvidenceTiming;
@@ -871,7 +871,7 @@ async function runQaRuntimeParitySuite(params: {
               bootStateLines: [],
             } satisfies RuntimeParityCell;
             return {
-              scenarioStatus: scenarioResult.status,
+              scenarioStatus: scenarioResult.status === "pass" ? "pass" : "fail",
               scenarioDetails: scenarioResult.details,
               cell: cellResult.runtimeParityCell ?? fallbackCell,
             };
@@ -1580,6 +1580,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       await artifactWriteQueue;
       const finishedAt = new Date();
       const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
+      const skippedCount = scenarios.filter((scenario) => scenario.status === "skip").length;
       lab.setScenarioRun({
         kind: "suite",
         status: "completed",
@@ -1624,7 +1625,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       } satisfies QaLabLatestReport);
       writeQaSuiteProgress(
         progressEnabled,
-        `run complete: passed=${scenarios.length - failedCount} failed=${failedCount} total=${scenarios.length}`,
+        `run complete: passed=${scenarios.length - failedCount - skippedCount} failed=${failedCount} skipped=${skippedCount} total=${scenarios.length}`,
       );
       return {
         outputDir,
@@ -1919,6 +1920,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       gatewayHeapSnapshots,
     });
     const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
+    const skippedCount = scenarios.filter((scenario) => scenario.status === "skip").length;
     if (
       scenarios.some((scenario) => scenario.status === "fail") ||
       gatewayRuntimeOptions?.preserveDebugArtifacts === true
@@ -1968,7 +1970,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     lab.setLatestReport(latestReport);
     writeQaSuiteProgress(
       progressEnabled,
-      `run complete: passed=${scenarios.length - failedCount} failed=${failedCount} total=${scenarios.length}`,
+      `run complete: passed=${scenarios.length - failedCount - skippedCount} failed=${failedCount} skipped=${skippedCount} total=${scenarios.length}`,
     );
 
     return {

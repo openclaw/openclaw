@@ -1477,6 +1477,25 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
+  it("uses an embedded queue rebound generation for cleanup when the attempt fails", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      (
+        attemptParams as {
+          onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
+        }
+      ).onLifecycleGenerationChanged?.("post-restart-generation");
+      throw new Error("attempt failed after queue rebound");
+    });
+
+    await expect(runBasicAgentCommand()).rejects.toThrow("attempt failed after queue rebound");
+
+    expect(state.clearAgentRunContextMock).toHaveBeenCalledWith(
+      expect.any(String),
+      "post-restart-generation",
+    );
+  });
+
   it("preserves restart ownership when an aborted attempt resolves normally", async () => {
     setupSingleAttemptFallback();
     const controller = new AbortController();
@@ -2257,6 +2276,51 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
     expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves restart recovery ownership when delivery fails after a session rebound", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const sessionStore = state.sessionStoreMock as Record<string, SessionEntry>;
+    const claimedEntry = expectDefined(
+      sessionStore["agent:main:main"],
+      "preclaimed restart recovery session",
+    );
+    claimedEntry.restartRecoveryDeliveryRunId = "session-1";
+    claimedEntry.restartRecoveryDeliveryContext = {
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
+    };
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "session-rebound",
+      sessionEntry: undefined,
+    });
+    state.deliverAgentCommandResultMock.mockRejectedValue(new Error("delivery failed"));
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+        deliver: true,
+      }),
+    ).rejects.toThrow("delivery failed");
+
+    expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("session-1");
   });
 
   it("persists only the CLI assistant reply after the runner persists the current user turn", async () => {
