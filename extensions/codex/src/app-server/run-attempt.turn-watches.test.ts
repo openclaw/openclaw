@@ -1021,7 +1021,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(true);
   });
 
-  it("counts handled nullable-turn elicitations as turn attempt progress", async () => {
+  it("records handled nullable-turn elicitations as turn attempt progress", async () => {
     const harness = createStartedThreadHarness();
     vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockResolvedValue({
       action: "accept",
@@ -1032,7 +1032,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.timeoutMs = 100;
+    params.timeoutMs = 1_000;
     const onRunProgress = vi.fn();
     params.onRunProgress = onRunProgress;
 
@@ -1050,9 +1050,6 @@ describe("runCodexAppServerAttempt turn watches", () => {
       fastWait,
     );
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 60);
-    });
     await harness.handleServerRequest({
       id: "request-null-turn-elicitation",
       method: "mcpServer/elicitation/request",
@@ -1066,9 +1063,13 @@ describe("runCodexAppServerAttempt turn watches", () => {
         _meta: null,
       },
     });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 60);
-    });
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "request:mcpServer/elicitation/request:start" }),
+        ),
+      fastWait,
+    );
 
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
