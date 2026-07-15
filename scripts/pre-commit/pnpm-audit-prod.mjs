@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.ts";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../lib/bounded-response.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
@@ -783,7 +784,7 @@ export async function readBoundedBulkAdvisoryErrorText(
 
       text += decoder.decode(value, { stream: true });
       if (text.length > maxChars) {
-        text = text.slice(0, maxChars);
+        text = truncateUtf16Safe(text, maxChars);
         truncated = true;
         break;
       }
