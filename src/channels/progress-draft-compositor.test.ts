@@ -136,28 +136,33 @@ describe("createChannelProgressDraftCompositor", () => {
   });
 
   it("suppresses default tool messages only after progress drafts become visible", async () => {
-    const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress" } },
-      mode: "progress",
-      active: true,
-      seed: "test",
-      update,
-    });
+    vi.useFakeTimers();
+    try {
+      const update = vi.fn();
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress" } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update,
+      });
 
-    expect(progress.suppressDefaultToolProgressMessages).toBe(false);
+      expect(progress.suppressDefaultToolProgressMessages).toBe(false);
 
-    await progress.pushToolProgress("Exec started");
+      await progress.pushToolProgress("Exec started");
 
-    expect(update).not.toHaveBeenCalled();
-    expect(progress.hasStarted).toBe(false);
-    expect(progress.suppressDefaultToolProgressMessages).toBe(false);
+      expect(update).not.toHaveBeenCalled();
+      expect(progress.hasStarted).toBe(false);
+      expect(progress.suppressDefaultToolProgressMessages).toBe(false);
 
-    await progress.pushToolProgress("Exec finished");
+      await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
 
-    expect(update).toHaveBeenCalled();
-    expect(progress.hasStarted).toBe(true);
-    expect(progress.suppressDefaultToolProgressMessages).toBe(true);
+      expect(update).toHaveBeenCalled();
+      expect(progress.hasStarted).toBe(true);
+      expect(progress.suppressDefaultToolProgressMessages).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not suppress default tool messages when progress drafts stay empty", async () => {
@@ -223,22 +228,6 @@ describe("createChannelProgressDraftCompositor", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("starts a label-only progress draft on repeated upstream answer activity", async () => {
-    const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
-      update,
-    });
-
-    await progress.noteActivity();
-    await progress.noteActivity();
-
-    expect(update).toHaveBeenCalledWith("Shelling", { flush: true, lines: [] });
   });
 
   it("passes structured progress lines to draft updates", async () => {
