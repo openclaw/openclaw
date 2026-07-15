@@ -57,7 +57,7 @@ export function resolveScopeKeyCaseInsensitive(
   }
   const target = normalizeLowercaseStringOrEmpty(key);
   return Object.keys(tree.scopes).find(
-    (scopeKey) => normalizeLowercaseStringOrEmpty(scopeKey) === target,
+    (candidate) => normalizeLowercaseStringOrEmpty(candidate) === target,
   );
 }
 
