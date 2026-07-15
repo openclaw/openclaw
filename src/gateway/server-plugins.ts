@@ -5,7 +5,6 @@ import { performance } from "node:perf_hooks";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
-import { GATEWAY_CLIENT_MODES } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -196,8 +195,15 @@ function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boo
   return scopes.includes(ADMIN_SCOPE);
 }
 
-function isBackendClient(client: GatewayRequestOptions["client"] | undefined): boolean {
-  return client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
+function hasServerAttestedPluginSubagentClient(
+  client: GatewayRequestOptions["client"] | undefined,
+  pluginId: string | undefined,
+): boolean {
+  return (
+    typeof pluginId === "string" &&
+    client?.internal?.agentRunTracking === "plugin_subagent" &&
+    client.internal.pluginRuntimeOwnerId === pluginId
+  );
 }
 
 function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boolean {
@@ -530,15 +536,16 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       });
       const overrideRequested = Boolean(params.provider || params.model);
       const hasRequestScopeClient = Boolean(scope?.client);
-      const hasBackendRequestScopeClient = isBackendClient(scope?.client);
-      const hasExternalPluginHttpRequestScope = scope?.pluginHttpRoute === true;
+      const hasServerAttestedPluginSubagentScope = hasServerAttestedPluginSubagentClient(
+        scope?.client,
+        pluginId,
+      );
       let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
       let allowSyntheticModelOverride = false;
       if (
         overrideRequested &&
         !allowOverride &&
-        (!hasRequestScopeClient ||
-          (hasBackendRequestScopeClient && !hasExternalPluginHttpRequestScope))
+        (!hasRequestScopeClient || hasServerAttestedPluginSubagentScope)
       ) {
         const fallbackAuth = authorizeFallbackModelOverride({
           pluginId: scope?.pluginId,
