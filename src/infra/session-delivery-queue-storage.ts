@@ -235,7 +235,7 @@ export async function markSessionDeliveryAttemptStarted(
       entry: {
         ...entry,
         deliveryStartedAt: entry.deliveryStartedAt ?? Date.now(),
-      },
+      } as QueuedSessionDelivery,
       metadata: queuedSessionDeliveryMetadata(entry),
       stateDir,
       updatePendingOnly: true,
@@ -272,7 +272,7 @@ export async function markSessionDeliverySettlement(
         ...entry,
         settlementOutcome: outcome,
         ...(outcome === "recovered" ? { acknowledgedAt: entry.acknowledgedAt ?? Date.now() } : {}),
-      },
+      } as QueuedSessionDelivery,
       metadata: queuedSessionDeliveryMetadata(entry),
       stateDir,
       updatePendingOnly: true,

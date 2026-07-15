@@ -307,27 +307,26 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   sessionEntry?: SessionEntry;
   stateDir?: string;
 }): Promise<boolean> {
-  const route = params.entry.route;
-  if (
-    params.entry.kind !== "agentTurn" ||
-    !route ||
-    params.entry.inputProvenance?.kind !== "inter_session" ||
-    !params.entry.sourceReplyDeliveryMode
-  ) {
+  if (params.entry.kind !== "agentTurn") {
+    return false;
+  }
+  const entry = params.entry;
+  const route = entry.route;
+  if (!route || entry.inputProvenance?.kind !== "inter_session" || !entry.sourceReplyDeliveryMode) {
     return false;
   }
 
-  const queuedRunId = resolveQueuedAgentRunId(params.entry);
-  const deliveryMode = resolveDurableCompletionDeliveryMode(params.entry.sourceReplyDeliveryMode);
+  const queuedRunId = resolveQueuedAgentRunId(entry);
+  const deliveryMode = resolveDurableCompletionDeliveryMode(entry.sourceReplyDeliveryMode);
   if (deliveryMode === "host_owned" && route.channel === INTERNAL_MESSAGE_CHANNEL) {
     return await deadLetterSessionDelivery(
-      params.entry,
+      entry,
       "queued host-owned generated-media delivery requires an external route",
       params.stateDir,
     );
   }
   const persistInternalMedia =
-    route.channel === INTERNAL_MESSAGE_CHANNEL && (params.entry.expectedMediaUrls?.length ?? 0) > 0
+    route.channel === INTERNAL_MESSAGE_CHANNEL && (entry.expectedMediaUrls?.length ?? 0) > 0
       ? async (mediaUrls: string[]) => {
           const sessionId = params.sessionEntry?.sessionId?.trim();
           if (!sessionId) {
@@ -349,7 +348,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
           if (!appended.ok) {
             if (appended.code === "session-rebound") {
               await deadLetterSessionDelivery(
-                params.entry,
+                entry,
                 "queued internal generated-media delivery lost its owning session",
                 params.stateDir,
               );
@@ -362,7 +361,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       : undefined;
   const evaluateResult = async (result: AgentDeliveryEvidence): Promise<true> => {
     await evaluateQueuedGeneratedMediaAgentResult({
-      entry: params.entry,
+      entry,
       result,
       route,
       ...(params.stateDir !== undefined ? { stateDir: params.stateDir } : {}),
@@ -379,7 +378,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   }
   if (hasRestartRecoveryTerminalRun(params.sessionEntry, queuedRunId)) {
     await deadLetterSessionDelivery(
-      params.entry,
+      entry,
       "queued generated-media agent turn dead-lettered without durable terminal evidence",
       params.stateDir,
     );
@@ -389,7 +388,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
     Boolean(params.sessionEntry.restartRecoveryDeliveryRunId);
   if (activeRecoveryClaim) {
     await deferSessionDelivery(
-      params.entry.id,
+      entry.id,
       AGENT_DELIVERY_OWNERSHIP_RETRY_MS,
       ...sessionDeliveryStateDirArgs(params.stateDir),
     );
@@ -397,9 +396,9 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       "queued generated-media agent turn is still owned by agent recovery",
     );
   }
-  if (params.entry.deliveryStartedAt !== undefined) {
+  if (entry.deliveryStartedAt !== undefined) {
     await deadLetterSessionDelivery(
-      params.entry,
+      entry,
       "queued generated-media agent turn dead-lettered after an interrupted unproven attempt",
       params.stateDir,
     );
@@ -412,10 +411,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   const cronSessionId = cronLifecycleRevision ? params.sessionEntry?.sessionId?.trim() : undefined;
   // Fence before gateway admission. Recovery clears it only for an explicit
   // pre-acceptance safe retry; accepted or deduped runs may already have effects.
-  await markSessionDeliveryAttemptStarted(
-    params.entry,
-    ...sessionDeliveryStateDirArgs(params.stateDir),
-  );
+  await markSessionDeliveryAttemptStarted(entry, ...sessionDeliveryStateDirArgs(params.stateDir));
   let accepted = false;
   let response: unknown;
   try {
@@ -423,7 +419,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       "agent",
       {
         sessionKey: params.canonicalKey,
-        message: params.entry.message,
+        message: entry.message,
         deliver:
           sourceReplyDeliveryMode === "automatic" && route.channel !== INTERNAL_MESSAGE_CHANNEL,
         bestEffortDeliver: false,
@@ -432,7 +428,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
         to: route.to,
         threadId: route.threadId,
         ...(cronSessionId ? { sessionId: cronSessionId } : {}),
-        inputProvenance: params.entry.inputProvenance,
+        inputProvenance: entry.inputProvenance,
         sourceReplyDeliveryMode,
         disableMessageTool: true,
         forceRestartSafeTools: true,
@@ -442,10 +438,8 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
         ...(cronSessionId ? { allowSyntheticCronRunContinuation: true } : {}),
         expectFinal: true,
         forceSyntheticClient: true,
-        internalDeliveryMediaUrls: params.entry.expectedMediaUrls ?? [],
-        ...(params.entry.suppressTextDelivery === true
-          ? { internalDeliverySuppressText: true }
-          : {}),
+        internalDeliveryMediaUrls: entry.expectedMediaUrls ?? [],
+        ...(entry.suppressTextDelivery === true ? { internalDeliverySuppressText: true } : {}),
         onAccepted: () => {
           accepted = true;
         },
@@ -466,7 +460,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       response && typeof response === "object"
         ? (response as { status?: unknown }).status
         : undefined;
-    const latestEntry = loadSessionEntry(params.entry.sessionKey).entry;
+    const latestEntry = loadSessionEntry(entry.sessionKey).entry;
     if (responseStatus === "accepted") {
       accepted = true;
     }
@@ -477,7 +471,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
         latestEntry.restartRecoveryDeliveryRunId)
     ) {
       await deferSessionDelivery(
-        params.entry.id,
+        entry.id,
         AGENT_DELIVERY_OWNERSHIP_RETRY_MS,
         ...sessionDeliveryStateDirArgs(params.stateDir),
       );
@@ -492,10 +486,10 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       }
       log.warn(
         "queued generated-media agent turn ended without durable delivery evidence; failing closed",
-        { queueId: params.entry.id, runId: queuedRunId },
+        { queueId: entry.id, runId: queuedRunId },
       );
       await deadLetterSessionDelivery(
-        params.entry,
+        entry,
         "queued generated-media agent turn dead-lettered without durable terminal evidence",
         params.stateDir,
       );

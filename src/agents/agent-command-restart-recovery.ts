@@ -43,7 +43,7 @@ export function constrainRestartRecoveryDeliveryPayloads(
   mediaUrls: string[],
   suppressText = false,
 ): ReplyPayload[] {
-  const constrained = (payloads ?? [])
+  const constrained: ReplyPayload[] = (payloads ?? [])
     .map((payload) => ({
       ...(!suppressText && typeof payload.text === "string" ? { text: payload.text } : {}),
       ...(payload.isError === true ? { isError: true as const } : {}),
