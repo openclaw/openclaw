@@ -108,9 +108,11 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
     params.activeSessionStore[params.sessionKey] = activeSessionEntry;
     return;
   }
+  let comparedEntry: SessionEntry | undefined;
   const updatedEntry = await updateSessionEntry(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     (persistedEntry) => {
+      comparedEntry = persistedEntry;
       if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
         return null;
       }
@@ -139,9 +141,12 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
       };
     },
   );
-  if (updatedEntry) {
-    // The persisted comparison owns selection freshness; only publish its
-    // result after the conditional update accepts this probe.
-    params.activeSessionStore[params.sessionKey] = updatedEntry;
+  // The persisted comparison owns selection freshness. Publish its updated
+  // result, or refresh the cache from the entry that rejected this probe.
+  const authoritativeEntry = updatedEntry ?? comparedEntry;
+  if (authoritativeEntry) {
+    params.activeSessionStore[params.sessionKey] = authoritativeEntry;
+  } else {
+    delete params.activeSessionStore[params.sessionKey];
   }
 }

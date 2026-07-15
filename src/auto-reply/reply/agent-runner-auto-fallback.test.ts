@@ -17,7 +17,7 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
     state.updateSessionEntryMock.mockReset();
   });
 
-  it("keeps the local probe selection when the persisted comparison rejects it", async () => {
+  it("refreshes the local selection when the persisted comparison rejects the probe", async () => {
     const probe = {
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -62,11 +62,11 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
       storePath: "/tmp/sessions.sqlite",
     });
 
-    expect(activeSessionStore.main).toBe(staleAutoEntry);
+    expect(activeSessionStore.main).toBe(newerUserEntry);
     expect(activeSessionStore.main).toMatchObject({
-      providerOverride: probe.fallbackProvider,
-      modelOverride: probe.fallbackModel,
-      modelOverrideSource: "auto",
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "user",
     });
   });
 });
