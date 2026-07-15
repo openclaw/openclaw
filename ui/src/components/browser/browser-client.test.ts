@@ -25,6 +25,7 @@ describe("fetchBrowserScreenshotDataUrl", () => {
   });
 
   it("rejects unsuccessful screenshot responses", async () => {
+    vi.useFakeTimers();
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () => new Response(null, { status: 404 })),
@@ -37,6 +38,7 @@ describe("fetchBrowserScreenshotDataUrl", () => {
         path: "/tmp/missing.png",
       }),
     ).rejects.toThrow("screenshot fetch failed (404)");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("aborts a stalled screenshot fetch after the request deadline", async () => {
