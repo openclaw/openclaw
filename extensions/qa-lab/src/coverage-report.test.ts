@@ -277,12 +277,12 @@ describe("qa coverage report", () => {
         nonYamlScenarios: [
           {
             id: scenario.id,
-            sourcePath: "extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts",
+            sourcePath: "extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts",
           },
         ],
       }),
     ).toThrow(
-      "duplicate qa scenario id(s): test-scenario (qa/scenarios/test/test-scenario.yaml, extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts)",
+      "duplicate qa scenario id(s): test-scenario (qa/scenarios/test/test-scenario.yaml, extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts)",
     );
   });
 
@@ -308,7 +308,7 @@ describe("qa coverage report", () => {
     expect(report).toContain("personal-share-safe-diagnostics-artifact");
     expect(report).toContain("## Live Transport Lanes");
     expect(report).toContain(
-      "- telegram (telegram): canary: always-on, help-command: telegram-help-command, mention-gating: telegram-mention-gating; missing baseline: allowlist-block, top-level-reply-shape, restart-resume",
+      "- telegram (telegram): canary: channel-canary, help-command: telegram-help-command, mention-gating: channel-mention-gating; missing baseline: allowlist-block, top-level-reply-shape, restart-resume",
     );
     expect(report).toContain("## Scorecard Taxonomy");
     expect(report).toContain("- Taxonomy: taxonomy.yaml");

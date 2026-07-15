@@ -93,6 +93,35 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
+  it("normalizes search once before dispatching every provider", async () => {
+    const alphaList = vi.fn(async () => []);
+    const zetaList = vi.fn(async () => []);
+    hoisted.activeRegistry.sessionCatalogs = [
+      { provider: provider("zeta", { list: zetaList }) },
+      { provider: provider("alpha", { list: alphaList }) },
+    ];
+
+    await call("sessions.catalog.list", { search: "   " });
+    expect(alphaList).toHaveBeenLastCalledWith(expect.objectContaining({ search: undefined }));
+    expect(zetaList).toHaveBeenLastCalledWith(expect.objectContaining({ search: undefined }));
+
+    const crossingPair = `${"x".repeat(499)}😀tail`;
+    await call("sessions.catalog.list", { search: `  ${crossingPair}  ` });
+    expect(alphaList).toHaveBeenLastCalledWith(
+      expect.objectContaining({ search: "x".repeat(499) }),
+    );
+    expect(zetaList).toHaveBeenLastCalledWith(expect.objectContaining({ search: "x".repeat(499) }));
+
+    const completePair = `${"y".repeat(498)}😀tail`;
+    await call("sessions.catalog.list", { search: completePair });
+    expect(alphaList).toHaveBeenLastCalledWith(
+      expect.objectContaining({ search: `${"y".repeat(498)}😀` }),
+    );
+    expect(zetaList).toHaveBeenLastCalledWith(
+      expect.objectContaining({ search: `${"y".repeat(498)}😀` }),
+    );
+  });
+
   it("advertises terminal opening only for providers that implement it", async () => {
     hoisted.activeRegistry.sessionCatalogs = [
       {

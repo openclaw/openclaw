@@ -1013,7 +1013,7 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(distQaLabPath, "export const qaLab = true;\n", "utf-8");
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
-      bundledPluginFile("qa-matrix", "src/index.ts"),
+      bundledPluginFile("qa-runner-fixture", "src/index.ts"),
     );
 
     const aliases = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1", NODE_ENV: undefined }, () =>

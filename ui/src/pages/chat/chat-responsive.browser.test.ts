@@ -246,9 +246,9 @@ function chatHeaderControlsHtml(hidden = false) {
   `;
 }
 
-function chatHtml(opts: ChatFixtureOptions = {}) {
+function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
   return `
-    <div class="shell shell--chat" data-chat-responsive-fixture>
+    <div class="shell shell--chat${mobileNavLayout ? " shell--mobile-nav" : ""}" data-chat-responsive-fixture>
       <header class="topbar">
         <div class="topnav-shell">
           <div class="topnav-shell__actions">
@@ -421,7 +421,7 @@ async function openFixture(width: number, height: number, opts: ChatFixtureOptio
   const page = await openBrowserPage(width, height);
   try {
     await page.setContent(
-      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts)}</body></html>`,
+      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts, width <= 1100)}</body></html>`,
     );
     return page;
   } catch (error) {

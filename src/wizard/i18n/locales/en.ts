@@ -639,6 +639,27 @@ export const en = {
       helpCreateBot: "2) Create a bot + copy its token",
       helpOpenConsole: "1) Mattermost System Console -> Integrations -> Bot Accounts",
     },
+    clickclack: {
+      baseUrlPrompt: "ClickClack server URL",
+      botToken: "ClickClack bot token",
+      botTokenInput: "Enter ClickClack bot token",
+      botTokenKeep: "ClickClack bot token already configured. Keep it?",
+      botTokenTitle: "ClickClack bot token",
+      connectionFailed:
+        "Connection check failed: {error}. Setup was saved; fix the connection and rerun setup.",
+      connectionTitle: "ClickClack connection",
+      connected: "Connected as @{handle} — workspace {workspace} resolved.",
+      envPrompt: "CLICKCLACK_BOT_TOKEN detected. Use env var?",
+      helpCreateToken:
+        "In ClickClack: Workspace settings → Integrations → OpenClaw → create bot → copy token",
+      invalidToken:
+        "ClickClack rejected the bot token (401). Copy a current token and rerun setup.",
+      validationWarningTitle: "ClickClack connection check",
+      workspaceHelp: "Use a wsp_… id, workspace slug, or display name.",
+      workspaceNotFound:
+        'Workspace "{workspace}" was not found. Check the id, slug, or name, list available workspaces, and rerun setup.',
+      workspacePrompt: "Workspace (id, slug, or name)",
+    },
     nextcloudTalk: {
       allowFromPrompt: "Nextcloud Talk allowFrom (user id)",
       apiPassword: "API password",

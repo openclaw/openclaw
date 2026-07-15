@@ -13,13 +13,12 @@ import {
 import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { cancelTaskById, listTaskRecords } from "../../tasks/task-registry.js";
 import {
-  cancelTaskById,
-  listTaskRecords,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryForTests,
   setTaskRegistryControlRuntimeForTests,
-} from "../../tasks/task-registry.js";
+} from "../../tasks/task-runtime.test-helpers.js";
 import {
   advanceCronActiveJobGeneration,
   clearCronJobActive,
@@ -34,20 +33,13 @@ import type {
   CronAgentExecutionStarted,
   CronJob,
 } from "../types.js";
-import {
-  cancelActiveCronTaskRun,
-  resetActiveCronTaskRunsForTests,
-} from "./active-run-cancellation.js";
+import { cancelActiveCronTaskRun } from "./active-run-cancellation.js";
+import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-support.js";
 import { computeJobNextRunAtMs } from "./jobs.js";
 import { run as runManualCronJob } from "./ops.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
-import {
-  applyJobResult,
-  executeJobCore,
-  executeJobCoreWithTimeout,
-  onTimer,
-  runMissedJobs,
-} from "./timer.js";
+import { applyJobResult, executeJobCoreWithTimeout, runMissedJobs } from "./timer.js";
+import { executeJobCore, onTimer } from "./timer.test-support.js";
 
 const FAST_TIMEOUT_SECONDS = 1;
 const timerRegressionFixtures = setupCronRegressionFixtures({

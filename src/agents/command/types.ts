@@ -150,6 +150,9 @@ export type AgentCommandOpts = {
   disableMessageTool?: boolean;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
+  /** Host-owned exact media set for a scoped automatic recovery delivery. */
+  internalDeliveryMediaUrls?: string[];
+  internalDeliverySuppressText?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
   skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */

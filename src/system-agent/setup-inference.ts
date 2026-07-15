@@ -64,22 +64,32 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
   projectDefaultInferenceRoute,
+  projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 import { loadAuthoredSetupConfig } from "./onboarding-welcome.js";
+import { revalidateSetupInferenceOwner } from "./revalidate-inference-owner.js";
 import {
   applySystemAgentModelSelection,
   createSystemAgentModelSelectionUpdater,
   createQuickstartNotePrompter,
 } from "./setup-apply.js";
+import {
+  listSetupInferenceAuthOptions,
+  listSetupInferenceManualProviders,
+  supportsSetupManualSecret,
+  supportsSetupTextInference,
+  type SetupInferenceAuthOption,
+  type SetupInferenceManualProvider,
+} from "./setup-inference-auth-options.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
-  createSystemAgentVerifiedInferenceBinding,
   hasCurrentSystemAgentOwnerPluginArtifacts,
   resolveSystemAgentVerifiedInferenceRoute,
+  type createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceDeps,
   type SystemAgentOwnerPluginArtifactSnapshot,
@@ -107,22 +117,14 @@ export type SetupInferenceCandidate = {
   credentials?: boolean;
 };
 
-export type SetupInferenceManualProvider = {
-  /** Provider-auth choice id sent back to `openclaw.setup.activate`. */
-  id: string;
-  label: string;
-  hint?: string;
-};
-
-export type SetupInferenceAuthOption = {
-  /** Provider-auth choice id sent to `openclaw.setup.auth.start`. */
-  id: string;
-  label: string;
-  hint?: string;
-  groupLabel?: string;
-  kind: "oauth" | "device-code";
-  featured: boolean;
-};
+export {
+  listSetupInferenceAuthOptions,
+  listSetupInferenceManualProviders,
+} from "./setup-inference-auth-options.js";
+export type {
+  SetupInferenceAuthOption,
+  SetupInferenceManualProvider,
+} from "./setup-inference-auth-options.js";
 
 export type SetupInferenceDetection = {
   candidates: SetupInferenceCandidate[];
@@ -302,67 +304,6 @@ async function resolveSetupInferenceWorkspace(params: {
     ),
     hasAuthoredSetup,
   };
-}
-
-function supportsTextInference(scopes?: ProviderAuthChoiceMetadata["onboardingScopes"]): boolean {
-  return !scopes || scopes.includes("text-inference");
-}
-
-function supportsManualSecret(choice: ProviderAuthChoiceMetadata): boolean {
-  return supportsTextInference(choice.onboardingScopes) && choice.appGuidedSecret === true;
-}
-
-export function listSetupInferenceManualProviders(
-  authChoices: readonly ProviderAuthChoiceMetadata[],
-): SetupInferenceManualProvider[] {
-  const choices = new Map<string, SetupInferenceManualProvider>();
-  for (const choice of authChoices) {
-    const id = choice.choiceId.trim();
-    if (!id || choices.has(id) || !supportsManualSecret(choice)) {
-      continue;
-    }
-    choices.set(id, {
-      id,
-      label: choice.choiceLabel,
-      ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
-    });
-  }
-  return [...choices.values()].toSorted(
-    (a, b) => a.label.localeCompare(b.label, "en") || a.id.localeCompare(b.id, "en"),
-  );
-}
-
-export function listSetupInferenceAuthOptions(
-  authChoices: readonly ProviderAuthChoiceMetadata[],
-): SetupInferenceAuthOption[] {
-  const choices = new Map<string, SetupInferenceAuthOption>();
-  for (const choice of authChoices) {
-    const id = choice.choiceId.trim();
-    if (
-      !id ||
-      choices.has(id) ||
-      !supportsTextInference(choice.onboardingScopes) ||
-      choice.assistantVisibility === "manual-only" ||
-      !choice.appGuidedAuth
-    ) {
-      continue;
-    }
-    choices.set(id, {
-      id,
-      label: choice.choiceLabel,
-      ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
-      ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
-      kind: choice.appGuidedAuth,
-      featured: choice.onboardingFeatured === true,
-    });
-  }
-  return [...choices.values()].toSorted(
-    (a, b) =>
-      Number(b.featured) - Number(a.featured) ||
-      (a.groupLabel ?? a.label).localeCompare(b.groupLabel ?? b.label, "en") ||
-      a.label.localeCompare(b.label, "en") ||
-      a.id.localeCompare(b.id, "en"),
-  );
 }
 
 export async function detectSetupInference(
@@ -858,6 +799,7 @@ async function buildTestPlan(params: {
   signal?: AbortSignal;
   isCancelled?: () => boolean;
   isRemoteProviderAuth?: boolean;
+  routeAgentId?: string;
   deps: ActivateSetupInferenceDeps;
 }): Promise<SetupInferenceTestPlan | { error: string }> {
   const { kind, cfg, workspaceDir } = params;
@@ -875,7 +817,7 @@ async function buildTestPlan(params: {
   };
   switch (kind) {
     case "existing-model": {
-      const route = await resolveSystemAgentConfiguredRouteFromConfig(cfg);
+      const route = await resolveSystemAgentConfiguredRouteFromConfig(cfg, params.routeAgentId);
       if (!route) {
         return { error: "No configured default-agent inference route is available." };
       }
@@ -1011,8 +953,8 @@ async function buildTestPlan(params: {
         : undefined;
       if (
         !choice ||
-        !supportsTextInference(choice.onboardingScopes) ||
-        (!interactive && !supportsManualSecret(choice)) ||
+        !supportsSetupTextInference(choice.onboardingScopes) ||
+        (!interactive && !supportsSetupManualSecret(choice)) ||
         (interactive && (choice.assistantVisibility === "manual-only" || !choice.appGuidedAuth))
       ) {
         return {
@@ -1046,7 +988,7 @@ async function buildTestPlan(params: {
       const resolved = provider && method ? { provider, method } : null;
       if (
         !resolved ||
-        !supportsTextInference(resolved.method.wizard?.onboardingScopes) ||
+        !supportsSetupTextInference(resolved.method.wizard?.onboardingScopes) ||
         (interactive && resolved.method.kind !== "oauth" && resolved.method.kind !== "device_code")
       ) {
         return {
@@ -2038,22 +1980,6 @@ async function redactSetupInferenceError(message: string, apiKey?: string): Prom
   return redactToolPayloadText(redacted);
 }
 
-async function revalidateSetupInferenceOwner(params: {
-  route: NonNullable<Awaited<ReturnType<typeof resolveSystemAgentConfiguredRouteFromConfig>>>;
-  auth: AgentExecutionAuthBinding;
-  deps: ActivateSetupInferenceDeps;
-}): Promise<SystemAgentVerifiedInferenceBinding> {
-  const createBinding =
-    params.deps.createSystemAgentVerifiedInferenceBinding ??
-    createSystemAgentVerifiedInferenceBinding;
-  return await createBinding({
-    configuredRoute: params.route,
-    executionRoute: params.route,
-    auth: params.auth,
-    deps: params.deps,
-  });
-}
-
 function hasSameOwnerPluginArtifacts(
   binding: SystemAgentVerifiedInferenceBinding,
   snapshot: SystemAgentOwnerPluginArtifactSnapshot,
@@ -2066,6 +1992,7 @@ function hasSameOwnerPluginArtifacts(
 
 type VerifySetupInferenceParams = {
   kind?: "existing-model";
+  agentId?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
@@ -2103,12 +2030,13 @@ export async function verifySetupInference(
     };
   }
   const cfg: OpenClawConfig = snapshot.runtimeConfig ?? snapshot.config;
-  const baselineRoute = await projectDefaultInferenceRoute(cfg);
+  const baselineRoute = await projectInferenceRoute(cfg, params.agentId);
   let verifiedBinding: SystemAgentVerifiedInferenceBinding | undefined;
   const verification = await verifySetupInferenceConfig({
     config: cfg,
     runtime: params.runtime,
     requireExecutionOwner: params.bindSession === true,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     ...(params.deps ? { deps: params.deps } : {}),
     ...(params.bindSession
@@ -2130,19 +2058,21 @@ export async function verifySetupInference(
     latestSnapshot?.exists && latestSnapshot.valid
       ? (latestSnapshot.runtimeConfig ?? latestSnapshot.config)
       : undefined;
-  const latestRoute = latestConfig ? await projectDefaultInferenceRoute(latestConfig) : undefined;
+  const latestRoute = latestConfig
+    ? await projectInferenceRoute(latestConfig, params.agentId)
+    : undefined;
   if (!latestRoute || !sameDefaultInferenceRoute(baselineRoute, latestRoute)) {
     return {
       ok: false,
       status: "unknown",
       error:
-        "The default-agent inference route changed during its live test. Review the current model/auth/runtime settings and retry.",
+        "The inference route changed during its live test. Review current model/auth/runtime settings and retry.",
     };
   }
   if (!params.bindSession) {
     return verification;
   }
-  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(cfg);
+  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(cfg, params.agentId);
   if (!configuredRoute || !verifiedBinding) {
     return {
       ok: false,
@@ -2157,6 +2087,7 @@ export async function verifySetupInference(
 type BoundSetupInferenceVerifier = (params: {
   runtime: RuntimeEnv;
   bindSession: true;
+  agentId?: string;
   deps?: ActivateSetupInferenceDeps;
 }) => Promise<BoundVerifySetupInferenceResult>;
 
@@ -2201,6 +2132,7 @@ export async function resolvePersistentApplyInference(params: {
   const live = await verifyBound({
     runtime: params.runtime,
     bindSession: true,
+    agentId: params.binding.execution.agentId,
     deps,
   });
   if (
@@ -2229,6 +2161,7 @@ export async function resolvePersistentApplyInference(params: {
 /** Live-test a staged default-agent route before any caller persists it. */
 export async function verifySetupInferenceConfig(params: {
   config: OpenClawConfig;
+  agentId?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
@@ -2245,12 +2178,12 @@ export async function verifySetupInferenceConfig(params: {
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
   };
   const cfg = params.config;
-  const defaultAgentId = resolveDefaultAgentId(cfg);
-  if (!resolveAgentEffectiveModelPrimary(cfg, defaultAgentId)) {
+  const routeAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(cfg));
+  if (!resolveAgentEffectiveModelPrimary(cfg, routeAgentId)) {
     return {
       ok: false,
       status: "unavailable",
-      error: "No default-agent model is configured. Run `openclaw onboard` first.",
+      error: "No agent model is configured. Run `openclaw onboard` first.",
     };
   }
   const tempDir = await (
@@ -2264,6 +2197,7 @@ export async function verifySetupInferenceConfig(params: {
       pluginWorkspaceDir: tempDir,
       agentDir: path.join(tempDir, "agent"),
       runtime: params.runtime,
+      routeAgentId,
       deps,
     });
     if ("error" in plan) {
@@ -2276,7 +2210,8 @@ export async function verifySetupInferenceConfig(params: {
       | undefined;
     let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
     if (requiresExecutionOwner) {
-      configuredRoute = (await resolveSystemAgentConfiguredRouteFromConfig(cfg)) ?? undefined;
+      configuredRoute =
+        (await resolveSystemAgentConfiguredRouteFromConfig(cfg, routeAgentId)) ?? undefined;
       if (!configuredRoute) {
         return {
           ok: false,
