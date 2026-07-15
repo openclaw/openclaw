@@ -664,7 +664,8 @@ describe("DiscordPresenceListener", () => {
       cooldownStore: cooldownStore(),
       nowMs: () => nowMs,
     });
-    const humanClient = client();
+    const fetchUser = vi.fn(async () => ({ bot: false }));
+    const humanClient = { fetchUser } as unknown as Client;
 
     nowMs = 30_000;
     listener.seedGuildSnapshot(guildSnapshot([]));
@@ -675,7 +676,7 @@ describe("DiscordPresenceListener", () => {
 
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(2);
     expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(2);
-    expect(humanClient.fetchUser).toHaveBeenCalledTimes(2);
+    expect(fetchUser).toHaveBeenCalledTimes(2);
     expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledTimes(2);
     expect(info).toHaveBeenCalledTimes(1);
     expect(info).toHaveBeenCalledWith(
