@@ -4016,15 +4016,11 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Approve child release gate after parent release approval");
     expect(releaseWorkflow).toContain("openclaw_npm_resume_run_id");
     expect(releaseWorkflow).toContain(
-      '.name == "validate_publish_request" and .conclusion == "success"',
+      '"${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-resume-run.mjs"',
     );
-    expect(releaseWorkflow).toContain("actions/workflows/openclaw-npm-release.yml\" --jq '.id'");
-    expect(releaseWorkflow).toContain(
-      '".github/workflows/openclaw-npm-release.yml@refs/tags/${resume_branch}"',
-    );
-    expect(releaseWorkflow).toContain("git/ref/tags/${resume_branch}");
-    expect(releaseWorkflow).toContain(".verification.verified");
-    expect(releaseWorkflow).toContain("compare/${resume_sha}...main");
+    expect(releaseWorkflow).toContain('--run-id "${OPENCLAW_NPM_RESUME_RUN_ID}"');
+    expect(releaseWorkflow).toContain("openclaw_npm_expected_workflow_ref=\"$(printf '%s'");
+    expect(releaseWorkflow).toContain("openclaw_npm_expected_workflow_sha=\"$(printf '%s'");
     expect(releaseWorkflow).toContain(
       '"${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-postpublish-verify.ts"',
     );

@@ -1092,6 +1092,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/release-workflow-matrix-plan.test.ts"],
   ],
   ["scripts/release-fast-pretag-check.sh", ["test/scripts/package-acceptance-workflow.test.ts"]],
+  ["scripts/openclaw-npm-resume-run.mjs", ["test/scripts/openclaw-npm-resume-run.test.ts"]],
   ["scripts/plugin-clawhub-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
   ["scripts/plugin-clawhub-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
   ["scripts/plugin-npm-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
@@ -2108,6 +2109,7 @@ const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
   ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
   ["scripts/docs-link-audit.d.mts", "scripts/docs-link-audit.mjs"],
+  ["scripts/openclaw-npm-resume-run.d.mts", "scripts/openclaw-npm-resume-run.mjs"],
   ["scripts/periphery-intersection.d.mts", "scripts/periphery-intersection.mjs"],
   [
     "scripts/lib/bundled-plugin-build-entries.d.mts",

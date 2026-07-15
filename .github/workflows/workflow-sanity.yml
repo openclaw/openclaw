@@ -83,7 +83,7 @@ jobs:
 
   actionlint:
     if: github.event_name != 'workflow_dispatch'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     steps:
       - *workflow_sanity_checkout_step
       - name: Setup Python
@@ -192,19 +192,7 @@ jobs:
           sudo install -m 0755 actionlint /usr/local/bin/actionlint
 
       - name: Lint workflows
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -d '' -t workflow_files < <(
-            find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z
-          )
-          lint_cpu="$(awk '/Cpus_allowed_list/ { print $2 }' /proc/self/status | cut -d, -f1 | cut -d- -f1)"
-          for workflow_file in "${workflow_files[@]}"; do
-            echo "actionlint ${workflow_file}"
-            # Bound both actionlint and each ShellCheck child so stalls report a source line.
-            timeout --foreground 90s taskset --cpu-list "${lint_cpu}" \
-              actionlint -shellcheck='timeout --foreground 60s shellcheck' "${workflow_file}"
-          done
+        run: actionlint
 
       - name: Audit all workflows with zizmor
         shell: bash
