@@ -58,6 +58,7 @@ describe("global hook runner composition (#91918, #107933)", () => {
         agentId: "test-agent",
         sessionKey: "test-session",
         toolCallId: "test-call",
+        toolName: "stateful_tool",
       },
     );
 
