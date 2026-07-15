@@ -160,7 +160,7 @@ type BehaviorPolicyOutputResult =
  *
  * Returns `{ kind: "pass" }` when no rules are active.
  */
-async function validateBehaviorOutput(params: {
+export async function validateBehaviorOutput(params: {
   config?: OpenClawConfig;
   rules: ResolvedBehaviorRule[] | undefined;
   output: string;
