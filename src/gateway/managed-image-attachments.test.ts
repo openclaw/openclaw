@@ -5,7 +5,6 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer as createNoisyPngFixtureBuffer,
@@ -13,7 +12,13 @@ import {
 } from "../../test/helpers/image-fixtures.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  insertManagedImageRecord,
+  MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+  readManagedImageRecord,
+} from "./managed-image-record-store.js";
 
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
 const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
@@ -108,6 +113,14 @@ function requireBlock(blocks: unknown[], index = 0): ManagedImageBlock {
   return block as ManagedImageBlock;
 }
 
+function requireManagedOriginalPath(stateDir: string, attachmentId: string): string {
+  const record = readManagedImageRecord(attachmentId, stateDir);
+  if (!record) {
+    throw new Error(`expected managed image record ${attachmentId}`);
+  }
+  return path.join(stateDir, "media", record.original.mediaSubdir, record.original.mediaId);
+}
+
 async function createFixture(
   stateDir: string,
   options?: { sessionKey?: string; agentId?: string; attachmentId?: string; filename?: string },
@@ -115,31 +128,28 @@ async function createFixture(
   const attachmentId = options?.attachmentId ?? "11111111-1111-4111-8111-111111111111";
   const sessionKey = options?.sessionKey ?? "agent:main:main";
   const filename = options?.filename ?? `${attachmentId}-cat-full.png`;
-  const originalPath = path.join(stateDir, "files", filename);
+  const originalPath = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR, filename);
   await fs.mkdir(path.dirname(originalPath), { recursive: true });
   await fs.writeFile(originalPath, Buffer.from("original-image"));
-  const record: Record<string, unknown> = {
-    attachmentId,
-    sessionKey,
-    ...(options?.agentId ? { agentId: options.agentId } : {}),
-    messageId: "msg-1",
-    createdAt: new Date().toISOString(),
-    alt: "Cat",
-    original: {
-      path: originalPath,
-      contentType: "image/png",
-      width: 1024,
-      height: 768,
-      sizeBytes: 14,
-      filename: "cat.png",
+  insertManagedImageRecord(
+    {
+      attachmentId,
+      sessionKey,
+      ...(options?.agentId ? { agentId: options.agentId } : {}),
+      messageId: "msg-1",
+      createdAt: new Date().toISOString(),
+      alt: "Cat",
+      original: {
+        mediaId: filename,
+        mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+        contentType: "image/png",
+        width: 1024,
+        height: 768,
+        sizeBytes: 14,
+        filename: "cat.png",
+      },
     },
-  };
-  const recordsDir = path.join(stateDir, "media", "outgoing", "records");
-  await fs.mkdir(recordsDir, { recursive: true });
-  await fs.writeFile(
-    path.join(recordsDir, `${attachmentId}.json`),
-    JSON.stringify(record, null, 2),
-    "utf-8",
+    stateDir,
   );
   return { attachmentId, sessionKey, originalPath };
 }
@@ -273,6 +283,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
     setMediaStoreNetworkDepsForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -303,6 +314,48 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),
     );
+  });
+
+  it("does not read retired record JSON at runtime", async () => {
+    const attachmentId = "11111111-1111-4111-8111-111111111111";
+    const sessionKey = "agent:main:main";
+    const originalPath = path.join(
+      stateDir,
+      "media",
+      MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+      "legacy.png",
+    );
+    const recordPath = path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`);
+    await fs.mkdir(path.dirname(originalPath), { recursive: true });
+    await fs.mkdir(path.dirname(recordPath), { recursive: true });
+    await fs.writeFile(originalPath, "legacy-image");
+    await fs.writeFile(
+      recordPath,
+      JSON.stringify({
+        attachmentId,
+        sessionKey,
+        messageId: "msg-1",
+        createdAt: new Date().toISOString(),
+        alt: "Legacy",
+        original: {
+          path: originalPath,
+          contentType: "image/png",
+          width: 1,
+          height: 1,
+          sizeBytes: 12,
+          filename: "legacy.png",
+        },
+      }),
+    );
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "token" },
+    });
+
+    expect(result.statusCode).toBe(404);
+    await expect(fs.access(recordPath)).resolves.toBeUndefined();
   });
 
   it("rejects unauthenticated requests before serving bytes", async () => {
@@ -539,6 +592,7 @@ describe("createManagedOutgoingImageBlocks", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
     setMediaStoreNetworkDepsForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -559,19 +613,10 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(block.url).toBe(block.openUrl);
     expect(String(block.url)).toMatch(/\/full$/);
 
-    const recordsDir = path.join(stateDir, "media", "outgoing", "records");
-    const [recordName] = await fs.readdir(recordsDir);
-    const record = JSON.parse(
-      await fs.readFile(
-        path.join(recordsDir, expectDefined(recordName, "recordName test invariant")),
-        "utf-8",
-      ),
-    ) as {
-      original: { path: string };
-    };
-    expect(record.original.path).toContain(
-      `${path.sep}media${path.sep}outgoing${path.sep}originals${path.sep}`,
-    );
+    const attachmentId = requireAttachmentIdFromUrl(block.url);
+    const record = readManagedImageRecord(attachmentId, stateDir);
+    expect(record?.original.mediaSubdir).toBe(MANAGED_OUTGOING_ORIGINALS_SUBDIR);
+    expect(record?.original.mediaId).toMatch(/\.png$/);
   });
 
   it("rejects oversized image data urls before decoding the payload", async () => {
@@ -667,15 +712,11 @@ describe("createManagedOutgoingImageBlocks", () => {
       expect(JSON.stringify(block)).not.toContain(sourcePath);
 
       const attachmentId = requireAttachmentIdFromUrl(block.url);
-      const record = JSON.parse(
-        await fs.readFile(
-          path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
-          "utf-8",
-        ),
-      ) as { original: { filename: string; path: string } };
-      expect(record.original.filename).toMatch(/\.png$/);
-      expect(record.original.path).not.toBe(sourcePath);
-      expect(record.original.path).toContain(path.join(stateDir, "media", "outgoing", "originals"));
+      const record = readManagedImageRecord(attachmentId, stateDir);
+      const originalPath = requireManagedOriginalPath(stateDir, attachmentId);
+      expect(record?.original.filename).toMatch(/\.png$/);
+      expect(originalPath).not.toBe(sourcePath);
+      expect(originalPath).toContain(path.join(stateDir, "media", "outgoing", "originals"));
     });
   });
 
@@ -720,18 +761,12 @@ describe("createManagedOutgoingImageBlocks", () => {
         expect(JSON.stringify(block)).not.toContain("sig=secret");
 
         const attachmentId = requireAttachmentIdFromUrl(block.url);
-        const record = JSON.parse(
-          await fs.readFile(
-            path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
-            "utf-8",
-          ),
-        ) as { original: { path: string } };
-        expect(record.original.path).toContain(
-          path.join(stateDir, "media", "outgoing", "originals"),
-        );
+        const record = readManagedImageRecord(attachmentId, stateDir);
+        const originalPath = requireManagedOriginalPath(stateDir, attachmentId);
+        expect(originalPath).toContain(path.join(stateDir, "media", "outgoing", "originals"));
         expect(JSON.stringify(record)).not.toContain("127.0.0.1");
         expect(JSON.stringify(record)).not.toContain("sig=secret");
-        expect(await fs.readFile(record.original.path)).toEqual(imageBuffer);
+        expect(await fs.readFile(originalPath)).toEqual(imageBuffer);
       });
     } finally {
       setMediaStoreNetworkDepsForTest();
@@ -762,19 +797,11 @@ describe("createManagedOutgoingImageBlocks", () => {
           });
 
           const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
+          const originalPath = requireManagedOriginalPath(stateDir, attachmentId);
 
-          const record = JSON.parse(
-            await fs.readFile(
-              path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
-              "utf-8",
-            ),
-          ) as { original: { path: string } };
-
-          expect(record.original.path).toContain(
-            path.join(stateDir, "media", "outgoing", "originals"),
-          );
-          expect(record.original.path).not.toContain(externalConfigDir);
-          await expect(fs.access(record.original.path)).resolves.toBeUndefined();
+          expect(originalPath).toContain(path.join(stateDir, "media", "outgoing", "originals"));
+          expect(originalPath).not.toContain(externalConfigDir);
+          await expect(fs.access(originalPath)).resolves.toBeUndefined();
         },
       );
     } finally {
@@ -1059,6 +1086,7 @@ describe("attachManagedOutgoingImagesToMessage", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -1075,21 +1103,11 @@ describe("attachManagedOutgoingImagesToMessage", () => {
       stateDir,
     });
 
-    const recordsDir = path.join(stateDir, "media", "outgoing", "records");
-    const [recordName] = await fs.readdir(recordsDir);
-    const record = JSON.parse(
-      await fs.readFile(
-        path.join(recordsDir, expectDefined(recordName, "recordName test invariant")),
-        "utf-8",
-      ),
-    ) as {
-      messageId: string | null;
-      retentionClass?: string;
-      updatedAt?: string;
-    };
-    expect(record.messageId).toBe("msg-committed");
-    expect(record.retentionClass).toBe("history");
-    expect(typeof record.updatedAt).toBe("string");
+    const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
+    const record = readManagedImageRecord(attachmentId, stateDir);
+    expect(record?.messageId).toBe("msg-committed");
+    expect(record?.retentionClass).toBe("history");
+    expect(typeof record?.updatedAt).toBe("string");
   });
 });
 
@@ -1103,6 +1121,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -1120,6 +1139,108 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.deletedFileCount).toBe(1);
     expect(result.retainedCount).toBe(0);
     await expectPathMissing(fixture.originalPath);
+  });
+
+  it("retries a durably claimed file deletion after a filesystem failure", async () => {
+    const fixture = await createFixture(stateDir);
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
+    });
+    readSessionMessagesMock.mockReturnValue([]);
+    const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("synthetic rm failure"));
+
+    let failed: Awaited<ReturnType<typeof cleanupManagedOutgoingImageRecords>>;
+    try {
+      failed = await cleanupManagedOutgoingImageRecords({ stateDir });
+    } finally {
+      rmSpy.mockRestore();
+    }
+
+    expect(failed).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+
+    const retried = await cleanupManagedOutgoingImageRecords({ stateDir });
+
+    expect(retried).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+    await expectPathMissing(fixture.originalPath);
+  });
+
+  it("reaps aged files left before a SQLite record was committed", async () => {
+    const orphanPath = path.join(
+      stateDir,
+      "media",
+      MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+      "orphan.png",
+    );
+    await fs.mkdir(path.dirname(orphanPath), { recursive: true });
+    await fs.writeFile(orphanPath, "orphan");
+    await fs.utimes(orphanPath, new Date(0), new Date(0));
+
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      nowMs: 1_000_000,
+      transientMaxAgeMs: 1_000,
+    });
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 1, retainedCount: 0 });
+    await expectPathMissing(orphanPath);
+  });
+
+  it("does not reap old unindexed files while legacy metadata still exists", async () => {
+    const orphanPath = path.join(
+      stateDir,
+      "media",
+      MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+      "legacy-owned.png",
+    );
+    const legacyRecordPath = path.join(
+      stateDir,
+      "media",
+      "outgoing",
+      "records",
+      "11111111-1111-4111-8111-111111111111.json",
+    );
+    await fs.mkdir(path.dirname(orphanPath), { recursive: true });
+    await fs.mkdir(path.dirname(legacyRecordPath), { recursive: true });
+    await fs.writeFile(orphanPath, "legacy");
+    await fs.writeFile(legacyRecordPath, "{}");
+    await fs.utimes(orphanPath, new Date(0), new Date(0));
+
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      nowMs: 1_000_000,
+      transientMaxAgeMs: 1_000,
+    });
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+    await expect(fs.access(orphanPath)).resolves.toBeUndefined();
+  });
+
+  it("fails closed when the legacy metadata directory cannot be inspected", async () => {
+    const orphanPath = path.join(
+      stateDir,
+      "media",
+      MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+      "unknown-owner.png",
+    );
+    await fs.mkdir(path.dirname(orphanPath), { recursive: true });
+    await fs.writeFile(orphanPath, "unknown");
+    await fs.utimes(orphanPath, new Date(0), new Date(0));
+    const readdirSpy = vi
+      .spyOn(fs, "readdir")
+      .mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EACCES" }));
+
+    let result!: Awaited<ReturnType<typeof cleanupManagedOutgoingImageRecords>>;
+    try {
+      result = await cleanupManagedOutgoingImageRecords({ stateDir, nowMs: 1_000_000 });
+    } finally {
+      readdirSpy.mockRestore();
+    }
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+    await expect(fs.access(orphanPath)).resolves.toBeUndefined();
   });
 
   it("retains committed records that are still referenced by a full-image block", async () => {

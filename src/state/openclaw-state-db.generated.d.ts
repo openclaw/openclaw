@@ -632,8 +632,10 @@ export interface MacosPortGuardianRecords {
 }
 
 export interface ManagedOutgoingImageRecords {
+  agent_id: string | null;
   alt: string;
   attachment_id: string;
+  cleanup_pending: Generated<number>;
   created_at: string;
   message_id: string | null;
   original_content_type: string;

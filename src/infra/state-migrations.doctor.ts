@@ -52,6 +52,10 @@ import {
   migrateLegacyAgentDir,
   migrateLegacySessions,
 } from "./state-migrations.legacy-sessions.js";
+import {
+  detectLegacyManagedOutgoingImages,
+  migrateLegacyManagedOutgoingImages,
+} from "./state-migrations.managed-outgoing-images.js";
 import { mergeNotices } from "./state-migrations.messages.js";
 import {
   migrateLegacyInstalledPluginIndex,
@@ -389,6 +393,10 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const managedOutgoingImages = detectLegacyManagedOutgoingImages({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const rescuePending = detectLegacyRescuePending({
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
@@ -544,6 +552,9 @@ export async function detectLegacyStateMigrations(params: {
   if (commitments.hasLegacy) {
     preview.push("- Commitments: legacy JSON file → shared SQLite state");
   }
+  if (managedOutgoingImages.hasLegacy) {
+    preview.push("- Managed outgoing images: legacy record JSON → shared SQLite state");
+  }
   if (rescuePending.hasLegacy) {
     preview.push("- System-agent rescue approvals: discard retired pending JSON capabilities");
   }
@@ -634,6 +645,7 @@ export async function detectLegacyStateMigrations(params: {
     },
     tuiLastSessions,
     commitments,
+    managedOutgoingImages,
     rescuePending,
     channelPairing,
     execApprovals,
@@ -821,6 +833,10 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.commitments,
     stateDir: detected.stateDir,
   });
+  const managedOutgoingImages = migrateLegacyManagedOutgoingImages({
+    detected: detected.managedOutgoingImages,
+    stateDir: detected.stateDir,
+  });
   const rescuePending = discardLegacyRescuePending({
     detected: detected.rescuePending,
     stateDir: detected.stateDir,
@@ -857,6 +873,7 @@ export async function runLegacyStateMigrations(params: {
     updateCheck,
     tuiLastSessions,
     commitments,
+    managedOutgoingImages,
     pluginPlans,
   ]);
   return {
@@ -874,6 +891,7 @@ export async function runLegacyStateMigrations(params: {
       ...currentConversationBindings.changes,
       ...tuiLastSessions.changes,
       ...commitments.changes,
+      ...managedOutgoingImages.changes,
       ...rescuePending.changes,
       ...channelPairing.changes,
       ...execApprovals.changes,
@@ -899,6 +917,7 @@ export async function runLegacyStateMigrations(params: {
       ...currentConversationBindings.warnings,
       ...tuiLastSessions.warnings,
       ...commitments.warnings,
+      ...managedOutgoingImages.warnings,
       ...rescuePending.warnings,
       ...channelPairing.warnings,
       ...execApprovals.warnings,
