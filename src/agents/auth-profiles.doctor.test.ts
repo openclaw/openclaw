@@ -29,7 +29,7 @@ describe("formatAuthDoctorHint", () => {
     );
   });
 
-  it("guides github-copilot oauth profiles with an unsupported enterprise domain to re-authenticate", async () => {
+  it("guides an unsupported github-copilot enterprise profile to login again", async () => {
     const hint = await formatAuthDoctorHint({
       store: {
         version: 1,
@@ -37,8 +37,8 @@ describe("formatAuthDoctorHint", () => {
           "github-copilot:default": {
             type: "oauth",
             provider: "github-copilot",
-            access: "ghu_access",
-            refresh: "ghr_refresh",
+            access: "fake",
+            refresh: "fake",
             expires: 0,
             enterpriseUrl: "attacker.example",
           },
@@ -48,12 +48,11 @@ describe("formatAuthDoctorHint", () => {
       profileId: "github-copilot:default",
     });
 
-    expect(hint).toBe(
-      "This GitHub Copilot OAuth profile has an unsupported enterprise domain and can no longer refresh. Re-authenticate with a supported host (github.com or a *.ghe.com tenant): openclaw onboard --auth-choice github-copilot.",
-    );
+    expect(hint).toContain("unsupported enterprise domain");
+    expect(hint).toContain("openclaw models auth login --provider github-copilot --force");
   });
 
-  it("does not force reauth for a github-copilot oauth profile on a ghe.com tenant", async () => {
+  it("accepts a github-copilot profile on a ghe.com tenant", async () => {
     const hint = await formatAuthDoctorHint({
       store: {
         version: 1,
@@ -61,8 +60,8 @@ describe("formatAuthDoctorHint", () => {
           "github-copilot:default": {
             type: "oauth",
             provider: "github-copilot",
-            access: "ghu_access",
-            refresh: "ghr_refresh",
+            access: "fake",
+            refresh: "fake",
             expires: 0,
             enterpriseUrl: "acme.ghe.com",
           },
@@ -75,7 +74,7 @@ describe("formatAuthDoctorHint", () => {
     expect(hint).not.toContain("unsupported enterprise domain");
   });
 
-  it("does not force reauth for a public github.com oauth profile", async () => {
+  it("accepts a public github.com profile", async () => {
     const hint = await formatAuthDoctorHint({
       store: {
         version: 1,
@@ -83,8 +82,8 @@ describe("formatAuthDoctorHint", () => {
           "github-copilot:default": {
             type: "oauth",
             provider: "github-copilot",
-            access: "ghu_access",
-            refresh: "ghr_refresh",
+            access: "fake",
+            refresh: "fake",
             expires: 0,
           },
         },

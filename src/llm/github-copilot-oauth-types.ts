@@ -2,12 +2,6 @@
  * GitHub Copilot OAuth wire and option types.
  */
 
-import type { OAuthCredentials } from "./types.js";
-
-export type CopilotCredentials = OAuthCredentials & {
-  enterpriseUrl?: string;
-};
-
 export type DeviceCodeResponse = {
   device_code: string;
   user_code: string;

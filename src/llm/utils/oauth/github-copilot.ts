@@ -18,16 +18,20 @@ import {
   isSupportedGithubCopilotDomain,
   normalizeGithubCopilotDomain,
 } from "../../../plugin-sdk/github-copilot-domain.js";
-import type { Model } from "../../types.js";
+import { resolveGithubCopilotTokenEndpoint } from "../../../plugin-sdk/github-copilot-token-endpoint.js";
 import type {
-  CopilotCredentials,
   CopilotModelListEntry,
   CopilotRequestOptions,
   DeviceCodeResponse,
   DeviceTokenErrorResponse,
   DeviceTokenSuccessResponse,
-} from "./github-copilot.types.js";
+} from "../../github-copilot-oauth-types.js";
+import type { Model } from "../../types.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
+
+type CopilotCredentials = OAuthCredentials & {
+  enterpriseUrl?: string;
+};
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 
@@ -77,22 +81,6 @@ function getUrls(domain: string): {
   };
 }
 
-/**
- * Parse the proxy-ep from a Copilot token and convert to API base URL.
- * Token format: tid=...;exp=...;proxy-ep=proxy.individual.githubcopilot.com;...
- * Returns API URL like https://api.individual.githubcopilot.com
- */
-function getBaseUrlFromToken(token: string): string | null {
-  const match = token.match(/proxy-ep=([^;]+)/);
-  if (!match) {
-    return null;
-  }
-  const proxyHost = expectDefined(match[1], "github copilot regex capture 1");
-  // Convert proxy.xxx to api.xxx
-  const apiHost = proxyHost.replace(/^proxy\./, "api.");
-  return `https://${apiHost}`;
-}
-
 function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): string {
   if (enterpriseDomain && !isSupportedGithubCopilotDomain(enterpriseDomain)) {
     throw new Error(
@@ -101,9 +89,14 @@ function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): str
   }
   // If we have a token, extract the base URL from proxy-ep
   if (token) {
-    const urlFromToken = getBaseUrlFromToken(token);
-    if (urlFromToken) {
-      return urlFromToken;
+    const tokenEndpoint = resolveGithubCopilotTokenEndpoint(token, enterpriseDomain);
+    if (tokenEndpoint.hasProxyEndpoint && !tokenEndpoint.baseUrl) {
+      throw new Error(
+        "Refusing to route GitHub Copilot requests to an unsupported proxy endpoint.",
+      );
+    }
+    if (tokenEndpoint.baseUrl) {
+      return tokenEndpoint.baseUrl;
     }
   }
   // Fallback for enterprise or if token parsing fails
@@ -572,10 +565,17 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
 
   modifyModels(models: Model[], credentials: OAuthCredentials): Model[] {
     const creds = credentials as CopilotCredentials;
-    if (!isSupportedGithubCopilotDomain(creds.enterpriseUrl)) {
+    const domain = creds.enterpriseUrl
+      ? (normalizeDomain(creds.enterpriseUrl) ?? undefined)
+      : undefined;
+    const tokenEndpoint = resolveGithubCopilotTokenEndpoint(creds.access, domain);
+    if (
+      !isSupportedGithubCopilotDomain(creds.enterpriseUrl) ||
+      (tokenEndpoint.hasProxyEndpoint && !tokenEndpoint.baseUrl)
+    ) {
       return models.filter((m) => m.provider !== "github-copilot");
     }
-    const baseUrl = getGitHubCopilotBaseUrl(creds.access, creds.enterpriseUrl);
+    const baseUrl = tokenEndpoint.baseUrl ?? getGitHubCopilotBaseUrl(undefined, domain);
     return models.map((m) => (m.provider === "github-copilot" ? { ...m, baseUrl } : m));
   },
 };

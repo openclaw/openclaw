@@ -197,7 +197,7 @@ describe("GitHub Copilot OAuth enterprise domain allowlist", () => {
       async () =>
         new Response(
           JSON.stringify({
-            token: "copilot-token",
+            token: "fake",
             expires_at: Math.floor(Date.now() / 1000) + 3600,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
@@ -256,6 +256,12 @@ describe("GitHub Copilot OAuth enterprise domain allowlist", () => {
       "https://api.individual.githubcopilot.com",
     );
   });
+
+  it("refuses a token-derived base url outside GitHub's Copilot hosts", () => {
+    expect(() => getGitHubCopilotBaseUrl("tid=x;proxy-ep=proxy.attacker.example;exp=1")).toThrow(
+      "unsupported proxy endpoint",
+    );
+  });
 });
 
 describe("GitHub Copilot OAuth model routing", () => {
@@ -282,12 +288,11 @@ describe("GitHub Copilot OAuth model routing", () => {
     expect(result?.map((m) => m.provider)).toEqual(["anthropic"]);
   });
 
-  it("does not trust a proxy-ep base url minted for an unsupported persisted domain", () => {
+  it("does not trust an off-allowlist proxy-ep without an enterprise domain", () => {
     const result = githubCopilotOAuthProvider.modifyModels?.(
       models,
       credential({
         access: "tid=x;proxy-ep=proxy.attacker.example;exp=1",
-        enterpriseUrl: "attacker.example",
       }),
     );
 
@@ -306,7 +311,7 @@ describe("GitHub Copilot OAuth model routing", () => {
     );
   });
 
-  it("restores github-copilot routing after reauthenticating on a supported host", () => {
+  it("quarantines unsupported credentials without affecting supported credentials", () => {
     const quarantined = githubCopilotOAuthProvider.modifyModels?.(
       models,
       credential({ enterpriseUrl: "attacker.example" }),

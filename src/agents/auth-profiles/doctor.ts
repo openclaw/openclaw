@@ -12,9 +12,6 @@ import type { AuthProfileStore } from "./types.js";
 const QWEN_PORTAL_OAUTH_MIGRATION_HINT =
   "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current portal token: openclaw onboard --auth-choice qwen-oauth.";
 
-const GITHUB_COPILOT_UNSUPPORTED_ENTERPRISE_DOMAIN_HINT =
-  "This GitHub Copilot OAuth profile has an unsupported enterprise domain and can no longer refresh. Re-authenticate with a supported host (github.com or a *.ghe.com tenant): openclaw onboard --auth-choice github-copilot.";
-
 function hasUnsupportedGithubCopilotEnterpriseDomain(
   store: AuthProfileStore,
   profileId?: string,
@@ -62,7 +59,7 @@ async function formatAuthDoctorHintWithPluginBuilder(
     normalizedProvider === "github-copilot" &&
     hasUnsupportedGithubCopilotEnterpriseDomain(params.store, params.profileId)
   ) {
-    return GITHUB_COPILOT_UNSUPPORTED_ENTERPRISE_DOMAIN_HINT;
+    return "This GitHub Copilot OAuth profile has an unsupported enterprise domain and can no longer refresh. Remove the legacy profile before re-authenticating with a supported host (github.com or a *.ghe.com tenant): openclaw models auth login --provider github-copilot --force.";
   }
 
   const pluginHint = await buildPluginHint({
