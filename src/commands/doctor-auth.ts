@@ -522,6 +522,7 @@ async function noteAuthProfileHealthForTarget(params: {
           store,
           profileId: profile.profileId,
           agentDir: params.target.agentDir,
+          forceRefresh: true,
         });
       } catch (err) {
         const message = formatErrorMessage(err);
