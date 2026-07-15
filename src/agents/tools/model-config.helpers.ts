@@ -156,8 +156,41 @@ export function hasProviderAuthForTool(params: {
   return false;
 }
 
-function formatProviderModelRef(provider: string, model: string): string {
-  return `${provider}/${model}`;
+export function formatProviderModelRef(provider: string, model: string): string {
+  const trimmedProvider = provider.trim();
+  const trimmedModel = model.trim();
+  if (!trimmedProvider) {
+    return trimmedModel;
+  }
+  if (!trimmedModel) {
+    return trimmedProvider;
+  }
+  // Strip the same provider prefix if already embedded (e.g. "openai/gpt-5.4"
+  // passed as the model with provider "openai") so we never double it up.
+  const providerLower = trimmedProvider.toLowerCase();
+  const prefix = `${providerLower}/`;
+  if (trimmedModel.toLowerCase().startsWith(prefix)) {
+    const remainder = trimmedModel.slice(prefix.length).trim();
+    if (remainder) {
+      return `${trimmedProvider}/${remainder}`;
+    }
+  }
+  // Also strip a *foreign* provider prefix embedded in the model
+  // (e.g. "openai/gpt-5.4" passed as the model with provider "minimax") so
+  // the result is "minimax/gpt-5.4" instead of the malformed
+  // "minimax/openai/gpt-5.4". Stale state from a previous fallback attempt
+  // can leak foreign provider prefixes into the active ref.
+  const slashIndex = trimmedModel.indexOf("/");
+  if (slashIndex > 0) {
+    const embeddedProvider = trimmedModel.slice(0, slashIndex).trim();
+    if (embeddedProvider && embeddedProvider.toLowerCase() !== providerLower) {
+      const remainder = trimmedModel.slice(slashIndex + 1).trim();
+      if (remainder) {
+        return `${trimmedProvider}/${remainder}`;
+      }
+    }
+  }
+  return `${trimmedProvider}/${trimmedModel}`;
 }
 
 function loadAuthStoreForProvider(params: {

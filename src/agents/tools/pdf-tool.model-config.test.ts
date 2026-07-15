@@ -2,7 +2,7 @@
 // for PDF understanding tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
+import { formatProviderModelRef, resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 import { resetPdfToolAuthEnv } from "./pdf-tool.test-support.js";
 
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-8";
@@ -303,5 +303,35 @@ describe("resolvePdfModelConfigForTool", () => {
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
       primary: "hatchery/vision-1",
     });
+  });
+});
+
+describe("formatProviderModelRef (pdf-tool.model-config)", () => {
+  it("joins provider and model with a slash", () => {
+    expect(formatProviderModelRef("openai", "gpt-5.4")).toBe("openai/gpt-5.4");
+  });
+
+  it("returns the model as-is when the same provider prefix is already embedded", () => {
+    expect(formatProviderModelRef("openai", "openai/gpt-5.4")).toBe("openai/gpt-5.4");
+  });
+
+  it("strips a foreign provider prefix embedded in the model", () => {
+    // Regression: previously produced "minimax/openai/gpt-5.4" which is malformed.
+    expect(formatProviderModelRef("minimax", "openai/gpt-5.4")).toBe("minimax/gpt-5.4");
+    expect(formatProviderModelRef("openai", "anthropic/claude-opus-4-6")).toBe(
+      "openai/claude-opus-4-6",
+    );
+  });
+
+  it("matches the embedded provider case-insensitively", () => {
+    expect(formatProviderModelRef("OpenAI", "openai/gpt-5.4")).toBe("openai/gpt-5.4");
+  });
+
+  it("returns the bare model when the provider is empty", () => {
+    expect(formatProviderModelRef("", "openai/gpt-5.4")).toBe("openai/gpt-5.4");
+  });
+
+  it("returns the bare provider when the model is empty", () => {
+    expect(formatProviderModelRef("minimax", "")).toBe("minimax");
   });
 });

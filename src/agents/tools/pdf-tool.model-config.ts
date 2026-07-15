@@ -21,12 +21,33 @@ import {
 import { hasProviderAuthForTool, resolveDefaultModelRef } from "./model-config.helpers.js";
 import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
 
-function formatProviderModelRef(providerId: string, modelId: string): string {
-  const slash = modelId.indexOf("/");
-  if (slash > 0 && modelId.slice(0, slash).trim() === providerId) {
-    return modelId;
+export function formatProviderModelRef(providerId: string, modelId: string): string {
+  const trimmedProviderId = providerId.trim();
+  const trimmedModelId = modelId.trim();
+  if (!trimmedProviderId) {
+    return trimmedModelId;
   }
-  return `${providerId}/${modelId}`;
+  if (!trimmedModelId) {
+    return trimmedProviderId;
+  }
+  const providerLower = trimmedProviderId.toLowerCase();
+  const slash = trimmedModelId.indexOf("/");
+  if (slash > 0) {
+    const embeddedProvider = trimmedModelId.slice(0, slash).trim();
+    if (embeddedProvider) {
+      // Same provider prefix: return the model as-is (already canonical).
+      if (embeddedProvider.toLowerCase() === providerLower) {
+        return trimmedModelId;
+      }
+      // Foreign provider prefix: strip it so the result is
+      // "minimax/gpt-5.4" instead of the malformed "minimax/openai/gpt-5.4".
+      const remainder = trimmedModelId.slice(slash + 1).trim();
+      if (remainder) {
+        return `${trimmedProviderId}/${remainder}`;
+      }
+    }
+  }
+  return `${trimmedProviderId}/${trimmedModelId}`;
 }
 
 function localModelIdForProvider(providerId: string, modelId: string): string {
