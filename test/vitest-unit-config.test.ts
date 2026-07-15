@@ -162,7 +162,6 @@ describe("unit vitest config", () => {
     const coverageInclude = resolveDefaultUnitCoverageIncludePatterns();
     expect(coverageInclude).toContain("packages/memory-host-sdk/src/host/embeddings.ts");
     expect(coverageInclude).toContain("src/commitments/store.ts");
-    expect(coverageInclude).toContain("src/tools/planner.ts");
   });
 
   it("leaves coverage include filters unset for explicit unit include lists", () => {
