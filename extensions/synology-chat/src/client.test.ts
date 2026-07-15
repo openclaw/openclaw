@@ -1,6 +1,7 @@
 // Synology Chat tests cover client plugin behavior.
 import { EventEmitter } from "node:events";
 import type { ClientRequest, IncomingMessage, RequestOptions } from "node:http";
+import { PassThrough } from "node:stream";
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 
 const ssrfMocks = {
@@ -46,6 +47,7 @@ type MockHttpCall = [
   RequestOptions & { rejectUnauthorized?: boolean },
   RequestCallback?,
 ];
+type MockResponse = IncomingMessage & PassThrough;
 
 function firstHttpsRequestCall(label = "Synology Chat HTTPS request"): MockHttpCall {
   const call = vi.mocked(https.request).mock.calls[0];
@@ -63,10 +65,10 @@ function firstHttpsGetCall(label = "Synology Chat HTTPS get"): MockHttpCall {
   return call as MockHttpCall;
 }
 
-function createMockResponseEmitter(statusCode: number): IncomingMessage {
-  const res = new EventEmitter() as Partial<IncomingMessage>;
+function createMockResponseEmitter(statusCode: number): MockResponse {
+  const res = new PassThrough() as PassThrough & Partial<IncomingMessage>;
   res.statusCode = statusCode;
-  return res as unknown as IncomingMessage;
+  return res as unknown as MockResponse;
 }
 
 function createMockRequestEmitter(): ClientRequest {
@@ -90,8 +92,7 @@ function mockResponse(statusCode: number, body: string) {
     const res = createMockResponseEmitter(statusCode);
     process.nextTick(() => {
       callback?.(res);
-      res.emit("data", Buffer.from(body));
-      res.emit("end");
+      res.end(body);
     });
     return createMockRequestEmitter();
   }) as MockRequestHandler);
@@ -298,8 +299,7 @@ function mockUserListResponseImpl(users: Array<Record<string, unknown>>, once: b
     const res = createMockResponseEmitter(200);
     process.nextTick(() => {
       callback?.(res);
-      res.emit("data", Buffer.from(JSON.stringify({ success: true, data: { users } })));
-      res.emit("end");
+      res.end(JSON.stringify({ success: true, data: { users } }));
     });
     return createMockRequestEmitter();
   };
@@ -359,9 +359,8 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
       const res = createMockResponseEmitter(200);
       process.nextTick(() => {
         callback?.(res);
-        res.emit("data", responseBody.subarray(0, splitAt));
-        res.emit("data", responseBody.subarray(splitAt));
-        res.emit("end");
+        res.write(responseBody.subarray(0, splitAt));
+        res.end(responseBody.subarray(splitAt));
       });
       return createMockRequestEmitter();
     }) as MockRequestHandler);
