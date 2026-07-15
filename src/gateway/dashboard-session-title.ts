@@ -68,7 +68,6 @@ export async function maybeGenerateDashboardSessionTitle(params: {
       userMessage: sourceText,
     }) ||
     hasExplicitSessionName(params.entry) ||
-    params.entry?.systemSent === true ||
     params.entry?.sessionId !== params.sessionId
   ) {
     return false;
