@@ -190,6 +190,11 @@ on:
         required: false
         default: ""
         type: string
+      allow_frozen_target_scenario_omissions:
+        description: Trusted opt-in to omit survivor scenarios absent from a canonical frozen target
+        required: false
+        default: false
+        type: boolean
       package_artifact_name:
         description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
         required: false
