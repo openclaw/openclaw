@@ -780,6 +780,63 @@ describe("update global helpers", () => {
     });
   });
 
+  it("does not adopt another pnpm project through a shared-store package symlink", async () => {
+    await withTempDir({ prefix: "openclaw-update-pnpm-shared-store-owner-" }, async (base) => {
+      const globalRoot = path.join(base, "pnpm-home", "global", "v11");
+      const activeInstallRoot = path.join(globalRoot, "active");
+      const orphanInstallRoot = path.join(globalRoot, "orphan");
+      const activePackageRoot = path.join(activeInstallRoot, "node_modules", "openclaw");
+      const orphanPackageRoot = path.join(orphanInstallRoot, "node_modules", "openclaw");
+      const sharedPackageRoot = path.join(base, "store", "openclaw");
+      await Promise.all([
+        fs.mkdir(path.dirname(activePackageRoot), { recursive: true }),
+        fs.mkdir(path.dirname(orphanPackageRoot), { recursive: true }),
+        fs.mkdir(sharedPackageRoot, { recursive: true }),
+      ]);
+      await Promise.all([
+        writeGlobalPackageJson(sharedPackageRoot, "2026.7.1"),
+        fs.writeFile(
+          path.join(activeInstallRoot, "package.json"),
+          JSON.stringify({ private: true, dependencies: { openclaw: "2026.7.1" } }),
+          "utf8",
+        ),
+        fs.writeFile(
+          path.join(orphanInstallRoot, "package.json"),
+          JSON.stringify({ private: true, dependencies: { openclaw: "2026.7.1" } }),
+          "utf8",
+        ),
+        fs.writeFile(path.join(orphanInstallRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n"),
+      ]);
+      await Promise.all([
+        fs.symlink(sharedPackageRoot, activePackageRoot, "dir"),
+        fs.symlink(sharedPackageRoot, orphanPackageRoot, "dir"),
+        fs.symlink(activeInstallRoot, path.join(globalRoot, "hash-active"), "dir"),
+      ]);
+      const runCommand: CommandRunner = async (argv) => {
+        if (argv.join(" ") === "pnpm root -g") {
+          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "pnpm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot: orphanPackageRoot,
+          packageName: "openclaw",
+        }),
+      ).resolves.toEqual({
+        manager: "pnpm",
+        command: "pnpm",
+        pnpmIsolated: { layoutVersion: 11 },
+        globalRoot,
+        packageRoot: orphanPackageRoot,
+      });
+    });
+  });
+
   it("preserves pnpm 11 ownership when the invoking project is orphaned", async () => {
     await withTempDir({ prefix: "openclaw-update-pnpm-isolated-orphan-" }, async (base) => {
       const pnpmGlobalRoot = path.join(base, "pnpm-home", "global", "v11");

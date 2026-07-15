@@ -768,6 +768,17 @@ async function hasPnpmIsolatedProjectMetadata(
   );
 }
 
+/** Resolves the pnpm project owner without following its shared-store package symlink. */
+export async function resolvePnpmIsolatedInstallOwner(
+  pkgRoot?: string | null,
+): Promise<string | null> {
+  const nodeModulesRoot = inferGlobalRootFromPackageRoot(pkgRoot);
+  if (!nodeModulesRoot) {
+    return null;
+  }
+  return path.resolve(await tryRealpath(path.dirname(nodeModulesRoot)));
+}
+
 async function listPnpmIsolatedGlobalPackages(params: {
   globalRoot?: string | null;
   packageName?: string;
@@ -838,19 +849,18 @@ async function resolvePnpmIsolatedGlobalPackage(params: {
       path.resolve(await tryRealpath(requestedOwnerRoot)) ===
         path.resolve(await tryRealpath(globalRoot))
     : false;
-  const canonicalRequestedPackageRoot =
+  const requestedInstallOwner =
     requestedPackageRoot && canonicalOwnerMatches
-      ? path.resolve(await tryRealpath(requestedPackageRoot))
+      ? await resolvePnpmIsolatedInstallOwner(requestedPackageRoot)
       : null;
 
   for (const entry of packages) {
     const packageRoot = entry.packageRoot;
-    if (requestedPackageRoot && path.resolve(packageRoot) !== requestedPackageRoot) {
-      const canonicalPackageRoot = path.resolve(await tryRealpath(packageRoot));
-      if (
-        canonicalRequestedPackageRoot === null ||
-        canonicalPackageRoot !== canonicalRequestedPackageRoot
-      ) {
+    if (requestedPackageRoot) {
+      // Compare the isolated project owners, not the package symlinks: separate
+      // pnpm 11 projects can point at the same shared-store package directory.
+      const installOwner = await resolvePnpmIsolatedInstallOwner(packageRoot);
+      if (requestedInstallOwner === null || installOwner !== requestedInstallOwner) {
         continue;
       }
     }

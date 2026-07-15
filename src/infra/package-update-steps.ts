@@ -23,6 +23,7 @@ import {
   readPackageManagerProbeValue,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
+  resolvePnpmIsolatedInstallOwner,
   resolvePnpmGlobalDirFromGlobalRoot,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
@@ -99,10 +100,14 @@ async function runPnpmPreflightProbe(params: {
 }> {
   const startedAt = Date.now();
   const argv = [params.installTarget.command, ...params.args];
+  const probeCwd = params.installTarget.globalRoot ?? undefined;
   try {
+    // pnpm reads project packageManager/config for every command. Keep all
+    // ownership probes in one manager-owned context before mutation.
     const result = await params.runCommand(argv, {
       timeoutMs: params.timeoutMs,
       env: params.env,
+      ...(probeCwd ? { cwd: probeCwd } : {}),
     });
     if (result.code === 0) {
       return { result, failedStep: null };
@@ -112,7 +117,7 @@ async function runPnpmPreflightProbe(params: {
       failedStep: {
         name: "pnpm isolated install preflight",
         command: argv.join(" "),
-        cwd: params.installTarget.globalRoot ?? process.cwd(),
+        cwd: probeCwd ?? process.cwd(),
         durationMs: Date.now() - startedAt,
         exitCode: result.code ?? 1,
         stdoutTail: result.stdout || null,
@@ -125,7 +130,7 @@ async function runPnpmPreflightProbe(params: {
       failedStep: {
         name: "pnpm isolated install preflight",
         command: argv.join(" "),
-        cwd: params.installTarget.globalRoot ?? process.cwd(),
+        cwd: probeCwd ?? process.cwd(),
         durationMs: Date.now() - startedAt,
         exitCode: 1,
         stdoutTail: null,
@@ -177,13 +182,14 @@ async function validatePnpmIsolatedUpdate(params: {
   }
 
   const invokingPackageRoot = params.installTarget.packageRoot;
-  const activePackageRoot = activePackageRoots.length === 1 ? activePackageRoots[0] : null;
-  if (
-    !invokingPackageRoot ||
-    !activePackageRoot ||
-    (await resolveCanonicalPath(activePackageRoot)) !==
-      (await resolveCanonicalPath(invokingPackageRoot))
-  ) {
+  const invokingInstallOwner = await resolvePnpmIsolatedInstallOwner(invokingPackageRoot);
+  const activeInstallOwners = await Promise.all(
+    activePackageRoots.map((packageRoot) => resolvePnpmIsolatedInstallOwner(packageRoot)),
+  );
+  const ownerMatchCount = invokingInstallOwner
+    ? activeInstallOwners.filter((installOwner) => installOwner === invokingInstallOwner).length
+    : 0;
+  if (!invokingPackageRoot || activePackageRoots.length !== 1 || ownerMatchCount !== 1) {
     return {
       globalBinDir: null,
       failedStep: {
@@ -193,7 +199,7 @@ async function validatePnpmIsolatedUpdate(params: {
         durationMs: 0,
         exitCode: 1,
         stdoutTail: null,
-        stderrTail: `Expected one active pnpm ${owner.layoutVersion} OpenClaw install matching the invoking package, found ${activePackageRoots.length}. Automatic update stopped before mutation.`,
+        stderrTail: `Expected exactly one active pnpm ${owner.layoutVersion} OpenClaw install owned by the invoking project; found ${activePackageRoots.length} active installs and ${ownerMatchCount} owner matches. Automatic update stopped before mutation.`,
       },
     };
   }
@@ -936,9 +942,14 @@ export async function runGlobalPackageUpdateSteps(params: {
               return null;
             }
             const replacementRoot = activeRoots[0];
-            return replacementRoot &&
-              (await resolveCanonicalPath(replacementRoot)) !==
-                (await resolveCanonicalPath(params.installTarget.packageRoot))
+            if (!replacementRoot) {
+              return null;
+            }
+            const [replacementOwner, previousOwner] = await Promise.all([
+              resolvePnpmIsolatedInstallOwner(replacementRoot),
+              resolvePnpmIsolatedInstallOwner(params.installTarget.packageRoot),
+            ]);
+            return replacementOwner && previousOwner && replacementOwner !== previousOwner
               ? replacementRoot
               : null;
           })()
