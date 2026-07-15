@@ -23,6 +23,8 @@ const rootEntries = [
   "src/agents/subagent-orphan-recovery.ts!",
   // Task cancellation loads this control facade by string path to avoid a registry cycle.
   "src/tasks/task-registry-control.runtime.ts!",
+  // Human plugin listing lazily loads its formatter to keep JSON startup lean.
+  "src/cli/plugins-list-format.ts!",
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
