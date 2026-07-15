@@ -110,14 +110,22 @@ export function buildQaBusSnapshot(params: {
   };
 }
 
+export function requireQaBusMessageForAccount(params: {
+  messages: Map<string, QaBusMessage>;
+  input: Pick<QaBusReadMessageInput, "accountId" | "messageId">;
+}): QaBusMessage {
+  const message = params.messages.get(params.input.messageId);
+  if (!message || message.accountId !== normalizeAccountId(params.input.accountId)) {
+    throw new Error(`qa-bus message not found: ${params.input.messageId}`);
+  }
+  return message;
+}
+
 export function readQaBusMessage(params: {
   messages: Map<string, QaBusMessage>;
   input: QaBusReadMessageInput;
 }) {
-  const message = params.messages.get(params.input.messageId);
-  if (!message) {
-    throw new Error(`qa-bus message not found: ${params.input.messageId}`);
-  }
+  const message = requireQaBusMessageForAccount(params);
   return cloneMessage(message);
 }
 

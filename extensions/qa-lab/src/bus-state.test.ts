@@ -66,6 +66,41 @@ describe("qa-bus state", () => {
     expect(typeof snapshot.messages[0]?.reactions[0]?.timestamp).toBe("number");
   });
 
+  it("rejects cross-account message reads and mutations", () => {
+    const state = createQaBusState();
+    const message = state.addOutboundMessage({
+      accountId: "account-a",
+      to: "channel:qa-room",
+      text: "account-owned",
+    });
+
+    expect(() => state.readMessage({ accountId: "account-b", messageId: message.id })).toThrow(
+      "qa-bus message not found",
+    );
+    expect(() =>
+      state.reactToMessage({
+        accountId: "account-b",
+        messageId: message.id,
+        emoji: "eyes",
+      }),
+    ).toThrow("qa-bus message not found");
+    expect(() =>
+      state.editMessage({
+        accountId: "account-b",
+        messageId: message.id,
+        text: "foreign edit",
+      }),
+    ).toThrow("qa-bus message not found");
+    expect(() => state.deleteMessage({ accountId: "account-b", messageId: message.id })).toThrow(
+      "qa-bus message not found",
+    );
+
+    const unchanged = state.readMessage({ accountId: "account-a", messageId: message.id });
+    expect(unchanged.text).toBe("account-owned");
+    expect(unchanged.deleted).not.toBe(true);
+    expect(unchanged.reactions).toEqual([]);
+  });
+
   it("waits for a text match and rejects on timeout", async () => {
     const state = createQaBusState();
     const pending = state.waitFor({

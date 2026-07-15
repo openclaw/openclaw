@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 import { listQaChannelAccountIds, resolveDefaultQaChannelAccountId } from "./accounts.js";
+import type { ChannelMessageActionName } from "./runtime-api.js";
 
 type QaDispatchTurn = Parameters<PluginRuntime["channel"]["inbound"]["dispatchReply"]>[0];
 
@@ -566,6 +567,7 @@ describe("qa-channel plugin", () => {
         cfg,
         accountId: "default",
         params: {
+          to: threadPayload.target,
           messageId: outbound.id,
           emoji: "white_check_mark",
         },
@@ -577,6 +579,7 @@ describe("qa-channel plugin", () => {
         cfg,
         accountId: "default",
         params: {
+          to: threadPayload.target,
           messageId: outbound.id,
           text: "message (edited)",
         },
@@ -588,6 +591,7 @@ describe("qa-channel plugin", () => {
         cfg,
         accountId: "default",
         params: {
+          to: threadPayload.target,
           messageId: outbound.id,
         },
       });
@@ -616,10 +620,162 @@ describe("qa-channel plugin", () => {
         cfg,
         accountId: "default",
         params: {
+          to: threadPayload.target,
           messageId: outbound.id,
         },
       });
       expect(state.readMessage({ messageId: outbound.id }).deleted).toBe(true);
+    } finally {
+      await bus.stop();
+    }
+  });
+
+  it("binds message-id actions and searches to the selected account and conversation", async () => {
+    installQaChannelTestRegistry();
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+
+    try {
+      const cfg = {
+        channels: {
+          "qa-channel": {
+            baseUrl: bus.baseUrl,
+            accounts: {
+              other: { baseUrl: bus.baseUrl },
+            },
+          },
+        },
+      };
+      const handleAction = requireQaActionHandler();
+      const allowedRoot = state.addOutboundMessage({
+        accountId: "default",
+        to: "channel:allowed",
+        text: "needle allowed root",
+      });
+      const foreignRoot = state.addOutboundMessage({
+        accountId: "default",
+        to: "channel:other",
+        text: "needle foreign root",
+      });
+      const allowedThread = state.addOutboundMessage({
+        accountId: "default",
+        to: "thread:allowed/thread-1",
+        threadId: "thread-1",
+        text: "needle allowed thread",
+      });
+      const foreignAccount = state.addOutboundMessage({
+        accountId: "other",
+        to: "channel:allowed",
+        text: "needle foreign account",
+      });
+
+      const crossedActions: Array<{
+        action: ChannelMessageActionName;
+        params: Record<string, unknown>;
+      }> = [
+        { action: "read", params: {} },
+        { action: "reactions", params: {} },
+        { action: "react", params: { emoji: "eyes" } },
+        { action: "edit", params: { text: "foreign edit" } },
+        { action: "delete", params: {} },
+      ];
+      for (const testCase of crossedActions) {
+        await expect(
+          handleAction({
+            channel: "qa-channel",
+            action: testCase.action,
+            cfg,
+            accountId: "default",
+            params: {
+              to: "channel:allowed",
+              messageId: foreignRoot.id,
+              ...testCase.params,
+            },
+          }),
+        ).rejects.toThrow("qa-channel message is not in the selected conversation");
+      }
+
+      await expect(
+        handleAction({
+          channel: "qa-channel",
+          action: "read",
+          cfg,
+          accountId: "other",
+          params: { to: "channel:allowed", messageId: allowedRoot.id },
+        }),
+      ).rejects.toThrow("qa-bus message not found");
+      await expect(
+        handleAction({
+          channel: "qa-channel",
+          action: "read",
+          cfg,
+          accountId: "default",
+          params: { to: "dm:allowed", messageId: allowedRoot.id },
+        }),
+      ).rejects.toThrow("qa-channel message is not in the selected conversation");
+      await expect(
+        handleAction({
+          channel: "qa-channel",
+          action: "read",
+          cfg,
+          accountId: "default",
+          params: { to: "channel:allowed", messageId: allowedThread.id },
+        }),
+      ).rejects.toThrow("qa-channel message is not in the selected conversation");
+      await expect(
+        handleAction({
+          channel: "qa-channel",
+          action: "read",
+          cfg,
+          accountId: "default",
+          params: { to: "thread:allowed/thread-2", messageId: allowedThread.id },
+        }),
+      ).rejects.toThrow("qa-channel message is not in the selected conversation");
+
+      await expect(
+        handleAction({
+          channel: "qa-channel",
+          action: "read",
+          cfg,
+          accountId: "default",
+          params: { to: "thread:allowed/thread-1", messageId: allowedThread.id },
+        }),
+      ).resolves.toBeDefined();
+
+      const runSearch = async (params: Record<string, unknown>, accountId = "default") => {
+        const result = await handleAction({
+          channel: "qa-channel",
+          action: "search",
+          cfg,
+          accountId,
+          params: { query: "needle", ...params },
+        });
+        return (extractToolPayload(result) as { messages: Array<{ id: string }> }).messages.map(
+          (message) => message.id,
+        );
+      };
+
+      await expect(runSearch({ channelId: "allowed" })).resolves.toEqual([allowedRoot.id]);
+      await expect(runSearch({ channelId: "thread:allowed/thread-1" })).resolves.toEqual([
+        allowedThread.id,
+      ]);
+      await expect(runSearch({ channelId: "dm:allowed" })).resolves.toEqual([]);
+      await expect(runSearch({ channelId: "allowed" }, "other")).resolves.toEqual([
+        foreignAccount.id,
+      ]);
+      await expect(runSearch({})).resolves.toEqual([
+        allowedRoot.id,
+        foreignRoot.id,
+        allowedThread.id,
+      ]);
+      await expect(runSearch({ threadId: "thread-1" })).rejects.toThrow(
+        "qa-channel search requires channelId when threadId is provided",
+      );
+
+      const unchanged = state.readMessage({ accountId: "default", messageId: foreignRoot.id });
+      expect(unchanged.text).toBe("needle foreign root");
+      expect(unchanged.deleted).not.toBe(true);
+      expect(unchanged.reactions).toEqual([]);
     } finally {
       await bus.stop();
     }

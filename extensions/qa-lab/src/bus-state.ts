@@ -8,6 +8,7 @@ import {
   normalizeConversationFromTarget,
   pollQaBusEvents,
   readQaBusMessage,
+  requireQaBusMessageForAccount,
   searchQaBusMessages,
 } from "./bus-queries.js";
 import { createQaBusWaiterStore } from "./bus-waiters.js";
@@ -234,10 +235,7 @@ export function createQaBusState() {
     },
     reactToMessage(input: QaBusReactToMessageInput) {
       const accountId = normalizeAccountId(input.accountId);
-      const message = messages.get(input.messageId);
-      if (!message) {
-        throw new Error(`qa-bus message not found: ${input.messageId}`);
-      }
+      const message = requireQaBusMessageForAccount({ messages, input });
       const reaction = {
         emoji: input.emoji,
         senderId: input.senderId?.trim() || DEFAULT_BOT_ID,
@@ -255,10 +253,7 @@ export function createQaBusState() {
     },
     editMessage(input: QaBusEditMessageInput) {
       const accountId = normalizeAccountId(input.accountId);
-      const message = messages.get(input.messageId);
-      if (!message) {
-        throw new Error(`qa-bus message not found: ${input.messageId}`);
-      }
+      const message = requireQaBusMessageForAccount({ messages, input });
       message.text = input.text;
       message.editedAt = input.timestamp ?? Date.now();
       pushEvent({
@@ -270,10 +265,7 @@ export function createQaBusState() {
     },
     deleteMessage(input: QaBusDeleteMessageInput) {
       const accountId = normalizeAccountId(input.accountId);
-      const message = messages.get(input.messageId);
-      if (!message) {
-        throw new Error(`qa-bus message not found: ${input.messageId}`);
-      }
+      const message = requireQaBusMessageForAccount({ messages, input });
       message.deleted = true;
       pushEvent({
         kind: "message-deleted",
