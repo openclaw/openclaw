@@ -213,11 +213,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
+    // SessionEntry.totalTokens is a current-context snapshot (usage.ts deriveSessionTotalTokens),
+    // so prefer the last model call's usage: its input+cacheRead is the prompt actually sent that
+    // turn. The aggregate `usage` sums cacheRead across every call, so a session with many prompt-
+    // cache hits reads as far over the context window even when the live transcript is small
+    // (#108238). Fall back to the aggregate only when no last-call usage is available.
     const usageForContext = isCliProvider(providerUsed, cfg)
       ? lastCallUsage
-      : lastCallUsage?.contextUsage
-        ? lastCallUsage
-        : usage;
+      : (lastCallUsage ?? usage);
     const totalTokens = deriveSessionTotalTokens({
       usage: promptTokens ? undefined : usageForContext,
       contextTokens,

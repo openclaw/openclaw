@@ -1051,6 +1051,47 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("snapshots the last-call context, not aggregate cacheRead, for cache-heavy sessions (#108238)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cache-hits";
+      const sessionId = "test-session-108238";
+
+      const sessionStore: Record<string, SessionEntry> = {};
+      await seedSessionStore(storePath, sessionStore);
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "openai",
+            model: "gpt-5.6-sol",
+            // Aggregate usage sums cacheRead across every prompt-cache hit this run.
+            usage: { input: 497_720, output: 7_485, cacheRead: 1_323_520, cacheWrite: 0 },
+            // The last model call's prompt is small — this is the live context size.
+            lastCallUsage: { input: 60_000, output: 7_485, cacheRead: 15_000, cacheWrite: 0 },
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.6-sol",
+        result,
+      });
+
+      // The snapshot must reflect the last call's prompt (input + cacheRead = 75000), not the
+      // aggregate input + cacheRead + cacheWrite (1,821,240) that read as context overflow (#108238).
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(75_000);
+    });
+  });
+
   it("persists estimated context budget status without marking stale usage fresh", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
@@ -1516,7 +1557,10 @@ describe("updateSessionStoreAfterAgentRun", () => {
         } as EmbeddedAgentRunResult,
       });
 
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(120_000);
+      // The context snapshot is the last call's prompt (input 91000 + cacheRead 4000 = 95000),
+      // not the aggregate input + cacheRead (120000) that sums cacheRead across calls (#108238).
+      // The point of this case still holds: fresh usage wins over the compaction snapshot (80000).
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(95_000);
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
       expect(sessionStore[sessionKey]?.inputTokens).toBe(100_000);
       expect(sessionStore[sessionKey]?.outputTokens).toBe(3_000);
