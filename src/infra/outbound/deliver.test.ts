@@ -1,6 +1,7 @@
 // Covers outbound delivery core: hooks, queue cleanup, durable capability
 // checks, adapter sends, transcript mirroring, and payload outcomes.
 import fsPromises from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -4573,13 +4574,21 @@ describe("deliverOutboundPayloads", () => {
     // reject (see local-media-access.ts), so staging that reads through a raw
     // params.mediaAccess would refuse media the send itself would deliver.
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-ws", roomId: "!room:example" });
+    // workspaceOnly pins the grant to the agent: it suppresses the parent-root
+    // expansion that would otherwise admit any declared source directory, so the
+    // workspace root can only come from the agent-scoped capability.
+    const workspaceOnlyConfig = {
+      ...matrixChunkConfig,
+      tools: { fs: { workspaceOnly: true } },
+    } as OpenClawConfig;
+    // Deliberately outside the OpenClaw temp root: that root is itself a default
+    // media root, so a state dir inside it would admit the source by containment
+    // and hide whether the agent-scoped capability is what grants access.
     const stateDir = await fsPromises.realpath(
-      await fsPromises.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "deliver-ws-")),
+      await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-deliver-ws-")),
     );
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
     const workspaceDir = path.join(stateDir, "workspace-proofagent");
-    await fsPromises.mkdir(workspaceDir, { recursive: true });
     // Host-local sends are buffer-verified, so the fixture needs real audio.
     const source = path.join(workspaceDir, "voice.mp3");
     const mp3 = Buffer.alloc(417 * 8);
@@ -4590,12 +4599,14 @@ describe("deliverOutboundPayloads", () => {
       mp3[o + 2] = 0x90;
       mp3[o + 3] = 0xc4;
     }
-    await fsPromises.writeFile(source, mp3);
     const payload = { mediaUrl: source, audioAsVoice: true };
 
     try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await fsPromises.mkdir(workspaceDir, { recursive: true });
+      await fsPromises.writeFile(source, mp3);
       await deliverOutboundPayloads({
-        cfg: matrixChunkConfig,
+        cfg: workspaceOnlyConfig,
         channel: "matrix",
         to: "!room:example",
         payloads: [payload],
