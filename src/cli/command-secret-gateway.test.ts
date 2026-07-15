@@ -1311,6 +1311,56 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 
+  it("accepts an inactive web ref after an incomplete gateway snapshot", async () => {
+    const restoreDeps = setGoogleWebSearchTargetDeps();
+    const webPath = "plugins.entries.google.config.webSearch.apiKey";
+    try {
+      callGateway.mockResolvedValueOnce({
+        assignments: [],
+        diagnostics: [],
+      });
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: {
+          tools: {
+            web: {
+              search: {
+                enabled: false,
+                provider: "gemini",
+              },
+            },
+          },
+          plugins: {
+            entries: {
+              google: {
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "missing-disabled-web-ref",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        commandName: "agent",
+        targetIds: new Set([webPath]),
+      });
+
+      expect(result.hadUnresolvedTargets).toBe(false);
+      expect(result.targetStatesByPath[webPath]).toBe("inactive_surface");
+      expect(
+        result.diagnostics.some((entry) =>
+          entry.includes(`${webPath}: tools.web.search is disabled.`),
+        ),
+      ).toBe(true);
+    } finally {
+      restoreDeps();
+    }
+  });
+
   it("limits strict local fallback analysis to unresolved gateway paths", async () => {
     const locallyRecoveredKey = "TALK_API_KEY_PARTIAL_GATEWAY_LOCAL";
     await withEnvValue(locallyRecoveredKey, "recovered-locally", async () => {
