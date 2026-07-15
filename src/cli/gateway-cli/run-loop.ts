@@ -902,6 +902,7 @@ export async function runGatewayLoop(params: {
       const {
         abortActiveCronTaskRuns,
         advanceCronActiveJobGeneration,
+        clearSessionCostUsageRefreshHoldersForInProcessRestart,
         reloadTaskRuntimeStateFromStore,
         retireActiveCronTaskRunTracking,
         resetCronActiveJobs,
@@ -930,6 +931,10 @@ export async function runGatewayLoop(params: {
       resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetAllLanes();
       clearRuntimeConfigSnapshot();
+      // A refresh holder interrupted mid-flight never released its lock; drop the stale
+      // registration so its own-pid lock is reclaimed instead of pinning usage-cost at
+      // "refreshing" for the rest of the process lifetime (#103910).
+      clearSessionCostUsageRefreshHoldersForInProcessRestart();
       resetGatewayRestartStateForInProcessRestart();
       reloadTaskRuntimeStateFromStore();
       markGatewayRestartTrace("restart.next-start");
