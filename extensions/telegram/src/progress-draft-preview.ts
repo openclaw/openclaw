@@ -50,16 +50,16 @@ function renderTelegramProgressStringLine(text: string): string {
   return renderTelegramHtmlText(clipped);
 }
 
+function renderTelegramProgressText(text: string): string {
+  return text.split(/\r?\n/u).map(renderTelegramProgressStringLine).filter(Boolean).join("<br>");
+}
+
 function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): string {
   if (typeof line === "string") {
-    return line.split(/\r?\n/u).map(renderTelegramProgressStringLine).filter(Boolean).join("<br>");
+    return renderTelegramProgressText(line);
   }
-  if (!line.icon && line.label === "Commentary") {
-    return line.text
-      .split(/\r?\n/u)
-      .map(renderTelegramProgressStringLine)
-      .filter(Boolean)
-      .join("<br>");
+  if (!line.icon && (!line.label || line.label === "Commentary")) {
+    return renderTelegramProgressText(line.text);
   }
   const label = [line.icon, line.label].filter(Boolean).join(" ");
   const parts = [`<b>${escapeTelegramProgressHtml(label)}</b>`];
@@ -109,20 +109,20 @@ function markdownLineToRichText(text: string): RichText {
   return clipped;
 }
 
+function progressTextToRichText(text: string): RichText | undefined {
+  const parts = text
+    .split(/\r?\n/u)
+    .map(markdownLineToRichText)
+    .filter((part) => part !== "");
+  return parts.length ? joinRichText(parts, "\n") : undefined;
+}
+
 function progressLineToRichText(line: ChannelProgressDraftCompositorLine): RichText | undefined {
   if (typeof line === "string") {
-    const parts = line
-      .split(/\r?\n/u)
-      .map(markdownLineToRichText)
-      .filter((part) => part !== "");
-    return parts.length ? joinRichText(parts, "\n") : undefined;
+    return progressTextToRichText(line);
   }
-  if (!line.icon && line.label === "Commentary") {
-    const parts = line.text
-      .split(/\r?\n/u)
-      .map(markdownLineToRichText)
-      .filter((part) => part !== "");
-    return parts.length ? joinRichText(parts, "\n") : undefined;
+  if (!line.icon && (!line.label || line.label === "Commentary")) {
+    return progressTextToRichText(line.text);
   }
   const label = [line.icon, line.label].filter(Boolean).join(" ");
   const parts: RichText[] = [boldRichText(label)];

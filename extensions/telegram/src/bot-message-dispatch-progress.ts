@@ -40,6 +40,17 @@ function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgr
   };
 }
 
+function buildTelegramTextToolProgressLine(text: string): ChannelProgressDraftLine {
+  // Keep tool-progress strings distinguishable from reasoning strings when a
+  // preamble headline makes the renderer select work-lane rows explicitly.
+  return {
+    kind: "item",
+    label: "",
+    text,
+    prefix: false,
+  };
+}
+
 export function createTelegramProgressController(params: {
   accountId: string;
   chatId: TelegramMessageContext["chatId"];
@@ -111,7 +122,10 @@ export function createTelegramProgressController(params: {
     if (!canPushToolProgress()) {
       return false;
     }
-    return await compositor.pushToolProgress(line, options);
+    return await compositor.pushToolProgress(
+      typeof line === "string" ? buildTelegramTextToolProgressLine(line) : line,
+      options,
+    );
   };
   const pushReasoningProgress = async (payload: {
     text?: string;

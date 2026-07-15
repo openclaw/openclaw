@@ -1,10 +1,5 @@
-import { createAgentRunEventHandler } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { dispatchReplyWithBufferedBlockDispatcher as dispatchReplyThroughRuntime } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { expect, it } from "vitest";
 import {
-  type DispatchReplyWithBufferedBlockDispatcherArgs,
-  type TelegramBotDeps,
-  type TelegramMessageContext,
   describeTelegramDispatch,
   createContext,
   createReasoningStreamContext,
@@ -24,7 +19,6 @@ import {
   recordOutboundMessageForPromptContext,
   setupDraftStreams,
   telegramProgressPreview,
-  telegramDepsForTest,
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
@@ -261,70 +255,33 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
-  it("keeps eight rolling Codex tool rows beneath a preamble with verbose off", async () => {
+  it("keeps eight rolling tool rows beneath a preamble with verbose off", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
-    const deps = {
-      ...telegramDepsForTest,
-      dispatchReplyWithBufferedBlockDispatcher: async (
-        params: DispatchReplyWithBufferedBlockDispatcherArgs,
-      ) =>
-        await dispatchReplyThroughRuntime({
-          ...params,
-          replyResolver: async (_ctx, opts) => {
-            const onAgentEvent = createAgentRunEventHandler({
-              turn: {
-                sessionCtx: { MessageSid: "456" },
-                opts,
-                typingSignals: { signalToolStart: async () => undefined },
-                toolProgressDetail: "raw",
-                applyReplyToMode: (payload: unknown) => payload,
-                sessionKey: "telegram-progress-test",
-              } as Parameters<typeof createAgentRunEventHandler>[0]["turn"],
-              lifecycleBackstop: {
-                emit: () => undefined,
-                getDeferredError: () => undefined,
-                note: () => undefined,
-              },
-              notifyAgentRunStart: () => undefined,
-              sourceRepliesAreToolOnly: false,
-              provider: "openai",
-              model: "gpt-test",
-              notifyUserAboutCompaction: false,
-              onCompactionCompleted: () => 0,
-              messageToolDeliveryState: { toolCallIds: new Set(), completed: false },
-            });
-            await onAgentEvent({
-              stream: "assistant",
-              data: {
-                phase: "commentary",
-                itemId: "preamble-1",
-                text: "I'll make exactly 10 harmless, read-only tool calls.",
-              },
-            });
-            for (let index = 1; index <= 10; index += 1) {
-              await onAgentEvent({
-                stream: "tool",
-                data: {
-                  phase: "start",
-                  name: "exec",
-                  toolCallId: `exec-${index}`,
-                  args: { command: `command-${index}` },
-                },
-              });
-            }
-            return { text: "Done" };
-          },
-        }),
-    } satisfies TelegramBotDeps;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReplyStart?.();
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "preamble-1",
+          progressText: "I'll make exactly 10 harmless, read-only tool calls.",
+        });
+        for (let index = 1; index <= 10; index += 1) {
+          await replyOptions?.onToolStart?.({
+            phase: "start",
+            name: "exec",
+            toolCallId: `exec-${index}`,
+            args: { command: `command-${index}` },
+          });
+        }
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
 
     await dispatchWithContext({
-      context: createContext({
-        ctxPayload: {
-          SessionKey: "telegram-progress-test",
-          ChatType: "direct",
-        } as TelegramMessageContext["ctxPayload"],
-      }),
+      context: createContext(),
       cfg: { agents: { defaults: { verboseDefault: "off" } } },
       streamMode: "progress",
       telegramCfg: {
@@ -333,7 +290,6 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
           progress: { commandText: "raw", maxLines: 8, toolProgress: true },
         },
       },
-      telegramDeps: deps,
     });
 
     const rollingPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
@@ -660,6 +616,74 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
         "<b>Shelling</b>\nChecking recent context\n<b>🛠️ Exec</b>",
       ),
     );
+  });
+
+  it("keeps fast-mode string progress beneath a Telegram preamble", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReplyStart?.();
+        await replyOptions?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "preamble-1",
+          progressText: "Checking recent context",
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "Fast mode enabled",
+            channelData: { openclawProgressKind: "fast-mode-auto" },
+          },
+          { kind: "tool" },
+        );
+        return { queuedFinal: false };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { label: "Shelling" } },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\nChecking recent context\nFast mode enabled",
+        "<b>Shelling</b>\nChecking recent context\nFast mode enabled",
+      ),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("keeps string tool-result progress beneath a Telegram preamble", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking recent context",
+      });
+      await replyOptions?.onToolResult?.({ text: "Background task still running" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        richMessages: true,
+        streaming: { mode: "progress", progress: { label: "Shelling" } },
+      },
+    });
+
+    const preview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(preview?.text).toBe("Shelling\nChecking recent context\nBackground task still running");
+    expect(JSON.stringify(preview?.richMessage)).toContain("Background task still running");
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("retracts the Telegram preamble headline by item identity", async () => {
