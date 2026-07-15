@@ -220,7 +220,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       noteLaneTaskProgress,
       onToolOutcome: input.observeToolOutcome,
       allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
-      onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
+      onToolStreamBoundary: () => {
+        void maybeAnnounceFastModeAutoOff();
+      },
       onRunProgress: notifyRunProgress,
       onToolResult: notifyToolResult,
       onAgentEvent: notifyAgentEvent,
