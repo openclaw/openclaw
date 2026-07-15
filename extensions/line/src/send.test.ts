@@ -1,4 +1,5 @@
 // Line tests cover send plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -287,6 +288,17 @@ describe("LINE send helpers", () => {
     });
   });
 
+  it("preserves literal internal-looking text in low-level sends", async () => {
+    const text = "⚠️ 🛠️ `search repos (agent)` failed";
+
+    await sendModule.sendMessageLine("line:user:U123", text, { cfg: LINE_TEST_CFG });
+
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "U123",
+      messages: [{ type: "text", text }],
+    });
+  });
+
   it("sends video with explicit image preview URL", async () => {
     await sendModule.sendMessageLine("line:user:U100", "Video", {
       cfg: LINE_TEST_CFG,
@@ -477,6 +489,9 @@ describe("LINE send helpers", () => {
     const firstCall = pushMessageMock.mock.calls.at(0) as [
       { messages: Array<{ quickReply?: { items: unknown[] } }> },
     ];
-    expect(firstCall[0].messages[0].quickReply?.items).toHaveLength(13);
+    const payload = expectDefined(firstCall[0], "LINE push payload");
+    expect(expectDefined(payload.messages[0], "LINE push message").quickReply?.items).toHaveLength(
+      13,
+    );
   });
 });

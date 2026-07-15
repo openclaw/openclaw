@@ -9,6 +9,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   UserTurnInput,
@@ -25,7 +26,6 @@ export type ImageContent = {
   data: string;
   mimeType: string;
 };
-export type { AgentStreamParams } from "./shared-types.js";
 
 /** Metadata overrides for trusted internal agent command callers. */
 export type AgentCommandResultMetaOverrides = {
@@ -114,6 +114,8 @@ export type AgentCommandOpts = {
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
+  /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Internal marker for an auto-applied cap that CLI runtimes must omit. */
   toolsAllowIsDefault?: boolean;
   /** Preserve the originating run's message-tool policy across internal continuation turns. */
@@ -146,6 +148,8 @@ export type AgentCommandOpts = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
   disableMessageTool?: boolean;
+  /** Restrict this reconstructed run to restart-safe tools. */
+  forceRestartSafeTools?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
   skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */

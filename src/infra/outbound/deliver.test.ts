@@ -1,6 +1,7 @@
 // Covers outbound delivery core: hooks, queue cleanup, durable capability
 // checks, adapter sends, transcript mirroring, and payload outcomes.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onTrustedMessageAuditEvent,
@@ -9,13 +10,16 @@ import {
 } from "../../audit/message-audit-events.js";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
-import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import type {
+  ChannelMessageSendMediaContext,
+  ChannelMessageSendTextContext,
+} from "../../channels/message/types.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import * as mediaCapabilityModule from "../../media/read-capability.js";
 import { createHookRunner } from "../../plugins/hooks.js";
-import { addTestHook } from "../../plugins/hooks.test-helpers.js";
+import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
   pinActivePluginChannelRegistry,
@@ -60,7 +64,7 @@ const internalHookMocks = vi.hoisted(() => ({
   triggerInternalHook: vi.fn(async () => {}),
 }));
 const queueMocks = vi.hoisted(() => ({
-  enqueueDelivery: vi.fn(async () => "mock-queue-id"),
+  enqueueDelivery: vi.fn(async (_params: unknown) => "mock-queue-id"),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
   failDeliveryAfterPlatformSend: vi.fn(async () => {}),
@@ -131,7 +135,7 @@ vi.mock("../../logging/subsystem.js", () => ({
 type DeliverModule = typeof import("./deliver.js");
 
 let deliverOutboundPayloads: DeliverModule["deliverOutboundPayloads"];
-let normalizeOutboundPayloads: DeliverModule["normalizeOutboundPayloads"];
+let deliverOutboundPayloadsInternal: DeliverModule["deliverOutboundPayloadsInternal"];
 let resolveOutboundDurableFinalDeliverySupport: DeliverModule["resolveOutboundDurableFinalDeliverySupport"];
 
 const matrixChunkConfig: OpenClawConfig = {
@@ -304,7 +308,7 @@ describe("deliverOutboundPayloads", () => {
   beforeAll(async () => {
     ({
       deliverOutboundPayloads,
-      normalizeOutboundPayloads,
+      deliverOutboundPayloadsInternal,
       resolveOutboundDurableFinalDeliverySupport,
     } = await import("./deliver.js"));
   });
@@ -696,9 +700,10 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "hello" }],
     });
 
-    const [[sendTextParams]] = messageSendText.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
+    const [sendTextParams] = expectDefined(
+      (messageSendText.mock.calls as unknown as Array<[Record<string, unknown>]>)[0],
+      "(messageSendText.mock.calls as unknown as Array<[Record<string, unknown>]>)[0] test invariant",
+    );
     expect(sendTextParams?.to).toBe("!room:example");
     expect(sendTextParams?.text).toBe("hello");
     expect(outboundSendText).not.toHaveBeenCalled();
@@ -797,9 +802,10 @@ describe("deliverOutboundPayloads", () => {
       "ack",
       "commit:pending-1:message-adapter-1",
     ]);
-    const [[beforeParams]] = beforeSendAttempt.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
+    const [beforeParams] = expectDefined(
+      (beforeSendAttempt.mock.calls as unknown as Array<[Record<string, unknown>]>)[0],
+      "(beforeSendAttempt.mock.calls as unknown as Array<[Record<string, unknown>]>)[0] test invariant",
+    );
     expect(beforeParams?.kind).toBe("text");
     expect(beforeParams?.to).toBe("!room:example");
     expect(beforeParams?.text).toBe("hello");
@@ -809,15 +815,25 @@ describe("deliverOutboundPayloads", () => {
       undefined,
       expect.objectContaining({ replyToId: undefined, threadId: undefined }),
     );
-    const [[successParams]] = afterSendSuccess.mock.calls as unknown as Array<
-      [Record<string, unknown> & { result?: { messageId?: string } }]
-    >;
+    const [successParams] = expectDefined(
+      (
+        afterSendSuccess.mock.calls as unknown as Array<
+          [Record<string, unknown> & { result?: { messageId?: string } }]
+        >
+      )[0],
+      "(afterSendSuccess.mock.calls as unknown as Array<\n        [Record<string, unknown> & { result?: { messageId?: string } }]\n      >)[0] test invariant",
+    );
     expect(successParams?.kind).toBe("text");
     expect(successParams?.attemptToken).toBe("pending-1");
     expect(successParams?.result?.messageId).toBe("message-adapter-1");
-    const [[commitParams]] = afterCommit.mock.calls as unknown as Array<
-      [Record<string, unknown> & { result?: { messageId?: string } }]
-    >;
+    const [commitParams] = expectDefined(
+      (
+        afterCommit.mock.calls as unknown as Array<
+          [Record<string, unknown> & { result?: { messageId?: string } }]
+        >
+      )[0],
+      "(afterCommit.mock.calls as unknown as Array<\n        [Record<string, unknown> & { result?: { messageId?: string } }]\n      >)[0] test invariant",
+    );
     expect(commitParams?.kind).toBe("text");
     expect(commitParams?.attemptToken).toBe("pending-1");
     expect(commitParams?.result?.messageId).toBe("message-adapter-1");
@@ -1039,6 +1055,103 @@ describe("deliverOutboundPayloads", () => {
     expect(messageSendMedia).toHaveBeenCalledOnce();
   });
 
+  it("passes stable part indexes to exact multi-media sends", async () => {
+    const messageSendMedia = vi.fn(async (ctx: ChannelMessageSendMediaContext) => ({
+      messageId: `media-${ctx.deliveryPartIndex}`,
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "matrix", messageId: `media-${ctx.deliveryPartIndex}` }],
+        kind: "media",
+      }),
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            id: "matrix",
+            message: {
+              id: "matrix",
+              durableFinal: {
+                capabilities: { text: true, media: true, reconcileUnknownSend: true },
+                reconcileUnknownSendKinds: { media: true },
+                reconcileUnknownSend: async () => ({ status: "not_sent" }),
+              },
+              send: { text: vi.fn(), media: messageSendMedia },
+            },
+          },
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [
+          {
+            text: "caption",
+            mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
+          },
+        ],
+        queuePolicy: "required",
+        requireUnknownSendReconciliation: true,
+      }),
+    ).resolves.toHaveLength(2);
+    expect(messageSendMedia.mock.calls.map(([ctx]) => ctx.deliveryPartIndex)).toEqual([0, 1]);
+  });
+
+  it("rejects exact sends when reply payload hooks change platform fan-out", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockResolvedValue({
+      payload: {
+        text: "caption",
+        mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
+      },
+    });
+    const messageSendMedia = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            id: "matrix",
+            message: {
+              id: "matrix",
+              durableFinal: {
+                capabilities: { text: true, media: true, reconcileUnknownSend: true },
+                reconcileUnknownSendKinds: { media: true },
+                reconcileUnknownSend: async () => ({ status: "not_sent" }),
+              },
+              send: { text: vi.fn(), media: messageSendMedia },
+            },
+          },
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "caption", mediaUrl: "https://example.com/original.png" }],
+        queuePolicy: "required",
+        requireUnknownSendReconciliation: true,
+        replyPayloadSendingHook: {
+          kind: "final",
+          channel: "matrix",
+          context: { channelId: "matrix", conversationId: "!room:example" },
+        },
+      }),
+    ).rejects.toThrow(/changed platform fan-out after outbound transforms/);
+    expect(messageSendMedia).not.toHaveBeenCalled();
+  });
+
   it("keeps an explicitly reconciled send retryable when dispatch state cannot persist", async () => {
     queueMocks.markDeliveryPlatformSendDispatched.mockRejectedValueOnce(
       new Error("dispatch state unavailable"),
@@ -1144,7 +1257,7 @@ describe("deliverOutboundPayloads", () => {
           context: { channelId: "matrix", conversationId: "!room:example" },
         },
       }),
-    ).rejects.toThrow(/media unknown-send reconciliation is unavailable/);
+    ).rejects.toThrow(/changed platform fan-out after outbound transforms/);
     expect(sendText).not.toHaveBeenCalled();
     expect(sendMedia).not.toHaveBeenCalled();
     expect(queueMocks.markDeliveryPlatformOutcomeUnknown).not.toHaveBeenCalled();
@@ -1296,9 +1409,10 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("native send failed");
 
-    const [[failureParams]] = afterSendFailure.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
+    const [failureParams] = expectDefined(
+      (afterSendFailure.mock.calls as unknown as Array<[Record<string, unknown>]>)[0],
+      "(afterSendFailure.mock.calls as unknown as Array<[Record<string, unknown>]>)[0] test invariant",
+    );
     expect(failureParams?.kind).toBe("text");
     expect(failureParams?.attemptToken).toBe("pending-2");
     expect(failureParams?.error).toBeInstanceOf(Error);
@@ -1352,9 +1466,10 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("native send failed");
 
-    const [[failureParams]] = afterSendFailure.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
+    const [failureParams] = expectDefined(
+      (afterSendFailure.mock.calls as unknown as Array<[Record<string, unknown>]>)[0],
+      "(afterSendFailure.mock.calls as unknown as Array<[Record<string, unknown>]>)[0] test invariant",
+    );
     expect(failureParams?.kind).toBe("text");
     expect(failureParams?.attemptToken).toBe("pending-2");
     expect(failureParams?.error).toBeInstanceOf(Error);
@@ -1415,9 +1530,14 @@ describe("deliverOutboundPayloads", () => {
     expect(results[0]?.channel).toBe("matrix");
     expect(results[0]?.messageId).toBe("message-adapter-1");
     expect(afterSendFailure).not.toHaveBeenCalled();
-    const [[commitParams]] = afterCommit.mock.calls as unknown as Array<
-      [Record<string, unknown> & { result?: { messageId?: string } }]
-    >;
+    const [commitParams] = expectDefined(
+      (
+        afterCommit.mock.calls as unknown as Array<
+          [Record<string, unknown> & { result?: { messageId?: string } }]
+        >
+      )[0],
+      "(afterCommit.mock.calls as unknown as Array<\n        [Record<string, unknown> & { result?: { messageId?: string } }]\n      >)[0] test invariant",
+    );
     expect(commitParams?.kind).toBe("text");
     expect(commitParams?.result?.messageId).toBe("message-adapter-1");
     expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
@@ -1518,9 +1638,14 @@ describe("deliverOutboundPayloads", () => {
       queuePolicy: "best_effort",
     });
 
-    const [[commitParams]] = afterCommit.mock.calls as unknown as Array<
-      [Record<string, unknown> & { result?: { messageId?: string } }]
-    >;
+    const [commitParams] = expectDefined(
+      (
+        afterCommit.mock.calls as unknown as Array<
+          [Record<string, unknown> & { result?: { messageId?: string } }]
+        >
+      )[0],
+      "(afterCommit.mock.calls as unknown as Array<\n        [Record<string, unknown> & { result?: { messageId?: string } }]\n      >)[0] test invariant",
+    );
     expect(commitParams?.kind).toBe("text");
     expect(commitParams?.result?.messageId).toBe("message-adapter-1");
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
@@ -3787,18 +3912,27 @@ describe("deliverOutboundPayloads", () => {
       ]),
     );
 
-    await deliverOutboundPayloads({
+    await deliverOutboundPayloadsInternal({
       cfg: { channels: { matrix: { textChunkLimit: 4000 } } } as OpenClawConfig,
       channel: "matrix",
       to: "!room",
       payloads: [{ text: "line one\nline two" }],
       replyToId: "reply-1",
       replyToMode: "first",
+      conversationReadOrigin: "direct-operator",
       formatting: { maxLinesPerMessage: 1 },
     });
 
     expect(sendText.mock.calls.map((call) => call[0]?.text)).toEqual(["line one", "line two"]);
     expect(sendText.mock.calls.map((call) => call[0]?.replyToId)).toEqual(["reply-1", undefined]);
+    expect(
+      sendText.mock.calls.map(
+        (call) => (call[0] as { conversationReadOrigin?: string })?.conversationReadOrigin,
+      ),
+    ).toEqual(["direct-operator", "direct-operator"]);
+    expect(queueMocks.enqueueDelivery.mock.calls[0]?.[0]).not.toHaveProperty(
+      "conversationReadOrigin",
+    );
   });
 
   it("drops text payloads after adapter sanitization removes all content", async () => {
@@ -3993,18 +4127,6 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrixCall[0]).toBe("!room:example");
     expect(sendMatrixCall[1]).toBe("Chart now");
     expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/chart.png");
-  });
-
-  it("normalizes payloads and drops empty entries", () => {
-    const normalized = normalizeOutboundPayloads([
-      { text: "hi" },
-      { text: "MEDIA:https://x.test/a.jpg" },
-      { text: " ", mediaUrls: [] },
-    ]);
-    expect(normalized).toEqual([
-      { text: "hi", mediaUrls: [], audioAsVoice: undefined },
-      { text: "", mediaUrls: ["https://x.test/a.jpg"], audioAsVoice: undefined },
-    ]);
   });
 
   it("continues on errors when bestEffort is enabled", async () => {
@@ -5506,3 +5628,4 @@ const defaultRegistry = createTestRegistry([
     source: "test",
   },
 ]);
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

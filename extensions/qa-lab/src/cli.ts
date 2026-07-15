@@ -141,7 +141,7 @@ function collectCliSuppliedQaRunFlags(
 }
 
 function formatFlagList(flags: readonly string[]): string {
-  return flags.length === 1 ? flags[0] : flags.join(", ");
+  return flags.join(", ");
 }
 
 function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
@@ -997,3 +997,4 @@ export function registerQaLabCli(program: Command) {
     lane.register(qa);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

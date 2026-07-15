@@ -1,14 +1,16 @@
 // Qa Matrix plugin module implements scenario runtime cli behavior.
-import { spawn as startOpenClawCliProcess, spawnSync } from "node:child_process";
+import { spawn as startOpenClawCliProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { resolveMatrixQaWindowsSystem32ExePath } from "../../windows-system-tools.js";
+import {
+  killMatrixQaCliChild,
+  resolveMatrixQaOpenClawCliEntryPath,
+} from "./scenario-runtime-cli-process.js";
 
 export type MatrixQaCliRunResult = {
   args: string[];
@@ -41,7 +43,8 @@ function isMatrixQaCliSecretPositionalArg(args: string[], index: number): boolea
 
 function redactMatrixQaCliArgs(args: string[]): string[] {
   return args.map((arg, index) => {
-    const [flag] = arg.split("=", 1);
+    const equalsIndex = arg.indexOf("=");
+    const flag = equalsIndex >= 0 ? arg.slice(0, equalsIndex) : arg;
     if (MATRIX_QA_CLI_SECRET_ARG_FLAGS.has(flag) && arg.includes("=")) {
       return `${flag}=[REDACTED]`;
     }
@@ -62,14 +65,6 @@ export function redactMatrixQaCliOutput(text: string): string {
 
 export function formatMatrixQaCliCommand(args: string[]) {
   return `openclaw ${redactMatrixQaCliArgs(args).join(" ")}`;
-}
-
-export function resolveMatrixQaOpenClawCliEntryPath(cwd: string): string {
-  const mjsEntryPath = path.join(cwd, "dist", "index.mjs");
-  if (existsSync(mjsEntryPath)) {
-    return mjsEntryPath;
-  }
-  return path.join(cwd, "dist", "index.js");
 }
 
 function buildMatrixQaCliResult(params: {
@@ -103,46 +98,6 @@ function formatMatrixQaCliTimeoutError(result: MatrixQaCliRunResult, timeoutMs: 
   ]
     .filter(Boolean)
     .join("\n");
-}
-
-function killMatrixQaCliChild(
-  child: ReturnType<typeof startOpenClawCliProcess>,
-  signal: NodeJS.Signals,
-  runTaskkill: typeof spawnSync = spawnSync,
-): void {
-  if (process.platform === "win32") {
-    if (child.pid) {
-      const taskkillPath = resolveMatrixQaWindowsSystem32ExePath("taskkill.exe");
-      const args = ["/PID", String(child.pid), "/T"];
-      if (signal === "SIGKILL") {
-        args.push("/F");
-      }
-      const result = runTaskkill(taskkillPath, args, { stdio: "ignore", windowsHide: true });
-      if (!result.error && result.status === 0) {
-        return;
-      }
-      if (signal !== "SIGKILL") {
-        const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
-          stdio: "ignore",
-          windowsHide: true,
-        });
-        if (!forceResult.error && forceResult.status === 0) {
-          return;
-        }
-      }
-    }
-    child.kill(signal);
-    return;
-  }
-  if (child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child if process-group signaling is unavailable.
-    }
-  }
-  child.kill(signal);
 }
 
 function isMatrixQaCliChildProcessGroupRunning(
@@ -485,7 +440,3 @@ export async function createMatrixQaOpenClawCliRuntime(params: {
     stateDir,
   };
 }
-
-export const testing = {
-  killMatrixQaCliChild,
-};

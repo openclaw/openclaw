@@ -28,13 +28,13 @@ const WHATSAPP_TEST_CFG: OpenClawConfig = {
   channels: { whatsapp: {} },
 };
 
-vi.mock("./connection-controller-registry.js", async () => {
-  const actual = await vi.importActual<typeof import("./connection-controller-registry.js")>(
-    "./connection-controller-registry.js",
+vi.mock("./connection-controller-runtime-context.js", async () => {
+  const actual = await vi.importActual<typeof import("./connection-controller-runtime-context.js")>(
+    "./connection-controller-runtime-context.js",
   );
   return {
     ...actual,
-    getRegisteredWhatsAppConnectionController: vi.fn((accountId: string) => {
+    getWhatsAppConnectionController: vi.fn((accountId: string) => {
       const listener = hoisted.controllerListeners.get(accountId) ?? null;
       return listener
         ? {
@@ -539,7 +539,7 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("prefers explicit mediaUrl over mediaUrls when both are present", async () => {
+  it("keeps direct API mediaUrl ahead of additive mediaUrls", async () => {
     const buf = Buffer.from("img");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,

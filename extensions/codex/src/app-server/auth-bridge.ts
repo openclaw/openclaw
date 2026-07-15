@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 // Codex plugin module implements auth bridge behavior.
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
@@ -20,6 +21,7 @@ import {
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { resolveCodexAppServerHomeDir, withEphemeralCodexAuthStore } from "./auth-start-options.js";
 import type { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
 import {
@@ -46,8 +48,6 @@ const OPENAI_PROVIDER = "openai";
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
-const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
-const CODEX_APP_SERVER_NATIVE_HOME_DIRNAME = "home";
 const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
 const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 const CODEX_ACCESS_TOKEN_ENV_VAR = "CODEX_ACCESS_TOKEN";
@@ -60,7 +60,6 @@ const CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS = [
 const CODEX_APP_SERVER_HOME_ENV_VARS = [CODEX_HOME_ENV_VAR, HOME_ENV_VAR];
 const CODEX_AUTH_JSON_FILENAME = "auth.json";
 const CODEX_HOME_DIRNAME = ".codex";
-
 type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
 const scopedOAuthRefreshQueues = new WeakMap<
   AuthProfileStore,
@@ -80,7 +79,7 @@ export async function bridgeCodexAppServerStartOptions(params: {
     return params.startOptions;
   }
   const scopedStartOptions = await withCodexHomeEnvironment(
-    params.startOptions,
+    withEphemeralCodexAuthStore(params),
     params.agentDir,
     params.pluginConfig,
   );
@@ -179,7 +178,7 @@ export function resolveCodexAppServerAuthProfileStore(params: {
   });
 }
 
-export type CodexAppServerPreparedAuthProfileSnapshot = {
+type CodexAppServerPreparedAuthProfileSnapshot = {
   loginParams: CodexLoginAccountParams;
   secretFreeCacheKey: string;
 };
@@ -348,7 +347,7 @@ export async function resolveCodexAppServerAuthAccountCacheKey(params: {
   return resolveChatgptAccountId(profileId, credential);
 }
 
-export function resolveCodexAppServerEnvApiKeyCacheKey(params: {
+function resolveCodexAppServerEnvApiKeyCacheKey(params: {
   startOptions: Pick<CodexAppServerStartOptions, "transport" | "env" | "clearEnv">;
   baseEnv?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
@@ -420,13 +419,7 @@ function fingerprintCodexCliAuthFileApiKeyCacheKey(apiKey: string): string {
   return `CODEX_AUTH_JSON:sha256:${hash.digest("hex")}`;
 }
 
-export function resolveCodexAppServerHomeDir(agentDir: string): string {
-  return path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME);
-}
-
-export function resolveCodexAppServerNativeHomeDir(agentDir: string): string {
-  return path.join(resolveCodexAppServerHomeDir(agentDir), CODEX_APP_SERVER_NATIVE_HOME_DIRNAME);
-}
+export { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 
 async function withCodexHomeEnvironment(
   startOptions: CodexAppServerStartOptions,

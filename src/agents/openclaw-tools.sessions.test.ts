@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
+import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   appendTranscriptMessage,
@@ -46,6 +46,7 @@ import { testing as agentStepTesting } from "./tools/agent-step.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { testing as sessionsResolutionTesting } from "./tools/sessions-resolution.js";
+import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
@@ -143,7 +144,7 @@ function createOpenClawTools(options?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
-  // Sessions tests exercise the three related tools as a small local bundle.
+  // Sessions tests exercise the related tools as a small local bundle.
   const config = options?.config ?? TEST_CONFIG;
   const gatewayCall = (opts: unknown) => callGatewayMock(opts);
   return [
@@ -154,6 +155,12 @@ function createOpenClawTools(options?: {
       callGateway: gatewayCall,
     }),
     createSessionsHistoryTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+      config,
+      callGateway: gatewayCall,
+    }),
+    createSessionsSearchTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
       config,
@@ -294,6 +301,9 @@ describe("sessions tools", () => {
     };
 
     expect(schemaProp("sessions_history", "limit").type).toBe("integer");
+    expect(schemaProp("sessions_history", "messageId").type).toBe("string");
+    expect(schemaProp("sessions_history", "sessionId").type).toBe("string");
+    expect(schemaProp("sessions_search", "limit").type).toBe("integer");
     expect(schemaProp("sessions_list", "limit").type).toBe("integer");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("integer");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("integer");
@@ -2258,3 +2268,4 @@ describe("sessions tools", () => {
     expect(sendParams.threadId).toBe("99");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

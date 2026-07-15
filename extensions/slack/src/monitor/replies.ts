@@ -276,14 +276,14 @@ export async function deliverReplies(params: {
   return latestResult;
 }
 
-export type SlackRespondFn = (payload: {
+type SlackRespondFn = (payload: {
   text: string;
   blocks?: (Block | KnownBlock)[];
   mrkdwn?: false;
   response_type?: "ephemeral" | "in_channel";
 }) => Promise<unknown>;
 
-export type SlackResponseUrlBudget = ResponseUrlBudget<Parameters<SlackRespondFn>[0]>;
+type SlackResponseUrlBudget = ResponseUrlBudget<Parameters<SlackRespondFn>[0]>;
 
 /**
  * Compute effective threadTs for a Slack reply based on replyToMode.
@@ -557,7 +557,8 @@ export async function deliverSlackSlashReplies(params: {
     throw failure;
   };
   const initialRemaining = responseBudget.remaining();
-  if (initialRemaining !== undefined && minimumRemainingCalls[0] > initialRemaining) {
+  const initialMinimumCalls = minimumCalls.reduce((total, calls) => total + calls, 0);
+  if (initialRemaining !== undefined && initialMinimumCalls > initialRemaining) {
     await failOversizedDelivery();
   }
 

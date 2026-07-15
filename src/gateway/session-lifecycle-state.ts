@@ -1,5 +1,6 @@
 // Gateway session lifecycle state projection.
 // Converts agent run lifecycle events into session row/store status updates.
+import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
@@ -26,6 +27,8 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
     livenessState?: unknown;
     timeoutPhase?: unknown;
     providerStarted?: unknown;
+    yielded?: unknown;
+    status?: unknown;
   };
 };
 
@@ -131,7 +134,7 @@ function resolveRuntimeMs(params: {
   return undefined;
 }
 
-export function deriveGatewaySessionLifecycleSnapshot(params: {
+function deriveGatewaySessionLifecycleSnapshot(params: {
   session?: Partial<LifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
@@ -159,9 +162,21 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
   const endedAt = resolveLifecycleEndedAt(params.event);
   const updatedAt = endedAt ?? existing?.updatedAt;
+  const status = isAgentLifecycleYieldedWaiting({
+    phase,
+    yielded: params.event.data?.yielded,
+    livenessState: params.event.data?.livenessState,
+    stopReason: params.event.data?.stopReason,
+    aborted: params.event.data?.aborted,
+    status: params.event.data?.status,
+    timeoutPhase: params.event.data?.timeoutPhase,
+    error: params.event.data?.error,
+  })
+    ? "running"
+    : resolveTerminalStatus(params.event);
   return {
     updatedAt,
-    status: resolveTerminalStatus(params.event),
+    status,
     startedAt,
     endedAt,
     runtimeMs: resolveRuntimeMs({
@@ -169,11 +184,11 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
       endedAt,
       existingRuntimeMs: existing?.runtimeMs,
     }),
-    abortedLastRun: resolveTerminalStatus(params.event) === "killed",
+    abortedLastRun: status === "killed",
   };
 }
 
-export function derivePersistedSessionLifecyclePatch(params: {
+function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {

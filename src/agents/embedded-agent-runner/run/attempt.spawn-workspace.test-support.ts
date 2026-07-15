@@ -72,6 +72,7 @@ type SessionManagerMocks = {
   replacePersistedTranscript: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
+  clearNextUserMessagePersistenceSuppression: UnknownMock;
   removeTrailingEntries: UnknownMock;
 };
 type AttemptSpawnWorkspaceHoisted = {
@@ -236,6 +237,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     replacePersistedTranscript: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
+    clearNextUserMessagePersistenceSuppression: vi.fn(),
     removeTrailingEntries: vi.fn(() => 0),
   };
   return {
@@ -947,6 +949,7 @@ type MutableSession = {
   isCompacting: boolean;
   isStreaming: boolean;
   agent: {
+    convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: unknown[]) => Promise<unknown>;
     transport?: string;
@@ -1106,6 +1109,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
+  hoisted.sessionManager.clearNextUserMessagePersistenceSuppression.mockReset();
   hoisted.sessionManager.buildSessionContext
     .mockReset()
     .mockReturnValue({ messages: params.sessionMessages ?? [] });
@@ -1415,3 +1419,4 @@ export async function createContextEngineAttemptRunner(params: {
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

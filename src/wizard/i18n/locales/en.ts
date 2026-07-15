@@ -262,7 +262,7 @@ export const en = {
       invalidConfigUnknown: "- The config could not be parsed.",
       manualChoice: "How would you like to connect AI?",
       nextSteps:
-        "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw crestodian` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
+        "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw setup` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
       nextStepsWithoutAi:
         "Workspace: {workspace}\nAdd AI later: re-run `openclaw onboard`\nAfter AI connects, add a channel: `openclaw channels add`\nOpen the dashboard: `openclaw dashboard`",
       nextStepsTitle: "Next steps",
@@ -1000,7 +1000,7 @@ export const en = {
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
       daemonRuntimeNodeHint:
-        "Required for WhatsApp + Telegram. Bun can corrupt memory on reconnect.",
+        "Required because OpenClaw state uses node:sqlite; Bun cannot run the Gateway.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',

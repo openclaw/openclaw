@@ -3,10 +3,7 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resetHeartbeatWakeStateForTests,
-  setHeartbeatWakeHandler,
-} from "../infra/heartbeat-wake.js";
+import { setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -26,9 +23,11 @@ import {
   pruneSessionStateEvents,
   recordSessionCompacted,
   recordSessionGoalChanged,
+  recordSessionHumanDirectMessage,
   recordSessionStateEvent,
   recordSubagentSpawned,
   recordSubagentTerminalState,
+  registerSessionStateWatch,
   sessionStateEventStoreLimits,
   sweepSessionStateWatchNotices,
 } from "./session-state-events.js";
@@ -38,6 +37,7 @@ const watcher = "agent:main:main";
 const nestedWatcher = "agent:main:subagent:parent";
 const child = "agent:main:subagent:child";
 const cfg = {} as OpenClawConfig;
+let disposeHeartbeatWakeHandler: (() => void) | undefined;
 
 function createDatabaseOptions() {
   const stateDir = makeTempDir(tempDirs, "openclaw-session-state-");
@@ -106,9 +106,10 @@ async function createWatcherSession(
 }
 
 afterEach(() => {
+  disposeHeartbeatWakeHandler?.();
+  disposeHeartbeatWakeHandler = undefined;
   closeOpenClawStateDatabaseForTest();
   resetSystemEventsForTest();
-  resetHeartbeatWakeStateForTests();
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });
@@ -192,7 +193,10 @@ describe("session state events", () => {
   it("wakes main watchers but only queues notices for nested watchers", async () => {
     vi.useFakeTimers();
     const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
-    setHeartbeatWakeHandler(wakes);
+    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
+    // Drain notices queued by earlier tests before checking this watcher's routing.
+    await vi.advanceTimersByTimeAsync(300);
+    wakes.mockClear();
     const database = createDatabaseOptions();
     seedChild(database, nestedWatcher);
 
@@ -205,7 +209,13 @@ describe("session state events", () => {
     recordSessionStateEvent(eventInput(), database);
     await vi.advanceTimersByTimeAsync(300);
     expect(wakes).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "session-state", sessionKey: watcher }),
+      // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
+      // dueness and would sit on the notice until the next scheduled tick.
+      expect.objectContaining({
+        source: "session-state",
+        sessionKey: watcher,
+        intent: "immediate",
+      }),
     );
   });
 
@@ -231,6 +241,20 @@ describe("session state events", () => {
 
     expect(getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
     expect(peekSystemEventEntries(watcher)).toEqual([]);
+  });
+
+  it("notifies watchers when an upstream session disappears", () => {
+    const database = createDatabaseOptions();
+    seedChild(database);
+    resetSystemEventsForTest();
+
+    const event = recordSessionStateEvent(
+      eventInput({ kind: "upstream_missing", actorType: "system" }),
+      database,
+    );
+
+    expect(event).toMatchObject({ kind: "upstream_missing", actorType: "system" });
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
   });
 
   it("returns the existing row for a duplicate dedupe key", () => {
@@ -461,6 +485,73 @@ describe("session state events", () => {
     expect(classifySessionStateActor({ internalEvents: [{}] })).toEqual({
       actorType: "system",
     });
+  });
+
+  it("registers explicit watchers who get notices only for later changes", () => {
+    const database = createDatabaseOptions();
+    const preRegistration = recordSessionStateEvent(
+      eventInput({ watcherSessionKeys: [] }),
+      database,
+    )!;
+
+    expect(registerSessionStateWatch({ watcherSessionKey: child, targetSessionKey: child })).toBe(
+      false,
+    );
+    expect(
+      registerSessionStateWatch({ watcherSessionKey: "global", targetSessionKey: child }),
+    ).toBe(false);
+    expect(
+      registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: child }, database),
+    ).toBe(true);
+
+    expect(peekSystemEventEntries(watcher)).toHaveLength(0);
+    expect(readCursor(database)).toMatchObject({ last_seen_sequence: preRegistration.sequence });
+
+    const afterRegistration = recordSessionStateEvent(
+      eventInput({ watcherSessionKeys: [] }),
+      database,
+    )!;
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
+    expect(peekSystemEventEntries(watcher)[0]?.text).toContain(
+      `changesSince ${preRegistration.sequence}`,
+    );
+
+    // Re-registering must keep the pending-notice cursor intact.
+    expect(
+      registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: child }, database),
+    ).toBe(true);
+    expect(readCursor(database)).toEqual({
+      last_seen_sequence: preRegistration.sequence,
+      notified_sequence: afterRegistration.sequence,
+      material_sequence: afterRegistration.sequence,
+    });
+  });
+
+  it("gates unparented human turns on registered watchers", () => {
+    const database = createDatabaseOptions();
+    const entry = { sessionId: "session-child", updatedAt: Date.now() };
+    recordSessionHumanDirectMessage({
+      sessionKey: child,
+      entry,
+      agentId: "main",
+      actor: { actorType: "human" },
+      channel: "webchat",
+    });
+    expect(listSessionStateEventsSince(child, "main", 0, 200, database).events).toHaveLength(0);
+
+    registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: child }, database);
+    recordSessionHumanDirectMessage({
+      sessionKey: child,
+      entry,
+      agentId: "main",
+      actor: { actorType: "human" },
+      channel: "webchat",
+    });
+
+    const events = listSessionStateEventsSince(child, "main", 0, 200, database).events;
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "human_direct_message" });
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
   });
 
   it("projects spawn, terminal, goal, and compaction producer helpers", () => {

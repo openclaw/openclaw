@@ -52,6 +52,21 @@ function throwIfFailed(label: string, result: CommandResult, check: boolean | un
   throw new Error(`${label} failed with exit code ${result.status}`);
 }
 
+const PARALLELS_GUEST_SESSION_UNAVAILABLE = "Unable to open new session in this virtual machine.";
+
+function throwIfGuestSessionUnavailable(
+  label: string,
+  result: CommandResult,
+  check: boolean | undefined,
+): void {
+  if (
+    check !== false &&
+    `${result.stdout}\n${result.stderr}`.includes(PARALLELS_GUEST_SESSION_UNAVAILABLE)
+  ) {
+    throw new Error(`${label} failed: Parallels guest session unavailable`);
+  }
+}
+
 const POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS = 30_000;
 const WINDOWS_BACKGROUND_LOG_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -527,6 +542,7 @@ export class MacosGuest {
     });
     this.phases.append(result.stdout);
     this.phases.append(result.stderr);
+    throwIfGuestSessionUnavailable("macOS guest command", result, options.check);
     throwIfFailed("macOS guest command", result, options.check);
     return result;
   }

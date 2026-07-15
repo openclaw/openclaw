@@ -55,7 +55,7 @@ export type MantisSlackDesktopSmokeOptions = {
 
 export type MantisSlackDesktopHydrateMode = "prehydrated" | "source";
 
-export type MantisSlackDesktopSmokeResult = {
+type MantisSlackDesktopSmokeResult = {
   approvalCheckpointScreenshotPaths?: string[];
   outputDir: string;
   reportPath: string;
@@ -622,6 +622,7 @@ const token = process.env.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN || process.env.OPENCLA
 const response = await fetch("https://slack.com/api/auth.test", {
   method: "POST",
   headers: { authorization: \`Bearer \${token}\` },
+  signal: AbortSignal.timeout(15_000),
 });
 const body = await response.json();
 process.stdout.write(JSON.stringify({ ok: body.ok, team_id: body.team_id, user_id: body.user_id }));
@@ -1581,3 +1582,4 @@ export async function runMantisSlackDesktopSmoke(
 function toErrorObject(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

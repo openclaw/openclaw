@@ -1,6 +1,11 @@
 // Qa Lab tests cover suite runtime agent session plugin behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  loadTranscriptEventsSync,
+  parseSqliteSessionFileMarker,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,14 +14,13 @@ import {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSkillStatus,
-  setSessionStoreLockRetryDelaysMsForTests,
+  seedQaSessionTranscript,
 } from "./suite-runtime-agent-session.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
 
 afterEach(async () => {
-  setSessionStoreLockRetryDelaysMsForTests();
   vi.useRealTimers();
   await cleanup();
 });
@@ -31,7 +35,6 @@ describe("qa suite runtime agent session helpers", () => {
   } as never;
 
   beforeEach(() => {
-    setSessionStoreLockRetryDelaysMsForTests([1, 1, 1]);
     gatewayCall.mockReset();
   });
 
@@ -105,7 +108,7 @@ describe("qa suite runtime agent session helpers", () => {
     vi.useFakeTimers();
     const pending = createSession(env, "Retry Session", "agent:qa:retry");
 
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(pending).resolves.toBe("session-2");
     expect(gatewayCall).toHaveBeenCalledTimes(2);
@@ -127,7 +130,7 @@ describe("qa suite runtime agent session helpers", () => {
     vi.useFakeTimers();
     const pending = createSession(env, "Retry Stale Session", "agent:qa:stale-retry");
 
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(pending).resolves.toBe("session-3");
     expect(gatewayCall).toHaveBeenCalledTimes(2);
@@ -180,6 +183,95 @@ describe("qa suite runtime agent session helpers", () => {
     });
   });
 
+  it("seeds QA session metadata and transcript messages in SQLite", async () => {
+    const tempRoot = await makeTempDir("qa-session-seed-");
+    const sessionId = "seeded-session";
+    const sessionKey = "agent:qa:seeded-session";
+
+    await seedQaSessionTranscript(
+      {
+        gateway: { tempRoot },
+      } as never,
+      {
+        sessionId,
+        sessionKey,
+        updatedAt: 300,
+        label: "Seeded QA transcript",
+        messages: [
+          { role: "user", text: "What is the codename?", timestamp: 100 },
+          { role: "assistant", text: "The codename is ORBIT-10.", timestamp: 200 },
+        ],
+      },
+    );
+
+    const sessionStore = await readRawQaSessionStore({
+      gateway: { tempRoot },
+    } as never);
+    expect(sessionStore).toMatchObject({
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 300,
+        origin: { label: "Seeded QA transcript" },
+      },
+    });
+    expect(parseSqliteSessionFileMarker(sessionStore[sessionKey]?.sessionFile)).toMatchObject({
+      agentId: "qa",
+      sessionId,
+    });
+
+    const transcriptEvents = loadTranscriptEventsSync({
+      agentId: "qa",
+      env: qaSessionEnv(tempRoot),
+      sessionId,
+      sessionKey,
+    });
+    expect(
+      transcriptEvents.flatMap((event) => {
+        const message = (event as { message?: unknown }).message;
+        return message ? [message] : [];
+      }),
+    ).toEqual([
+      {
+        role: "user",
+        timestamp: 100,
+        content: [{ type: "text", text: "What is the codename?" }],
+      },
+      {
+        role: "assistant",
+        timestamp: 200,
+        content: [{ type: "text", text: "The codename is ORBIT-10." }],
+      },
+    ]);
+
+    await expect(
+      fs.stat(path.join(tempRoot, "state", "agents", "qa", "agent", "openclaw-agent.sqlite")),
+    ).resolves.toBeDefined();
+    await expect(
+      fs.stat(path.join(tempRoot, "state", "agents", "qa", "sessions", "sessions.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(path.join(tempRoot, "state", "agents", "qa", "sessions", `${sessionId}.jsonl`)),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects an empty QA session transcript seed", async () => {
+    const tempRoot = await makeTempDir("qa-session-seed-empty-");
+
+    await expect(
+      seedQaSessionTranscript(
+        {
+          gateway: { tempRoot },
+        } as never,
+        {
+          sessionId: "seeded-session",
+          sessionKey: "agent:qa:seeded-session",
+          updatedAt: 100,
+          messages: [],
+        },
+      ),
+    ).rejects.toThrow("requires at least one message");
+  });
+
   it("summarizes a QA session transcript by session key", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-");
     const sessionKey = "agent:qa:webchat";
@@ -197,8 +289,27 @@ describe("qa suite runtime agent session helpers", () => {
             input: { action: "send", text: "hello" },
           },
         ],
+        stopReason: "toolUse",
       },
     });
+
+    await expect(
+      readSessionTranscriptSummary(
+        {
+          gateway: { tempRoot },
+        } as never,
+        sessionKey,
+      ),
+    ).resolves.toEqual({
+      assistantToolCallCounts: { message: 1 },
+      finalText: "",
+      hasDirectReplySelfMessage: false,
+      lastAssistantContentTypes: ["tool_use"],
+      lastAssistantStopReason: "toolUse",
+      lastAssistantToolNames: ["message"],
+      lastMessageRole: "assistant",
+    });
+
     await appendQaTranscriptMessage({
       tempRoot,
       sessionKey,
@@ -214,8 +325,10 @@ describe("qa suite runtime agent session helpers", () => {
         "agent:qa:webchat",
       ),
     ).resolves.toEqual({
+      assistantToolCallCounts: { message: 1 },
       finalText: "Sent.",
       hasDirectReplySelfMessage: true,
+      lastMessageRole: "assistant",
     });
   });
 
@@ -248,7 +361,12 @@ describe("qa suite runtime agent session helpers", () => {
       tempRoot,
       sessionKey,
       sessionId: "session-stream",
-      message: { role: "assistant", content: "Sent." },
+      message: {
+        role: "assistant",
+        content: "Sent.",
+        stopReason: "aborted",
+        errorMessage: "Request was aborted",
+      },
     });
 
     await expect(
@@ -259,8 +377,12 @@ describe("qa suite runtime agent session helpers", () => {
         "agent:qa:stream",
       ),
     ).resolves.toEqual({
+      assistantToolCallCounts: { message: 1 },
       finalText: "Sent.",
       hasDirectReplySelfMessage: true,
+      lastAssistantErrorMessage: "Request was aborted",
+      lastAssistantStopReason: "aborted",
+      lastMessageRole: "assistant",
     });
   });
 

@@ -1,6 +1,5 @@
 // Run meta error tests cover status reporting when cron run metadata fails.
 import { describe, expect, it } from "vitest";
-import { CommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -10,6 +9,12 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+
+function makeCommandLaneTaskTimeoutError(lane: string, timeoutMs: number): Error {
+  const error = new Error(`Command lane "${lane}" task timed out after ${timeoutMs}ms`);
+  error.name = "CommandLaneTaskTimeoutError";
+  return error;
+}
 
 describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   setupRunCronIsolatedAgentTurnSuite();
@@ -91,7 +96,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
 
   it("surfaces cron timeout result when the cron-nested lane watchdog fires", async () => {
     runWithModelFallbackMock.mockRejectedValueOnce(
-      new CommandLaneTaskTimeoutError("cron-nested", 330_000),
+      makeCommandLaneTaskTimeoutError("cron-nested", 330_000),
     );
 
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
@@ -101,7 +106,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.error).not.toContain("CommandLaneTaskTimeoutError");
     expect(result.error).not.toContain("cron-nested");
     // The timeout row must keep the already-resolved run attribution so
-    // cron_run_logs does not show an un-attributed cron timeout (#95873).
+    // Task-run history does not show an un-attributed cron timeout (#95873).
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-5.4");
     expect(result.sessionId).toBe("test-session-id");

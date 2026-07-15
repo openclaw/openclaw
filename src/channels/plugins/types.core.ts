@@ -503,6 +503,12 @@ export type ChannelMessagingAdapter = {
    * targets before plugin-specific normalization.
    */
   targetPrefixes?: readonly string[];
+  /** DM targets rebuilt from session keys require an explicit `user:` kind prefix. */
+  directTargetStyle?: "user-prefixed";
+  /** Equality rule for ids carried by prefixed outbound targets. */
+  targetIdComparison?: "case-sensitive" | "lowercase";
+  /** Bare numeric conversation/topic shorthand is valid for this channel. */
+  numericTopicShorthand?: true;
   normalizeTarget?: (raw: string) => string | undefined;
   defaultMarkdownTableMode?: MarkdownTableMode;
   normalizeExplicitSessionKey?: (params: {
@@ -696,7 +702,7 @@ export type ChannelDirectoryEntry = {
   raw?: unknown;
 };
 
-export type ChannelMessageActionName = ChannelMessageActionNameFromList;
+type ChannelMessageActionName = ChannelMessageActionNameFromList;
 
 /** Execution context passed to channel-owned actions on the shared `message` tool. */
 export type ChannelMessageActionContext = {
@@ -753,6 +759,8 @@ export type ChannelMessagePreparedSendPayloadContext = {
   to: string;
   payload: ReplyPayload;
   replyToId?: string | null;
+  /** Preserve caller intent when plugins translate reply ids into durable payloads. */
+  replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number | null;
 };
 

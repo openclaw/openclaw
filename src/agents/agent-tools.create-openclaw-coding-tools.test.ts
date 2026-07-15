@@ -18,14 +18,16 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
@@ -416,14 +418,14 @@ describe("createOpenClawCodingTools", () => {
 
   it("keeps the injected ring-zero tool under policy and rejects a same-name replacement", () => {
     const injectedTool = {
-      ...stubTool("crestodian"),
-      label: "Crestodian",
+      ...stubTool("openclaw"),
+      label: "OpenClaw",
       description: "trusted ring-zero tool",
       execute: async () => ({ content: [], details: {} }),
     };
     const duplicateTool = {
-      ...stubTool("crestodian"),
-      label: "Crestodian",
+      ...stubTool("openclaw"),
+      label: "OpenClaw",
       description: "duplicate plugin tool",
       execute: async () => ({ content: [], details: {} }),
     };
@@ -431,8 +433,8 @@ describe("createOpenClawCodingTools", () => {
 
     const tools = runWithAgentRingZeroTools([injectedTool], () =>
       createOpenClawCodingTools({
-        config: { tools: { allow: ["read"], deny: ["crestodian"] } },
-        runtimeToolAllowlist: ["crestodian"],
+        config: { tools: { allow: ["read"], deny: ["openclaw"] } },
+        runtimeToolAllowlist: ["openclaw"],
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: false,
@@ -444,7 +446,7 @@ describe("createOpenClawCodingTools", () => {
     );
 
     expect(tools).toHaveLength(1);
-    expect(tools[0]?.name).toBe("crestodian");
+    expect(tools[0]?.name).toBe("openclaw");
     expect(tools[0]?.description).toBe("trusted ring-zero tool");
   });
 
@@ -969,6 +971,42 @@ describe("createOpenClawCodingTools", () => {
       "lobster",
       DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
     ]);
+  });
+
+  it("materializes additive runtime tools while preserving normal deny policy", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const config: OpenClawConfig = {
+      tools: {
+        profile: "coding",
+        deny: ["workboard_block"],
+      },
+    };
+
+    createOpenClawCodingTools({
+      config,
+      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+        config,
+        runtimePluginToolGrant: {
+          pluginId: "workboard",
+          toolNames: ["workboard_heartbeat", "workboard_complete"],
+        },
+      }),
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).not.toContain(
+      "workboard_heartbeat",
+    );
+    expect(
+      isPluginToolAllowed(
+        new Set(latestCreateOpenClawToolsOptions().pluginToolAllowlist),
+        "workboard",
+        "workboard_heartbeat",
+      ),
+    ).toBe(true);
+    expect(latestCreateOpenClawToolsOptions()).not.toHaveProperty("runtimePluginToolGrant");
+    expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolDenylist, ["workboard_block"]);
   });
 
   it("passes explicit denylist entries to OpenClaw tool factory planning", () => {
@@ -1880,3 +1918,4 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

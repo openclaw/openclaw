@@ -17,6 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { detectChangedScope } from "../../../../scripts/ci-changed-scope.mjs";
 import { isDirectRunUrl } from "../../../../scripts/lib/direct-run.mjs";
 import {
@@ -37,6 +38,8 @@ const DEFAULT_EXPECTED_ORIGIN = "openclaw/openclaw";
 const FULL_SHA_RE = /^[0-9a-f]{40}$/u;
 const GATEWAY_READINESS_ATTEMPTS = 3;
 const GATEWAY_READINESS_RETRY_DELAY_MS = 5_000;
+const GATEWAY_STOP_PROOF_ATTEMPTS = 100;
+const GATEWAY_STOP_PROOF_RETRY_DELAY_MS = 100;
 const GATEWAY_SUSPEND_TIMEOUT_MS = 10_000;
 const GENERATED_LAUNCH_AGENT_ENV_WRAPPER = `#!/bin/sh
 set -eu
@@ -785,6 +788,8 @@ function readManagedGatewayLaunchAgent(checkout) {
   const label = plist?.Label;
   const programArguments = plist?.ProgramArguments;
   const environmentVariables = plist?.EnvironmentVariables;
+  const workingDirectory =
+    typeof plist?.WorkingDirectory === "string" ? plist.WorkingDirectory : null;
   const serviceEnvironment = Object.fromEntries(
     Object.entries(environmentVariables ?? {}).filter((entry) => typeof entry[1] === "string"),
   );
@@ -829,6 +834,7 @@ function readManagedGatewayLaunchAgent(checkout) {
     runtime: gatewayCommand.runtime,
     serviceEnvironment,
     stateDir: gatewayCommand.stateDir,
+    workingDirectory,
     wrapperPath: gatewayCommand.wrapperPath,
   };
 }
@@ -875,23 +881,43 @@ export function repointManagedGatewayDeployment(
   };
 }
 
+export function replaceLaunchAgentProgramArgument(programArguments, index, expected, replacement) {
+  if (!Array.isArray(programArguments) || programArguments[index] !== expected) {
+    throw new UpdateInvariantError(
+      "gateway_repoint_failed",
+      "managed Gateway LaunchAgent changed before its entrypoint could be replaced",
+    );
+  }
+  return programArguments.with(index, replacement);
+}
+
 function replaceLaunchAgentEntrypoint(deployment, entrypoint) {
-  const original = readFileSync(deployment.plistPath);
   const temporaryPath = `${deployment.plistPath}.openclaw-live-updater-${randomUUID()}`;
-  writeFileSync(temporaryPath, original, {
+  writeFileSync(temporaryPath, readFileSync(deployment.plistPath), {
     flag: "wx",
     mode: statSync(deployment.plistPath).mode,
   });
   try {
+    const plistResult = spawnSync(
+      "/usr/bin/plutil",
+      ["-convert", "json", "-o", "-", temporaryPath],
+      { encoding: "utf8" },
+    );
+    if (plistResult.status !== 0) {
+      throw new UpdateInvariantError(
+        "gateway_repoint_failed",
+        `could not read the managed Gateway LaunchAgent: ${String(plistResult.stderr).trim()}`,
+      );
+    }
+    const programArguments = replaceLaunchAgentProgramArgument(
+      JSON.parse(plistResult.stdout)?.ProgramArguments,
+      deployment.entrypointIndex,
+      deployment.entrypoint,
+      entrypoint,
+    );
     execFileSync(
       "/usr/bin/plutil",
-      [
-        "-replace",
-        `ProgramArguments.${deployment.entrypointIndex}`,
-        "-string",
-        entrypoint,
-        temporaryPath,
-      ],
+      ["-replace", "ProgramArguments", "-json", JSON.stringify(programArguments), temporaryPath],
       { stdio: ["ignore", "ignore", "pipe"] },
     );
     execFileSync("/usr/bin/plutil", ["-lint", temporaryPath], {
@@ -982,7 +1008,7 @@ export function parseLaunchctlArguments(output) {
     : [];
 }
 
-function runBuiltGatewayCli(checkout, args, deployment) {
+function runBuiltGatewayCli(checkout, args, deployment, options = {}) {
   const observedDeployment = deployment ?? readManagedGatewayLaunchAgent(checkout);
   const sourceEntrypoint = path.join(checkout, "dist/index.js");
   let managedDeployment = observedDeployment;
@@ -1010,6 +1036,7 @@ function runBuiltGatewayCli(checkout, args, deployment) {
     port,
     runtime,
     serviceEnvironment = {},
+    workingDirectory,
     wrapperPath,
   } = managedDeployment;
   const baseEnv = { ...process.env };
@@ -1070,10 +1097,10 @@ function runBuiltGatewayCli(checkout, args, deployment) {
           ]
         : [...invocationPrefix, ...args];
     return execFileSync(executable, callArgs, {
-      cwd: path.dirname(path.dirname(entrypoint)),
+      cwd: workingDirectory ?? path.dirname(path.dirname(entrypoint)),
       encoding: "utf8",
       env,
-      stdio: ["ignore", "pipe", "inherit"],
+      stdio: ["ignore", "pipe", options.stderr ?? "inherit"],
     });
   } finally {
     rmSync(overlayPath, { force: true });
@@ -1140,6 +1167,33 @@ function stopManagedGateway(runCommand, checkout, deployment) {
     "/bin/launchctl",
     ["bootout", `gui/${process.getuid()}/${deployment.label}`],
     checkout,
+  );
+}
+
+function stopManagedGatewayAndProve(runCommand, checkout, deployment, proveGatewayStopped, sleep) {
+  let stopError;
+  try {
+    stopManagedGateway(runCommand, checkout, deployment);
+  } catch (error) {
+    stopError = error;
+  }
+  let proofError;
+  for (let attempt = 0; attempt < GATEWAY_STOP_PROOF_ATTEMPTS; attempt += 1) {
+    try {
+      return proveGatewayStopped(checkout);
+    } catch (error) {
+      proofError = error;
+      if (attempt + 1 < GATEWAY_STOP_PROOF_ATTEMPTS) {
+        sleep(GATEWAY_STOP_PROOF_RETRY_DELAY_MS);
+      }
+    }
+  }
+  if (!stopError) {
+    throw proofError;
+  }
+  throw new AggregateError(
+    [stopError, proofError],
+    "Gateway stop command failed and native stopped proof did not converge",
   );
 }
 
@@ -1467,13 +1521,85 @@ function summarizeGatewayLogEntry(entry) {
   };
 }
 
-export function parseGatewayLogAudit(output, sinceMs) {
-  const entries = output
+function canonicalizeExistingPath(filePath) {
+  try {
+    return realpathSync(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
+function isPathWithinRoot(sourcePath, rootPath) {
+  const normalizedRoot = canonicalizeExistingPath(rootPath);
+  const normalizedSource = canonicalizeExistingPath(sourcePath);
+  return (
+    normalizedSource === normalizedRoot ||
+    normalizedSource.startsWith(`${normalizedRoot}${path.sep}`)
+  );
+}
+
+function isCurrentGatewayLogSource(source, sourceRoot, managedSourceRoots) {
+  if (managedSourceRoots === null) {
+    return true;
+  }
+  if (!sourceRoot) {
+    return true;
+  }
+  if (typeof source !== "string" || source.length === 0) {
+    return true;
+  }
+  let sourcePath;
+  try {
+    sourcePath = source.startsWith("file:") ? fileURLToPath(source) : source;
+  } catch {
+    return true;
+  }
+  const sourceFilePath = sourcePath.replace(/:\d+(?::\d+)?$/u, "");
+  if (sourceFilePath !== sourcePath && !existsSync(sourcePath) && existsSync(sourceFilePath)) {
+    sourcePath = sourceFilePath;
+  }
+  if (
+    isPathWithinRoot(sourcePath, sourceRoot) ||
+    managedSourceRoots.some((rootPath) => isPathWithinRoot(sourcePath, rootPath))
+  ) {
+    return true;
+  }
+  const normalizedRoot = canonicalizeExistingPath(sourceRoot);
+  const normalizedSource = canonicalizeExistingPath(sourcePath);
+  const checkoutRoot = path.dirname(normalizedRoot);
+  let candidate = path.dirname(normalizedSource);
+  while (candidate !== path.dirname(candidate)) {
+    const packagePath = path.join(candidate, "package.json");
+    const gitPath = path.join(candidate, ".git");
+    if (existsSync(packagePath) && existsSync(gitPath)) {
+      try {
+        if (JSON.parse(readFileSync(packagePath, "utf8")).name === "openclaw") {
+          return candidate === checkoutRoot;
+        }
+      } catch {
+        return true;
+      }
+    }
+    candidate = path.dirname(candidate);
+  }
+  return true;
+}
+
+function parseGatewayLogEntries(output, sinceMs) {
+  return output
     .split("\n")
     .filter(Boolean)
     .flatMap((line) => {
       try {
         const raw = JSON.parse(line);
+        let sourceRecord = raw;
+        if (raw.type === "log" && typeof raw.raw === "string") {
+          try {
+            sourceRecord = JSON.parse(raw.raw);
+          } catch {
+            sourceRecord = raw;
+          }
+        }
         const rawLevel = raw.type === "log" ? raw.level : raw._meta?.logLevelName;
         const level = String(rawLevel ?? "").toLowerCase();
         const time = raw.time ?? raw._meta?.date;
@@ -1495,12 +1621,16 @@ export function parseGatewayLogAudit(output, sinceMs) {
             level,
             subsystem,
             message: raw.message ?? raw["1"] ?? raw["0"] ?? "",
+            source: sourceRecord._meta?.path?.fullFilePath ?? null,
           },
         ];
       } catch {
         return [];
       }
     });
+}
+
+function summarizeGatewayLogAudit(entries) {
   const errors = entries
     .filter((entry) => entry.level === "error" || entry.level === "fatal")
     .map(summarizeGatewayLogEntry);
@@ -1512,6 +1642,13 @@ export function parseGatewayLogAudit(output, sinceMs) {
     errors: errors.slice(0, 20),
     warnings: warnings.slice(0, 20),
   };
+}
+
+export function parseGatewayLogAudit(output, sinceMs, sourceRoot = null, managedSourceRoots = []) {
+  const entries = parseGatewayLogEntries(output, sinceMs).filter((entry) =>
+    isCurrentGatewayLogSource(entry.source, sourceRoot, managedSourceRoots),
+  );
+  return summarizeGatewayLogAudit(entries);
 }
 
 function localDateKey(date) {
@@ -1536,7 +1673,47 @@ function readFallbackGatewayLogs(sinceMs) {
   return contents.join("\n");
 }
 
-function defaultAuditGatewayLogs(checkout, sinceMs) {
+function readManagedPluginSourceRoots(checkout, deployment) {
+  let managedDeployment = deployment;
+  try {
+    managedDeployment ??= readManagedGatewayLaunchAgent(checkout);
+  } catch {
+    return null;
+  }
+  try {
+    const output = runBuiltGatewayCli(
+      checkout,
+      ["plugins", "list", "--enabled", "--json"],
+      managedDeployment,
+      { stderr: "pipe" },
+    );
+    return resolveManagedPluginSourceRoots(JSON.parse(output));
+  } catch {
+    return null;
+  }
+}
+
+export function resolveManagedPluginSourceRoots(report) {
+  if (!Array.isArray(report?.plugins)) {
+    return null;
+  }
+  const roots = [];
+  for (const plugin of report.plugins) {
+    if (typeof plugin?.rootDir !== "string" || plugin.rootDir.length === 0) {
+      return null;
+    }
+    roots.push(plugin.rootDir);
+  }
+  return roots;
+}
+
+export function resolveManagedGatewaySourceRoot(checkout, deployment) {
+  return typeof deployment?.entrypoint === "string" && deployment.entrypoint.length > 0
+    ? path.dirname(path.resolve(deployment.entrypoint))
+    : path.join(realpathSync(checkout), "dist");
+}
+
+function defaultAuditGatewayLogs(checkout, sinceMs, deployment = null) {
   let output;
   try {
     output = execFileSync(
@@ -1560,7 +1737,12 @@ function defaultAuditGatewayLogs(checkout, sinceMs) {
       throw error;
     }
   }
-  const audit = parseGatewayLogAudit(output, sinceMs);
+  const audit = parseGatewayLogAudit(
+    output,
+    sinceMs,
+    resolveManagedGatewaySourceRoot(checkout, deployment),
+    readManagedPluginSourceRoots(checkout, deployment),
+  );
   if (audit.errorCount > 0) {
     throw new UpdateInvariantError(
       "gateway_restart_log_errors",
@@ -1585,7 +1767,7 @@ function verifyAndAuditGateway({
   } catch (error) {
     verificationError = error;
   }
-  const audit = auditGatewayLogs(checkout, sinceMs);
+  const audit = auditGatewayLogs(checkout, sinceMs, deployment);
   if (verificationError) {
     throw verificationError;
   }
@@ -1802,10 +1984,15 @@ export function maintainMain(options, dependencies = {}) {
         // Native bootout prevents launchd from retaining old ProgramArguments
         // and avoids source launchers that can rebuild stale dist before stopping.
         try {
-          stopManagedGateway(runCommand, update.checkout, gatewayDeploymentBefore);
-          // Retarget only after launchd has discarded the old ProgramArguments.
-          // Otherwise a later kickstart can revive its cached snapshot command.
-          proveGatewayStopped(update.checkout);
+          // launchctl can return before the job and listener have disappeared.
+          // Retarget only after bounded native proof prevents cached snapshot revival.
+          stopManagedGatewayAndProve(
+            runCommand,
+            update.checkout,
+            gatewayDeploymentBefore,
+            proveGatewayStopped,
+            sleep,
+          );
         } catch (error) {
           try {
             resumeSuspension(

@@ -1,5 +1,6 @@
 // Zalo tests cover monitor.polling.media reply plugin behavior.
 import type { ServerResponse } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -35,8 +36,6 @@ vi.mock("./outbound-media.js", async () => {
     prepareHostedZaloMediaUrl: (...args: unknown[]) => prepareHostedZaloMediaUrlMock(...args),
   };
 });
-
-import { clearHostedZaloMediaForTest } from "./outbound-media.js";
 
 function installZaloRuntimeForTest(): void {
   setZaloRuntime({
@@ -123,7 +122,6 @@ describe("Zalo polling media replies", () => {
 
   beforeEach(async () => {
     await resetLifecycleTestState();
-    await clearHostedZaloMediaForTest();
     resetPluginStateStoreForTests();
     installZaloRuntimeForTest();
     prepareHostedZaloMediaUrlMock.mockReset();
@@ -143,26 +141,31 @@ describe("Zalo polling media replies", () => {
         });
       },
     );
-    setLifecycleRuntimeCore({
-      routing: {
-        resolveAgentRoute:
-          resolveAgentRouteMock as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+    setLifecycleRuntimeCore(
+      {
+        routing: {
+          resolveAgentRoute:
+            resolveAgentRouteMock as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+        },
+        reply: {
+          finalizeInboundContext:
+            finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+          dispatchReplyWithBufferedBlockDispatcher:
+            dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
+        },
+        session: {
+          recordInboundSession:
+            recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
+        },
       },
-      reply: {
-        finalizeInboundContext:
-          finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
-        dispatchReplyWithBufferedBlockDispatcher:
-          dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-      },
-      session: {
-        recordInboundSession:
-          recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
-      },
-    });
+      {
+        openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests<T>("zalo", options),
+      } as PluginRuntime["state"],
+    );
   });
 
   afterAll(async () => {
-    await clearHostedZaloMediaForTest();
     await resetLifecycleTestState();
   });
 
@@ -315,7 +318,7 @@ describe("Zalo polling media replies", () => {
         (route) => route.source === "zalo-hosted-media",
       );
       expect(firstHostedMediaRoutes).toHaveLength(1);
-      const hostedMediaRoute = firstHostedMediaRoutes[0];
+      const hostedMediaRoute = expectDefined(firstHostedMediaRoutes[0], "Zalo hosted-media route");
       expect(hostedMediaRoute?.path).toBe("/hooks/zalo/media");
       expect(hostedMediaRoute?.pluginId).toBe("zalo");
       expect(hostedMediaRoute?.source).toBe("zalo-hosted-media");

@@ -22,10 +22,8 @@ import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plan
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export type ConfigWriteSnapshot = Awaited<
-  ReturnType<typeof readConfigFileSnapshotForWrite>
->["snapshot"];
-export type ConfigWriteOptions = Awaited<
+type ConfigWriteSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>["snapshot"];
+type ConfigWriteOptions = Awaited<
   ReturnType<typeof readConfigFileSnapshotForWrite>
 >["writeOptions"];
 
@@ -240,7 +238,12 @@ export async function commitGatewayConfigWrite(params: {
   nextConfig: OpenClawConfig;
   context?: GatewayRequestContext;
   disconnectSharedAuthClients?: boolean;
-}): Promise<{ path: string; config: OpenClawConfig; queueFollowUp: () => void }> {
+}): Promise<{
+  path: string;
+  config: OpenClawConfig;
+  hash: string | null;
+  queueFollowUp: () => void;
+}> {
   const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
     writeOptions: {
@@ -255,6 +258,9 @@ export async function commitGatewayConfigWrite(params: {
   return {
     path: resolveGatewayConfigPath(params.snapshot),
     config: result.nextConfig,
+    // Persisted hash of the re-read file (resolveConfigSnapshotHash), i.e.
+    // exactly what a follow-up config.get reports — writers ack against it.
+    hash: result.persistedHash,
     queueFollowUp: () => {
       // Defer generation refresh/disconnect until after the RPC response so
       // the writer receives the success payload before its connection is closed.

@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
 import type { RequestFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -12,7 +13,6 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import {
-  resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "../infra/net/proxy/active-proxy-state.js";
@@ -80,7 +80,6 @@ describe("GatewayClient", () => {
 
   beforeEach(() => {
     wsMockState.last = null;
-    resetActiveManagedProxyStateForTests();
     delete process.env["NO_PROXY"];
     delete process.env["no_proxy"];
     delete process.env["HTTP_PROXY"];
@@ -383,6 +382,18 @@ function broadcastChatClassEvents(
 }
 
 describe("gateway broadcaster", () => {
+  it("exposes current buffered bytes for a targeted connection", () => {
+    const socket = makeRecordingSocket();
+    socket.bufferedAmount = 1234;
+    const client = makeOperatorWsClient("c-admin", socket, ["operator.admin"]);
+    const clients = new Set<GatewayWsClient>([client]);
+    const { getBufferedAmount } = createGatewayBroadcaster({ clients });
+
+    expect(getBufferedAmount("c-admin")).toBe(1234);
+    clients.delete(client);
+    expect(getBufferedAmount("c-admin")).toBeUndefined();
+  });
+
   it("keeps workers outside all generic and targeted gateway broadcasts", () => {
     const workerSocket = makeRecordingSocket();
     const worker = makeGatewayWsClient("c-worker", workerSocket, {
@@ -470,6 +481,19 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, ["task"]);
   });
 
+  it("requires operator.read for node presence broadcasts", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
+      makeScopedBroadcastContext();
+
+    broadcast("node.presence", { nodeId: "mac-1", lastActiveAtMs: 100 });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["node.presence"]);
+    expectSentEvents(writeSocket, ["node.presence"]);
+    expectSentEvents(adminSocket, ["node.presence"]);
+  });
+
   it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
       makeScopedBroadcastContext();
@@ -485,6 +509,44 @@ describe("gateway broadcaster", () => {
     const expectedEvents = ["plugin.myplugin.custom", "plugin.otherplugin.state"];
     expectSentEvents(writeSocket, expectedEvents);
     expectSentEvents(adminSocket, expectedEvents);
+  });
+
+  it("honors explicit read scope for plugin lifecycle events", () => {
+    const {
+      pairingSocket,
+      nodeSocket,
+      readSocket,
+      writeSocket,
+      adminSocket,
+      broadcastPluginEvent,
+    } = makeScopedBroadcastContext();
+
+    broadcastPluginEvent("plugin.workboard.changed", { revision: 1 }, "operator.read");
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["plugin.workboard.changed"]);
+    expectSentEvents(writeSocket, ["plugin.workboard.changed"]);
+    expectSentEvents(adminSocket, ["plugin.workboard.changed"]);
+  });
+
+  it("rejects invalid or reserved plugin event broadcasts", () => {
+    const { broadcastPluginEvent } = makeScopedBroadcastContext();
+    const unsafe = broadcastPluginEvent as unknown as (
+      event: string,
+      payload: unknown,
+      scope: string,
+    ) => void;
+
+    expect(() => unsafe("workboard.changed", {}, "operator.read")).toThrow(
+      "invalid plugin gateway event",
+    );
+    expect(() => unsafe("plugin.approval.requested", {}, "operator.read")).toThrow(
+      "invalid plugin gateway event",
+    );
+    expect(() => unsafe("plugin.workboard.changed", {}, "operator.approvals")).toThrow(
+      "invalid plugin gateway event scope",
+    );
   });
 
   it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
@@ -753,7 +815,7 @@ describe("node subscription manager", () => {
 
     expect(sent).toHaveLength(2);
     expect(sent.map((s) => s.nodeId).toSorted()).toEqual(["node-a", "node-b"]);
-    expect(sent[0].event).toBe("chat");
+    expect(expectDefined(sent[0], "sent[0] test invariant").event).toBe("chat");
   });
 
   test("runtime forwards subscribed node payload json without parsing it again", () => {
@@ -887,6 +949,7 @@ describe("resolveNodeCommandAllowlist", () => {
 
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).not.toContain("screen.snapshot");
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("screen.record");
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("health.summary");
     expect(allow.has("screen.snapshot")).toBe(true);
     expect(allow.has("screen.record")).toBe(false);
   });

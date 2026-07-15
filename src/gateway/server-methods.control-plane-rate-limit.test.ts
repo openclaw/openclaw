@@ -7,19 +7,16 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import {
-  testing as controlPlaneRateLimitTesting,
-  resolveControlPlaneRateLimitKey,
-} from "./control-plane-rate-limit.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const noWebchat = () => false;
+let clientSequence = 0;
 
 describe("gateway control-plane write rate limit", () => {
   beforeEach(() => {
-    controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
+    clientSequence += 1;
     resetGatewayWorkAdmission();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-19T00:00:00.000Z"));
@@ -28,7 +25,6 @@ describe("gateway control-plane write rate limit", () => {
   afterEach(() => {
     vi.useRealTimers();
     resetGatewayWorkAdmission();
-    controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
   });
 
   function buildContext(logWarn = vi.fn()) {
@@ -59,8 +55,8 @@ describe("gateway control-plane write rate limit", () => {
   function buildClient() {
     return {
       connect: buildConnect(),
-      connId: "conn-1",
-      clientIp: "10.0.0.5",
+      connId: `conn-${clientSequence}`,
+      clientIp: `10.0.0.${clientSequence}`,
     } as Parameters<typeof handleGatewayRequest>[0]["client"];
   }
 
@@ -125,7 +121,7 @@ describe("gateway control-plane write rate limit", () => {
     expect(logWarn).toHaveBeenCalledTimes(1);
   });
 
-  it("allows the Crestodian inference ladder to probe more than 3 candidates", async () => {
+  it("allows the OpenClaw inference ladder to probe more than 3 candidates", async () => {
     const handlerCalls = vi.fn();
     const handler: GatewayRequestHandler = (opts) => {
       handlerCalls(opts);
@@ -138,7 +134,7 @@ describe("gateway control-plane write rate limit", () => {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       responses.push(
         await runRequest({
-          method: "crestodian.setup.activate",
+          method: "openclaw.setup.activate",
           context,
           client,
           handler,
@@ -261,21 +257,4 @@ describe("gateway control-plane write rate limit", () => {
       expect(isRetryableGatewayStartupUnavailableError(error)).toBe(true);
     },
   );
-
-  it("uses connId fallback when both device and client IP are unknown", () => {
-    const key = resolveControlPlaneRateLimitKey({
-      connect: buildConnect(),
-      connId: "conn-fallback",
-    });
-    expect(key).toBe("unknown-device|unknown-ip|conn=conn-fallback");
-  });
-
-  it("keeps device/IP-based key when identity is present", () => {
-    const key = resolveControlPlaneRateLimitKey({
-      connect: buildConnect(),
-      connId: "conn-fallback",
-      clientIp: "10.0.0.10",
-    });
-    expect(key).toBe("unknown-device|10.0.0.10");
-  });
 });

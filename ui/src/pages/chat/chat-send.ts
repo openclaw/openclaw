@@ -33,6 +33,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { buildChatApiAttachments } from "./attachment-api.ts";
 import {
   discardChatAttachmentDataUrls,
   getChatAttachmentDataUrl,
@@ -83,19 +84,15 @@ import {
 } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
-  handleChatDraftChange,
-  handleChatInputHistoryKey,
-  navigateChatInputHistory,
   recordNonTranscriptInputHistory,
   resetChatInputHistoryNavigation,
-  type ChatInputHistoryKeyInput,
-  type ChatInputHistoryKeyResult,
   type ChatInputHistoryState,
 } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
   handleAbortChat,
+  hasAbortableSessionRun,
   isChatBusy,
   isChatStopCommand,
   reconcileChatRunLifecycle,
@@ -205,44 +202,9 @@ type ChatSendOptions = {
   onSideQuestionSendRejected?: () => void;
 };
 
-function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
-  if (!match) {
-    return null;
-  }
-  return { mimeType: match[1], content: match[2] };
-}
-
-function buildApiAttachments(attachments?: ChatAttachment[]) {
-  const hasAttachments = attachments && attachments.length > 0;
-  return hasAttachments
-    ? attachments
-        .map((att) => {
-          const dataUrl = getChatAttachmentDataUrl(att);
-          const parsed = dataUrl ? dataUrlToBase64(dataUrl) : null;
-          if (!parsed) {
-            return null;
-          }
-          return {
-            type: parsed.mimeType.startsWith("image/") ? "image" : "file",
-            mimeType: parsed.mimeType,
-            fileName: att.fileName,
-            content: parsed.content,
-          };
-        })
-        .filter((a): a is NonNullable<typeof a> => a !== null)
-    : undefined;
-}
-
 function normalizeAckTimingValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
-
-export type {
-  ChatSendAck,
-  ChatSendAckServerTiming,
-  ChatSendAckStatus,
-} from "./chat-send-contract.ts";
 
 function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTiming | undefined {
   if (!value || typeof value !== "object") {
@@ -279,7 +241,7 @@ function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSend
   };
 }
 
-export async function requestChatSend(
+async function requestChatSend(
   state: ChatState,
   params: {
     message: string;
@@ -303,7 +265,7 @@ export async function requestChatSend(
     message: params.message,
     deliver: false,
     idempotencyKey: params.runId,
-    attachments: buildApiAttachments(params.attachments),
+    attachments: buildChatApiAttachments(params.attachments),
   });
   if (controlUiReconnectResume) {
     state.reconnectResumeSessionId = null;
@@ -339,7 +301,7 @@ function resolveChatSendRouting(
   };
 }
 
-export async function requestSkillWorkshopRevisionChatSend(
+async function requestSkillWorkshopRevisionChatSend(
   state: ChatState,
   params: {
     proposalId: string;
@@ -410,7 +372,7 @@ async function sendChatMessageWithGeneratedRunId(
   }
 }
 
-export async function sendDetachedChatMessage(
+async function sendDetachedChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
@@ -418,22 +380,6 @@ export async function sendDetachedChatMessage(
 ): Promise<ChatSendAck | null> {
   return sendChatMessageWithGeneratedRunId(state, message, attachments, () => true, runId);
 }
-
-export async function sendSteerChatMessage(
-  state: ChatState,
-  message: string,
-  attachments?: ChatAttachment[],
-): Promise<ChatSendAck | null> {
-  return sendChatMessageWithGeneratedRunId(state, message, attachments);
-}
-
-export {
-  handleChatDraftChange,
-  handleChatInputHistoryKey,
-  navigateChatInputHistory,
-  resetChatInputHistoryNavigation,
-};
-export type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult };
 
 function isChatResetCommand(text: string) {
   const parsed = parseSlashCommand(text);
@@ -1277,11 +1223,13 @@ function clearSubmittedComposerState(
 } {
   const attachmentsUnchanged =
     host.chatAttachments.length === submittedAttachments.length &&
-    host.chatAttachments.every(
-      (attachment, index) =>
-        attachmentSubmitSignature(attachment) ===
-        attachmentSubmitSignature(submittedAttachments[index]),
-    );
+    host.chatAttachments.every((attachment, index) => {
+      const submitted = submittedAttachments[index];
+      return (
+        submitted !== undefined &&
+        attachmentSubmitSignature(attachment) === attachmentSubmitSignature(submitted)
+      );
+    });
   const clearedDraft = host.chatMessage === submittedDraft && attachmentsUnchanged;
   const clearedAttachments = clearedDraft;
   if (clearedDraft) {
@@ -1346,7 +1294,7 @@ async function sendDetachedCommandMessage(
 }
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string) {
-  if (!host.connected || !host.chatRunId) {
+  if (!host.connected || !hasAbortableSessionRun(host)) {
     return;
   }
   const activeRunId = host.chatRunId;
@@ -1385,7 +1333,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     createdAt: item.createdAt,
     kind: "steered",
     ...(item.attachments?.length ? { attachments: item.attachments } : {}),
-    pendingRunId: activeRunId,
+    ...(activeRunId ? { pendingRunId: activeRunId } : { sendState: "steering" as const }),
   };
   const hasTransientProjection = setTransientQueuedMessageProjection(
     host,
@@ -1413,17 +1361,19 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     hasAttachments ? attachments : undefined,
     () => visibleSessionMatches(host, itemSessionKey, item.agentId),
   );
-  const pendingStillVisible = host.chatQueue.some(
-    (entry) => entry.id === id && entry.pendingRunId === activeRunId,
-  );
-  replacePendingQueuedMessageProjection(
-    host,
-    itemSessionKey,
-    id,
-    activeRunId,
-    claimed,
-    item.agentId,
-  );
+  const pendingStillVisible = activeRunId
+    ? host.chatQueue.some((entry) => entry.id === id && entry.pendingRunId === activeRunId)
+    : false;
+  if (activeRunId) {
+    replacePendingQueuedMessageProjection(
+      host,
+      itemSessionKey,
+      id,
+      activeRunId,
+      claimed,
+      item.agentId,
+    );
+  }
   clearTransientQueuedMessageProjection(host, itemSessionKey, id, item.agentId);
   const itemStillVisible = visibleSessionMatches(host, itemSessionKey, item.agentId);
   if (!ack) {
@@ -2163,7 +2113,12 @@ export async function handleSendChat(
   }
 
   if (shouldInterpretChatCommands) {
-    if (isChatStopCommand(message)) {
+    // Natural words such as "wait" and "exit" are stop aliases only while a
+    // run exists. Keep the explicit /stop command available at any time.
+    const shouldAbort =
+      isChatStopCommand(message) &&
+      (message.trim().startsWith("/") || hasAbortableSessionRun(host));
+    if (shouldAbort) {
       if (messageOverride == null) {
         recordNonTranscriptInputHistory(host, message);
       }
@@ -2524,3 +2479,4 @@ function escapeMarkdownInline(value: string): string {
 }
 
 export const flushChatQueueForEvent = flushChatQueue;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -131,7 +131,7 @@ function createLocalGatewayRequestContext(
     unsubscribeSessionEvents: (connId) => {
       sessionEvents.delete(connId);
     },
-    subscribeSessionMessageEvents: () => {},
+    subscribeSessionMessageEvents: () => undefined,
     unsubscribeSessionMessageEvents: () => {},
     unsubscribeAllSessionEvents: (connId) => {
       sessionEvents.delete(connId);
@@ -140,7 +140,7 @@ function createLocalGatewayRequestContext(
     registerToolEventRecipient: () => {},
     dedupe: new Map(),
     wizardSessions: new Map(),
-    crestodianSessions: new Map(),
+    systemAgentSessions: new Map(),
     findRunningWizard: () => null,
     purgeWizardSession: () => {},
     getRuntimeSnapshot: () => ({}) as ChannelRuntimeSnapshot,
@@ -153,6 +153,11 @@ function createLocalGatewayRequestContext(
     markChannelLoggedOut: () => {},
     wizardRunner: async () => {
       throw new Error("Onboarding wizard is unavailable in local embedded agent gateway context.");
+    },
+    channelWizardRunner: async () => {
+      throw new Error(
+        "Channel setup wizard is unavailable in local embedded agent gateway context.",
+      );
     },
     broadcastVoiceWakeChanged: () => {},
     broadcastVoiceWakeRoutingChanged: () => {},

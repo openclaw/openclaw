@@ -9,11 +9,12 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { setMaxPluginStateEntriesPerPluginForTests } from "../plugin-state/plugin-state-store.sqlite.js";
 import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import {
   readPersistedInstalledPluginIndex,
@@ -56,46 +57,6 @@ vi.mock("../channels/plugins/bundled.js", async () => {
     }
   }
 
-  function resolveTelegramAccountId(cfg: OpenClawConfig): string {
-    const defaultAgentId = cfg.agents?.list?.find((agent) => agent.default)?.id ?? "main";
-    const boundAccountId = cfg.bindings?.find(
-      (binding) =>
-        binding.agentId === defaultAgentId &&
-        binding.match?.channel === "telegram" &&
-        typeof binding.match.accountId === "string",
-    )?.match.accountId;
-    return boundAccountId ?? cfg.channels?.telegram?.defaultAccount ?? "default";
-  }
-
-  function detectTelegramAllowFromMigration(params: {
-    cfg: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-  }) {
-    const root = params.env.OPENCLAW_STATE_DIR;
-    if (!root) {
-      return [];
-    }
-    const legacyPath = path.join(root, "credentials", "telegram-allowFrom.json");
-    if (!fileExists(legacyPath)) {
-      return [];
-    }
-    const targetPath = path.join(
-      root,
-      "credentials",
-      `telegram-${resolveTelegramAccountId(params.cfg)}-allowFrom.json`,
-    );
-    return fileExists(targetPath)
-      ? []
-      : [
-          {
-            kind: "copy" as const,
-            label: "Telegram pairing allowFrom",
-            sourcePath: legacyPath,
-            targetPath,
-          },
-        ];
-  }
-
   function detectWhatsAppLegacyStateMigrations(params: { oauthDir: string }) {
     let entries: fs.Dirent[];
     try {
@@ -133,8 +94,6 @@ vi.mock("../channels/plugins/bundled.js", async () => {
     ]),
     listBundledChannelLegacyStateMigrationDetectors: vi.fn(() => [
       ({ oauthDir }: { oauthDir: string }) => detectWhatsAppLegacyStateMigrations({ oauthDir }),
-      ({ cfg, env }: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
-        detectTelegramAllowFromMigration({ cfg, env }),
       () => mockedChannelMigrationPlans.plans,
     ]),
   };
@@ -207,12 +166,18 @@ function writeLegacyTelegramAllowFromStore(oauthDir: string) {
 async function runTelegramAllowFromMigration(params: { root: string; cfg: OpenClawConfig }) {
   const oauthDir = ensureCredentialsDir(params.root);
   writeLegacyTelegramAllowFromStore(oauthDir);
+  const env = { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv;
   const detected = await detectLegacyStateMigrations({
     cfg: params.cfg,
-    env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
+    env,
   });
-  const result = await runLegacyStateMigrations({ detected, now: () => 123 });
-  return { oauthDir, detected, result };
+  const result = await runLegacyStateMigrations({
+    detected,
+    config: params.cfg,
+    env,
+    now: () => 123,
+  });
+  return { oauthDir, env, detected, result };
 }
 
 afterEach(async () => {
@@ -1366,21 +1331,42 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(path.join(oauthDir, "creds.json"))).toBe(false);
   });
 
-  it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
-    const { root, cfg } = await makeRootWithEmptyCfg();
-    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.channelPlans.hasLegacy).toBe(true);
-    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
-      "telegram-default-allowFrom.json",
-    ]);
-    expect(result.warnings).toStrictEqual([]);
+  it("uses the channel-resolved default account for unscoped pairing allowFrom", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {},
+            alerts: {},
+          },
+        },
+      },
+    };
+    const oauthDir = ensureCredentialsDir(root);
+    const sourcePath = path.join(oauthDir, "whatsapp-allowFrom.json");
+    fs.writeFileSync(sourcePath, '["123456"]\n', "utf8");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
 
-    const target = path.join(oauthDir, "telegram-default-allowFrom.json");
-    expect(fs.existsSync(target)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({
-      version: 1,
-      allowFrom: ["123456"],
+    const detected = await detectLegacyStateMigrations({ cfg, env });
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env, now: () => 123 });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(readChannelPairingStateSnapshot("whatsapp", env).allowFrom).toEqual({
+      work: ["123456"],
     });
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
+  it("migrates legacy Telegram pairing allowFrom store to SQLite default account rows", async () => {
+    const { root, cfg } = await makeRootWithEmptyCfg();
+    const { oauthDir, env, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPairing.hasLegacy).toBe(true);
+    expect(result.warnings).toStrictEqual([]);
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
+      default: ["123456"],
+    });
+    expect(fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json"))).toBe(false);
   });
 
   it("does not fan out legacy Telegram pairing allowFrom store to configured named accounts", async () => {
@@ -1396,23 +1382,13 @@ describe("doctor legacy state migrations", () => {
         },
       },
     };
-    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.channelPlans.hasLegacy).toBe(true);
-    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
-      "telegram-bot2-allowFrom.json",
-    ]);
+    const { oauthDir, env, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPairing.hasLegacy).toBe(true);
     expect(result.warnings).toStrictEqual([]);
-
-    const bot1Target = path.join(oauthDir, "telegram-bot1-allowFrom.json");
-    const bot2Target = path.join(oauthDir, "telegram-bot2-allowFrom.json");
-    const defaultTarget = path.join(oauthDir, "telegram-default-allowFrom.json");
-    expect(fs.existsSync(bot1Target)).toBe(false);
-    expect(fs.existsSync(bot2Target)).toBe(true);
-    expect(fs.existsSync(defaultTarget)).toBe(false);
-    expect(JSON.parse(fs.readFileSync(bot2Target, "utf-8"))).toEqual({
-      version: 1,
-      allowFrom: ["123456"],
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
+      bot2: ["123456"],
     });
+    expect(fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json"))).toBe(false);
   });
 
   it("migrates legacy Telegram pairing allowFrom store to the default agent bound account", async () => {
@@ -1432,23 +1408,13 @@ describe("doctor legacy state migrations", () => {
       },
     };
 
-    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.channelPlans.hasLegacy).toBe(true);
-    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
-      "telegram-alerts-allowFrom.json",
-    ]);
+    const { oauthDir, env, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPairing.hasLegacy).toBe(true);
     expect(result.warnings).toStrictEqual([]);
-
-    const alertsTarget = path.join(oauthDir, "telegram-alerts-allowFrom.json");
-    const backupTarget = path.join(oauthDir, "telegram-backup-allowFrom.json");
-    const defaultTarget = path.join(oauthDir, "telegram-default-allowFrom.json");
-    expect(fs.existsSync(alertsTarget)).toBe(true);
-    expect(fs.existsSync(backupTarget)).toBe(false);
-    expect(fs.existsSync(defaultTarget)).toBe(false);
-    expect(JSON.parse(fs.readFileSync(alertsTarget, "utf-8"))).toEqual({
-      version: 1,
-      allowFrom: ["123456"],
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
+      alerts: ["123456"],
     });
+    expect(fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json"))).toBe(false);
   });
 
   it("no-ops when nothing detected", async () => {
@@ -2378,7 +2344,7 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
-  it("keeps exact legacy npm install record when SQLite lacks authoritative package identity", async () => {
+  it("archives conflicting legacy npm metadata when SQLite has the plugin install record", async () => {
     const root = await makeTempRoot();
     await writeExistingPluginInstallIndex(root, {
       demo: {
@@ -2397,11 +2363,159 @@ describe("doctor legacy state migrations", () => {
 
     const result = await runLegacyStateMigrationsForRoot(root);
 
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toStrictEqual([
+      "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+
+    const retry = await runLegacyStateMigrationsForRoot(root);
+    expect(retry.warnings).toStrictEqual([]);
+    expect(retry.notices).toBeUndefined();
+    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
+      installRecords: {
+        demo: { source: "npm", spec: "demo@latest", version: "1.0.0" },
+      },
+    });
+  });
+
+  it("converges the reported plugin, update-check, and config-health conflicts", async () => {
+    const root = await makeTempRoot();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const configPath = path.join(root, "openclaw.json");
+    const pluginSourcePath = writeLegacyPluginInstallIndex(root, {
+      demo: {
+        source: "npm",
+        spec: "demo@beta",
+        version: "2.0.0-beta.1",
+      },
+    });
+    const updateCheckSourcePath = path.join(root, "update-check.json");
+    const configHealthSourcePath = path.join(root, "logs", "config-health.json");
+    await writeExistingPluginInstallIndex(root, {
+      demo: {
+        source: "npm",
+        spec: "demo@1.0.0",
+        version: "1.0.0",
+      },
+    });
+    fs.writeFileSync(
+      updateCheckSourcePath,
+      JSON.stringify({
+        lastCheckedAt: "2026-07-01T00:00:00.000Z",
+        lastAvailableVersion: "2026.7.1",
+      }),
+      "utf8",
+    );
+    fs.mkdirSync(path.dirname(configHealthSourcePath), { recursive: true });
+    fs.writeFileSync(
+      configHealthSourcePath,
+      JSON.stringify({
+        entries: {
+          [configPath]: {
+            lastKnownGood: { hash: "legacy" },
+            lastPromotedGood: { hash: "legacy" },
+            lastObservedSuspiciousSignature: "legacy:size-drop",
+          },
+        },
+      }),
+      "utf8",
+    );
+    const { db } = openOpenClawStateDatabase({ env });
+    db.prepare(
+      `INSERT INTO update_check_state (
+        state_key, last_checked_at, last_available_version, updated_at_ms
+      ) VALUES (?, ?, ?, ?)`,
+    ).run("default", "2026-07-14T00:00:00.000Z", "2026.7.2", 1);
+    db.prepare(
+      `INSERT INTO config_health_entries (
+        config_path, last_known_good_json, last_promoted_good_json,
+        last_observed_suspicious_signature, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      configPath,
+      JSON.stringify({ hash: "sqlite-known" }),
+      JSON.stringify({ hash: "sqlite-promoted" }),
+      "sqlite:size-drop",
+      1,
+    );
+
+    const result = await runLegacyStateMigrationsForRoot(root);
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toEqual(
+      expect.arrayContaining([
+        "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
+        expect.stringContaining(
+          "Kept shared SQLite update-check state because legacy cache differs",
+        ),
+      ]),
+    );
+    for (const sourcePath of [pluginSourcePath, updateCheckSourcePath, configHealthSourcePath]) {
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    }
+    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
+      installRecords: {
+        demo: { source: "npm", spec: "demo@1.0.0", version: "1.0.0" },
+      },
+    });
+    expect(
+      db
+        .prepare(
+          "SELECT last_available_version FROM update_check_state WHERE state_key = 'default'",
+        )
+        .get(),
+    ).toMatchObject({ last_available_version: "2026.7.2" });
+    expect(
+      db
+        .prepare("SELECT last_known_good_json FROM config_health_entries WHERE config_path = ?")
+        .get(configPath),
+    ).toMatchObject({ last_known_good_json: JSON.stringify({ hash: "sqlite-known" }) });
+
+    const retry = await runLegacyStateMigrationsForRoot(root);
+    expect(retry).toMatchObject({ changes: [], warnings: [] });
+    expect(retry.notices).toBeUndefined();
+  });
+
+  it("keeps plugin install archive failures blocking after choosing SQLite metadata", async () => {
+    const root = await makeTempRoot();
+    await writeExistingPluginInstallIndex(root, {
+      demo: {
+        source: "npm",
+        spec: "demo@latest",
+        version: "1.0.0",
+      },
+    });
+    const sourcePath = writeLegacyPluginInstallIndex(root, {
+      demo: {
+        source: "npm",
+        spec: "demo@1.0.0",
+        version: "1.0.0",
+      },
+    });
+    const rename = failRenameOnce(sourcePath);
+
+    const result = await runLegacyStateMigrationsForRoot(root);
+    rename.mockRestore();
+
     expect(result.warnings).toStrictEqual([
-      "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: demo",
+      `Failed archiving plugin install index ${sourcePath}: Error: forced archive failure`,
+    ]);
+    expect(result.notices).toStrictEqual([
+      "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
     ]);
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+
+    const retry = await runLegacyStateMigrationsForRoot(root);
+    expect(retry.warnings).toStrictEqual([]);
+    expect(retry.notices).toStrictEqual([
+      "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
   });
 
   for (const fixture of [
@@ -2507,18 +2621,19 @@ describe("doctor legacy state migrations", () => {
     current: InstalledPluginInstallRecordInfo;
     legacy: InstalledPluginInstallRecordInfo;
   }>) {
-    it(`keeps legacy plugin install index when same-version npm records ${fixture.label}`, async () => {
+    it(`keeps SQLite plugin metadata when legacy npm records ${fixture.label}`, async () => {
       const root = await makeTempRoot();
       await writeExistingPluginInstallIndex(root, { demo: fixture.current });
       const sourcePath = writeLegacyPluginInstallIndex(root, { demo: fixture.legacy });
 
       const result = await runLegacyStateMigrationsForRoot(root);
 
-      expect(result.warnings).toStrictEqual([
-        "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: demo",
+      expect(result.warnings).toStrictEqual([]);
+      expect(result.notices).toStrictEqual([
+        "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
       ]);
-      expect(fs.existsSync(sourcePath)).toBe(true);
-      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
     });
   }
 
@@ -3670,3 +3785,4 @@ describe("doctor legacy state migrations", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

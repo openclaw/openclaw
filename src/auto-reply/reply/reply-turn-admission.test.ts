@@ -458,7 +458,7 @@ describe("reply turn admission", () => {
       sessionId: "new-session",
       kind: "visible",
       resetTriggered: false,
-      onFollowupAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
+      onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
     });
 
     let settled = false;
@@ -469,11 +469,11 @@ describe("reply turn admission", () => {
       setImmediate(resolve);
     });
     expect(settled).toBe(false);
-    expect(waitChanges).toEqual([]);
+    expect(waitChanges).toEqual([true]);
 
     active.complete();
     const result = await admitted;
-    expect(waitChanges).toEqual([]);
+    expect(waitChanges).toEqual([true, false]);
 
     expect(result.status).toBe("owned");
     if (result.status === "owned") {
@@ -566,7 +566,7 @@ describe("reply turn admission", () => {
       sessionId: "queued-session",
       kind: "queued_followup",
       resetTriggered: false,
-      onFollowupAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
+      onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
     });
     let settled = false;
     void admitted.then(() => {
@@ -978,6 +978,7 @@ describe("reply turn admission", () => {
       active.setPhase("running");
       active.recordActivity();
       const abortController = new AbortController();
+      const waitChanges: boolean[] = [];
       let settled = false;
       const result = admitReplyTurn({
         sessionKey: "agent:main:telegram:topic:fresh-visible",
@@ -985,6 +986,7 @@ describe("reply turn admission", () => {
         kind: "visible",
         resetTriggered: false,
         upstreamAbortSignal: abortController.signal,
+        onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
       }).then((admission) => {
         settled = true;
         return admission;
@@ -992,6 +994,7 @@ describe("reply turn admission", () => {
 
       await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
       expect(settled).toBe(false);
+      expect(waitChanges).toEqual([true]);
       expect(replyRunRegistry.get("agent:main:telegram:topic:fresh-visible")).toBe(active);
 
       abortController.abort();
@@ -1000,6 +1003,7 @@ describe("reply turn admission", () => {
         reason: "aborted",
         activeOperation: active,
       });
+      expect(waitChanges).toEqual([true, false]);
     } finally {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
@@ -1170,4 +1174,112 @@ describe("reply turn admission", () => {
     });
     active.complete();
   });
+
+  it("adopts a source-keyed command reservation into the target run slot", async () => {
+    const sourceSessionKey = "agent:main:telegram:slash:adopt-user";
+    const targetSessionKey = "agent:main:telegram:group:adopt-target";
+    const targetSessionId = "target-session-adopt";
+    const storePath = createSessionStore({
+      [targetSessionKey]: { sessionId: targetSessionId, updatedAt: Date.now() },
+    });
+    const reservation = createReplyOperation({
+      sessionKey: sourceSessionKey,
+      sessionId: "source-reservation-adopt",
+      resetTriggered: false,
+    });
+
+    const admission = await admitReplyTurn({
+      sessionKey: targetSessionKey,
+      sessionId: reservation.sessionId,
+      expectedSessionId: targetSessionId,
+      storePath,
+      kind: "visible",
+      resetTriggered: false,
+      waitForActive: false,
+      adoptOperation: reservation,
+    });
+
+    expect(admission.status).toBe("owned");
+    if (admission.status !== "owned") {
+      return;
+    }
+    expect(admission.operation).toBe(reservation);
+    expect(reservation.key).toBe(targetSessionKey);
+    expect(replyRunRegistry.get(sourceSessionKey)).toBeUndefined();
+    expect(replyRunRegistry.get(targetSessionKey)).toBe(reservation);
+
+    // Target lifecycle interrupts must reach the adopted operation: reset or
+    // delete on the target session interlocks with the continuation run.
+    reservation.setPhase("running");
+    let mutationRan = false;
+    const mutation = runExclusiveSessionLifecycleMutation({
+      scope: storePath,
+      identities: [targetSessionKey, targetSessionId],
+      prepare: async () => {
+        await interruptSessionWorkAdmissions({
+          scope: storePath,
+          identities: [targetSessionKey, targetSessionId],
+        });
+      },
+      run: async () => {
+        mutationRan = true;
+      },
+    });
+    await vi.waitFor(() => {
+      expect(reservation.abortSignal.aborted).toBe(true);
+    });
+    expect(reservation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
+    expect(mutationRan).toBe(false);
+
+    reservation.complete();
+    await mutation;
+    expect(mutationRan).toBe(true);
+  });
+
+  it("skips adoption without waiting when the target run slot is owned", async () => {
+    const sourceSessionKey = "agent:main:telegram:slash:busy-user";
+    const targetSessionKey = "agent:main:telegram:group:busy-target";
+    const targetSessionId = "target-session-busy";
+    const storePath = createSessionStore({
+      [targetSessionKey]: { sessionId: targetSessionId, updatedAt: Date.now() },
+    });
+    const blocker = createReplyOperation({
+      sessionKey: targetSessionKey,
+      sessionId: targetSessionId,
+      resetTriggered: false,
+    });
+    blocker.setPhase("running");
+    const reservation = createReplyOperation({
+      sessionKey: sourceSessionKey,
+      sessionId: "source-reservation-busy",
+      resetTriggered: false,
+    });
+
+    const admission = await admitReplyTurn({
+      sessionKey: targetSessionKey,
+      sessionId: reservation.sessionId,
+      expectedSessionId: targetSessionId,
+      storePath,
+      kind: "visible",
+      resetTriggered: false,
+      waitForActive: false,
+      adoptOperation: reservation,
+    });
+
+    expect(admission).toMatchObject({
+      status: "skipped",
+      reason: "active-run",
+      activeOperation: blocker,
+    });
+    // The reservation stays source-keyed so the command turn's own delivery
+    // lifecycle is unaffected; queue policy handles the busy target.
+    expect(reservation.key).toBe(sourceSessionKey);
+    expect(replyRunRegistry.get(sourceSessionKey)).toBe(reservation);
+    expect(replyRunRegistry.get(targetSessionKey)).toBe(blocker);
+    expect(reservation.result).toBeNull();
+
+    blocker.complete();
+    reservation.complete();
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

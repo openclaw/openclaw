@@ -47,7 +47,7 @@ const DISCORD_PRECONNECT_ERROR_CODES = new Set([
 ]);
 const log = createSubsystemLogger("discord/retry");
 
-export type DiscordRetrySafety = "idempotent" | "nonce-protected-create" | "non-idempotent-create";
+type DiscordRetrySafety = "idempotent" | "nonce-protected-create" | "non-idempotent-create";
 
 export type DiscordRetryRunner = <T>(
   fn: () => Promise<T>,
@@ -68,7 +68,7 @@ function readDiscordErrorStatus(err: unknown): number | undefined {
   return parseStrictNonNegativeInteger(raw);
 }
 
-export function isRetryableDiscordTransientError(err: unknown): boolean {
+function isRetryableDiscordTransientError(err: unknown): boolean {
   if (err instanceof RateLimitError) {
     return true;
   }
@@ -97,7 +97,7 @@ export function isRetryableDiscordTransientError(err: unknown): boolean {
   return false;
 }
 
-export function isRetryableDiscordPreConnectError(err: unknown): boolean {
+function isRetryableDiscordPreConnectError(err: unknown): boolean {
   if (err instanceof RateLimitError) {
     return true;
   }

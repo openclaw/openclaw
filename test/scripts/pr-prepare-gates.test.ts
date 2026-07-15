@@ -47,7 +47,12 @@ function sanitizedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 
 function runGatesBash(
   script: string,
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; sourcePrepareCore?: boolean } = {},
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    sourcePrepareCore?: boolean;
+    sourcePush?: boolean;
+  } = {},
 ) {
   return spawnSync(
     "bash",
@@ -58,6 +63,7 @@ function runGatesBash(
         `script_parent_dir='${repoRoot}/scripts'`,
         `source '${repoRoot}/scripts/pr-lib/common.sh'`,
         `source '${repoRoot}/scripts/pr-lib/gates.sh'`,
+        ...(options.sourcePush ? [`source '${repoRoot}/scripts/pr-lib/push.sh'`] : []),
         ...(options.sourcePrepareCore
           ? [`source '${repoRoot}/scripts/pr-lib/prepare-core.sh'`]
           : []),
@@ -88,17 +94,9 @@ function makeRetryRepo(): { repoDir: string; stubBin: string; headSha: string } 
   mkdirSync(repoDir);
   for (const args of [
     ["init", "-q"],
-    [
-      "-c",
-      "user.name=t",
-      "-c",
-      "user.email=t@example.com",
-      "commit",
-      "-q",
-      "--allow-empty",
-      "-m",
-      "retry head",
-    ],
+    ["config", "user.name", "t"],
+    ["config", "user.email", "t@example.com"],
+    ["commit", "-q", "--allow-empty", "-m", "retry head"],
   ]) {
     const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
     expect(result.status).toBe(0);
@@ -164,6 +162,7 @@ function makeSyncRepo(options: { needsRebase: boolean }): string {
   git("checkout", "-q", "prep");
 
   mkdirSync(join(repoDir, ".local"));
+  writeFileSync(join(repoDir, ".local", "hosted-sha"), `${git("rev-parse", "HEAD")}\n`);
   writeFileSync(
     join(repoDir, ".local", "pr-meta.env"),
     "PR_NUMBER=4242\nPR_AUTHOR=steipete\nPR_URL=https://example.test/pr/4242\n",
@@ -176,11 +175,11 @@ function makeSyncRepo(options: { needsRebase: boolean }): string {
 function prepareSyncHeadStubs(): string[] {
   return [
     "enter_worktree() { :; }",
-    "hosted_sha=$(git rev-parse HEAD)",
+    "hosted_sha=$(cat .local/hosted-sha)",
     'gh() { printf "%s\\n" "$hosted_sha"; }',
     "verify_pr_head_branch_matches_expected() { :; }",
+    'verify_prep_head_extends_hosted_head() { git merge-base --is-ancestor "$1" HEAD; }',
     "push_prep_head_to_pr_branch() {",
-    '  [ ! -e .local/prep-sync.env ] || { echo "stale sync evidence reached publication" >&2; return 97; }',
     '  local result_env="$7"',
     "  touch .local/published",
     '  printf \'PUSH_PREP_HEAD_SHA=%q\\nPUSH_LOCAL_PREP_HEAD_SHA=%q\\nPUSHED_FROM_SHA=%q\\nPR_HEAD_SHA_AFTER_PUSH=%q\\n\' "$3" "$3" "$hosted_sha" "$3" > "$result_env"',
@@ -205,6 +204,43 @@ async function waitForExit(child: ChildProcess): Promise<void> {
   }
   await new Promise((resolve) => {
     child.once("exit", resolve);
+  });
+}
+
+async function waitForStderr(
+  child: ChildProcess,
+  expected: string,
+  timeoutMs: number,
+): Promise<string> {
+  const stderr = child.stderr;
+  if (!stderr) {
+    throw new Error("child stderr is not piped");
+  }
+  stderr.setEncoding("utf8");
+  let output = "";
+  return await new Promise<string>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout);
+      stderr.off("data", onData);
+      child.off("exit", onExit);
+    };
+    const onData = (chunk: string) => {
+      output += chunk;
+      if (output.includes(expected)) {
+        cleanup();
+        resolve(output);
+      }
+    };
+    const onExit = () => {
+      cleanup();
+      reject(new Error(`child exited before writing ${JSON.stringify(expected)}: ${output}`));
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`timed out waiting for ${JSON.stringify(expected)}: ${output}`));
+    }, timeoutMs);
+    stderr.on("data", onData);
+    child.once("exit", onExit);
   });
 }
 
@@ -436,102 +472,73 @@ describe("lease-retry gate stamp refresh", () => {
 });
 
 describe("prepare sync-head transitions", () => {
-  it("publishes a changed-patch Testbox rebase with fresh sync evidence", () => {
+  it("publishes only appended fixups when main advances", () => {
     const repoDir = makeSyncRepo({ needsRebase: true });
-    writeFileSync(join(repoDir, ".local", "prep-sync.env"), "PREP_SYNC_TREE=stale\n");
-    writeFileSync(join(repoDir, ".local", "gates.env"), "GATES_MODE=stale\n");
-    writeFileSync(join(repoDir, ".local", "prep.env"), "PREP_HEAD_SHA=stale\n");
+    writeFileSync(join(repoDir, "fixup.ts"), "export const fixed = true;\n");
+    for (const args of [
+      ["add", "fixup.ts"],
+      ["commit", "-qm", "reviewed fixup"],
+    ]) {
+      const commit = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
+      expect(commit.status, commit.stderr).toBe(0);
+    }
+    const localHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).stdout.trim();
 
     const result = runGatesBash(
       [
         ...prepareSyncHeadStubs(),
-        "resolve_prep_sync_evidence_sha() { touch .local/evidence-called; printf '%s\\n' \"$2\"; }",
         "prepare_sync_head 4242",
-        "source .local/prep-sync.env",
-        'test "$PREP_SYNC_TREE" = "$(git rev-parse HEAD^{tree})"',
-        'test "$PREP_SYNC_PATCH_ID" = "$(compute_pr_patch_id origin/main HEAD)"',
-        'test -z "$PREP_SYNC_EVIDENCE_SHA"',
+        `test "$(git rev-parse HEAD)" = "${localHead}"`,
+        'test "$(git diff --name-only "$hosted_sha" HEAD)" = "fixup.ts"',
+        'git merge-base --is-ancestor "$hosted_sha" HEAD',
+        "! git merge-base --is-ancestor origin/main HEAD",
         "test -e .local/published",
-        "test ! -e .local/evidence-called",
-        "test ! -e .local/gates.env",
-        "test ! -e .local/prep.env",
-        'printf "SYNC_EVIDENCE=<%s>\\n" "$PREP_SYNC_EVIDENCE_SHA"',
+        "grep -F 'Preserved hosted PR ancestry' .local/prep.md",
       ].join("\n"),
       { cwd: repoDir, env: { OPENCLAW_TESTBOX: "1" }, sourcePrepareCore: true },
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Rebase changed the PR patch");
     expect(result.stdout).toContain("prepare-sync-head complete");
-    expect(result.stdout).toContain("SYNC_EVIDENCE=<>\n");
-  });
-
-  it("clears stale sync evidence before a new publication attempt", () => {
-    const repoDir = makeSyncRepo({ needsRebase: false });
-    writeFileSync(join(repoDir, ".local", "prep-sync.env"), "PREP_SYNC_TREE=stale\n");
-
-    const result = runGatesBash(
-      [
-        ...prepareSyncHeadStubs(),
-        "prepare_sync_head 4242",
-        "test -e .local/published",
-        "test ! -e .local/prep-sync.env",
-        'printf "STALE_SYNC_EXISTS=no\\n"',
-      ].join("\n"),
-      { cwd: repoDir, env: { OPENCLAW_TESTBOX: "1" }, sourcePrepareCore: true },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("STALE_SYNC_EXISTS=no\n");
+    expect(result.stdout).not.toContain("Rebase");
   });
 });
 
-describe("prepare gate stamp transitions", () => {
-  it("preserves whitespace in the rebase patch fingerprint", () => {
-    const { repoDir, headSha: baseSha } = makeRetryRepo();
-    writeFileSync(join(repoDir, "config.yml"), "root:\n  child: value\n");
-    spawnSync("git", ["add", "config.yml"], { cwd: repoDir });
-    spawnSync(
-      "git",
-      ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "two spaces"],
-      { cwd: repoDir },
-    );
-    const twoSpaceSha = spawnSync("git", ["rev-parse", "HEAD"], {
-      cwd: repoDir,
-      encoding: "utf8",
-    }).stdout.trim();
-    writeFileSync(join(repoDir, "config.yml"), "root:\n    child: value\n");
-    spawnSync("git", ["add", "config.yml"], { cwd: repoDir });
-    spawnSync(
-      "git",
-      ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "four spaces"],
-      { cwd: repoDir },
-    );
-    const fourSpaceSha = spawnSync("git", ["rev-parse", "HEAD"], {
-      cwd: repoDir,
-      encoding: "utf8",
-    }).stdout.trim();
+describe("GraphQL fork publication", () => {
+  it("accepts fixups appended to the hosted head", () => {
+    const { repoDir, headSha } = makeRetryRepo();
+    writeFileSync(join(repoDir, "fixup.ts"), "export const fixed = true;\n");
+    for (const args of [
+      ["add", "fixup.ts"],
+      ["commit", "-qm", "reviewed fixup"],
+    ]) {
+      const commit = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
+      expect(commit.status, commit.stderr).toBe(0);
+    }
 
     const result = runGatesBash(
       [
-        `compute_pr_patch_id ${baseSha} ${twoSpaceSha}`,
-        `compute_pr_patch_id ${baseSha} ${fourSpaceSha}`,
+        'gh() { touch .local/gh-called; printf \'%s\\n\' \'{"data":{"createCommitOnBranch":{"commit":{"oid":"signed-head","url":"https://example.test/commit"}}}}\'; }',
+        `graphql_push_to_fork example/repo topic ${headSha}`,
+        "test -e .local/gh-called",
       ].join("\n"),
-      { cwd: repoDir },
+      { cwd: repoDir, sourcePush: true },
     );
-    expect(result.status).toBe(0);
-    const patchIds = result.stdout.trim().split("\n");
-    expect(patchIds).toHaveLength(2);
-    expect(patchIds[0]).not.toBe(patchIds[1]);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("signed-head");
   });
 
-  it("uses the hosted pre-sync SHA only when its tree matches the local prep head", () => {
+  it("rejects rewritten history before encoding files or calling GitHub", () => {
     const { repoDir, headSha } = makeRetryRepo();
     const tree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], {
       cwd: repoDir,
       encoding: "utf8",
     }).stdout.trim();
-    const remoteSha = spawnSync(
+    const unrelatedHead = spawnSync(
       "git",
       [
         "-c",
@@ -540,51 +547,32 @@ describe("prepare gate stamp transitions", () => {
         "user.email=t@example.com",
         "commit-tree",
         tree,
-        "-p",
-        headSha,
         "-m",
-        "hosted head",
+        "rewritten",
       ],
       { cwd: repoDir, encoding: "utf8" },
     ).stdout.trim();
-
-    const matching = runGatesBash(`resolve_prep_sync_evidence_sha ${headSha} ${remoteSha}`, {
+    const checkout = spawnSync("git", ["checkout", "-q", "--detach", unrelatedHead], {
       cwd: repoDir,
-      sourcePrepareCore: true,
+      encoding: "utf8",
     });
-    expect(matching.status).toBe(0);
-    expect(matching.stdout.trim()).toBe(remoteSha);
+    expect(checkout.status, checkout.stderr).toBe(0);
 
-    writeFileSync(join(repoDir, "changed.ts"), "export {};\n");
-    spawnSync("git", ["add", "changed.ts"], { cwd: repoDir });
-    spawnSync(
-      "git",
-      ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "different"],
-      { cwd: repoDir },
-    );
-    const mismatched = runGatesBash(
-      `resolve_prep_sync_evidence_sha ${headSha} $(git rev-parse HEAD)`,
-      { cwd: repoDir, sourcePrepareCore: true },
-    );
-    expect(mismatched.status).not.toBe(0);
-  });
-
-  it("forwards only the recorded pre-rebase SHA as recent evidence", () => {
     const result = runGatesBash(
       [
-        "gh() { if [ \"$1\" = pr ]; then printf 'deadbeef\\n'; else printf 'openclaw/openclaw\\n'; fi; }",
-        "run_quiet_logged() { printf 'ARG:%s\\n' \"$@\"; }",
-        "run_hosted_prepare_gates 100606 deadbeef false cafebabe",
+        "gh() { touch .local/gh-called; return 99; }",
+        `graphql_push_to_fork example/repo topic ${headSha}`,
       ].join("\n"),
+      { cwd: repoDir, sourcePush: true },
     );
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("ARG:hosted CI/Testbox gates");
-    expect(result.stdout).toContain(`ARG:${repoRoot}/scripts/verify-pr-hosted-gates.mjs`);
-    expect(result.stdout).toContain("ARG:--pr\nARG:100606");
-    expect(result.stdout).toContain("ARG:--recent-sha\nARG:cafebabe");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("refused rewritten history");
+    expect(existsSync(join(repoDir, ".local", "gh-called"))).toBe(false);
   });
+});
 
+describe("prepare gate stamp transitions", () => {
   it.each([
     ["CHANGELOG.md", true],
     ["changed.ts", false],
@@ -674,33 +662,7 @@ describe("prepare gate stamp transitions", () => {
       ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "change"],
       { cwd: repoDir },
     );
-    const prepTree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], {
-      cwd: repoDir,
-      encoding: "utf8",
-    }).stdout.trim();
-    const mainlineBase = spawnSync("git", ["rev-parse", "refs/remotes/origin/main"], {
-      cwd: repoDir,
-      encoding: "utf8",
-    }).stdout.trim();
-    const patchId = spawnSync(
-      "bash",
-      [
-        "-c",
-        "git diff --binary refs/remotes/origin/main HEAD | git patch-id --verbatim | awk 'NR == 1 { print $1 }'",
-      ],
-      { cwd: repoDir, encoding: "utf8" },
-    ).stdout.trim();
     writeFileSync(join(repoDir, ".local", "pr-meta.env"), "PR_AUTHOR=steipete\n");
-    writeFileSync(
-      join(repoDir, ".local", "prep-sync.env"),
-      [
-        `PREP_SYNC_MAINLINE_BASE_SHA=${mainlineBase}`,
-        `PREP_SYNC_TREE=${prepTree}`,
-        `PREP_SYNC_PATCH_ID=${patchId}`,
-        "PREP_SYNC_EVIDENCE_SHA=cafebabe",
-        "",
-      ].join("\n"),
-    );
     writeFileSync(
       join(repoDir, ".local", "gates.env"),
       [
@@ -719,7 +681,7 @@ describe("prepare gate stamp transitions", () => {
         "checkout_prep_branch() { :; }",
         "path_is_docsish() { return 1; }",
         "changelog_required_for_changed_files() { return 1; }",
-        "run_hosted_prepare_gates() { printf 'RECENT:%s\\n' \"${4:-}\"; }",
+        "run_hosted_prepare_gates() { printf 'HOSTED\\n'; }",
         "prepare_gates 4242",
         "cat .local/gates.env",
       ].join("\n"),
@@ -727,8 +689,8 @@ describe("prepare gate stamp transitions", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("GATES_MODE=hosted_exact_or_recent_rebase");
-    expect(result.stdout).toContain("RECENT:cafebabe");
+    expect(result.stdout).toContain("GATES_MODE=hosted_exact_or_recent_parent");
+    expect(result.stdout).toContain("HOSTED");
     expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=''");
     expect(result.stdout).not.toContain("tbx_stale");
   });
@@ -759,7 +721,7 @@ describe("pr-gates-lock helper", () => {
     const second = spawnGateLockHolder(repoDir, secondStatus, {
       OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS: "50",
     });
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await waitForStderr(second, "queued behind the local heavy-check lock", 5_000);
     expect(existsSync(secondStatus)).toBe(false);
 
     first.kill("SIGTERM");

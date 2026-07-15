@@ -259,7 +259,7 @@ export const zh_CN = {
       invalidConfigUnknown: "- 无法解析配置。",
       manualChoice: "你想如何连接 AI？",
       nextSteps:
-        "工作区：{workspace}\n添加频道：`openclaw channels add`\n更喜欢聊天？运行 `openclaw crestodian`，然后说 `connect telegram`（或 `connect slack`）。\n打开 dashboard：`openclaw dashboard`\n稍后聊天：`openclaw`",
+        "工作区：{workspace}\n添加频道：`openclaw channels add`\n更喜欢聊天？运行 `openclaw setup`，然后说 `connect telegram`（或 `connect slack`）。\n打开 dashboard：`openclaw dashboard`\n稍后聊天：`openclaw`",
       nextStepsWithoutAi:
         "工作区：{workspace}\n稍后添加 AI：重新运行 `openclaw onboard`\n连接 AI 后添加频道：`openclaw channels add`\n打开 dashboard：`openclaw dashboard`",
       nextStepsTitle: "下一步",
@@ -968,7 +968,7 @@ export const zh_CN = {
       dashboardWhenReady: "准备好后运行：{command}",
       daemonRuntime: "Gateway 服务运行时",
       daemonRuntimeNode: "Node（推荐）",
-      daemonRuntimeNodeHint: "WhatsApp + Telegram 需要使用。Bun 重新连接时可能造成内存损坏。",
+      daemonRuntimeNodeHint: "OpenClaw 状态使用 node:sqlite，因此必须使用 Node；Bun 无法运行网关。",
       editBootstrap: "之后可编辑 BOOTSTRAP.md 来修改 agent 的自我介绍方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次终端聊天会发送："醒醒，我的朋友！"',

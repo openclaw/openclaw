@@ -21,13 +21,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
-  attachCodexMirrorIdentity,
   buildCodexUserPromptMessage,
+  codexTranscriptMirrorRuntime,
   importCodexThreadHistoryToTranscript,
-  mirrorCodexAppServerTranscript,
-  mirrorTranscriptBestEffort,
   projectBoundedCodexThreadHistory,
 } from "./transcript-mirror.js";
+import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
+
+const mirrorCodexAppServerTranscript = codexTranscriptMirrorRuntime.mirror;
+const mirrorTranscriptBestEffort = codexTranscriptMirrorRuntime.mirrorBestEffort;
 
 const publishSessionTranscriptUpdateByIdentityMock = vi.hoisted(() => vi.fn());
 
@@ -1194,3 +1196,4 @@ describe("mirrorCodexAppServerTranscript", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

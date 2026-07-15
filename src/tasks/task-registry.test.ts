@@ -6,24 +6,27 @@ import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
   registerAgentRunContext,
-  resetAgentRunContextForTest,
+  resetAgentEventsForTest,
 } from "../infra/agent-events.js";
 import {
-  hasPendingHeartbeatWake,
-  resetHeartbeatWakeStateForTests,
+  requestHeartbeat,
+  setHeartbeatWakeHandler,
+  type HeartbeatWakeRequest,
 } from "../infra/heartbeat-wake.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import {
+  beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { registerActiveCronTaskRun, resetActiveCronTaskRunsForTests } from "./cron-task-cancel.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
+import { ensureTaskRuntimeStateReady } from "./runtime-internal.js";
 import {
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -36,13 +39,14 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   cancelTaskById,
   createTaskRecord as createTaskRecordOrNull,
+  deleteTaskRecordById,
   finalizeTaskRunByRunId,
-  findLatestTaskForRelatedSessionKey,
   findTaskByRunId,
   getTaskById,
   isParentFlowLinkError,
   listTasksForAgentId,
   listTasksForOwnerKey,
+  listTasksForRelatedSessionKey,
   listTaskRecords,
   linkTaskToFlowById,
   maybeDeliverTaskStateChangeUpdate,
@@ -111,10 +115,12 @@ function createTaskFlowForTask(
 const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
   const cancelSessionMock = vi.fn();
+  const cancelActiveCronTaskRunMock = vi.fn();
   const killSubagentRunAdminMock = vi.fn();
   return {
     sendMessageMock,
     cancelSessionMock,
+    cancelActiveCronTaskRunMock,
     killSubagentRunAdminMock,
   };
 });
@@ -235,9 +241,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       return next;
     },
     isRuntimeAuthoritative: () => true,
-    resolveCronJobsStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
-    loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
-    readCronRunLogEntriesSync: () => [],
+    listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: () => [],
   });
 }
 
@@ -462,13 +466,48 @@ function configureInMemoryTaskStoresForLinkValidationTests() {
   configureInMemoryTaskStoresForTests();
 }
 
+const HEARTBEAT_FLUSH_REASON = "task-registry-test-flush";
+let heartbeatWakeRequests: HeartbeatWakeRequest[] = [];
+let clearHeartbeatWakeHandler: (() => void) | undefined;
+
+async function flushHeartbeatWakeRequests(): Promise<void> {
+  requestHeartbeat({
+    source: "other",
+    intent: "immediate",
+    reason: HEARTBEAT_FLUSH_REASON,
+    coalesceMs: 0,
+  });
+  await vi.waitFor(() => {
+    expect(heartbeatWakeRequests.some((request) => request.reason === HEARTBEAT_FLUSH_REASON)).toBe(
+      true,
+    );
+  });
+}
+
+function expectHeartbeatWake(
+  source: "background-task" | "background-task-blocked",
+  sessionKey: string,
+) {
+  expect(heartbeatWakeRequests).toContainEqual(
+    expect.objectContaining({ source, reason: source, sessionKey }),
+  );
+}
+
 describe("task-registry", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetGatewayWorkAdmission();
+    heartbeatWakeRequests = [];
+    clearHeartbeatWakeHandler = setHeartbeatWakeHandler(async (request) => {
+      heartbeatWakeRequests.push(request);
+      return { status: "ran", durationMs: 0 };
+    });
+    await flushHeartbeatWakeRequests();
+    heartbeatWakeRequests = [];
     setTaskRegistryDeliveryRuntimeForTests({
       sendMessage: hoisted.sendMessageMock,
     });
     setTaskRegistryControlRuntimeForTests({
+      cancelActiveCronTaskRun: (params) => hoisted.cancelActiveCronTaskRunMock(params),
       getAcpSessionManager: () => ({
         cancelSession: hoisted.cancelSessionMock,
       }),
@@ -476,14 +515,15 @@ describe("task-registry", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
+    await flushHeartbeatWakeRequests();
+    clearHeartbeatWakeHandler?.();
+    clearHeartbeatWakeHandler = undefined;
     resetSystemEventsForTest();
-    resetHeartbeatWakeStateForTests();
-    resetAgentRunContextForTest();
+    resetAgentEventsForTest({ preserveListeners: true });
     resetCronActiveJobs();
-    resetActiveCronTaskRunsForTests();
     resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryMaintenanceRuntimeForTests();
@@ -491,6 +531,7 @@ describe("task-registry", () => {
     resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
+    hoisted.cancelActiveCronTaskRunMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
   });
 
@@ -617,6 +658,35 @@ describe("task-registry", () => {
         error: undefined,
         terminalSummary: "finished",
       });
+    });
+  });
+
+  it("clears a provisional child session when the terminal outcome has none", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      createTaskRecord({
+        runtime: "cron",
+        ownerKey: "",
+        scopeKind: "system",
+        childSessionKey: "agent:main:cron:provisional",
+        runId: "cron:provisional:100",
+        task: "Provisional cron run",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      finalizeTaskRunByRunId({
+        runId: "cron:provisional:100",
+        runtime: "cron",
+        childSessionKey: null,
+        status: "failed",
+        endedAt: 200,
+        error: "setup failed",
+      });
+      reloadTaskRegistryFromStore();
+
+      expect(requireTaskByRunId("cron:provisional:100").childSessionKey).toBeUndefined();
     });
   });
 
@@ -1218,6 +1288,152 @@ describe("task-registry", () => {
         taskId: task.taskId,
         parentFlowId: undefined,
       });
+    });
+  });
+
+  it("does not persist linked task changes while task-flow restore is failed", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      const taskStore = createInMemoryTaskRegistryStore();
+      const taskUpsert = vi.spyOn(taskStore, "upsertTaskWithDeliveryState");
+      const taskDelete = vi.spyOn(taskStore, "deleteTaskWithDeliveryState");
+      const deliveryUpsert = vi.spyOn(taskStore, "upsertDeliveryState");
+      configureTaskRegistryRuntime({ store: taskStore });
+      configureTaskFlowRegistryRuntime({
+        store: createInMemoryTaskFlowRegistryStore(),
+      });
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "flow-restore-failed-task",
+        task: "Preserve linked task state",
+        status: "running",
+      });
+      const flow = createTaskFlowForTask({ task });
+      expect(
+        linkTaskToFlowById({
+          taskId: task.taskId,
+          flowId: flow.flowId,
+        })?.parentFlowId,
+      ).toBe(flow.flowId);
+      taskUpsert.mockClear();
+      deliveryUpsert.mockClear();
+
+      resetTaskFlowRegistryForTests({ persist: false });
+      const loadSnapshot = vi.fn(() => {
+        throw new Error("SQLITE_IOERR: task-flow restore failed");
+      });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot,
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(() =>
+        markTaskTerminalById({
+          taskId: task.taskId,
+          status: "succeeded",
+          endedAt: 200,
+        }),
+      ).toThrow("Task-flow registry restore failed: SQLITE_IOERR: task-flow restore failed");
+      expect(taskUpsert).not.toHaveBeenCalled();
+      expect(requireTaskById(task.taskId).status).toBe("running");
+
+      expect(() => deleteTaskRecordById(task.taskId)).toThrow(
+        "Task-flow registry restore failed: SQLITE_IOERR: task-flow restore failed",
+      );
+      expect(taskDelete).not.toHaveBeenCalled();
+      expect(requireTaskById(task.taskId).taskId).toBe(task.taskId);
+
+      expect(() =>
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterOrigin: {
+            channel: "notifychat",
+            to: "notifychat:123",
+          },
+          runId: task.runId,
+          task: task.task,
+          status: "running",
+        }),
+      ).toThrow("Task-flow registry restore failed: SQLITE_IOERR: task-flow restore failed");
+      expect(deliveryUpsert).not.toHaveBeenCalled();
+      expect(loadSnapshot).toHaveBeenCalledTimes(1);
+
+      const standalone = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "standalone-during-flow-restore-failure",
+        task: "Keep standalone task state available",
+        status: "running",
+        deliveryStatus: "not_applicable",
+      });
+      expect(
+        markTaskTerminalById({
+          taskId: standalone.taskId,
+          status: "succeeded",
+          endedAt: 300,
+        })?.status,
+      ).toBe("succeeded");
+    });
+  });
+
+  it("restores task-flow state before activating the task registry", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      const loadTaskSnapshot = vi.fn(() => ({
+        tasks: new Map<string, TaskRecord>(),
+        deliveryStates: new Map<string, TaskDeliveryState>(),
+      }));
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: loadTaskSnapshot,
+          saveSnapshot: () => {},
+        },
+      });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            throw new Error("SQLITE_CORRUPT: task-flow startup restore failed");
+          },
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(() => ensureTaskRuntimeStateReady()).toThrow(
+        "Task-flow registry restore failed: SQLITE_CORRUPT: task-flow startup restore failed",
+      );
+      expect(loadTaskSnapshot).not.toHaveBeenCalled();
+    });
+  });
+
+  it("propagates task registry restore failures through the runtime gate", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureTaskFlowRegistryRuntime({
+        store: createInMemoryTaskFlowRegistryStore(),
+      });
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            throw new Error("SQLITE_IOERR: task startup restore failed");
+          },
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(() => ensureTaskRuntimeStateReady()).toThrow(
+        "Task registry restore failed: SQLITE_IOERR: task startup restore failed",
+      );
     });
   });
 
@@ -1847,7 +2063,8 @@ describe("task-registry", () => {
       expect(peekSystemEvents(ownerKey)).toEqual([
         expect.stringContaining("Background task ready for review: ACP background task"),
       ]);
-      expect(hasPendingHeartbeatWake()).toBe(true);
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task", ownerKey);
     });
   });
 
@@ -1930,7 +2147,8 @@ describe("task-registry", () => {
         "Background task blocked: ACP background task (run run-deli). Writable session or apply_patch authorization required.",
         "Task needs follow-up: ACP background task (run run-deli). Writable session or apply_patch authorization required.",
       ]);
-      expect(hasPendingHeartbeatWake()).toBe(true);
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task-blocked", "agent:main:main");
     });
   });
 
@@ -1999,8 +2217,9 @@ describe("task-registry", () => {
         "Background task blocked: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
         "Task needs follow-up: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
       ]);
-      expect(hasPendingHeartbeatWake()).toBe(true);
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task-blocked", "agent:main:main");
     });
   });
 
@@ -2091,7 +2310,8 @@ describe("task-registry", () => {
       expect(peekSystemEvents("agent:main:main")).toEqual([
         "Task needs follow-up: ACP background task (run run-bloc). Writable session or apply_patch authorization required.",
       ]);
-      expect(hasPendingHeartbeatWake()).toBe(true);
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task-blocked", "agent:main:main");
     });
   });
 
@@ -2129,7 +2349,11 @@ describe("task-registry", () => {
         );
       });
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-      expect(hasPendingHeartbeatWake()).toBe(true);
+      await flushHeartbeatWakeRequests();
+      expectHeartbeatWake("background-task", "agent:main:main");
+      expect(heartbeatWakeRequests).not.toContainEqual(
+        expect.objectContaining({ source: "background-task-blocked" }),
+      );
     });
   });
 
@@ -2549,7 +2773,7 @@ describe("task-registry", () => {
         latest.taskId,
         older.taskId,
       ]);
-      expect(findLatestTaskForRelatedSessionKey("agent:main:subagent:child-1")?.taskId).toBe(
+      expect(listTasksForRelatedSessionKey("agent:main:subagent:child-1")[0]?.taskId).toBe(
         older.taskId,
       );
     });
@@ -3264,12 +3488,12 @@ describe("task-registry", () => {
                 "task-missing-cleanup",
                 {
                   taskId: "task-missing-cleanup",
-                  runtime: "cron",
+                  runtime: "cli",
                   requesterSessionKey: "",
-                  ownerKey: "system:cron:task-missing-cleanup",
+                  ownerKey: "system:cli:task-missing-cleanup",
                   scopeKind: "system",
                   runId: "run-maintenance-cleanup",
-                  task: "Finished cron",
+                  task: "Finished CLI task",
                   status: "failed",
                   deliveryStatus: "not_applicable",
                   notifyPolicy: "silent",
@@ -3396,9 +3620,7 @@ describe("task-registry", () => {
         resolveTaskForLookupToken: () => undefined,
         setTaskCleanupAfterById: () => null,
         isRuntimeAuthoritative: () => true,
-        resolveCronJobsStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
-        loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
-        readCronRunLogEntriesSync: () => [],
+        listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: () => [],
       });
 
       try {
@@ -3687,6 +3909,114 @@ describe("task-registry", () => {
         status: "cancelled",
       });
       expect(summarizeTaskRecords(listTaskRecords()).active).toBe(0);
+    });
+  });
+
+  it("reattaches the lifecycle listener after recovering from an initial restore failure", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const runId = "run-restore-listener";
+      const storedTask: TaskRecord = {
+        taskId: "task-restore-listener",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId,
+        task: "Resume lifecycle tracking after restore recovery",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: 100,
+        startedAt: 100,
+        lastEventAt: 100,
+      };
+      let restoreShouldFail = true;
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            if (restoreShouldFail) {
+              throw new Error("SQLITE_IOERR: initial task restore failed");
+            }
+            return {
+              tasks: new Map([[storedTask.taskId, storedTask]]),
+              deliveryStates: new Map(),
+            };
+          },
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(() => getTaskById(storedTask.taskId)).toThrow(
+        "Task registry restore failed: SQLITE_IOERR: initial task restore failed",
+      );
+      restoreShouldFail = false;
+      reloadTaskRegistryFromStore();
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      expectRecordFields(requireTaskByRunId(runId), {
+        status: "succeeded",
+        endedAt: 250,
+      });
+    });
+  });
+
+  it("does not hide a failed reload behind the restart-draining delivery fallback", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const storedTask: TaskRecord = {
+        taskId: "task-reload-failure",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-reload-failure",
+        task: "Keep restore failures visible",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: 100,
+        endedAt: 200,
+        lastEventAt: 200,
+      };
+      let restoreError: Error | null = null;
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            if (restoreError) {
+              throw restoreError;
+            }
+            return {
+              tasks: new Map([[storedTask.taskId, storedTask]]),
+              deliveryStates: new Map(),
+            };
+          },
+          saveSnapshot: () => {},
+        },
+      });
+      expect(getTaskById(storedTask.taskId)?.taskId).toBe(storedTask.taskId);
+
+      beginGatewayRestartSignalAdmission();
+      const pendingDelivery = maybeDeliverTaskTerminalUpdate(storedTask.taskId);
+      await Promise.resolve();
+
+      restoreError = new Error("SQLITE_CORRUPT: task reload failed");
+      expect(() => reloadTaskRegistryFromStore()).toThrow(
+        "Task registry restore failed: SQLITE_CORRUPT: task reload failed",
+      );
+      markGatewayRestartDraining();
+
+      await expect(pendingDelivery).rejects.toThrow(
+        "Task registry restore failed: SQLITE_CORRUPT: task reload failed",
+      );
     });
   });
 
@@ -4934,9 +5264,9 @@ describe("task-registry", () => {
       if (!task) {
         throw new Error("expected cron task");
       }
-      registerActiveCronTaskRun({
-        runId: "cron:nightly-gmail-sync:123",
-        controller: abortController,
+      hoisted.cancelActiveCronTaskRunMock.mockImplementation(({ reason }: { reason?: string }) => {
+        abortController.abort(reason);
+        return true;
       });
 
       const result = await cancelTaskById({
@@ -4944,6 +5274,10 @@ describe("task-registry", () => {
         taskId: task.taskId,
       });
 
+      expect(hoisted.cancelActiveCronTaskRunMock).toHaveBeenCalledWith({
+        runId: "cron:nightly-gmail-sync:123",
+        reason: "Cancelled by operator.",
+      });
       expect(abortController.signal.aborted).toBe(true);
       expect(abortController.signal.reason).toBe("Cancelled by operator.");
       expectRecordFields(result, {
@@ -4956,6 +5290,38 @@ describe("task-registry", () => {
         status: "cancelled",
         error: "Cancelled by operator.",
       });
+    });
+  });
+
+  it("refuses terminal and unknown cron task cancellation before runtime dispatch", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: "finished-cron",
+        ownerKey: "",
+        scopeKind: "system",
+        runId: "cron:finished-cron:123",
+        task: "Finished cron",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+
+      await expect(
+        cancelTaskById({ cfg: {} as never, taskId: task.taskId }),
+      ).resolves.toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "Task is already terminal.",
+      });
+      await expect(
+        cancelTaskById({ cfg: {} as never, taskId: "unknown-cron-task" }),
+      ).resolves.toMatchObject({
+        found: false,
+        cancelled: false,
+        reason: "Task not found.",
+      });
+      expect(hoisted.cancelActiveCronTaskRunMock).not.toHaveBeenCalled();
     });
   });
 
@@ -5129,3 +5495,4 @@ describe("task-registry", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

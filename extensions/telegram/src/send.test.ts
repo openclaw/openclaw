@@ -1,6 +1,7 @@
 // Telegram tests cover send plugin behavior.
 import fs from "node:fs";
 import type { Bot } from "grammy";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -13,10 +14,14 @@ import {
   buildTelegramConversationContext,
   createTelegramMessageCache,
   resolveTelegramMessageCacheScope,
-  resetTelegramMessageCacheBucketsForTest,
 } from "./message-cache.js";
 import { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
-import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import { setTelegramRuntime } from "./runtime.js";
+import {
+  clearTelegramRuntimeForTest as clearTelegramRuntime,
+  resetTelegramMessageCacheForTest as resetTelegramMessageCacheBucketsForTest,
+  resetTelegramSentMessageCacheForTest,
+} from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import type { TelegramApiOverride } from "./send.js";
 import {
@@ -27,10 +32,7 @@ import {
 import {
   TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
   TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
-  clearSentMessageCache,
   recordSentMessage,
-  resetSentMessageCacheForTest,
-  setTelegramSentMessageStoreForTest,
   wasSentByBot,
 } from "./sent-message-cache.js";
 
@@ -59,6 +61,7 @@ const {
   pinMessageTelegram,
   reactMessageTelegram,
   renameForumTopicTelegram,
+  sendLocationTelegram,
   sendMessageTelegram: sendMessageTelegramImported,
   sendTypingTelegram,
   sendPollTelegram,
@@ -127,7 +130,13 @@ const sendMessageTelegram: typeof sendMessageTelegramImpl = async (to, text, opt
   );
 
 const TELEGRAM_TEST_CFG = {};
-let sentMessageStore: NonNullable<Parameters<typeof setTelegramSentMessageStoreForTest>[0]>;
+type PersistedSentMessageForTest = {
+  scopeKey: string;
+  chatId: string;
+  messageId: string;
+  timestamp: number;
+};
+let sentMessageStore: PluginStateSyncKeyedStore<PersistedSentMessageForTest>;
 
 function markdownTable(columns: number): string {
   return [
@@ -157,16 +166,18 @@ function countTelegramRichHtmlBlocks(html: string): number {
 
 beforeEach(() => {
   resetPluginStateStoreForTests({ closeDatabase: false });
-  installTelegramStateRuntimeForTest();
   sentMessageStore = createPluginStateSyncKeyedStoreForTests("telegram", {
     namespace: TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
     maxEntries: TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
   });
   sentMessageStore.clear();
-  setTelegramSentMessageStoreForTest(sentMessageStore);
+  installTelegramStateRuntimeForTest(sentMessageStore);
+  resetTelegramSentMessageCacheForTest();
 });
 
-function installTelegramStateRuntimeForTest(): void {
+function installTelegramStateRuntimeForTest(
+  syncStore: PluginStateSyncKeyedStore<PersistedSentMessageForTest>,
+): void {
   setTelegramRuntime({
     state: {
       openKeyedStore: ((options) =>
@@ -174,11 +185,7 @@ function installTelegramStateRuntimeForTest(): void {
           "telegram",
           options,
         )) as TelegramRuntime["state"]["openKeyedStore"],
-      openSyncKeyedStore: ((options) =>
-        createPluginStateSyncKeyedStoreForTests(
-          "telegram",
-          options,
-        )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      openSyncKeyedStore: (() => syncStore) as TelegramRuntime["state"]["openSyncKeyedStore"],
     },
     channel: {},
   } as TelegramRuntime);
@@ -401,9 +408,8 @@ function capturedLogText(logFile: string): string {
 }
 
 afterEach(() => {
+  resetTelegramSentMessageCacheForTest();
   clearTelegramRuntime();
-  clearSentMessageCache();
-  setTelegramSentMessageStoreForTest(undefined);
   resetPluginStateStoreForTests();
   setLoggerOverride(null);
   resetLogger();
@@ -434,16 +440,8 @@ describe("sent-message-cache", () => {
     expect(wasSentByBot(123, 1)).toBe(true);
   });
 
-  it("clears cache", () => {
-    recordSentMessage(123, 1);
-    expect(wasSentByBot(123, 1)).toBe(true);
-
-    clearSentMessageCache();
-    expect(wasSentByBot(123, 1)).toBe(false);
-  });
-
   it("keeps sent-message cache storage failures best-effort", () => {
-    setTelegramSentMessageStoreForTest({
+    installTelegramStateRuntimeForTest({
       ...sentMessageStore,
       entries() {
         throw new Error("read boom");
@@ -459,7 +457,7 @@ describe("sent-message-cache", () => {
 
   it("persists only the newly recorded sent-message row", () => {
     const persistedMessageIds: string[] = [];
-    setTelegramSentMessageStoreForTest({
+    installTelegramStateRuntimeForTest({
       ...sentMessageStore,
       register(key, value, options) {
         sentMessageStore.register(key, value, options);
@@ -478,7 +476,7 @@ describe("sent-message-cache", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-26T12:00:00.000Z"));
     const ttlByMessageId = new Map<string, number>();
-    setTelegramSentMessageStoreForTest({
+    installTelegramStateRuntimeForTest({
       ...sentMessageStore,
       register(key, value, options) {
         sentMessageStore.register(key, value, options);
@@ -501,20 +499,13 @@ describe("sent-message-cache", () => {
     recordSentMessage(123, 1, sentMessageCfg);
     expect(wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
 
-    resetSentMessageCacheForTest();
+    resetTelegramSentMessageCacheForTest();
 
     const restartedCache = await importFreshModule<typeof import("./sent-message-cache.js")>(
       import.meta.url,
       "./sent-message-cache.js?scope=restart",
     );
-    restartedCache.setTelegramSentMessageStoreForTest(sentMessageStore);
-
-    try {
-      expect(restartedCache.wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
-    } finally {
-      restartedCache.clearSentMessageCache();
-      restartedCache.setTelegramSentMessageStoreForTest(undefined);
-    }
+    expect(restartedCache.wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
   });
 
   it("keeps expired custom-store cleanup away from the default store", () => {
@@ -565,21 +556,13 @@ describe("sent-message-cache", () => {
       import.meta.url,
       "./sent-message-cache.js?scope=shared-b",
     );
-    cacheA.setTelegramSentMessageStoreForTest(sentMessageStore);
-    cacheB.setTelegramSentMessageStoreForTest(sentMessageStore);
-
-    cacheA.clearSentMessageCache();
+    resetTelegramSentMessageCacheForTest();
 
     try {
       cacheA.recordSentMessage(123, 1);
       expect(cacheB.wasSentByBot(123, 1)).toBe(true);
-
-      cacheB.clearSentMessageCache();
-      expect(cacheA.wasSentByBot(123, 1)).toBe(false);
     } finally {
-      cacheA.clearSentMessageCache();
-      cacheA.setTelegramSentMessageStoreForTest(undefined);
-      cacheB.setTelegramSentMessageStoreForTest(undefined);
+      resetTelegramSentMessageCacheForTest();
     }
   });
 });
@@ -1028,6 +1011,48 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(node?.timestamp).toBe(1_779_394_745_000);
+    expect(node?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: { ...cursor.source, partIndex: 0, finalPart: true },
+    });
+    expect(cursor.nextPartIndex).toBe(1);
+  });
+
+  it("records transcript projection metadata for native locations", async () => {
+    const storePath = `/tmp/openclaw-telegram-location-context-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-location",
+    });
+    const sendLocation = vi.fn().mockResolvedValue({
+      message_id: 1498,
+      date: 1_779_394_746,
+      chat: { id: "123", type: "private" },
+      from: { id: 42, is_bot: true, first_name: "Kelaw" },
+      location: { latitude: 48.858844, longitude: 2.294351 },
+    });
+
+    await sendLocationTelegram(
+      "123",
+      { latitude: 48.858844, longitude: 2.294351 },
+      {
+        cfg,
+        token: "tok",
+        api: { sendLocation } as unknown as TelegramApiOverride,
+        promptContextProjectionPlan: { cursor, finalPart: true },
+      },
+    );
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const node = await cache.get({
+      accountId: "default",
+      chatId: "123",
+      messageId: "1498",
+    });
+
+    expect(node?.timestamp).toBe(1_779_394_746_000);
     expect(node?.promptContextProjectionMarker).toEqual({
       kind: "valid",
       projection: { ...cursor.source, partIndex: 0, finalPart: true },
@@ -2430,6 +2455,98 @@ describe("sendMessageTelegram", () => {
       expect(Object.keys(params).toSorted()).toEqual(["caption", "parse_mode"]);
       expect(res.messageId).toBe("201");
     }
+  });
+
+  it.each([
+    {
+      name: "non-video media",
+      contentType: "image/png",
+      fileName: "photo.png",
+      forceDocument: false,
+    },
+    {
+      name: "forced documents",
+      contentType: "video/mp4",
+      fileName: "video.mp4",
+      forceDocument: true,
+    },
+  ])("rejects video notes backed by $name", async (testCase) => {
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-media"),
+      contentType: testCase.contentType,
+      fileName: testCase.fileName,
+    });
+
+    await expect(
+      sendMessageTelegram("123", "", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api: {},
+        mediaUrl: `https://example.com/${testCase.fileName}`,
+        asVideoNote: true,
+        forceDocument: testCase.forceDocument,
+      }),
+    ).rejects.toThrow("Telegram video notes require video media.");
+  });
+
+  it("sends native locations and venues with bounded accuracy", async () => {
+    const chatId = "123";
+    const sendLocation = vi.fn().mockResolvedValue({ message_id: 301, chat: { id: chatId } });
+    const sendVenue = vi.fn().mockResolvedValue({ message_id: 302, chat: { id: chatId } });
+    const api = { sendLocation, sendVenue } as unknown as TelegramApiOverride;
+
+    await sendLocationTelegram(
+      chatId,
+      { latitude: 48.858844, longitude: 2.294351, accuracy: 12 },
+      {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        replyToMessageId: 77,
+        quoteText: "quoted location",
+      },
+    );
+    await sendLocationTelegram(
+      chatId,
+      {
+        latitude: 48.858844,
+        longitude: 2.294351,
+        name: "Eiffel Tower",
+        address: "Champ de Mars",
+      },
+      { cfg: TELEGRAM_TEST_CFG, token: "tok", api },
+    );
+
+    expect(sendLocation).toHaveBeenCalledWith(
+      chatId,
+      48.858844,
+      2.294351,
+      expect.objectContaining({
+        horizontal_accuracy: 12,
+        reply_parameters: expect.objectContaining({
+          message_id: 77,
+          quote: "quoted location",
+        }),
+      }),
+    );
+    expect(sendVenue).toHaveBeenCalledWith(
+      chatId,
+      48.858844,
+      2.294351,
+      "Eiffel Tower",
+      "Champ de Mars",
+      expect.any(Object),
+    );
+  });
+
+  it("rejects incomplete Telegram venues", async () => {
+    await expect(
+      sendLocationTelegram(
+        "123",
+        { latitude: 1, longitude: 2, name: "Unnamed address" },
+        { cfg: TELEGRAM_TEST_CFG, token: "tok", api: {} },
+      ),
+    ).rejects.toThrow(/require both/i);
   });
 
   it("passes probed dimensions to regular video sends", async () => {
@@ -4607,3 +4724,4 @@ describe("createForumTopicTelegram", () => {
     expect(botCtorSpy).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

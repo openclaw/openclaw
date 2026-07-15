@@ -206,17 +206,7 @@ const rules = [
   {
     id: "message-api",
     roots: ["src", "extensions", "packages"],
-    names: [
-      "deliverOutboundPayloads",
-      "dispatchChannelMessageReplyWithBase",
-      "recordChannelMessageReplyDispatch",
-      "buildChannelMessageReplyDispatchBase",
-      "hasFinalChannelMessageReplyDispatch",
-      "hasVisibleChannelMessageReplyDispatch",
-      "resolveChannelMessageReplyDispatchCounts",
-      "createChannelTurnReplyPipeline",
-      "deliverDurableInboundReplyPayload",
-    ],
+    names: ["deliverOutboundPayloads"],
     allowedFiles: [
       "src/channels/message/inbound-reply-dispatch.ts",
       "src/infra/outbound/deliver-runtime.ts",
@@ -227,7 +217,6 @@ const rules = [
       "src/plugin-sdk/inbound-reply-dispatch.ts",
       "src/plugin-sdk/outbound-runtime.ts",
       "src/plugin-sdk/test-helpers/outbound-delivery.ts",
-      "src/plugin-sdk/testing.ts",
     ],
     message: "use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext",
   },

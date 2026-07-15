@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 const PLUGIN_UPDATE_DOCKER_SCRIPT = "scripts/e2e/plugin-update-unchanged-docker.sh";
@@ -200,6 +201,7 @@ describe("plugin update unchanged Docker E2E", () => {
   it("bounds corrupt plugin update commands and prints diagnostics on hangs", () => {
     const script = readFileSync(CORRUPT_UPDATE_SCENARIO_SCRIPT, "utf8");
 
+    expect(script).toContain('plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" --force');
     expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS");
     expect(script).toContain(
       "openclaw_e2e_read_positive_int_env OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS 900",
@@ -257,7 +259,10 @@ describe("plugin update unchanged Docker E2E", () => {
             pluginId: CORRUPT_PLUGIN_ID,
             message:
               `Plugin "${CORRUPT_PLUGIN_ID}" could not be processed after the core update: ` +
-              disabledAfterFailure.npm.outcomes[0].message +
+              expectDefined(
+                disabledAfterFailure.npm.outcomes[0],
+                "corrupt plugin update failure outcome",
+              ).message +
               " Run openclaw update repair to retry post-update plugin repair. " +
               `Run openclaw plugins inspect ${CORRUPT_PLUGIN_ID} --runtime --json for details.`,
           },

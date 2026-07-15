@@ -33,7 +33,6 @@ const https = await import("node:https");
 let fakeNowMs = 1_700_000_000_000;
 let sendMessage: typeof import("./client.js").sendMessage;
 let sendFileUrl: typeof import("./client.js").sendFileUrl;
-let fetchChatUsers: typeof import("./client.js").fetchChatUsers;
 let resolveLegacyWebhookNameToChatUserId: typeof import("./client.js").resolveLegacyWebhookNameToChatUserId;
 
 type RequestCallback = (res: IncomingMessage) => void;
@@ -108,7 +107,7 @@ function mockFailureResponse(statusCode = 500) {
 
 function installFakeTimerHarness() {
   beforeAll(async () => {
-    ({ sendMessage, sendFileUrl, fetchChatUsers, resolveLegacyWebhookNameToChatUserId } =
+    ({ sendMessage, sendFileUrl, resolveLegacyWebhookNameToChatUserId } =
       await import("./client.js"));
   });
 
@@ -416,7 +415,7 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
   });
 });
 
-describe("fetchChatUsers", () => {
+describe("resolveLegacyWebhookNameToChatUserId user lookup", () => {
   installFakeTimerHarness();
 
   it("filters malformed user entries while keeping valid ones", async () => {
@@ -425,11 +424,13 @@ describe("fetchChatUsers", () => {
       { user_id: "bad", username: "broken" },
     ]);
 
-    const users = await fetchChatUsers(
-      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22",
-    );
+    const userId = await resolveLegacyWebhookNameToChatUserId({
+      incomingUrl:
+        "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22",
+      mutableWebhookUsername: "jmn",
+    });
 
-    expect(users).toEqual([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
+    expect(userId).toBe(4);
   });
 
   it("verifies TLS by default for user_list lookups", async () => {
@@ -437,7 +438,10 @@ describe("fetchChatUsers", () => {
     const freshUrl =
       "https://fresh-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22fresh%22";
 
-    await fetchChatUsers(freshUrl);
+    await resolveLegacyWebhookNameToChatUserId({
+      incomingUrl: freshUrl,
+      mutableWebhookUsername: "jmn",
+    });
 
     const firstCall = firstHttpsGetCall();
     expect(firstCall[1]?.rejectUnauthorized).toBe(true);

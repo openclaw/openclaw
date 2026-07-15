@@ -2,9 +2,10 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { registerDiffsPlugin } from "./plugin.js";
@@ -15,7 +16,6 @@ const { launchMock } = vi.hoisted(() => ({
 }));
 
 let PlaywrightDiffScreenshotter: typeof import("./browser.js").PlaywrightDiffScreenshotter;
-let resetSharedBrowserStateForTests: typeof import("./browser.js").resetSharedBrowserStateForTests;
 
 vi.mock("playwright-core", () => ({
   chromium: {
@@ -44,21 +44,17 @@ describe("PlaywrightDiffScreenshotter", () => {
   let outputPath: string;
   let cleanupRootDir: () => Promise<void>;
 
-  beforeAll(async () => {
-    ({ PlaywrightDiffScreenshotter, resetSharedBrowserStateForTests } =
-      await import("./browser.js"));
-  });
-
   beforeEach(async () => {
     vi.useFakeTimers();
+    vi.resetModules();
+    ({ PlaywrightDiffScreenshotter } = await import("./browser.js"));
     ({ rootDir, cleanup: cleanupRootDir } = await createTempDiffRoot("openclaw-diffs-browser-"));
     outputPath = path.join(rootDir, "preview.png");
     launchMock.mockReset();
-    await resetSharedBrowserStateForTests();
   });
 
   afterEach(async () => {
-    await resetSharedBrowserStateForTests();
+    await vi.runAllTimersAsync();
     vi.useRealTimers();
     await cleanupRootDir();
   });
@@ -139,15 +135,14 @@ describe("PlaywrightDiffScreenshotter", () => {
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(pages).toHaveLength(1);
-    expect(pages[0]?.pdf).toHaveBeenCalledTimes(1);
-    const pdfCall = firstMockCall(pages[0]?.pdf, "PDF render")[0] as
-      | Record<string, unknown>
-      | undefined;
+    const page = expectDefined(pages[0], "diffs browser page");
+    expect(page.pdf).toHaveBeenCalledTimes(1);
+    const pdfCall = firstMockCall(page.pdf, "PDF render")[0] as Record<string, unknown> | undefined;
     if (!pdfCall) {
       throw new Error("expected PDF render call");
     }
     expect(pdfCall).not.toHaveProperty("pageRanges");
-    expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
+    expect(page.screenshot).toHaveBeenCalledTimes(0);
     await expect(fs.readFile(pdfPath, "utf8")).resolves.toContain("%PDF-1.7");
   });
 

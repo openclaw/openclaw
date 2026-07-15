@@ -3,9 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { HealthSummary } from "./health.js";
 
@@ -753,6 +753,35 @@ describe("getHealthSnapshot", () => {
     expect(discord.accounts?.default?.connected).toBe(true);
     expect(discord.accounts?.default?.tokenSource).toBe("config");
     expect(discord.accounts?.default?.tokenStatus).toBe("available");
+  });
+
+  it("redacts base URL credentials returned by channel summary hooks", async () => {
+    testConfig = { channels: { discord: { token: "test" } } };
+    testStore = {};
+    const plugin = createDiscordHealthPlugin();
+    plugin.status = {
+      ...plugin.status,
+      buildChannelSummary: () => ({
+        configured: true,
+        baseUrl: [
+          "https://summary-user",
+          ":",
+          "summary-pass",
+          "@chat.example.test/?to",
+          "ken=test",
+        ].join(""),
+      }),
+    };
+    healthPluginsForTest = [plugin];
+
+    const snap = await getHealthSnapshot({ probe: false, includeSensitive: false });
+    const discord = snap.channels.discord as {
+      baseUrl?: string;
+      accounts?: Record<string, { baseUrl?: string }>;
+    };
+
+    expect(discord.baseUrl).toBe("https://chat.example.test/?token=***");
+    expect(discord.accounts?.default?.baseUrl).toBe("https://chat.example.test/?token=***");
   });
 
   it("preserves plugin-derived configured state for unavailable SecretRef credentials", async () => {

@@ -16,8 +16,8 @@ import {
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
+import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import {
@@ -32,6 +32,8 @@ import {
   createCodexTestModel,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
+
+const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 
 let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexTestAppServerClientFactory | undefined;
@@ -84,6 +86,31 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
   } as EmbeddedRunAttemptParams;
+}
+
+function createSqliteParams(workspaceDir: string, storeName: string): EmbeddedRunAttemptParams {
+  const sessionId = "session-1";
+  const sessionKey = "agent:main:session-1";
+  const storePath = path.join(tempDir, `${storeName}.sqlite`);
+  const sessionFile = formatSqliteSessionFileMarker({
+    agentId: "main",
+    sessionId,
+    storePath,
+  });
+  const params = createParams(sessionFile, workspaceDir);
+  params.sessionTarget = {
+    agentId: "main",
+    sessionId,
+    sessionKey,
+    storePath,
+  };
+  const message = userMessage("hello", Date.now());
+  params.userTurnTranscriptRecorder = {
+    message,
+    resolveMessage: async () => message,
+    markRuntimePersisted() {},
+  } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+  return params;
 }
 
 const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
@@ -1929,7 +1956,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   ] as const)(
     "keeps $name turns heartbeat-classified through afterTurn maintenance",
     async (testCase) => {
-      const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const afterTurn = vi.fn(
         async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
@@ -1937,7 +1963,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
       const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
       const harness = createStartedThreadHarness();
-      const params = createParams(sessionFile, workspaceDir);
+      const params = createSqliteParams(
+        workspaceDir,
+        `heartbeat-${testCase.bootstrapContextRunKind}`,
+      );
       params.contextEngine = contextEngine;
       params.trigger = testCase.trigger;
       params.bootstrapContextRunKind = testCase.bootstrapContextRunKind;
@@ -2056,7 +2085,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   it("falls back to ingestBatch and skips turn maintenance on prompt failure", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const ingestBatch = vi.fn(async () => ({ ingestedCount: 2 }));
     const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
@@ -2067,7 +2095,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       bootstrap: undefined,
     });
     const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createSqliteParams(workspaceDir, "prompt-failure");
     params.contextEngine = contextEngine;
 
     const run = runCodexAppServerAttempt(params);
@@ -2093,3 +2121,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,6 +3,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type {
@@ -3935,7 +3936,10 @@ describe("subagent registry seam flow", () => {
           string,
           SessionEntry
         >;
-        const current = store[scope.sessionKey];
+        const current = expectDefined(
+          store[scope.sessionKey],
+          "store[scope.sessionKey] test invariant",
+        );
         const patch = await update(current, { existingEntry: { ...current } });
         if (patch) {
           mocks.updateSessionStore(scope.storePath, () => {});
@@ -6065,3 +6069,4 @@ describe("subagent registry seam flow", () => {
     await expect(mod.testing.runSweeperTickForTests()).resolves.toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

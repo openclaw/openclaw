@@ -1,8 +1,8 @@
 package ai.openclaw.app.chat
-
 import java.util.Locale
 
 private val visibleChatMessageRoles = setOf("user", "assistant", "system", "custom")
+internal const val CHAT_IMAGE_MAX_BASE64_CHARS = 300 * 1024
 
 /** Keeps transcript rows limited to roles Android renders as user-visible chat. */
 internal fun normalizeVisibleChatMessageRole(role: String?): String? =
@@ -61,10 +61,10 @@ internal val defaultChatThinkingLevelSelection =
   ChatThinkingLevelSelection(
     options =
       listOf(
-        ChatThinkingLevelOption(id = "off", label = "off"),
-        ChatThinkingLevelOption(id = "low", label = "low"),
-        ChatThinkingLevelOption(id = "medium", label = "medium"),
-        ChatThinkingLevelOption(id = "high", label = "high"),
+        ChatThinkingLevelOption(id = "off", label = "Off"),
+        ChatThinkingLevelOption(id = "low", label = "Low"),
+        ChatThinkingLevelOption(id = "medium", label = "Medium"),
+        ChatThinkingLevelOption(id = "high", label = "High"),
       ),
     isGatewayProvided = false,
   )

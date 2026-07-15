@@ -14,7 +14,7 @@ import {
   getRuntimeConfig,
 } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { clearPluginLoaderCache } from "../plugins/loader.js";
+import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import {
   pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,
@@ -1094,3 +1094,4 @@ describeLive("gateway live (ACP bind)", () => {
     LIVE_TIMEOUT_MS + 360_000,
   );
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

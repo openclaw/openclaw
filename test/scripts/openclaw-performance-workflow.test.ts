@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -82,7 +83,7 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "2b02b7d33418db0c6952c4cf8fe8a608e7964859";
+    const kovaRef = "f3d037b5b8aacd6adf8ef1dd2ea4c1d778ec7c6c";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
 
@@ -659,7 +660,9 @@ esac
     const plan = findStep("Kova version and plan sanity");
     const runKova = findStep("Run Kova");
     const matrixEntries = kovaMatrixEntries();
-    const includeFilters = matrixEntries.map((entry) => entry.include_filters);
+    const includeFilters = matrixEntries.map((entry, index) =>
+      expectDefined(entry.include_filters, `Kova matrix include filters ${index}`),
+    );
     const expectedReleaseEntries = matrixEntries.map((entry) => entry.expected_release_entries);
 
     expect(includeFilters).toEqual([

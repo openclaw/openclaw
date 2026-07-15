@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -20,7 +21,7 @@ import {
   writeLegacyCallsJsonl,
 } from "./src/manager.test-harness.js";
 import { getCallHistoryFromStore, loadActiveCallsFromStore } from "./src/manager/store.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./src/runtime-state.js";
+import { setVoiceCallStateRuntime } from "./src/runtime-state.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -88,7 +89,10 @@ describe("voice-call doctor state migration", () => {
           },
         },
       };
-      const result = await stateMigrations[0].migrateLegacyState({
+      const result = await expectDefined(
+        stateMigrations[0],
+        "voice-call state migration",
+      ).migrateLegacyState({
         config,
         env: warmEnv,
         stateDir: warmStateDir,
@@ -105,7 +109,6 @@ describe("voice-call doctor state migration", () => {
         historyCallIds: history.map((entry) => entry.callId),
       };
     } finally {
-      clearVoiceCallStateRuntime();
       resetPluginStateStoreForTests();
       await fs.rm(warmStateDir, { recursive: true, force: true });
       await fs.rm(warmStorePath, { recursive: true, force: true });
@@ -121,7 +124,6 @@ describe("voice-call doctor state migration", () => {
   });
 
   afterEach(async () => {
-    clearVoiceCallStateRuntime();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
     await fs.rm(storePath, { recursive: true, force: true });
@@ -179,7 +181,7 @@ describe("voice-call doctor state migration", () => {
       },
     ]);
 
-    const migration = stateMigrations[0];
+    const migration = expectDefined(stateMigrations[0], "voice-call state migration");
     const config = {
       plugins: {
         entries: {
@@ -256,7 +258,7 @@ describe("voice-call doctor state migration", () => {
     } finally {
       db.close();
     }
-    const migration = stateMigrations[0];
+    const migration = expectDefined(stateMigrations[0], "voice-call state migration");
     const config = {
       plugins: {
         entries: {
@@ -323,7 +325,10 @@ describe("voice-call doctor state migration", () => {
         },
       },
     };
-    const result = await stateMigrations[0].migrateLegacyState({
+    const result = await expectDefined(
+      stateMigrations[0],
+      "voice-call state migration",
+    ).migrateLegacyState({
       config,
       env,
       stateDir,

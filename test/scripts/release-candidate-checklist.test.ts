@@ -1,5 +1,6 @@
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
@@ -12,6 +13,7 @@ import {
   parseArgs,
   parseRunIdFromDispatchOutput,
   reconcileReleaseCandidateState,
+  releaseBranchForTag,
   resolveArtifactName,
   requireRunIdFromDispatchOutput,
   run,
@@ -19,6 +21,7 @@ import {
   validateCandidateCheckout,
   validateCandidateReleaseNotes,
   validateFullManifest,
+  validateNpmPreflightRunSource,
   validatePreflightManifest,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
@@ -447,13 +450,12 @@ describe("release candidate checklist", () => {
       ".artifacts/preflight/openclaw.tgz",
       "--json",
     ]);
-    expect(
-      candidateParallelsShellCommand(
-        ".artifacts/preflight/openclaw candidate.tgz",
-        "/opt/homebrew/bin/gtimeout",
-      ),
-    ).toContain(
-      "set -a; source \"$HOME/.profile\" >/dev/null 2>&1 || true; set +a; exec '/opt/homebrew/bin/gtimeout' --foreground 150m pnpm",
+    const command = candidateParallelsShellCommand(
+      ".artifacts/preflight/openclaw candidate.tgz",
+      "/opt/homebrew/bin/gtimeout",
+    );
+    expect(command).toContain(
+      `set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a; export PATH='${dirname(process.execPath)}':"$PATH"; exec '/opt/homebrew/bin/gtimeout' --foreground 150m pnpm`,
     );
     expect(
       candidateParallelsShellCommand(
@@ -519,6 +521,34 @@ describe("release candidate checklist", () => {
     ).toThrow("invalid dependency tarball metadata");
   });
 
+  it("trusts the npm workflow SHA while binding the candidate through its manifest", () => {
+    const workflowSha = "a".repeat(40);
+    const isTrustedWorkflowAncestor = vi.fn(() => true);
+
+    expect(
+      validateNpmPreflightRunSource({
+        workflowRun: { headSha: workflowSha },
+        workflowRef: "main",
+        isTrustedWorkflowAncestor,
+      }),
+    ).toEqual({
+      status: "passed",
+      headSha: workflowSha,
+      workflowRef: "main",
+    });
+    expect(isTrustedWorkflowAncestor).toHaveBeenCalledWith(workflowSha, "refs/remotes/origin/main");
+  });
+
+  it("rejects npm preflight workflow code outside the trusted ref", () => {
+    expect(() =>
+      validateNpmPreflightRunSource({
+        workflowRun: { headSha: "a".repeat(40) },
+        workflowRef: "main",
+        isTrustedWorkflowAncestor: () => false,
+      }),
+    ).toThrow("is not reachable from trusted main");
+  });
+
   it("requires run ids when dispatch is disabled", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14-beta.3", "--skip-dispatch"])).toThrow(
       "--skip-dispatch requires --full-release-run and --npm-preflight-run",
@@ -530,6 +560,16 @@ describe("release candidate checklist", () => {
     expect(() =>
       parseArgs(["--tag", "v2026.5.14-beta.3", "--workflow-ref", "release/2026.5.14"]),
     ).toThrow("--workflow-ref must be main");
+  });
+
+  it("keeps release validation context on the canonical release branch", () => {
+    expect(releaseBranchForTag("v2026.7.1-beta.4")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1-alpha.4")).toBe("");
+
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    expect(source).toContain("target_context_ref: targetContextRef");
   });
 
   it("preserves the matching Tideclaw alpha workflow source", () => {
@@ -710,7 +750,9 @@ describe("release candidate checklist", () => {
     ) as {
       on: { workflow_dispatch: { inputs: Record<string, unknown> } };
     };
-    const emittedInputs = [...command.matchAll(/'-f' '([^=']+)=/gu)].map((match) => match[1]);
+    const emittedInputs = [...command.matchAll(/'-f' '([^=']+)=/gu)].flatMap((match) =>
+      match[1] === undefined ? [] : [match[1]],
+    );
     for (const input of emittedInputs) {
       expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
     }
@@ -1025,4 +1067,28 @@ describe("release candidate checklist", () => {
       "GitHub API repos/openclaw/openclaw/actions/runs/123/jobs timed out after 5ms",
     );
   });
+});
+
+describe("GitHub API public fallback", () => {
+  it.each([403, 429])(
+    "retries anonymously after an authenticated rate limit response %s",
+    async (status) => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ message: "API rate limit exceeded" }), { status }),
+        )
+        .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      await expect(
+        githubApi("repos/openclaw/openclaw/actions/runs/123", {
+          token: "x",
+          fetchImpl,
+        }),
+      ).resolves.toEqual({ ok: true });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(fetchImpl.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer x" });
+      expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+    },
+  );
 });

@@ -58,7 +58,7 @@ function parseOptionalBoolean(value: string): boolean {
   throw new Error(`invalid boolean: ${value}`);
 }
 
-export function parseWorkspaceGrid(value: string): WorkspaceGrid {
+function parseWorkspaceGrid(value: string): WorkspaceGrid {
   const parts = value.split(",").map((entry) => Number(entry.trim()));
   if (parts.length !== 4 || parts.some((entry) => !Number.isInteger(entry))) {
     throw new Error("grid must be x,y,w,h");
@@ -67,7 +67,7 @@ export function parseWorkspaceGrid(value: string): WorkspaceGrid {
   return { x, y, w, h };
 }
 
-export function parseWorkspaceBindingShorthand(value: string): [string, WorkspaceBinding] {
+function parseWorkspaceBindingShorthand(value: string): [string, WorkspaceBinding] {
   const eqIndex = value.indexOf("=");
   if (eqIndex <= 0) {
     throw new Error("binding must be id=file:<path>, id=rpc:<method>, or id=static:<json>");
