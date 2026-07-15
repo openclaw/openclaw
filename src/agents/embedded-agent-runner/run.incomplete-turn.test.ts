@@ -786,6 +786,35 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.finalAssistantVisibleText).toBeUndefined();
   });
 
+  it("recovers a completed prompt-timeout assistant without collected assistant text", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const finalText = "Completed answer after the timeout race.";
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: finalText }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: undefined as unknown as string[],
+        timedOut: true,
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-no-assistant-texts",
+    });
+
+    expect(result.payloads).toEqual([{ text: finalText }]);
+  });
+
   it("preserves tool media when prompt-timeout recovery replaces partial assistant text", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const partialText = "Partial answer before the timeout race.";

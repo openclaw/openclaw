@@ -197,12 +197,12 @@ export function prepareEmbeddedRunTerminal(input: {
 
 function replacePartialAssistantPayload(input: {
   payloads: EmbeddedAgentRunResult["payloads"];
-  assistantTexts: string[];
+  assistantTexts?: string[];
   recoveredText: string;
 }): NonNullable<EmbeddedAgentRunResult["payloads"]> {
   const payloads = input.payloads ? [...input.payloads] : [];
   const assistantTextSignatures = new Set(
-    input.assistantTexts.map((text) => text.trim()).filter((text) => text.length > 0),
+    (input.assistantTexts ?? []).map((text) => text.trim()).filter((text) => text.length > 0),
   );
   // The attempt can contain completed assistant blocks before its partial tail.
   // Recover the latest matching payload or we can overwrite already-delivered text.
