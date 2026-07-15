@@ -9,7 +9,6 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { requestFeishuApi } from "./comment-shared.js";
 import {
   assertFeishuPostWithinEnvelope,
   buildFeishuPostMessageContent,
