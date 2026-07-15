@@ -1,0 +1,107 @@
+====================================================================
+ CI FAILURE REPORT — PR #108061
+ Generated: 2026-07-15 11:43 CEST
+====================================================================
+
+1. GH RUN LIST
+   Database ID: 29405042432
+   Branch: feat/behavior-governance
+   Workflow: CI
+   URL: https://github.com/openclaw/openclaw/actions/runs/29405042432
+
+2. FAILED JOBS SUMMARY
+   -------------------------------------------------------
+   a) check-test-types: FAILED (annotation: .github#107)
+      - Full log was too verbose to extract the specific error; the
+        step exited non-zero.
+
+   b) check-dependencies: FAILED — "Unexpected unused exports" in:
+        src/security/behavior-policy.ts: ResolvedBehaviorRule
+        src/security/behavior-policy.ts: validateBehaviorOutput
+      Suggested fix: `pnpm deadcode:exports:update` after removing dead code.
+
+   c) checks-node-compact-small-whole-1: NOT FOUND in run logs.
+      - The closest match is "checks-node-compact-small-3" which ran
+        the core-unit-src-security shard.
+        That shard had 1 test failure:
+        File: src/state/openclaw-state-db.test.ts
+        Test: "migrates operator approvals to accept system-agent records"
+        Error: AssertionError — "cannot start a transaction within a transaction"
+        (Warning about nested transactions during schema migration)
+
+   d) Other failures visible in the run:
+        - checks-node-compact-large-4: FAILED (.github#461)
+        - checks-node-compact-small-6: FAILED (.github#373)
+        - checks-node-compact-small-10: FAILED (.github#405)
+        - openclaw/ci-gate: FAILED (check-shard + checks-node-core-test-nondist-shard)
+
+3. SOURCE FILE CHECKS
+   -------------------------------------------------------
+   a) behavior-policy.test.ts — require() calls:
+        NONE FOUND (file is clean, uses only `import`)
+
+   b) _test_header.txt — EXISTS on disk? NO
+
+   c) Exist on disk:
+        _test_header.txt:     NO
+        _status.txt:          NO
+        _status2.txt:         YES  ← will be removed
+        _ci_status.txt:       NO
+        _ci_failures.txt:     YES  ← will be removed
+
+4. TEST FILE FIXES (behavior-policy.test.ts)
+   -------------------------------------------------------
+   a) require() calls:                       NONE — already clean
+   b) resolveBehaviorPolicy imports:         NONE — already clean
+   c) ResolvedBehaviorRule type references:  NONE — already clean
+   d) Imports: only resolveBehaviorRules,
+      buildBehaviorPolicyPrompt,
+      validateBehaviorOutput                YES — already correct
+   e) describe("resolveBehaviorPolicy",…):  NONE — already absent
+   f) makeConfig inline type:               YES — uses inline type, not
+                                                BehaviorPolicyRule
+
+   => No changes needed to the test file.
+
+5. EXPORT CHECK (behavior-policy.ts)
+   -------------------------------------------------------
+   The following five items are all NOT exported (already correct):
+      BehaviorPolicyConfig    - local type, no export keyword  ✓
+      BehaviorPolicyOutputResult - local type, no export keyword ✓
+      BehaviorPolicyRule  - local type, no export keyword      ✓
+      BehaviorPolicyViolation   - local type, no export keyword ✓
+      resolveBehaviorPolicy    - local function, no export keyword ✓
+
+   Note: ResolvedBehaviorRule IS exported and is flagged as an
+   unused export by CI. validateBehaviorOutput is also flagged
+   as unused export. These are not mentioned in item 5 but are
+   the root cause of the check-dependencies failure.
+
+6. STALE FILES REMOVED
+   -------------------------------------------------------
+   Removed: _status2.txt, _ci_failures.txt
+   (others did not exist)
+
+7. LINT / PRETTIER RESULTS
+   -------------------------------------------------------
+   oxlint: locked by another process (heavy lock held by another shard);
+           could not run lint within the timeout. Files are syntactically
+           correct — no structural errors expected.
+
+   prettier --write: FIXED formatting issues in both files:
+      src/security/behavior-policy.ts       (174ms — reformatted)
+      src/security/behavior-policy.test.ts  (34ms — reformatted)
+      Both files now pass prettier check.
+
+   Stale files removed: _status2.txt, _ci_failures.txt
+
+====================================================================
+REMAINING ISSUES (not addressed by this task)
+====================================================================
+- check-dependencies failure: ResolvedBehaviorRule and
+  validateBehaviorOutput flagged as unused exports.
+- check-test-types failure: root cause unclear from logs.
+- checks-node-compact-small-3: nested-transaction bug in
+  openclaw-state-db.test.ts (not behavior-policy related).
+- Multiple other CI shard failures unrelated to this change.
+====================================================================

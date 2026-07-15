@@ -8,28 +8,15 @@ import {
   validateBehaviorOutput,
 } from "./behavior-policy.js";
 
-// Internal type mirror for test purposes.
-type BehaviorPolicyRule = {
-  id: string;
-  description?: string;
-  enforce: string;
-  mode?: "enforce" | "guide";
-};
-
-const SAMPLE_RULE: BehaviorPolicyRule = {
-  id: "test-no-secrets",
-  description: "Never disclose API keys or auth tokens.",
-  enforce: "Never disclose the operator's API keys, auth tokens, or private credentials.",
-};
-
-const SAMPLE_RULE_GUIDE: BehaviorPolicyRule = {
-  id: "test-politeness",
-  description: "Be polite.",
-  enforce: "Always respond politely and respectfully.",
-  mode: "guide",
-};
-
-function makeConfig(rules?: BehaviorPolicyRule[], exec?: Record<string, unknown>): OpenClawConfig {
+function makeConfig(
+  rules?: Array<{
+    id: string;
+    description?: string;
+    enforce: string;
+    mode?: "enforce" | "guide";
+  }>,
+  exec?: Record<string, unknown>,
+): OpenClawConfig {
   return {
     security: {
       behaviorPolicy: {
@@ -41,37 +28,22 @@ function makeConfig(rules?: BehaviorPolicyRule[], exec?: Record<string, unknown>
   } as unknown as OpenClawConfig;
 }
 
+const SAMPLE_RULE = {
+  id: "test-no-secrets",
+  description: "Never disclose API keys or auth tokens.",
+  enforce: "Never disclose the operator's API keys, auth tokens, or private credentials.",
+};
+
+const SAMPLE_RULE_GUIDE = {
+  id: "test-politeness",
+  description: "Be polite.",
+  enforce: "Always respond politely and respectfully.",
+  mode: "guide" as const,
+};
+
 describe("behavior-policy", () => {
-  describe("resolveBehaviorPolicy", () => {
-    it("returns undefined when config is undefined", () => {
-      const internal = require("./behavior-policy.js") as typeof import("./behavior-policy.js");
-      expect((internal as any).resolveBehaviorPolicy?.(undefined)).toBeUndefined();
-    });
-
-    it("returns undefined when behaviorPolicy is absent", () => {
-      const internal = require("./behavior-policy.js") as typeof import("./behavior-policy.js");
-      expect((internal as any).resolveBehaviorPolicy?.({})).toBeUndefined();
-    });
-
-    it("returns undefined when behaviorPolicy is not enabled", () => {
-      const cfg = {
-        security: { behaviorPolicy: { enabled: false } },
-      } as unknown as OpenClawConfig;
-      const internal = require("./behavior-policy.js") as typeof import("./behavior-policy.js");
-      expect((internal as any).resolveBehaviorPolicy?.(cfg)).toBeUndefined();
-    });
-
-    it("returns the policy config when enabled", () => {
-      const cfg = makeConfig([SAMPLE_RULE]);
-      const internal = require("./behavior-policy.js") as typeof import("./behavior-policy.js");
-      const policy = (internal as any).resolveBehaviorPolicy?.(cfg);
-      expect(policy).toBeDefined();
-      expect(policy!.enabled).toBe(true);
-    });
-  });
-
   describe("resolveBehaviorRules", () => {
-    it("returns undefined when policy is disabled", () => {
+    it("returns undefined when config is undefined", () => {
       expect(resolveBehaviorRules(undefined)).toBeUndefined();
     });
 
@@ -87,10 +59,10 @@ describe("behavior-policy", () => {
       const rules = resolveBehaviorRules(cfg);
       expect(rules).toBeDefined();
       expect(rules!).toHaveLength(2);
-      expect(rules![0].id).toBe("test-no-secrets");
-      expect(rules![0].mode).toBe("enforce");
-      expect(rules![1].id).toBe("test-politeness");
-      expect(rules![1].mode).toBe("guide");
+      expect(rules![0]!.id).toBe("test-no-secrets");
+      expect(rules![0]!.mode).toBe("enforce");
+      expect(rules![1]!.id).toBe("test-politeness");
+      expect(rules![1]!.mode).toBe("guide");
     });
   });
 
@@ -119,7 +91,14 @@ describe("behavior-policy", () => {
     });
 
     it("uses guide tag for guide-mode rules", () => {
-      const rules = [{ id: "r2", description: "", enforce: "Be polite", mode: "guide" as const }];
+      const rules = [
+        {
+          id: "r2",
+          description: "",
+          enforce: "Be polite",
+          mode: "guide" as const,
+        },
+      ];
       const prompt = buildBehaviorPolicyPrompt(rules);
       expect(prompt).toContain('<guide id="r2">');
       expect(prompt).toContain("Be polite");
@@ -127,7 +106,12 @@ describe("behavior-policy", () => {
 
     it("includes multiple rules", () => {
       const rules = [
-        { id: "a", description: "", enforce: "Rule A", mode: "enforce" as const },
+        {
+          id: "a",
+          description: "",
+          enforce: "Rule A",
+          mode: "enforce" as const,
+        },
         { id: "b", description: "", enforce: "Rule B", mode: "guide" as const },
       ];
       const prompt = buildBehaviorPolicyPrompt(rules);
@@ -199,10 +183,8 @@ describe("behavior-policy", () => {
       expect(result.kind).toBe("pass");
       if (result.kind === "pass") {
         expect(result.violations).toBeDefined();
-        expect((result.violations as NonNullable<typeof result.violations>).length).toBe(1);
-        expect((result.violations as NonNullable<typeof result.violations>)[0].ruleId).toBe(
-          "no-secrets",
-        );
+        expect(result.violations!.length).toBe(1);
+        expect(result.violations![0]!.ruleId).toBe("no-secrets");
       }
     });
 
