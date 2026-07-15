@@ -25,7 +25,7 @@ async function createStorePath(): Promise<string> {
   return path.join(root, "sessions.json");
 }
 
-async function seedSession(storePath: string, language?: "english" | "中文"): Promise<void> {
+async function seedSession(storePath: string): Promise<void> {
   await upsertSessionEntry(
     { storePath, sessionKey },
     {
@@ -33,7 +33,6 @@ async function seedSession(storePath: string, language?: "english" | "中文"): 
       updatedAt: 1,
       label: "测试会话",
       pinnedAt,
-      ...(language ? { markLanguage: language } : {}),
     },
   );
 }
@@ -86,7 +85,7 @@ describe("mark command", () => {
       argsMenu: "auto",
       category: "session",
     });
-    expect(command?.args?.[0]?.choices).toHaveLength(9);
+    expect(command?.args?.[0]?.choices).toHaveLength(7);
     expect(loadCommandHandlers()).toContain(handleMarkCommand);
   });
 
@@ -127,43 +126,6 @@ describe("mark command", () => {
       pinnedAt,
     });
     expect(cleared?.sessionMark).toBeUndefined();
-  });
-
-  it("defaults to English until the session explicitly selects Chinese", async () => {
-    const storePath = await createStorePath();
-    await seedSession(storePath);
-
-    const defaultError = await runMark(storePath, "/mark nonexistent");
-    expect(defaultError?.reply?.text).toContain("No mark matches");
-    expect(loadSessionEntry({ storePath, sessionKey })?.markLanguage).toBeUndefined();
-
-    await runMark(storePath, "/mark 中文");
-    const chineseError = await runMark(storePath, "/mark nonexistent");
-    expect(chineseError?.reply?.text).toContain("没有匹配");
-  });
-
-  it("switches reply language without changing the label or pinnedAt", async () => {
-    const storePath = await createStorePath();
-    await seedSession(storePath);
-
-    const english = await runMark(storePath, "/mark english");
-    expect(english?.reply?.text).toContain("switched to English");
-    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
-      label: "测试会话",
-      pinnedAt,
-      markLanguage: "english",
-    });
-
-    const englishError = await runMark(storePath, "/mark nonexistent");
-    expect(englishError?.reply?.text).toContain("No mark matches");
-
-    const chinese = await runMark(storePath, "/mark 中文");
-    expect(chinese?.reply?.text).toContain("切换为中文");
-    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
-      label: "测试会话",
-      pinnedAt,
-      markLanguage: "中文",
-    });
   });
 
   it("preserves arbitrary separator labels when clearing or applying a mark", async () => {
