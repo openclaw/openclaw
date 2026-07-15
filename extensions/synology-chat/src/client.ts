@@ -5,6 +5,7 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
+import { StringDecoder } from "node:string_decoder";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
@@ -182,11 +183,13 @@ async function fetchChatUsers(
 
     const req = transport
       .get(listUrl, requestOptions, (res) => {
+        const decoder = new StringDecoder("utf8");
         let data = "";
         res.on("data", (c: Buffer) => {
-          data += c.toString();
+          data += decoder.write(c);
         });
         res.on("end", () => {
+          data += decoder.end();
           const result = safeParseJsonWithSchema(ChatUserListResponseSchema, data);
           if (!result) {
             log?.warn("fetchChatUsers: failed to parse user_list response");

@@ -344,6 +344,36 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     expect(result).toBe(4);
   });
 
+  it("preserves UTF-8 when user_list splits a nickname across response chunks", async () => {
+    const nickname = "猫";
+    const responseBody = Buffer.from(
+      JSON.stringify({
+        success: true,
+        data: { users: [{ user_id: 4, username: "jmn67", nickname }] },
+      }),
+      "utf8",
+    );
+    const nicknameOffset = responseBody.indexOf(Buffer.from(nickname, "utf8"));
+    const splitAt = nicknameOffset + 1;
+    vi.mocked(https.get).mockImplementation(((_url, _opts, callback) => {
+      const res = createMockResponseEmitter(200);
+      process.nextTick(() => {
+        callback?.(res);
+        res.emit("data", responseBody.subarray(0, splitAt));
+        res.emit("data", responseBody.subarray(splitAt));
+        res.emit("end");
+      });
+      return createMockRequestEmitter();
+    }) as MockRequestHandler);
+
+    const result = await resolveLegacyWebhookNameToChatUserId({
+      incomingUrl: baseUrl,
+      mutableWebhookUsername: nickname,
+    });
+
+    expect(result).toBe(4);
+  });
+
   it("resolves user by username when nickname does not match", async () => {
     mockUserListResponse([
       { user_id: 4, username: "jmn67", nickname: "" },
