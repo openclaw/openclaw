@@ -17,6 +17,7 @@ vi.mock("../gateway-rpc.js", async () => {
 
 const { registerCronAddCommand } = await import("./register.cron-add.js");
 const { registerCronEditCommand } = await import("./register.cron-edit.js");
+const { readCronTriggerScript } = await import("./trigger-options.js");
 
 describe("cron trigger CLI options", () => {
   let fixtureRoot = "";
@@ -75,6 +76,19 @@ describe("cron trigger CLI options", () => {
         trigger: { script: "json({ fire: true })", once: true },
       }),
     );
+  });
+
+  it("rejects oversized trigger script files before reading the body", async () => {
+    const scriptPath = path.join(fixtureRoot, "oversized.js");
+    const stat = vi.fn(async () => ({ size: 65_537 }));
+    const readFile = vi.fn(async () => "json({ fire: true })");
+
+    await expect(readCronTriggerScript(scriptPath, { stat, readFile })).rejects.toThrow(
+      "Trigger script exceeds 65536 bytes",
+    );
+
+    expect(stat).toHaveBeenCalledWith(scriptPath);
+    expect(readFile).not.toHaveBeenCalled();
   });
 
   it("maps --clear-trigger to a nullable edit patch", async () => {

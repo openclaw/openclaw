@@ -22,13 +22,14 @@ export async function readCronTriggerScript(
   source: string,
   deps?: {
     readFile?: (path: string) => Promise<string>;
+    stat?: (path: string) => Promise<{ size: number }>;
     stdin?: NodeJS.ReadableStream;
   },
 ): Promise<string> {
   const raw =
     source === "-"
       ? await readStdin(deps?.stdin ?? process.stdin)
-      : await (deps?.readFile ?? ((path) => fs.readFile(path, "utf8")))(source);
+      : await readTriggerScriptFile(source, deps);
   if (Buffer.byteLength(raw, "utf8") > MAX_CRON_TRIGGER_SCRIPT_BYTES) {
     throw new Error("Trigger script exceeds 65536 bytes");
   }
@@ -37,4 +38,18 @@ export async function readCronTriggerScript(
     throw new Error("Trigger script must not be empty");
   }
   return script;
+}
+
+async function readTriggerScriptFile(
+  source: string,
+  deps?: {
+    readFile?: (path: string) => Promise<string>;
+    stat?: (path: string) => Promise<{ size: number }>;
+  },
+): Promise<string> {
+  const stat = await (deps?.stat ?? ((path) => fs.stat(path)))(source);
+  if (stat.size > MAX_CRON_TRIGGER_SCRIPT_BYTES) {
+    throw new Error("Trigger script exceeds 65536 bytes");
+  }
+  return await (deps?.readFile ?? ((path) => fs.readFile(path, "utf8")))(source);
 }
