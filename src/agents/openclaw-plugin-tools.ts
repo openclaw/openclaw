@@ -140,6 +140,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       existingToolNames,
       toolAllowlist: params.options?.pluginToolAllowlist,
       toolDenylist: params.options?.pluginToolDenylist,
+      agentSessionKey: params.options?.agentSessionKey,
     }),
   );
 

@@ -1562,3 +1562,4 @@ export function resolvePluginTools(params: {
 
   return tools;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

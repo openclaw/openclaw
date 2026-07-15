@@ -876,6 +876,9 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
               presenceEvents: {
                 channelId: "222222222222222222",
                 users: ["333333333333333333"], // optional; omit for all humans
+                reconnectSuppressSeconds: 300, // optional; new-session quiet window (0 disables)
+                burstLimit: 8, // optional; max events per burst window
+                burstWindowSeconds: 60, // optional; sliding burst-detection window
               },
             },
           },
@@ -884,7 +887,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
     }
     ```
 
-    `presenceEvents` requires an enabled heartbeat for the routed agent and the privileged **Presence Intent** on the application's Bot page in the Discord Developer Portal. OpenClaw seeds current online members from each complete `GUILD_CREATE` snapshot, routes observed offline-to-online transitions, and also treats a later first online signal for an unseen member as newly available. That member may have come online or joined after the snapshot, so the event does not assert an exact prior status. OpenClaw ignores bots and unchanged online states and persists an eight-hour per-user cooldown across Gateway restarts. Discord limits snapshots for guilds above 75,000 members; there, OpenClaw requires an explicit offline update before greeting. The system event carries immutable user, guild, and channel IDs without embedding mutable display names. The agent decides whether and how to greet.
+    `presenceEvents` requires an enabled heartbeat for the routed agent and the privileged **Presence Intent** on the application's Bot page in the Discord Developer Portal. OpenClaw seeds current online members from each complete `GUILD_CREATE` snapshot, routes observed offline-to-online transitions, and also treats a later first online signal for an unseen member as newly available. That member may have come online or joined after the snapshot, so the event does not assert an exact prior status. OpenClaw ignores bots and unchanged online states and persists an eight-hour per-user cooldown across Gateway restarts. When Discord establishes a new Gateway session and sends `READY`, OpenClaw suppresses presence-derived events for `reconnectSuppressSeconds` (default 300, `0` disables) while guild presence state is rebuilt, so re-observed members cannot wake the agent one by one. It additionally rate-limits successfully queued events per guild to `burstLimit` events (default 8) per `burstWindowSeconds` sliding window (default 60), logging each guild's suppression episode once. A resumed session is not treated as a new session. Discord limits snapshots for guilds above 75,000 members; there, OpenClaw requires an explicit offline update before greeting. The system event carries immutable user, guild, and channel IDs without embedding mutable display names. The agent decides whether and how to greet.
 
   </Accordion>
 

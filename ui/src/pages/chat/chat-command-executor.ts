@@ -788,3 +788,4 @@ async function executeRedirect(
     return { content: `Failed to redirect: ${String(err)}`, failed: true };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

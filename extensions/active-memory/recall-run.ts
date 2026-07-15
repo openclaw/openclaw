@@ -2,7 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -40,10 +44,39 @@ import { fileTranscriptSource, transcriptSourceFromReturnedSessionFile } from ".
 import {
   ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS,
   ACTIVE_MEMORY_RECALL_LANE,
+  type ActiveMemoryFastMode,
   type ActiveMemoryTranscriptSource,
   type RecallSubagentResult,
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
+
+function normalizeRecallFastMode(value: unknown): ActiveMemoryFastMode | undefined {
+  return value === true || value === false || value === "auto" ? value : undefined;
+}
+
+function resolveRecallFastMode(params: {
+  api: OpenClawPluginApi;
+  config: ResolvedActiveRecallPluginConfig;
+  agentId: string;
+  parentSessionKey?: string;
+  storePath: string;
+}): ActiveMemoryFastMode | undefined {
+  if (params.config.fastMode !== undefined) {
+    return params.config.fastMode;
+  }
+  const sessionFastMode = params.parentSessionKey
+    ? params.api.runtime.agent.session.getSessionEntry({
+        agentId: params.agentId,
+        sessionKey: params.parentSessionKey,
+        storePath: params.storePath,
+        readConsistency: "latest",
+      })?.fastMode
+    : undefined;
+  return (
+    normalizeRecallFastMode(sessionFastMode) ??
+    normalizeRecallFastMode(resolveAgentConfig(params.api.config, params.agentId)?.fastModeDefault)
+  );
+}
 
 function collectActiveMemoryTranscriptSources(params: {
   artifactSessionFile: string;
@@ -207,6 +240,13 @@ async function runRecallSubagent(params: {
       agentId: params.agentId,
     },
   );
+  const fastMode = resolveRecallFastMode({
+    api: params.api,
+    config: params.config,
+    agentId: params.agentId,
+    parentSessionKey,
+    storePath,
+  });
   const runtimeSessionFile = formatSqliteSessionFileMarker({
     agentId: params.agentId,
     sessionId: subagentSessionId,
@@ -300,6 +340,7 @@ async function runRecallSubagent(params: {
       bootstrapContextMode: "lightweight",
       verboseLevel: "off",
       thinkLevel: params.config.thinking,
+      fastMode,
       reasoningLevel: "off",
       silentExpected: true,
       authProfileFailurePolicy: "local",

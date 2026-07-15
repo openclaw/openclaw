@@ -1396,3 +1396,4 @@ describe("openai transport stream", () => {
     expect(client.constructor.name).toBe("AzureOpenAI");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1180,3 +1180,4 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     hadUnresolvedTargets: Object.values(targetStatesByPath).includes("unresolved"),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2456,3 +2456,4 @@ export function stopTimer(state: CronServiceState) {
   }
   state.timer = null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

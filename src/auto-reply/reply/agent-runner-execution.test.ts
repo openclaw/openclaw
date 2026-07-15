@@ -28,15 +28,16 @@ import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveFallbackCandidateRun } from "./agent-runner-auth-profile.js";
+import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
+import {
+  buildContextOverflowRecoveryText,
+  computeContextAwareReserveTokensFloor,
+} from "./agent-runner-context-recovery.js";
+import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import {
   buildEmptyInteractiveReplyPayload,
   buildKnownAgentRunFailureReplyPayload,
-  buildContextOverflowRecoveryText,
-  computeContextAwareReserveTokensFloor,
-  MAX_LIVE_SWITCH_RETRIES,
-  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
-} from "./agent-runner-execution.js";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
+} from "./agent-runner-failure-reply.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
@@ -5929,6 +5930,84 @@ describe("runAgentTurnWithFallback", () => {
     expect(onCommandOutput).not.toHaveBeenCalled();
   });
 
+  it("preserves message-tool-only suppression across fallback candidates", async () => {
+    const onItemEvent = vi.fn();
+    const onCommandOutput = vi.fn();
+    state.runEmbeddedAgentMock
+      .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await params.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "message",
+            toolCallId: "message-1",
+            args: { action: "send", message: "Visible reply" },
+          },
+        });
+        await params.onAgentEvent?.({
+          stream: "item",
+          data: {
+            itemId: "tool-message-1",
+            phase: "end",
+            kind: "tool",
+            name: "message",
+            toolCallId: "message-1",
+            status: "completed",
+          },
+        });
+        return { payloads: [], meta: {} };
+      })
+      .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await params.onAgentEvent?.({
+          stream: "command_output",
+          data: {
+            itemId: "command:exec-1",
+            phase: "end",
+            name: "exec",
+            output: "must stay suppressed",
+            status: "completed",
+            exitCode: 0,
+          },
+        });
+        return { payloads: [{ text: "NO_REPLY" }], meta: {} };
+      });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("anthropic", "primary");
+      return {
+        result: await params.run("openai", "fallback"),
+        provider: "openai",
+        model: "fallback",
+        attempts: [],
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: { Provider: "discord", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { onItemEvent, onCommandOutput } satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "on",
+    });
+
+    expect(onItemEvent).toHaveBeenCalledTimes(1);
+    expect(onCommandOutput).not.toHaveBeenCalled();
+  });
+
   it("keeps opted-in progress callbacks active after message-tool-only delivery completes", async () => {
     const onToolStart = vi.fn();
     const onCommandOutput = vi.fn();
@@ -8706,11 +8785,11 @@ describe("runAgentTurnWithFallback", () => {
       resolvedVerboseLevel: "off",
     });
 
-    // After MAX_LIVE_SWITCH_RETRIES (2) the loop must break instead of continuing
+    // After two retries the loop must break instead of continuing
     // forever. The result should be a final error, not an infinite hang.
     expect(result.kind).toBe("final");
-    // 1 initial + MAX_LIVE_SWITCH_RETRIES retries = exact total invocations
-    expect(switchCallCount).toBe(1 + MAX_LIVE_SWITCH_RETRIES);
+    // One initial attempt plus two retries.
+    expect(switchCallCount).toBe(3);
   });
 
   it("propagates auth profile state on bounded live model switch retries (#58348)", async () => {
@@ -9238,3 +9317,4 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

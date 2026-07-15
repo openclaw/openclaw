@@ -1025,3 +1025,4 @@ function formatExitValue(value: unknown): string {
   }
   return "unknown";
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

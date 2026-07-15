@@ -2450,3 +2450,4 @@ describe("worker environment service", () => {
     } satisfies Partial<WorkerEnvironmentServiceError>);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

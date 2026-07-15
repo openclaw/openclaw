@@ -3768,3 +3768,4 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

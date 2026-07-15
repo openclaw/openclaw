@@ -3,6 +3,7 @@ import type { messagingApi } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
@@ -49,8 +50,8 @@ type LineAutoReplyDeps = {
 >;
 
 type LineAutoReplyDeliveryResult =
-  | { status: "delivered"; replyTokenUsed: boolean }
-  | { status: "partial"; replyTokenUsed: boolean; error: Error };
+  | { status: "delivered"; replyTokenUsed: boolean; visibleReplySent: boolean }
+  | { status: "partial"; replyTokenUsed: boolean; visibleReplySent: true; error: Error };
 
 function markLineVisibleDeliveryError(error: unknown): Error {
   if (error instanceof Error && Object.isExtensible(error)) {
@@ -75,16 +76,38 @@ export async function deliverLineAutoReply(params: {
 }): Promise<LineAutoReplyDeliveryResult> {
   const { payload, lineData, replyToken, accountId, to, textLimit, deps } = params;
   let replyTokenUsed = params.replyTokenUsed;
+  let visibleReplySent = false;
+
+  const sendVisible = async <T>(send: () => Promise<T>): Promise<T> => {
+    try {
+      const result = await send();
+      visibleReplySent = true;
+      return result;
+    } catch (error) {
+      if (visibleReplySent) {
+        throw markLineVisibleDeliveryError(error);
+      }
+      throw error;
+    }
+  };
+  const replyVisible: LineAutoReplyDeps["replyMessageLine"] = (...args) =>
+    sendVisible(() => deps.replyMessageLine(...args));
+  const pushTextVisible: LineAutoReplyDeps["pushMessageLine"] = (...args) =>
+    sendVisible(() => deps.pushMessageLine(...args));
+  const pushQuickRepliesVisible: LineAutoReplyDeps["pushTextMessageWithQuickReplies"] = (...args) =>
+    sendVisible(() => deps.pushTextMessageWithQuickReplies(...args));
 
   const pushLineMessages = async (messages: messagingApi.Message[]): Promise<void> => {
     if (messages.length === 0) {
       return;
     }
     for (let i = 0; i < messages.length; i += 5) {
-      await deps.pushMessagesLine(to, messages.slice(i, i + 5), {
-        cfg: params.cfg,
-        accountId,
-      });
+      await sendVisible(() =>
+        deps.pushMessagesLine(to, messages.slice(i, i + 5), {
+          cfg: params.cfg,
+          accountId,
+        }),
+      );
     }
   };
 
@@ -100,7 +123,7 @@ export async function deliverLineAutoReply(params: {
     if (allowReplyToken && replyToken && !replyTokenUsed) {
       const replyBatch = remaining.slice(0, 5);
       try {
-        await deps.replyMessageLine(replyToken, replyBatch, {
+        await replyVisible(replyToken, replyBatch, {
           cfg: params.cfg,
           accountId,
         });
@@ -140,8 +163,11 @@ export async function deliverLineAutoReply(params: {
     richMessages.push(deps.createLocationMessage(lineData.location));
   }
 
-  const processed = payload.text
-    ? deps.processLineMessage(payload.text)
+  // Inbound auto-replies bypass the channel outbound adapter, so enforce the
+  // same assistant-visible boundary here before Markdown can create LINE UI.
+  const visibleText = payload.text ? sanitizeAssistantVisibleText(payload.text) : "";
+  const processed = visibleText
+    ? deps.processLineMessage(visibleText)
     : { text: "", flexMessages: [] };
 
   for (const flexMsg of processed.flexMessages) {
@@ -205,10 +231,11 @@ export async function deliverLineAutoReply(params: {
       replyTokenUsed,
       cfg: params.cfg,
       accountId,
-      replyMessageLine: deps.replyMessageLine,
-      pushMessageLine: deps.pushMessageLine,
-      pushTextMessageWithQuickReplies: deps.pushTextMessageWithQuickReplies,
+      replyMessageLine: replyVisible,
+      pushMessageLine: pushTextVisible,
+      pushTextMessageWithQuickReplies: pushQuickRepliesVisible,
       createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
+      onReplyError: deps.onReplyError,
     });
     replyTokenUsed = nextReplyTokenUsed;
     if (!sendRichBeforeText) {
@@ -232,9 +259,9 @@ export async function deliverLineAutoReply(params: {
         replyTokenUsed,
         cfg: params.cfg,
         accountId,
-        replyMessageLine: deps.replyMessageLine,
-        pushMessageLine: deps.pushMessageLine,
-        pushTextMessageWithQuickReplies: deps.pushTextMessageWithQuickReplies,
+        replyMessageLine: replyVisible,
+        pushMessageLine: pushTextVisible,
+        pushTextMessageWithQuickReplies: pushQuickRepliesVisible,
         createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
         onReplyError: deps.onReplyError,
       });
@@ -253,17 +280,18 @@ export async function deliverLineAutoReply(params: {
     }
   }
 
-  if (richMediaError !== undefined) {
+  if (richMediaError !== undefined && visibleReplySent) {
     // A rich/media bubble was lost — either it failed to build (e.g. a video
-    // missing its preview image) or failed to send. Preserve both generic send
-    // evidence and foreground visibility: the caller surfaces the failure without
-    // retrying text the user already saw.
+    // missing its preview image) or failed to send. Other visible content still
+    // reached the user, so surface a partial delivery instead of retrying the
+    // text they already saw.
     return {
       status: "partial",
       replyTokenUsed,
+      visibleReplySent: true,
       error: markLineVisibleDeliveryError(richMediaError),
     };
   }
 
-  return { status: "delivered", replyTokenUsed };
+  return { status: "delivered", replyTokenUsed, visibleReplySent };
 }

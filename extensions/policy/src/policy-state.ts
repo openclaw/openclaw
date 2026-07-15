@@ -3079,3 +3079,4 @@ function stableJson(value: unknown): string {
   }
   return JSON.stringify(value);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

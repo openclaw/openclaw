@@ -2714,3 +2714,4 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

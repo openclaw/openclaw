@@ -24,7 +24,11 @@ import {
   recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual,
   registerTelegramOutboundGroupHistoryRecorder,
 } from "./outbound-message-context.js";
-import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import { setTelegramRuntime } from "./runtime.js";
+import {
+  clearTelegramRuntimeForTest as clearTelegramRuntime,
+  resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests,
+} from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
@@ -189,7 +193,6 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
-let resetTelegramReplyFenceForTests: typeof import("./bot-message-dispatch.js").resetTelegramReplyFenceForTests;
 
 function installTelegramStateRuntimeForTest(): void {
   setTelegramRuntime({
@@ -243,8 +246,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
   const trailingFinalStatusText = "Post-final plugin status";
 
   beforeAll(async () => {
-    ({ dispatchTelegramMessage, resetTelegramReplyFenceForTests } =
-      await import("./bot-message-dispatch.js"));
+    ({ dispatchTelegramMessage } = await import("./bot-message-dispatch.js"));
   });
 
   beforeEach(() => {
@@ -8403,3 +8405,4 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

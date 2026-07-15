@@ -27,7 +27,6 @@ import {
   resolveLocalHeavyCheckEnv,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
-import { isProductionTypeScriptFile } from "./lib/ts-loc-policy.mjs";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
 
 const SHRINKWRAP_POLICY_PATH_RE =
@@ -399,14 +398,18 @@ export function createChangedCheckPlan(result, options = {}) {
   };
 
   add("conflict markers", ["check:no-conflict-markers"]);
-  if (result.paths.some(isProductionTypeScriptFile)) {
-    // Deliberately omit --head here: local changed checks must inspect worktree and untracked
-    // content. Exact-tree CI calls check:loc directly with both refs.
-    add("TypeScript LOC ratchet", [
-      "check:loc",
-      ...(options.staged ? ["--staged"] : ["--base", options.base ?? "origin/main"]),
-      "--",
-      ...result.paths,
+  if (
+    result.paths.some((filePath) =>
+      /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mjs$)/u.test(
+        filePath,
+      ),
+    )
+  ) {
+    add("max-lines suppression ratchet", [
+      "check:max-lines-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.staged ? "HEAD" : (options.base ?? "origin/main"),
     ]);
   }
   add("changelog attributions", ["check:changelog-attributions"]);

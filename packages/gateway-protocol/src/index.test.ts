@@ -849,6 +849,19 @@ describe("validateWakeParams", () => {
 });
 
 describe("validateChatEvent", () => {
+  it("accepts an explicitly yielded final turn", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-yielded",
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "final",
+        stopReason: "end_turn",
+        yielded: true,
+      }),
+    ).toBe(true);
+  });
+
   it("accepts v4 chat delta text and replacement markers", () => {
     expect(
       validateChatEvent({

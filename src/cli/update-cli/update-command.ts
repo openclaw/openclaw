@@ -1499,3 +1499,4 @@ async function updateCommandInternal(
     defaultRuntime.writeJson(resultWithPostUpdate);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

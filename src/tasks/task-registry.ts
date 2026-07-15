@@ -2781,3 +2781,4 @@ export function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryContr
   ] = runtime;
   controlRuntimeLoader.clear();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -6069,3 +6069,4 @@ describe("subagent registry seam flow", () => {
     await expect(mod.testing.runSweeperTickForTests()).resolves.toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

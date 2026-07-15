@@ -1346,3 +1346,4 @@ describe("sessions_send gating", () => {
     expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

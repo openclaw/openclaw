@@ -173,21 +173,6 @@ function resolveBoundConversationOrigin(params: {
   const parentConversationId = conversation.parentConversationId?.trim() ?? "";
   const requesterConversationId = params.requesterConversation?.conversationId?.trim() ?? "";
   const requesterTo = params.requesterOrigin?.to?.trim();
-  if (
-    conversation.channel === "matrix" &&
-    parentConversationId &&
-    requesterConversationId &&
-    parentConversationId === requesterConversationId &&
-    requesterTo
-  ) {
-    return {
-      channel: conversation.channel,
-      accountId: conversation.accountId,
-      to: requesterTo,
-      ...(conversationId ? { threadId: conversationId } : {}),
-    };
-  }
-
   const boundTarget = routeToDeliveryFields(routeFromConversationRef(conversation));
   const inferredThreadId =
     boundTarget.threadId ??
@@ -1980,3 +1965,4 @@ export const testing = {
   hasSessionFileChangedAnnounceError,
   isSessionFileChangedAnnounceError,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

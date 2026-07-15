@@ -3827,3 +3827,4 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

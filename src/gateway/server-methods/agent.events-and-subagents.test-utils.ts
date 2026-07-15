@@ -1421,3 +1421,4 @@ describe("gateway agent handler", () => {
     expect(callArgs).not.toHaveProperty("bashElevated");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

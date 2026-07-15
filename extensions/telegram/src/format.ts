@@ -1542,3 +1542,4 @@ export function markdownToTelegramHtmlChunks(
 ): string[] {
   return markdownToTelegramChunks(markdown, limit, options).map((chunk) => chunk.html);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

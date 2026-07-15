@@ -6,11 +6,14 @@ import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
-  resetTelegramMessageCacheBucketsForTest,
   resolveTelegramMessageCachePersistentScopeKey,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
-  type TelegramMessageCachePersistentStore,
 } from "./message-cache.js";
+import { resetTelegramMessageCacheForTest as resetTelegramMessageCacheBucketsForTest } from "./runtime.test-support.js";
+
+type TelegramMessageCachePersistentStore = NonNullable<
+  NonNullable<Parameters<typeof createTelegramMessageCache>[0]>["persistentStore"]
+>;
 
 type PersistedCacheValue = {
   version: 1;
@@ -1473,3 +1476,4 @@ describe("telegram message cache", () => {
     expect(context.map((entry) => entry.node.body)).not.toContain("tools.toolSearch: true");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2286,3 +2286,4 @@ describe("gateway discover routing helpers", () => {
     expect(pickGatewayPort(beacon)).toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

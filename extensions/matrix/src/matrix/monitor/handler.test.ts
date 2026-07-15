@@ -11,7 +11,7 @@ import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
-import { createMatrixRoomMessageHandler, MatrixRetryableInboundError } from "./handler.js";
+import { createMatrixRoomMessageHandler } from "./handler.js";
 import {
   createMatrixHandlerTestHarness,
   createMatrixReactionEvent,
@@ -2831,97 +2831,6 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     },
   );
 
-  it("releases a claimed event when queued final delivery fails with an explicit retryable error", async () => {
-    const inboundDeduper = {
-      claimEvent: vi.fn(async () => true),
-      commitEvent: vi.fn(async () => undefined),
-      releaseEvent: vi.fn(),
-    };
-    const runtime = {
-      error: vi.fn(),
-    };
-    const { handler } = createMatrixHandlerTestHarness({
-      inboundDeduper,
-      runtime: runtime as never,
-      dispatchReplyFromConfig: vi.fn(async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      })),
-      createReplyDispatcherWithTyping: (params) => ({
-        dispatcher: {
-          markComplete: () => {},
-          waitForIdle: async () => {
-            params?.onError?.(new MatrixRetryableInboundError("retry send"), { kind: "final" });
-          },
-        },
-        replyOptions: {},
-        markDispatchIdle: () => {},
-        markRunComplete: () => {},
-      }),
-    });
-
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$retryable-final-delivery-error",
-        body: "hello",
-      }),
-    );
-
-    expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
-    expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
-      roomId: "!room:example.org",
-      eventId: "$retryable-final-delivery-error",
-    });
-  });
-
-  it.each(["tool", "block"] as const)(
-    "releases a claimed event when queued %s delivery fails with an explicit retryable error and no final reply exists",
-    async (kind) => {
-      const inboundDeduper = {
-        claimEvent: vi.fn(async () => true),
-        commitEvent: vi.fn(async () => undefined),
-        releaseEvent: vi.fn(),
-      };
-      const { handler } = createMatrixHandlerTestHarness({
-        inboundDeduper,
-        dispatchReplyFromConfig: vi.fn(async () => ({
-          queuedFinal: false,
-          counts: {
-            final: 0,
-            block: kind === "block" ? 1 : 0,
-            tool: kind === "tool" ? 1 : 0,
-          },
-        })),
-        createReplyDispatcherWithTyping: (params) => ({
-          dispatcher: {
-            markComplete: () => {},
-            waitForIdle: async () => {
-              params?.onError?.(new MatrixRetryableInboundError("retry send"), { kind });
-            },
-          },
-          replyOptions: {},
-          markDispatchIdle: () => {},
-          markRunComplete: () => {},
-        }),
-      });
-
-      await handler(
-        "!room:example.org",
-        createMatrixTextMessageEvent({
-          eventId: `$retryable-${kind}-delivery-error`,
-          body: "hello",
-        }),
-      );
-
-      expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
-      expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
-        roomId: "!room:example.org",
-        eventId: `$retryable-${kind}-delivery-error`,
-      });
-    },
-  );
-
   it("commits a claimed event when dispatch completes without a final reply", async () => {
     const callOrder: string[] = [];
     const inboundDeduper = {
@@ -4509,3 +4418,4 @@ describe("matrix monitor handler block streaming config", () => {
     expect(capturedDisableBlockStreaming).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

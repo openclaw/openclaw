@@ -783,3 +783,4 @@ export function hasLocalServiceProcessExited(
 ): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

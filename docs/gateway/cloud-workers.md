@@ -77,6 +77,10 @@ Profile fields:
 
 ## Dispatching a session
 
+In the Control UI, open **New Session**, choose an agent whose configured runtime is OpenClaw, select a configured **Cloud · profile** target from the **Where** menu, and start the task. Cloud selection enables the required managed worktree automatically; the Gateway creates the session, finishes dispatch, and only then sends the first turn. The server badge in the session sidebar shows the durable placement state. Cloud targets are not offered for external CLI session catalogs.
+
+The equivalent RPC flow is:
+
 Create a session with a managed worktree, then dispatch it (the RPC requires `operator.admin` and only exists when profiles are configured):
 
 Cloud workers run the OpenClaw agent runtime. Choose an `openai/*` or other model that resolves to that runtime; sessions configured for an external CLI runtime such as `claude-cli` cannot dispatch.

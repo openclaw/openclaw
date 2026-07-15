@@ -3167,3 +3167,4 @@ describe("loadPluginManifestRegistry", () => {
     expectNoRegistryDiagnosticContains(newerHost, "this host is 2026.3.21");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

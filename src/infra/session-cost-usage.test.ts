@@ -2117,3 +2117,4 @@ example
     expect(logs?.map((log) => log.content)).toEqual(["third", "fourth"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

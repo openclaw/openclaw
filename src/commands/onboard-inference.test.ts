@@ -1,6 +1,6 @@
 // Inference backend detection tests cover the documented ladder and login-awareness.
 import { describe, expect, it } from "vitest";
-import type { LocalCommandProbe } from "../crestodian/probes.js";
+import type { LocalCommandProbe } from "../system-agent/probes.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_MODEL_REF,

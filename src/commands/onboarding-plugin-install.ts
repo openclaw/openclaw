@@ -1511,3 +1511,4 @@ export async function ensureOnboardingPluginInstalled(params: {
     error: errorDetail,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -5342,3 +5342,4 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(testing.hasSessionFileChangedAnnounceError(wrapperErr)).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

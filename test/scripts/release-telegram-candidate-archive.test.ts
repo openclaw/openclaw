@@ -205,15 +205,16 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
     root.type = tarfile.DIRTYPE
     archive.addfile(root)
 
-    tail = ["d" for _ in range(254)]
-    for index in range(path_count):
-        parts = ["candidate", f"{index:04d}", *tail]
-        for component_count in range(2, len(parts)):
-            directory = tarfile.TarInfo("/".join(parts[:component_count]))
-            directory.type = tarfile.DIRTYPE
-            archive.addfile(directory)
+    # One shared prefix preserves the 256-component boundary and distinct leaves
+    # without rebuilding the same deep parent chain for every sibling.
+    parts = ["candidate", *["d" for _ in range(254)]]
+    for component_count in range(2, len(parts) + 1):
+        directory = tarfile.TarInfo("/".join(parts[:component_count]))
+        directory.type = tarfile.DIRTYPE
+        archive.addfile(directory)
 
-        member = tarfile.TarInfo("/".join(parts))
+    for index in range(path_count):
+        member = tarfile.TarInfo("/".join([*parts, f"{index:04d}"]))
         member.size = 1
         archive.addfile(member, io.BytesIO(b"x"))
 `;
@@ -928,7 +929,7 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
       "--max-path-bytes",
       `${8 * 1024 * 1024}`,
     ]);
-    expect(JSON.parse(result.stdout)).toMatchObject({ members: 8_162 });
+    expect(JSON.parse(result.stdout)).toMatchObject({ members: 288 });
     expect(JSON.parse(result.stdout).maxCachedMembers).toBeLessThanOrEqual(1);
   });
 

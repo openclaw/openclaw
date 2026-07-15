@@ -22,7 +22,7 @@ import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 
 const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
-export const SCP_STDERR_TAIL_CHARS = 16_384;
+const SCP_STDERR_TAIL_CHARS = 16_384;
 
 // `staged` maps every absolute source path that was copied into the sandbox
 // (or remote cache) to its rewritten ctx path. Callers like chat.send's
@@ -391,7 +391,7 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
   }
 }
 
-export function appendScpStderrTail(
+function appendScpStderrTail(
   current: string,
   chunk: string,
   maxChars = SCP_STDERR_TAIL_CHARS,

@@ -882,3 +882,4 @@ export function createWebFetchTool(options?: {
     formatWebFetchTerminalPresentation(result),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

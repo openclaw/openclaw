@@ -1344,3 +1344,4 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1230,3 +1230,4 @@ describe("control command parsing", () => {
     expect(hasControlCommand(metaWrapped)).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

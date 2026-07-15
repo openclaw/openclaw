@@ -2049,3 +2049,4 @@ export function initSubagentRegistry() {
 // Importing this module also registers the subagent maintenance preserve-key
 // provider as a side effect (see subagent-registry-maintenance.ts).
 export { listSessionMaintenanceProtectedSubagentSessionKeys } from "./subagent-registry-maintenance.js";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

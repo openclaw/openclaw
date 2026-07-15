@@ -1880,3 +1880,4 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     return eventStream as ReturnType<StreamFn>;
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

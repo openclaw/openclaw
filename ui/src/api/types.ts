@@ -479,6 +479,7 @@ export type GatewaySessionRow = {
   worktree?: { id: string; branch: string; repoRoot: string };
   /** Session-scoped exec node binding (exec host=node routing). */
   execNode?: string;
+  placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
@@ -880,3 +881,4 @@ export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
 export type ModelsProbeResult =
   import("../../../packages/gateway-protocol/src/schema.js").ModelsProbeResult;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2307,3 +2307,4 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalizeTestText(text)).toContain("Runtime: OpenAI Codex");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

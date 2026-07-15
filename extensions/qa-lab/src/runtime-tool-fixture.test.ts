@@ -1379,3 +1379,4 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow("web_search not present in effective tools");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

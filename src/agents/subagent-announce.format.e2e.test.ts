@@ -247,7 +247,18 @@ const announceFormatChannelPlugins = [
   },
   {
     pluginId: "matrix",
-    plugin: createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+    plugin: {
+      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+      messaging: {
+        resolveDeliveryTarget: (params: {
+          conversationId: string;
+          parentConversationId?: string;
+        }) => ({
+          to: `room:${params.parentConversationId ?? params.conversationId}`,
+          ...(params.parentConversationId ? { threadId: params.conversationId } : {}),
+        }),
+      },
+    },
     source: "test",
   },
   {
@@ -3653,3 +3664,4 @@ describe("subagent announce formatting", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
