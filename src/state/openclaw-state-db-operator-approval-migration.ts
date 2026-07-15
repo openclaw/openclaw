@@ -40,7 +40,7 @@ function tableSql(db: DatabaseSync): string | undefined {
   return typeof row?.sql === "string" ? row.sql : undefined;
 }
 
-export function hasCanonicalOperatorApprovalKinds(db: DatabaseSync): boolean {
+function hasCanonicalOperatorApprovalKinds(db: DatabaseSync): boolean {
   if (!tableExists(db, "operator_approvals")) {
     return true;
   }
@@ -116,7 +116,7 @@ function canonicalCreateSql(): string {
   );
 }
 
-export function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
+function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
   if (
     hasCanonicalOperatorApprovalKinds(db) ||
     tableExists(db, "operator_approvals_migration_new") ||

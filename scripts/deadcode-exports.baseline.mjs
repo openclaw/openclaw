@@ -124,7 +124,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/agents/tools/image-tool.ts: resolveImageModelConfigForTool",
   "src/agents/tools/image-tool.ts: testing",
   "src/agents/tools/model-config.helpers.ts: hasDirectProviderApiKeyAuthForTool",
-  "src/agents/tools/openclaw-delegate-tool.ts: createOpenClawDelegateTool",
   "src/agents/tools/sessions-resolution.ts: testing",
   "src/agents/tools/sessions-send-tool.a2a.ts: testing",
   "src/agents/tools/sessions-spawn-visible-admission.ts: VisibleChildReservation",
@@ -225,8 +224,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/skills/lifecycle/upload-store.ts: createSkillUploadStore",
   "src/skills/runtime/refresh.ts: resetSkillsRefreshForTest",
   "src/skills/runtime/remote-skills.ts: resetRemoteNodeSkillsForTests",
-  "src/state/openclaw-state-db-operator-approval-migration.ts: hasCanonicalOperatorApprovalKinds",
-  "src/state/openclaw-state-db-operator-approval-migration.ts: repairOperatorApprovalKinds (operatorApprovalMigration)",
   "src/system-agent/agent-turn.ts: runSystemAgentTurnWithDeps",
   "src/tasks/detached-task-runtime.ts: resetDetachedTaskLifecycleRuntimeForTests",
   "src/tasks/detached-task-runtime.ts: setDetachedTaskLifecycleRuntime",
@@ -240,9 +237,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/tasks/task-registry.ts: resetTaskRegistryForTests",
   "src/tasks/task-registry.ts: setTaskRegistryControlRuntimeForTests",
   "src/tasks/task-registry.ts: setTaskRegistryDeliveryRuntimeForTests",
-  "ui/src/app/exec-approval.ts: parseExecApprovalRequested",
-  "ui/src/app/exec-approval.ts: parsePluginApprovalRequested",
-  "ui/src/app/exec-approval.ts: parseSystemAgentApprovalRequested",
 ];
 
 // Platform-variant findings. Allowed when present; never required.
