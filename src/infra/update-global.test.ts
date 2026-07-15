@@ -411,6 +411,46 @@ describe("update global helpers", () => {
     });
   });
 
+  it("falls back to the running package root when npm redacts UUID-like path segments", async () => {
+    await withMockedPlatform("darwin", async () => {
+      await withTempDir({ prefix: "openclaw-update-redacted-probe-" }, async (base) => {
+        const globalRoot = path.join(base, "usr", "local", "lib", "node_modules");
+        const pkgRoot = path.join(globalRoot, "openclaw");
+        const redactedRoot = path.join(
+          base,
+          "tmp",
+          "ci-agent",
+          "***",
+          "workspace",
+          "sbx-***",
+          "nvm",
+          "versions",
+          "node",
+          "v24.14.0",
+          "lib",
+          "node_modules",
+        );
+        await fs.mkdir(pkgRoot, { recursive: true });
+
+        const runCommand = createNpmRootRunner({ defaultNpmRoot: redactedRoot });
+
+        await expect(
+          resolveGlobalInstallTarget({
+            manager: "npm",
+            runCommand,
+            timeoutMs: 1000,
+            pkgRoot,
+          }),
+        ).resolves.toEqual({
+          manager: "npm",
+          command: "npm",
+          globalRoot,
+          packageRoot: pkgRoot,
+        });
+      });
+    });
+  });
+
   it("does not infer npm ownership from path shape alone when the owning npm binary is absent", async () => {
     await withTempDir({ prefix: "openclaw-update-npm-missing-bin-" }, async (base) => {
       const brewRoot = path.join(base, "opt", "homebrew", "lib", "node_modules");
