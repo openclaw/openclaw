@@ -1,5 +1,6 @@
 // Builds the canonical reviewer-safe projection for durable approvals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ApprovalDecision,
   ApprovalKind,
@@ -38,6 +39,12 @@ function normalizeDecisionList(decisions: readonly ApprovalDecision[]): Approval
 function isWithinCodePointLimit(value: string, maxLength: number): boolean {
   return Array.from(value).length <= maxLength;
 }
+
+// Display-size caps for system-agent approval text. truncateUtf16Safe keeps the
+// cut on a UTF-16 code-unit boundary so an emoji (surrogate pair) straddling the
+// limit does not leave a lone high surrogate in the reviewer-facing title/description.
+const SYSTEM_AGENT_APPROVAL_TITLE_MAX_LENGTH = 80;
+const SYSTEM_AGENT_APPROVAL_DESCRIPTION_MAX_LENGTH = 512;
 
 function sanitizeOptionalSingleLine(value: unknown): string | null {
   const normalized = normalizeOptionalString(value);
@@ -126,8 +133,14 @@ function buildSystemAgentApprovalPresentation(params: {
   }
   return {
     kind: "system-agent",
-    title: sanitizeExecApprovalDisplayText(title).slice(0, 80),
-    description: sanitizeExecApprovalWarningText(description).slice(0, 512),
+    title: truncateUtf16Safe(
+      sanitizeExecApprovalDisplayText(title),
+      SYSTEM_AGENT_APPROVAL_TITLE_MAX_LENGTH,
+    ),
+    description: truncateUtf16Safe(
+      sanitizeExecApprovalWarningText(description),
+      SYSTEM_AGENT_APPROVAL_DESCRIPTION_MAX_LENGTH,
+    ),
     proposalHash: request.proposalHash,
     agentId: sanitizeOptionalSingleLine(request.agentId),
     allowedDecisions: ["allow-once", "deny"],

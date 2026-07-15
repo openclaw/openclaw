@@ -23,6 +23,28 @@ function buildPluginPresentation(request: {
   return buildApprovalPresentation({ kind: "plugin", request, allowedDecisions });
 }
 
+function buildSystemAgentPresentation(request: {
+  title: string;
+  description: string;
+  proposalHash?: string;
+}) {
+  return buildApprovalPresentation({
+    kind: "system-agent",
+    request: {
+      title: request.title,
+      description: request.description,
+      command: "true",
+      proposalHash: request.proposalHash ?? "a".repeat(64),
+      allowedDecisions,
+      sessionId: "s1",
+    },
+    allowedDecisions,
+  });
+}
+
+// Matches a high UTF-16 surrogate with no paired low surrogate following it.
+const LONE_HIGH_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u;
+
 describe("buildApprovalPresentation", () => {
   it("sanitizes exec routing metadata and preserves empty values as null", () => {
     const githubToken = `ghp_${"a".repeat(100)}`;
@@ -110,5 +132,35 @@ describe("buildApprovalPresentation", () => {
         description: `${description}${String.fromCodePoint(0x1f6e1)}`,
       }),
     ).toBeNull();
+  });
+});
+
+describe("buildApprovalPresentation (system-agent)", () => {
+  it("drops a split emoji at the title boundary instead of leaving a lone surrogate", () => {
+    // 79 ASCII chars + 😀 (U+1F600, two UTF-16 code units) = 81 code units.
+    // A raw .slice(0, 80) keeps the lone high surrogate; truncateUtf16Safe backs off.
+    const title = `${"a".repeat(79)}\u{1F600}`;
+    const presentation = buildSystemAgentPresentation({ title, description: "d" });
+    expect(presentation).not.toBeNull();
+    expect(LONE_HIGH_SURROGATE.test(presentation?.title ?? "")).toBe(false);
+    expect(presentation?.title).toBe("a".repeat(79));
+  });
+
+  it("keeps an emoji that fits within the title limit intact", () => {
+    // 78 ASCII chars + 😀 = 80 code units, so the emoji fits without truncation.
+    const title = `${"a".repeat(78)}\u{1F600}`;
+    const presentation = buildSystemAgentPresentation({ title, description: "d" });
+    expect(presentation).not.toBeNull();
+    expect(LONE_HIGH_SURROGATE.test(presentation?.title ?? "")).toBe(false);
+    expect(presentation?.title).toBe(`${"a".repeat(78)}\u{1F600}`);
+  });
+
+  it("drops a split emoji at the description boundary instead of leaving a lone surrogate", () => {
+    // 511 ASCII chars + 🛡 (U+1F6E1, two UTF-16 code units) = 513 code units.
+    const description = `${"a".repeat(511)}\u{1F6E1}`;
+    const presentation = buildSystemAgentPresentation({ title: "t", description });
+    expect(presentation).not.toBeNull();
+    expect(LONE_HIGH_SURROGATE.test(presentation?.description ?? "")).toBe(false);
+    expect(presentation?.description).toBe("a".repeat(511));
   });
 });
