@@ -42,7 +42,7 @@ import {
   resolveManagedUnsetPathsForWrite,
   resolveWriteEnvSnapshotForPath,
 } from "./io.write-prepare.js";
-import { checkCommentLossWarning } from "./json5-comments.js";
+import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
@@ -555,6 +555,7 @@ async function writeRootBoundJsonFile(params: {
   rootSnapshot: ConfigFileSnapshot;
   assertConfigPathForWrite: () => void;
   preCommitRuntimePreflight?: () => Promise<unknown>;
+  skipOutputLogs?: boolean;
 }): Promise<void> {
   params.assertConfigPathForWrite();
   const targetBeforeBackup = await resolveExpectedRootBoundIncludeFile({
@@ -586,9 +587,15 @@ async function writeRootBoundJsonFile(params: {
   }
   const content = formatJsonFileValue(params.value);
   // The include fast path bypasses writeConfigFile(); keep its authority guard
-  // on the final conflict-checked target with no later await before the write.
+  // and comment warning on the final conflict-checked target. No later await may
+  // run before the write.
   await params.preCommitRuntimePreflight?.();
   params.assertConfigPathForWrite();
+  warnIfJSON5CommentsWillBeStripped({
+    raw: currentRaw,
+    filePath: targetAtCommit.absolutePath,
+    skipOutputLogs: params.skipOutputLogs,
+  });
   await targetAtCommit.root.write(targetAtCommit.relativePath, content, {
     mkdir: true,
     mode: 0o600,
@@ -747,6 +754,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       formatInvalidConfigDetails(validated.issues),
     );
   }
+
   const runtimeConfigSnapshot = getRuntimeConfigSnapshot();
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();
   const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
@@ -772,7 +780,8 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
         ),
     });
   }
-  const committedIncludeHash = hashConfigIncludeRaw(formatJsonFileValue(includedValueToWrite));
+  const committedIncludeRaw = formatJsonFileValue(includedValueToWrite);
+  const committedIncludeHash = hashConfigIncludeRaw(committedIncludeRaw);
   const callerPreCommit = params.writeOptions?.preCommitRuntimePreflight;
   assertConfigPathForWrite();
   await assertRootConfigStillMatchesSnapshot(params.snapshot);
@@ -782,12 +791,6 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       currentHash: hashConfigIncludeRaw(includeRawAtCommit),
     });
   }
-  checkCommentLossWarning(
-    previousIncludeRaw,
-    expectedIncludeTarget,
-    undefined,
-    params.writeOptions?.skipOutputLogs,
-  );
   await writeRootBoundJsonFile({
     configPath: params.snapshot.path,
     includePath,
@@ -797,6 +800,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     expectedRaw: includeRawAtCommit,
     rootSnapshot: params.snapshot,
     assertConfigPathForWrite,
+    skipOutputLogs: params.writeOptions?.skipOutputLogs,
     preCommitRuntimePreflight:
       runtimeEnvBaseline || callerPreCommit
         ? async () => {
@@ -817,6 +821,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     ) {
       return { persistedHash: null, persistedConfig: runtimeConfigToWrite };
     }
+
     let refreshed: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
     try {
       refreshed = await readConfigSnapshotForMutation({

@@ -1,44 +1,34 @@
-const STRIDE = 1;
-
-const skipQuotedString = (raw: string, start: number, quote: string): number => {
-  let pos = start + STRIDE;
-  while (pos < raw.length && raw[pos] !== quote) {
-    if (raw[pos] === "\\") {
-      pos += STRIDE;
-    }
-    pos += STRIDE;
-  }
-  return pos;
-};
-
-/** Detects `//` or `/*` tokens outside JSON5 string literals. */
-const hasJSON5Comments = (raw: string): boolean => {
-  for (let idx = 0; idx < raw.length; idx += STRIDE) {
-    const char = raw[idx];
-    if (char === '"' || char === "'" || char === "`") {
-      idx = skipQuotedString(raw, idx, char);
-    } else if (char === "/" && idx + STRIDE < raw.length) {
-      const next = raw[idx + STRIDE];
-      if (next === "/" || next === "*") {
-        return true;
+function hasJSON5Comments(raw: string): boolean {
+  let quote: '"' | "'" | undefined;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (quote) {
+      if (char === "\\") {
+        index += 1;
+      } else if (char === quote) {
+        quote = undefined;
       }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "/" && (raw[index + 1] === "/" || raw[index + 1] === "*")) {
+      return true;
     }
   }
   return false;
-};
+}
 
-export const checkCommentLossWarning = (
-  raw: string | null | undefined,
-  filePath: string,
-  warn?: (msg: string) => void,
-  skipOutputLogs?: boolean,
-): string | undefined => {
-  if (skipOutputLogs || typeof raw !== "string" || !hasJSON5Comments(raw)) {
-    return undefined;
+export function warnIfJSON5CommentsWillBeStripped(params: {
+  raw: string | null | undefined;
+  filePath: string;
+  warn?: (message: string) => void;
+  skipOutputLogs?: boolean;
+}): void {
+  if (params.skipOutputLogs || typeof params.raw !== "string" || !hasJSON5Comments(params.raw)) {
+    return;
   }
-  const msg =
-    `Config write will strip JSON5 comments from ${filePath}. ` +
-    "Use a separate tool to re-add documentation comments after modifications.";
-  (warn ?? console.warn)(msg);
-  return msg;
-};
+  (params.warn ?? console.warn)(`Config write will strip JSON5 comments from ${params.filePath}.`);
+}
