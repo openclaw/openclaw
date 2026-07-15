@@ -152,7 +152,18 @@ async function downloadTogetherVideo(params: {
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
   maxBytes: number;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: import("openclaw/plugin-sdk/provider-http").PinnedDispatcherPolicy;
 }): Promise<GeneratedVideoAsset> {
+  const guardedOptions =
+    params.allowPrivateNetwork || params.dispatcherPolicy
+      ? {
+          ...(params.allowPrivateNetwork
+            ? { ssrfPolicy: { allowPrivateNetwork: true } as const }
+            : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+        }
+      : undefined;
   const response = await fetchProviderDownloadResponse({
     url: params.url,
     init: { method: "GET" },
@@ -160,6 +171,7 @@ async function downloadTogetherVideo(params: {
     fetchFn: params.fetchFn,
     provider: "together",
     requestFailedMessage: "Together generated video download failed",
+    guardedOptions,
   });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
@@ -314,6 +326,8 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
           }),
           fetchFn,
           maxBytes: resolveGeneratedVideoMaxBytes(req),
+          allowPrivateNetwork,
+          dispatcherPolicy,
         });
         return {
           videos: [video],

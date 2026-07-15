@@ -158,12 +158,23 @@ async function pollBytePlusTask(params: {
   timeoutMs?: number;
   baseUrl: string;
   fetchFn: typeof fetch;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: import("openclaw/plugin-sdk/provider-http").PinnedDispatcherPolicy;
 }): Promise<BytePlusTaskResponse> {
   const deadline = createProviderOperationDeadline({
     timeoutMs: params.timeoutMs,
     label: `BytePlus video generation task ${params.taskId}`,
   });
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
+    const guardedOptions =
+      params.allowPrivateNetwork || params.dispatcherPolicy
+        ? {
+            ...(params.allowPrivateNetwork
+              ? { ssrfPolicy: { allowPrivateNetwork: true } as const }
+              : {}),
+            ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+          }
+        : undefined;
     const response = await fetchProviderOperationResponse({
       stage: "poll",
       url: `${params.baseUrl}/contents/generations/tasks/${params.taskId}`,
@@ -178,6 +189,7 @@ async function pollBytePlusTask(params: {
       fetchFn: params.fetchFn,
       provider: "byteplus",
       requestFailedMessage: "BytePlus video status request failed",
+      guardedOptions,
     });
     const payload = await readBytePlusJsonResponse<BytePlusTaskResponse>(
       response,
@@ -204,7 +216,18 @@ async function downloadBytePlusVideo(params: {
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
   maxBytes: number;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: import("openclaw/plugin-sdk/provider-http").PinnedDispatcherPolicy;
 }): Promise<GeneratedVideoAsset> {
+  const guardedOptions =
+    params.allowPrivateNetwork || params.dispatcherPolicy
+      ? {
+          ...(params.allowPrivateNetwork
+            ? { ssrfPolicy: { allowPrivateNetwork: true } as const }
+            : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+        }
+      : undefined;
   const response = await fetchProviderDownloadResponse({
     url: params.url,
     init: { method: "GET" },
@@ -212,6 +235,7 @@ async function downloadBytePlusVideo(params: {
     fetchFn: params.fetchFn,
     provider: "byteplus",
     requestFailedMessage: "BytePlus generated video download failed",
+    guardedOptions,
   });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
@@ -381,6 +405,8 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
           }),
           baseUrl,
           fetchFn,
+          allowPrivateNetwork,
+          dispatcherPolicy,
         });
         const videoUrl = readBytePlusVideoUrl(completed);
         const video = await downloadBytePlusVideo({
@@ -391,6 +417,8 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
           }),
           fetchFn,
           maxBytes: resolveGeneratedVideoMaxBytes(req),
+          allowPrivateNetwork,
+          dispatcherPolicy,
         });
         return {
           videos: [video],

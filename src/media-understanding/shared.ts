@@ -256,7 +256,22 @@ export async function fetchProviderOperationResponse(params: {
   provider?: string;
   requestFailedMessage?: string;
   retry?: TransientProviderRetryConfig;
+  guardedOptions?: GuardedProviderRequestOptions;
 }): Promise<Response> {
+  if (params.guardedOptions) {
+    const result = await fetchGuardedProviderOperationResponse({
+      stage: params.stage,
+      url: params.url,
+      init: params.init ?? {},
+      timeoutMs: params.timeoutMs,
+      fetchFn: params.fetchFn,
+      provider: params.provider,
+      requestFailedMessage: params.requestFailedMessage,
+      retry: params.retry,
+      guardedOptions: params.guardedOptions,
+    });
+    return result.response;
+  }
   return await executeProviderOperationWithRetry({
     provider: params.provider ?? "provider-http",
     stage: params.stage,
@@ -284,6 +299,7 @@ export async function fetchProviderDownloadResponse(params: {
   provider?: string;
   requestFailedMessage: string;
   retry?: TransientProviderRetryConfig;
+  guardedOptions?: GuardedProviderRequestOptions;
 }): Promise<Response> {
   return await fetchProviderOperationResponse({
     stage: "download",
@@ -294,6 +310,7 @@ export async function fetchProviderDownloadResponse(params: {
     provider: params.provider,
     requestFailedMessage: params.requestFailedMessage,
     retry: params.retry,
+    guardedOptions: params.guardedOptions,
   });
 }
 

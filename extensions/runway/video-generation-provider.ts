@@ -274,7 +274,18 @@ async function pollRunwayTask(params: {
   timeoutMs?: number;
   baseUrl: string;
   fetchFn: typeof fetch;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: import("openclaw/plugin-sdk/provider-http").PinnedDispatcherPolicy;
 }): Promise<RunwayTaskDetailResponse> {
+  const guardedOptions =
+    params.allowPrivateNetwork || params.dispatcherPolicy
+      ? {
+          ...(params.allowPrivateNetwork
+            ? { ssrfPolicy: { allowPrivateNetwork: true } as const }
+            : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+        }
+      : undefined;
   const deadline = createProviderOperationDeadline({
     timeoutMs: params.timeoutMs,
     label: `Runway video generation task ${params.taskId}`,
@@ -294,6 +305,7 @@ async function pollRunwayTask(params: {
       fetchFn: params.fetchFn,
       provider: "runway",
       requestFailedMessage: "Runway video status request failed",
+      guardedOptions,
     });
     const payload = await readRunwayJsonResponse<RunwayTaskDetailResponse>(
       response,
@@ -322,7 +334,18 @@ async function downloadRunwayVideos(params: {
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
   maxBytes: number;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: import("openclaw/plugin-sdk/provider-http").PinnedDispatcherPolicy;
 }): Promise<GeneratedVideoAsset[]> {
+  const guardedOptions =
+    params.allowPrivateNetwork || params.dispatcherPolicy
+      ? {
+          ...(params.allowPrivateNetwork
+            ? { ssrfPolicy: { allowPrivateNetwork: true } as const }
+            : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+        }
+      : undefined;
   const videos: GeneratedVideoAsset[] = [];
   for (const [index, url] of params.urls.entries()) {
     const response = await fetchProviderDownloadResponse({
@@ -332,6 +355,7 @@ async function downloadRunwayVideos(params: {
       fetchFn: params.fetchFn,
       provider: "runway",
       requestFailedMessage: "Runway generated video download failed",
+      guardedOptions,
     });
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
@@ -444,6 +468,8 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
           }),
           baseUrl,
           fetchFn,
+          allowPrivateNetwork,
+          dispatcherPolicy,
         });
         const outputUrls = readRunwayOutputUrls(completed);
         const videos = await downloadRunwayVideos({
@@ -454,6 +480,8 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
           }),
           fetchFn,
           maxBytes: resolveGeneratedVideoMaxBytes(req),
+          allowPrivateNetwork,
+          dispatcherPolicy,
         });
         return {
           videos,
