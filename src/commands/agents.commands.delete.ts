@@ -127,6 +127,12 @@ export async function agentsDeleteCommand(
     agentId,
     deleteFiles: true,
   });
+
+  // Purge cron jobs through the canonical store path regardless of which
+  // deletion path succeeded. The cron service is either stopped (transport
+  // error) or will pick up the change on its next load cycle.
+  await purgeAgentCronJobs(agentId);
+
   if (gatewayResult) {
     const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
     const workspaceRetained = workspaceSharedWith.length > 0;
@@ -160,7 +166,6 @@ export async function agentsDeleteCommand(
 
   // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
   await purgeAgentSessionStoreEntries(cfg, agentId);
-  purgeAgentCronJobs(agentId);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   // Only trash the workspace if no other agent can depend on that path (#70890).
