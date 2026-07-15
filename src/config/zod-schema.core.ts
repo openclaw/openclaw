@@ -315,6 +315,7 @@ const ConfiguredProviderRequestFields = {
   auth: ConfiguredProviderRequestAuthSchema,
   proxy: ConfiguredProviderRequestProxySchema,
   tls: ConfiguredProviderRequestTlsSchema,
+  timeoutMs: z.number().int().positive().max(600_000).optional(),
 };
 
 const ConfiguredProviderRequestSchema = z
@@ -517,6 +518,16 @@ export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
   return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(normalizeProviderId(providerId));
 }
 
+const ModelProviderRetrySchema = z
+  .object({
+    attempts: z.number().int().min(1).max(5).optional(),
+    minDelayMs: z.number().int().positive().max(30_000).optional(),
+    maxDelayMs: z.number().int().positive().max(300_000).optional(),
+    jitter: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1).optional(),
@@ -537,6 +548,7 @@ const ModelProviderSchema = z
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
+    retry: ModelProviderRetrySchema,
     models: z.array(ModelDefinitionSchema).optional(),
   })
   .strict();

@@ -1107,8 +1107,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum milliseconds to wait for the local model server readiness probe after starting the process.",
   "models.providers.*.localService.idleStopMs":
     "Milliseconds to keep an OpenClaw-started local model server alive after the last request finishes. Set 0 to keep it alive until OpenClaw exits.",
+  "models.providers.*.retry":
+    "Per-provider retry configuration for transient model request failures (timeouts, 5xx, connection resets). Retries use exponential backoff between minDelayMs and maxDelayMs with optional jitter. Failed retries fall through to the next model in the fallback chain only after all attempts are exhausted.",
+  "models.providers.*.retry.attempts":
+    "Maximum number of retry attempts on transient failures before falling through to the next fallback model. Range 1–5. Default: 1.",
+  "models.providers.*.retry.minDelayMs":
+    "Minimum delay in milliseconds before the first retry. Default: 500.",
+  "models.providers.*.retry.maxDelayMs":
+    "Maximum delay in milliseconds between retries. Default: 5000.",
+  "models.providers.*.retry.jitter":
+    "Whether to apply random jitter to retry delays to avoid thundering-herd effects. Default: true.",
   "models.providers.*.request":
-    "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
+    "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, request timeout, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
+  "models.providers.*.request.timeoutMs":
+    "Per-request timeout in milliseconds for model-provider HTTP calls. Overrides the provider-level timeoutSeconds when set, giving millisecond-granularity control over connect, headers, body, and total request lifetime. Use this when you need sub-second timeout precision (e.g., fast-failing serverless GPU cold starts). Maximum 600000 (10 minutes).",
   "models.providers.*.request.headers":
     "Extra headers merged into provider requests after default attribution and auth resolution.",
   "models.providers.*.request.auth":
