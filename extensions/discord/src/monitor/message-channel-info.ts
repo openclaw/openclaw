@@ -8,15 +8,12 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelType, Message } from "../internal/discord.js";
 import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
-import { discordChannelInfoCacheState } from "./message-channel-info-state.js";
+import {
+  discordChannelInfoCacheState,
+  type DiscordChannelInfo,
+} from "./message-channel-info-state.js";
 
-export type DiscordChannelInfo = {
-  type: ChannelType;
-  name?: string;
-  topic?: string;
-  parentId?: string;
-  ownerId?: string;
-};
+export type { DiscordChannelInfo } from "./message-channel-info-state.js";
 export type DiscordChannelInfoClient = {
   fetchChannel(channelId: string): Promise<unknown>;
 };
