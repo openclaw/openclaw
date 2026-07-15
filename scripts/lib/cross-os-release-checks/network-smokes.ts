@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.js";
+import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
 import type { GatewayHandle, LaneState } from "./config.ts";
 import {
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
