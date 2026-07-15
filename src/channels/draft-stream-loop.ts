@@ -39,7 +39,9 @@ export function createDraftStreamLoop(params: {
       clearTimeout(timer);
       timer = undefined;
     }
-    while (!params.isStopped()) {
+    let iterations = 0;
+    while (!params.isStopped() && iterations < 50) {
+      iterations++;
       if (inFlightPromise) {
         await inFlightPromise;
         continue;

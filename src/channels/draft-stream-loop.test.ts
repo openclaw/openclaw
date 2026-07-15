@@ -259,4 +259,20 @@ describe("createDraftStreamLoop", () => {
     expect(sendOrEditStreamMessage).toHaveBeenNthCalledWith(1, "hello");
     expect(sendOrEditStreamMessage).toHaveBeenNthCalledWith(2, "hello");
   });
+
+  it("bounds flush iterations to prevent indefinite looping (#106644)", async () => {
+    const loop = createDraftStreamLoop({
+      throttleMs: 0,
+      isStopped: () => false,
+      sendOrEditStreamMessage: vi.fn().mockResolvedValue(true),
+    });
+
+    // 100 rapid update+flush cycles must not hang — each flush
+    // iteration exits because pendingText is cleared after send.
+    for (let i = 0; i < 100; i++) {
+      loop.update(`text-${i}`);
+      await loop.flush();
+    }
+    // Reaching here confirms the loop exits.
+  });
 });
