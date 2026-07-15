@@ -114,7 +114,7 @@ describe("scripts/check-deprecated-api-usage", () => {
 
   it("keeps the compat re-export chain and test files off the facade import rule", () => {
     const result = runFacadeImportRule({
-      "src/plugin-sdk/channel-message-runtime.ts": 'export * from "./channel-message.js";',
+      "src/plugin-sdk/channel-message-runtime.ts": 'export * from "./channel-outbound.js";',
       "src/plugin-sdk/channel-inbound.ts":
         'export { runChannelInboundEvent } from "../channels/message/inbound-reply-dispatch.js";',
       "src/plugin-sdk/channel-message.test.ts":
