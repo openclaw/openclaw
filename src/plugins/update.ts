@@ -20,6 +20,7 @@ import {
 import {
   expectedIntegrityForUpdate,
   installedPackageNeedsOpenClawPeerLinkRepair,
+  readInstalledPackageManifest,
   readInstalledPackagePeerDependencies,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
@@ -57,6 +58,7 @@ import {
   recordPluginInstall,
   resolveNpmInstallRecordSpec,
 } from "./installs.js";
+import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import {
@@ -68,6 +70,7 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
+import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
@@ -175,6 +178,22 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
     packageName !== params.pluginId &&
     unscopedPackageName(packageName) === params.pluginId,
   );
+}
+
+async function hasRunnableInstalledNpmPayload(params: {
+  installPath: string;
+  manifest: PackageManifest | undefined;
+}): Promise<boolean> {
+  const extensions = resolvePackageExtensionEntries(params.manifest);
+  if (extensions.status !== "ok") {
+    return false;
+  }
+  const validation = await validatePackageExtensionEntriesForInstall({
+    packageDir: params.installPath,
+    extensions: extensions.entries,
+    manifest: params.manifest ?? {},
+  });
+  return validation.ok;
 }
 
 function formatNpmInstallFailure(params: {
@@ -1427,14 +1446,14 @@ export async function updateNpmInstalledPlugins(params: {
     options: {
       channelFallback?: PluginUpdateChannelFallback;
       code?: string;
-      installedVersion?: string;
+      installedPayloadRunnable?: boolean;
     } = {},
   ) => {
     // Metadata failure is advisory only when a runnable payload is still installed.
     // Missing-payload repair must keep disabling the broken config entry.
     const preserveInstalledPayload =
       options.code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE &&
-      options.installedVersion !== undefined;
+      options.installedPayloadRunnable === true;
     if (params.disableOnFailure && !params.dryRun && !preserveInstalledPayload) {
       const disabledMessage =
         `Disabled "${pluginId}" after plugin update failure; OpenClaw will continue without it. ` +
@@ -1657,8 +1676,17 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
     let currentVersion: string | undefined;
+    let installedPayloadRunnable = false;
     try {
-      currentVersion = await readInstalledPackageVersion(installPath);
+      const installedManifest = readInstalledPackageManifest(installPath) as
+        | PackageManifest
+        | undefined;
+      currentVersion =
+        typeof installedManifest?.version === "string" ? installedManifest.version : undefined;
+      installedPayloadRunnable =
+        Boolean(params.disableOnFailure) &&
+        currentVersion !== undefined &&
+        (await hasRunnableInstalledNpmPayload({ installPath, manifest: installedManifest }));
     } catch (err) {
       recordFailure(
         pluginId,
@@ -1766,7 +1794,7 @@ export async function updateNpmInstalledPlugins(params: {
               metadataResult.category === "metadata-env"
                 ? PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE
                 : undefined,
-            installedVersion: currentVersion,
+            installedPayloadRunnable,
           });
           continue;
         }
@@ -2015,7 +2043,7 @@ export async function updateNpmInstalledPlugins(params: {
           {
             channelFallback: npmChannelFallback,
             code: "code" in probe && probe.code ? probe.code : undefined,
-            installedVersion: currentVersion,
+            installedPayloadRunnable,
           },
         );
         continue;
@@ -2322,7 +2350,7 @@ export async function updateNpmInstalledPlugins(params: {
         {
           channelFallback: npmChannelFallback,
           code: resultSource === "npm" && result && "code" in result ? result.code : undefined,
-          installedVersion: currentVersion,
+          installedPayloadRunnable,
         },
       );
       continue;

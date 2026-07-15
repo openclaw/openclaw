@@ -326,6 +326,7 @@ function createInstalledPackageDir(params: {
   name?: string;
   version: string;
   peerDependencies?: Record<string, string>;
+  runnable?: boolean;
 }): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-test-"));
   tempDirs.push(dir);
@@ -336,11 +337,15 @@ function createInstalledPackageDir(params: {
         name: params.name ?? "test-plugin",
         version: params.version,
         ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
+        ...(params.runnable ? { openclaw: { extensions: ["./index.js"] } } : {}),
       },
       null,
       2,
     ),
   );
+  if (params.runnable) {
+    fs.writeFileSync(path.join(dir, "index.js"), "export default function register() {}\n");
+  }
   return dir;
 }
 
@@ -2043,6 +2048,7 @@ describe("updateNpmInstalledPlugins", () => {
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
       version: "0.9.0",
+      runnable: true,
     });
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       code: 1,
@@ -2100,6 +2106,62 @@ describe("updateNpmInstalledPlugins", () => {
         pluginId: "lossless-claw",
         status: "error",
         message: "Failed to check lossless-claw: npm view failed: registry timeout",
+      },
+    ]);
+  });
+
+  it("disables a corrupt installed payload when metadata probing also fails", async () => {
+    const warn = vi.fn();
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      runnable: true,
+    });
+    fs.rmSync(path.join(installPath, "index.js"));
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "registry timeout",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          allow: ["lossless-claw", "keep"],
+          entries: {
+            "lossless-claw": {
+              enabled: true,
+              config: { preserved: true },
+            },
+          },
+          installs: {
+            "lossless-claw": {
+              source: "npm",
+              spec: "@martian-engineering/lossless-claw@^0.9.0",
+              installPath,
+            },
+          },
+        },
+      },
+      pluginIds: ["lossless-claw"],
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    const message =
+      'Disabled "lossless-claw" after plugin update failure; OpenClaw will continue without it. Failed to check lossless-claw: npm view failed: registry timeout';
+    expect(warn).toHaveBeenCalledWith(message);
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.["lossless-claw"]).toEqual({
+      enabled: false,
+      config: { preserved: true },
+    });
+    expect(result.config.plugins?.allow).toEqual(["keep"]);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "lossless-claw",
+        status: "skipped",
+        message,
       },
     ]);
   });
