@@ -2437,9 +2437,9 @@ private fun OnboardingHeader(
 private fun TogglePill(
   text: String,
   selected: Boolean,
+  modifier: Modifier = Modifier,
   enabled: Boolean = true,
   onClick: () -> Unit,
-  modifier: Modifier = Modifier,
 ) {
   Surface(
     onClick = onClick,
