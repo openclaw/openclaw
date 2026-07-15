@@ -7,8 +7,8 @@ import type { CommitmentRecord } from "./types.js";
 
 export type CommitmentsDatabase = Pick<OpenClawStateKyselyDatabase, "commitments">;
 export type CommitmentRow = Selectable<CommitmentsDatabase["commitments"]>;
-export type CommitmentRowInsert = Insertable<CommitmentsDatabase["commitments"]>;
-export type CommitmentRowUpdate = Updateable<CommitmentsDatabase["commitments"]>;
+type CommitmentRowInsert = Insertable<CommitmentsDatabase["commitments"]>;
+type CommitmentRowUpdate = Updateable<CommitmentsDatabase["commitments"]>;
 
 const COMMITMENT_KINDS = new Set([
   "event_check_in",

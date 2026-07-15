@@ -38,7 +38,7 @@ type LegacySourceSnapshot = {
 const LEGACY_STORE_KEYS = new Set(["version", "commitments"]);
 const ACTIVE_STATUSES = ["pending", "snoozed"] as const;
 
-export function resolveLegacyCommitmentsPath(stateDir: string): string {
+function resolveLegacyCommitmentsPath(stateDir: string): string {
   return path.join(stateDir, "commitments", "commitments.json");
 }
 

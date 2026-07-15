@@ -1,9 +1,9 @@
 // Covers fail-closed doctor import of the retired commitments JSON store.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { commitmentRecordToRow, type CommitmentsDatabase } from "../commitments/store-record.js";
 import { listCommitments } from "../commitments/store.js";
 import { readCommitmentsForTest, seedCommitmentsForTest } from "../commitments/store.test-utils.js";
@@ -17,26 +17,24 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   detectLegacyCommitments,
   migrateLegacyCommitments,
-  resolveLegacyCommitmentsPath,
 } from "./state-migrations.commitments.js";
 
 describe("legacy commitments doctor migration", () => {
-  const tmpDirs: string[] = [];
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   const nowMs = Date.parse("2026-04-29T17:00:00.000Z");
 
-  afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    vi.restoreAllMocks();
-    envSnapshot?.restore();
-    envSnapshot = undefined;
-    await Promise.all(tmpDirs.map((dir) => fsp.rm(dir, { recursive: true, force: true })));
-    tmpDirs.length = 0;
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+    afterEach(() => {
+      closeOpenClawStateDatabaseForTest();
+      vi.restoreAllMocks();
+      envSnapshot?.restore();
+      envSnapshot = undefined;
+      cleanup();
+    });
   });
 
   async function useStateDir(): Promise<string> {
-    const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-commitments-migration-"));
-    tmpDirs.push(stateDir);
+    const stateDir = tempDirs.make("openclaw-commitments-migration-");
     envSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     return stateDir;
@@ -77,7 +75,7 @@ describe("legacy commitments doctor migration", () => {
   }
 
   async function writeLegacyStore(stateDir: string, commitments: unknown[]): Promise<string> {
-    const sourcePath = resolveLegacyCommitmentsPath(stateDir);
+    const sourcePath = path.join(stateDir, "commitments", "commitments.json");
     await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
     await fsp.writeFile(sourcePath, JSON.stringify({ version: 1, commitments }, null, 2), "utf8");
     return sourcePath;
@@ -260,7 +258,7 @@ describe("legacy commitments doctor migration", () => {
     const stateDir = await useStateDir();
     const realPath = path.join(stateDir, "outside.json");
     await fsp.writeFile(realPath, JSON.stringify({ version: 1, commitments: [record()] }), "utf8");
-    const sourcePath = resolveLegacyCommitmentsPath(stateDir);
+    const sourcePath = path.join(stateDir, "commitments", "commitments.json");
     await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
     await fsp.symlink(realPath, sourcePath);
 
