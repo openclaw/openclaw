@@ -96,7 +96,12 @@ describe("delivery queue media crash boundary", () => {
     // A fresh process reclaims the dead owner's generation, but a pending row
     // still needs this artifact, so it must survive its owner's death.
     await reclaimDeadGenerationSpoolArtifacts({
-      retainPaths: new Set(collectEntrySpoolPaths(pendingBeforeGc[0]?.payloads ?? [], stateDir)),
+      loadRetainPaths: async () =>
+        new Set(
+          (await loadPendingDeliveries(stateDir)).flatMap((entry) =>
+            collectEntrySpoolPaths(entry.payloads, stateDir),
+          ),
+        ),
       stateDir,
     });
     await expect(fs.readFile(artifact, "utf8")).resolves.toBe("opus-bytes");
@@ -123,7 +128,10 @@ describe("delivery queue media crash boundary", () => {
 
     // Ack already released it; a later sweep with no retain set is a no-op that
     // also clears the dead generation directory itself.
-    await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+    await reclaimDeadGenerationSpoolArtifacts({
+      loadRetainPaths: async () => new Set<string>(),
+      stateDir,
+    });
 
     await expect(fs.readFile(artifact, "utf8")).rejects.toThrow();
     await expect(fs.readdir(path.dirname(artifact))).rejects.toThrow();

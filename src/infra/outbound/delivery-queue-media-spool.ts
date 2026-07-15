@@ -171,24 +171,37 @@ export async function stageQueuePayloadMedia(params: {
   };
 
   const stagedPayloads: ReplyPayload[] = [];
-  for (const payload of params.payloads) {
-    const sources = payloadMediaSources(payload).filter(isSpoolableSource);
-    if (sources.length === 0) {
-      stagedPayloads.push(payload);
-      continue;
+  try {
+    for (const payload of params.payloads) {
+      const sources = payloadMediaSources(payload).filter(isSpoolableSource);
+      if (sources.length === 0) {
+        stagedPayloads.push(payload);
+        continue;
+      }
+      const staged = { ...payload };
+      if (typeof payload.mediaUrl === "string" && isSpoolableSource(payload.mediaUrl)) {
+        staged.mediaUrl = await stageSource(payload.mediaUrl);
+      }
+      if (payload.mediaUrls) {
+        // Sequential, not concurrent: a rejected copy must leave no sibling copy
+        // still in flight, or the cleanup below would run before that sibling
+        // lands and orphan it. Also bounds peak memory to one source at a time.
+        const stagedMediaUrls: string[] = [];
+        for (const mediaUrl of payload.mediaUrls) {
+          stagedMediaUrls.push(
+            isSpoolableSource(mediaUrl) ? await stageSource(mediaUrl) : mediaUrl,
+          );
+        }
+        staged.mediaUrls = stagedMediaUrls;
+      }
+      stagedPayloads.push(staged);
     }
-    const staged = { ...payload };
-    if (typeof payload.mediaUrl === "string" && isSpoolableSource(payload.mediaUrl)) {
-      staged.mediaUrl = await stageSource(payload.mediaUrl);
-    }
-    if (payload.mediaUrls) {
-      staged.mediaUrls = await Promise.all(
-        payload.mediaUrls.map(async (mediaUrl) =>
-          isSpoolableSource(mediaUrl) ? await stageSource(mediaUrl) : mediaUrl,
-        ),
-      );
-    }
-    stagedPayloads.push(staged);
+  } catch (err) {
+    // A later source failed after earlier ones were published. No row will ever
+    // reference them, and reclaim never touches a live owner's generation, so
+    // they would accumulate for this process's lifetime unless dropped here.
+    await releaseSpoolArtifacts(artifacts, params.stateDir);
+    throw err;
   }
   return { status: "staged", payloads: stagedPayloads, artifacts };
 }
@@ -237,9 +250,16 @@ export function collectEntrySpoolPaths(
  * Reclaims artifacts in generations whose producer is provably gone. Live and
  * unverifiable owners are skipped whole — wall-clock age is never an ownership
  * signal, so a long-idle gateway keeps its own undelivered media.
+ *
+ * `loadRetainPaths` is re-read after each death proof rather than snapshotted up
+ * front: a short-lived producer (`openclaw message send`) can stage, commit, and
+ * exit while this pass runs, and a snapshot taken before that commit would not
+ * name the artifact its now-pending row still needs. Reading after the owner is
+ * proven dead is sufficient, because a process only ever stages into its own
+ * generation, so a dead owner can produce no further references.
  */
 export async function reclaimDeadGenerationSpoolArtifacts(params: {
-  retainPaths: ReadonlySet<string>;
+  loadRetainPaths: () => Promise<ReadonlySet<string>>;
   stateDir?: string;
 }): Promise<void> {
   const spoolRoot = resolveDeliveryQueueMediaDir(params.stateDir);
@@ -261,7 +281,7 @@ export async function reclaimDeadGenerationSpoolArtifacts(params: {
     await reclaimGeneration({
       generationDir: entry.name,
       generationPath: path.join(spoolRoot, entry.name),
-      retainPaths: params.retainPaths,
+      retainPaths: await params.loadRetainPaths(),
       stateDir: params.stateDir,
     });
   }

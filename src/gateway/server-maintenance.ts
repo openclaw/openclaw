@@ -155,12 +155,15 @@ export function startGatewayMaintenanceTimers(params: {
       // Lazy: the queue runtime already loads on demand for recovery, and the
       // maintenance timers must not pull it into gateway startup.
       const { loadPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
-      const pending = await loadPendingDeliveries();
-      // Only pending rows still replay, so only their exact paths are retained.
-      const retainPaths = new Set(
-        pending.flatMap((entry) => collectEntrySpoolPaths(entry.payloads)),
-      );
-      await reclaimDeadGenerationSpoolArtifacts({ retainPaths });
+      await reclaimDeadGenerationSpoolArtifacts({
+        // Re-read per death proof rather than snapshotted: a CLI producer can
+        // commit a row and exit mid-sweep. Only pending rows still replay, so
+        // only their exact paths are retained.
+        loadRetainPaths: async () => {
+          const pending = await loadPendingDeliveries();
+          return new Set(pending.flatMap((entry) => collectEntrySpoolPaths(entry.payloads)));
+        },
+      });
     });
   const performDeliveryQueueMediaGc = () =>
     runDeliveryQueueMediaGc().catch((err: unknown) => {

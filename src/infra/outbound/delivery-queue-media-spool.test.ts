@@ -115,7 +115,10 @@ describe("generation reclaim", () => {
     pidAlive.isPidDefinitelyDead.mockReturnValue(false);
     ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(900);
 
-    await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+    await reclaimDeadGenerationSpoolArtifacts({
+      loadRetainPaths: async () => new Set<string>(),
+      stateDir,
+    });
 
     // Age is never an ownership signal: a gateway idle for a year still owns its
     // undelivered media.
@@ -128,7 +131,10 @@ describe("generation reclaim", () => {
     pidAlive.isPidDefinitelyDead.mockReturnValue(false);
     ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(null);
 
-    await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+    await reclaimDeadGenerationSpoolArtifacts({
+      loadRetainPaths: async () => new Set<string>(),
+      stateDir,
+    });
 
     expect(await exists(artifactPath)).toBe(true);
   });
@@ -138,7 +144,10 @@ describe("generation reclaim", () => {
     pidAlive.isPidDefinitelyDead.mockReturnValue(false);
     ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(1500);
 
-    await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+    await reclaimDeadGenerationSpoolArtifacts({
+      loadRetainPaths: async () => new Set<string>(),
+      stateDir,
+    });
 
     expect(await exists(artifactPath)).toBe(true);
   });
@@ -147,7 +156,10 @@ describe("generation reclaim", () => {
     const { generationPath, artifactPath } = await seedGeneration({ pid: 4245, startTime: 900 });
     pidAlive.isPidDefinitelyDead.mockReturnValue(true);
 
-    await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+    await reclaimDeadGenerationSpoolArtifacts({
+      loadRetainPaths: async () => new Set<string>(),
+      stateDir,
+    });
 
     expect(await exists(artifactPath)).toBe(false);
     expect(await exists(generationPath)).toBe(false);
@@ -160,7 +172,7 @@ describe("generation reclaim", () => {
     pidAlive.isPidDefinitelyDead.mockReturnValue(true);
 
     await reclaimDeadGenerationSpoolArtifacts({
-      retainPaths: new Set([artifactPath]),
+      loadRetainPaths: async () => new Set([artifactPath]),
       stateDir,
     });
 
@@ -170,13 +182,34 @@ describe("generation reclaim", () => {
     expect(await exists(generationPath)).toBe(true);
   });
 
+  it("retains an artifact whose row is committed after the sweep begins", async () => {
+    const { generationPath, artifactPath } = await seedGeneration({ pid: 4260, startTime: 900 });
+    // Models a CLI producer that stages, commits its row, and exits while this
+    // sweep is already running: the row lands exactly as the sweep proves the
+    // owner dead, so a retain set read before that proof cannot name it.
+    let committed = false;
+    pidAlive.isPidDefinitelyDead.mockImplementation(() => {
+      committed = true;
+      return true;
+    });
+    const loadRetainPaths = async () => (committed ? new Set([artifactPath]) : new Set<string>());
+
+    await reclaimDeadGenerationSpoolArtifacts({ loadRetainPaths, stateDir });
+
+    expect(await exists(artifactPath)).toBe(true);
+    expect(await exists(generationPath)).toBe(true);
+  });
+
   it("reclaims a generation whose PID was recycled by a different process", async () => {
     const { artifactPath } = await seedGeneration({ pid: 4247, startTime: 900 });
     // The PID is live, but it belongs to a process that booted later.
     pidAlive.isPidDefinitelyDead.mockReturnValue(false);
     ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(999_000);
 
-    await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+    await reclaimDeadGenerationSpoolArtifacts({
+      loadRetainPaths: async () => new Set<string>(),
+      stateDir,
+    });
 
     expect(await exists(artifactPath)).toBe(false);
   });
@@ -189,7 +222,10 @@ describe("generation reclaim", () => {
       pidAlive.isPidDefinitelyDead.mockReturnValue(false);
       ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(1_752_000_000_000);
 
-      await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+      await reclaimDeadGenerationSpoolArtifacts({
+        loadRetainPaths: async () => new Set<string>(),
+        stateDir,
+      });
 
       expect(await exists(artifactPath)).toBe(true);
     });
@@ -200,7 +236,10 @@ describe("generation reclaim", () => {
       // Same PID, different incarnation: Windows recycles PIDs aggressively.
       ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(1_752_999_999_000);
 
-      await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+      await reclaimDeadGenerationSpoolArtifacts({
+        loadRetainPaths: async () => new Set<string>(),
+        stateDir,
+      });
 
       expect(await exists(artifactPath)).toBe(false);
     });
@@ -211,7 +250,10 @@ describe("generation reclaim", () => {
       // PowerShell/WMIC unavailable or timed out: unreadable is never "dead".
       ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(null);
 
-      await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+      await reclaimDeadGenerationSpoolArtifacts({
+        loadRetainPaths: async () => new Set<string>(),
+        stateDir,
+      });
 
       expect(await exists(artifactPath)).toBe(true);
     });
@@ -225,7 +267,10 @@ describe("generation reclaim", () => {
     });
     pidAlive.isPidDefinitelyDead.mockReturnValue(true);
 
-    await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+    await reclaimDeadGenerationSpoolArtifacts({
+      loadRetainPaths: async () => new Set<string>(),
+      stateDir,
+    });
 
     expect(await exists(artifactPath)).toBe(false);
   });
@@ -237,7 +282,10 @@ describe("generation reclaim", () => {
     await fs.writeFile(stranger, "not ours");
     pidAlive.isPidDefinitelyDead.mockReturnValue(true);
 
-    await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+    await reclaimDeadGenerationSpoolArtifacts({
+      loadRetainPaths: async () => new Set<string>(),
+      stateDir,
+    });
 
     expect(await exists(stranger)).toBe(true);
   });
@@ -253,7 +301,10 @@ describe("generation reclaim", () => {
     await fs.symlink(outside, path.join(generationPath, "escape.ogg"));
     pidAlive.isPidDefinitelyDead.mockReturnValue(true);
 
-    await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+    await reclaimDeadGenerationSpoolArtifacts({
+      loadRetainPaths: async () => new Set<string>(),
+      stateDir,
+    });
 
     expect(await exists(outside)).toBe(true);
   });
@@ -418,6 +469,34 @@ describe("staging", () => {
     // The publish leaves no scratch behind.
     const generation = path.dirname(result.artifacts[0] as string);
     expect(await fs.readdir(generation)).toHaveLength(1);
+  });
+
+  it("drops earlier copies when a later source in the same entry fails", async () => {
+    const good = path.join(sourceDir, "first.ogg");
+    await fs.writeFile(good, "opus-bytes");
+    const missing = path.join(sourceDir, "second.ogg");
+
+    await expect(
+      stageQueuePayloadMedia({
+        payloads: [{ mediaUrls: [good, missing] }],
+        mediaAccess: mediaAccessFor([sourceDir]),
+        maxBytes: 1024 * 1024,
+        stateDir,
+      }),
+    ).rejects.toThrow();
+
+    // No row will ever reference the first copy, and reclaim never touches a
+    // live owner's generation, so a partial stage must clean up after itself.
+    const generations = await fs.readdir(spoolRoot).catch(() => []);
+    const leaked = (
+      await Promise.all(
+        generations.map(
+          async (generation) =>
+            (await fs.readdir(path.join(spoolRoot, generation)).catch(() => [])).length,
+        ),
+      )
+    ).reduce((total, count) => total + count, 0);
+    expect(leaked).toBe(0);
   });
 
   it("copies a repeated source once per entry", async () => {
