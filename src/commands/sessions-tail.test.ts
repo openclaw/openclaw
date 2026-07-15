@@ -369,8 +369,9 @@ describe("sessionsTailCommand", () => {
       data: { name: "python", success: true },
     });
     // POSIX positional reads may return fewer bytes than requested; cap each
-    // follow-poll read to a small window to exercise that contract.
+    // call to prove the bounded delta is filled without skipping bytes.
     let capReads = false;
+    let shortReadCalls = 0;
     const realReadSync = fs.readSync.bind(fs);
     const cappedReadSync = (
       fd: number,
@@ -380,6 +381,9 @@ describe("sessionsTailCommand", () => {
       position: fs.ReadPosition | null,
     ): number => {
       const cappedLength = capReads ? Math.min(length, 16) : length;
+      if (capReads) {
+        shortReadCalls += 1;
+      }
       return realReadSync(fd, buffer, offset, cappedLength, position);
     };
     const readSpy = vi
@@ -407,6 +411,7 @@ describe("sessionsTailCommand", () => {
     }
 
     const output = runtimeOutput(runtime);
+    expect(shortReadCalls).toBeGreaterThan(1);
     expect(output).toContain("tool.result");
     expect(output).toContain("python ok");
   });

@@ -16,6 +16,7 @@ import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.j
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readFileWindowFullySync } from "../infra/file-read.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -544,10 +545,7 @@ function readNewFileFollowEvents(state: FileFollowState): TrajectoryEvent[] {
       );
     }
     const buffer = Buffer.alloc(deltaBytes);
-    // Positional reads may return short; advance the cursor only past the
-    // bytes actually read so the next poll re-reads the remainder instead of
-    // skipping it, and decode only those bytes to keep the JSONL lines clean.
-    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, state.offset);
+    const bytesRead = readFileWindowFullySync(fd, buffer, state.offset);
     state.offset += bytesRead;
     state.fileState = fileState;
     const combined = `${state.pending}${state.decoder.write(buffer.subarray(0, bytesRead))}`;
