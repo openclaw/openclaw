@@ -69,7 +69,7 @@ import {
   type GatewayConfigReloadTransactionOwnership,
   type GatewayReloadPlan,
 } from "./config-reload.js";
-import { resolveHooksConfig } from "./hooks.js";
+import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
@@ -576,9 +576,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     resetPreparedModelRuntimeStateForHotReload();
 
+    let hooksReloadResolved = false;
     if (plan.reloadHooks) {
       try {
         nextState.hooksConfig = resolveHooksConfig(nextConfig);
+        hooksReloadResolved = true;
       } catch (err) {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
         throw err;
@@ -654,6 +656,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         params.setState(nextState);
         // All rejecting work is complete. Publish pre-resolved lane limits at
         // the final synchronous commit edge, alongside the accepted state.
+        if (hooksReloadResolved) {
+          commitHooksConfigReload();
+        }
         applyGatewayLaneConcurrency(laneConcurrency);
         runtimeCommitted = true;
         setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
