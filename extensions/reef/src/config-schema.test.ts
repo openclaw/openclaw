@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import reefChannelEntry from "../index.js";
+import { reefPlugin } from "./channel.js";
 import { autonomyBudget, parseReefRelayUrl, ReefChannelConfigSchema } from "./config-schema.js";
 import { setActiveReef } from "./runtime.js";
 
@@ -83,6 +84,33 @@ describe("Reef configuration boundary", () => {
       text: expect.stringContaining("Usage: /reef friend"),
     });
     expect(flowSend).not.toHaveBeenCalled();
+  });
+
+  it("keeps read-only account and security inspection safe before runtime setup", () => {
+    const cfg = {
+      channels: {
+        reef: {
+          handle: "owner",
+          email: "owner@example.com",
+          guard: {
+            provider: "anthropic" as const,
+            pinnedModel: "claude-test-2026-07-12",
+            apiKeyEnv: "REEF_GUARD_API_KEY",
+            policyVersion: "owner-policy-v2",
+            timeoutMs: 5_000,
+          },
+        },
+      },
+    };
+    const account = reefPlugin.config.resolveAccount(cfg, "default");
+
+    expect(reefPlugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([]);
+    expect(reefPlugin.config.describeAccount?.(account)).toMatchObject({
+      extra: { friendCount: 0 },
+    });
+    expect(
+      reefPlugin.security?.resolveDmPolicy?.({ cfg, accountId: "default", account }),
+    ).toMatchObject({ policy: "pairing", allowFrom: [] });
   });
 });
 

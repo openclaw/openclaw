@@ -20,7 +20,7 @@ import {
 import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
-import { getActiveReef, getReefRuntime, setActiveReef } from "./runtime.js";
+import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
 import { loadKeys, openStores, resolveStateDir, ReviewApprovalStore } from "./state.js";
 import {
@@ -40,6 +40,20 @@ function resolveAccount(cfg: unknown): ReefAccount {
     configured: Boolean(config.handle && config.email && config.guard),
     config,
   };
+}
+
+function listTrustedPeers(config: ReefAccount["config"]): string[] {
+  if (!config.handle) {
+    return [];
+  }
+  // Read-only setup, doctor, and audit discovery can load the channel shape
+  // without initializing the live plugin runtime.
+  const runtime = getOptionalReefRuntime();
+  return runtime
+    ? openReefTrustStore(runtime, config)
+        .list()
+        .map((entry) => entry.peer)
+    : [];
 }
 
 export const reefPlugin: ChannelPlugin<ReefAccount> = {
@@ -74,18 +88,12 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
     isConfigured: (account) => account.configured,
     resolveAllowFrom: ({ cfg }) => {
       const config = resolveReefConfig(cfg as ReefCoreConfig);
-      return config.handle
-        ? openReefTrustStore(getReefRuntime(), config)
-            .list()
-            .map((entry) => entry.peer)
-        : [];
+      return listTrustedPeers(config);
     },
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom.map(String).map((entry) => normalizeReefTarget(entry) ?? entry),
     describeAccount: (account) => {
-      const friendCount = account.config.handle
-        ? openReefTrustStore(getReefRuntime(), account.config).list().length
-        : 0;
+      const friendCount = listTrustedPeers(account.config).length;
       return {
         accountId: "default",
         enabled: account.enabled,
@@ -141,11 +149,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
   security: {
     resolveDmPolicy: ({ account }) => ({
       policy: "pairing",
-      allowFrom: account.config.handle
-        ? openReefTrustStore(getReefRuntime(), account.config)
-            .list()
-            .map((entry) => entry.peer)
-        : [],
+      allowFrom: listTrustedPeers(account.config),
       policyPath: "Reef local peer trust",
       allowFromPath: "Reef local peer trust",
       approveHint: "openclaw pairing approve reef <code>",
