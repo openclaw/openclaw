@@ -1250,6 +1250,16 @@ export async function runReplyAgent(params: {
     mode: typingMode,
     isHeartbeat,
   });
+  let beforeAgentReplyInvoked = false;
+  const invokeBeforeAgentReply = async (admitted?: {
+    sessionId?: string;
+  }): Promise<ReplyPayload | undefined> => {
+    if (!beforeAgentReply || beforeAgentReplyInvoked) {
+      return undefined;
+    }
+    beforeAgentReplyInvoked = true;
+    return await beforeAgentReply(admitted);
+  };
 
   const baseShouldEmitToolResult = createShouldEmitToolResult({
     sessionKey,
@@ -1285,6 +1295,13 @@ export async function runReplyAgent(params: {
 
   let shouldQueueAfterSteerRejection = false;
   if (effectiveShouldSteer && isActive) {
+    // Steering never reaches reply-lane admission. Preserve the hook's
+    // historical before-queue boundary instead of silently skipping it.
+    const hookReply = await invokeBeforeAgentReply();
+    if (hookReply) {
+      typing.cleanup();
+      return hookReply;
+    }
     // Steer against the operation that owns THIS session's run slot. A native
     // command continuation whose slot adoption was skipped (#104844) still
     // carries a source-keyed reservation; steering by its stale sessionId
@@ -1368,6 +1385,13 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
+    // Follow-up queues are process-local and may collect multiple sources.
+    // Run each source hook before enqueue so handled turns never enter a batch.
+    const hookReply = await invokeBeforeAgentReply();
+    if (hookReply) {
+      typing.cleanup();
+      return hookReply;
+    }
     const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
@@ -1742,7 +1766,7 @@ export async function runReplyAgent(params: {
     // Suppressed delivery persists only the user transcript; crashed suppressed runs die
     // silently. Deliverable turns atomically persist transcript plus recovery ownership.
     await opts?.onTurnAdopted?.();
-    const hookReply = await beforeAgentReply?.({ sessionId: replyOperation.sessionId });
+    const hookReply = await invokeBeforeAgentReply({ sessionId: replyOperation.sessionId });
     if (hookReply) {
       const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
       const normalizedHookReplies = normalizePendingFinalDeliveryPayloads([hookReply]);

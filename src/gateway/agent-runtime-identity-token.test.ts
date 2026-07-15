@@ -153,6 +153,27 @@ describe("agent runtime identity token", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("bounds run-lifetime message action bearers independently of local revocation", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1000);
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "session-1",
+      messageActionContext: { expiresAtMs: Number.MAX_SAFE_INTEGER },
+    });
+
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken(token, 60_999),
+    ).resolves.toMatchObject({
+      messageActionContext: { expiresAtMs: 61_000 },
+    });
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken(token, 61_000),
+    ).resolves.toBeUndefined();
+    nowSpy.mockRestore();
+  });
+
   it("queues parallel verifications behind a same-process approvals update", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

@@ -616,6 +616,22 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("does not bypass a deferred hook when an active run forces follow-up queueing", async () => {
+    const beforeAgentReply = vi.fn(async () => ({ text: "handled before queue" }));
+    const { run } = createMinimalRun({
+      beforeAgentReply,
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    await expect(run()).resolves.toEqual({ text: "handled before queue" });
+
+    expect(beforeAgentReply).toHaveBeenCalledOnce();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("cleans up typing when followup admission is rejected", async () => {
     vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
     const { run, typing } = createMinimalRun({

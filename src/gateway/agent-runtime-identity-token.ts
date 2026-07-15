@@ -12,6 +12,7 @@ import type { AgentRuntimeMessageActionContext } from "./message-action-turn-cap
 
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
 const AGENT_RUNTIME_IDENTITY_TOKEN_KIND = "agent-runtime";
+const MESSAGE_ACTION_TOKEN_TTL_MS = 60_000;
 
 export type AgentRuntimeIdentity = {
   kind: "agentRuntime";
@@ -183,11 +184,22 @@ export async function mintAgentRuntimeIdentityToken(params: {
   sessionKey: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
 }): Promise<string> {
+  const messageActionContext = params.messageActionContext
+    ? {
+        ...params.messageActionContext,
+        // The process-local turn capability may live for the whole run, but a
+        // copied bearer must expire shortly after its individual tool action.
+        expiresAtMs: Math.min(
+          params.messageActionContext.expiresAtMs,
+          Date.now() + MESSAGE_ACTION_TOKEN_TTL_MS,
+        ),
+      }
+    : undefined;
   const payload = encodePayload({
     kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
     agentId: normalizeAgentId(params.agentId),
     sessionKey: params.sessionKey.trim(),
-    ...(params.messageActionContext ? { messageActionContext: params.messageActionContext } : {}),
+    ...(messageActionContext ? { messageActionContext } : {}),
   });
   const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
   return `${payload}.${signature}`;

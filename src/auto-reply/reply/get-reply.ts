@@ -1024,8 +1024,9 @@ export async function getReplyFromConfig(
   }
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
-  // Dispatch-owned turns defer this until durable admission so a restart after
-  // hook entry can still recover the accepted user request.
+  // Dispatch-owned turns defer this to the runner. Turns that acquire the reply
+  // lane run it after durable admission; active steer/follow-up paths preserve
+  // the hook's existing before-queue boundary.
   let beforeAgentReply:
     | ((admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>)
     | undefined;
