@@ -70,6 +70,7 @@ import {
   resolveAgentLifecycleTerminalMetadata,
   type AgentLifecycleTerminalBackstop,
 } from "./agent-lifecycle-terminal.js";
+import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import {
   clearDroppedCliSessionBinding,
   createCliReasoningStreamBridge,
@@ -77,13 +78,12 @@ import {
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
+import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import {
   buildEmptyInteractiveReplyPayload,
-  buildTerminalAgentRunFailureReplyPayload,
-  buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
-  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
-} from "./agent-runner-execution.js";
+  buildTerminalAgentRunFailureReplyPayload,
+} from "./agent-runner-failure-reply.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import {
