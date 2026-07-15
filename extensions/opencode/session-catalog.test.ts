@@ -152,6 +152,14 @@ describe("OpenCode session catalog", () => {
         cursor: latest.nextCursor,
       });
       expect(older.items.map((item) => item.type)).toEqual(["reasoning", "agentMessage"]);
+      for (const cursor of [`${latest.nextCursor}$`, ` ${latest.nextCursor} `]) {
+        await expect(
+          readLocalOpenCodeTranscriptPage({
+            threadId: "ses_test",
+            cursor,
+          }),
+        ).rejects.toThrow("cursor is invalid");
+      }
       await expect(listLocalOpenCodeSessionPage({ cursor: " " })).rejects.toThrow(
         "cursor is invalid",
       );

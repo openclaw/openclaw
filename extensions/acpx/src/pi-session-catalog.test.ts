@@ -238,6 +238,14 @@ describe("Pi session catalog", () => {
       cursor: latest.nextCursor,
     });
     expect(older.items.map((item) => item.type)).toEqual(["reasoning", "agentMessage"]);
+    for (const cursor of [`${latest.nextCursor}$`, ` ${latest.nextCursor} `]) {
+      await expect(
+        readLocalPiTranscriptPage({
+          threadId: "pi-session",
+          cursor,
+        }),
+      ).rejects.toThrow("cursor is invalid");
+    }
     await expect(listLocalPiSessionPage({ cursor: " " })).rejects.toThrow("cursor is invalid");
     await expect(
       readLocalPiTranscriptPage({ threadId: "pi-session", cursor: 123 }),

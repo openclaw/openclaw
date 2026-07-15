@@ -24,12 +24,16 @@ export function encodeListSessionsCursor(cursor: ListSessionsCursor): string {
 
 /** Decodes and validates an ACP session-list cursor, defaulting to the first page. */
 export function decodeListSessionsCursor(value: string | null | undefined): ListSessionsCursor {
-  if (!value) {
+  if (value === null || value === undefined) {
     return { offset: 0 };
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+    const bytes = Buffer.from(value, "base64url");
+    if (bytes.toString("base64url") !== value) {
+      throw new Error("non-canonical base64url");
+    }
+    parsed = JSON.parse(bytes.toString("utf8"));
   } catch {
     throw new Error("Invalid ACP session list cursor.");
   }

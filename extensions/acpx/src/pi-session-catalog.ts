@@ -40,16 +40,27 @@ function encodeCursor(offset: number): string {
   return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
 }
 
-function decodeCursor(value: unknown): number {
+function optionalRawCursor(value: unknown): string | undefined {
   if (value === undefined) {
-    return 0;
+    return undefined;
   }
-  const cursor = optionalPiString(value, MAX_CURSOR_LENGTH);
-  if (!cursor) {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_CURSOR_LENGTH) {
     throw new Error("cursor is invalid");
   }
+  return value;
+}
+
+function decodeCursor(value: unknown): number {
+  const cursor = optionalRawCursor(value);
+  if (cursor === undefined) {
+    return 0;
+  }
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
+    const bytes = Buffer.from(cursor, "base64url");
+    if (bytes.toString("base64url") !== cursor) {
+      throw new Error("non-canonical base64url");
+    }
+    const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
     if (!isRecord(parsed) || !Number.isInteger(parsed.offset) || Number(parsed.offset) < 0) {
       throw new Error("invalid offset");
     }
@@ -161,10 +172,7 @@ function parseListParams(value: unknown): { searchTerm?: string; limit: number; 
   if (value.searchTerm !== undefined && !searchTerm) {
     throw new Error("searchTerm is invalid");
   }
-  const cursor = optionalPiString(value.cursor, MAX_CURSOR_LENGTH);
-  if (value.cursor !== undefined && !cursor) {
-    throw new Error("cursor is invalid");
-  }
+  const cursor = optionalRawCursor(value.cursor);
   return {
     limit: boundedLimit(value.limit),
     ...(searchTerm ? { searchTerm } : {}),
@@ -184,10 +192,7 @@ function parseReadParams(value: unknown): { threadId: string; limit: number; cur
   if (!threadId || !SESSION_ID_PATTERN.test(threadId)) {
     throw new Error("threadId is invalid");
   }
-  const cursor = optionalPiString(value.cursor, MAX_CURSOR_LENGTH);
-  if (value.cursor !== undefined && !cursor) {
-    throw new Error("cursor is invalid");
-  }
+  const cursor = optionalRawCursor(value.cursor);
   return {
     threadId,
     limit: boundedLimit(value.limit),
