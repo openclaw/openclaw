@@ -2044,6 +2044,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         latestDraftFullText = "";
       };
 
+      const resetDraftDeliveryState = async () => {
+        await draftStream?.discardPending();
+        draftStream?.reset();
+        draftConsumed = false;
+        currentDraftMessageGeneration = 0;
+        currentDraftBlockOffset = 0;
+        latestDraftFullText = "";
+        pendingDraftBoundaries.length = 0;
+        latestQueuedDraftBoundaryOffsets.clear();
+        currentDraftReplyToId = draftReplyToId;
+        progressDraftGate.cancel();
+        resetPreviewToolProgress();
+      };
+
       const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
         core.channel.reply.createReplyDispatcherWithTyping({
           ...prefixOptions,
@@ -2481,6 +2495,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                               resetPreviewToolProgress();
                             }
                           : undefined,
+                        onQueuedFollowupAdmitted: draftStream ? resetDraftDeliveryState : undefined,
                         ...buildPreviewToolProgressReplyOptions(),
                         onModelSelected,
                       },

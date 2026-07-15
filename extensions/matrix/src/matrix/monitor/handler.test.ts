@@ -2897,6 +2897,7 @@ describe("matrix monitor handler draft streaming", () => {
       context?: { assistantMessageIndex?: number },
     ) => Promise<void> | void;
     onAssistantMessageStart?: () => void;
+    onQueuedFollowupAdmitted?: () => Promise<void> | void;
     suppressDefaultToolProgressMessages?: boolean;
     onToolStart?: (payload: {
       itemId?: string;
@@ -3777,6 +3778,34 @@ describe("matrix monitor handler draft streaming", () => {
 
       await vi.advanceTimersByTimeAsync(50);
       expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+      await finish();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts a fresh Matrix draft for queued followups after the primary final", async () => {
+    vi.useFakeTimers();
+    try {
+      const { dispatch } = createStreamingHarness();
+      const { deliver, opts, finish } = await dispatch();
+
+      opts.onPartialReply?.({ text: "Primary answer" });
+      await vi.waitFor(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+
+      await deliver({ text: "Primary answer" }, { kind: "final" });
+
+      sendSingleTextMessageMatrixMock.mockClear();
+      sendSingleTextMessageMatrixMock.mockResolvedValue({ messageId: "$draft2", roomId: "!room" });
+
+      await opts.onQueuedFollowupAdmitted?.();
+      opts.onPartialReply?.({ text: "Queued followup answer" });
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(singleTextMessageBody()).toBe("Queued followup answer");
       await finish();
     } finally {
       vi.useRealTimers();
