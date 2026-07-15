@@ -1195,6 +1195,12 @@ describe("worker turn launcher", () => {
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
         }),
+        quiesceWorkspace: vi.fn(async () => {
+          throw new Error("unexpected workspace quiescence");
+        }),
+        reconcileWorkspace: vi.fn(async () => {
+          throw new Error("unexpected workspace reconciliation");
+        }),
         stop: vi.fn(async () => {}),
       })),
       stopTunnel,
