@@ -15,16 +15,11 @@ const writerStore = new Map<string, EventWriter>();
 // --- Client tools (for the plugin tool factory) ---
 
 export function stashTools(sessionKey: string, tools: Tool[]): void {
-  console.log(`[ag-ui] stashTools: sessionKey=${sessionKey}, toolCount=${tools.length}`);
-  for (const t of tools) {
-    console.log(`[ag-ui]   tool: name=${t.name}, description=${t.description ?? "(none)"}, hasParams=${!!t.parameters}, params=${JSON.stringify(t.parameters ?? {})}`);
-  }
   toolStore.set(sessionKey, tools);
 }
 
 export function popTools(sessionKey: string): Tool[] {
   const tools = toolStore.get(sessionKey) ?? [];
-  console.log(`[ag-ui] popTools: sessionKey=${sessionKey}, tools=${tools.length}`);
   toolStore.delete(sessionKey);
   return tools;
 }
@@ -68,13 +63,11 @@ export function pushToolCallId(sessionKey: string, toolCallId: string): void {
     pendingStacks.set(sessionKey, stack);
   }
   stack.push(toolCallId);
-  console.log(`[ag-ui] pushToolCallId: sessionKey=${sessionKey}, toolCallId=${toolCallId}, stackSize=${stack.length}`);
 }
 
 export function popToolCallId(sessionKey: string): string | undefined {
   const stack = pendingStacks.get(sessionKey);
   const id = stack?.pop();
-  console.log(`[ag-ui] popToolCallId: sessionKey=${sessionKey}, toolCallId=${id ?? "none"}, stackSize=${stack?.length ?? 0}`);
   if (stack && stack.length === 0) {
     pendingStacks.delete(sessionKey);
   }
@@ -90,7 +83,6 @@ export function markClientToolNames(
   sessionKey: string,
   names: string[],
 ): void {
-  console.log(`[ag-ui] markClientToolNames: sessionKey=${sessionKey}, names=${names.join(", ")}`);
   clientToolNames.set(sessionKey, new Set(names));
 }
 
@@ -98,13 +90,10 @@ export function isClientTool(
   sessionKey: string,
   toolName: string,
 ): boolean {
-  const result = clientToolNames.get(sessionKey)?.has(toolName) ?? false;
-  console.log(`[ag-ui] isClientTool: sessionKey=${sessionKey}, toolName=${toolName}, result=${result}`);
-  return result;
+  return clientToolNames.get(sessionKey)?.has(toolName) ?? false;
 }
 
 export function clearClientToolNames(sessionKey: string): void {
-  console.log(`[ag-ui] clearClientToolNames: sessionKey=${sessionKey}`);
   clientToolNames.delete(sessionKey);
 }
 
@@ -135,18 +124,13 @@ export function clearToolFiredInRun(sessionKey: string): void {
 const clientToolCalledFlags = new Map<string, boolean>();
 
 export function setClientToolCalled(sessionKey: string): void {
-  console.log(`[ag-ui] setClientToolCalled: sessionKey=${sessionKey}`);
   clientToolCalledFlags.set(sessionKey, true);
 }
 
 export function wasClientToolCalled(sessionKey: string): boolean {
-  const result = clientToolCalledFlags.get(sessionKey) ?? false;
-  console.log(`[ag-ui] wasClientToolCalled: sessionKey=${sessionKey}, result=${result}`);
-  return result;
+  return clientToolCalledFlags.get(sessionKey) ?? false;
 }
 
 export function clearClientToolCalled(sessionKey: string): void {
-  console.log(`[ag-ui] clearClientToolCalled: sessionKey=${sessionKey}`);
   clientToolCalledFlags.delete(sessionKey);
 }
-
