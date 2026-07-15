@@ -21,7 +21,6 @@ import {
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
 
@@ -107,14 +106,15 @@ function renderPresentation(presentation: ApprovalPresentation) {
     <div class="approval-page__preview-label">${t("approvalPage.requestLabel")}</div>
     <div class=${previewClass}>${presentation.description}</div>
     <dl class="approval-page__meta">
-      ${renderMetaRow(t("execApproval.labels.severity"), presentation.severity)}
-      ${renderMetaRow(t("execApproval.labels.plugin"), presentation.pluginId)}
-      ${renderMetaRow(t("approvalPage.toolLabel"), presentation.toolName)}
+      ${presentation.kind === "plugin"
+        ? html`${renderMetaRow(t("execApproval.labels.severity"), presentation.severity)}
+          ${renderMetaRow(t("execApproval.labels.plugin"), presentation.pluginId)}
+          ${renderMetaRow(t("approvalPage.toolLabel"), presentation.toolName)}`
+        : nothing}
       ${renderMetaRow(t("execApproval.labels.agent"), presentation.agentId)}
     </dl>
   `;
 }
-
 function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
   if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
     return t("approvalPage.resolvedElsewhere");
@@ -359,7 +359,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
       !this.connected ||
       !id ||
       approval?.status !== "pending" ||
-      !approval.presentation.allowedDecisions.includes(decision) ||
+      !Array.prototype.includes.call(approval.presentation.allowedDecisions, decision) ||
       this.resolving
     ) {
       return;

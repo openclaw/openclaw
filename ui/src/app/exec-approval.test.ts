@@ -5,6 +5,7 @@ import {
   isStaleApprovalResolutionError,
   parseExecApprovalRequested,
   parsePluginApprovalRequested,
+  parseSystemAgentApprovalRequested,
   clearResolvedExecApprovalPrompt,
   refreshPendingApprovalQueue,
   type ExecApprovalPromptState,
@@ -153,6 +154,39 @@ describe("parsePluginApprovalRequested", () => {
     expect(result?.pluginId).toBeNull();
     expect(result?.request.agentId).toBeNull();
     expect(result?.request.sessionKey).toBeNull();
+  });
+});
+
+describe("parseSystemAgentApprovalRequested", () => {
+  it("keeps the exact proposal and only safe prompt fields", () => {
+    const result = parseSystemAgentApprovalRequested({
+      id: "system-agent:1",
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+      request: {
+        title: "OpenClaw change",
+        description: "Set gateway.port to 19001",
+        command: "Set gateway.port to 19001",
+        proposalHash: "a".repeat(64),
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        allowedDecisions: ["allow-once", "deny", "allow-always"],
+      },
+    });
+
+    expect(result).toMatchObject({
+      id: "system-agent:1",
+      kind: "system-agent",
+      pluginTitle: "OpenClaw change",
+      pluginDescription: "Set gateway.port to 19001",
+      proposalHash: "a".repeat(64),
+      request: {
+        command: "Set gateway.port to 19001",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
   });
 });
 

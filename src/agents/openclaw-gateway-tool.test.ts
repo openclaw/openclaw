@@ -826,25 +826,13 @@ describe("gateway tool", () => {
     expectGatewayMethodNotCalled("config.apply");
   });
 
-  it("passes update.run through gateway call", async () => {
-    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
-    const tool = requireGatewayTool(sessionKey);
+  it("does not expose update.run", () => {
+    const tool = requireGatewayTool();
+    const parameters = tool.parameters as {
+      properties?: { action?: { enum?: string[] } };
+    };
 
-    await tool.execute("call3", {
-      action: "update.run",
-      note: "test update",
-      continuationMessage: "Report the update result after restart.",
-    });
-
-    const updateCall = gatewayCall("update.run");
-    const [, opts, params] = updateCall;
-    expectRecordFields(params, {
-      continuationMessage: "Report the update result after restart.",
-      note: "test update",
-      sessionKey,
-      timeoutMs: 20 * 60_000,
-    });
-    expectRecordFields(opts, { timeoutMs: 20 * 60_000 });
+    expect(parameters.properties?.action?.enum).not.toContain("update.run");
   });
 
   it("returns a path-scoped schema lookup result", async () => {

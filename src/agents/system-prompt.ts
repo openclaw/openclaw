@@ -792,7 +792,8 @@ export function buildAgentSystemPrompt(params: {
     nodes: "Paired node status/control/media",
     cron: "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context.",
     message: "Message/channel actions",
-    gateway: "Gateway restart/config/update",
+    openclaw: "System setup/config expert; writes need human approval",
+    gateway: "Gateway restart/config",
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
       : "List allowed subagent ids",
@@ -828,6 +829,7 @@ export function buildAgentSystemPrompt(params: {
     "nodes",
     "cron",
     "message",
+    "openclaw",
     "gateway",
     "agents_list",
     "sessions_list",
@@ -896,6 +898,7 @@ export function buildAgentSystemPrompt(params: {
   });
 
   const hasGateway = availableTools.has("gateway");
+  const hasOpenClaw = availableTools.has("openclaw");
   const readToolName = resolveToolName("read");
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
@@ -1027,6 +1030,7 @@ export function buildAgentSystemPrompt(params: {
     capabilityToolNames: [...availableTools].toSorted(),
     renderOpenClawToolWorkflowHints,
     hasGateway,
+    hasOpenClaw,
     readToolName,
     execToolName,
     processToolName,
@@ -1081,6 +1085,7 @@ export function buildAgentSystemPrompt(params: {
             `Long wait: no rapid poll. Use ${execToolName} yieldMs or ${processToolName}(poll, timeout=<ms>).`,
             "Large work: `sessions_spawn`; completion push-based.",
             '`sessions_spawn`: omit `context`; transcript needed => `context:"fork"`.',
+            ...(hasSessionsSpawn ? ["`visible:true` only web/app user or asked."] : []),
           ]
         : []),
       ...nativeCommandGuidanceLines,
@@ -1151,24 +1156,19 @@ export function buildAgentSystemPrompt(params: {
       ...safetySection,
       "## OpenClaw Control",
       "Do not invent commands.",
-      "Config/restart: prefer `gateway` (`config.schema.lookup|get|patch|apply`, `restart`).",
+      ...(hasOpenClaw
+        ? [
+            "Config, channels, plugins, new agents, model/provider, updates: ask `openclaw`. Never write own config; OpenClaw is system expert.",
+          ]
+        : [
+            "Config/restart: prefer `gateway` (`config.schema.lookup|get|patch|apply`, `restart`).",
+          ]),
       "CLI lifecycle only explicit: `openclaw gateway status|restart|start|stop`.",
       "`restart`, not stop+start.",
       "",
       ...skillsSection,
       ...skillWorkshopSection,
       ...memorySection,
-      hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
-      hasGateway && !isMinimal
-        ? [
-            "Explicit user request only.",
-            "Before config edit/question: `config.schema.lookup` exact dot path.",
-            "Actions: config.get, config.patch, config.apply, update.run. Hot-reload when possible; restart if required.",
-            "After restart: last active session auto-pinged.",
-          ].join("\n")
-        : "",
-      hasGateway && !isMinimal ? "" : "",
-      "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
         ? "## Model Aliases"
         : "",

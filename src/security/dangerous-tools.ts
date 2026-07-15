@@ -33,6 +33,7 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "nodes",
   // Desktop control on a paired Mac (pointer/keyboard) and screen reads
   "computer",
+  "openclaw",
 ] as const;
 
 /**
@@ -51,4 +52,5 @@ export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
   "sessions",
   "nodes",
   "computer",
+  "openclaw",
 ] as const;

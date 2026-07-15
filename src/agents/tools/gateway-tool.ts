@@ -1,7 +1,7 @@
 /**
  * gateway built-in tool.
  *
- * Exposes selected Gateway control/config/update actions with fail-closed config mutation boundaries.
+ * Exposes selected Gateway control/config actions with fail-closed config mutation boundaries.
  */
 import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -42,7 +42,6 @@ import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 
 const log = createSubsystemLogger("gateway-tool");
 
-const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
 // Keep complete JSON below the smallest default tool-result presentation budget.
 const MAX_GATEWAY_CONFIG_GET_TEXT_CHARS = 12_000;
 const CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE = "config schema path not found";
@@ -156,7 +155,6 @@ const GATEWAY_ACTIONS = [
   "config.schema.lookup",
   "config.apply",
   "config.patch",
-  "update.run",
 ] as const;
 
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
@@ -168,7 +166,7 @@ const GatewayToolSchema = Type.Object({
   delayMs: optionalNonNegativeIntegerSchema(),
   reason: Type.Optional(Type.String()),
   continuationMessage: Type.Optional(Type.String()),
-  // config.get, config.schema.lookup, config.apply, update.run
+  // config.get, config.schema.lookup, config.apply
   ...gatewayCallOptionSchemaProperties(),
   // config.get, config.schema.lookup
   path: Type.Optional(Type.String()),
@@ -176,7 +174,7 @@ const GatewayToolSchema = Type.Object({
   raw: Type.Optional(Type.String()),
   baseHash: Type.Optional(Type.String()),
   replacePaths: Type.Optional(Type.Array(Type.String(), { maxItems: 256 })),
-  // config.apply, config.patch, update.run
+  // config.apply, config.patch
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
   restartDelayMs: optionalNonNegativeIntegerSchema(),
@@ -194,7 +192,7 @@ export function createGatewayTool(opts?: {
     label: "Gateway",
     name: "gateway",
     description:
-      "Gateway restart/config/update. Before config edit: config.schema.lookup exact dot path. Partial merge: config.patch; full replace only: config.apply. Removing array entries via patch needs exact array replacePaths. Writes hot-reload/restart as needed. Always human note for post-restart delivery. Internal continuation: one-shot continuationMessage; its visible follow-up uses message tool. Never write restart sentinel directly.",
+      "Gateway restart/config. Before edit: config.schema.lookup exact path. Patch merges; apply replaces. Array removal: exact replacePaths. Writes reload/restart. Human note after restart. Internal continuation: one-shot continuationMessage; visible follow-up uses message tool. Never write restart sentinel directly.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -366,24 +364,6 @@ export function createGatewayTool(opts?: {
         });
         return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }
-      if (action === "update.run") {
-        const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
-        const continuationMessage = normalizeOptionalString(params.continuationMessage);
-        const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
-        const updateGatewayOpts = {
-          ...gatewayOpts,
-          timeoutMs: updateTimeoutMs,
-        };
-        const result = await callGatewayTool("update.run", updateGatewayOpts, {
-          sessionKey,
-          note,
-          continuationMessage,
-          restartDelayMs,
-          timeoutMs: updateTimeoutMs,
-        });
-        return jsonResult({ ok: true, result });
-      }
-
       throw new Error(`Unknown action: ${action}`);
     },
   };

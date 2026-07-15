@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -15,6 +16,7 @@ import type {
   SystemAgentVerifiedInferenceDeps,
 } from "../../system-agent/verified-inference.js";
 import { createDeferred } from "../../test-utils/deferred.js";
+import { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   systemAgentHandlers,
   runExclusiveSystemAgentSetupActivation,
@@ -501,6 +503,94 @@ describe("openclaw.chat", () => {
 
     expect(handle).toHaveBeenCalledWith("status");
     expect(call.payload).toMatchObject({ reply: "did the thing", action: "none" });
+  });
+
+  it("surfaces delegated proposals without letting the agent arm them", async () => {
+    const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
+    const proposalHash = "a".repeat(64);
+    const engine = makeVerifiedEngine();
+    vi.spyOn(engine, "handle").mockResolvedValue({ text: "Approval pending.", action: "none" });
+    vi.spyOn(engine, "getPendingOperatorProposal").mockReturnValue({
+      operation,
+      hash: proposalHash,
+    });
+    const resolveOperatorApproval = vi
+      .spyOn(engine, "resolveOperatorApproval")
+      .mockResolvedValue(null);
+    const sessions = new Map<string, SystemAgentChatSession>([
+      [
+        "delegate-1",
+        seededSession({
+          engine,
+          delegationKey: JSON.stringify(["main", "agent:main:main"]),
+        }),
+      ],
+    ]);
+    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      approvalKind: "system-agent",
+      resolveAllowedDecisions: (request) => request.allowedDecisions,
+    });
+    const broadcast = vi.fn();
+    const context = {
+      ...makeContext(sessions),
+      systemAgentApprovalManager: manager,
+      broadcast,
+      broadcastToConnIds: vi.fn(),
+      hasExecApprovalClients: () => true,
+    } as unknown as GatewayRequestContext;
+
+    const first = await callChat(context, {
+      sessionId: "delegate-1",
+      message: "Change port.",
+      delegation: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    const proposalId = (first.payload as { proposalId?: string }).proposalId;
+
+    expect(first.payload).toMatchObject({
+      reply: "Approval pending.",
+      needsApproval: true,
+      proposalId: expect.stringMatching(/^system-agent:/),
+    });
+    expect(proposalId).toBeTruthy();
+    expect(manager.getSnapshot(proposalId!)).toMatchObject({
+      request: { proposalHash, agentId: "main", sessionKey: "agent:main:main" },
+    });
+    expect(manager.getSnapshot(proposalId!)?.decision).toBeUndefined();
+    expect(broadcast).toHaveBeenCalledWith(
+      "openclaw.approval.requested",
+      expect.objectContaining({ id: proposalId }),
+      { dropIfSlow: true },
+    );
+    expect(resolveOperatorApproval).not.toHaveBeenCalled();
+
+    await callChat(context, {
+      sessionId: "delegate-1",
+      message: "yes",
+      delegation: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    expect(resolveOperatorApproval).not.toHaveBeenCalled();
+
+    manager.resolve(proposalId!, "allow-once", "operator-ui");
+    await vi.waitFor(() => {
+      expect(resolveOperatorApproval).toHaveBeenCalledWith("allow-once", proposalHash);
+    });
+  });
+
+  it("rejects delegated reuse of another caller's session", async () => {
+    const engine = makeVerifiedEngine();
+    const handle = vi.spyOn(engine, "handle");
+    const sessions = new Map<string, SystemAgentChatSession>([
+      ["shared", seededSession({ engine })],
+    ]);
+
+    const delegated = await callChat(makeContext(sessions), {
+      sessionId: "shared",
+      message: "yes",
+      delegation: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+
+    expect(delegated).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    expect(handle).not.toHaveBeenCalled();
   });
 
   it("drops a failed session and requires fresh inference on retry", async () => {

@@ -369,29 +369,12 @@ describe("gateway tool restart continuation", () => {
     expect(clearRestartSentinelMock).toHaveBeenCalledOnce();
   });
 
-  it("uses the runtime session for update.run continuation routing (#86742)", async () => {
-    const tool = createGatewayTool({
-      agentSessionKey: "agent:main:session-A",
-      config: {},
-    });
+  it("does not expose update.run", () => {
+    const tool = createGatewayTool();
+    const parameters = tool.parameters as {
+      properties?: { action?: { enum?: string[] } };
+    };
 
-    await tool.execute?.("tool-call-update", {
-      action: "update.run",
-      sessionKey: "agent:main:session-B",
-      continuationMessage: "Reply after update restart",
-      note: "Updating now",
-      restartDelayMs: 0,
-    });
-
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "update.run",
-      expect.objectContaining({ timeoutMs: expect.any(Number) }),
-      expect.objectContaining({
-        sessionKey: "agent:main:session-A",
-        continuationMessage: "Reply after update restart",
-        note: "Updating now",
-        restartDelayMs: 0,
-      }),
-    );
+    expect(parameters.properties?.action?.enum).not.toContain("update.run");
   });
 });
