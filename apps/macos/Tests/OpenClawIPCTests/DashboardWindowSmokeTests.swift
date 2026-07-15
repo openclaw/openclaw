@@ -488,7 +488,7 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserRepresentedURL == nil)
     }
 
-    @Test func `dashboard link browser opens half width and remembers divider drag`() throws {
+    @Test func `dashboard link browser opens half width and remembers resizable pane width`() throws {
         #expect(!DashboardWindowLayout.dividerMoved(from: nil, to: 100))
         #expect(!DashboardWindowLayout.dividerMoved(from: 100, to: 100))
         #expect(DashboardWindowLayout.dividerMoved(from: 100, to: 101))
@@ -534,25 +534,13 @@ struct DashboardWindowSmokeTests {
         #expect(
             openedSplitWidth - dividerThickness - openedLinkBrowserWidth >=
                 DashboardWindowLayout.mainBrowserMinWidth)
+        #expect(controller._testLinkBrowserMaximumThickness == NSSplitViewItemUnspecifiedDimension)
 
-        // Shrinking the browser is feasible even when a hosted runner cannot
-        // grow the window. Pure layout checks above cover an exact 400px restore.
-        let requestedWidth = max(
-            DashboardWindowLayout.linkBrowserMinWidth,
-            openedLinkBrowserWidth - 80)
-        if DashboardWindowLayout.dividerMoved(
-            from: openedLinkBrowserWidth,
-            to: requestedWidth)
-        {
-            controller._testSetLinkBrowserWidth(requestedWidth)
-        } else {
-            // A minimum-size runner cannot produce a drag. Seed the same saved
-            // value so the remaining assertions still cover reopen clamping.
-            defaults.set(Double(requestedWidth), forKey: key)
-        }
+        defaults.set(Double(openedLinkBrowserWidth + 37), forKey: key)
+        controller._testCompleteLinkBrowserDividerDrag()
         let resizedWidth = controller._testLinkBrowserWidth
-        #expect(abs(resizedWidth - requestedWidth) < 1)
         #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
+        #expect(abs(CGFloat(defaults.double(forKey: key)) - openedLinkBrowserWidth - 37) >= 1)
 
         controller._testCloseLinkBrowser()
         controller.window?.setContentSize(DashboardWindowLayout.windowMinSize)

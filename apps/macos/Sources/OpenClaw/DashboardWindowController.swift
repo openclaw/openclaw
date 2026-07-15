@@ -1292,6 +1292,10 @@ extension DashboardWindowController {
         self.splitViewController.splitView.dividerThickness
     }
 
+    var _testLinkBrowserMaximumThickness: CGFloat {
+        self.linkBrowserItem.maximumThickness
+    }
+
     var _testLinkBrowserTabBarIsHidden: Bool {
         self.linkBrowser._testTabBarIsHidden
     }
@@ -1304,8 +1308,7 @@ extension DashboardWindowController {
         self.linkBrowser._testTabBarHeight
     }
 
-    func _testSetLinkBrowserWidth(_ width: CGFloat) {
-        self.restoreLinkBrowserWidth(width)
+    func _testCompleteLinkBrowserDividerDrag() {
         self.linkBrowserSplitView._testCompleteDividerDrag()
     }
 
