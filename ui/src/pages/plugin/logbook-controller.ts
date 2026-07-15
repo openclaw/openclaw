@@ -1,95 +1,12 @@
 // Control UI controller for the Logbook tab: state, gateway calls, polling.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-
-export type LogbookStatusPayload = {
-  captureEnabled: boolean;
-  capturePaused: boolean;
-  captureIntervalSeconds: number;
-  analysisIntervalMinutes: number;
-  retentionDays: number;
-  nodeId?: string;
-  nodeName?: string;
-  lastCaptureAtMs?: number;
-  lastCaptureError?: string;
-  pendingFrames: number;
-  analysisRunning: boolean;
-  lastBatch?: { id: number; day: string; status: string; endMs: number; error?: string };
-  visionModel?: string;
-  visionModelSource: "config" | "media-defaults" | "missing";
-  today: string;
-  todayCards: number;
-  timeZone: string;
-};
-
-type LogbookDistractionPayload = { startMs: number; endMs: number; title: string };
-
-export type LogbookCardPayload = {
-  id: number;
-  day: string;
-  startMs: number;
-  endMs: number;
-  title: string;
-  summary: string;
-  detail: string;
-  category: string;
-  appPrimary?: string;
-  appSecondary?: string;
-  distractions: LogbookDistractionPayload[];
-  keyframeId?: number;
-};
-
-type LogbookDayStatsPayload = {
-  trackedMs: number;
-  distractionMs: number;
-  categories: Array<{ category: string; ms: number }>;
-  apps: Array<{ domain: string; ms: number }>;
-};
-
-type LogbookTimelinePayload = {
-  day: string;
-  cards: LogbookCardPayload[];
-  stats: LogbookDayStatsPayload;
-};
-
-type LogbookDaysPayload = {
-  days: Array<{ day: string; cards: number; firstMs: number; lastMs: number }>;
-};
-
-type LogbookBackgroundRefresh = {
-  client: GatewayBrowserClient;
-  lifecycleGeneration: number;
-};
-
-export type LogbookUiState = {
-  day: string;
-  /** True once the user navigated to a specific day; unpinned views follow the gateway's today. */
-  dayPinned: boolean;
-  status: LogbookStatusPayload | null;
-  days: LogbookDaysPayload["days"];
-  timeline: LogbookTimelinePayload | null;
-  loading: boolean;
-  error: string | null;
-  expandedCardIds: Set<number>;
-  framePreviews: Map<number, string>;
-  frameLoads: Set<number>;
-  framePreviewFailed: Set<number>;
-  standup: { day: string; text: string; updatedMs: number } | null;
-  standupLoading: boolean;
-  askQuestion: string;
-  askAnswer: string | null;
-  askLoading: boolean;
-  actionPending: boolean;
-  // Every load advances result ownership; foreground loading state has its own
-  // owner so a superseded request cannot clear a newer spinner.
-  loadGeneration: number;
-  loadingGeneration: number | null;
-  lifecycleGeneration: number;
-  backgroundRefresh: Promise<void> | null;
-  backgroundRefreshQueued: LogbookBackgroundRefresh | null;
-  pollTimer: ReturnType<typeof globalThis.setInterval> | null;
-  pollClient: GatewayBrowserClient | null;
-  requestUpdate: (() => void) | null;
-};
+import type {
+  LogbookBackgroundRefresh,
+  LogbookDaysPayload,
+  LogbookStatusPayload,
+  LogbookTimelinePayload,
+  LogbookUiState,
+} from "./logbook-types.ts";
 
 const FRAME_PREVIEW_CACHE_LIMIT = 48;
 const POLL_INTERVAL_MS = 30_000;
@@ -129,6 +46,8 @@ export function getLogbookState(host: object): LogbookUiState {
       askAnswer: null,
       askLoading: false,
       actionPending: false,
+      actionGeneration: 0,
+      actionPendingGeneration: null,
       loadGeneration: 0,
       loadingGeneration: null,
       lifecycleGeneration: 0,
@@ -229,10 +148,21 @@ function retireLogbookLoads(state: LogbookUiState): void {
   // and an abandoned background request must not block the next polling epoch.
   state.loadGeneration += 1;
   state.lifecycleGeneration += 1;
+  state.actionGeneration += 1;
+  state.actionPendingGeneration = null;
+  state.actionPending = false;
   state.loadingGeneration = null;
   state.loading = false;
   state.backgroundRefresh = null;
   state.backgroundRefreshQueued = null;
+}
+
+function isLogbookActionCurrent(
+  state: LogbookUiState,
+  actionGeneration: number,
+  refresh: LogbookBackgroundRefresh,
+): boolean {
+  return actionGeneration === state.actionGeneration && isLogbookRefreshCurrent(state, refresh);
 }
 
 function isLogbookRefreshCurrent(
@@ -374,15 +304,26 @@ export async function setLogbookCapturePaused(
   if (!client || state.actionPending) {
     return;
   }
+  const actionGeneration = ++state.actionGeneration;
+  state.actionPendingGeneration = actionGeneration;
   state.actionPending = true;
   notify(state);
+  const refresh = { client, lifecycleGeneration: state.lifecycleGeneration };
   try {
-    state.status = await client.request<LogbookStatusPayload>("logbook.capture.set", { paused });
+    const status = await client.request<LogbookStatusPayload>("logbook.capture.set", { paused });
+    if (isLogbookActionCurrent(state, actionGeneration, refresh)) {
+      state.status = status;
+    }
   } catch (err) {
-    state.error = err instanceof Error ? err.message : String(err);
+    if (isLogbookActionCurrent(state, actionGeneration, refresh)) {
+      state.error = err instanceof Error ? err.message : String(err);
+    }
   } finally {
-    state.actionPending = false;
-    notify(state);
+    if (state.actionPendingGeneration === actionGeneration) {
+      state.actionPendingGeneration = null;
+      state.actionPending = false;
+      notify(state);
+    }
   }
 }
 
@@ -393,23 +334,39 @@ export async function runLogbookAnalysisNow(
   if (!client || state.actionPending) {
     return;
   }
+  const actionGeneration = ++state.actionGeneration;
+  state.actionPendingGeneration = actionGeneration;
   state.actionPending = true;
   notify(state);
-  const lifecycleGeneration = state.lifecycleGeneration;
+  const refresh = { client, lifecycleGeneration: state.lifecycleGeneration };
   try {
     const result = await client.request<{ started: boolean; reason?: string }>(
       "logbook.analyze.now",
       {},
     );
-    if (!result.started && result.reason) {
+    if (
+      isLogbookActionCurrent(state, actionGeneration, refresh) &&
+      !result.started &&
+      result.reason
+    ) {
       state.error = result.reason;
     }
   } catch (err) {
-    state.error = err instanceof Error ? err.message : String(err);
+    if (isLogbookActionCurrent(state, actionGeneration, refresh)) {
+      state.error = err instanceof Error ? err.message : String(err);
+    }
   } finally {
-    state.actionPending = false;
-    notify(state);
-    void refreshLogbookSilently(state, client, { lifecycleGeneration, required: true });
+    if (state.actionPendingGeneration === actionGeneration) {
+      state.actionPendingGeneration = null;
+      state.actionPending = false;
+      notify(state);
+    }
+    if (isLogbookActionCurrent(state, actionGeneration, refresh)) {
+      void refreshLogbookSilently(state, client, {
+        lifecycleGeneration: refresh.lifecycleGeneration,
+        required: true,
+      });
+    }
   }
 }
 

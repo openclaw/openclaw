@@ -8,8 +8,8 @@ import {
   loadLogbookStandup,
   runLogbookAnalysisNow,
   stopLogbookPolling,
-  type LogbookStatusPayload,
 } from "./logbook-controller.ts";
+import type { LogbookStatusPayload } from "./logbook-types.ts";
 
 function clientWithRequest(
   request: (method: string, params: unknown) => Promise<unknown>,
@@ -289,21 +289,25 @@ describe("Logbook controller", () => {
     expect(state.timeline?.cards[0]?.title).toBe("Post-analysis refresh");
   });
 
-  it("does not refresh a retired client after analysis settles", async () => {
+  it("does not let a retired analysis action affect the new client", async () => {
     vi.useFakeTimers();
     const host = {};
     hosts.push(host);
     const state = getLogbookState(host);
     state.day = "2026-07-04";
     state.dayPinned = true;
-    const analysis = deferred<unknown>();
+    const oldAnalysis = deferred<unknown>();
+    const newAnalysis = deferred<unknown>();
     const oldRequest = vi.fn((method: string) => {
       if (method !== "logbook.analyze.now") {
         throw new Error(`Unexpected retired-client request: ${method}`);
       }
-      return analysis.promise;
+      return oldAnalysis.promise;
     });
     const newRequest = vi.fn(async (method: string) => {
+      if (method === "logbook.analyze.now") {
+        return await newAnalysis.promise;
+      }
       if (method === "logbook.status") {
         return statusFor("2026-07-04");
       }
@@ -313,18 +317,25 @@ describe("Logbook controller", () => {
       return timelineFor("2026-07-04", "New client");
     });
     const oldClient = clientWithRequest(oldRequest);
+    const newClient = clientWithRequest(newRequest);
 
     configureLogbookPolling(state, oldClient, true);
-    const action = runLogbookAnalysisNow(state, oldClient);
-    configureLogbookPolling(state, clientWithRequest(newRequest), true);
+    const oldAction = runLogbookAnalysisNow(state, oldClient);
+    configureLogbookPolling(state, newClient, true);
+    const newAction = runLogbookAnalysisNow(state, newClient);
+    expect(state.actionPending).toBe(true);
 
-    analysis.resolve({ started: true });
-    await action;
-    await vi.advanceTimersByTimeAsync(0);
+    oldAnalysis.resolve({ started: false, reason: "Retired analysis error" });
+    await oldAction;
     expect(oldRequest).toHaveBeenCalledTimes(1);
+    expect(state.actionPending).toBe(true);
+    expect(state.error).not.toBe("Retired analysis error");
 
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(newRequest).toHaveBeenCalledTimes(3);
+    newAnalysis.resolve({ started: true });
+    await newAction;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state.actionPending).toBe(false);
+    expect(newRequest).toHaveBeenCalledTimes(4);
     expect(state.timeline?.cards[0]?.title).toBe("New client");
   });
 
