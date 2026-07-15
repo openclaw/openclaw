@@ -3,7 +3,7 @@ import { normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 
 type OpenClawCodingToolsFactory =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
-export type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
+type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
 
 export const CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME = "node_exec";
 export const CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME = "node_process";
