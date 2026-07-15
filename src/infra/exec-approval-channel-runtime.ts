@@ -7,6 +7,10 @@ import { isApprovalMethod } from "../gateway/method-scopes.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
+import {
+  isGatewayNativeApprovalMethod,
+  type GatewayNativeApprovalMethod,
+} from "./approval-gateway-runtime-methods.js";
 import { formatErrorMessage } from "./errors.js";
 import type {
   ExecApprovalChannelRuntime,
@@ -23,9 +27,16 @@ export type {
 
 type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
+type ApprovalReplayMethod = Extract<
+  GatewayNativeApprovalMethod,
+  "exec.approval.list" | "plugin.approval.list"
+>;
 
 type ApprovalReplayClient = {
-  request: <T = unknown>(method: string, params: Record<string, unknown>) => Promise<T>;
+  request: <T = unknown>(
+    method: ApprovalReplayMethod,
+    params: Record<string, unknown>,
+  ) => Promise<T>;
 };
 
 /** Error raised when the gateway pauses approval reconnects after a terminal startup failure. */
@@ -64,8 +75,8 @@ type PendingApprovalEntry<
 
 function resolveApprovalReplayMethods(
   eventKinds: ReadonlySet<ExecApprovalChannelRuntimeEventKind>,
-): string[] {
-  const methods: string[] = [];
+): ApprovalReplayMethod[] {
+  const methods: ApprovalReplayMethod[] = [];
   if (eventKinds.has("exec")) {
     methods.push("exec.approval.list");
   }
@@ -480,6 +491,11 @@ export function createExecApprovalChannelRuntime<
         );
       }
       if (gatewayRuntime) {
+        if (!isGatewayNativeApprovalMethod(method)) {
+          throw new Error(
+            `${adapter.label}: Gateway-owned approval runtime cannot dispatch ${method}`,
+          );
+        }
         return await gatewayRuntime.request<T>(method, params, {
           clientDisplayName: adapter.clientDisplayName,
         });

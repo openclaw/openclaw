@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
+import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
@@ -119,9 +120,9 @@ describe("createGatewayInstanceRuntime", () => {
       isDispatchAvailable: () => true,
     });
 
-    await expect(runtime.nativeApprovals.request("config.get", {})).rejects.toThrow(
-      "internal principal cannot dispatch config.get",
-    );
+    await expect(
+      runtime.nativeApprovals.request("config.get" as GatewayNativeApprovalMethod, {}),
+    ).rejects.toThrow("internal principal cannot dispatch config.get");
     await expect(runtime.nativeApprovals.requestRoute("config.get" as "send", {})).rejects.toThrow(
       "internal principal cannot dispatch config.get",
     );

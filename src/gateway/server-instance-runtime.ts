@@ -1,4 +1,8 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
+import {
+  GATEWAY_NATIVE_APPROVAL_METHODS,
+  type GatewayNativeApprovalMethod,
+} from "../infra/approval-gateway-runtime-methods.js";
 import type {
   GatewayApprovalEventKind,
   GatewayApprovalEventSubscriber,
@@ -54,14 +58,7 @@ export function createGatewayInstanceRuntime(
   const recoveryMethods = new Set(["agent", "agent.wait"]);
   const recoveryNoticeMethods = new Set(["message.action"]);
   const approvalClient = createSyntheticPluginRuntimeClient({ scopes: [APPROVALS_SCOPE] });
-  const approvalMethods = new Set([
-    "approval.resolve",
-    "exec.approval.get",
-    "exec.approval.list",
-    "exec.approval.resolve",
-    "plugin.approval.list",
-    "plugin.approval.resolve",
-  ]);
+  const approvalMethods = new Set<GatewayNativeApprovalMethod>(GATEWAY_NATIVE_APPROVAL_METHODS);
   const approvalRouteClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
   const approvalRouteMethods = new Set(["send"]);
 
@@ -105,7 +102,7 @@ export function createGatewayInstanceRuntime(
     },
     nativeApprovals: {
       request: async <T>(
-        method: string,
+        method: GatewayNativeApprovalMethod,
         payload: Record<string, unknown>,
         requestOptions?: { clientDisplayName?: string },
       ) =>

@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import { isApprovalNotFoundError } from "./approval-errors.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
+import type { GatewayNativeApprovalMethod } from "./approval-gateway-runtime-methods.js";
 
 type ResolveApprovalOverGatewayBaseParams = {
   cfg: OpenClawConfig;
@@ -96,7 +97,10 @@ export async function resolveApprovalOverGateway(
     params.clientDisplayName ?? `Approval (${params.senderId?.trim() || "unknown"})`;
 
   const requestWithClient = async (gatewayClient: {
-    request: <T = unknown>(method: string, params: Record<string, unknown>) => Promise<T>;
+    request: <T = unknown>(
+      method: GatewayNativeApprovalMethod,
+      params: Record<string, unknown>,
+    ) => Promise<T>;
   }) => {
     if (hasCanonicalKind) {
       const resolveParams: ApprovalResolveParams = {
@@ -133,8 +137,10 @@ export async function resolveApprovalOverGateway(
   const gatewayRuntime = getGatewayNativeApprovalRuntime();
   const result = gatewayRuntime
     ? await requestWithClient({
-        request: async <T>(method: string, requestParams: Record<string, unknown>) =>
-          await gatewayRuntime.request<T>(method, requestParams, { clientDisplayName }),
+        request: async <T>(
+          method: GatewayNativeApprovalMethod,
+          requestParams: Record<string, unknown>,
+        ) => await gatewayRuntime.request<T>(method, requestParams, { clientDisplayName }),
       })
     : await withOperatorApprovalsGatewayClient(
         {
