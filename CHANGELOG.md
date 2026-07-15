@@ -6,7 +6,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- **Reef trust state:** keep relay friendship reachability server-side while storing peer key pins and autonomy in identity-scoped SQLite plugin state, require relay acceptance to match the exact revocation-fenced identity/key approval, and remove the duplicate config allowlist and friendship maps.
 - **ClickClack guided setup:** configure ClickClack from `openclaw onboard` or `openclaw channels add clickclack` with URL, token, and workspace prompts, default-account env fallback, nonfatal live connection validation, and gateway-aware next steps that connect automatically when OpenClaw is already running. Thanks @shakkernerd.
 - **ClickClack command menus:** publish each bot's native OpenClaw commands to ClickClack composer autocomplete at gateway startup, with per-account opt-out and nonfatal compatibility handling for older tokens and servers. Thanks @shakkernerd.
 - **Skill Workshop approvals:** run agent-initiated apply, reject, and quarantine actions without an additional approval prompt by default while preserving `skills.workshop.approvalPolicy: "pending"` as an opt-in approval gate. Thanks @shakkernerd.
