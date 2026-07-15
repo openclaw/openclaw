@@ -5080,6 +5080,76 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports Claude CLI turn content through the existing Phoenix GenAI keys", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      captureContent: {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: true,
+        systemPrompt: true,
+        toolDefinitions: true,
+      },
+    });
+    await service.start(ctx);
+
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-claude-cli",
+        callId: "call-claude-cli",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        api: "claude-code",
+        transport: "stdio-live",
+        durationMs: 80,
+      },
+      {
+        inputMessages: [{ role: "user", content: [{ type: "text", text: "trace this" }] }],
+        outputMessages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "trace complete" },
+              { type: "thinking", thinking: "checked the span" },
+              { type: "tool_call", id: "tool-1", name: "Read" },
+            ],
+            stopReason: "end_turn",
+          },
+        ],
+        systemPrompt: "OpenClaw appended instructions",
+      },
+    );
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+    expect(attrs?.["openclaw.api"]).toBe("claude-code");
+    expect(attrs?.["openclaw.transport"]).toBe("stdio-live");
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.input.messages"))).toEqual([
+      { role: "user", parts: [{ type: "text", content: "trace this" }] },
+    ]);
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.output.messages"))).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          { type: "text", content: "trace complete" },
+          { type: "reasoning", content: "checked the span" },
+          { type: "tool_call", id: "tool-1", name: "Read" },
+        ],
+        finish_reason: "end_turn",
+      },
+    ]);
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.system_instructions"))).toEqual([
+      { type: "text", content: "OpenClaw appended instructions" },
+    ]);
+    expect(Object.hasOwn(attrs ?? {}, "gen_ai.tool.definitions")).toBe(false);
+    await service.stop?.(ctx);
+  });
+
   test("emits semconv response text for tool response parts", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {

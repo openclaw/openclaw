@@ -203,6 +203,58 @@ bus.
   stays on the same diagnostic trace when the emitting runtime has trusted
   trace context.
 
+### Claude Code CLI model-call fidelity
+
+Claude Code CLI turns emit one synthetic, turn-level `openclaw.model.call`
+span. These are not Anthropic HTTP request spans. They use `openclaw.api =
+claude-code` and identify OpenClaw's CLI boundary through
+`openclaw.transport`:
+
+- `stdio` - one-shot local Claude Code process.
+- `stdio-live` - one turn on a managed persistent Claude stdio session.
+- `paired-node-cli` - one-shot Claude Code execution delegated to a paired
+  node.
+
+The span starts when OpenClaw admits the prepared CLI turn and ends only after
+that turn succeeds or fails. For managed sessions, an interim success result
+does not end the span while Claude reports result-holding background agents or
+workflows; the final post-drain result does. Abort, timeout, process failure,
+output/parse failure, and other turn failures end the same span with an error.
+
+Claude Code reports per-assistant-message usage and may also report cumulative
+usage on its terminal result. OpenClaw reply accounting continues to use the
+last assistant message so existing cost semantics do not change; the
+turn-level model-call span uses terminal cumulative usage when available,
+including cache-read and cache-creation tokens.
+
+For these CLI spans, byte and timing fields describe the observable OpenClaw
+CLI boundary:
+
+- `openclaw.model_call.request_bytes` is the UTF-8 size of the prompt value
+  sent over one-shot stdin/argv, or the managed stdio JSONL user envelope. It
+  is not the size of Claude Code's hidden model request.
+- `openclaw.model_call.response_bytes` is the UTF-8 size of Claude CLI stdout
+  observed during the turn. It is not Anthropic HTTP response size.
+- `openclaw.model_call.time_to_first_byte_ms` is time to the first observable
+  Claude CLI stdout or stderr output. It is not network TTFB.
+
+With the matching granular `captureContent` fields enabled, the span exports
+the effective prompt OpenClaw sends to Claude Code, OpenClaw's appended system
+prompt, and visible assistant text/reasoning/tool-call identity through
+`gen_ai.input.messages`, `gen_ai.output.messages`, and
+`gen_ai.system_instructions`. Tool arguments, opaque thinking signatures, and
+tool results are omitted from the Claude assistant envelope. OpenClaw does not
+claim access to Claude Code's private system prompt, hidden resumed or
+compacted request payload, native internal tool schemas, raw Anthropic HTTP
+request, internal retries, upstream request id, or true network TTFB. Because
+Claude Code does not expose its effective native tool definitions accurately,
+these spans do not populate `gen_ai.tool.definitions`.
+
+External Claude harness tool spans remain metadata-only even when tool content
+capture is enabled. As with every model span, captured Claude CLI content uses
+the trusted listener-only path and the exporter's existing redaction and size
+bounds; content remains off by default.
+
 ## Exported metrics
 
 ### Model usage
@@ -214,9 +266,9 @@ bus.
 - `gen_ai.client.token.usage` (histogram, GenAI semantic-conventions metric, attrs: `gen_ai.token.type` = `input`/`output`, `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model`)
 - `gen_ai.client.operation.duration` (histogram, seconds, GenAI semantic-conventions metric, attrs: `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model`, optional `error.type`)
 - `openclaw.model_call.duration_ms` (histogram, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, plus `openclaw.errorCategory` and `openclaw.failureKind` on classified errors)
-- `openclaw.model_call.request_bytes` (histogram, UTF-8 byte size of the final model request payload; no raw payload content)
-- `openclaw.model_call.response_bytes` (histogram, UTF-8 byte size of streamed response chunk payloads; high-frequency text, thinking, and tool-call deltas count only incremental `delta` bytes; no raw response content)
-- `openclaw.model_call.time_to_first_byte_ms` (histogram, elapsed time before the first streamed response event)
+- `openclaw.model_call.request_bytes` (histogram, UTF-8 byte size of the final model request payload; for Claude Code CLI, the observable prompt input/envelope described above; no raw payload content)
+- `openclaw.model_call.response_bytes` (histogram, UTF-8 byte size of streamed response chunk payloads; high-frequency text, thinking, and tool-call deltas count only incremental `delta` bytes; for Claude Code CLI, observed stdout bytes; no raw response content)
+- `openclaw.model_call.time_to_first_byte_ms` (histogram, elapsed time before the first streamed response event; for Claude Code CLI, first observable CLI output rather than network TTFB)
 - `openclaw.model.failover` (counter, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.failover.to_provider`, `openclaw.failover.to_model`, `openclaw.failover.reason`, `openclaw.failover.suspended`, `openclaw.lane`)
 - `openclaw.skill.used` (counter, attrs: `openclaw.skill.name`, `openclaw.skill.source`, `openclaw.skill.activation`, optional `openclaw.agent`, optional `openclaw.toolName`)
 
