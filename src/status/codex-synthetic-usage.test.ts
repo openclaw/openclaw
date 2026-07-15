@@ -74,7 +74,7 @@ describe("mergeUsageSummaries", () => {
 
     expect(merged.providers[0]?.billing).toEqual([
       { type: "balance", amount: 8, unit: "credits" },
-      { type: "subscription", amount: 20, unit: "usd", period: "month" },
+      { type: "spend", amount: 20, unit: "usd", period: "month" },
     ]);
   });
 
