@@ -67,9 +67,9 @@ function main() {
   const selectedSha = requireEnv("OPENCLAW_SELECTED_SHA");
   const workflowSha = requireEnv("OPENCLAW_WORKFLOW_SHA");
   const isFrozenTarget = selectedSha !== workflowSha;
-  const compatibilityEnabled = process.env.OPENCLAW_FROZEN_TARGET_COMPATIBILITY === "1";
+  const omissionsAllowed = process.env.OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS === "1";
 
-  if (!suiteId.startsWith(CODEX_SUITE_PREFIX) || !isFrozenTarget || !compatibilityEnabled) {
+  if (!suiteId.startsWith(CODEX_SUITE_PREFIX) || !isFrozenTarget || !omissionsAllowed) {
     appendLine(outputFile, "run_lane=true");
     return;
   }

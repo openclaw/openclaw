@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 function runResolver(params: {
-  compatibility?: boolean;
+  allow?: boolean;
   modelIds?: string[];
   selectedSha?: string;
   suiteId: string;
@@ -42,7 +42,7 @@ function runResolver(params: {
       GITHUB_ENV: envFile,
       GITHUB_OUTPUT: output,
       GITHUB_STEP_SUMMARY: summary,
-      OPENCLAW_FROZEN_TARGET_COMPATIBILITY: params.compatibility === false ? "0" : "1",
+      OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: params.allow === false ? "0" : "1",
       OPENCLAW_FROZEN_CODEX_SUITE_ID: params.suiteId,
       OPENCLAW_FROZEN_TARGET_ROOT: root,
       OPENCLAW_SELECTED_SHA: params.selectedSha ?? "a".repeat(40),
@@ -92,7 +92,7 @@ describe("frozen Codex live-suite resolver", () => {
 
   it("does nothing without the trusted frozen-target opt-in", () => {
     const result = runResolver({
-      compatibility: false,
+      allow: false,
       suiteId: "live-codex-harness-gpt56-sol-docker",
     });
 

@@ -1054,7 +1054,7 @@ jobs:
             -f rerun_group="$child_rerun_group"
           )
           if [[ -n "${TARGET_CONTEXT_REF// }" ]]; then
-            args+=(-f frozen_target_compatibility=true)
+            args+=(-f allow_frozen_target_scenario_omissions=true)
           fi
           if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
             args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")

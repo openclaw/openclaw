@@ -1461,7 +1461,9 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
     expect(workflow).toContain("published_upgrade_survivor_baselines:");
     expect(workflow).toContain("published_upgrade_survivor_scenarios:");
-    expect(parsedWorkflow.on?.workflow_call?.inputs).toHaveProperty("frozen_target_compatibility");
+    expect(parsedWorkflow.on?.workflow_call?.inputs).toHaveProperty(
+      "allow_frozen_target_scenario_omissions",
+    );
     expect(workflow).toContain("docker_e2e_bare_image:");
     expect(workflow).toContain("docker_e2e_functional_image:");
     expect(workflow).toContain("OPENCLAW_DOCKER_E2E_SELECTED_SHA:");
@@ -1476,7 +1478,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}");
     expect(workflow).toContain(
-      "OPENCLAW_FROZEN_TARGET_COMPATIBILITY: ${{ inputs.frozen_target_compatibility && '1' || '0' }}",
+      "OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}",
     );
     expect(workflow).toContain("Download current-run OpenClaw Docker E2E package");
     expect(workflow).toContain("Download previous-run OpenClaw Docker E2E package");
@@ -2328,13 +2330,15 @@ describe("package artifact reuse", () => {
 
     expect(workflow).toContain("package_acceptance_release_checks:");
     expect(packageAcceptanceWorkflow.on?.workflow_call?.inputs).toHaveProperty(
-      "frozen_target_compatibility",
+      "allow_frozen_target_scenario_omissions",
     );
     expect(packageAcceptanceJob.with).toMatchObject({
-      frozen_target_compatibility: "${{ inputs.frozen_target_compatibility }}",
+      allow_frozen_target_scenario_omissions:
+        "${{ inputs.allow_frozen_target_scenario_omissions }}",
     });
     expect(dockerAcceptanceJob.with).toMatchObject({
-      frozen_target_compatibility: "${{ inputs.frozen_target_compatibility }}",
+      allow_frozen_target_scenario_omissions:
+        "${{ inputs.allow_frozen_target_scenario_omissions }}",
     });
     expect(workflow).toContain(
       "live_repo_e2e_release_checks:\n    name: Run repo/live E2E validation\n    needs: [resolve_target]",
@@ -2345,7 +2349,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("include_release_path_suites: false");
     expect(workflow).toContain("include_release_path_suites: true");
     expect(workflow).toContain(
-      "frozen_target_compatibility: ${{ inputs.frozen_target_compatibility }}",
+      "allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}",
     );
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain(
