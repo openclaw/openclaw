@@ -70,13 +70,13 @@ import {
 } from "../gateway/session-utils.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
   clearEmbeddedPluginApprovalBroker,
   EmbeddedPluginApprovalBroker,
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { logInfo, logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
