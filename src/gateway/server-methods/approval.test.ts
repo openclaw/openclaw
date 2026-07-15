@@ -25,7 +25,12 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { getOperatorApproval, insertOperatorApproval } from "../operator-approval-store.js";
+import { getOperatorApprovalDetailed, insertOperatorApproval } from "../operator-approval-store.js";
+
+function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
+  const result = getOperatorApprovalDetailed(params);
+  return result.outcome === "found" ? result.record : null;
+}
 import { createApprovalHandlers } from "./approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -1332,3 +1337,4 @@ describe("unified approval handlers", () => {
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

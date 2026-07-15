@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/cli/crestodian",
+      "destination": "/cli/openclaw"
+    },
+    {
       "source": "/channels/bluebubbles",
       "destination": "/channels/imessage-from-bluebubbles"
     },
@@ -1152,6 +1156,7 @@
                   "channels/mattermost",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/reef",
                   "channels/raft",
                   "channels/tlon",
                   "channels/synology-chat",
@@ -1219,6 +1224,7 @@
                   "concepts/session-search",
                   "concepts/channel-docking",
                   "concepts/session-pruning",
+                  "concepts/session-state",
                   "concepts/session-tool",
                   {
                     "group": "Memory",
@@ -1291,6 +1297,7 @@
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/vault",
+                  "plugins/onepassword",
                   "plugins/memory-wiki",
                   "plugins/llama-cpp",
                   "plugins/memory-lancedb",
@@ -1316,6 +1323,7 @@
                 "pages": [
                   "tools/skills",
                   "tools/skill-workshop",
+                  "tools/self-learning",
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",
@@ -1543,6 +1551,7 @@
                   "platforms/windows",
                   "platforms/android",
                   "platforms/ios",
+                  "platforms/ios-healthkit",
                   "platforms/easyrunner"
                 ]
               },
@@ -1609,6 +1618,7 @@
                       "gateway/authentication",
                       "auth-credential-semantics",
                       "gateway/secrets",
+                      "gateway/1password",
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth"
                     ]
@@ -1745,7 +1755,7 @@
                     "group": "Gateway and service",
                     "pages": [
                       "cli/backup",
-                      "cli/crestodian",
+                      "cli/openclaw",
                       "cli/daemon",
                       "cli/doctor",
                       "cli/fleet",
@@ -1801,7 +1811,8 @@
                       "cli/flows",
                       "cli/node",
                       "cli/nodes",
-                      "cli/sandbox"
+                      "cli/sandbox",
+                      "cli/worker"
                     ]
                   },
                   {
@@ -1950,6 +1961,7 @@
                     "group": "Release notes",
                     "pages": [
                       "releases/index",
+                      "releases/2026.7.1",
                       "releases/2026.6.11"
                     ]
                   },

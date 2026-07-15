@@ -40,6 +40,7 @@ import {
   buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
+  findCliMaxTurnsError,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
   resolveModelFallbackError,
@@ -151,7 +152,7 @@ type FailoverAttribution = {
  * exhausted. Carries per-attempt details so callers can build informative
  * user-facing messages (e.g. "rate-limited, retry in 30 s").
  */
-export class FallbackSummaryError extends Error {
+class FallbackSummaryError extends Error {
   readonly attempts: FallbackAttempt[];
   readonly soonestCooldownExpiry: number | null;
   readonly sessionId?: string;
@@ -1804,6 +1805,11 @@ async function runWithModelFallbackInternal<T>(
       return attemptRun.success;
     }
     const err = attemptRun.error;
+    // Max-turn termination can follow successful tool actions. Stop before
+    // candidate fallback so the user can verify effects before any replay.
+    if (findCliMaxTurnsError(err)) {
+      throw err;
+    }
     if (
       !attemptRun.classifiedResult &&
       params.canFallbackAfterError &&
@@ -2072,3 +2078,4 @@ export async function runWithImageModelFallback<T>(params: {
     cfg: params.cfg,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

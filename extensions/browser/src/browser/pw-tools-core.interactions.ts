@@ -789,7 +789,7 @@ export async function clickViaPlaywright(
 }
 
 /** Clicks absolute page coordinates with optional double-click and navigation guard. */
-export async function clickCoordsViaPlaywright(
+async function clickCoordsViaPlaywright(
   opts: {
     cdpUrl: string;
     targetId?: string;
@@ -2139,3 +2139,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

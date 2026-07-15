@@ -38,11 +38,56 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await server?.close();
   });
 
+  it("shows compaction savings and live working time", async () => {
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    await currentPage.clock.install();
+    const gateway = await installMockGateway(currentPage, {
+      historyMessages: [
+        {
+          role: "system",
+          timestamp: Date.now() - 1_000,
+          __openclaw: {
+            kind: "compaction",
+            id: "compact-entry-1",
+            tokensBefore: 900_000,
+            tokensAfter: 24_700,
+          },
+        },
+      ],
+    });
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("saved 875.3k tokens", { exact: true }).waitFor();
+    await currentPage.locator(".agent-chat__input textarea").fill("keep working");
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    await gateway.waitForRequest("chat.send");
+    await currentPage.locator(".chat-working-indicator").waitFor();
+
+    await currentPage.clock.runFor(177_000);
+
+    await expect
+      .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
+      .toBe("2m 57s");
+    const workingLabel = currentPage.locator(
+      ".chat-working-indicator__status > .agent-chat__sr-only",
+    );
+    expect(await workingLabel.textContent()).toBe("Working…");
+    expect(
+      await currentPage
+        .locator(".chat-working-indicator__status > span:not(.agent-chat__sr-only)")
+        .count(),
+    ).toBe(0);
+  });
+
   it("clears shared session activity when chat final arrives first", async () => {
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
+    await currentPage.clock.install();
     const gateway = await installMockGateway(currentPage, {
       historyMessages: [
         {
@@ -135,10 +180,13 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
     await gateway.resolveDeferred("sessions.list");
 
-    await currentPage.waitForTimeout(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
+    await currentPage.clock.runFor(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     expect(await mainSession.locator(".session-run-spinner").count()).toBe(0);
 
+    // Event timestamps must follow the page's virtual clock so freshness checks
+    // see the same elapsed suppression window that the UI just observed.
+    const otherSessionUpdatedAt = await currentPage.evaluate(() => Date.now());
     const sessionListsBeforeOtherSession = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
     await gateway.emitGatewayEvent("sessions.changed", {
@@ -146,7 +194,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       kind: "direct",
       label: "Another session",
       reason: "lifecycle",
-      updatedAt: Date.now(),
+      updatedAt: otherSessionUpdatedAt,
     });
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
@@ -157,7 +205,8 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
 
     // Re-publish after the former 10-second suppression window. The completed
     // run identity stays terminal until the Gateway publishes different state.
-    await currentPage.waitForTimeout(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
+    await currentPage.clock.runFor(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
+    const lateStaleActiveUpdatedAt = await currentPage.evaluate(() => Date.now());
     const sessionListsBeforeLateStaleActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
     await gateway.emitGatewayEvent("sessions.changed", {
@@ -166,9 +215,9 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       key: "main",
       kind: "direct",
       reason: "lifecycle",
-      startedAt: Date.now() - 11_000,
+      startedAt: lateStaleActiveUpdatedAt - 11_000,
       status: "running",
-      updatedAt: Date.now(),
+      updatedAt: lateStaleActiveUpdatedAt,
     });
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list")).length)

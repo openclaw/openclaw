@@ -1135,6 +1135,7 @@ function resolvePluginDynamicModelWithRegistry(params: {
   modelRegistry: CoreModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  agentRuntimeId?: string;
   workspaceDir?: string;
   authProfileId?: string;
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
@@ -1145,11 +1146,12 @@ function resolvePluginDynamicModelWithRegistry(params: {
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const agentHarnessPolicy = resolveAgentHarnessPolicy({ provider, modelId, config: cfg });
-  const agentRuntimeId =
+  const inferredAgentRuntimeId =
     agentHarnessPolicy.runtimeSource !== "implicit" ||
     cfg?.plugins?.entries?.codex?.enabled === true
       ? agentHarnessPolicy.runtime
       : undefined;
+  const agentRuntimeId = params.agentRuntimeId ?? inferredAgentRuntimeId;
   const authProfile = resolveDynamicModelAuthProfile({
     provider,
     modelId,
@@ -1212,6 +1214,7 @@ function resolveRuntimePreferredSuppressedModel(params: {
   modelRegistry: CoreModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  agentRuntimeId?: string;
   workspaceDir?: string;
   authProfileId?: string;
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
@@ -1524,6 +1527,7 @@ export function resolveModelWithRegistry(params: {
   modelRegistry: CoreModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  agentRuntimeId?: string;
   workspaceDir?: string;
   authProfileId?: string;
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
@@ -1658,6 +1662,7 @@ export async function resolveModelAsync(
     allowBundledStaticCatalogFallback?: boolean;
     preferBundledStaticCatalogTransport?: boolean;
     retryTransientProviderRuntimeMiss?: boolean;
+    agentRuntimeId?: string;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
     skipAgentDiscovery?: boolean;
@@ -1713,6 +1718,7 @@ export async function resolveModelAsync(
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
+      ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
       workspaceDir,
       authProfileId: options?.authProfileId,
       authProfileMode: options?.authProfileMode,
@@ -1802,6 +1808,7 @@ export async function resolveModelAsync(
       context: {
         config: cfg,
         agentDir: resolvedAgentDir,
+        ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
         workspaceDir,
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,
@@ -1816,6 +1823,7 @@ export async function resolveModelAsync(
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
+      ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
       workspaceDir,
       authProfileId: options?.authProfileId,
       authProfileMode: options?.authProfileMode,
@@ -1985,3 +1993,4 @@ function buildMissingProviderModelRegistrationHint(params: {
   }
   return `Found agents.defaults.models["${agentModelKey}"], but no matching models.providers["${params.provider}"].models[] entry. Add { "id": "${params.modelId}", "name": "${params.modelId}" } to models.providers["${params.provider}"].models[] to register this provider model. For custom or proxy providers, also set api and baseUrl so requests route to the intended endpoint. See https://docs.openclaw.ai/concepts/model-providers.`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

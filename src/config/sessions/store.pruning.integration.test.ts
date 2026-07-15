@@ -1657,7 +1657,6 @@ describe("Integration: saveSessionStore with pruning", () => {
           mode: "enforce",
           pruneAfter: "365d",
           maxEntries: 100,
-          rotateBytes: 200,
         },
       },
     });
@@ -1696,7 +1695,6 @@ describe("Integration: saveSessionStore with pruning", () => {
           mode: "enforce",
           pruneAfter: "365d",
           maxEntries: 1,
-          rotateBytes: 200,
         },
       },
     });
@@ -1765,3 +1763,4 @@ describe("Integration: saveSessionStore with pruning", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

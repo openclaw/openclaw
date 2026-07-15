@@ -325,6 +325,20 @@ describe("release validation no-push transport", () => {
     expect(verify.run).not.toContain('"$head_sha" != "$TARGET_SHA"');
   });
 
+  it("keeps the Release SHA wrapper as the durable evidence identity", () => {
+    const full = readWorkflow(FULL_RELEASE);
+    const verify = step(job(full, "summary"), "Verify child workflow results");
+    const dispatch = step(job(full, "summary"), "Request release evidence update");
+
+    expect(verify.run).toContain(
+      'echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"',
+    );
+    expect(verify.run).toContain('"ci.yml"');
+    expect(verify.run).toContain('"openclaw-release-checks.yml"');
+    expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
+    expect(dispatch.run).toContain("reused green product evidence from chain-root run");
+  });
+
   it("publishes an attempt-qualified canonical manifest plus a temporary legacy alias", () => {
     const summary = job(readWorkflow(FULL_RELEASE), "summary");
     expect(step(summary, "Upload release validation manifest").with).toMatchObject({
@@ -358,11 +372,14 @@ describe("release validation no-push transport", () => {
       'if [[ "$source_sha" != "$PACKAGE_REF" ]]',
     );
     expect(live.with).toMatchObject({
+      allow_unreleased_changelog:
+        "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",
       shared_image_artifact_namespace: "release-live",
       shared_image_policy: "no-push-artifact",
     });
-    expect(live.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(docker.with).toMatchObject({
+      allow_unreleased_changelog:
+        "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",
       package_artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
       package_artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
       package_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
@@ -376,7 +393,6 @@ describe("release validation no-push transport", () => {
       shared_image_artifact_namespace: "release-docker",
       shared_image_policy: "no-push-artifact",
     });
-    expect(docker.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(acceptance.with).toMatchObject({
       artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
       artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",

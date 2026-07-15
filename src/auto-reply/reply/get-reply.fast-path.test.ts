@@ -15,12 +15,11 @@ import {
 } from "../../sessions/model-overrides.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { handleGoalCommand } from "./commands-goal.js";
+import { buildFastReplyCommandContext, initFastReplySessionState } from "./get-reply-fast-path.js";
 import {
-  buildFastReplyCommandContext,
-  initFastReplySessionState,
   markCompleteReplyConfig,
   withFastReplyConfig,
-} from "./get-reply-fast-path.js";
+} from "./get-reply-fast-path.test-support.js";
 import {
   buildGetReplyCtx,
   createGetReplyContinueDirectivesResult,

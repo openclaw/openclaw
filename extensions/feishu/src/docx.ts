@@ -1607,3 +1607,4 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     registered.push("feishu_app_scopes");
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

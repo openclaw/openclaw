@@ -32,7 +32,7 @@ import {
   sendZaloLink,
   sendZaloReaction,
   startZaloQrLogin,
-  testing,
+  __testing as testing,
   waitForZaloQrLogin,
 } from "./zalo-js.js";
 

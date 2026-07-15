@@ -22,11 +22,7 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  CodexAppServerEventProjector,
-  type CodexAppServerEventProjectorOptions,
-  type CodexAppServerToolTelemetry,
-} from "./event-projector.js";
+import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
@@ -36,6 +32,10 @@ const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
+type CodexAppServerEventProjectorOptions = ConstructorParameters<
+  typeof CodexAppServerEventProjector
+>[3];
+type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 
 function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => {
@@ -274,6 +274,24 @@ function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotific
   } as ProjectorNotification;
 }
 
+function pendingCommandStarted(id: string): ProjectorNotification {
+  return forCurrentTurn("item/started", {
+    item: {
+      type: "commandExecution",
+      id,
+      command: "/bin/bash -lc 'sleep 600'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "inProgress",
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: null,
+      durationMs: null,
+    },
+  });
+}
+
 describe("CodexAppServerEventProjector", () => {
   it("projects assistant deltas and usage into embedded attempt results", async () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
@@ -445,6 +463,18 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["assistant"]);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain(params.prompt);
+  });
+
+  it("tags mirrored prompts with the exact upstream user text", async () => {
+    const projector = await createProjector(undefined, {
+      upstreamUserText: "decorated upstream prompt",
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const userMessage = requireRecord(result.messagesSnapshot[0], "user message");
+    expect(userMessage["__openclaw"]).toMatchObject({
+      upstreamUserText: "decorated upstream prompt",
+    });
   });
 
   it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {
@@ -675,6 +705,83 @@ describe("CodexAppServerEventProjector", () => {
       hadPotentialSideEffects: true,
       replaySafe: false,
     });
+  });
+
+  it("supersedes terminal assistant text before raw image persistence settles", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-before-image", text: "stale answer" },
+      }),
+    );
+    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(true);
+
+    let resolveMedia: (() => void) | undefined;
+    const mediaPersistence = new Promise<void>((resolve) => {
+      resolveMedia = resolve;
+    });
+    const mediaProjection = (
+      projector as unknown as {
+        generatedMediaProjection: { recordRaw(item: unknown): Promise<void> };
+      }
+    ).generatedMediaProjection;
+    vi.spyOn(mediaProjection, "recordRaw").mockReturnValue(mediaPersistence);
+
+    const pending = projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "image_generation_call",
+          id: "image-after-answer",
+          status: "completed",
+          result: tinyPngBase64,
+        },
+      }),
+    );
+
+    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(false);
+    resolveMedia?.();
+    await pending;
+  });
+
+  it("does not let delayed raw completion consume a newer assistant echo", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-a", text: "rewritten A" },
+      }),
+    );
+
+    const rawAnswerA = projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "answer-a",
+          role: "assistant",
+          content: [{ type: "output_text", text: "original A" }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-b", text: "rewritten B" },
+      }),
+    );
+    await rawAnswerA;
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "answer-b",
+          role: "assistant",
+          content: [{ type: "output_text", text: "original B" }],
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["rewritten B"]);
+    expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "rewritten B" }]);
   });
 
   it("keeps raw image-generation results replay-invalid when media save fails", async () => {
@@ -1030,17 +1137,21 @@ describe("CodexAppServerEventProjector", () => {
       );
     }
 
-    const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<
-        string,
-        {
-          rawSignatures: Array<{ length: number; prefix: string }>;
-          streamedRawSignature?: { length: number; prefix: string };
-        }
-      >;
-    };
-    expect(echoState.toolProgressEchoesByItem.size).toBe(1);
-    const state = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo");
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<
+            string,
+            {
+              rawSignatures: Array<{ length: number; prefix: string }>;
+              streamedRawSignature?: { length: number; prefix: string };
+            }
+          >;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    expect(echoState.size).toBe(1);
+    const state = echoState.get("cmd-streamed-echo");
     // Stream owns one dedicated slot; FIFO stays empty for pure stream accumulation.
     expect(state?.rawSignatures).toEqual([]);
     const latestRaw = state?.streamedRawSignature;
@@ -1092,16 +1203,20 @@ describe("CodexAppServerEventProjector", () => {
         delta: rawOutput,
       }),
     );
-    const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<
-        string,
-        {
-          rawSignatures: Array<{ length: number; prefix: string }>;
-          streamedRawSignature?: { length: number; prefix: string };
-        }
-      >;
-    };
-    const state = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo-newline");
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<
+            string,
+            {
+              rawSignatures: Array<{ length: number; prefix: string }>;
+              streamedRawSignature?: { length: number; prefix: string };
+            }
+          >;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    const state = echoState.get("cmd-streamed-echo-newline");
     expect(state?.streamedRawSignature?.length).toBe(rawOutput.trim().length);
 
     await projector.handleNotification(
@@ -1649,6 +1764,38 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.aborted).toBe(true);
     expect(result.assistantTexts).toEqual([]);
+  });
+
+  it("keeps missing tool detail without overriding an explicit abort", async () => {
+    const projector = await createProjector();
+    projector.markAborted();
+
+    await projector.handleNotification(pendingCommandStarted("cmd-aborted"));
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(true);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.lastToolError).toMatchObject({
+      toolName: "bash",
+      error: expect.stringContaining("without a matching tool.result"),
+    });
+  });
+
+  it("fails closed when interrupted status has no abort marker", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(pendingCommandStarted("cmd-interrupted"));
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(false);
+    expect(result.promptError).toContain("without a matching tool.result");
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.lastToolError).toBeUndefined();
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
@@ -3738,15 +3885,14 @@ describe("CodexAppServerEventProjector", () => {
       );
     }
 
-    const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<
-        string,
-        {
-          streamedRawSignature?: { length: number; prefix: string };
-        }
-      >;
-    };
-    const state = echoState.toolProgressEchoesByItem.get("cmd-freeze-prefix");
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<string, { streamedRawSignature?: { length: number; prefix: string } }>;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    const state = echoState.get("cmd-freeze-prefix");
     expect(state?.streamedRawSignature).toBeDefined();
     expect(fullOutput.startsWith(state!.streamedRawSignature!.prefix)).toBe(true);
     expect(state!.streamedRawSignature!.length).toBe(fullOutput.length);
@@ -5993,3 +6139,4 @@ describe("CodexAppServerEventProjector", () => {
     expect(started.scope).toBe("thread");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

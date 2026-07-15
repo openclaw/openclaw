@@ -211,7 +211,7 @@ function normalizePart(value: string | undefined, fallback: string): string {
 }
 
 // Keep inherited lookups for HOME/etc. without enumerating large Kubernetes service envs.
-export function createStateDirEnv(
+function createStateDirEnv(
   stateDir: string,
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
@@ -1243,3 +1243,4 @@ export function createChannelIngressQueue<
     prune,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -44,6 +44,7 @@ import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
+import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import {
   buildOpenClawToolFallbackText,
   shouldRenderOpenClawToolWorkflowHints,
@@ -318,7 +319,7 @@ function buildMemorySection(params: {
   });
 }
 
-export function buildAgentBootstrapSystemContext(params: {
+function buildAgentBootstrapSystemContext(params: {
   bootstrapMode?: BootstrapMode;
   hasBootstrapFileInProjectContext?: boolean;
 }): string[] {
@@ -348,7 +349,7 @@ export function buildAgentBootstrapSystemContext(params: {
   ];
 }
 
-export function buildAgentBootstrapSystemPromptSections(params: {
+function buildAgentBootstrapSystemPromptSections(params: {
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
   contextFiles?: EmbeddedContextFile[];
@@ -1142,6 +1143,7 @@ export function buildAgentSystemPrompt(params: {
           isMinimal,
         }),
       }),
+      ...buildPromisedWorkPromptSection(),
       ...buildOverridablePromptSection({
         override: providerStablePrefix,
         fallback: [],
@@ -1382,7 +1384,7 @@ function buildActiveProcessSessionReferenceLines(
   ];
 }
 
-export function buildRuntimeLine(
+function buildRuntimeLine(
   runtimeInfo?: {
     agentId?: string;
     sessionKey?: string;
@@ -1440,3 +1442,4 @@ export function buildRuntimeLine(
     .filter(Boolean)
     .join(" | ")}`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

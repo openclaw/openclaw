@@ -4,10 +4,10 @@ import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
-import { CodexAppServerClient, MIN_CODEX_APP_SERVER_VERSION } from "./client.js";
+import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
-import { CodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { createClientHarness } from "./test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -255,9 +255,7 @@ describe("shared Codex app-server client", () => {
     const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
     await sendInitializeResult(harness, "openclaw/0.117.9 (macOS; test)");
 
-    await expect(listPromise).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
-    );
+    await expect(listPromise).rejects.toThrow("Codex app-server 0.143.0 or newer is required");
     expect(harness.process.stdin.destroyed).toBe(true);
     startSpy.mockRestore();
   });
@@ -820,6 +818,22 @@ describe("shared Codex app-server client", () => {
     await rejection;
     expect(harness.process.stdin.destroyed).toBe(true);
     finishAuth();
+  });
+
+  it("does not start isolated auth after the total startup deadline elapsed", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    const clientPromise = createIsolatedCodexAppServerClient({ timeoutMs: 100 });
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
+    now = 101;
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
+
+    await expect(clientPromise).rejects.toThrow("codex app-server initialize timed out");
+    expect(mocks.applyCodexAppServerAuthProfile).not.toHaveBeenCalled();
+    expect(harness.process.stdin.destroyed).toBe(true);
   });
 
   it("passes the selected auth profile through the bridge helper", async () => {
@@ -1572,7 +1586,7 @@ describe("shared Codex app-server client", () => {
       setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
     };
     const retainClient = vi.fn(() => retainSharedCodexAppServerClientIfCurrent(client));
-    const monitor = new CodexNativeSubagentMonitor(
+    const monitor = new codexNativeSubagentMonitorRuntime.Monitor(
       client,
       {
         createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
@@ -1857,3 +1871,4 @@ function rawDataToText(data: RawData): string {
   }
   return Buffer.from(data).toString("utf8");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

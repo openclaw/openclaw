@@ -19,7 +19,6 @@ import {
   resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerHomeDir,
-  resolveCodexAppServerNativeHomeDir,
   resolveCodexAppServerPreparedAuthHandoff,
   resolveCodexAppServerPreparedAuthProfileSnapshot,
   resolveCodexAppServerPreparedApiKeyCacheKey,
@@ -132,11 +131,14 @@ function createStartOptions(
   return {
     transport: "stdio",
     command: "codex",
+    commandSource: "resolved-managed",
     args: ["app-server"],
     headers: { authorization: "Bearer dev-token" },
     ...overrides,
   };
 }
+
+const EPHEMERAL_AUTH_ARGS = ["app-server", "-c", 'cli_auth_credentials_store="ephemeral"'];
 
 async function expectPathMissing(filePath: string): Promise<void> {
   try {
@@ -219,7 +221,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
     const startOptions = createStartOptions();
     try {
       const codexHome = resolveCodexAppServerHomeDir(agentDir);
-      const nativeHome = resolveCodexAppServerNativeHomeDir(agentDir);
 
       await expect(
         bridgeCodexAppServerStartOptions({
@@ -228,12 +229,12 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           CODEX_HOME: codexHome,
         },
       });
       await expect(fs.access(codexHome)).resolves.toBeUndefined();
-      await expectPathMissing(nativeHome);
       expect(startOptions.env).toBeUndefined();
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
@@ -257,6 +258,56 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
   });
 
+  it("places the ephemeral auth-store override after configured root overrides", async () => {
+    await withTempDir("openclaw-codex-auth-store-", async (agentDir) => {
+      const startOptions = createStartOptions({
+        args: ["-c", 'cli_auth_credentials_store="keyring"', "app-server"],
+      });
+
+      const bridged = await bridgeCodexAppServerStartOptions({ startOptions, agentDir });
+
+      expect(bridged.args).toEqual([
+        "-c",
+        'cli_auth_credentials_store="keyring"',
+        "app-server",
+        "-c",
+        'cli_auth_credentials_store="ephemeral"',
+      ]);
+    });
+  });
+
+  it("does not mistake an option value for the app-server subcommand", async () => {
+    await withTempDir("openclaw-codex-profile-name-", async (agentDir) => {
+      const startOptions = createStartOptions({
+        args: ["--profile", "app-server", "app-server"],
+      });
+
+      const bridged = await bridgeCodexAppServerStartOptions({ startOptions, agentDir });
+
+      expect(bridged.args).toEqual([
+        "--profile",
+        "app-server",
+        "app-server",
+        "-c",
+        'cli_auth_credentials_store="ephemeral"',
+      ]);
+    });
+  });
+
+  it("preserves custom stdio backend arguments", async () => {
+    await withTempDir("openclaw-codex-custom-backend-", async (agentDir) => {
+      const startOptions = createStartOptions({
+        command: "custom-codex-compatible-server",
+        commandSource: "config",
+        args: [],
+      });
+
+      const bridged = await bridgeCodexAppServerStartOptions({ startOptions, agentDir });
+
+      expect(bridged.args).toEqual([]);
+    });
+  });
+
   it("preserves inherited HOME when clearEnv asks to clear app-server isolation vars", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions({
@@ -270,6 +321,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
         },
@@ -297,6 +349,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           CODEX_HOME: codexHome,
           HOME: nativeHome,
@@ -339,6 +392,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           EXISTING: "1",
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
@@ -377,6 +431,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
         },
@@ -409,6 +464,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
         },
@@ -441,6 +497,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         });
         expect(bridged).toEqual({
           ...startOptions,
+          args: EPHEMERAL_AUTH_ARGS,
           env: { CODEX_HOME: resolveCodexAppServerHomeDir(agentDir) },
           clearEnv: ["FOO", "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
         });
@@ -611,6 +668,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
         },
@@ -2576,3 +2634,4 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

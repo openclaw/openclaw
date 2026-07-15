@@ -3,7 +3,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "./internal-runtime-context.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   createAgentRunDirectAbortError,
@@ -199,6 +202,11 @@ vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
 
+// Harness selection has dedicated coverage; this command suite registers no auto harnesses.
+vi.mock("./harness/support.js", () => ({
+  resolveAutoAgentHarnessId: () => undefined,
+}));
+
 vi.mock("../acp/policy.js", () => ({
   isAcpEnabledByPolicy: () => true,
   resolveAcpAgentPolicyError: (...args: unknown[]) => state.resolveAcpAgentPolicyErrorMock(...args),
@@ -265,6 +273,11 @@ vi.mock("./agent-runtime-config.js", () => {
 
 vi.mock("../config/runtime-snapshot.js", () => ({
   setRuntimeConfigSnapshot: vi.fn(),
+}));
+
+// Model selection is mocked below, so plugin discovery cannot affect these assertions.
+vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: () => ({ plugins: [] }),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -466,6 +479,11 @@ vi.mock("./defaults.js", () => ({
   DEFAULT_PROVIDER: "anthropic",
 }));
 
+// Exec eligibility is outside model-switch scope; avoid loading its policy graph.
+vi.mock("./exec-defaults.js", () => ({
+  resolveNodeExecEligibility: () => ({ canExec: false }),
+}));
+
 vi.mock("./lanes.js", () => ({
   AGENT_LANE_SUBAGENT: "subagent",
 }));
@@ -613,30 +631,6 @@ vi.mock("./model-selection.js", () => {
       }
       const slash = key.indexOf("/");
       return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
-    },
-    resolveAllowedModelSelection: ({
-      provider,
-      model,
-      allowAny,
-      allowedKeys,
-      allowedCatalog,
-    }: {
-      provider: string;
-      model: string;
-      allowAny: boolean;
-      allowedKeys: ReadonlySet<string>;
-      allowedCatalog: Array<{ provider: string; id: string }>;
-    }) => {
-      const key = `${provider}/${model}`;
-      if (
-        allowAny ||
-        allowedKeys.has(key) ||
-        (key.includes("/") && allowedKeys.has(`${key.slice(0, key.indexOf("/"))}/*`))
-      ) {
-        return { provider, model };
-      }
-      const fallback = allowedCatalog[0];
-      return fallback ? { provider: fallback.provider, model: fallback.id } : null;
     },
     buildModelAliasIndex: ({
       cfg,
@@ -2619,6 +2613,56 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
   });
 
+  it("retains and clears a preclaimed transcript-only recovery run", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      updatedAt: 1,
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+
+    await agentCommand({
+      message: "continue after restart",
+      sessionKey: "agent:main:main",
+      deliver: false,
+      runId: "recovery-run",
+    });
+
+    const persistedClaims = state.persistSessionEntryMock.mock.calls.map((call) => {
+      const params = call[0] as { entry?: SessionEntry };
+      return {
+        context: params.entry?.restartRecoveryDeliveryContext,
+        runId: params.entry?.restartRecoveryDeliveryRunId,
+        sourceRunId: params.entry?.restartRecoveryDeliverySourceRunId,
+      };
+    });
+    expect(persistedClaims).toContainEqual({
+      context: undefined,
+      runId: "recovery-run",
+      sourceRunId: "control-ui-run",
+    });
+    expect(persistedClaims.at(-1)).toEqual({
+      context: undefined,
+      runId: undefined,
+      sourceRunId: undefined,
+    });
+    const cleanupParams = state.persistSessionEntryMock.mock.calls.at(-1)?.[0] as
+      | {
+          sessionStore?: Record<string, SessionEntry>;
+        }
+      | undefined;
+    const stored = cleanupParams?.sessionStore?.["agent:main:main"];
+    expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+  });
+
   it("refreshes delivery session entries through the session accessor", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
@@ -4572,3 +4616,4 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expectFallbackOverrideCalls(false, true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

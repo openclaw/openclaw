@@ -18,7 +18,9 @@ import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
+import ai.openclaw.app.ui.SettingsRoute
 import ai.openclaw.app.voice.VoiceConversationEntry
+import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
 import android.app.Application
 import android.net.Uri
@@ -141,11 +143,18 @@ internal class CronEditorDraftMemory {
  * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class MainViewModel(
+class MainViewModel private constructor(
   app: Application,
+  private val prefs: SecurePrefs,
 ) : AndroidViewModel(app) {
+  constructor(app: Application) : this(app, (app as NodeApp).prefs)
+
+  internal constructor(
+    app: NodeApp,
+    prefs: SecurePrefs,
+  ) : this(app as Application, prefs)
+
   private val nodeApp = app as NodeApp
-  private val prefs = nodeApp.prefs
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
   private val gatewayConfigOperationSeq = AtomicLong()
   private val gatewayConfigOperationMutex = Mutex()
@@ -167,6 +176,8 @@ class MainViewModel(
 
   private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
+  private val requestedSettingsRouteState = MutableStateFlow<SettingsRoute?>(null)
+  internal val requestedSettingsRoute: StateFlow<SettingsRoute?> get() = requestedSettingsRouteState
   private val _startOnboardingAtGatewaySetup = MutableStateFlow(false)
   val startOnboardingAtGatewaySetup: StateFlow<Boolean> = _startOnboardingAtGatewaySetup
   private val _chatDraft = MutableStateFlow<ChatDraft?>(null)
@@ -199,17 +210,27 @@ class MainViewModel(
         "Screenshot fixture mode must be selected before live runtime startup"
       }
       runtime.setForeground(foreground)
+      runtime.setVoiceWakeEnabled(scene == AndroidScreenshotScene.VoiceWake)
       _requestedHomeDestination.value = scene.homeDestination
+      requestedSettingsRouteState.value = scene.settingsRoute
       return
     }
     prefs.setOnboardingCompleted(true)
     prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
     prefs.setDisplayName("Pixel")
     prefs.setSpeakerEnabled(true)
+    prefs.setVoiceWakeEnabled(scene == AndroidScreenshotScene.VoiceWake)
+    prefs.setVoiceWakeWords(VoiceWakePreferences.defaultTriggerWords)
     val runtime = nodeApp.ensureScreenshotFixtureRuntime()
     runtime.setForeground(foreground)
     runtimeRef.value = runtime
     _requestedHomeDestination.value = scene.homeDestination
+    requestedSettingsRouteState.value = scene.settingsRoute
+  }
+
+  /** Acknowledges the one-shot settings-route request that accompanies a home destination. */
+  fun clearRequestedSettingsRoute() {
+    requestedSettingsRouteState.value = null
   }
 
   /**
@@ -223,6 +244,11 @@ class MainViewModel(
       runCatching { ensureRuntime() }
       runtimeStartupQueued = false
     }
+  }
+
+  internal fun resumeNodeServiceForConnection() {
+    if (!prefs.onboardingCompleted.value) return
+    NodeForegroundService.resume(context = nodeApp, startNow = true)
   }
 
   /**
@@ -355,6 +381,15 @@ class MainViewModel(
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
+  val voiceWakeEnabled: StateFlow<Boolean> = prefs.voiceWakeEnabled
+  val voiceWakeWords: StateFlow<List<String>> = prefs.voiceWakeWords
+  val voiceWakeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.voiceWakeAvailable }
+  val voiceWakeIsListening: StateFlow<Boolean> = runtimeState(initial = false) { it.voiceWakeIsListening }
+  val voiceWakeStatusText: StateFlow<String> = runtimeState(initial = "Off") { it.voiceWakeStatusText }
+  val voiceWakeLastTriggeredCommand: StateFlow<String?> =
+    runtimeState(initial = null) { it.voiceWakeLastTriggeredCommand }
+  val voiceWakeWordsSaving: StateFlow<Boolean> = runtimeState(initial = false) { it.voiceWakeWordsSaving }
+  val voiceWakeWordsNoticeText: StateFlow<String?> = runtimeState(initial = null) { it.voiceWakeWordsNoticeText }
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = prefs.appearanceThemeMode
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
   val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
@@ -420,7 +455,6 @@ class MainViewModel(
   ) {
     val runtime = runtimeRef.value ?: return
     runtime.camera.attachLifecycleOwner(owner)
-    runtime.camera.attachPermissionRequester(permissionRequester)
     runtime.sms.attachPermissionRequester(permissionRequester)
     this.permissionRequester = permissionRequester
   }
@@ -449,11 +483,11 @@ class MainViewModel(
   }
 
   fun setCameraEnabled(value: Boolean) {
-    prefs.setCameraEnabled(value)
+    runtimeRef.value?.setCameraEnabled(value) ?: prefs.setCameraEnabled(value)
   }
 
   fun setLocationMode(mode: LocationMode) {
-    prefs.setLocationMode(mode)
+    runtimeRef.value?.setLocationMode(mode) ?: prefs.setLocationMode(mode)
   }
 
   fun setLocationPreciseEnabled(value: Boolean) {
@@ -488,6 +522,7 @@ class MainViewModel(
   }
 
   internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {
+    resumeNodeServiceForConnection()
     val operation = gatewayConfigOperationSeq.incrementAndGet()
     // Gateway pairing touches encrypted prefs, identity files, and sockets; keep
     // the whole sequence off the Compose thread so retries cannot trigger ANRs.
@@ -555,10 +590,14 @@ class MainViewModel(
       ensureRuntime()
     }
     prefs.setOnboardingCompleted(value)
+    if (value) {
+      NodeForegroundService.resume(nodeApp, startNow = true)
+    }
   }
 
   /** Re-enters gateway setup after disconnecting and clearing one-time setup credentials. */
   fun pairNewGateway() {
+    NodeForegroundService.stop(nodeApp)
     val operation = gatewayConfigOperationSeq.incrementAndGet()
     viewModelScope.launch(Dispatchers.Default) {
       gatewayConfigOperationMutex.withLock {
@@ -746,11 +785,24 @@ class MainViewModel(
     ensureRuntime().setSpeakerEnabled(enabled)
   }
 
+  fun setVoiceWakeEnabled(enabled: Boolean) {
+    ensureRuntime().setVoiceWakeEnabled(enabled)
+  }
+
+  fun setVoiceWakeWords(values: List<String>) {
+    ensureRuntime().setVoiceWakeWords(values)
+  }
+
+  fun refreshVoiceWakePermission() {
+    ensureRuntime().refreshVoiceWakePermission()
+  }
+
   fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
     prefs.setAppearanceThemeMode(mode)
   }
 
   fun refreshGatewayConnection() {
+    resumeNodeServiceForConnection()
     viewModelScope.launch(Dispatchers.Default) {
       ensureRuntime().refreshGatewayConnection()
     }
@@ -761,6 +813,7 @@ class MainViewModel(
   }
 
   fun connect(endpoint: GatewayEndpoint) {
+    resumeNodeServiceForConnection()
     viewModelScope.launch(Dispatchers.Default) {
       ensureRuntime().connectSwitchingGateway(endpoint)
     }
@@ -772,6 +825,7 @@ class MainViewModel(
     bootstrapToken: String?,
     password: String?,
   ) {
+    resumeNodeServiceForConnection()
     viewModelScope.launch(Dispatchers.Default) {
       ensureRuntime().connectSwitchingGateway(
         endpoint,
@@ -785,10 +839,12 @@ class MainViewModel(
   }
 
   fun connectManual() {
+    resumeNodeServiceForConnection()
     ensureRuntime().connectManual()
   }
 
   fun switchToGateway(stableId: String) {
+    resumeNodeServiceForConnection()
     val operation = gatewayConfigOperationSeq.incrementAndGet()
     viewModelScope.launch(Dispatchers.Default) {
       gatewayConfigOperationMutex.withLock {
@@ -811,6 +867,7 @@ class MainViewModel(
   }
 
   fun disconnect() {
+    NodeForegroundService.stop(nodeApp)
     val operation = gatewayConfigOperationSeq.incrementAndGet()
     viewModelScope.launch(Dispatchers.Default) {
       gatewayConfigOperationMutex.withLock {

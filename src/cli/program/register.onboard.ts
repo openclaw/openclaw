@@ -20,26 +20,14 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
 
-function resolveInstallDaemonFlag(
-  command: unknown,
-  opts: { installDaemon?: boolean },
-): boolean | undefined {
-  if (!command || typeof command !== "object") {
-    return undefined;
-  }
-  const getOptionValueSource =
-    "getOptionValueSource" in command ? command.getOptionValueSource : undefined;
-  if (typeof getOptionValueSource !== "function") {
-    return undefined;
-  }
-
+export function resolveInstallDaemonFlag(command: Command): boolean | undefined {
   // Commander doesn't support option conflicts natively; keep original behavior.
   // If --skip-daemon is explicitly passed, it wins.
-  if (getOptionValueSource.call(command, "skipDaemon") === "cli") {
+  if (command.getOptionValueSource("skipDaemon") === "cli") {
     return false;
   }
-  if (getOptionValueSource.call(command, "installDaemon") === "cli") {
-    return Boolean(opts.installDaemon);
+  if (command.getOptionValueSource("installDaemon") === "cli") {
+    return Boolean(command.getOptionValue("installDaemon"));
   }
   return undefined;
 }
@@ -203,7 +191,7 @@ export function registerOnboardCommand(program: Command): void {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
-    .option("--modern", "Open inference-gated Crestodian (kept for compatibility)", false)
+    .option("--modern", "Open inference-gated OpenClaw (kept for compatibility)", false)
     .option("--classic", "Use the classic multi-step setup wizard", false)
     .option(
       "--accept-risk",
@@ -232,7 +220,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
-    .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
+    .option("--daemon-runtime <runtime>", "Daemon runtime: node")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
     .option("--skip-bootstrap", "Skip creating default agent workspace files")
@@ -247,7 +235,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--import-secrets", "Import supported secrets during onboarding migration", false)
     .option("--json", "Output JSON summary", false);
 
-  command.action(async (opts, commandRuntime) => {
+  command.action(async (opts, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       if (opts.modern) {
@@ -256,7 +244,7 @@ export function registerOnboardCommand(program: Command): void {
           defaultRuntime.error(
             [
               `--modern cannot be combined with: ${unsupportedOptions.join(", ")}.`,
-              "Run those setup options without --modern, or remove them to open Crestodian.",
+              "Run those setup options without --modern, or remove them to open OpenClaw.",
             ].join("\n"),
           );
           defaultRuntime.exit(1);
@@ -273,9 +261,9 @@ export function registerOnboardCommand(program: Command): void {
           defaultRuntime.exit(1);
           return;
         }
-        const { runCrestodianWithInference } =
-          await import("../../commands/crestodian-with-inference.js");
-        await runCrestodianWithInference(
+        const { runSystemAgentWithInference } =
+          await import("../../commands/system-agent-with-inference.js");
+        await runSystemAgentWithInference(
           {
             yes: false,
             json: Boolean(opts.json),
@@ -291,9 +279,7 @@ export function registerOnboardCommand(program: Command): void {
         );
         return;
       }
-      const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
-        installDaemon: Boolean(opts.installDaemon),
-      });
+      const installDaemon = resolveInstallDaemonFlag(commandRuntime);
       const gatewayPort = parsePort(opts.gatewayPort);
       const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(

@@ -10,7 +10,6 @@ import {
   buildBeforeModelResolveAttachments,
   resolveAgentHarnessRunAdmissionError,
   resolveEmbeddedRuntimeModelPolicy,
-  resolveEffectiveRuntimeModel,
   resolveHookModelSelection,
   resolveNativeModelOwnedHarnessId,
 } from "./setup.js";
@@ -135,6 +134,32 @@ describe("buildBeforeModelResolveAttachments", () => {
 });
 
 describe("resolveHookModelSelection", () => {
+  it("does not expose locked model selection to routing hooks", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(() => true),
+      runBeforeModelResolve: vi.fn(),
+      runBeforeAgentStart: vi.fn(),
+    };
+
+    await expect(
+      resolveHookModelSelection({
+        prompt: "private review transcript",
+        provider: "foreground-provider",
+        modelId: "foreground-model",
+        modelSelectionLocked: true,
+        hookRunner,
+        hookContext,
+      }),
+    ).resolves.toEqual({
+      provider: "foreground-provider",
+      modelId: "foreground-model",
+      beforeAgentStartResult: undefined,
+    });
+    expect(hookRunner.hasHooks).not.toHaveBeenCalled();
+    expect(hookRunner.runBeforeModelResolve).not.toHaveBeenCalled();
+    expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
+  });
+
   it("passes attachment metadata to before_model_resolve hooks", async () => {
     const attachments = [{ kind: "image" as const, mimeType: "image/png" }];
     const hookRunner = {
@@ -222,7 +247,7 @@ function createConfiguredModel(
   };
 }
 
-describe("resolveEffectiveRuntimeModel", () => {
+describe("resolveEmbeddedRuntimeModelPolicy", () => {
   it("can read Codex OAuth context overrides for native Codex harness runs", () => {
     const cfg = {
       models: {
@@ -235,15 +260,16 @@ describe("resolveEffectiveRuntimeModel", () => {
       },
     } satisfies OpenClawConfig;
 
-    const result = resolveEffectiveRuntimeModel({
+    const result = resolveEmbeddedRuntimeModelPolicy({
       cfg,
       provider: "codex",
       contextConfigProvider: "openai",
       modelId: "gpt-5.5",
       runtimeModel: createRuntimeModel(),
+      nativeModelOwned: false,
     });
 
-    expect(result.ctxInfo).toEqual({
+    expect(result.contextWindowInfo).toEqual({
       source: "modelsConfig",
       tokens: 1_000_000,
     });
@@ -262,14 +288,15 @@ describe("resolveEffectiveRuntimeModel", () => {
       },
     } satisfies OpenClawConfig;
 
-    const result = resolveEffectiveRuntimeModel({
+    const result = resolveEmbeddedRuntimeModelPolicy({
       cfg,
       provider: "codex",
       modelId: "gpt-5.5",
       runtimeModel: createRuntimeModel(),
+      nativeModelOwned: false,
     });
 
-    expect(result.ctxInfo).toEqual({
+    expect(result.contextWindowInfo).toEqual({
       source: "model",
       tokens: 272_000,
     });

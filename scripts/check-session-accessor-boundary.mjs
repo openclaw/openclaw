@@ -76,8 +76,28 @@ export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
   "updateSessionStore",
 ]);
 
+const gatewaySessionServerMethodFiles = [
+  "src/gateway/server-methods/sessions-abort.ts",
+  "src/gateway/server-methods/sessions-compact.ts",
+  "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
+  "src/gateway/server-methods/sessions-compaction-queries.ts",
+  "src/gateway/server-methods/sessions-compaction-runner.ts",
+  "src/gateway/server-methods/sessions-create.ts",
+  "src/gateway/server-methods/sessions-delete.ts",
+  "src/gateway/server-methods/sessions-dispatch.ts",
+  "src/gateway/server-methods/sessions-groups.ts",
+  "src/gateway/server-methods/sessions-messaging.ts",
+  "src/gateway/server-methods/sessions-mutations.ts",
+  "src/gateway/server-methods/sessions-read.ts",
+  "src/gateway/server-methods/sessions-shared.ts",
+  "src/gateway/server-methods/sessions-subscriptions.ts",
+  "src/gateway/server-methods/sessions.ts",
+];
+
 export const migratedSessionAccessorFiles = new Set([
   "packages/memory-host-sdk/src/host/session-files.ts",
+  "src/acp/control-plane/manager.background-task.ts",
+  "src/acp/control-plane/manager.core.ts",
   "src/acp/runtime/session-meta.ts",
   "src/agents/acp-spawn.ts",
   "src/agents/auth-profiles/session-override.ts",
@@ -118,7 +138,7 @@ export const migratedSessionAccessorFiles = new Set([
   "src/gateway/server-methods/chat.ts",
   "src/gateway/sessions-resolve.ts",
   "src/gateway/server-methods/sessions-files.ts",
-  "src/gateway/server-methods/sessions.ts",
+  ...gatewaySessionServerMethodFiles,
   "src/gateway/server-session-events.ts",
   "src/gateway/session-reset-service.ts",
   "src/infra/outbound/message-action-tts.ts",
@@ -165,6 +185,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/live-model-switch.ts",
   "src/agents/main-session-restart-recovery.ts",
+  "src/agents/session-suspension.ts",
   "src/auto-reply/reply/abort.ts",
   "src/agents/subagent-control.ts",
   "src/agents/subagent-registry-helpers.ts",
@@ -194,7 +215,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/config/sessions/goals.ts",
   "src/gateway/boot.ts",
   "src/gateway/server-methods/chat.ts",
-  "src/gateway/server-methods/sessions.ts",
+  ...gatewaySessionServerMethodFiles,
   "src/gateway/server-node-events.ts",
   "src/gateway/session-compaction-checkpoints.ts",
   "src/infra/outbound/outbound-session.ts",
@@ -215,7 +236,7 @@ export const migratedTranscriptWriterFiles = new Set([
 ]);
 
 export const migratedSessionCompactManualTrimFiles = new Set([
-  "src/gateway/server-methods/sessions.ts",
+  "src/gateway/server-methods/sessions-compact.ts",
 ]);
 
 export const migratedSessionLifecycleCleanupFiles = new Set([
@@ -860,7 +881,7 @@ export async function main() {
     sourceRoots: resolveSourceRoots(repoRoot, ["src/gateway/server-methods"]),
     skipFile: (filePath) =>
       normalizeRelativePath(path.relative(repoRoot, filePath)) !==
-      "src/gateway/server-methods/sessions.ts",
+      "src/gateway/server-methods/sessions-create.ts",
     findViolations: findGatewaySessionCreateLifecycleViolations,
   });
   const manualCompactTrimViolations = await collectFileViolations({

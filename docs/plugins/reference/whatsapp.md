@@ -20,4 +20,4 @@ channels: whatsapp; contracts: tools; skills
 
 ## Related docs
 
-- [whatsapp](/channels/whatsapp)
+- [WhatsApp](/channels/whatsapp)

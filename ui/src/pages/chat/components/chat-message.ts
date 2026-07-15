@@ -39,7 +39,11 @@ import {
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
-import { formatCompactTokenCount, formatTimeAgo } from "../../../lib/format.ts";
+import {
+  formatCompactTokenCount,
+  formatDurationCompact,
+  formatTimeAgo,
+} from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
@@ -58,6 +62,7 @@ import {
   resolveToolRowText,
   shouldToggleSelectableDisclosure,
 } from "./chat-tool-cards.ts";
+import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 function renderChatIcon(name: string) {
   return icons[name as IconName] ?? icons.zap;
@@ -90,7 +95,7 @@ type ChatTimestampDisplay = {
   dateTime: string;
 };
 
-export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
+function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) {
     return {
@@ -130,7 +135,7 @@ const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
 
 /** Footer label: relative for recent messages, compact date beyond a week. */
-export function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
+function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) {
     return t("chat.messages.unknownDate");
@@ -202,25 +207,6 @@ function pinMessageMetaPreview(event: MouseEvent) {
   }
   event.preventDefault();
   delete details.dataset.preview;
-}
-
-export function resetAssistantAttachmentAvailabilityCacheForTest() {
-  assistantAttachmentAvailabilityCache.clear();
-  bumpAssistantAttachmentAvailabilityRenderVersion();
-  for (const timer of assistantAttachmentRefreshTimers.values()) {
-    clearTimeout(timer);
-  }
-  assistantAttachmentRefreshTimers.clear();
-  for (const { timer } of pairingQrExpiryRefreshTimers.values()) {
-    clearTimeout(timer);
-  }
-  pairingQrExpiryRefreshTimers.clear();
-  for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
-    URL.revokeObjectURL(blobUrl);
-  }
-  managedImageBlobUrlCache.clear();
-  managedImageBlobUrlResolvedCache.clear();
-  managedImageBlobUrlMissCache.clear();
 }
 
 export function getAssistantAttachmentAvailabilityRenderVersion(): number {
@@ -579,15 +565,6 @@ type StreamGroupOptions = {
   authToken?: string | null;
 };
 
-function renderReadingIndicatorBubble() {
-  // Working claw: the brand pincer rests slightly open where the reply will
-  // materialize and pinches once per cycle (same gesture as the favicon
-  // mascot snap). aria-hidden; the composer sr-only run-status announces.
-  return html`
-    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">${icons.claw}</div>
-  `;
-}
-
 // One assistant group per contiguous run of streaming items: a reply that
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
@@ -598,14 +575,21 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   // is only the reading indicator has no timestamp and therefore no footer.
   const streamStarts = parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
   const footerStartedAt = streamStarts.length > 0 ? Math.min(...streamStarts) : null;
+  // While the agent works with nothing streamed yet the run is pure claw: no
+  // avatar next to it - the punching pincer is the whole signal. The avatar
+  // arrives with the first stream part.
+  const indicatorOnly = parts.every((part) => part.kind === "reading-indicator");
+  const avatar = indicatorOnly
+    ? nothing
+    : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
 
   return html`
-    <div class="chat-group assistant">
-      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
+    <div class="chat-group assistant ${indicatorOnly ? "chat-group--working" : ""}">
+      ${avatar}
       <div class="chat-group-messages">
         ${parts.map((part) =>
           part.kind === "reading-indicator"
-            ? renderReadingIndicatorBubble()
+            ? renderChatWorkingIndicator(part)
             : renderGroupedMessage(
                 {
                   role: "assistant",
@@ -627,6 +611,55 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
               </div>
             `
           : nothing}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Collapsed-turn rollup header: one slim "Worked for X" disclosure standing in
+ * for the turn's intermediate work once the run is done. The check/x icon is
+ * the turn's done indicator; the expanded groups render after this row.
+ */
+export function renderWorkGroupSummary(
+  item: { durationMs: number | null; hasError: boolean },
+  opts: { expanded: boolean; onToggle: () => void },
+) {
+  const duration = formatDurationCompact(item.durationMs, { spaced: true });
+  const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
+  return html`
+    <div class="chat-group tool chat-group--work">
+      <span class="chat-work-group__gutter" aria-hidden="true"></span>
+      <div class="chat-group-messages">
+        <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
+          <button
+            class="chat-activity-group__summary ${item.hasError
+              ? "chat-activity-group__summary--error"
+              : ""}"
+            type="button"
+            aria-expanded=${String(opts.expanded)}
+            aria-label=${item.hasError
+              ? duration
+                ? t("chat.workRun.workedForError", { duration })
+                : t("chat.workRun.workedError")
+              : nothing}
+            @click=${(event: MouseEvent) => {
+              if (shouldToggleSelectableDisclosure(event)) {
+                opts.onToggle();
+              }
+            }}
+          >
+            <span class="chat-activity-group__icon">
+              ${item.hasError ? icons.x : icons.check}
+            </span>
+            <span class="chat-activity-group__label" title=${label}>${label}</span>
+            <span
+              class="collapse-chevron ${opts.expanded ? "" : "collapse-chevron--collapsed"}"
+              aria-hidden="true"
+              >${icons.chevronDown}</span
+            >
+          </button>
+        </div>
       </div>
     </div>
   `;
@@ -2083,10 +2116,10 @@ function renderGroupedMessage(
   );
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
-  const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = markdownBase;
+  const markdown = extractedText?.trim() ? extractedText : null;
   const markdownRenderOptions: MarkdownRenderOptions = {
+    assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
     fileLinks: true,
   };
@@ -2396,3 +2429,4 @@ function renderMarkdownText(
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1065,4 +1065,4 @@ export const testApi = {
   recordDiagnosticEvent,
   renderPrometheusMetrics,
 };
-export { testApi as __test__ };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

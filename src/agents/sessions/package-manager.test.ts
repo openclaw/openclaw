@@ -60,6 +60,33 @@ describe("DefaultPackageManager", () => {
     expect(skillPaths).not.toContain(outsideSkill);
   });
 
+  it("expands manifest resource globs without hidden paths", async () => {
+    const root = await makeTempDir("openclaw-package-manager-");
+    const packageRoot = join(root, "package");
+    const visibleSkill = join(packageRoot, "skills", "visible", "SKILL.md");
+    const hiddenSkill = join(packageRoot, "skills", ".hidden", "SKILL.md");
+    await mkdir(join(packageRoot, "skills", "visible"), { recursive: true });
+    await mkdir(join(packageRoot, "skills", ".hidden"), { recursive: true });
+    await writeFile(visibleSkill, "# Visible\n", "utf-8");
+    await writeFile(hiddenSkill, "# Hidden\n", "utf-8");
+    await writeFile(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ openclaw: { skills: ["skills/*"] } }),
+      "utf-8",
+    );
+
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory({ packages: [packageRoot] }),
+    });
+
+    const skillPaths = (await manager.resolve()).skills.map((skill) => skill.path);
+
+    expect(skillPaths).toContain(visibleSkill);
+    expect(skillPaths).not.toContain(hiddenSkill);
+  });
+
   it("keeps convention-discovered resource entries inside the package root", async () => {
     const root = await makeTempDir("openclaw-package-manager-");
     const packageRoot = join(root, "package");
@@ -95,12 +122,19 @@ describe("DefaultPackageManager", () => {
   it("keeps auto-discovered project skills inside their skill root", async () => {
     const root = await makeTempDir("openclaw-package-manager-");
     const agentsSkillsRoot = join(root, ".agents", "skills");
-    const insideSkill = join(agentsSkillsRoot, "inside", "SKILL.md");
+    const insideSkill = join(agentsSkillsRoot, "group", "deep", "t", "SKILL.md");
+    const ignoredSkill = join(agentsSkillsRoot, "group", "deep", "i", "SKILL.md");
+    const escapedSkill = join(agentsSkillsRoot, "group", "deep", "!x ", "SKILL.md");
     const outsideRoot = join(root, "outside");
     await mkdir(join(root, ".git"));
-    await mkdir(join(agentsSkillsRoot, "inside"), { recursive: true });
+    await mkdir(join(agentsSkillsRoot, "group", "deep", "t"), { recursive: true });
+    await mkdir(join(agentsSkillsRoot, "group", "deep", "i"), { recursive: true });
+    await mkdir(join(agentsSkillsRoot, "group", "deep", "!x "), { recursive: true });
     await mkdir(outsideRoot, { recursive: true });
     await writeFile(insideSkill, "# Inside\n", "utf-8");
+    await writeFile(ignoredSkill, "# Ignored\n", "utf-8");
+    await writeFile(escapedSkill, "# Ignored\n", "utf-8");
+    await writeFile(join(agentsSkillsRoot, "group", ".gitignore"), "i/ \nt/\t\n\\!x\\ \n");
     await writeFile(join(outsideRoot, "SKILL.md"), "# Outside\n", "utf-8");
 
     try {
@@ -119,6 +153,8 @@ describe("DefaultPackageManager", () => {
     const skillPaths = resolved.skills.map((skill) => skill.path);
 
     expect(skillPaths).toContain(insideSkill);
+    expect(skillPaths).not.toContain(ignoredSkill);
+    expect(skillPaths).not.toContain(escapedSkill);
     expect(skillPaths.some((skillPath) => skillPath.includes(join("skills", "linked")))).toBe(
       false,
     );

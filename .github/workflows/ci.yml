@@ -18,6 +18,11 @@ on:
         required: false
         default: false
         type: boolean
+      pull_request_number:
+        description: Pull request number required by the exact-SHA release gate.
+        required: false
+        default: ""
+        type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -40,8 +45,6 @@ on:
       - "docs/**"
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
-    paths-ignore:
-      - "CHANGELOG.md"
 
 permissions:
   contents: read
@@ -130,6 +133,8 @@ jobs:
       - name: Validate release-gate dispatch
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
+          HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
           TARGET_REF: ${{ inputs.target_ref }}
         run: |
           set -euo pipefail
@@ -139,8 +144,18 @@ jobs:
             exit 1
           fi
 
+          if [[ ! "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "release_gate requires pull_request_number" >&2
+            exit 1
+          fi
+
           if [[ "$GITHUB_SHA" != "$TARGET_REF" ]]; then
             echo "release_gate must run from the branch at target_ref" >&2
+            exit 1
+          fi
+
+          if [[ -n "$HISTORICAL_TARGET_TAG" ]]; then
+            echo "release_gate cannot be combined with historical_target_tag" >&2
             exit 1
           fi
 
@@ -177,8 +192,8 @@ jobs:
           }
 
           # Manual release-gate runs commonly validate the workflow ref's exact SHA.
-          # Fetch the branch/tag ref first so GitHub does not have to negotiate an
-          # arbitrary SHA fetch, then verify the resolved commit stayed pinned.
+          # Fetch the branch/tag ref first, then refetch the SHA if that ref moves
+          # while the manual run waits for a runner.
           checkout_ref="$CHECKOUT_REF"
           requested_sha=""
           if [[ "$CHECKOUT_REF" =~ ^[0-9a-f]{40}$ ]]; then
@@ -209,6 +224,12 @@ jobs:
 
           if [ -n "$requested_sha" ]; then
             resolved_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
+            if [ "$resolved_sha" != "$requested_sha" ] && [ "$checkout_ref" != "$requested_sha" ]; then
+              echo "::notice::checkout ref '$checkout_ref' moved to '$resolved_sha'; fetching requested SHA '$requested_sha'"
+              checkout_ref="$requested_sha"
+              fetch_checkout_ref "$checkout_ref"
+              resolved_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
+            fi
             if [ "$resolved_sha" != "$requested_sha" ]; then
               echo "::error::checkout ref '$checkout_ref' resolved to '$resolved_sha'," \
                 "expected '$requested_sha'" >&2
@@ -309,6 +330,7 @@ jobs:
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_RUN_UI_TESTS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
+          OPENCLAW_CI_CHANGED_PATHS_JSON: ${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
@@ -344,6 +366,15 @@ jobs:
                 : undefined;
           if (typeof createNodeTestPlan !== "function") {
             throw new Error("CI target does not export a supported Node test shard planner");
+          }
+
+          let changedNodeTestPlan = {};
+          if (existsSync("./scripts/lib/ci-changed-node-test-plan.mjs")) {
+            try {
+              changedNodeTestPlan = await import("./scripts/lib/ci-changed-node-test-plan.mjs");
+            } catch (error) {
+              console.warn(`Changed Node test planner import failed; using compact full suite: ${error}`);
+            }
           }
 
           const importTargetPlan = async (path) => {
@@ -390,6 +421,16 @@ jobs:
           const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts ?? {};
           const hasPackageScript = (name) => typeof packageScripts[name] === "string";
           const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
+          const changedPaths = (() => {
+            try {
+              const value = JSON.parse(process.env.OPENCLAW_CI_CHANGED_PATHS_JSON ?? "null");
+              return Array.isArray(value) && value.every((path) => typeof path === "string")
+                ? value
+                : null;
+            } catch {
+              return null;
+            }
+          })();
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
           const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
@@ -443,7 +484,16 @@ jobs:
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
           const runFormatCheck = !frozenTarget || supportsFormatCheck;
-          const checksFastCoreTasks = [];
+          const checksFastCoreTasks =
+            runNode && !frozenTarget
+              ? [
+                  {
+                    check_name: "checks-fast-max-lines-ratchet",
+                    runtime: "node",
+                    task: "max-lines-ratchet",
+                  },
+                ]
+            : [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
@@ -460,14 +510,29 @@ jobs:
           }
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
+          let changedNodeTestShards = null;
+          if (
+            compactPullRequest &&
+            changedPaths &&
+            typeof changedNodeTestPlan.createChangedNodeTestShards === "function"
+          ) {
+            try {
+              changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths);
+            } catch (error) {
+              console.warn(`Changed Node test planning failed; using compact full suite: ${error}`);
+            }
+          }
           const runQaSmokeCi =
             runNodeFull &&
             (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
           const nodeTestShards = runNodeFull
-            ? createNodeTestPlan({
-                includeReleaseOnlyPluginShards: false,
-                compact: compactPullRequest,
-              }).map((shard) => ({
+            ? (changedNodeTestShards
+                ? changedNodeTestShards
+                : createNodeTestPlan({
+                    includeReleaseOnlyPluginShards: false,
+                    compact: compactPullRequest,
+                  })
+              ).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
@@ -479,6 +544,7 @@ jobs:
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
+                targets: shard.targets,
                 requires_go:
                   shard.shardName === "core-tooling" ||
                   shard.groups?.some((group) => group.shard_name.startsWith("core-tooling")),
@@ -486,6 +552,9 @@ jobs:
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
+          // Targeted jobs cannot discover repository-scanning boundary tests
+          // through imports, so preserve the existing full boundary gate.
+          const runNodeCoreDist = changedNodeTestShards !== null || nodeTestDistShards.length > 0;
           const channelContractShards = runNodeFull ? createChannelContractTestShards() : [];
           const protocolCoverageRequested = runNode || runIosBuild || runAndroid;
           const runProtocolEventCoverage =
@@ -516,7 +585,7 @@ jobs:
             run_checks: runNodeFull,
             run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
-            run_checks_node_core_dist: nodeTestDistShards.length > 0,
+            run_checks_node_core_dist: runNodeCoreDist,
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
             run_check_docs: docsChanged && eventName !== "push",
@@ -578,14 +647,14 @@ jobs:
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
         run: node scripts/check-protocol-event-coverage.mjs
 
-  # Run dependency-free security checks in parallel with scope detection so the
-  # main Node jobs do not have to wait for Python/pre-commit setup.
+  # Run dependency-free security checks on a hosted runner in parallel with
+  # scope detection. No downstream job waits for Python/pre-commit setup.
   security-fast:
     permissions:
       contents: read
     needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
@@ -869,7 +938,7 @@ jobs:
         env:
           # GitHub-hosted Linux reports a higher RSS baseline than Blacksmith for
           # the same built CLI. Keep the tighter Blacksmith regression ceiling.
-          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '350' }}
+          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
         run: |
           set +e
           pnpm test:startup:memory
@@ -1095,6 +1164,7 @@ jobs:
   checks-fast-core:
     permissions:
       contents: read
+      pull-requests: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast_core == 'true'
@@ -1106,6 +1176,56 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
       - *linux_node_checkout_step
+      - name: Prepare release-gate max-lines merge tree
+        if: matrix.task == 'max-lines-ratchet' && github.event_name == 'workflow_dispatch' && inputs.release_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+          TARGET_SHA: ${{ inputs.target_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          prepared=false
+          for attempt in {1..6}; do
+            pr_info="$(
+              gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}" |
+                jq -r --arg repo "$GITHUB_REPOSITORY" --arg target "$TARGET_SHA" '
+                  select(.state == "open" and .head.sha == $target and .base.repo.full_name == $repo)
+                  | [.base.sha, (if .mergeable == null then "unknown" else (.mergeable | tostring) end)]
+                  | @tsv
+                '
+            )"
+            if [[ -z "$pr_info" ]]; then
+              echo "release-gate pull request must be open and match the target head" >&2
+              exit 1
+            fi
+            IFS=$'\t' read -r base_sha mergeable <<<"$pr_info"
+            if [[ "$mergeable" == "false" ]]; then
+              echo "release-gate pull request is not mergeable" >&2
+              exit 1
+            fi
+            if [[ "$mergeable" == "true" ]] &&
+              git fetch --no-tags --depth=2 origin \
+                "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"; then
+              merge_sha="$(git rev-parse refs/remotes/origin/ci-max-lines-merge)"
+              read -r merge_base merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
+              if [[ "$merge_base" == "$base_sha" && "$merge_head" == "$TARGET_SHA" && -z "$extra_parent" ]]; then
+                prepared=true
+                break
+              fi
+            fi
+            if [[ "$attempt" != "6" ]]; then
+              sleep 5
+            fi
+          done
+          if [[ "$prepared" != "true" ]]; then
+            echo "release-gate merge tree did not refresh to the current pull request base and head" >&2
+            exit 1
+          fi
+          git checkout --detach "$merge_sha"
+          echo "RATCHET_RELEASE_BASE_SHA=${base_sha}" >> "$GITHUB_ENV"
+          echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1113,11 +1233,22 @@ jobs:
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
+          GH_TOKEN: ${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
+          RATCHET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RATCHET_EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
+          RATCHET_MANUAL_TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}
+          RATCHET_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
           set -euo pipefail
+          has_package_script() {
+            node -e '
+              const scripts = require("./package.json").scripts ?? {};
+              process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
+            ' "$1"
+          }
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
@@ -1125,10 +1256,67 @@ jobs:
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             ci-routing)
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              ;;
+            max-lines-ratchet)
+              if ! has_package_script "check:max-lines-ratchet"; then
+                echo "Current CI targets must provide check:max-lines-ratchet." >&2
+                exit 1
+              fi
+              base_sha="${RATCHET_EVENT_BASE_SHA:-${RATCHET_RELEASE_BASE_SHA:-}}"
+              if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]; then
+                base_sha=""
+              fi
+              base_ref=""
+              if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
+                mapfile -t merge_parents < <(git cat-file -p HEAD | sed -n 's/^parent //p')
+                if [[ "${#merge_parents[@]}" != "2" || "${merge_parents[1]:-}" != "$RATCHET_PR_HEAD_SHA" ]]; then
+                  echo "Pull request checkout is not the expected two-parent merge tree." >&2
+                  exit 1
+                fi
+                merge_base="${merge_parents[0]}"
+                git fetch --no-tags --depth=1 origin \
+                  "+${merge_base}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              elif [[ -n "$base_sha" ]]; then
+                git fetch --no-tags --depth=1 origin \
+                  "+${base_sha}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              elif [[ -n "${RATCHET_MANUAL_TARGET_SHA:-}" ]]; then
+                default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
+                default_sha="$(
+                  git ls-remote origin "refs/heads/${default_branch}" | awk 'NR == 1 { print $1 }'
+                )"
+                if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                  echo "Could not resolve the default branch head for the max-lines ratchet." >&2
+                  exit 1
+                fi
+                merge_base_sha="$(
+                  gh api --method GET \
+                    "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}" \
+                    --jq '.merge_base_commit.sha'
+                )"
+                if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                  echo "Could not resolve the manual target merge base for the max-lines ratchet." >&2
+                  exit 1
+                fi
+                git fetch --no-tags --depth=1 origin \
+                  "+${merge_base_sha}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              else
+                default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
+                git fetch --no-tags --depth=1 origin \
+                  "+refs/heads/${default_branch}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              fi
+              unset GH_TOKEN
+              pnpm check:max-lines-ratchet --base "$base_ref"
+              if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
+                node scripts/run-oxlint.mjs src ui/src packages extensions
+              fi
               ;;
             bun-launcher)
               OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
@@ -1211,7 +1399,7 @@ jobs:
             // isolate each scenario so one invocation cannot pin a profile part.
             const compatibilityScenarioIds = new Set([
               "control-ui-chat-flow-playwright",
-              "crestodian-ring-zero-setup",
+              "system-agent-ring-zero-setup",
               "dreaming-shadow-trial-report",
               "gateway-smoke",
               "group-visible-reply-tool",
@@ -1388,7 +1576,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "22.19.0"
+          node-version: "22.22.3"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1449,6 +1637,7 @@ jobs:
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_NODE_TEST_TARGETS_JSON: ${{ toJson(matrix.targets) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
@@ -1460,6 +1649,23 @@ jobs:
           import { spawnSync } from "node:child_process";
           import { writeFileSync } from "node:fs";
           import { join } from "node:path";
+
+          const targets = JSON.parse(process.env.OPENCLAW_NODE_TEST_TARGETS_JSON ?? "null");
+          if (Array.isArray(targets) && targets.length > 0) {
+            // One file per process preserves the isolation boundaries encoded by
+            // full-suite include-pattern shards while keeping one runner job.
+            for (const target of targets) {
+              const result = spawnSync(
+                "pnpm",
+                ["exec", "node", "scripts/test-projects.mjs", target],
+                { env: process.env, stdio: "inherit" },
+              );
+              if (result.status !== 0) {
+                process.exit(result.status ?? 1);
+              }
+            }
+            process.exit(0);
+          }
 
           const groups = JSON.parse(process.env.OPENCLAW_NODE_TEST_GROUPS_JSON ?? "null");
           const plans = Array.isArray(groups) && groups.length > 0
@@ -1565,6 +1771,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          has_package_script() {
+            node -e '
+              const scripts = require("./package.json").scripts ?? {};
+              process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
+            ' "$1"
+          }
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
@@ -1572,8 +1784,8 @@ jobs:
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
               if [ -n "$PR_BASE_SHA" ]; then
-                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/pr-base"
-                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/pr-base --head HEAD --no-merge-base
+                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
+                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
@@ -1597,12 +1809,21 @@ jobs:
               fi
               ;;
             dependencies)
-              if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
+              if has_package_script "deadcode:dependencies" &&
+                has_package_script "deadcode:unused-files"; then
                 pnpm deadcode:dependencies
                 pnpm deadcode:unused-files
-                pnpm deadcode:report:ci:ts-unused
-              else
+                if has_package_script "deadcode:exports"; then
+                  pnpm deadcode:exports
+                elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                  echo "Current CI targets must provide the deadcode:exports package script." >&2
+                  exit 1
+                fi
+              elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
                 pnpm deadcode:ci
+              else
+                echo "Target does not provide a supported deadcode check." >&2
+                exit 1
               fi
               ;;
             test-types)
@@ -1625,14 +1846,6 @@ jobs:
               exit 1
               ;;
           esac
-
-      - name: Upload deadcode reports
-        if: ${{ always() && matrix.task == 'dependencies' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: deadcode-reports
-          path: .artifacts/deadcode
-          if-no-files-found: ignore
 
   check-additional-shard:
     permissions:
@@ -1666,12 +1879,6 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-sqlite-session-flip-proof
             group: sqlite-session-flip-proof
-            runner: blacksmith-8vcpu-ubuntu-2404
-          - check_name: check-additional-extension-channels
-            group: extension-channels
-            runner: blacksmith-8vcpu-ubuntu-2404
-          - check_name: check-additional-extension-bundled
-            group: extension-bundled
             runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
@@ -1811,12 +2018,6 @@ jobs:
               else
                 run_check "sqlite sessions/transcripts flip proof" node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts
               fi
-              ;;
-            extension-channels)
-              run_check "lint:extensions:channels" pnpm run lint:extensions:channels
-              ;;
-            extension-bundled)
-              run_check "lint:extensions:bundled" pnpm run lint:extensions:bundled
               ;;
             extension-package-boundary)
               run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile
@@ -2153,17 +2354,18 @@ jobs:
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: |
-          brew update
-          if [[ -x ./scripts/install-swift-tools.sh ]]; then
-            brew install xcodegen
+          if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
             swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+            ./scripts/install-xcodegen.sh "$swift_tools_dir"
             ./scripts/install-swift-tools.sh "$swift_tools_dir"
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            "$swift_tools_dir/xcodegen" --version
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets before the pinned installer used one of these
             # reviewed formatter contracts. Fail closed for any unknown minimum.
+            brew update
             brew install xcodegen swiftlint
             swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
             case "$swiftformat_min_version" in
@@ -2195,7 +2397,7 @@ jobs:
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
             [[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]
           else
-            echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
+            echo "Current CI targets must provide scripts/install-xcodegen.sh and scripts/install-swift-tools.sh." >&2
             exit 1
           fi
 
@@ -2357,17 +2559,18 @@ jobs:
 
       - name: Install iOS Swift tooling
         run: |
-          brew update
-          if [[ -x ./scripts/install-swift-tools.sh ]]; then
-            brew install xcodegen
+          if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
             swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+            ./scripts/install-xcodegen.sh "$swift_tools_dir"
             ./scripts/install-swift-tools.sh "$swift_tools_dir"
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            "$swift_tools_dir/xcodegen" --version
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # The generated Xcode project runs SwiftFormat during the build, so
             # frozen targets must keep the formatter contract they were authored for.
+            brew update
             brew install xcodegen swiftlint
             swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
             case "$swiftformat_min_version" in
@@ -2404,7 +2607,7 @@ jobs:
             ln -sfn "$swift_tools_dir/swiftformat" "$swiftformat_link"
             [[ "$("$swiftformat_link" --version)" == "$swiftformat_version" ]]
           else
-            echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
+            echo "Current CI targets must provide scripts/install-xcodegen.sh and scripts/install-swift-tools.sh." >&2
             exit 1
           fi
 
@@ -2563,6 +2766,97 @@ jobs:
               exit 1
               ;;
           esac
+
+  ci-gate:
+    permissions:
+      contents: read
+    name: openclaw/ci-gate
+    needs:
+      - runner-admission
+      - preflight
+      - security-fast
+      - pnpm-store-warmup
+      - build-artifacts
+      - native-i18n
+      - checks-ui
+      - control-ui-i18n
+      - checks-fast-core
+      - qa-smoke-ci-profile
+      - checks-fast-plugin-contracts-shard
+      - checks-fast-channel-contracts-shard
+      - checks-node-compat
+      - checks-node-core-test-nondist-shard
+      - check-shard
+      - check-additional-shard
+      - check-docs
+      - skills-python
+      - checks-windows
+      - macos-node
+      - macos-swift
+      - ios-build
+      - android
+    if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify selected CI lanes
+        shell: bash
+        env:
+          REQUIRED_RESULTS: |
+            runner-admission=${{ needs.runner-admission.result }}
+            preflight=${{ needs.preflight.result }}
+            security-fast=${{ needs.security-fast.result }}
+          SELECTED_RESULTS: |
+            pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}
+            build-artifacts=${{ needs.build-artifacts.result }}
+            native-i18n=${{ needs.native-i18n.result }}
+            checks-ui=${{ needs.checks-ui.result }}
+            control-ui-i18n=${{ needs.control-ui-i18n.result }}
+            checks-fast-core=${{ needs.checks-fast-core.result }}
+            qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}
+            checks-fast-plugin-contracts-shard=${{ needs.checks-fast-plugin-contracts-shard.result }}
+            checks-fast-channel-contracts-shard=${{ needs.checks-fast-channel-contracts-shard.result }}
+            checks-node-compat=${{ needs.checks-node-compat.result }}
+            checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}
+            check-shard=${{ needs.check-shard.result }}
+            check-additional-shard=${{ needs.check-additional-shard.result }}
+            check-docs=${{ needs.check-docs.result }}
+            skills-python=${{ needs.skills-python.result }}
+            checks-windows=${{ needs.checks-windows.result }}
+            macos-node=${{ needs.macos-node.result }}
+            macos-swift=${{ needs.macos-swift.result }}
+            ios-build=${{ needs.ios-build.result }}
+            android=${{ needs.android.result }}
+        run: |
+          set -euo pipefail
+
+          failures=0
+          while IFS= read -r entry; do
+            [[ -n "$entry" ]] || continue
+            name="${entry%%=*}"
+            result="${entry#*=}"
+            echo "${name}: ${result}"
+            if [[ "$result" != "success" ]]; then
+              echo "::error title=Required CI job did not succeed::${name} finished with ${result}"
+              failures=1
+            fi
+          done <<< "$REQUIRED_RESULTS"
+
+          while IFS= read -r entry; do
+            [[ -n "$entry" ]] || continue
+            name="${entry%%=*}"
+            result="${entry#*=}"
+            echo "${name}: ${result}"
+            case "$result" in
+              success | skipped) ;;
+              *)
+                echo "::error title=Selected CI job did not succeed::${name} finished with ${result}"
+                failures=1
+                ;;
+            esac
+          done <<< "$SELECTED_RESULTS"
+
+          exit "$failures"
 
   ci-timings-summary:
     permissions:

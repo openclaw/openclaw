@@ -37,7 +37,6 @@ export {
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
-  resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
 const authProfileUsageDeps = {
@@ -972,3 +971,4 @@ export async function clearAuthProfileCooldown(params: {
     logDroppedAuthProfileBookkeeping("clear_cooldown", profileId);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

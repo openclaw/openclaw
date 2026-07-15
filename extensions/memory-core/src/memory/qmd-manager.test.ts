@@ -55,16 +55,18 @@ type EmbedLockCall = [
   () => Promise<unknown>,
 ];
 
+type MockStream = EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+
 interface MockChild extends EventEmitter {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
+  stdout: MockStream;
+  stderr: MockStream;
   kill: (signal?: NodeJS.Signals) => void;
   closeWith: (code?: number | null) => void;
 }
 
 function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }): MockChild {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
+  const stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  const stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   const child: MockChild = Object.assign(new EventEmitter(), {
     stdout,
     stderr,
@@ -212,13 +214,15 @@ import {
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { configureMemoryCoreDreamingState } from "../dreaming-state.js";
+import { resolveQmdSessionArtifactIdentity } from "../qmd-session-artifacts.js";
 import {
-  configureMemoryCoreDreamingState,
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
-} from "../dreaming-state.js";
-import { resolveQmdSessionArtifactIdentity } from "../qmd-session-artifacts.js";
+} from "../test-helpers.js";
+import { parseListedQmdCollections, parseShownQmdCollection } from "./qmd-collection-metadata.js";
 import { QmdMemoryManager, resolveQmdMcporterSearchProcessTimeoutMs } from "./qmd-manager.js";
+import { MEMORY_SEARCH_DEADLINE_CONTROL } from "./search-deadline.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
@@ -478,7 +482,9 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager();
     spawnMock.mockClear();
     let searchAttempts = 0;
+    const events: string[] = [];
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      events.push(`command:${args[0]}${args[1] ? `:${args[1]}` : ""}`);
       if (args[0] === "query" || args[0] === "search" || args[0] === "vsearch") {
         const child = createMockChild({ autoClose: false });
         searchAttempts += 1;
@@ -498,11 +504,38 @@ describe("QmdMemoryManager", () => {
       onDebug: (entry) => {
         debug.push(entry);
       },
+      [MEMORY_SEARCH_DEADLINE_CONTROL]: (action) => {
+        events.push(`phase:${action}`);
+      },
     });
 
     expect(searchAttempts).toBe(2);
     expect(countQmdCommand((args) => args[0] === "collection" && args[1] === "list")).toBe(1);
     expect(debug.at(-1)?.qmd?.collectionValidation?.cacheState).toBe("bypass-force");
+    expect(events.filter((event) => event.startsWith("phase:"))).toEqual([
+      "phase:pause",
+      "phase:resume",
+      "phase:pause",
+      "phase:resume",
+    ]);
+    const isSearchCommand = (event: string) =>
+      ["command:query:", "command:search:", "command:vsearch:"].some((prefix) =>
+        event.startsWith(prefix),
+      );
+    const firstSearch = events.findIndex(isSearchCommand);
+    const firstSearchEnd = events.indexOf("phase:resume");
+    const collectionRepair = events.findIndex(
+      (event, index) => index > firstSearchEnd && event.startsWith("command:collection:"),
+    );
+    const retryStart = events.indexOf("phase:pause", firstSearchEnd + 1);
+    const retrySearch = events.findIndex(
+      (event, index) => index > firstSearch && isSearchCommand(event),
+    );
+    expect(events.indexOf("phase:pause")).toBeLessThan(firstSearch);
+    expect(firstSearch).toBeLessThan(firstSearchEnd);
+    expect(firstSearchEnd).toBeLessThan(collectionRepair);
+    expect(collectionRepair).toBeLessThan(retryStart);
+    expect(retryStart).toBeLessThan(retrySearch);
   });
 
   it("reuses persisted qmd multi-collection support probe across managers", async () => {
@@ -4057,9 +4090,11 @@ describe("QmdMemoryManager", () => {
       },
     } as OpenClawConfig;
 
+    const commandPhases: string[] = [];
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
+        expect(commandPhases).toEqual(["pause"]);
         // Verify it calls qmd.query (v2) not qmd.deep_search (v1)
         expect(args[1]).toBe("qmd.query");
         const callArgs = JSON.parse(requireArgAfter(args, "--args"));
@@ -4084,7 +4119,13 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager();
-    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+    await manager.search("hello", {
+      sessionKey: "agent:main:slack:dm:u123",
+      [MEMORY_SEARCH_DEADLINE_CONTROL]: (action) => {
+        commandPhases.push(action);
+      },
+    });
+    expect(commandPhases).toEqual(["pause", "resume"]);
     await manager.close();
   });
 
@@ -4872,13 +4913,20 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager();
-    const managerWithPrivate = manager as object as {
-      runMcporter: (typeof manager)["runMcporter"];
-    };
-    const originalRunMcporter = managerWithPrivate.runMcporter.bind(managerWithPrivate);
+    const commandClient = (
+      manager as object as {
+        commands: {
+          runMcporter: (
+            args: string[],
+            opts?: { timeoutMs?: number; signal?: AbortSignal },
+          ) => Promise<{ stdout: string; stderr: string }>;
+        };
+      }
+    ).commands;
+    const originalRunMcporter = commandClient.runMcporter.bind(commandClient);
     let injectTimeoutOnce = true;
     const runMcporterSpy = vi
-      .spyOn(managerWithPrivate, "runMcporter")
+      .spyOn(commandClient, "runMcporter")
       .mockImplementation(async (...args) => {
         if (injectTimeoutOnce) {
           injectTimeoutOnce = false;
@@ -7258,14 +7306,7 @@ describe("QmdMemoryManager", () => {
     expect(addCall?.[2]).toBe(newWorkspaceDir);
   });
 
-  it("parseShownCollection extracts path and pattern from qmd collection show output", async () => {
-    // Unit test for the private parser — accessed via type cast to avoid exporting internals.
-    const { manager } = await createManager({ mode: "status" });
-    type WithParser = {
-      parseShownCollection: (output: string) => { path?: string; pattern?: string };
-    };
-    const parser = (manager as unknown as WithParser).parseShownCollection.bind(manager);
-
+  it("parseShownQmdCollection extracts path and pattern from qmd collection show output", () => {
     const sampleOutput = [
       "Collection: memory-dir-example",
       "  Path:     /home/node/.openclaw/teams/example-team/workspace-example/memory",
@@ -7273,20 +7314,24 @@ describe("QmdMemoryManager", () => {
       "  Include:  yes (default)",
     ].join("\n");
 
-    const result = parser(sampleOutput);
+    const result = parseShownQmdCollection(sampleOutput);
     expect(result.path).toBe("/home/node/.openclaw/teams/example-team/workspace-example/memory");
     expect(result.pattern).toBe("**/*.md");
 
     // Tolerant of missing fields.
-    expect(parser("")).toEqual({});
-    expect(parser("Collection: no-path-here\n  Include:  yes")).toEqual({});
+    expect(parseShownQmdCollection("")).toEqual({});
+    expect(parseShownQmdCollection("Collection: no-path-here\n  Include:  yes")).toEqual({});
 
     // Path-only (no pattern line).
-    const pathOnly = parser("Collection: x\n  Path:  /some/path\n");
+    const pathOnly = parseShownQmdCollection("Collection: x\n  Path:  /some/path\n");
     expect(pathOnly.path).toBe("/some/path");
     expect(pathOnly.pattern).toBeUndefined();
+  });
 
-    await manager.close();
+  it("parseListedQmdCollections accepts uppercase bare collection names", () => {
+    expect(parseListedQmdCollections("Workspace-Main\n")).toEqual(
+      new Map([["Workspace-Main", {}]]),
+    );
   });
 });
 
@@ -7302,3 +7347,4 @@ function createDeferred<T>() {
   }
   return { promise, resolve, reject };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

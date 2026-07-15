@@ -1077,3 +1077,4 @@ async function readRuntimeHealthConfig(): Promise<OpenClawConfig> {
   const { getRuntimeConfig } = await loadConfigRuntime();
   return getRuntimeConfig();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

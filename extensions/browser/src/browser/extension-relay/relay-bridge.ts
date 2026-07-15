@@ -29,7 +29,7 @@ const BROWSER_TARGET_ID = "openclaw-extension-relay";
 const BROWSER_CONTEXT_ID = "openclaw-extension-context";
 
 /** Minimal socket seam so tests can drive the bridge without real WebSockets. */
-export type BridgeSocket = {
+type BridgeSocket = {
   send: (data: string) => void;
   close: (code?: number, reason?: string) => void;
 };
@@ -898,3 +898,4 @@ export class ExtensionRelayBridge {
     this.childSessions.clear();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

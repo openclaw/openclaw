@@ -612,8 +612,15 @@ Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-l
 - `slack-canary`
 - `slack-mention-gating`
 - `slack-allowlist-block`
+- `slack-channel-disabled-warning` - opt-in real-Slack probe that confirms a
+  configured disabled channel emits a structured warning without replying.
 - `slack-top-level-reply-shape`
 - `slack-restart-resume`
+- `slack-progress-commentary-true`, `slack-progress-commentary-false`,
+  `slack-progress-commentary-omitted`, and
+  `slack-progress-commentary-verbose-dedupe` - opt-in real-Slack probes for
+  independent commentary/tool-progress controls, the omitted-key legacy
+  default, and single-delivery behavior when durable verbose progress is on.
 - `slack-reaction-glyph-native` - opt-in live message-tool reaction scenario.
   Instructs the agent to pass the exact `✅` glyph and confirms Slack stored
   `white_check_mark` for the SUT bot on the target message.

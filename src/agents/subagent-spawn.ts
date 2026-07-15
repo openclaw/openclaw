@@ -51,6 +51,7 @@ import {
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
 import { resolveThinkingDefault } from "./model-thinking-default.js";
+import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
@@ -67,13 +68,6 @@ import { countActiveRunsForSession, registerSubagentRun } from "./subagent-regis
 import { resolveSubagentRunTimerDelayMs } from "./subagent-run-timeout.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
-import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
-import { normalizeSubagentTaskName } from "./subagent-task-name.js";
-export {
-  SUBAGENT_SPAWN_ACCEPTED_NOTE,
-  SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
-} from "./subagent-spawn-accepted-note.js";
-import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
@@ -111,17 +105,10 @@ import type {
   SpawnSubagentMode,
   SpawnSubagentSandboxMode,
 } from "./subagent-spawn.types.js";
+import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
+import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 
-export {
-  SUBAGENT_SPAWN_CONTEXT_MODES,
-  SUBAGENT_SPAWN_MODES,
-  SUBAGENT_SPAWN_SANDBOX_MODES,
-} from "./subagent-spawn.types.js";
-export type {
-  SpawnSubagentContextMode,
-  SpawnSubagentMode,
-  SpawnSubagentSandboxMode,
-} from "./subagent-spawn.types.js";
+export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
 function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   return listAgentIds(cfg);
@@ -198,7 +185,7 @@ type SpawnSubagentContext = {
   inheritedToolDenylist?: string[];
 };
 
-export type SpawnSubagentResult = {
+type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
   childSessionKey?: string;
   runId?: string;
@@ -218,8 +205,6 @@ export type SpawnSubagentResult = {
     relDir: string;
   };
 };
-
-export { splitModelRef } from "./subagent-spawn-plan.js";
 
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
@@ -1757,3 +1742,4 @@ export const testing = {
       : defaultSubagentSpawnDeps;
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

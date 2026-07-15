@@ -153,7 +153,7 @@ SDK.
     | Need | Import |
     | --- | --- |
     | Config types such as `OpenClawConfig` | `openclaw/plugin-sdk/config-contracts` |
-    | Already-loaded config assertions and plugin-entry config lookup | `openclaw/plugin-sdk/plugin-config-runtime` |
+    | Already-loaded config assertions, plugin-entry config lookup, and config merging | `openclaw/plugin-sdk/plugin-config-runtime` |
     | Current runtime snapshot reads | `openclaw/plugin-sdk/runtime-config-snapshot` |
     | Config writes | `openclaw/plugin-sdk/config-mutation` |
     | Session store helpers | `openclaw/plugin-sdk/session-store-runtime` |
@@ -380,7 +380,7 @@ SDK.
   | `plugin-sdk/core` | Legacy umbrella re-export for channel entry definitions/builders | `defineChannelPluginEntry`, `createChatChannelPlugin` |
   | `plugin-sdk/config-schema` | Root config schema export | `OpenClawSchema` |
   | `plugin-sdk/provider-entry` | Single-provider entry helper | `defineSingleProviderPluginEntry` |
-  | `plugin-sdk/channel-core` | Focused channel entry definitions and builders | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
+  | `plugin-sdk/channel-core` | Focused channel entry definitions and builders | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `createChannelConfigUiHints` |
   | `plugin-sdk/setup` | Shared setup wizard helpers | Setup translator, allowlist prompts, setup status builders |
   | `plugin-sdk/setup-runtime` | Setup-time runtime helpers | `createSetupTranslator`, import-safe setup patch adapters, lookup-note helpers, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
   | `plugin-sdk/setup-adapter-runtime` | Deprecated setup adapter alias | Use `plugin-sdk/setup-runtime` |
@@ -436,7 +436,7 @@ SDK.
   | `plugin-sdk/security-runtime` | Security helpers | Shared trust, DM gating, root-bounded file/path helpers, external-content, and secret-collection helpers |
   | `plugin-sdk/ssrf-policy` | SSRF policy helpers | Host allowlist and private-network policy helpers |
   | `plugin-sdk/ssrf-runtime` | SSRF runtime helpers | Pinned-dispatcher, guarded fetch, SSRF policy helpers |
-  | `plugin-sdk/system-event-runtime` | System event helpers | `enqueueSystemEvent`, `peekSystemEventEntries` |
+  | `plugin-sdk/system-event-runtime` | System event helpers | `enqueueSystemEvent` (including keyed replacement), `peekSystemEventEntries` |
   | `plugin-sdk/heartbeat-runtime` | Heartbeat helpers | Heartbeat wake, event, and visibility helpers |
   | `plugin-sdk/delivery-queue-runtime` | Delivery queue helpers | `drainPendingDeliveries` |
   | `plugin-sdk/channel-activity-runtime` | Channel activity helpers | `recordChannelActivity` |
@@ -500,7 +500,7 @@ SDK.
   | `plugin-sdk/media-generation-runtime` | Shared media-generation helpers | Shared failover helpers, candidate selection, and missing-model messaging for image/video/music generation |
   | `plugin-sdk/media-understanding` | Media-understanding helpers | Media understanding provider types plus provider-facing image/audio helper exports |
   | `plugin-sdk/text-runtime` | Deprecated broad text compatibility export | Use `string-coerce-runtime`, `text-chunking`, `text-utility-runtime`, and `logging-core` |
-  | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
+  | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text and offset-preserving range chunking helpers |
   | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, validation helpers, and OpenAI-compatible TTS builder |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
@@ -788,6 +788,18 @@ major release. Every entry maps the old API to its canonical replacement.
     remains wired as deprecated compatibility while existing providers
     migrate. Plugin inspection reports non-bundled usage as compatibility
     debt.
+
+  </Accordion>
+
+  <Accordion title="Raw channel send results -> OutboundDeliveryResult">
+    **Old**: return `{ ok, messageId, error }` through
+    `ChannelSendRawResult` and normalize it with
+    `createRawChannelSendResultAdapter(...)`.
+
+    **New**: return `OutboundDeliveryResult` fields and attach the channel with
+    `createAttachedChannelResultAdapter(...)`. Failed sends should throw instead
+    of returning an error string. The raw result type remains available until
+    the next plugin-SDK major release.
 
   </Accordion>
 

@@ -42,11 +42,11 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
+import { CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
-  CLAUDE_CLI_DEFAULT_MODEL_REF,
   CLAUDE_CLI_OFF_THINKING_PROFILE,
 } from "./cli-shared.js";
 import {
@@ -54,11 +54,8 @@ import {
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import {
-  createClaudeSessionNodeHostCommands,
-  createClaudeSessionNodeInvokePolicies,
-  registerClaudeSessionCatalog,
-} from "./session-catalog.js";
+import { createClaudeSessionNodeInvokePolicies } from "./session-catalog-node-commands.js";
+import { registerClaudeSessionDiscovery } from "./session-catalog-registration.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
@@ -121,12 +118,6 @@ async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams)
     );
   }
 }
-const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = CLAUDE_CLI_DEFAULT_MODEL_REF.startsWith(
-  `${CLAUDE_CLI_BACKEND_ID}/`,
-)
-  ? `anthropic/${CLAUDE_CLI_DEFAULT_MODEL_REF.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
-  : CLAUDE_CLI_DEFAULT_MODEL_REF;
-
 function normalizeAnthropicSetupTokenInput(value: string): string {
   return value.replaceAll(/\s+/g, "").trim();
 }
@@ -901,7 +892,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: ({ provider, modelId, params }) => {
       const contractModelId = resolveClaudeModelIdentity({ id: modelId, params });
-      return isAnthropicMandatoryClaude5Model(contractModelId) &&
+      return isAnthropicMythos5Model(contractModelId) &&
         normalizeLowercaseStringOrEmpty(provider) !== PROVIDER_ID
         ? CLAUDE_CLI_OFF_THINKING_PROFILE
         : resolveClaudeThinkingProfile(contractModelId, undefined, {
@@ -928,11 +919,9 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   api.registerCliBackend(buildAnthropicCliBackend());
   api.registerProvider(buildAnthropicProvider());
   api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
-  registerClaudeSessionCatalog(api);
-  for (const command of createClaudeSessionNodeHostCommands()) {
-    api.registerNodeHostCommand(command);
-  }
+  registerClaudeSessionDiscovery(api);
   for (const policy of createClaudeSessionNodeInvokePolicies()) {
     api.registerNodeInvokePolicy(policy);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

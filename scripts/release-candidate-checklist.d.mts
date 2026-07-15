@@ -23,6 +23,7 @@ export function parseArgs(argv: unknown): {
   windowsNodeInstallerDigests: string;
   outputDir: string;
 };
+export function releaseBranchForTag(tag: string): string;
 export function run(command: unknown, args: unknown, options?: Record<string, unknown>): string;
 export function buildReleaseCandidateState(
   options: unknown,
@@ -161,6 +162,19 @@ export function requireRunIdFromDispatchOutput(output: unknown, workflowFile: un
 export function buildPublishCommand(options: unknown): string;
 export function validatePreflightManifest(manifest: unknown, params: unknown): void;
 export function validateFullManifest(manifest: unknown, params: unknown): void;
+export function validateNpmPreflightRunSource({
+  workflowRun,
+  workflowRef,
+  isTrustedWorkflowAncestor,
+}: {
+  workflowRun: { headSha: string };
+  workflowRef: string;
+  isTrustedWorkflowAncestor?: ((ancestor: string, target: string) => boolean) | undefined;
+}): {
+  status: string;
+  headSha: string;
+  workflowRef: string;
+};
 export function candidateParallelsArgs(
   tarballPath: unknown,
   dependencyTarballPaths?: unknown[],

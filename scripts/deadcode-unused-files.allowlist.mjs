@@ -16,6 +16,7 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "extensions/diffs/src/viewer-client.ts",
   "extensions/diffs/src/viewer-payload.ts",
   "extensions/matrix/src/plugin-entry.runtime.js",
+  "extensions/mxc/src/mxc-spawn-launcher.mjs",
   "src/agents/subagent-registry.runtime.ts",
   "src/auto-reply/reply/get-reply.test-loader.ts",
   "src/commands/doctor/shared/deprecation-compat.ts",

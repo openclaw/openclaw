@@ -81,7 +81,11 @@ const voiceCallConfigSchema = {
       label: "Allow ngrok Free Tier (Loopback Bypass)",
       advanced: true,
     },
-    "streaming.enabled": { label: "Enable Streaming", advanced: true },
+    "streaming.enabled": {
+      label: "Enable Streaming",
+      help: "Classic streaming transcription currently requires the Twilio call provider.",
+      advanced: true,
+    },
     "streaming.provider": {
       label: "Streaming Provider",
       help: "Uses the first registered realtime transcription provider when unset.",
@@ -904,3 +908,4 @@ export default definePluginEntry({
     });
   },
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

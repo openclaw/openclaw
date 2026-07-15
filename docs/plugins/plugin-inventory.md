@@ -51,7 +51,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-64 plugins
+68 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
@@ -99,6 +99,10 @@ Each entry lists the package, distribution route, and description.
 
 - **[imessage](/plugins/reference/imessage)** (`@openclaw/imessage`) - included in OpenClaw. Adds the iMessage channel surface for sending and receiving OpenClaw messages.
 
+- **[linux-canvas](/plugins/reference/linux-canvas)** (`@openclaw/linux-canvas`) - included in OpenClaw. Canvas rendering bridge for the OpenClaw Linux desktop app.
+
+- **[linux-node](/plugins/reference/linux-node)** (`@openclaw/linux-node`) - included in OpenClaw. Desktop notifications, camera capture, and location for Linux node hosts.
+
 - **[litellm](/plugins/reference/litellm)** (`@openclaw/litellm-provider`) - included in OpenClaw. Adds LiteLLM model provider support to OpenClaw.
 
 - **[llm-task](/plugins/reference/llm-task)** (`@openclaw/llm-task`) - included in OpenClaw. Generic JSON-only LLM tool for structured tasks callable from workflows.
@@ -133,6 +137,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[ollama](/plugins/reference/ollama)** (`@openclaw/ollama-provider`) - included in OpenClaw. Adds Ollama, Ollama Cloud model provider support to OpenClaw.
 
+- **[onepassword](/plugins/reference/onepassword)** (`@openclaw/onepassword`) - included in OpenClaw. Curated 1Password secrets broker with approval policy and SQLite audit history.
+
 - **[open-prose](/plugins/reference/open-prose)** (`@openclaw/open-prose`) - included in OpenClaw. OpenProse VM skill pack with a /prose slash command.
 
 - **[openai](/plugins/reference/openai)** (`@openclaw/openai-provider`) - included in OpenClaw. Adds OpenAI model provider support to OpenClaw.
@@ -144,6 +150,8 @@ Each entry lists the package, distribution route, and description.
 - **[openrouter](/plugins/reference/openrouter)** (`@openclaw/openrouter-provider`) - included in OpenClaw. Adds OpenRouter model provider support to OpenClaw.
 
 - **[policy](/plugins/reference/policy)** (`@openclaw/policy`) - included in OpenClaw. Adds policy-backed doctor checks for workspace conformance.
+
+- **[reef](/plugins/reference/reef)** (`@openclaw/reef`) - included in OpenClaw. Guarded end-to-end encrypted claw channel.
 
 - **[runway](/plugins/reference/runway)** (`@openclaw/runway-provider`) - included in OpenClaw. Adds video generation provider support.
 
@@ -183,7 +191,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-70 plugins
+71 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -268,6 +276,8 @@ Each entry lists the package, distribution route, and description.
 - **[moonshot](/plugins/reference/moonshot)** (`@openclaw/moonshot-provider`) - npm; ClawHub: `clawhub:@openclaw/moonshot-provider`. Adds Moonshot model provider support to OpenClaw.
 
 - **[msteams](/plugins/reference/msteams)** (`@openclaw/msteams`) - npm; ClawHub. OpenClaw Microsoft Teams channel plugin for bot conversations.
+
+- **[mxc](/plugins/reference/mxc)** (`@openclaw/mxc-sandbox`) - npm; ClawHub. OS-level sandboxed tool execution via MXC for MXC-capable Windows hosts: runs commands in ProcessContainer (Windows) with configured MXC policy files.
 
 - **[nextcloud-talk](/plugins/reference/nextcloud-talk)** (`@openclaw/nextcloud-talk`) - npm; ClawHub. OpenClaw Nextcloud Talk channel plugin for conversations.
 

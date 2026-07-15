@@ -15,7 +15,7 @@ import {
   releasePinnedPluginSessionExtensionRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { buildGatewaySessionRow } from "./session-utils.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -1199,3 +1199,4 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     subagentControlScope: "children",
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

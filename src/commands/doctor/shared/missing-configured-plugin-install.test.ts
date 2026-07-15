@@ -124,7 +124,6 @@ function writeLegacyNpmDeclarationStub(params: {
 }
 
 vi.mock("../../../channels/plugins/catalog.js", () => ({
-  listChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
   listRawChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
 }));
 
@@ -5014,3 +5013,4 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({ changes: [], warnings: [], records: {} });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

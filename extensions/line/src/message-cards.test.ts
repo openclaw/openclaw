@@ -1,7 +1,7 @@
 // Line tests cover message cards plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { datetimePickerAction, postbackAction, uriAction } from "./actions.js";
+import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
 import { registerLineCardCommand } from "./card-command.js";
 import {
   createActionCard,
@@ -21,7 +21,6 @@ import {
   createImageCarousel,
   createImageCarouselColumn,
   createProductCarousel,
-  messageAction,
 } from "./template-messages.js";
 
 const loneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
@@ -47,6 +46,20 @@ describe("createConfirmTemplate", () => {
 });
 
 describe("createButtonTemplate", () => {
+  it("omits a blank optional title", () => {
+    const template = createButtonTemplate(undefined, "Text", [messageAction("OK")]);
+    expect(template).toMatchObject({
+      altText: "Text",
+      template: { type: "buttons", text: "Text" },
+    });
+    expect(template.template).not.toHaveProperty("title");
+  });
+
+  it("uses the titleless 160-character text limit for an empty title", () => {
+    const template = createButtonTemplate("", "x".repeat(160), [messageAction("OK")]);
+    expect(template.template).toMatchObject({ text: "x".repeat(160) });
+  });
+
   it("limits actions to 4", () => {
     const actions = Array.from({ length: 6 }, (_, i) => messageAction(`Button ${i}`));
     const template = createButtonTemplate("Title", "Text", actions);

@@ -11,6 +11,7 @@ import {
   overflowBaseRunParams as baseParams,
   loadRunOverflowCompactionHarness,
   mockedCompactDirect,
+  mockedClassifyFailoverReason,
   mockedContextEngine,
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
@@ -24,6 +25,9 @@ import {
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+
+const REASONING_ONLY_RETRY_INSTRUCTION =
+  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
@@ -595,6 +599,78 @@ describe("overflow compaction in run loop", () => {
     expect(retryParams.prompt).toBe(baseParams.prompt);
     expect(retryParams.suppressNextUserMessagePersistence).toBe(false);
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("does not suppress an unpersisted reasoning continuation after precheck compaction", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "kimi-for-coding",
+        provider: "kimi",
+        contextWindow: 262144,
+        api: "anthropic-messages",
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    });
+    const overflowError = makeOverflowError(
+      "Context overflow: prompt too large for the model (precheck).",
+    );
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (attemptParams) => {
+        (
+          attemptParams as {
+            onUserMessagePersisted?: (message: ReturnType<typeof makeUserMessage>) => void;
+          }
+        ).onUserMessagePersisted?.(makeUserMessage());
+        return makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "end_turn",
+            provider: "kimi",
+            model: "kimi-for-coding",
+            api: "anthropic-messages",
+            content: [
+              {
+                type: "thinking",
+                thinking: "internal reasoning",
+                thinkingSignature: JSON.stringify({ id: "rs_precheck", type: "reasoning" }),
+              },
+            ],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        });
+      })
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: overflowError,
+          promptErrorSource: "precheck",
+          preflightRecovery: { route: "compact_only" },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted before continuation submission",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...baseParams,
+      currentMessageId: "telegram-msg-continuation-precheck",
+      provider: "kimi",
+      model: "kimi-for-coding",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    for (const index of [1, 2]) {
+      const retryParams = requireMockCallArg(mockedRunEmbeddedAttempt, index);
+      expect(retryParams.prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+      expect(retryParams.suppressNextUserMessagePersistence).toBe(false);
+    }
   });
 
   it("retries after successful compaction on likely-overflow promptError variants", async () => {
@@ -1204,3 +1280,4 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

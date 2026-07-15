@@ -86,7 +86,7 @@ type QueueStatus = {
   showDetails?: boolean;
 };
 
-export type StatusArgs = {
+type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
   agentId?: string;
@@ -1158,3 +1158,4 @@ export function buildStatusMessage(args: StatusArgs): string {
     .filter((line): line is string => Boolean(line))
     .join("\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

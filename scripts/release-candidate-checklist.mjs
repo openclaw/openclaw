@@ -109,6 +109,14 @@ function requireValue(argv, index, flag) {
   return value;
 }
 
+export function releaseBranchForTag(tag) {
+  if (tag.includes("-alpha.")) {
+    return "";
+  }
+  const version = tag.replace(/^v/u, "").split("-", 1)[0];
+  return `release/${version}`;
+}
+
 /**
  * Parses release-candidate validation options and enforces publish-scope policy.
  */
@@ -577,6 +585,24 @@ function gitIsAncestor(ancestor, target) {
       result.stderr?.trim() || result.signal || result.status
     }`,
   );
+}
+
+export function validateNpmPreflightRunSource({
+  workflowRun,
+  workflowRef,
+  isTrustedWorkflowAncestor = gitIsAncestor,
+}) {
+  const trustedRef = `refs/remotes/origin/${workflowRef}`;
+  if (!isTrustedWorkflowAncestor(workflowRun.headSha, trustedRef)) {
+    throw new Error(
+      `npm preflight workflow SHA ${workflowRun.headSha} is not reachable from trusted ${workflowRef}`,
+    );
+  }
+  return {
+    status: "passed",
+    headSha: workflowRun.headSha,
+    workflowRef,
+  };
 }
 
 function candidateContributionRecordPullRequests(
@@ -1283,8 +1309,10 @@ async function main() {
 
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
+    const targetContextRef = releaseBranchForTag(options.tag);
     options.fullReleaseRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
       ref: options.tag,
+      ...(targetContextRef ? { target_context_ref: targetContextRef } : {}),
       provider: options.provider,
       mode: options.mode,
       release_profile: options.releaseProfile,
@@ -1322,9 +1350,10 @@ async function main() {
     workflowName: "OpenClaw NPM Release",
     workflowRef: options.workflowRef,
   });
-  if (npmRun.headSha !== targetSha) {
-    throw new Error(`run SHA mismatch: tag=${targetSha} npm=${npmRun.headSha}`);
-  }
+  const npmPreflightSource = validateNpmPreflightRunSource({
+    workflowRun: npmRun,
+    workflowRef: options.workflowRef,
+  });
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const fullDir = join(options.outputDir, "full-release-validation");
@@ -1425,6 +1454,7 @@ async function main() {
     fullReleaseValidationUrl: fullRun.url,
     fullReleaseValidationControls: fullManifest.controls,
     npmPreflightUrl: npmRun.url,
+    npmPreflightSource,
     artifacts: {
       npmPreflight: npmArtifactName,
       fullReleaseValidation: fullArtifactName,
