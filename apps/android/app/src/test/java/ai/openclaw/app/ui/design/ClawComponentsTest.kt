@@ -10,10 +10,17 @@ class ClawComponentsTest {
   }
 
   @Test
-  fun smallSegmentedOptionSetsStayOnOneRow() {
-    val options = listOf("One", "Two", "Three", "Four")
+  fun segmentedOptionsStayOnOneRowByDefault() {
+    val options = listOf("One", "Two", "Three", "Four", "Five")
 
     assertEquals(listOf(options), segmentedControlRows(options))
+  }
+
+  @Test
+  fun optedInSmallSegmentedOptionSetsStayOnOneRow() {
+    val options = listOf("One", "Two", "Three", "Four")
+
+    assertEquals(listOf(options), segmentedControlRows(options, maxOptionsPerRow = 4))
   }
 
   @Test
@@ -25,13 +32,13 @@ class ClawComponentsTest {
         listOf("Pending", "Held", "Applied"),
         listOf("Rejected", "All"),
       ),
-      segmentedControlRows(options),
+      segmentedControlRows(options, maxOptionsPerRow = 4),
     )
   }
 
   @Test
   fun largerSegmentedOptionSetsKeepRowsBalancedAndBounded() {
-    val rows = segmentedControlRows((1..10).map(Int::toString))
+    val rows = segmentedControlRows((1..10).map(Int::toString), maxOptionsPerRow = 4)
 
     assertEquals(listOf(4, 3, 3), rows.map { it.size })
     assertEquals((1..10).map(Int::toString), rows.flatten())

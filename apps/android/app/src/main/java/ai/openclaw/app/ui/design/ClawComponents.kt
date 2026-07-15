@@ -453,14 +453,16 @@ internal fun ClawListItem(
   }
 }
 
-private const val maxSegmentedOptionsPerRow = 4
-
-/** Keeps segmented options readable while preserving one row for small sets. */
-internal fun segmentedControlRows(options: List<String>): List<List<String>> {
+/** Keeps segmented options on one row unless a caller explicitly opts into wrapping. */
+internal fun segmentedControlRows(
+  options: List<String>,
+  maxOptionsPerRow: Int? = null,
+): List<List<String>> {
   if (options.isEmpty()) return emptyList()
-  if (options.size <= maxSegmentedOptionsPerRow) return listOf(options)
+  if (maxOptionsPerRow == null || options.size <= maxOptionsPerRow) return listOf(options)
+  require(maxOptionsPerRow > 0) { "maxOptionsPerRow must be positive" }
 
-  val rowCount = (options.size + maxSegmentedOptionsPerRow - 1) / maxSegmentedOptionsPerRow
+  val rowCount = (options.size + maxOptionsPerRow - 1) / maxOptionsPerRow
   val minimumRowSize = options.size / rowCount
   val largerRowCount = options.size % rowCount
   var startIndex = 0
@@ -472,7 +474,7 @@ internal fun segmentedControlRows(options: List<String>): List<List<String>> {
   }
 }
 
-/** Equal-width segmented control that wraps larger mode/filter sets. */
+/** Equal-width segmented control with caller-controlled wrapping. */
 @Composable
 internal fun ClawSegmentedControl(
   options: List<String>,
@@ -480,6 +482,7 @@ internal fun ClawSegmentedControl(
   onSelect: (String) -> Unit,
   modifier: Modifier = Modifier,
   enabledOptions: Set<String> = options.toSet(),
+  maxOptionsPerRow: Int? = null,
 ) {
   Column(
     modifier =
@@ -489,7 +492,7 @@ internal fun ClawSegmentedControl(
         .padding(2.dp),
     verticalArrangement = Arrangement.spacedBy(2.dp),
   ) {
-    segmentedControlRows(options).forEach { rowOptions ->
+    segmentedControlRows(options, maxOptionsPerRow).forEach { rowOptions ->
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
