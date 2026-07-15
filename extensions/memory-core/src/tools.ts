@@ -174,10 +174,26 @@ const PAUSED_MEMORY_INDEX_WARNING =
   "Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings.";
 const PAUSED_MEMORY_INDEX_ACTION =
   "Tell the user to run: openclaw memory status --index or openclaw memory index --force.";
+const OPTIONAL_EMBEDDING_PROVIDER_UNAVAILABLE_PREFIX = "Optional embedding provider unavailable:";
+
+function hasOptionalProviderFtsFallback(status: { custom?: unknown }): boolean {
+  const custom = asRecord(status.custom);
+  const providerState = asRecord(custom?.providerState);
+  const fallbackState = asRecord(custom?.optionalProviderFtsFallback);
+  const reason = typeof providerState?.reason === "string" ? providerState.reason.trim() : "";
+  return (
+    providerState?.mode === "fts-only" &&
+    reason.startsWith(OPTIONAL_EMBEDDING_PROVIDER_UNAVAILABLE_PREFIX) &&
+    fallbackState?.enabled === true
+  );
+}
 
 function resolvePausedMemoryIndexIdentityReason(status: { custom?: unknown }): string | undefined {
   const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
   if (indexIdentity?.status !== "mismatched" && indexIdentity?.status !== "missing") {
+    return undefined;
+  }
+  if (hasOptionalProviderFtsFallback(status)) {
     return undefined;
   }
   return typeof indexIdentity.reason === "string" && indexIdentity.reason.trim()
@@ -700,6 +716,7 @@ export function createMemorySearchTool(options: {
                 // retry. Long-lived QMD managers must not run update work in the tool hot path.
                 if (
                   rawResults.length === 0 &&
+                  !hasOptionalProviderFtsFallback(statusBeforeRetry) &&
                   activeMemory.manager.sync &&
                   (statusBeforeRetry.backend !== "qmd" || options.oneShotCliRun === true)
                 ) {

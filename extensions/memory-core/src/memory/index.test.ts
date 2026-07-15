@@ -45,6 +45,7 @@ let providerCloseCalls = 0;
 let providerCloseFailuresRemaining = 0;
 let providerCloseGate: Promise<void> | null = null;
 let providerInitGate: Promise<void> | null = null;
+let providerInitError: Error | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
 const originalMemoryIndexStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -132,6 +133,9 @@ vi.mock("./embeddings.js", () => {
         outputDimensionality: options.outputDimensionality,
       });
       await providerInitGate;
+      if (providerInitError) {
+        throw providerInitError;
+      }
       if (forceNoProvider) {
         return {
           provider: null,
@@ -314,6 +318,7 @@ describe("memory index", () => {
     providerCloseFailuresRemaining = 0;
     providerCloseGate = null;
     providerInitGate = null;
+    providerInitError = null;
     providerCalls = [];
     forceNoProvider = false;
 
@@ -593,6 +598,92 @@ describe("memory index", () => {
           chunks: status.chunks,
         },
       ]);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it.each([
+    { label: "missing provider", provider: undefined },
+    { label: "auto provider", provider: "auto" },
+  ])("falls back to FTS-only when optional $label initialization fails", async ({ provider }) => {
+    providerInitError = new Error('No API key found for provider "openai"');
+    const cfg = createCfg({
+      provider,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await expect(manager.sync({ reason: "test" })).resolves.toBeUndefined();
+
+      expect(providerCalls.map((call) => call.provider)).toContain("openai");
+      expect(manager.status().custom?.providerState).toMatchObject({
+        mode: "fts-only",
+        attemptedProviderId: "openai",
+      });
+
+      if (manager.status().fts?.available) {
+        const results = await manager.search("alpha");
+        expect(results.length).toBeGreaterThan(0);
+        expect(results[0]?.path).toContain("memory/2026-01-12.md");
+      }
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("uses existing FTS rows when an optional provider becomes unavailable", async () => {
+    const cfg = createCfg({
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const indexedManager = await getFreshManager(cfg);
+    try {
+      await indexedManager.sync({ reason: "test" });
+      if (!indexedManager.status().fts?.available) {
+        return;
+      }
+    } finally {
+      await indexedManager.close?.();
+    }
+
+    providerCalls = [];
+    providerInitError = new Error('No API key found for provider "openai"');
+    const fallbackManager = await getFreshManager(cfg);
+    try {
+      const results = await fallbackManager.search("alpha");
+
+      expect(providerCalls.map((call) => call.provider)).toContain("openai");
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]?.path).toContain("memory/2026-01-12.md");
+      expect(fallbackManager.status().custom?.providerState).toMatchObject({
+        mode: "fts-only",
+        attemptedProviderId: "openai",
+      });
+      expect(fallbackManager.status().custom?.optionalProviderFtsFallback).toMatchObject({
+        enabled: true,
+        mode: "read-only",
+      });
+    } finally {
+      await fallbackManager.close?.();
+    }
+  });
+
+  it("keeps explicit memory embedding providers fail-closed when initialization fails", async () => {
+    providerInitError = new Error('No API key found for provider "openai"');
+    const cfg = createCfg({
+      provider: "openai",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await expect(manager.sync({ reason: "test" })).rejects.toThrow(
+        'No API key found for provider "openai"',
+      );
+      expect(providerCalls.map((call) => call.provider)).toContain("openai");
+      expect(manager.status().custom?.providerState).toMatchObject({
+        mode: "pending",
+        requestedProvider: "openai",
+      });
     } finally {
       await manager.close?.();
     }
