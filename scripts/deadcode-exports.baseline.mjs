@@ -2,9 +2,6 @@
 // New entries fail CI. After deleting dead code, run `pnpm deadcode:exports:update`.
 // Do not add entries to avoid fixing new findings.
 export const KNIP_UNUSED_EXPORT_BASELINE = [
-  "extensions/codex/src/session-catalog.ts: CODEX_TERMINAL_RESUME_COMMAND",
-  "extensions/codex/src/session-upstream-activity.ts: checkCodexUpstreamActivity (upstream)",
-  "extensions/codex/src/session-upstream-activity.ts: classifyCodexUpstreamTurns",
   "src/acp/control-plane/active-turns.ts: resetAcpActiveTurnsForTests",
   "src/acp/runtime/registry.ts: AcpRuntimeBackend",
   "src/agents/agent-hooks/compaction-safeguard.ts: testing",
