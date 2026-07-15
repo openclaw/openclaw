@@ -475,6 +475,7 @@ export const en: TranslationMap = {
     cloudSecureContextRequired:
       "Cloud workers need a secure browser context so recovery can protect your task.",
     cloudStartFailed: "The session was created locally, but cloud startup failed: {error}",
+    cloudSyncsFolder: "Syncs {folder} to the cloud worker",
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     browse: "Browse folders",
