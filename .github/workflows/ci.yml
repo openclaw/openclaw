@@ -90,6 +90,7 @@ jobs:
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
+      diff_base_revision: ${{ steps.diff_base.outputs.sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
@@ -242,6 +243,21 @@ jobs:
         id: checkout_ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve exact diff base
+        id: diff_base
+        env:
+          EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
+        run: |
+          set -euo pipefail
+          base_sha="$EVENT_BASE_SHA"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            # A long-lived PR event can retain an old base SHA. The tested merge
+            # commit's first parent is the exact target tree for this run.
+            base_sha="$(node scripts/lib/merge-head-diff-base.mjs \
+              --base "$base_sha" --head HEAD --prefer-first-parent)"
+          fi
+          echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
+
       - name: Validate historical release target
         id: historical_target
         if: inputs.historical_target_tag != ''
@@ -290,13 +306,15 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
         id: docs_scope
         if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/detect-docs-changes
+        with:
+          base-sha: ${{ steps.diff_base.outputs.sha }}
 
       - name: Detect changed scopes
         id: changed_scope
@@ -306,10 +324,10 @@ jobs:
           set -euo pipefail
 
           if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
+            BASE="${{ steps.diff_base.outputs.sha }}"
             node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
           else
-            BASE="${{ github.event.pull_request.base.sha }}"
+            BASE="${{ steps.diff_base.outputs.sha }}"
             node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD --merge-head-first-parent
           fi
 
@@ -676,7 +694,7 @@ jobs:
             for attempt in 1 2 3; do
               timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
                 -c protocol.version=2 \
-                fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+                fetch --no-tags --prune --no-recurse-submodules --depth=2 origin \
                 "+${ref}:refs/remotes/origin/checkout" && return 0
               fetch_status="$?"
               if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
@@ -705,17 +723,40 @@ jobs:
           fi
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
+      - name: Resolve security diff base
+        id: diff_base
+        env:
+          EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
+        run: |
+          set -euo pipefail
+          base_sha="$EVENT_BASE_SHA"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            # Do not execute a helper from the untrusted PR tree before trusted
+            # pre-commit configuration is selected.
+            read -r head_sha first_parent second_parent extra <<< \
+              "$(git rev-list --parents -n 1 HEAD)"
+            if [[
+              "$head_sha" = "$(git rev-parse HEAD)" &&
+              "$first_parent" =~ ^[0-9a-f]{40}$ &&
+              "$second_parent" =~ ^[0-9a-f]{40}$ &&
+              -z "${extra:-}"
+            ]]; then
+              base_sha="$first_parent"
+            fi
+          fi
+          echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
+
       - name: Ensure security base commit
         if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Prepare trusted pre-commit config
         if: github.event_name == 'pull_request'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.diff_base.outputs.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
@@ -753,7 +794,7 @@ jobs:
 
       - name: Audit changed GitHub workflows with zizmor
         env:
-          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.diff_base.outputs.sha }}
         run: |
           set -euo pipefail
 
@@ -870,7 +911,7 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: ./.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
+          base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
           fetch-ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Setup Node environment
@@ -1767,7 +1808,7 @@ jobs:
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
-          PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
         shell: bash
         run: |
           set -euo pipefail

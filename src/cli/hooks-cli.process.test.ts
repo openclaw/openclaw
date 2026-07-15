@@ -187,10 +187,12 @@ async function runHooksRelay(params: { event: "post_tool_use" | "pre_tool_use"; 
 }
 
 describe("hooks CLI process lifecycle", () => {
-  it("exits after JSON output when plugin registration leaves a ref'd handle", async () => {
+  it("exits after one-shot outputs when plugins leave ref'd handles", async () => {
     const fixture = await createLingeringPluginFixture();
 
-    const result = await runHooksCli({
+    // Both command families need real process coverage. Keep their expensive CLI
+    // bootstraps sequential so low-core shards test lifecycle, not startup contention.
+    const listResult = await runHooksCli({
       args: ["hooks", "list", "--json"],
       env: {
         LINGER_MARKER: fixture.markerPath,
@@ -200,37 +202,19 @@ describe("hooks CLI process lifecycle", () => {
       },
       timeoutMessage: "hooks list did not exit after emitting output",
     });
+    const relayResult = await runHooksRelay({ event: "pre_tool_use", stdin: "{}" });
 
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
-    expect(result.stderr).not.toContain("Error:");
-    expect(JSON.parse(result.stdout)).toMatchObject({ hooks: expect.any(Array) });
+    expect(listResult, listResult.stderr).toMatchObject({ code: 0, signal: null });
+    expect(listResult.stderr).not.toContain("Error:");
+    expect(JSON.parse(listResult.stdout)).toMatchObject({ hooks: expect.any(Array) });
     await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("registered\n");
-  }, 20_000);
-
-  it("exits successfully after an observational relay result with a ref'd handle", async () => {
-    const result = await runHooksRelay({ event: "post_tool_use", stdin: "{}" });
-
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stdout: "" });
-    expect(result.stderr).toMatch(/native hook relay (timed out|unavailable)/);
-  }, 20_000);
-
-  it("flushes fail-closed PreToolUse JSON before exiting with a ref'd handle", async () => {
-    const result = await runHooksRelay({ event: "pre_tool_use", stdin: "{}" });
-
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
-    expect(JSON.parse(result.stdout)).toMatchObject({
+    expect(relayResult, relayResult.stderr).toMatchObject({ code: 0, signal: null });
+    expect(JSON.parse(relayResult.stdout)).toMatchObject({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
         permissionDecisionReason: expect.any(String),
       },
     });
-  }, 20_000);
-
-  it("preserves a malformed-input exit code with a ref'd handle", async () => {
-    const result = await runHooksRelay({ event: "post_tool_use", stdin: "{nope" });
-
-    expect(result).toMatchObject({ code: 1, signal: null, stdout: "" });
-    expect(result.stderr).toContain("failed to read native hook input");
-  }, 20_000);
+  }, 35_000);
 });

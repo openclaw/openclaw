@@ -112,16 +112,14 @@ import {
 import {
   buildExactMarkerPrompt,
   buildMatrixQaToken,
-  buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
-  buildMentionPrompt,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
-export { buildMatrixReplyArtifact, buildMatrixReplyDetails, buildMentionPrompt, runMatrixQaCanary };
+export { buildMatrixReplyDetails, runMatrixQaCanary };
 
 async function runDriverTopologyScopedScenario(params: {
   context: MatrixQaScenarioContext;

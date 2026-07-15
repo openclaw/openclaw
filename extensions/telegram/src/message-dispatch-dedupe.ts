@@ -25,7 +25,7 @@ type TelegramMessageDispatchReplayForgetFailure = {
   error?: unknown;
 };
 
-export class TelegramMessageDispatchReplayForgetError extends Error {
+class TelegramMessageDispatchReplayForgetError extends Error {
   readonly failures: TelegramMessageDispatchReplayForgetFailure[];
   override readonly cause: unknown;
 

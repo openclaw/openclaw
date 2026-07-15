@@ -1,7 +1,22 @@
 // Qa Matrix tests cover client plugin behavior.
 import { describe, expect, it } from "vitest";
-import { testing, createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
+import {
+  buildMatrixQaMessageContent,
+  buildMatrixQaReplacementMessageContent,
+  buildMatrixReactionRelation,
+  resolveNextRegistrationAuth,
+} from "./client-message-content.js";
+import { createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
+import { createMatrixQaRoomObserver } from "./sync.js";
 import { buildDefaultMatrixQaTopologySpec } from "./topology.js";
+
+const testing = {
+  buildMatrixQaMessageContent,
+  buildMatrixQaReplacementMessageContent,
+  buildMatrixReactionRelation,
+  createMatrixQaRoomObserver,
+  resolveNextRegistrationAuth,
+};
 
 function resolveRequestUrl(input: RequestInfo | URL) {
   if (typeof input === "string") {

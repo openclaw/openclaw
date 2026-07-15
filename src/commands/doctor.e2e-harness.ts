@@ -276,6 +276,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/bindings/current-conversations.json",
       hasLegacy: false,
     },
+    tuiLastSessions: {
+      sourcePath: "/tmp/state/tui/last-session.json",
+      hasLegacy: false,
+    },
     channelPairing: {
       sourceDir: "/tmp/oauth",
       files: [],

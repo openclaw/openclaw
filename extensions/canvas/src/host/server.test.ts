@@ -121,14 +121,13 @@ async function captureHandlerResponse(
 }
 
 async function captureA2uiFixtureResponse(
-  rootDir: string,
   url: string,
   method = "GET",
   liveReload = true,
 ): Promise<CapturedResponse> {
-  const { createA2uiHttpRequestHandler } = await import("./a2ui.js");
+  const { handleA2uiHttpRequest } = await import("./a2ui.js");
   return await captureHttpResponse(
-    createA2uiHttpRequestHandler({ rootDir, liveReload }),
+    async (req, res) => await handleA2uiHttpRequest(req, res, { liveReload }),
     url,
     method,
   );
@@ -661,59 +660,64 @@ describe("canvas host", () => {
   });
 
   it("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
-    const a2uiRoot = await createCaseDir();
-    const nestedAssetDir = path.join(a2uiRoot, "assets", "demo");
+    const fixtureEntryDir = await createCaseDir();
+    const a2uiRoot = path.join(fixtureEntryDir, "a2ui");
+    const nestedAssetDir = path.join(
+      a2uiRoot,
+      `test-assets-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    const nestedAssetUrlPath = path.basename(nestedAssetDir);
+    const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
     const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
     const linkPath = path.join(a2uiRoot, linkName);
-
-    await fs.mkdir(nestedAssetDir, { recursive: true });
-    await fs.writeFile(
-      path.join(a2uiRoot, "index.html"),
-      `<openclaw-a2ui-host></openclaw-a2ui-host>
-<script>openclawCanvasA2UIAction</script>`,
-      "utf8",
-    );
-    await fs.writeFile(path.join(a2uiRoot, "a2ui.bundle.js"), "window.openclawA2UI = {};", "utf8");
-    await fs.writeFile(path.join(nestedAssetDir, "sample.txt"), "nested asset", "utf8");
-    await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+    const originalArgv = [...process.argv];
 
     try {
-      const res = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/`);
+      process.argv[1] = path.join(fixtureEntryDir, "openclaw.mjs");
+      await fs.mkdir(nestedAssetDir, { recursive: true });
+      await fs.writeFile(
+        path.join(a2uiRoot, "index.html"),
+        `<openclaw-a2ui-host></openclaw-a2ui-host>
+<script>openclawCanvasA2UIAction</script>`,
+        "utf8",
+      );
+      await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
+      await fs.writeFile(path.join(nestedAssetDir, "sample.txt"), "nested asset", "utf8");
+      await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+
+      const res = await captureA2uiFixtureResponse(`${A2UI_PATH}/`);
       const html = res.body;
       expect(res.status).toBe(200);
       expect(html).toContain("openclaw-a2ui-host");
       expect(html).toContain("openclawCanvasA2UIAction");
 
-      const noReloadRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/`, "GET", false);
+      const noReloadRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/`, "GET", false);
       expect(noReloadRes.body).toContain("openclawCanvasA2UIAction");
       expect(noReloadRes.body).not.toContain(CANVAS_WS_PATH);
 
-      const bundleRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/a2ui.bundle.js`);
+      const bundleRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/a2ui.bundle.js`);
       const js = bundleRes.body;
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
 
       const assetRes = await captureA2uiFixtureResponse(
-        a2uiRoot,
-        `${A2UI_PATH}/assets/demo/sample.txt`,
+        `${A2UI_PATH}/${nestedAssetUrlPath}/sample.txt`,
       );
       expect(assetRes.status).toBe(200);
       expect(assetRes.headers["content-type"]).toBe("text/plain");
       expect(assetRes.body).toBe("nested asset");
 
-      const traversalRes = await captureA2uiFixtureResponse(
-        a2uiRoot,
-        `${A2UI_PATH}/%2e%2e%2fpackage.json`,
-      );
+      const traversalRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
       expect(traversalRes.status).toBe(404);
       expect(traversalRes.body).toBe("not found");
-      const malformedRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/%E0%A4%A`);
+      const malformedRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/%E0%A4%A`);
       expect(malformedRes.status).toBe(404);
       expect(malformedRes.body).toBe("not found");
-      const symlinkRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/${linkName}`);
+      const symlinkRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/${linkName}`);
       expect(symlinkRes.status).toBe(404);
       expect(symlinkRes.body).toBe("not found");
     } finally {
+      process.argv.splice(0, process.argv.length, ...originalArgv);
       await fs.rm(linkPath, { force: true });
     }
   });

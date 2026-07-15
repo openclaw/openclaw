@@ -643,7 +643,7 @@ describe("scoped vitest configs", () => {
     );
   });
 
-  it("isolates media task status suites from conflicting task-runtime mocks", () => {
+  it("isolates agent suites with conflicting shared-module mocks", () => {
     const sharedConfig = requireTestConfig(defaultAgentsCoreConfig);
     const isolatedConfig = requireTestConfig(defaultAgentsCoreIsolatedConfig);
 

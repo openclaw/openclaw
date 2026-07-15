@@ -78,11 +78,11 @@ import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   buildEmptyInteractiveReplyPayload,
   buildKnownAgentRunFailureReplyPayload,
-  runAgentTurnWithFallback,
-} from "./agent-runner-execution.js";
+} from "./agent-runner-failure-reply.js";
 import {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,

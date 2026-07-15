@@ -63,6 +63,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   applyChatAgentsList,
   clearChatHistory,
@@ -70,7 +71,6 @@ import {
   loadOlderChatHistoryPage,
   resolveChatHistoryPagination,
   syncSelectedSessionMessageSubscription,
-  type ChatHistoryPagination,
 } from "./chat-history.ts";
 import { dismissChatError, resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
@@ -1989,6 +1989,7 @@ class ChatPane extends OpenClawLightDomElement {
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
+      followUpMode: state.settings.chatFollowUpMode,
       draft: state.chatMessage,
       queue: state.chatQueue,
       realtimeTalkActive: state.realtimeTalkActive,

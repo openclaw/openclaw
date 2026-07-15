@@ -523,6 +523,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     ctx.prompter.repairMode.canPrompt || ctx.prompter.shouldRepair;
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
+    doctorOnlyStateMigrations: true,
     crossStateDirImports:
       ctx.options.crossStateDirImports === true && operatorCanApproveCrossStateDirImports,
   });
@@ -672,6 +673,7 @@ async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
   await noteSessionTranscriptHealth({
+    cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
   });

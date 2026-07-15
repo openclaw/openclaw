@@ -499,6 +499,7 @@ export const es: TranslationMap = {
     cloudSecureContextRequired:
       "Los trabajadores en la nube necesitan un contexto de navegador seguro para que la recuperación pueda proteger tu tarea.",
     cloudStartFailed: "La sesión se creó localmente, pero el inicio en la nube falló: {error}",
+    cloudSyncsFolder: "Sincroniza {folder} con el worker en la nube",
     folder: "Carpeta",
     folderPlaceholder: "Espacio de trabajo del agente",
     browse: "Explorar carpetas",
@@ -3419,6 +3420,9 @@ export const es: TranslationMap = {
     sendShortcut: "Atajo de envío",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "Seguimientos mientras el agente está trabajando",
+    followUpModeQueue: "Poner en cola hasta que finalice la ejecución",
+    followUpModeSteer: "Incorporar a la ejecución activa",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",

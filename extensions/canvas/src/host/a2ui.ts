@@ -146,23 +146,6 @@ async function handleA2uiHttpRequestWithRootResolver(
   }
 }
 
-/** Creates an HTTP handler for a specific hosted A2UI asset root. */
-export function createA2uiHttpRequestHandler(params: {
-  rootDir: string;
-  liveReload?: boolean;
-}): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
-  let rootRealPromise: Promise<string> | null = null;
-  return async (req, res) => {
-    rootRealPromise ??= fs.realpath(params.rootDir);
-    return await handleA2uiHttpRequestWithRootResolver(
-      req,
-      res,
-      async () => await rootRealPromise,
-      { liveReload: params.liveReload },
-    );
-  };
-}
-
 /** Handles one HTTP request for the hosted A2UI asset surface. */
 export async function handleA2uiHttpRequest(
   req: IncomingMessage,

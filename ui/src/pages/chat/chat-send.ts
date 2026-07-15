@@ -7,7 +7,11 @@ import {
   type GatewayHelloOk,
 } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
-import { setLastActiveSessionKey } from "../../app/settings.ts";
+import {
+  normalizeChatFollowUpMode,
+  setLastActiveSessionKey,
+  type ChatFollowUpMode,
+} from "../../app/settings.ts";
 import type {
   ChatAttachment,
   ChatQueueItem,
@@ -125,6 +129,7 @@ export type ChatHost = ChatInputHistoryState &
     eventLogBuffer?: unknown[];
     assistantAgentId?: string | null;
     agentsList?: ChatAgentsListSnapshot | null;
+    settings?: { chatFollowUpMode?: ChatFollowUpMode };
     /** Selected message to reply to (right-click / keyboard shortcut). */
     chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
     /** Placeholder for an in-flight /btw side question awaiting chat.side_result. */
@@ -2430,6 +2435,17 @@ export async function handleSendChat(
       } else {
         recordChatSendTiming(host, pending, "queued-busy", submittedAtMs);
         sendResult = "pending";
+        // Steer-by-default injects the follow-up into the active run, same as
+        // clicking Steer on the queued row. When steering is unavailable the
+        // message stays queued, keeping the queue row as the visible fallback.
+        if (
+          !skillWorkshopRevision &&
+          normalizeChatFollowUpMode(host.settings?.chatFollowUpMode) === "steer" &&
+          host.connected &&
+          hasAbortableSessionRun(host)
+        ) {
+          void steerQueuedChatMessage(host, pending.id);
+        }
       }
     } else {
       sendResult = await sendChatMessageNow(host, effectiveMessage, {

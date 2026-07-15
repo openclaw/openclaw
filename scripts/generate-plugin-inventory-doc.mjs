@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { resolvePluginSurface } from "./lib/plugin-inventory-doc.mjs";
 
 const DOC_PATH = "docs/plugins/plugin-inventory.md";
 const REFERENCE_INDEX_PATH = "docs/plugins/reference.md";
@@ -335,29 +336,6 @@ function resolveDocs({ dirName, manifest, packageJson }) {
   return links;
 }
 
-function resolveSurface(manifest) {
-  const parts = [];
-  if (Array.isArray(manifest.channels) && manifest.channels.length > 0) {
-    parts.push(`channels: ${manifest.channels.join(", ")}`);
-  }
-  if (Array.isArray(manifest.providers) && manifest.providers.length > 0) {
-    parts.push(`providers: ${manifest.providers.join(", ")}`);
-  }
-  const contracts = Object.keys(manifest.contracts ?? {}).toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-  if (contracts.length > 0) {
-    parts.push(`contracts: ${contracts.join(", ")}`);
-  }
-  if (Array.isArray(manifest.skills) && manifest.skills.length > 0) {
-    parts.push("skills");
-  }
-  if (parts.length === 0) {
-    return "plugin";
-  }
-  return parts.join("; ");
-}
-
 function resolveInstallRoute(packageJson, status) {
   if (status === "source") {
     return "source checkout only";
@@ -578,7 +556,7 @@ function collectPluginRecords() {
       name: humanizeId(id),
       packageName: packageJson.name ?? "-",
       status,
-      surface: resolveSurface(manifest),
+      surface: resolvePluginSurface(manifest),
     });
   }
 

@@ -330,9 +330,12 @@ describe("runtime parity", () => {
     expect(isRuntimeParityResultPass(result)).toBe(false);
   });
 
-  it("prefers transcript tool results when mock debug rows are incomplete", async () => {
+  it("prefers transcript tool results when mock debug rows repeat an incomplete call", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } }],
+      requests: [
+        { plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } },
+        { plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } },
+      ],
       messages: [
         { role: "user", content: "Delegate one bounded QA task to a subagent." },
         {
