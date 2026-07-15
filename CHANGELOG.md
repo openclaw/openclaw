@@ -42,7 +42,6 @@ Docs: https://docs.openclaw.ai
 
 - **Control UI chat transcripts:** preserve loaded history across session and pane returns, bound automatic backscroll loading, virtualize long transcripts, and keep prepends, streaming, and responsive layouts from flickering or jumping. Thanks @shakkernerd.
 - **Codex dynamic tool outcomes:** use the shared tool-result failure contract for arbitrary lifecycle metadata, preventing successful Skill Workshop results from being displayed and persisted as failed calls. Fixes #107684. Thanks @shakkernerd.
-- **Tavily Tool Search credentials:** preserve resolved SecretRefs and runtime credentials when deferred Tool Search builds plugin tools, preventing lean agents from losing configured search authentication. (#95109, #97827) Thanks @VACInc.
 - **Nested resource ignores:** honor slash-free patterns and escaped literal exclamation marks in nested ignore files during skill and resource discovery. Thanks @moguangyu5-design.
 - **Proxy bypass precedence:** honor blank lower-case `no_proxy` values shadowing upper-case `NO_PROXY` consistently with Undici, and reuse the canonical matcher for Telegram fallback selection.
 - **Tokenjuice exec compaction:** avoid retaining raw command output inside compacted middleware metadata, preventing large successful compactions from failing the middleware details-size guard.
