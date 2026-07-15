@@ -2070,7 +2070,15 @@ export type PluginCommandContext = {
   senderIsOwner?: boolean;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
-  /** Host-resolved agent that owns the active session. */
+  /**
+   * Host-resolved agent id bound to this command invocation, when the host can
+   * determine one. It is resolved from an explicit host-provided agent id or an
+   * agent-scoped session key (for example `agent:main:...`), so command handlers
+   * that need per-agent state can read it directly instead of re-parsing
+   * `sessionKey`. Optional: it is `undefined` when no agent can be resolved for
+   * the invocation (for example a non-agent-shaped, plugin-owned session key with
+   * no host-provided agent id).
+   */
   agentId?: string;
   /** Stable host session key for the active conversation when available. */
   sessionKey?: string;
