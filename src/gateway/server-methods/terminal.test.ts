@@ -160,6 +160,7 @@ describe("terminal gateway policy", () => {
     const openTerminal = vi.fn(async () => ({
       kind: "local" as const,
       argv: ["codex", "resume", "thread"],
+      pathEnv: "/login-shell/bin:/usr/bin",
       title: "codex resume thread",
     }));
     installCatalog({
@@ -188,6 +189,7 @@ describe("terminal gateway policy", () => {
       expect.objectContaining({
         shell: expect.any(String),
         args: ["-il", "-c", "'codex' 'resume' 'thread'"],
+        env: expect.objectContaining({ PATH: "/login-shell/bin:/usr/bin" }),
       }),
     );
     expect(respond).toHaveBeenCalledWith(

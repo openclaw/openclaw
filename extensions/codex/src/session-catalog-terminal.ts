@@ -2,6 +2,7 @@
 import {
   decodeNodePtyResumeParams,
   resolveExecutableFromPathEnv,
+  resolveExecutableWithPathEnv,
   runNodePtyCommand,
 } from "openclaw/plugin-sdk/node-host";
 import type {
@@ -33,6 +34,12 @@ export function resolveLocalCodexTerminalExecutable(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   return resolveExecutableFromPathEnv("codex", env.PATH ?? env.Path ?? "", env, {
+    fallbackToLoginShell: true,
+  });
+}
+
+function resolveLocalCodexTerminalExecutableWithPathEnv(env: NodeJS.ProcessEnv = process.env) {
+  return resolveExecutableWithPathEnv("codex", env.PATH ?? env.Path ?? "", env, {
     fallbackToLoginShell: true,
   });
 }
@@ -175,16 +182,17 @@ export async function openCodexCatalogTerminal(params: {
   const title = `codex resume ${params.threadId.slice(0, 8)}…`;
   if (params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
     const record = await requireCatalogEligibleThread(params.control, params.threadId);
-    const executable = resolveLocalCodexTerminalExecutable();
+    const resolution = resolveLocalCodexTerminalExecutableWithPathEnv();
     // A managed app-server may exist without a local CLI. Fail closed so
     // terminal resume never targets a different machine or missing binary.
-    if (!executable) {
+    if (!resolution) {
       throw new CatalogParamsError("Codex CLI is unavailable");
     }
     return {
       kind: "local",
-      argv: [executable, "resume", params.threadId],
+      argv: [resolution.executable, "resume", params.threadId],
       ...(record.cwd ? { cwd: record.cwd } : {}),
+      ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
       title,
     };
   }

@@ -11,6 +11,7 @@ let getShellEnvAppliedKeys: ShellEnvModule["getShellEnvAppliedKeys"];
 let getShellPathFromLoginShell: ShellEnvModule["getShellPathFromLoginShell"];
 let loadShellEnvFallback: ShellEnvModule["loadShellEnvFallback"];
 let resolveExecutableFromUserShellPath: ShellEnvModule["resolveExecutableFromUserShellPath"];
+let resolveExecutableFromUserShellPathWithPathEnv: ShellEnvModule["resolveExecutableFromUserShellPathWithPathEnv"];
 let resolveShellEnvFallbackTimeoutMs: ShellEnvModule["resolveShellEnvFallbackTimeoutMs"];
 let shouldDeferShellEnvFallback: ShellEnvModule["shouldDeferShellEnvFallback"];
 let shouldEnableShellEnvFallback: ShellEnvModule["shouldEnableShellEnvFallback"];
@@ -23,6 +24,7 @@ beforeEach(async () => {
     getShellPathFromLoginShell,
     loadShellEnvFallback,
     resolveExecutableFromUserShellPath,
+    resolveExecutableFromUserShellPathWithPathEnv,
     resolveShellEnvFallbackTimeoutMs,
     shouldDeferShellEnvFallback,
     shouldEnableShellEnvFallback,
@@ -587,6 +589,19 @@ describe("shell env fallback", () => {
 
     expect(result).toBe("/bin/sh");
     expect(exec).toHaveBeenCalledOnce();
+  });
+
+  it("returns the login-shell PATH needed by env-based executable launchers", () => {
+    const exec = vi.fn(() => Buffer.from("PATH=/bin\0"));
+
+    const result = resolveExecutableFromUserShellPathWithPathEnv("sh", {
+      env: { PATH: "/missing", SHELL: "/bin/sh" },
+      exec: exec as unknown as Parameters<
+        typeof resolveExecutableFromUserShellPathWithPathEnv
+      >[1]["exec"],
+    });
+
+    expect(result).toEqual({ executable: "/bin/sh", pathEnv: "/bin" });
   });
 
   it("returns null without invoking shell on win32", () => {

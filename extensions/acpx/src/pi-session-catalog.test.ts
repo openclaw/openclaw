@@ -15,6 +15,8 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
     runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
     resolveExecutableFromPathEnv: (command: string, pathEnv: string, env?: NodeJS.ProcessEnv) =>
       actual.resolveExecutableFromPathEnv(command, pathEnv, env),
+    resolveExecutableWithPathEnv: (command: string, pathEnv: string, env?: NodeJS.ProcessEnv) =>
+      actual.resolveExecutableWithPathEnv(command, pathEnv, env),
   };
 });
 

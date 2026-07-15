@@ -33,6 +33,18 @@ const nodeHostMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
+  const resolveWithTestShellPath = (
+    command: string,
+    pathEnv: string,
+    env: NodeJS.ProcessEnv | undefined,
+    options: { fallbackToLoginShell?: boolean } | undefined,
+  ) => {
+    const fallbackPath = options?.fallbackToLoginShell
+      ? nodeHostMocks.userShellPaths.get(command)
+      : undefined;
+    const resolution = actual.resolveExecutableWithPathEnv(command, fallbackPath ?? pathEnv, env);
+    return resolution && fallbackPath ? { ...resolution, pathEnv: fallbackPath } : resolution;
+  };
   return {
     ...actual,
     runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
@@ -41,14 +53,8 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
       pathEnv: string,
       env: NodeJS.ProcessEnv | undefined,
       options: { fallbackToLoginShell?: boolean } | undefined,
-    ) =>
-      actual.resolveExecutableFromPathEnv(
-        command,
-        options?.fallbackToLoginShell
-          ? (nodeHostMocks.userShellPaths.get(command) ?? pathEnv)
-          : pathEnv,
-        env,
-      ),
+    ) => resolveWithTestShellPath(command, pathEnv, env, options)?.executable,
+    resolveExecutableWithPathEnv: resolveWithTestShellPath,
   };
 });
 
@@ -1079,6 +1085,7 @@ describe("Claude session catalog", () => {
       kind: "local",
       argv: [path.join(shellBinDir, "claude"), "--resume", sessionId],
       cwd: home,
+      pathEnv: shellBinDir,
     });
     await expect(
       provider?.openTerminal?.({ hostId: "gateway:local", threadId: "missing" }),

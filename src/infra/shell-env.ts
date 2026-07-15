@@ -319,7 +319,13 @@ export function getShellPathFromLoginShell(opts: {
   return cachedShellPath;
 }
 
-export function resolveExecutableFromUserShellPath(
+export type UserShellExecutableResolution = {
+  executable: string;
+  /** Present only when resolution required the login-shell PATH fallback. */
+  pathEnv?: string;
+};
+
+export function resolveExecutableFromUserShellPathWithPathEnv(
   executable: string,
   opts: {
     env: NodeJS.ProcessEnv;
@@ -329,7 +335,7 @@ export function resolveExecutableFromUserShellPath(
     exec?: typeof execFileSync;
     platform?: NodeJS.Platform;
   },
-): string | undefined {
+): UserShellExecutableResolution | undefined {
   const direct = resolveExecutableFromPathEnv(
     executable,
     opts.pathEnv ?? opts.env.PATH ?? opts.env.Path ?? "",
@@ -337,7 +343,7 @@ export function resolveExecutableFromUserShellPath(
     { includeExtensionless: opts.includeExtensionless },
   );
   if (direct) {
-    return direct;
+    return { executable: direct };
   }
   const shellPath = getShellPathFromLoginShell({
     env: opts.env,
@@ -345,11 +351,20 @@ export function resolveExecutableFromUserShellPath(
     exec: opts.exec,
     platform: opts.platform,
   });
-  return shellPath
-    ? resolveExecutableFromPathEnv(executable, shellPath, opts.env, {
-        includeExtensionless: opts.includeExtensionless,
-      })
-    : undefined;
+  if (!shellPath) {
+    return undefined;
+  }
+  const resolved = resolveExecutableFromPathEnv(executable, shellPath, opts.env, {
+    includeExtensionless: opts.includeExtensionless,
+  });
+  return resolved ? { executable: resolved, pathEnv: shellPath } : undefined;
+}
+
+export function resolveExecutableFromUserShellPath(
+  executable: string,
+  opts: Parameters<typeof resolveExecutableFromUserShellPathWithPathEnv>[1],
+): string | undefined {
+  return resolveExecutableFromUserShellPathWithPathEnv(executable, opts)?.executable;
 }
 
 export function getShellEnvAppliedKeys(): string[] {
