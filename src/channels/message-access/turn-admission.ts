@@ -13,7 +13,7 @@ export type ChannelIngressSideEffectResult =
 
 /** Convert an ingress graph decision plus any plugin-owned side effect into turn admission. */
 export function mapChannelIngressDecisionToTurnAdmission(
-  decision: ChannelIngressDecision,
+  decision: Pick<ChannelIngressDecision, "admission" | "reasonCode">,
   sideEffect: ChannelIngressSideEffectResult,
 ): ChannelTurnAdmission {
   if (decision.admission === "dispatch") {

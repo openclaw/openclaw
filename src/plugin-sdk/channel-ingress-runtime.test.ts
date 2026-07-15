@@ -36,6 +36,7 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
       reason: "activation_allowed",
     });
   });
+
   it("derives store allowlists, command auth, sender separation, and redaction", async () => {
     const sender = "Secret-Sender@example.test";
     const readStoreAllowFrom = vi.fn(async () => ["secret-sender@example.test"]);
