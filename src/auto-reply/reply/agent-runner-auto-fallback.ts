@@ -1,10 +1,14 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  clearAutoFallbackPrimaryProbeSelection,
+  entryMatchesAutoFallbackPrimaryProbe,
   hasSessionAutoModelFallbackProvenance,
   resolveAutoFallbackPrimaryProbe,
 } from "../../agents/agent-scope.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import type { FollowupRun } from "./queue.js";
 
 /** Decides whether to retry after rechecking auto-fallback primary probe state. */
@@ -72,4 +76,67 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
     model: refreshedProbe.model,
     autoFallbackPrimaryProbe: refreshedProbe,
   };
+}
+
+/** Clears a recovered primary probe without overwriting a newer session selection. */
+export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
+  run: FollowupRun["run"];
+  provider: string;
+  model: string;
+  sessionKey?: string;
+  activeSessionStore?: Record<string, SessionEntry>;
+  getActiveSessionEntry: () => SessionEntry | undefined;
+  storePath?: string;
+}): Promise<void> {
+  if (shouldPreserveUserFacingSessionStateForInputProvenance(params.run.inputProvenance)) {
+    return;
+  }
+  const probe = params.run.autoFallbackPrimaryProbe;
+  if (!probe || params.provider !== probe.provider || params.model !== probe.model) {
+    return;
+  }
+  if (!params.sessionKey || !params.activeSessionStore) {
+    return;
+  }
+  const activeSessionEntry =
+    params.activeSessionStore[params.sessionKey] ?? params.getActiveSessionEntry();
+  if (!activeSessionEntry || !entryMatchesAutoFallbackPrimaryProbe(activeSessionEntry, probe)) {
+    return;
+  }
+  clearAutoFallbackPrimaryProbeSelection(activeSessionEntry);
+  params.activeSessionStore[params.sessionKey] = activeSessionEntry;
+  if (!params.storePath) {
+    return;
+  }
+  await updateSessionEntry(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    (persistedEntry) => {
+      if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
+        return null;
+      }
+      const shouldClearAuthProfile =
+        persistedEntry.authProfileOverrideSource === "auto" ||
+        (persistedEntry.authProfileOverrideSource === undefined &&
+          persistedEntry.authProfileOverrideCompactionCount !== undefined);
+      clearAutoFallbackPrimaryProbeSelection(persistedEntry);
+      return {
+        providerOverride: undefined,
+        modelOverride: undefined,
+        modelOverrideSource: undefined,
+        modelOverrideFallbackOriginProvider: undefined,
+        modelOverrideFallbackOriginModel: undefined,
+        ...(shouldClearAuthProfile
+          ? {
+              authProfileOverride: undefined,
+              authProfileOverrideSource: undefined,
+              authProfileOverrideCompactionCount: undefined,
+            }
+          : {}),
+        fallbackNoticeSelectedModel: undefined,
+        fallbackNoticeActiveModel: undefined,
+        fallbackNoticeReason: undefined,
+        updatedAt: persistedEntry.updatedAt,
+      };
+    },
+  );
 }
