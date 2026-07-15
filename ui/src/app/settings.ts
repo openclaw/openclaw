@@ -450,6 +450,18 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
   }
 }
 
+export function saveLocalUserIdentity(next: Partial<LocalUserIdentity>): void {
+  const storage = getSafeLocalStorage();
+  if (!storage) return;
+  try {
+    const current = loadLocalUserIdentity();
+    const normalized = normalizeLocalUserIdentity({ ...current, ...next });
+    storage.setItem(LOCAL_USER_IDENTITY_KEY, JSON.stringify(normalized));
+  } catch {
+    // ignore storage errors
+  }
+}
+
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
   persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();
