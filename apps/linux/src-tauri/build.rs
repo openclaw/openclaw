@@ -1,4 +1,6 @@
 fn main() {
+    // Command metadata generates capability permissions independently of the
+    // target's invoke handler, so keep the Linux-only command permission known.
     const COMMANDS: &[&str] = &[
         "bootstrap",
         "canvas_a2ui_action",

@@ -493,6 +493,7 @@ export const hi: TranslationMap = {
     cloudSecureContextRequired:
       "Cloud वर्कर को एक सुरक्षित ब्राउज़र संदर्भ की आवश्यकता है, ताकि पुनर्प्राप्ति आपके कार्य को सुरक्षित रख सके।",
     cloudStartFailed: "सत्र स्थानीय रूप से बनाया गया था, लेकिन Cloud स्टार्टअप विफल रहा: {error}",
+    cloudSyncsFolder: "{folder} को क्लाउड वर्कर से सिंक करता है",
     folder: "फ़ोल्डर",
     folderPlaceholder: "Agent workspace",
     browse: "फ़ोल्डर ब्राउज़ करें",
@@ -3347,6 +3348,9 @@ export const hi: TranslationMap = {
     sendShortcut: "भेजने का शॉर्टकट",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "एजेंट के काम करते समय फ़ॉलो-अप",
+    followUpModeQueue: "रन समाप्त होने तक कतार में रखें",
+    followUpModeSteer: "सक्रिय रन को दिशा दें",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "टर्मिनल",

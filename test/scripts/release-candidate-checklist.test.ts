@@ -98,6 +98,16 @@ describe("release candidate checklist", () => {
     expect(output).toHaveLength(2 * 1024 * 1024);
   });
 
+  it("passes scoped environment overrides to release child commands", () => {
+    const output = run(
+      process.execPath,
+      ["-e", "process.stdout.write(process.env.OPENCLAW_RELEASE_TEST_VALUE ?? '')"],
+      { capture: true, env: { OPENCLAW_RELEASE_TEST_VALUE: "passed" } },
+    );
+
+    expect(output).toBe("passed");
+  });
+
   it("keeps the frozen release target separate from clean trusted workflow tooling", () => {
     expect(
       validateCandidateCheckout({
@@ -161,6 +171,11 @@ describe("release candidate checklist", () => {
     ).toThrow("clean tracked tooling checkout");
     const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
     expect(source).toContain('const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url))');
+    expect(source).toContain('mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"))');
+    expect(source).toContain(
+      '["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"]',
+    );
+    expect(source).toContain("cwd: TOOLING_ROOT");
     expect(source).toContain("`+refs/heads/${workflowRef}:${remoteRef}`");
     expect(source).toContain('"worktree", "add", "--detach", toolingRoot, trustedToolingSha');
     expect(source).toContain(
@@ -443,9 +458,10 @@ describe("release candidate checklist", () => {
   });
 
   it("runs Parallels against the exact prepared candidate tarball", () => {
-    expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz")).toEqual([
-      "test:parallels:npm-update",
-      "--",
+    expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [], "/trusted")).toEqual([
+      "exec",
+      "tsx",
+      "/trusted/scripts/e2e/parallels/npm-update-smoke.ts",
       "--target-tarball",
       ".artifacts/preflight/openclaw.tgz",
       "--json",
@@ -465,12 +481,15 @@ describe("release candidate checklist", () => {
       ),
     ).toContain("'--target-tarball' '.artifacts/preflight/openclaw candidate.tgz'");
     expect(
-      candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [
-        ".artifacts/preflight/openclaw-ai.tgz",
-      ]),
+      candidateParallelsArgs(
+        ".artifacts/preflight/openclaw.tgz",
+        [".artifacts/preflight/openclaw-ai.tgz"],
+        "/trusted",
+      ),
     ).toEqual([
-      "test:parallels:npm-update",
-      "--",
+      "exec",
+      "tsx",
+      "/trusted/scripts/e2e/parallels/npm-update-smoke.ts",
       "--target-tarball",
       ".artifacts/preflight/openclaw.tgz",
       "--dependency-tarball",

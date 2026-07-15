@@ -502,6 +502,7 @@ export const it: TranslationMap = {
       "I worker cloud necessitano di un contesto del browser sicuro affinché il ripristino possa proteggere la tua attività.",
     cloudStartFailed:
       "La sessione è stata creata localmente, ma l'avvio nel cloud non è riuscito: {error}",
+    cloudSyncsFolder: "Sincronizza {folder} con il worker cloud",
     folder: "Cartella",
     folderPlaceholder: "Area di lavoro dell'agente",
     browse: "Sfoglia cartelle",
@@ -3424,6 +3425,9 @@ export const it: TranslationMap = {
     sendShortcut: "Scorciatoia di invio",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "Messaggi successivi mentre l'agente è in esecuzione",
+    followUpModeQueue: "Metti in coda fino al termine dell'esecuzione",
+    followUpModeSteer: "Indirizza nell'esecuzione attiva",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",

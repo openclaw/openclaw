@@ -498,6 +498,7 @@ export const ru: TranslationMap = {
     cloudSecureContextRequired:
       "Облачным исполнителям требуется безопасный контекст браузера, чтобы функция восстановления могла защитить вашу задачу.",
     cloudStartFailed: "Сеанс был создан локально, но не удалось запустить его в облаке: {error}",
+    cloudSyncsFolder: "Синхронизирует {folder} с облачным воркером",
     folder: "Папка",
     folderPlaceholder: "Рабочая область агента",
     browse: "Обзор папок",
@@ -3412,6 +3413,9 @@ export const ru: TranslationMap = {
     sendShortcut: "Сочетание клавиш для отправки",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "Последующие сообщения во время работы агента",
+    followUpModeQueue: "Добавлять в очередь до завершения выполнения",
+    followUpModeSteer: "Направлять в активное выполнение",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Терминал",

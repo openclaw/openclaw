@@ -4,19 +4,19 @@ import {
   normalizeInboundTextNewlines,
   sanitizeInboundSystemTags,
 } from "../../auto-reply/reply/inbound-text.js";
-import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
-import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
-import {
-  implicitMentionKindWhen,
-  resolveInboundMentionDecision,
-} from "../channel-mention-gating.js";
 import {
   createAckReactionHandle,
   removeAckReactionAfterReply,
   removeAckReactionHandleAfterReply,
   shouldAckReaction,
-} from "../testing.js";
-import type { PluginRuntime } from "../testing.js";
+} from "../../channels/ack-reactions.js";
+import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
+import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "../channel-mention-gating.js";
 
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_MODEL = "gpt-5.6-sol";

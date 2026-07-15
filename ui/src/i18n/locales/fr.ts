@@ -505,6 +505,7 @@ export const fr: TranslationMap = {
       "Les workers cloud nécessitent un contexte de navigateur sécurisé afin que la récupération puisse protéger votre tâche.",
     cloudStartFailed:
       "La session a été créée localement, mais le démarrage dans le cloud a échoué : {error}",
+    cloudSyncsFolder: "Synchronise {folder} avec le worker cloud",
     folder: "Dossier",
     folderPlaceholder: "Espace de travail de l’agent",
     browse: "Parcourir les dossiers",
@@ -3449,6 +3450,9 @@ export const fr: TranslationMap = {
     sendShortcut: "Raccourci d’envoi",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "Messages de suivi pendant que l’agent travaille",
+    followUpModeQueue: "Mettre en file d’attente jusqu’à la fin de l’exécution",
+    followUpModeSteer: "Orienter l’exécution en cours",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",

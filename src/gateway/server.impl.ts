@@ -653,11 +653,11 @@ export async function startGatewayServer(
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets,
     emitStateEvent: emitSecretsStateEvent,
+    channelAutostartSuppression: opts.channelAutostartSuppression,
     ...(startupConfigLoad.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }
       : {}),
   });
-
   let startupInternalWriteHash: string | null = null;
   let startupLastGoodSnapshot = configSnapshot;
   const startupActivationSourceConfig = configSnapshot.sourceConfig;
