@@ -33,4 +33,33 @@ describe("redactSensitiveText", () => {
       configureAcpErrorRedactor(undefined);
     }
   });
+
+  it("redacts unquoted auth-style HTTP headers in fallback errors", () => {
+    const keyHeader = ["api", "-", "key"].join("");
+    const googleHeader = ["x", "-", "goog", "-", "api", "-", "key"].join("");
+    const accessHeader = ["x", "-", "access", "-", "token"].join("");
+    const input = [
+      ["Authorization", ": token ", "samplevalue1234567890abcd"].join(""),
+      ["Proxy-Authorization", ": Digest ", "sampleproxyvalue1234567890"].join(""),
+      [keyHeader, ": ", "samplekeyvalue1234567890"].join(""),
+      [googleHeader, "=", "samplegoogvalue1234567890"].join(""),
+      [accessHeader, ": ", "sampleaccessvalue1234567890"].join(""),
+    ].join("\n");
+
+    expect(redactSensitiveText(input)).toBe(
+      [
+        ["Authorization", ": token ", "[REDACTED]"].join(""),
+        ["Proxy-Authorization", ": Digest ", "[REDACTED]"].join(""),
+        [keyHeader, ": ", "[REDACTED]"].join(""),
+        [googleHeader, "=", "[REDACTED]"].join(""),
+        [accessHeader, ": ", "[REDACTED]"].join(""),
+      ].join("\n"),
+    );
+  });
+
+  it("does not redact ordinary authorization prose in fallback errors", () => {
+    const input = "the authorization model is open";
+
+    expect(redactSensitiveText(input)).toBe(input);
+  });
 });

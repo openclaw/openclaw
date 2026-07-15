@@ -352,6 +352,49 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(secret);
   });
 
+  it("masks non-Bearer authorization schemes", () => {
+    const firstValue = ["sample", "value", "1234567890abcd"].join("");
+    const secondValue = ["sample", "proxy", "value", "1234567890"].join("");
+    const input = [
+      ["Authorization", ": token ", firstValue].join(""),
+      ["Proxy-Authorization", ": Digest ", secondValue].join(""),
+    ].join("\n");
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).toContain("Authorization: token ");
+    expect(output).toContain("Proxy-Authorization: Digest ");
+    expect(output).not.toContain(firstValue);
+    expect(output).not.toContain(secondValue);
+  });
+
+  it("masks unquoted credential-style headers", () => {
+    const firstValue = ["sample", "key", "value", "1234567890"].join("");
+    const secondValue = ["sample", "goog", "value", "1234567890"].join("");
+    const thirdValue = ["sample", "access", "value", "1234567890"].join("");
+    const keyHeader = ["api", "-", "key"].join("");
+    const googleHeader = ["x", "-", "goog", "-", "api", "-", "key"].join("");
+    const accessHeader = ["x", "-", "access", "-", "token"].join("");
+    const input = [
+      [keyHeader, ": ", firstValue].join(""),
+      [googleHeader, "=", secondValue].join(""),
+      [accessHeader, ": ", thirdValue].join(""),
+    ].join("\n");
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).toContain(`${keyHeader}: `);
+    expect(output).toContain(`${googleHeader}=`);
+    expect(output).toContain(`${accessHeader}: `);
+    expect(output).not.toContain(firstValue);
+    expect(output).not.toContain(secondValue);
+    expect(output).not.toContain(thirdValue);
+  });
+
+  it("does not redact ordinary authorization prose", () => {
+    const input = "the authorization model is open";
+
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
+  });
+
   it("masks named Gateway security headers", () => {
     const openClawToken = "supersecretgatewaytoken1234567890";
     const pomeriumJwt = "eyJheaderabcd.eyJpayloadabcd.signatureabcd123456";

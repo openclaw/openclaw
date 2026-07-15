@@ -165,6 +165,11 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)`,
   String.raw`Authorization\s*[:=]\s*Basic\s+([A-Za-z0-9+/=]+)`,
   String.raw`Authorization\s*[:=]\s*Bot\s+([A-Za-z0-9._\-+=]{18,})`,
+  String.raw`(^|[\s,{])Proxy-Authorization\s*[:=]\s*[A-Za-z][A-Za-z0-9._-]*\s+([^\s"',;]+)`,
+  String.raw`(^|[\s,{])Proxy-Authorization\s*[:=]\s*([^\s"',;]+)(?=$|[\r\n,;])`,
+  String.raw`(^|[\s,{])Authorization\s*[:=]\s*(?!(?:Bearer|Basic|Bot)\b)[A-Za-z][A-Za-z0-9._-]*\s+([^\s"',;]+)`,
+  String.raw`(^|[\s,{])Authorization\s*[:=]\s*(?!(?:Bearer|Basic|Bot)\b)([^\s"',;]+)(?=$|[\r\n,;])`,
+  String.raw`(^|[\s,{])(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)\s*[:=]\s*([^\s"',;]+)`,
   String.raw`(?:X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token)\s*[:=]\s*([^\s"',;]+)`,
   String.raw`\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b`,
   // URL userinfo and common connection-string password slots.
