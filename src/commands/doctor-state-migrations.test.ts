@@ -2237,16 +2237,22 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
-  it("merges missing legacy plugin install records into an existing SQLite index", async () => {
+  it("ignores all legacy plugin records when the SQLite ledger already exists", async () => {
     const root = await makeTempRoot();
     await writeExistingPluginInstallIndex(root, {
-      existing: {
+      demo: {
         source: "npm",
-        spec: "existing@1.0.0",
+        spec: "demo@1.0.0",
+        version: "1.0.0",
       },
     });
     const sourcePath = writeLegacyPluginInstallIndex(root, {
-      legacy: {
+      demo: {
+        source: "npm",
+        spec: "demo@2.0.0",
+        version: "2.0.0",
+      },
+      legacyOnly: {
         source: "git",
         spec: "git:file:///tmp/legacy",
       },
@@ -2255,38 +2261,26 @@ describe("doctor legacy state migrations", () => {
     const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain("Merged 1 legacy plugin install record → shared SQLite state");
     expect(fs.existsSync(sourcePath)).toBe(false);
-    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
-      installRecords: {
-        existing: { source: "npm", spec: "existing@1.0.0" },
-        legacy: { source: "git", spec: "git:file:///tmp/legacy" },
-      },
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir: root });
+    expect(persisted?.installRecords).toStrictEqual({
+      demo: { source: "npm", spec: "demo@1.0.0", version: "1.0.0" },
     });
   });
 
-  it("archives legacy plugin install index when SQLite already has richer matching records", async () => {
+  it("archives an invalid legacy plugin index without parsing it when SQLite exists", async () => {
     const root = await makeTempRoot();
     await writeExistingPluginInstallIndex(root, {
-      demo: {
-        source: "npm",
-        spec: "demo@latest",
-        version: "1.0.0",
-        resolvedName: "demo",
-        resolvedVersion: "1.0.0",
-        resolvedSpec: "demo@1.0.0",
-        integrity: "sha512-current",
-        shasum: "current",
-        installedAt: "2026-06-01T21:04:35.000Z",
-      },
-    });
-    const sourcePath = writeLegacyPluginInstallIndex(root, {
       demo: {
         source: "npm",
         spec: "demo@1.0.0",
         version: "1.0.0",
       },
     });
+    const sourcePath = path.join(root, "plugins", "installs.json");
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(sourcePath, "{not-json", "utf8");
 
     const result = await runLegacyStateMigrationsForRoot(root);
 
@@ -2295,87 +2289,7 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
     await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
       installRecords: {
-        demo: {
-          source: "npm",
-          spec: "demo@latest",
-          resolvedVersion: "1.0.0",
-          integrity: "sha512-current",
-        },
-      },
-    });
-  });
-
-  it("archives exact legacy npm install record when SQLite has authoritative resolved metadata", async () => {
-    const root = await makeTempRoot();
-    await writeExistingPluginInstallIndex(root, {
-      discord: {
-        source: "npm",
-        spec: "@openclaw/discord@latest",
-        resolvedName: "@openclaw/discord",
-        resolvedVersion: "2026.6.16",
-        integrity: "sha512-current",
-        installedAt: "2026-06-16T12:00:00.000Z",
-      },
-    });
-    const sourcePath = writeLegacyPluginInstallIndex(root, {
-      discord: {
-        source: "npm",
-        spec: "@openclaw/discord@2026.6.16",
-        version: "2026.6.16",
-        installedAt: "2026-06-01T12:00:00.000Z",
-      },
-    });
-
-    const result = await runLegacyStateMigrationsForRoot(root);
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
-    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
-      installRecords: {
-        discord: {
-          source: "npm",
-          spec: "@openclaw/discord@latest",
-          resolvedName: "@openclaw/discord",
-          resolvedVersion: "2026.6.16",
-          integrity: "sha512-current",
-        },
-      },
-    });
-  });
-
-  it("archives conflicting legacy npm metadata when SQLite has the plugin install record", async () => {
-    const root = await makeTempRoot();
-    await writeExistingPluginInstallIndex(root, {
-      demo: {
-        source: "npm",
-        spec: "demo@latest",
-        version: "1.0.0",
-      },
-    });
-    const sourcePath = writeLegacyPluginInstallIndex(root, {
-      demo: {
-        source: "npm",
-        spec: "demo@1.0.0",
-        version: "1.0.0",
-      },
-    });
-
-    const result = await runLegacyStateMigrationsForRoot(root);
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.notices).toStrictEqual([
-      "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
-    ]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
-
-    const retry = await runLegacyStateMigrationsForRoot(root);
-    expect(retry.warnings).toStrictEqual([]);
-    expect(retry.notices).toBeUndefined();
-    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
-      installRecords: {
-        demo: { source: "npm", spec: "demo@latest", version: "1.0.0" },
+        demo: { source: "npm", spec: "demo@1.0.0", version: "1.0.0" },
       },
     });
   });
@@ -2446,7 +2360,6 @@ describe("doctor legacy state migrations", () => {
     expect(result.warnings).toStrictEqual([]);
     expect(result.notices).toEqual(
       expect.arrayContaining([
-        "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
         expect.stringContaining(
           "Kept shared SQLite update-check state because legacy cache differs",
         ),
@@ -2503,139 +2416,16 @@ describe("doctor legacy state migrations", () => {
     expect(result.warnings).toStrictEqual([
       `Failed archiving plugin install index ${sourcePath}: Error: forced archive failure`,
     ]);
-    expect(result.notices).toStrictEqual([
-      "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
-    ]);
+    expect(result.notices).toBeUndefined();
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
 
     const retry = await runLegacyStateMigrationsForRoot(root);
     expect(retry.warnings).toStrictEqual([]);
-    expect(retry.notices).toStrictEqual([
-      "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
-    ]);
+    expect(retry.notices).toBeUndefined();
     expect(fs.existsSync(sourcePath)).toBe(false);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
   });
-
-  for (const fixture of [
-    {
-      label: "name different packages",
-      current: {
-        source: "npm",
-        spec: "@openclaw/demo@1.0.0",
-        version: "1.0.0",
-        resolvedName: "@openclaw/demo",
-        resolvedVersion: "1.0.0",
-        resolvedSpec: "@openclaw/demo@1.0.0",
-      },
-      legacy: {
-        source: "npm",
-        spec: "@vendor/demo@1.0.0",
-        version: "1.0.0",
-      },
-    },
-    {
-      label: "specs are unparseable",
-      current: {
-        source: "npm",
-        spec: "file:../current-demo",
-        version: "1.0.0",
-        resolvedVersion: "1.0.0",
-      },
-      legacy: {
-        source: "npm",
-        spec: "file:../legacy-demo",
-        version: "1.0.0",
-      },
-    },
-    {
-      label: "would pin a legacy floating selector to an exact version",
-      current: {
-        source: "npm",
-        spec: "demo@1.0.0",
-        version: "1.0.0",
-        resolvedName: "demo",
-        resolvedVersion: "1.0.0",
-        resolvedSpec: "demo@1.0.0",
-      },
-      legacy: {
-        source: "npm",
-        spec: "demo@beta",
-        version: "1.0.0",
-      },
-    },
-    {
-      label: "use different floating selectors",
-      current: {
-        source: "npm",
-        spec: "demo@latest",
-        version: "1.0.0",
-        resolvedName: "demo",
-        resolvedVersion: "1.0.0",
-        resolvedSpec: "demo@1.0.0",
-      },
-      legacy: {
-        source: "npm",
-        spec: "demo@beta",
-        version: "1.0.0",
-      },
-    },
-    {
-      label: "keep legacy floating selectors even when resolved specs match",
-      current: {
-        source: "npm",
-        spec: "demo@latest",
-        version: "1.0.0",
-        resolvedName: "demo",
-        resolvedVersion: "1.0.0",
-        resolvedSpec: "demo@1.0.0",
-      },
-      legacy: {
-        source: "npm",
-        spec: "demo@beta",
-        version: "1.0.0",
-        resolvedName: "demo",
-        resolvedVersion: "1.0.0",
-        resolvedSpec: "demo@1.0.0",
-      },
-    },
-    {
-      label: "have malformed legacy spec metadata",
-      current: {
-        source: "npm",
-        spec: "demo@1.0.0",
-        version: "1.0.0",
-        resolvedName: "demo",
-        resolvedVersion: "1.0.0",
-        resolvedSpec: "demo@1.0.0",
-      },
-      legacy: {
-        source: "npm",
-        spec: { raw: "demo@beta" },
-        version: "1.0.0",
-      } as unknown as InstalledPluginInstallRecordInfo,
-    },
-  ] satisfies Array<{
-    label: string;
-    current: InstalledPluginInstallRecordInfo;
-    legacy: InstalledPluginInstallRecordInfo;
-  }>) {
-    it(`keeps SQLite plugin metadata when legacy npm records ${fixture.label}`, async () => {
-      const root = await makeTempRoot();
-      await writeExistingPluginInstallIndex(root, { demo: fixture.current });
-      const sourcePath = writeLegacyPluginInstallIndex(root, { demo: fixture.legacy });
-
-      const result = await runLegacyStateMigrationsForRoot(root);
-
-      expect(result.warnings).toStrictEqual([]);
-      expect(result.notices).toStrictEqual([
-        "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
-      ]);
-      expect(fs.existsSync(sourcePath)).toBe(false);
-      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
-    });
-  }
 
   it("auto-migrates the shipped plugin-state SQLite sidecar by itself", async () => {
     const root = await makeTempRoot();
