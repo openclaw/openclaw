@@ -107,9 +107,7 @@ export function resolveBehaviorRules(
  * Returns an empty string when there are no rules so callers can always
  * append the result unconditionally.
  */
-export function buildBehaviorPolicyPrompt(
-  rules: ResolvedBehaviorRule[] | undefined,
-): string {
+export function buildBehaviorPolicyPrompt(rules: ResolvedBehaviorRule[] | undefined): string {
   if (!rules || rules.length === 0) {
     return "";
   }
@@ -243,10 +241,7 @@ function escapeXml(str: string): string {
  * rule says it shouldn't.  This is intentionally simple — the external
  * `exec` path handles serious enforcement.
  */
-function checkBuiltin(
-  rule: ResolvedBehaviorRule,
-  output: string,
-): BehaviorPolicyViolation | null {
+function checkBuiltin(rule: ResolvedBehaviorRule, output: string): BehaviorPolicyViolation | null {
   // Extract key constraint phrases from the enforce text.
   const keywords = extractKeywords(rule.enforce);
   if (keywords.length === 0) {
@@ -256,7 +251,9 @@ function checkBuiltin(
   const lowerOutput = output.toLowerCase();
 
   // Negative rules: things the agent MUST NOT do.
-  const negations = keywords.filter((k) => /^(not|never|don't|do not|must not|should not)/i.test(k));
+  const negations = keywords.filter((k) =>
+    /^(not|never|don't|do not|must not|should not)/i.test(k),
+  );
   for (const negation of negations) {
     const stripped = negation.replace(/^(not|never|don't|do not|must not|should not)\s*/i, "");
     if (!stripped) {
@@ -277,7 +274,10 @@ function checkBuiltin(
 
 function extractKeywords(text: string): string[] {
   // Simple split on common connectors and punctuation.
-  const words = text.split(/[,.;:!?\n]+/).map((w) => w.trim()).filter(Boolean);
+  const words = text
+    .split(/[,.;:!?\n]+/)
+    .map((w) => w.trim())
+    .filter(Boolean);
   // Only return substantives (longer phrases that carry meaning).
   return words.filter((w) => w.length > 10);
 }
@@ -323,13 +323,10 @@ async function validateViaExternalCommand(params: {
 
   let result: Awaited<ReturnType<typeof runCommandWithTimeout>>;
   try {
-    result = await runCommandWithTimeout({
-      command: params.exec.command,
-      args: params.exec.args ?? [],
+    result = await runCommandWithTimeout([params.exec.command, ...(params.exec.args ?? [])], {
       env: params.exec.env,
       timeoutMs,
       input,
-      maxOutputBytes: params.exec.maxOutputBytes ?? 1024 * 1024,
     });
   } catch (err) {
     params.logger?.error?.(`Behavior policy exec error: ${formatErrorMessage(err)}`);
@@ -337,9 +334,9 @@ async function validateViaExternalCommand(params: {
     return { kind: "pass" };
   }
 
-  if (result.exitCode !== 0) {
+  if (result.code !== 0) {
     params.logger?.warn?.(
-      `Behavior policy exec exited ${result.exitCode}: ${(result.stderr ?? "").slice(0, 500)}`,
+      `Behavior policy exec exited ${result.code}: ${(result.stderr ?? "").slice(0, 500)}`,
     );
     // Fail open.
     return { kind: "pass" };
