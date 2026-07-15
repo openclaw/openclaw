@@ -151,10 +151,19 @@ function hasTimeoutSignal(error: unknown, message: string): boolean {
   );
 }
 
+/**
+ * Canonical transient HTTP status predicate for provider operations.
+ * Shared by structured-error classification and the guarded POST gate so
+ * these paths cannot drift.
+ */
+export function isTransientProviderHttpStatus(status: number): boolean {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
 function isTransientProviderOperationError(error: unknown, message: string): boolean {
   const status = readErrorStatus(error);
   if (status !== undefined) {
-    return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+    return isTransientProviderHttpStatus(status);
   }
   if (
     /\b(?:HTTP\s*)?(?:400|401|403|404)\b/i.test(message) ||
