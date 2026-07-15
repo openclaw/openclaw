@@ -11,6 +11,7 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
@@ -984,7 +985,9 @@ export function handleToolExecutionStart(
         const argsType = typeof args;
         const rawArgsPreview = readStringValue(args);
         const argsPreview = sanitizeForConsole(
-          rawArgsPreview?.slice(0, TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS),
+          rawArgsPreview
+            ? sliceUtf16Safe(rawArgsPreview, 0, TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS)
+            : undefined,
           TOOL_START_WARNING_PREVIEW_MAX_CHARS,
         );
         const safeRunId = sanitizeForConsole(runId) ?? "-";

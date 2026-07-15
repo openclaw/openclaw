@@ -32,6 +32,24 @@ import type {
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
+
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      // High surrogate must be followed by a low surrogate.
+      if (i + 1 >= s.length || s.charCodeAt(i + 1) < 0xdc00 || s.charCodeAt(i + 1) > 0xdfff) {
+        return true;
+      }
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      // Low surrogate must be preceded by a high surrogate.
+      if (i === 0 || s.charCodeAt(i - 1) < 0xd800 || s.charCodeAt(i - 1) > 0xdbff) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 type PayloadToolMetas = Parameters<typeof buildEmbeddedRunPayloads>[0]["toolMetas"];
 
 const beforeToolCallTesting = { adjustedParamsByToolCallId, buildAdjustedParamsKey };
@@ -373,6 +391,27 @@ describe("handleToolExecutionStart read path checks", () => {
 
     const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
     expect(warnMeta?.argsPreview).toBe(`${"x".repeat(200)}…`);
+  });
+
+  it("does not split surrogate pairs when bounding read warning preview", async () => {
+    const { ctx, warn } = createTestContext();
+
+    // 199 BMP code units followed by an emoji puts the 201-code-unit slice
+    // boundary inside the surrogate pair, so the old implementation kept only
+    // the high surrogate.
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-surrogate-args",
+      args: "x".repeat(199) + "🎉",
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const argsPreview = typeof warnMeta?.argsPreview === "string" ? warnMeta.argsPreview : "";
+    expect(argsPreview.length).toBeLessThanOrEqual(201); // 200 visible chars + ellipsis
+    expect(hasLoneSurrogate(argsPreview)).toBe(false);
   });
 
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {
