@@ -1,28 +1,30 @@
 // Discord tests cover threading.parent info plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
-import { resetDiscordChannelInfoCacheForTest } from "./message-channel-info.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
-describe("resolveDiscordThreadParentInfo", () => {
-  beforeEach(() => {
-    resetDiscordChannelInfoCacheForTest();
-  });
+let idSequence = 0;
+function nextTestId(prefix: string): string {
+  return `${prefix}-${++idSequence}`;
+}
 
+describe("resolveDiscordThreadParentInfo", () => {
   it("falls back to fetched thread parentId when parentId is missing in payload", async () => {
+    const threadId = nextTestId("thread");
+    const parentId = nextTestId("parent");
     const fetchChannel = vi.fn(async (channelId: string) => {
-      if (channelId === "thread-1") {
+      if (channelId === threadId) {
         return {
-          id: "thread-1",
+          id: threadId,
           type: ChannelType.PublicThread,
           name: "thread-name",
-          parentId: "parent-1",
+          parentId,
         };
       }
-      if (channelId === "parent-1") {
+      if (channelId === parentId) {
         return {
-          id: "parent-1",
+          id: parentId,
           type: ChannelType.GuildText,
           name: "parent-name",
         };
@@ -37,34 +39,36 @@ describe("resolveDiscordThreadParentInfo", () => {
     const result = await resolveDiscordThreadParentInfo({
       client,
       threadChannel: {
-        id: "thread-1",
+        id: threadId,
         parentId: undefined,
       },
       channelInfo: null,
     });
 
-    expect(fetchChannel).toHaveBeenCalledWith("thread-1");
-    expect(fetchChannel).toHaveBeenCalledWith("parent-1");
+    expect(fetchChannel).toHaveBeenCalledWith(threadId);
+    expect(fetchChannel).toHaveBeenCalledWith(parentId);
     expect(result).toEqual({
-      id: "parent-1",
+      id: parentId,
       name: "parent-name",
       type: ChannelType.GuildText,
     });
   });
 
   it("falls back to fetched thread parentId when partial channel getters throw", async () => {
+    const threadId = nextTestId("thread");
+    const parentId = nextTestId("parent");
     const fetchChannel = vi.fn(async (channelId: string) => {
-      if (channelId === "thread-1") {
+      if (channelId === threadId) {
         return {
-          id: "thread-1",
+          id: threadId,
           type: ChannelType.PublicThread,
           name: "thread-name",
-          parentId: "parent-1",
+          parentId,
         };
       }
-      if (channelId === "parent-1") {
+      if (channelId === parentId) {
         return {
-          id: "parent-1",
+          id: parentId,
           type: ChannelType.GuildText,
           name: "parent-name",
         };
@@ -75,7 +79,7 @@ describe("resolveDiscordThreadParentInfo", () => {
     const client = { fetchChannel } as unknown as import("../internal/discord.js").Client;
     const threadChannel = createPartialDiscordChannelWithThrowingGetters(
       {
-        id: "thread-1",
+        id: threadId,
         parent: { id: "stale-parent", name: "stale-parent-name" },
       },
       ["parentId", "parent"],
@@ -87,20 +91,22 @@ describe("resolveDiscordThreadParentInfo", () => {
       channelInfo: null,
     });
 
-    expect(fetchChannel).toHaveBeenCalledWith("thread-1");
-    expect(fetchChannel).toHaveBeenCalledWith("parent-1");
+    expect(fetchChannel).toHaveBeenCalledWith(threadId);
+    expect(fetchChannel).toHaveBeenCalledWith(parentId);
     expect(result).toEqual({
-      id: "parent-1",
+      id: parentId,
       name: "parent-name",
       type: ChannelType.GuildText,
     });
   });
 
   it("does not fetch thread info when parentId is already present", async () => {
+    const threadId = nextTestId("thread");
+    const parentId = nextTestId("parent");
     const fetchChannel = vi.fn(async (channelId: string) => {
-      if (channelId === "parent-1") {
+      if (channelId === parentId) {
         return {
-          id: "parent-1",
+          id: parentId,
           type: ChannelType.GuildText,
           name: "parent-name",
         };
@@ -112,26 +118,27 @@ describe("resolveDiscordThreadParentInfo", () => {
     const result = await resolveDiscordThreadParentInfo({
       client,
       threadChannel: {
-        id: "thread-1",
-        parentId: "parent-1",
+        id: threadId,
+        parentId,
       },
       channelInfo: null,
     });
 
     expect(fetchChannel).toHaveBeenCalledTimes(1);
-    expect(fetchChannel).toHaveBeenCalledWith("parent-1");
+    expect(fetchChannel).toHaveBeenCalledWith(parentId);
     expect(result).toEqual({
-      id: "parent-1",
+      id: parentId,
       name: "parent-name",
       type: ChannelType.GuildText,
     });
   });
 
   it("returns empty parent info when fallback thread lookup has no parentId", async () => {
+    const threadId = nextTestId("thread");
     const fetchChannel = vi.fn(async (channelId: string) => {
-      if (channelId === "thread-1") {
+      if (channelId === threadId) {
         return {
-          id: "thread-1",
+          id: threadId,
           type: ChannelType.PublicThread,
           name: "thread-name",
           parentId: undefined,
@@ -144,14 +151,14 @@ describe("resolveDiscordThreadParentInfo", () => {
     const result = await resolveDiscordThreadParentInfo({
       client,
       threadChannel: {
-        id: "thread-1",
+        id: threadId,
         parentId: undefined,
       },
       channelInfo: null,
     });
 
     expect(fetchChannel).toHaveBeenCalledTimes(1);
-    expect(fetchChannel).toHaveBeenCalledWith("thread-1");
+    expect(fetchChannel).toHaveBeenCalledWith(threadId);
     expect(result).toStrictEqual({});
   });
 });

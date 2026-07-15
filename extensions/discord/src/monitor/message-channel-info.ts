@@ -33,10 +33,6 @@ const DISCORD_CHANNEL_INFO_CACHE = new Map<
   { value: DiscordChannelInfo | null; expiresAt: number }
 >();
 
-export function resetDiscordChannelInfoCacheForTest() {
-  DISCORD_CHANNEL_INFO_CACHE.clear();
-}
-
 function resolveDiscordChannelInfoCacheExpiresAt(ttlMs: number, nowMs: number): number | undefined {
   return resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs });
 }

@@ -14,7 +14,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "extensions/discord/src/directory-cache.ts: resetDiscordDirectoryCacheForTest",
   "extensions/discord/src/internal/client.ts: ComponentRegistry",
   "extensions/discord/src/internal/command-deploy.ts: testing",
-  "extensions/discord/src/monitor/message-channel-info.ts: resetDiscordChannelInfoCacheForTest",
   "extensions/discord/src/monitor/native-command.runtime.ts: testing",
   "extensions/discord/src/monitor/native-command.ts: testing",
   "extensions/discord/src/monitor/provider.ts: testing",

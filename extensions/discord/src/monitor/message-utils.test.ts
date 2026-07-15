@@ -7,8 +7,6 @@ import {
 } from "discord-api-types/v10";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Client, type Message } from "../internal/discord.js";
-import { resetDiscordChannelInfoCacheForTest } from "./message-channel-info.js";
-
 const readRemoteMediaBuffer = vi.fn();
 const saveMediaBuffer = vi.fn();
 
@@ -1199,10 +1197,6 @@ describe("resolveDiscordMessageText", () => {
 });
 
 describe("resolveDiscordChannelInfo", () => {
-  beforeEach(() => {
-    resetDiscordChannelInfoCacheForTest();
-  });
-
   it("caches channel lookups between calls", async () => {
     const fetchChannel = vi.fn().mockResolvedValue({
       type: ChannelType.DM,
