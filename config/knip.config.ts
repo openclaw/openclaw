@@ -15,6 +15,8 @@ const rootEntries = [
   "src/agents/code-mode.worker.ts!",
   "src/audit/audit-event-writer.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
+  // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
+  "src/agents/subagent-orphan-recovery.ts!",
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
