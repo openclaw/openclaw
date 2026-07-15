@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { isManagedWorktreeOwnerActive } from "../gateway/worktree-owner-activity.js";
 import { defaultRuntime } from "../runtime.js";
 import { registerWorktreesCli } from "./worktrees-cli.js";
 
@@ -31,7 +30,7 @@ describe("worktrees cli", () => {
 
     expect(gc).toHaveBeenCalledWith({
       limits: { maxCount: 25, maxTotalSizeBytes: 50 * 1024 ** 3 },
-      isOwnerActive: isManagedWorktreeOwnerActive,
+      shouldProtectOwner: expect.any(Function),
     });
   });
 });

@@ -119,7 +119,6 @@ export {
   CODEX_LOCAL_SESSION_HOST_ID,
   CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
 } from "./session-catalog-parsing.js";
-export { CODEX_TERMINAL_RESUME_COMMAND } from "./session-catalog-terminal.js";
 
 type CodexSessionCatalogRequestSnapshot = {
   requestTimeoutMs: number;

@@ -30,6 +30,7 @@ import {
   MAX_SETUP_GRACE_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
   type ActiveMemoryChatType,
+  type ActiveMemoryFastMode,
   type ActiveMemoryPromptStyle,
   type ActiveMemoryQmdSearchMode,
   type ActiveMemoryThinkingLevel,
@@ -239,6 +240,7 @@ function normalizePluginConfig(
     allowedChatIds: normalizeChatIdList(raw.allowedChatIds),
     deniedChatIds: normalizeChatIdList(raw.deniedChatIds),
     thinking: resolveThinkingLevel(raw.thinking),
+    fastMode: resolveFastMode(raw.fastMode),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
     toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow, cfg }),
     promptOverride: normalizePromptConfigText(raw.promptOverride),
@@ -343,6 +345,10 @@ function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
     return thinking;
   }
   return "off";
+}
+
+function resolveFastMode(fastMode: unknown): ActiveMemoryFastMode | undefined {
+  return fastMode === true || fastMode === false || fastMode === "auto" ? fastMode : undefined;
 }
 
 function resolvePromptStyle(
