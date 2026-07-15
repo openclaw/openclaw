@@ -185,7 +185,7 @@ describe("TerminalConnection", () => {
     const client = makeFakeClient();
     const conn = new TerminalConnection(client);
     const data: string[] = [];
-    const replays: string[] = [];
+    const replays: Array<{ snapshot: string; newlyObservedFrom: number }> = [];
     const recovery = deferred<{
       sessionId: string;
       agentId: string;
@@ -199,7 +199,7 @@ describe("TerminalConnection", () => {
       { cols: 80, rows: 24 },
       {
         onData: (chunk) => data.push(chunk),
-        onReplay: (snapshot) => replays.push(snapshot),
+        onReplay: (snapshot, newlyObservedFrom) => replays.push({ snapshot, newlyObservedFrom }),
         onExit: () => {},
       },
     );
@@ -228,11 +228,13 @@ describe("TerminalConnection", () => {
       shell: "/bin/zsh",
       cwd: "/work",
       confined: false,
-      buffer: "authoritative snapshot",
+      buffer: "hello??worldcovered",
       seq: 19,
     });
 
-    await vi.waitFor(() => expect(replays).toEqual(["authoritative snapshot"]));
+    await vi.waitFor(() =>
+      expect(replays).toEqual([{ snapshot: "hello??worldcovered", newlyObservedFrom: 5 }]),
+    );
     expect(data).toEqual(["hello"]);
     expect(client.requests.filter((request) => request.method === "terminal.attach")).toHaveLength(
       1,

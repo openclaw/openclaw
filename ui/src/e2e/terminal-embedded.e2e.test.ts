@@ -79,6 +79,23 @@ describeControlUiE2e("embedded terminal document", () => {
         cols: expect.any(Number),
         rows: expect.any(Number),
       });
+      const colorQueries = "\u001b]10;?\u001b\\\u001b]11;?\u001b\\";
+      await gateway.emitGatewayEvent("terminal.data", {
+        sessionId: "terminal-e2e",
+        seq: colorQueries.length,
+        data: colorQueries,
+      });
+      await expect.poll(async () => (await gateway.getRequests("terminal.input")).length).toBe(2);
+      expect((await gateway.getRequests("terminal.input")).map(({ params }) => params)).toEqual([
+        {
+          sessionId: "terminal-e2e",
+          data: "\u001b]10;rgb:1b1b/1e1e/2626\u001b\\",
+        },
+        {
+          sessionId: "terminal-e2e",
+          data: "\u001b]11;rgb:f7f7/f8f8/fafa\u001b\\",
+        },
+      ]);
       expect(await page.locator("openclaw-login-gate").count()).toBe(0);
       expect(await page.locator("openclaw-terminal-panel").count()).toBe(1);
       const closeControlMetrics = await page

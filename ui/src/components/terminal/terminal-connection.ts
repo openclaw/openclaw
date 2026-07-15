@@ -59,7 +59,7 @@ type TerminalExitInfo = {
 type SessionSink = {
   onData: (data: string) => void;
   /** Clears emulator state before replaying the authoritative ring snapshot. */
-  onReplay?: (data: string) => void;
+  onReplay?: (data: string, newlyObservedFrom: number) => void;
   onExit: (info: TerminalExitInfo) => void;
 };
 
@@ -259,7 +259,11 @@ export class TerminalConnection {
     this.streams.set(sessionId, stream);
     this.lastTerminalActivityAtMs = Date.now();
     if (replay !== undefined) {
-      (sink.onReplay ?? sink.onData)(replay);
+      if (sink.onReplay) {
+        sink.onReplay(replay, replay.length);
+      } else {
+        sink.onData(replay);
+      }
     }
     this.flushPending(sessionId, stream, coveredThroughSeq, replay !== undefined);
     this.scheduleLivenessCheck();
@@ -333,6 +337,7 @@ export class TerminalConnection {
           this.flushPending(sessionId, stream, undefined, true);
           return;
         }
+        const previouslyObservedThrough = stream.expectedSeq;
         stream.seqMode = "offset";
         stream.expectedSeq = offset;
         if (!stream.sink.onReplay) {
@@ -343,7 +348,15 @@ export class TerminalConnection {
           this.client.forceReconnect("terminal replay reset unavailable");
           return;
         }
-        stream.sink.onReplay(result.buffer);
+        // The ring may include both bytes already delivered and the gap's
+        // missing suffix. Preserve that boundary so response-producing
+        // emulators do not answer historical control queries twice.
+        const replayStart = offset - result.buffer.length;
+        const newlyObservedFrom =
+          typeof previouslyObservedThrough === "number"
+            ? Math.max(0, Math.min(result.buffer.length, previouslyObservedThrough - replayStart))
+            : 0;
+        stream.sink.onReplay(result.buffer, newlyObservedFrom);
         stream.recovering = false;
         this.flushPending(sessionId, stream, offset, true);
       })
