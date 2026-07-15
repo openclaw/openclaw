@@ -25,11 +25,26 @@ resolve_head_push_url() {
 # Pushes the diff between expected_head_oid and local HEAD as file additions/deletions.
 # File bytes are read from git objects (not the working tree) to avoid
 # symlink/special-file dereference risks from untrusted fork content.
+verify_prep_head_extends_hosted_head() {
+  local expected_oid="$1"
+  if ! git cat-file -e "${expected_oid}^{commit}" 2>/dev/null; then
+    echo "Prep sync cannot resolve hosted head $expected_oid locally; re-run prepare-init." >&2
+    return 1
+  fi
+  if ! git merge-base --is-ancestor "$expected_oid" HEAD; then
+    echo "Prep sync refused rewritten history: hosted head $expected_oid is not an ancestor of local HEAD." >&2
+    echo "Recreate the prep branch from the hosted PR head and replay only reviewed fixup commits." >&2
+    return 1
+  fi
+}
+
 graphql_push_to_fork() {
   local repo_nwo="$1"
   local branch="$2"
   local expected_oid="$3"
   local max_blob_bytes=$((5 * 1024 * 1024))
+
+  verify_prep_head_extends_hosted_head "$expected_oid" || return 1
 
   local additions="[]"
   local deletions="[]"

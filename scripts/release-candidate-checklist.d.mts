@@ -178,6 +178,7 @@ export function validateNpmPreflightRunSource({
 export function candidateParallelsArgs(
   tarballPath: unknown,
   dependencyTarballPaths?: unknown[],
+  toolingRoot?: string,
 ): unknown[];
 export function candidateParallelsShellCommand(
   tarballPath: unknown,

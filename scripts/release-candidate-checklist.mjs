@@ -9,6 +9,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -515,6 +516,13 @@ function runFromTrustedTooling(argv, { targetRoot, workflowRef }) {
       cwd: targetRoot,
     });
     worktreeAdded = true;
+    const targetNodeModules = join(targetRoot, "node_modules");
+    if (!existsSync(targetNodeModules)) {
+      throw new Error("release candidate validation requires target checkout node_modules");
+    }
+    // Trusted release tooling executes from an isolated worktree, while dependency
+    // bytes stay pinned to the prepared target checkout used by local preflight.
+    symlinkSync(targetNodeModules, join(toolingRoot, "node_modules"), "dir");
     const result = spawnSync(
       process.execPath,
       [join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv],
@@ -1194,10 +1202,15 @@ export function validateFullManifest(manifest, params) {
   }
 }
 
-export function candidateParallelsArgs(tarballPath, dependencyTarballPaths = []) {
+export function candidateParallelsArgs(
+  tarballPath,
+  dependencyTarballPaths = [],
+  toolingRoot = TOOLING_ROOT,
+) {
   return [
-    "test:parallels:npm-update",
-    "--",
+    "exec",
+    "tsx",
+    join(toolingRoot, "scripts/e2e/parallels/npm-update-smoke.ts"),
     "--target-tarball",
     tarballPath,
     ...dependencyTarballPaths.flatMap((dependency) => ["--dependency-tarball", dependency]),
@@ -1233,7 +1246,11 @@ async function runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths
     capture: true,
   }).trim();
   const command = candidateParallelsShellCommand(tarballPath, timeoutBin, dependencyTarballPaths);
-  run("bash", ["-lc", command]);
+  run("bash", ["-lc", command], {
+    env: {
+      OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(process.cwd(), ".artifacts", "parallels"),
+    },
+  });
   return {
     status: "passed",
     command,
