@@ -492,6 +492,7 @@ export type ChatEventPayload = {
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  stopReason?: string;
   yielded?: true;
 };
 
