@@ -6,14 +6,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const pidAlive = vi.hoisted(() => ({
   isPidDefinitelyDead: vi.fn<(pid: number) => boolean>(),
-  getFileLockProcessStartTime: vi.fn<(pid: number) => number | null>(),
+}));
+const ownerIdentity = vi.hoisted(() => ({
+  readProcessStartTimeForOwnerIdentity: vi.fn<(pid: number) => number | null>(),
 }));
 
-// Only the two ownership probes are stubbed; siblings (session locks, gateway
-// lock) import the rest of this module and must keep the real implementations.
+// Only the ownership probes are stubbed; siblings (session locks, gateway lock)
+// import the rest of these modules and must keep the real implementations.
 vi.mock("../../shared/pid-alive.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../shared/pid-alive.js")>()),
   ...pidAlive,
+}));
+
+vi.mock("../process-owner-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process-owner-identity.js")>()),
+  ...ownerIdentity,
 }));
 
 // Observes the publish step without changing it: wraps the real store so a test
@@ -91,7 +98,7 @@ beforeEach(async () => {
   sourceDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "spool-src-")));
   spoolRoot = path.join(stateDir, "delivery-queue-media");
   pidAlive.isPidDefinitelyDead.mockReset();
-  pidAlive.getFileLockProcessStartTime.mockReset();
+  ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReset();
   storeSpy.onMove = null;
 });
 
@@ -106,7 +113,7 @@ describe("generation reclaim", () => {
     const ancient = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000);
     await fs.utimes(artifactPath, ancient, ancient);
     pidAlive.isPidDefinitelyDead.mockReturnValue(false);
-    pidAlive.getFileLockProcessStartTime.mockReturnValue(900);
+    ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(900);
 
     await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
 
@@ -119,7 +126,7 @@ describe("generation reclaim", () => {
     const { artifactPath } = await seedGeneration({ pid: 4243, startTime: 900 });
     // kill(0) did not prove absence (e.g. EPERM) and the identity is unreadable.
     pidAlive.isPidDefinitelyDead.mockReturnValue(false);
-    pidAlive.getFileLockProcessStartTime.mockReturnValue(null);
+    ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(null);
 
     await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
 
@@ -129,7 +136,7 @@ describe("generation reclaim", () => {
   it("retains a generation recorded without a process identity", async () => {
     const { artifactPath } = await seedGeneration({ pid: 4244, startTime: "unknown" });
     pidAlive.isPidDefinitelyDead.mockReturnValue(false);
-    pidAlive.getFileLockProcessStartTime.mockReturnValue(1500);
+    ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(1500);
 
     await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
 
@@ -167,11 +174,47 @@ describe("generation reclaim", () => {
     const { artifactPath } = await seedGeneration({ pid: 4247, startTime: 900 });
     // The PID is live, but it belongs to a process that booted later.
     pidAlive.isPidDefinitelyDead.mockReturnValue(false);
-    pidAlive.getFileLockProcessStartTime.mockReturnValue(999_000);
+    ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(999_000);
 
     await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
 
     expect(await exists(artifactPath)).toBe(false);
+  });
+
+  // Windows resolves owner identity through Win32_Process CreationDate rather
+  // than procfs, so the same three outcomes are proven for the value it yields.
+  describe("windows owner identity", () => {
+    it("retains a generation whose Windows start time still matches", async () => {
+      const { artifactPath } = await seedGeneration({ pid: 5001, startTime: 1_752_000_000_000 });
+      pidAlive.isPidDefinitelyDead.mockReturnValue(false);
+      ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(1_752_000_000_000);
+
+      await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+
+      expect(await exists(artifactPath)).toBe(true);
+    });
+
+    it("reclaims a generation whose Windows start time no longer matches", async () => {
+      const { artifactPath } = await seedGeneration({ pid: 5002, startTime: 1_752_000_000_000 });
+      pidAlive.isPidDefinitelyDead.mockReturnValue(false);
+      // Same PID, different incarnation: Windows recycles PIDs aggressively.
+      ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(1_752_999_999_000);
+
+      await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+
+      expect(await exists(artifactPath)).toBe(false);
+    });
+
+    it("retains a generation when Windows identity cannot be read", async () => {
+      const { artifactPath } = await seedGeneration({ pid: 5003, startTime: 1_752_000_000_000 });
+      pidAlive.isPidDefinitelyDead.mockReturnValue(false);
+      // PowerShell/WMIC unavailable or timed out: unreadable is never "dead".
+      ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(null);
+
+      await reclaimDeadGenerationSpoolArtifacts({ retainPaths: new Set(), stateDir });
+
+      expect(await exists(artifactPath)).toBe(true);
+    });
   });
 
   it("collects a partial publish left by a crash between write and rename", async () => {

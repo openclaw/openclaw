@@ -15,8 +15,9 @@ import {
   type OutboundMediaAccess,
 } from "../../media/load-options.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { fileStore } from "../file-store.js";
+import { readProcessStartTimeForOwnerIdentity } from "../process-owner-identity.js";
 import { generateSecureHex, generateSecureUuid } from "../secure-random.js";
 
 // <pid>-<processStartTime|unknown>-<nonce>. The nonce keeps generations distinct
@@ -39,7 +40,7 @@ let currentGenerationDir: string | undefined;
 /** Directory name identifying artifacts owned by this process incarnation. */
 function resolveCurrentGenerationDir(): string {
   if (!currentGenerationDir) {
-    const startTime = getFileLockProcessStartTime(process.pid);
+    const startTime = readProcessStartTimeForOwnerIdentity(process.pid);
     currentGenerationDir = `${process.pid}-${startTime ?? "unknown"}-${generateSecureHex(16)}`;
   }
   return currentGenerationDir;
@@ -78,7 +79,7 @@ function resolveGenerationOwner(generation: Generation): GenerationOwner {
   if (generation.startTime === null) {
     return "unknown";
   }
-  const currentStartTime = getFileLockProcessStartTime(generation.pid);
+  const currentStartTime = readProcessStartTimeForOwnerIdentity(generation.pid);
   if (currentStartTime === null) {
     return "unknown";
   }
