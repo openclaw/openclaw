@@ -1414,12 +1414,18 @@ describe("shared Codex app-server client", () => {
       .mockReturnValueOnce("api-key:first")
       .mockReturnValueOnce("api-key:second");
 
-    const firstList = listCodexAppServerModels({ timeoutMs: 1000 });
+    const firstList = listCodexAppServerModels({
+      timeoutMs: 1000,
+      authRequirement: "api-key",
+    });
     await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(first);
     await expect(firstList).resolves.toEqual({ models: [] });
 
-    const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
+    const secondList = listCodexAppServerModels({
+      timeoutMs: 1000,
+      authRequirement: "api-key",
+    });
     await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(second);
     await expect(secondList).resolves.toEqual({ models: [] });
@@ -1427,6 +1433,49 @@ describe("shared Codex app-server client", () => {
     expect(startSpy).toHaveBeenCalledTimes(2);
     expect(first.process.stdin.destroyed).toBe(false);
     expect(second.process.stdin.destroyed).toBe(false);
+  });
+
+  it("does not share a client across auth requirements", async () => {
+    const first = createClientHarness();
+    const second = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client);
+
+    const firstList = listCodexAppServerModels({
+      timeoutMs: 1000,
+      authProfileId: "openai:work",
+      authRequirement: "api-key",
+    });
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
+    await sendEmptyModelList(first);
+    await expect(firstList).resolves.toEqual({ models: [] });
+
+    const secondList = listCodexAppServerModels({
+      timeoutMs: 1000,
+      authProfileId: "openai:work",
+      authRequirement: "subscription",
+    });
+    await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
+    await sendEmptyModelList(second);
+    await expect(secondList).resolves.toEqual({ models: [] });
+
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(first.process.stdin.destroyed).toBe(false);
+    expect(second.process.stdin.destroyed).toBe(false);
+  });
+
+  it("rejects prepared auth that conflicts with the auth requirement", async () => {
+    const startSpy = vi.spyOn(CodexAppServerClient, "start");
+
+    await expect(
+      getSharedCodexAppServerClient({
+        authRequirement: "subscription",
+        preparedAuth: { kind: "api-key", apiKey: "placeholder" },
+      }),
+    ).rejects.toThrow("Prepared Codex auth does not satisfy the requested auth requirement.");
+    expect(startSpy).not.toHaveBeenCalled();
   });
 
   it("does not let one shared-client failure tear down another keyed client", async () => {
