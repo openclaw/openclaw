@@ -1648,7 +1648,67 @@ describe("projectRecentChatDisplayMessages", () => {
           sourceSessionKey: "agent:main:webchat:source",
           sourceTool: "sessions_send",
         },
+        __openclaw: { turnBoundary: true },
         timestamp: 2,
+      },
+    ]);
+  });
+
+  it("marks only the first visible message after each hidden heartbeat input", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: HEARTBEAT_PROMPT }],
+        __openclaw: { seq: 1 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "First run started." }],
+        __openclaw: { seq: 2 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "First run finished." }],
+        __openclaw: { seq: 3 },
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: HEARTBEAT_PROMPT }],
+        __openclaw: { seq: 4 },
+      },
+      {
+        role: "system",
+        content: [{ type: "text", text: "Compaction" }],
+        __openclaw: { kind: "compaction", seq: 5 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Second run finished." }],
+        __openclaw: { seq: 6 },
+      },
+    ]);
+
+    expect(
+      result.map((message) => ({
+        text: (message.content as Array<{ text?: string }> | undefined)?.[0]?.text,
+        metadata: message["__openclaw"],
+      })),
+    ).toEqual([
+      {
+        text: "First run started.",
+        metadata: { seq: 2, turnBoundary: true },
+      },
+      {
+        text: "First run finished.",
+        metadata: { seq: 3 },
+      },
+      {
+        text: "Compaction",
+        metadata: { kind: "compaction", seq: 5 },
+      },
+      {
+        text: "Second run finished.",
+        metadata: { seq: 6, turnBoundary: true },
       },
     ]);
   });
