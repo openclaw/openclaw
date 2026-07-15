@@ -217,8 +217,9 @@ describe("auth.test boot call", () => {
     vi.stubEnv("SLACK_API_URL", server.apiUrl);
     useRealSlackStartupAuthClientOnce();
 
-    const runtimeLog = vi.fn((message: string) => {
-      if (message.includes("slack auth.test failed at boot")) {
+    const runtimeLog = vi.fn((...args: unknown[]) => {
+      const message = args[0];
+      if (typeof message === "string" && message.includes("slack auth.test failed at boot")) {
         events.push("auth-settled");
       }
     });
