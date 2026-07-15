@@ -1219,6 +1219,66 @@ describe("resolvePluginTools optional tools", () => {
     expect(staleRegistry.diagnostics).toStrictEqual([]);
   });
 
+  it("keeps missing-owner diagnostics on the request-local cold registry", () => {
+    const context = createContext();
+    const config = context.config;
+    const multiEntry: MockRegistryToolEntry = {
+      pluginId: "multi",
+      optional: false,
+      source: "/tmp/multi.js",
+      names: ["other_tool"],
+      declaredNames: ["other_tool"],
+      factory: () => makeTool("other_tool"),
+    };
+    installToolManifestSnapshots({
+      config,
+      plugins: [
+        {
+          id: "multi",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["other_tool"] },
+        },
+        {
+          id: "optional-demo",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["optional_tool"] },
+        },
+      ],
+    });
+    const activeRegistry = createToolRegistry([multiEntry]);
+    const coldRegistry = createToolRegistry([]);
+    coldRegistry.plugins.push({ id: "optional-demo", origin: "bundled", status: "loaded" });
+    setActivePluginRegistry?.(
+      activeRegistry as never,
+      "partial-test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
+    resolveRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
+    loadOpenClawPluginsMock.mockReturnValue(coldRegistry);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context,
+        toolAllowlist: ["*", "optional-demo"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["other_tool"]);
+    expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
+    expectSingleDiagnosticMessage(
+      coldRegistry.diagnostics,
+      "plugin tool registry did not include selected plugin tools after cold load (optional-demo)",
+    );
+    expect(activeRegistry.diagnostics).toStrictEqual([]);
+  });
+
   it("does not reuse a pinned gateway registry for manifest-unavailable tools", () => {
     const config = createContext().config;
     installToolManifestSnapshot({

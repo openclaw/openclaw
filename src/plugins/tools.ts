@@ -1001,6 +1001,13 @@ function resolvePluginToolRegistry(params: {
   onRetainRegistry?: (registry: PluginRegistry) => void;
 }) {
   const requestedPluginIds = params.onlyPluginIds;
+  // Retained registries belong to one cached descriptor execution. Reusing one
+  // across a multi-owner request would keep its tools but lose its hook state
+  // when another owner triggers a fresh scoped load.
+  const retainedRegistry =
+    requestedPluginIds === undefined || requestedPluginIds.length === 1
+      ? params.retainedRegistry
+      : undefined;
   const registries: PluginRegistry[] = [];
   const seenRegistries = new Set<PluginRegistry>();
   const ownerRegistryByPluginId = new Map<string, PluginRegistry>();
@@ -1079,11 +1086,11 @@ function resolvePluginToolRegistry(params: {
 
   if (
     requestedPluginIds === undefined &&
-    registryHasScopedPluginTools(params.retainedRegistry, undefined)
+    registryHasScopedPluginTools(retainedRegistry, undefined)
   ) {
-    return params.retainedRegistry;
+    return retainedRegistry;
   }
-  addRegistry(params.retainedRegistry);
+  addRegistry(retainedRegistry);
   requiredPluginIds = missingPluginIds();
   if (requiredPluginIds?.length === 0) {
     return composeSelectedRegistries();
@@ -1091,7 +1098,7 @@ function resolvePluginToolRegistry(params: {
   // Partial active/retained registries contribute their matching owners, but
   // missing requested owners still force a fresh load. Plugin records alone
   // do not prove that the executable tool registrations are available.
-  const forceStandaloneLoad = Boolean(gatewayRegistry || activeRegistry || params.retainedRegistry);
+  const forceStandaloneLoad = Boolean(gatewayRegistry || activeRegistry || retainedRegistry);
   const shouldRetainColdLoadedToolRegistry =
     forceStandaloneLoad &&
     params.loadOptions.activate === false &&
@@ -1130,10 +1137,10 @@ function composePluginToolRegistries(params: {
       (pluginId) => params.ownerRegistryByPluginId.get(pluginId) === registry,
     ),
   );
-  if (contributingRegistries.length <= 1) {
-    return contributingRegistries[0] ?? params.registries.at(-1);
+  const baseRegistry = params.registries.at(-1)!;
+  if (contributingRegistries.length === 1 && contributingRegistries[0] === baseRegistry) {
+    return baseRegistry;
   }
-  const baseRegistry = contributingRegistries.at(-1)!;
   const selectedPluginIds = new Set(params.requestedPluginIds);
   return {
     ...baseRegistry,
