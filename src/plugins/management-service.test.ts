@@ -175,6 +175,7 @@ const hostedFeedDiffsEntry = {
   id: "@openclaw/diffs",
   title: "Diffs",
   state: "available",
+  featured: true,
   publisher: { id: "openclaw", trust: "official" },
   install: {
     candidates: [
@@ -212,13 +213,12 @@ describe("plugin management service", () => {
     });
   });
 
-  it("overlays bundled curation through the hosted catalog load path", async () => {
+  it("keeps bundled curation when the hosted catalog falls back offline", async () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
     mocks.officialCatalog.mockResolvedValue({
-      source: "hosted",
+      source: "bundled-fallback",
       entries: [hostedDiffsEntry],
-      feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
-      metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
+      error: "offline",
     });
 
     const catalog = await listManagedPlugins({ config: {}, env: {} });
