@@ -7,23 +7,36 @@ import Testing
 struct StatusItemMouseRouterTests {
     @Test func `installed monitor consumes the native button event`() throws {
         let (window, button) = Self.makeButtonWindow()
-        window.orderFront(nil)
         defer { window.close() }
 
+        let monitorToken = NSObject()
+        var installedMask: NSEvent.EventTypeMask = []
+        var installedHandler: StatusItemMouseRouter.EventMonitorHandler?
+        var removedMonitor = false
         var leftClicks = 0
-        let router = StatusItemMouseRouter()
+        let router = StatusItemMouseRouter(
+            eventMonitorInstaller: { mask, handler in
+                installedMask = mask
+                installedHandler = handler
+                return monitorToken
+            },
+            eventMonitorRemover: { monitor in
+                removedMonitor = monitor as AnyObject === monitorToken
+            })
         router.install(
             on: button,
             onLeftClick: { leftClicks += 1 },
             onRightClick: {},
             onHoverChanged: { _ in })
-        defer { router.uninstall() }
 
+        #expect(installedMask == [.leftMouseDown, .rightMouseDown])
+        let handler = try #require(installedHandler)
         let left = try Self.mouseEvent(.leftMouseDown, window: window, location: NSPoint(x: 30, y: 30))
-        NSApp.sendEvent(left)
-
+        #expect(handler(left) == nil)
         #expect(leftClicks == 1)
-        #expect(button.nativeMouseDownCount == 0)
+
+        router.uninstall()
+        #expect(removedMonitor)
     }
 
     @Test func `routes left and right clicks without opening the native menu`() throws {
@@ -101,13 +114,13 @@ struct StatusItemMouseRouterTests {
         #expect(rightClicks == 1)
     }
 
-    private static func makeButtonWindow() -> (NSWindow, TestStatusBarButton) {
+    private static func makeButtonWindow() -> (NSWindow, NSStatusBarButton) {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 120, height: 80),
             styleMask: .borderless,
             backing: .buffered,
             defer: false)
-        let button = TestStatusBarButton(frame: NSRect(x: 20, y: 20, width: 40, height: 24))
+        let button = NSStatusBarButton(frame: NSRect(x: 20, y: 20, width: 40, height: 24))
         window.contentView?.addSubview(button)
         return (window, button)
     }
@@ -127,14 +140,5 @@ struct StatusItemMouseRouterTests {
             eventNumber: 1,
             clickCount: 1,
             pressure: 1))
-    }
-}
-
-@MainActor
-private final class TestStatusBarButton: NSStatusBarButton {
-    private(set) var nativeMouseDownCount = 0
-
-    override func mouseDown(with event: NSEvent) {
-        self.nativeMouseDownCount += 1
     }
 }

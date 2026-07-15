@@ -247,12 +247,30 @@ struct OpenClawApp: App {
 /// A label subview is not durable because SwiftUI replaces it when `MenuBarExtra` redraws.
 @MainActor
 final class StatusItemMouseRouter: NSResponder {
+    typealias EventMonitorHandler = (NSEvent) -> NSEvent?
+    typealias EventMonitorInstaller = (NSEvent.EventTypeMask, @escaping EventMonitorHandler) -> Any?
+    typealias EventMonitorRemover = (Any) -> Void
+
     private weak var button: NSStatusBarButton?
     private var eventMonitor: Any?
     private var trackingArea: NSTrackingArea?
     private var onLeftClick: (() -> Void)?
     private var onRightClick: (() -> Void)?
     private var onHoverChanged: ((Bool) -> Void)?
+    private let eventMonitorInstaller: EventMonitorInstaller
+    private let eventMonitorRemover: EventMonitorRemover
+
+    init(
+        eventMonitorInstaller: @escaping EventMonitorInstaller = { mask, handler in
+            NSEvent.addLocalMonitorForEvents(matching: mask, handler: handler)
+        },
+        eventMonitorRemover: @escaping EventMonitorRemover = { monitor in
+            NSEvent.removeMonitor(monitor)
+        })
+    {
+        self.eventMonitorInstaller = eventMonitorInstaller
+        self.eventMonitorRemover = eventMonitorRemover
+    }
 
     func install(
         on item: NSStatusItem,
@@ -280,8 +298,8 @@ final class StatusItemMouseRouter: NSResponder {
         self.track(button)
 
         guard self.eventMonitor == nil else { return }
-        self.eventMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown])
+        self.eventMonitor = self.eventMonitorInstaller(
+            [.leftMouseDown, .rightMouseDown])
         { [weak self] event in
             guard let self else { return event }
             return self.route(event)
@@ -290,7 +308,7 @@ final class StatusItemMouseRouter: NSResponder {
 
     func uninstall() {
         if let eventMonitor {
-            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitorRemover(eventMonitor)
             self.eventMonitor = nil
         }
         if let button, let trackingArea {
@@ -348,7 +366,7 @@ final class StatusItemMouseRouter: NSResponder {
 
     @MainActor deinit {
         if let eventMonitor {
-            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitorRemover(eventMonitor)
         }
     }
 }
