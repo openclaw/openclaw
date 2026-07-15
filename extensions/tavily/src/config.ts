@@ -8,8 +8,8 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com";
-export const DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS = 30;
-export const DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS = 60;
+const DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS = 30;
+const DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS = 60;
 
 type TavilySearchConfig =
   | {
@@ -25,7 +25,7 @@ type PluginEntryConfig = {
   };
 };
 
-export function resolveTavilySearchConfig(cfg?: OpenClawConfig): TavilySearchConfig {
+function resolveTavilySearchConfig(cfg?: OpenClawConfig): TavilySearchConfig {
   const pluginConfig = cfg?.plugins?.entries?.tavily?.config as PluginEntryConfig;
   const pluginWebSearch = pluginConfig?.webSearch;
   if (pluginWebSearch && typeof pluginWebSearch === "object" && !Array.isArray(pluginWebSearch)) {

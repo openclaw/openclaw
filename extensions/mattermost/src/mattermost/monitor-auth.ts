@@ -104,7 +104,7 @@ function mapMattermostChannelKind(channelType?: string | null): "direct" | "grou
   return "channel";
 }
 
-export type MattermostCommandAuthDecision =
+type MattermostCommandAuthDecision =
   | {
       ok: true;
       commandAuthorized: boolean;

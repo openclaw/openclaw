@@ -500,6 +500,8 @@ export interface ToolDefinition<
   name: string;
   /** Human-readable label for UI */
   label: string;
+  /** Preserve lifecycle telemetry without rendering transient channel progress. */
+  hideFromChannelProgress?: boolean;
   /** Description for LLM */
   description: string;
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */
@@ -1692,3 +1694,4 @@ export interface ExtensionError {
   error: string;
   stack?: string;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

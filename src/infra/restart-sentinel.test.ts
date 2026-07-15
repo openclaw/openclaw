@@ -194,6 +194,36 @@ describe("restart sentinel", () => {
     });
   });
 
+  it("keeps old config restart sentinels readable without restart-required stats", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const filePath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "restart-sentinel.json");
+      const payload = {
+        kind: "config-patch" as const,
+        status: "ok" as const,
+        ts: Date.now(),
+        message: "Config updated successfully",
+        stats: { mode: "config.patch" },
+      };
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, JSON.stringify({ version: 1, payload }, null, 2), "utf-8");
+
+      const read = await readRestartSentinel();
+
+      expect(read?.payload).toEqual(payload);
+      if (!read) {
+        throw new Error("Expected old restart sentinel to be readable");
+      }
+      expect(summarizeRestartSentinel(read.payload)).toBe(
+        "Gateway restart config-patch ok (config.patch)",
+      );
+      expect(formatRestartSentinelMessage(read.payload)).toBe(
+        ["Gateway restart config-patch ok (config.patch)", "Config updated successfully"].join(
+          "\n",
+        ),
+      );
+    });
+  });
+
   it("formatRestartSentinelMessage uses custom message when present", () => {
     const payload = {
       kind: "config-apply" as const,
@@ -242,6 +272,48 @@ describe("restart sentinel", () => {
     expect(result).toContain("Gateway restart");
   });
 
+  it("formats config write success notices as restart required when marked", () => {
+    const payload = {
+      kind: "config-patch" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message: "Run restart-gateway.ps1 to apply config changes.",
+      doctorHint: "Run openclaw doctor --non-interactive",
+      stats: { mode: "config.patch", requiresRestart: true },
+    };
+
+    expect(formatRestartSentinelMessage(payload)).toBe(
+      [
+        "Gateway restart required (config.patch)",
+        "Run restart-gateway.ps1 to apply config changes.",
+        "Run openclaw doctor --non-interactive",
+      ].join("\n"),
+    );
+    expect(summarizeRestartSentinel(payload)).toBe("Gateway restart required (config.patch)");
+
+    expect(
+      summarizeRestartSentinel({
+        kind: "config-apply",
+        status: "ok",
+        ts: Date.now(),
+        stats: { mode: "config.apply", requiresRestart: true },
+      }),
+    ).toBe("Gateway restart required (config.apply)");
+  });
+
+  it("does not mark hot-reloaded config patch notices as restart required", () => {
+    const payload = {
+      kind: "config-patch" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      stats: { mode: "config.patch", requiresRestart: false },
+    };
+
+    expect(summarizeRestartSentinel(payload)).toBe(
+      "Gateway restart config-patch ok (config.patch)",
+    );
+  });
+
   it("formats summary, distinct reason, and doctor hint together", () => {
     const payload = {
       kind: "config-patch" as const,
@@ -267,6 +339,10 @@ describe("restart sentinel", () => {
     const trimmed = trimLogTail(text, 8000);
     expect(trimmed?.length).toBeLessThanOrEqual(8001);
     expect(trimmed?.startsWith("…")).toBe(true);
+  });
+
+  it("keeps trimmed log tails UTF-16 safe", () => {
+    expect(trimLogTail("prefix🤖tail", 5)).toBe("…tail");
   });
 
   it("formats restart messages without volatile timestamps", () => {

@@ -12,9 +12,7 @@ type LegacyAgentTurnCommandPayload = {
   timeoutSeconds?: number;
 };
 
-export type UnresolvedAgentTurnShellToolPromptKind =
-  | "commandPromptWithoutShellAccess"
-  | "shellToolPrompt";
+type UnresolvedAgentTurnShellToolPromptKind = "commandPromptWithoutShellAccess" | "shellToolPrompt";
 
 const LEGACY_AGENT_TURN_COMMAND_MARKER_RE = /\bCommand to run\s*:/iu;
 const LEGACY_AGENT_TURN_COMMAND_FIELD_RE = /^\s*-\s*(command|workdir|timeout)\s*:\s*(.*?)\s*$/iu;
@@ -240,8 +238,4 @@ export function classifyUnresolvedAgentTurnShellToolPrompt(
     return "shellToolPrompt";
   }
   return null;
-}
-
-export function hasUnresolvedAgentTurnShellToolPrompt(payload: UnknownRecord): boolean {
-  return classifyUnresolvedAgentTurnShellToolPrompt(payload) !== null;
 }

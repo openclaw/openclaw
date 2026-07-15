@@ -7,11 +7,13 @@ import {
   spawnSync,
   type SpawnOptionsWithoutStdio,
 } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { sleep } from "../lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
@@ -150,9 +152,9 @@ const DEFAULT_SKILL_DIR = "~/.codex/skills/custom/telegram-e2e-bot-to-bot";
 const DEFAULT_CONVEX_ENV_FILE = `${DEFAULT_SKILL_DIR}/convex.local.env`;
 const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
-export const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
-export const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
-export const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
+const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
+const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
+const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
 export const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 export const COMMAND_TIMEOUT_KILL_GRACE_MS = 5_000;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 25;
@@ -238,7 +240,7 @@ function trimToValue(value: string | undefined) {
 const positiveIntegerPattern = /^[1-9]\d*$/u;
 const SHORT_OPTION_TOKENS = new Set(["-h"]);
 
-function isMissingOptionValue(value: string | undefined) {
+function isMissingOptionValue(value: string) {
   return !value || SHORT_OPTION_TOKENS.has(value) || value.startsWith("--");
 }
 
@@ -270,6 +272,10 @@ function parseTcpPort(value: string, label: string) {
   return parsed;
 }
 
+function createTelegramProofRunId() {
+  return `${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID().slice(0, 8)}`;
+}
+
 export function parseArgs(argvInput: string[]): Options {
   let argv = argvInput;
   argv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -285,7 +291,6 @@ export function parseArgs(argvInput: string[]): Options {
     "view",
   ]);
   const command = commands.has(argv[0] ?? "") ? (argv.shift() as Options["command"]) : "probe";
-  const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
   const opts: Options = {
     crabboxClass: "standard",
     command,
@@ -299,7 +304,7 @@ export function parseArgs(argvInput: string[]): Options {
     keepBox: false,
     mockResponseText: "OPENCLAW_E2E_OK",
     mockPort: 19_882,
-    outputDir: path.join(DEFAULT_OUTPUT_ROOT, stamp),
+    outputDir: path.join(DEFAULT_OUTPUT_ROOT, createTelegramProofRunId()),
     previewCropWidth: TELEGRAM_PROOF_CROP.cropWidth,
     previewFps: 24,
     previewWidth: 1920,
@@ -322,12 +327,22 @@ export function parseArgs(argvInput: string[]): Options {
     argv = argv.slice(0, commandSeparator);
   }
   let expectWasPassed = false;
+  const seenSingleValueOptions = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    const readValue = () => {
+    if (arg === undefined) {
+      usage();
+    }
+    const readValue = (options: { repeatable?: boolean } = {}) => {
       const value = argv[index + 1];
-      if (isMissingOptionValue(value)) {
+      if (value === undefined || isMissingOptionValue(value)) {
         usage();
+      }
+      if (!options.repeatable) {
+        if (seenSingleValueOptions.has(arg)) {
+          throw new Error(`${arg} was provided more than once`);
+        }
+        seenSingleValueOptions.add(arg);
       }
       index += 1;
       return value;
@@ -347,7 +362,7 @@ export function parseArgs(argvInput: string[]): Options {
         opts.expect = [];
         expectWasPassed = true;
       }
-      opts.expect.push(readValue());
+      opts.expect.push(readValue({ repeatable: true }));
     } else if (arg === "--gateway-port") {
       opts.gatewayPort = parseTcpPort(readValue(), "--gateway-port");
     } else if (arg === "--id") {
@@ -565,12 +580,12 @@ function appendCommandText(current: string, chunk: Buffer): string {
   return current + chunk.toString("utf8");
 }
 
-export function appendCommandTextTail(current: string, chunk: Buffer, maxChars: number): string {
+function appendCommandTextTail(current: string, chunk: Buffer, maxChars: number): string {
   const next = appendCommandText(current, chunk);
   return next.length > maxChars ? next.slice(-maxChars) : next;
 }
 
-export function appendCommandStdout(
+function appendCommandStdout(
   current: string,
   chunk: Buffer,
   maxChars = COMMAND_STDOUT_MAX_CHARS,
@@ -582,7 +597,7 @@ export function appendCommandStdout(
   return { ok: true, value: next };
 }
 
-export function appendCommandStderrTail(
+function appendCommandStderrTail(
   current: string,
   chunk: Buffer,
   maxChars = COMMAND_STDERR_TAIL_CHARS,
@@ -618,7 +633,11 @@ export function signalCommandTree(
     useProcessGroup = platform !== "win32",
   }: {
     platform?: NodeJS.Platform;
-    runTaskkill?: typeof spawnSync;
+    runTaskkill?: (
+      command: string,
+      args: readonly string[],
+      options: { stdio: "ignore" },
+    ) => { error?: Error; status: number | null };
     useProcessGroup?: boolean;
   } = {},
 ) {
@@ -984,12 +1003,6 @@ function spawnDaemon(params: {
   return child.pid;
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function waitForChildExit(child: ChildProcess) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(child.exitCode);
@@ -1107,19 +1120,24 @@ function writeSutConfig(params: {
   const config = {
     agents: {
       defaults: {
-        model: { primary: "openai/gpt-5.5" },
-        models: { "openai/gpt-5.5": { params: { openaiWsWarmup: false, transport: "sse" } } },
+        model: { primary: "openai/gpt-5.6-luna" },
+        models: {
+          "openai/gpt-5.6-luna": { params: { openaiWsWarmup: false, transport: "sse" } },
+        },
       },
       list: [
         {
           default: true,
           id: "main",
-          model: { primary: "openai/gpt-5.5" },
+          model: { primary: "openai/gpt-5.6-luna" },
           name: "Main",
           workspace,
         },
       ],
     },
+    // Exercise the opt-in message audit surface: the DM probe should produce
+    // inbound/outbound rows under the privacy-sensitive "direct" mode.
+    audit: { enabled: true, messages: "direct" },
     channels: {
       telegram: {
         allowFrom: [params.testerId],
@@ -1148,7 +1166,12 @@ function writeSutConfig(params: {
           apiKey: { id: "OPENAI_API_KEY", provider: "default", source: "env" },
           baseUrl: `http://127.0.0.1:${params.mockPort}/v1`,
           models: [
-            { api: "openai-responses", contextWindow: 128000, id: "gpt-5.5", name: "gpt-5.5" },
+            {
+              api: "openai-responses",
+              contextWindow: 128000,
+              id: "gpt-5.6-luna",
+              name: "gpt-5.6-luna",
+            },
           ],
           request: { allowPrivateNetwork: true },
         },
@@ -1200,10 +1223,11 @@ export async function startLocalSut(
       cwd: params.repoRoot,
       env: mockServerEnv({ ...params, requestLog }),
     });
+    const runningMock = mock;
     await waitForOutputReady(
-      mock.child,
+      runningMock.child,
       /mock-openai listening/u,
-      () => mock.output,
+      () => runningMock.output,
       "mock-openai",
       10_000,
     );
@@ -1213,23 +1237,24 @@ export async function startLocalSut(
       repoRoot: params.repoRoot,
     });
     gateway = spawnLoggedCommand(gatewaySpec.command, gatewaySpec.args, gatewaySpec.options);
+    const runningGateway = gateway;
     await waitForOutputReady(
-      gateway.child,
+      runningGateway.child,
       /\[gateway\] ready/u,
-      () => gateway.output,
+      () => runningGateway.output,
       "gateway",
       60_000,
     );
     return {
       ...config,
       drained,
-      gateway: gateway.child,
+      gateway: runningGateway.child,
       get gatewayLog() {
-        return gateway.output;
+        return runningGateway.output;
       },
-      mock: mock.child,
+      mock: runningMock.child,
       get mockLog() {
-        return mock.output;
+        return runningMock.output;
       },
       requestLog,
     };
@@ -1321,10 +1346,10 @@ async function startLocalSutDaemon(params: {
     gatewayPid = spawnDaemon({
       args: gatewaySpec.args,
       command: gatewaySpec.command,
-      cwd: gatewaySpec.options.cwd ?? params.repoRoot,
+      cwd: (gatewaySpec.options.cwd ?? params.repoRoot) as string,
       env: gatewaySpec.options.env ?? gatewayEnvVars,
       logPath: gatewayLog,
-      shell: gatewaySpec.options.shell,
+      shell: gatewaySpec.options.shell as boolean | undefined,
       windowsVerbatimArguments: gatewaySpec.options.windowsVerbatimArguments,
     });
     if (!gatewayPid) {
@@ -1993,6 +2018,7 @@ const FULL_ARTIFACT_JSON_NAMES = new Set([
   "telegram-user-crabbox-session-summary.json",
 ]);
 const FULL_ARTIFACT_FILE_EXTENSIONS = new Set([".gif", ".log", ".md", ".mp4", ".png"]);
+const FULL_ARTIFACT_PROOF_REPORT = "telegram-user-crabbox-proof.md";
 const TIMESTAMPED_PROBE_ARTIFACT_JSON = /^probe-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/u;
 
 function isFullArtifactJsonName(name: string) {
@@ -2000,6 +2026,10 @@ function isFullArtifactJsonName(name: string) {
 }
 
 export function stageFullSessionArtifacts(outputDir: string) {
+  if (!fs.existsSync(path.join(outputDir, FULL_ARTIFACT_PROOF_REPORT))) {
+    throw new Error(`Missing proof report. Run finish first: ${FULL_ARTIFACT_PROOF_REPORT}`);
+  }
+
   const publishDir = path.join(outputDir, "publish-full-artifacts");
   fs.rmSync(publishDir, { force: true, recursive: true });
   fs.mkdirSync(publishDir, { recursive: true });

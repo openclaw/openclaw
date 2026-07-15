@@ -52,6 +52,21 @@ describe("check-cli-startup-memory", () => {
     expect(testing.resolveDefaultLimitsMb("darwin").help).toBeGreaterThan(100);
   });
 
+  it("guards packaged plugin listing startup memory", () => {
+    expect(testing.resolveDefaultLimitsMb("linux").pluginsList).toBe(400);
+    expect(testing.resolveDefaultLimitsMb("darwin").pluginsList).toBeGreaterThan(350);
+    expect(testing.cases).toContainEqual(
+      expect.objectContaining({
+        id: "pluginsList",
+        args: ["openclaw.mjs", "plugins", "list", "--json"],
+      }),
+    );
+  });
+
+  it("keeps status startup headroom above Linux runner RSS variance", () => {
+    expect(testing.resolveDefaultLimitsMb("linux").statusJson).toBe(425);
+  });
+
   it("keeps invalid startup memory env values from bypassing budgets", () => {
     expect(() =>
       testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {
@@ -188,8 +203,8 @@ describe("check-cli-startup-memory", () => {
         },
       ),
     ).toThrow("--help timed out after 1234ms");
-    expect(seenTimeouts).toEqual([1234, 1234, 1234]);
-    expect(seenKillSignals).toEqual(["SIGKILL", "SIGKILL", "SIGKILL"]);
+    expect(seenTimeouts).toEqual(testing.cases.map(() => 1234));
+    expect(seenKillSignals).toEqual(testing.cases.map(() => "SIGKILL"));
   });
 
   it("rejects zero RSS markers instead of passing empty resource evidence", () => {
@@ -217,5 +232,43 @@ describe("check-cli-startup-memory", () => {
         },
       ),
     ).toThrow("--help did not report max RSS");
+  });
+
+  it("passes the generated RSS hook as a Node import URL", () => {
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      return;
+    }
+
+    const tempRoot = makeTempRoot();
+    const seenArgs: string[][] = [];
+
+    const result = testing.runStartupMemoryCheck(
+      [
+        "--json",
+        path.join(tempRoot, "startup-memory.json"),
+        "--summary",
+        path.join(tempRoot, "summary.md"),
+      ],
+      {
+        platform: "linux",
+        spawnSync: (_command: string, args: string[]) => {
+          seenArgs.push(args);
+          return {
+            error: null,
+            signal: null,
+            status: 0,
+            stderr: "__OPENCLAW_MAX_RSS_KB__=1024\n",
+            stdout: "",
+          };
+        },
+      },
+    );
+
+    expect(result.skipped).toBe(false);
+    expect(seenArgs).toHaveLength(testing.cases.length);
+    for (const args of seenArgs) {
+      expect(args[0]).toBe("--import");
+      expect(args[1]).toMatch(/^file:/u);
+    }
   });
 });

@@ -15,6 +15,8 @@ import {
   normalizeProviderId,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
@@ -56,7 +58,8 @@ function normalizeBedrockResolvedModel({ modelId, model }: ProviderNormalizeReso
   }
   const reasoning =
     model.reasoning ||
-    resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
+    resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params }) !== undefined ||
+    resolveClaudeMythos5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
   const current = model.thinkingLevelMap;
   const currentEfforts = current as Record<string, string | null | undefined> | undefined;
   if (
@@ -244,25 +247,6 @@ type BedrockAppProfileTraits = {
 
 const appProfileTraitsCache = new Map<string, BedrockAppProfileTraits>();
 
-type BedrockGetInferenceProfileResponse = {
-  models?: Array<{ modelArn?: string }>;
-};
-
-type BedrockControlPlane = {
-  getInferenceProfile: (input: {
-    inferenceProfileIdentifier: string;
-  }) => Promise<BedrockGetInferenceProfileResponse>;
-};
-
-async function createBedrockControlPlane(region: string | undefined): Promise<BedrockControlPlane> {
-  await refreshAwsSharedConfigCacheForBedrock();
-  const { BedrockClient, GetInferenceProfileCommand } = await import("@aws-sdk/client-bedrock");
-  const client = new BedrockClient(region ? { region } : {});
-  return {
-    getInferenceProfile: async (input) => await client.send(new GetInferenceProfileCommand(input)),
-  };
-}
-
 async function resolveAppProfileTraits(
   modelId: string,
   fallbackRegion: string | undefined,
@@ -273,10 +257,14 @@ async function resolveAppProfileTraits(
   }
   try {
     const region = extractRegionFromArn(modelId) ?? fallbackRegion;
-    const controlPlane = await createBedrockControlPlane(region);
-    const resp = await controlPlane.getInferenceProfile({ inferenceProfileIdentifier: modelId });
+    await refreshAwsSharedConfigCacheForBedrock();
+    const { BedrockClient, GetInferenceProfileCommand } = await import("@aws-sdk/client-bedrock");
+    const client = new BedrockClient(region ? { region } : {});
+    const resp = await client.send(
+      new GetInferenceProfileCommand({ inferenceProfileIdentifier: modelId }),
+    );
     const models = resp.models ?? [];
-    const modelArns = models.map((m: { modelArn?: string }) => m.modelArn ?? "");
+    const modelArns = models.map((model) => model.modelArn ?? "");
     const traits = {
       cacheEligible:
         models.length > 0 && modelArns.every((modelArn) => resolvedModelSupportsCaching(modelArn)),
@@ -334,8 +322,7 @@ function injectBedrockCachePoints(
   // Bedrock Converse uses lowercase roles ("user" / "assistant").
   const messages = payload.messages as BedrockMessage[] | undefined;
   if (Array.isArray(messages) && messages.length > 0) {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
+    for (const msg of messages.toReversed()) {
       if (msg.role === "user" && Array.isArray(msg.content)) {
         if (!hasCachePoint(msg.content)) {
           msg.content.push(point);
@@ -544,6 +531,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       const currentGuardrail = currentPluginConfig?.guardrail;
       const modelRef = { id: modelId, params: model?.params };
       const fable5 = resolveClaudeFable5ModelIdentity(modelRef) !== undefined;
+      const sonnet5 = resolveClaudeSonnet5ModelIdentity(modelRef) !== undefined;
       const canonicalModelId = resolveClaudeModelIdentity(modelRef);
       const opus47OrNewer =
         isOpus47OrNewerBedrockModelRef(modelId) || isOpus47OrNewerBedrockModelRef(canonicalModelId);
@@ -564,8 +552,11 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         api.logger.warn(message),
       );
       if (serviceTier && wrapped) {
-        if (fable5 && serviceTier !== "default") {
-          api.logger.warn(`ignoring unsupported Fable 5 Bedrock service tier: ${serviceTier}`);
+        if ((fable5 || sonnet5) && serviceTier !== "default") {
+          const modelLabel = fable5 ? "Fable 5" : "Sonnet 5";
+          api.logger.warn(
+            `ignoring unsupported ${modelLabel} Bedrock service tier: ${serviceTier}`,
+          );
         } else {
           wrapped = createBedrockServiceTierWrapper(wrapped, serviceTier);
         }

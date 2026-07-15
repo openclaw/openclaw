@@ -416,7 +416,7 @@ jobs:
           output_rel=".artifacts/qa-e2e/mantis/telegram-live"
           root="$candidate_repo/$output_rel"
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
-          model="${OPENCLAW_CI_OPENAI_MODEL:-openai/gpt-5.5}"
+          model="${OPENCLAW_CI_OPENAI_MODEL:-openai/gpt-5.6-luna}"
 
           scenario_args=()
           if [[ -n "${SCENARIO_INPUT// }" ]]; then
@@ -506,7 +506,7 @@ jobs:
           name: mantis-telegram-live-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_mantis.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Create Mantis GitHub App token
         id: mantis_app_token

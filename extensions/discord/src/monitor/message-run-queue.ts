@@ -1,5 +1,6 @@
 // Discord plugin module implements message run queue behavior.
 import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -11,7 +12,6 @@ import {
 import { materializeDiscordInboundJob, type DiscordInboundJob } from "./inbound-job.js";
 import type { RuntimeEnv } from "./message-handler.preflight.types.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
-import { mergeAbortSignals } from "./timeouts.js";
 
 type ProcessDiscordMessage = typeof import("./message-handler.process.js").processDiscordMessage;
 
@@ -34,14 +34,9 @@ export type DiscordMessageRunQueueTestingHooks = {
 
 type SkippedQueuedMessageCleanup = () => void;
 
-let messageProcessRuntimePromise:
-  | Promise<typeof import("./message-handler.process.js")>
-  | undefined;
-
-async function loadMessageProcessRuntime() {
-  messageProcessRuntimePromise ??= import("./message-handler.process.js");
-  return await messageProcessRuntimePromise;
-}
+const loadMessageProcessRuntime = createLazyRuntimeModule(
+  () => import("./message-handler.process.js"),
+);
 
 async function processDiscordQueuedMessage(params: {
   job: DiscordInboundJob;
@@ -52,7 +47,10 @@ async function processDiscordQueuedMessage(params: {
   const processDiscordMessageImpl =
     params.testing?.processDiscordMessage ??
     (await loadMessageProcessRuntime()).processDiscordMessage;
-  const abortSignal = mergeAbortSignals([params.job.runtime.abortSignal, params.lifecycleSignal]);
+  const abortSignal =
+    params.job.runtime.abortSignal && params.lifecycleSignal
+      ? AbortSignal.any([params.job.runtime.abortSignal, params.lifecycleSignal])
+      : (params.job.runtime.abortSignal ?? params.lifecycleSignal);
   try {
     await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
     await commitDiscordInboundReplay({

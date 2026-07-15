@@ -3,6 +3,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { listExplicitlyDisabledChannelIdsForConfig } from "../../../channels/config-presence.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { HealthFinding } from "../../../flows/health-checks.js";
 import {
   hasExplicitChannelConfig,
   listExplicitConfiguredChannelIdsForConfig,
@@ -19,6 +20,8 @@ import {
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
 import { isSafeChannelEnvVarTriggerName } from "../../../secrets/channel-env-var-names.js";
+
+const CHANNEL_PLUGIN_BLOCKERS_CHECK_ID = "core/doctor/channel-plugin-blockers";
 
 type ChannelPluginBlockerHit = {
   /** Normalized configured channel id whose backing plugin is unavailable. */
@@ -38,29 +41,36 @@ type ChannelPluginBlockerHit = {
     | "not in allowlist";
 };
 
+type ScanConfiguredChannelPluginBlockerOptions = {
+  manifestRecords?: readonly PluginManifestRecord[];
+};
+
 /** Find configured channel ids whose backing plugins cannot activate. */
 export function scanConfiguredChannelPluginBlockers(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
   activationSourceConfig: OpenClawConfig = cfg,
+  options: ScanConfiguredChannelPluginBlockerOptions = {},
 ): ChannelPluginBlockerHit[] {
   const explicitChannelIds = listExplicitConfiguredChannelIdsForConfig(cfg)
     .map((channelId) => normalizeOptionalLowercaseString(channelId))
     .filter((channelId): channelId is string => Boolean(channelId));
   const sourcePluginsConfig = normalizePluginsConfig(activationSourceConfig.plugins);
   const effectivePluginsConfig = normalizePluginsConfig(cfg.plugins);
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    config: cfg,
-    env,
-    includeDisabled: true,
-  });
-  const manifestEnvTriggers = listManifestEnvConfiguredChannelTriggers(registry.plugins, env);
+  const manifestRecords =
+    options.manifestRecords ??
+    loadPluginManifestRegistryForPluginRegistry({
+      config: cfg,
+      env,
+      includeDisabled: true,
+    }).plugins;
+  const manifestEnvTriggers = listManifestEnvConfiguredChannelTriggers(manifestRecords, env);
   const policyEntries = resolveConfiguredChannelPresencePolicy({
     config: cfg,
     activationSourceConfig,
     env,
     includePersistedAuthState: false,
-    manifestRecords: registry.plugins,
+    manifestRecords,
   });
   // A manifest env match identifies one owner. Do not widen the same ambient env signal to
   // sibling owners that cannot consume that credential.
@@ -119,7 +129,7 @@ export function scanConfiguredChannelPluginBlockers(
   };
 
   for (const channelId of genericChannelIds) {
-    const owners = registry.plugins.filter((plugin) =>
+    const owners = manifestRecords.filter((plugin) =>
       plugin.channels.some(
         (rawChannelId) => normalizeOptionalLowercaseString(rawChannelId) === channelId,
       ),
@@ -141,7 +151,7 @@ export function scanConfiguredChannelPluginBlockers(
   }
 
   for (const [channelId, triggers] of manifestEnvTriggers) {
-    const channelOwnerStates = registry.plugins
+    const channelOwnerStates = manifestRecords
       .filter((plugin) =>
         plugin.channels.some(
           (rawChannelId) => normalizeOptionalLowercaseString(rawChannelId) === channelId,
@@ -357,6 +367,25 @@ export function collectConfiguredChannelPluginBlockerWarnings(
     (hit) =>
       `- channels.${sanitizeForLog(hit.channelId)}: channel is configured, but ${formatReason(hit)} Fix plugin enablement before relying on setup guidance for this channel.`,
   );
+}
+
+function stripListMarker(message: string): string {
+  return message.startsWith("- ") ? message.slice(2) : message;
+}
+
+/** Convert a configured channel plugin blocker into a structured Doctor finding. */
+export function channelPluginBlockerHitToHealthFinding(
+  hit: ChannelPluginBlockerHit,
+): HealthFinding {
+  return {
+    checkId: CHANNEL_PLUGIN_BLOCKERS_CHECK_ID,
+    severity: "warning",
+    message: stripListMarker(collectConfiguredChannelPluginBlockerWarnings([hit])[0] ?? ""),
+    path: `channels.${hit.channelId}`,
+    target: hit.pluginId,
+    requirement: hit.reason,
+    fixHint: "Fix plugin enablement before relying on setup guidance for this channel.",
+  };
 }
 
 /** Return true when a setup warning targets a channel already explained by plugin blockers. */

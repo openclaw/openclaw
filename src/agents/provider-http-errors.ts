@@ -4,15 +4,18 @@
  * Transport adapters use this module to turn provider-specific response bodies,
  * request ids, and binary payload guardrails into stable OpenClaw error shapes.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
+import { readResponseTextPrefix, readResponseWithLimit } from "../infra/http-body.js";
 import { redactSensitiveText } from "../logging/redact.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 
 const ERROR_BODY_METADATA_LIMIT = 500;
 const PROVIDER_BINARY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const PROVIDER_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 /** Returns a plain object view for provider JSON payloads when one exists. */
 export function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -23,7 +26,7 @@ export function asObject(value: unknown): Record<string, unknown> | undefined {
 
 /** Trims provider error details to a log- and prompt-safe preview length. */
 export function truncateErrorDetail(detail: string, limit = 220): string {
-  return detail.length <= limit ? detail : `${detail.slice(0, limit - 1)}…`;
+  return detail.length <= limit ? detail : `${truncateUtf16Safe(detail, limit - 1)}…`;
 }
 
 /** Redacts secrets before preserving a bounded provider error body preview. */
@@ -39,50 +42,21 @@ export async function readResponseTextLimited(
   if (limitBytes <= 0) {
     return "";
   }
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return "";
-  }
+  return (await readResponseTextPrefix(response, limitBytes)).text;
+}
 
-  const decoder = new TextDecoder();
-  let total = 0;
-  let text = "";
-  let reachedLimit = false;
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value || value.byteLength === 0) {
-        continue;
-      }
-      const remaining = limitBytes - total;
-      if (remaining <= 0) {
-        reachedLimit = true;
-        break;
-      }
-      const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
-      total += chunk.byteLength;
-      text += decoder.decode(chunk, { stream: true });
-      if (total >= limitBytes) {
-        reachedLimit = true;
-        break;
-      }
-    }
-    text += decoder.decode();
-  } finally {
-    if (reachedLimit) {
-      // Stop the upstream body once the diagnostic budget is full.
-      await reader.cancel().catch(() => {});
-    }
-    try {
-      reader.releaseLock();
-    } catch {}
-  }
-
-  return text;
+/** Reads a successful provider text response under a byte cap. */
+export async function readProviderTextResponse(
+  response: Response,
+  label: string,
+  opts?: { maxBytes?: number },
+): Promise<string> {
+  const maxBytes = opts?.maxBytes ?? PROVIDER_TEXT_RESPONSE_MAX_BYTES;
+  const bytes = await readResponseWithLimit(response, maxBytes, {
+    onOverflow: ({ maxBytes: maxBytesLocal }) =>
+      new Error(`${label}: text response exceeds ${maxBytesLocal} bytes`),
+  });
+  return new TextDecoder().decode(bytes);
 }
 
 /** Formats common provider JSON error payload shapes into one readable detail string. */
@@ -287,10 +261,24 @@ export async function assertOkOrThrowHttpError(response: Response, label: string
   throw await createProviderHttpError(response, label, { statusPrefix: "HTTP " });
 }
 
-/** Parses a provider JSON response and wraps malformed JSON with the caller's label. */
-export async function readProviderJsonResponse<T>(response: Response, label: string): Promise<T> {
+/**
+ * Parses a provider JSON response under a byte cap and wraps malformed JSON with the caller's label.
+ *
+ * The body is read through the same bounded reader as binary responses so a provider that streams an
+ * unbounded JSON body cannot force the runtime to buffer the whole payload before parsing.
+ */
+export async function readProviderJsonResponse<T>(
+  response: Response,
+  label: string,
+  opts?: { maxBytes?: number },
+): Promise<T> {
+  const maxBytes = opts?.maxBytes ?? PROVIDER_JSON_RESPONSE_MAX_BYTES;
+  const bytes = await readResponseWithLimit(response, maxBytes, {
+    onOverflow: ({ maxBytes: maxBytesLocal }) =>
+      new Error(`${label}: JSON response exceeds ${maxBytesLocal} bytes`),
+  });
   try {
-    return (await response.json()) as T;
+    return JSON.parse(new TextDecoder().decode(bytes)) as T;
   } catch (cause) {
     throw new Error(`${label}: malformed JSON response`, { cause });
   }

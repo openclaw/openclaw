@@ -6,7 +6,17 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
-APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
+source "$ROOT_DIR/scripts/lib/build-metadata.sh"
+DEFAULT_APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+APP_ROOT="${OPENCLAW_PACKAGE_APP_ROOT:-$DEFAULT_APP_ROOT}"
+case "$APP_ROOT" in
+  "$ROOT_DIR/dist/"*) ;;
+  *)
+    echo "ERROR: OPENCLAW_PACKAGE_APP_ROOT must stay under $ROOT_DIR/dist" >&2
+    exit 1
+    ;;
+esac
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 MLX_TTS_HELPER_PRODUCT="openclaw-mlx-tts"
@@ -14,12 +24,26 @@ MLX_TTS_HELPER_ROOT="$ROOT_DIR/apps/macos-mlx-tts"
 MLX_TTS_HELPER_BUILD_ROOT="$MLX_TTS_HELPER_ROOT/.build"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
-BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_CONFIG="${BUILD_CONFIG:-debug}"
+BUILD_TS="$(openclaw_resolve_build_timestamp)"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  OPENCLAW_REQUIRE_BUILD_METADATA=1
+fi
+BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  bash "$ROOT_DIR/scripts/apple-release-source-check.sh" \
+    --root "$ROOT_DIR" \
+    --expected-commit "$BUILD_GIT_COMMIT"
+fi
+export OPENCLAW_BUILD_TIMESTAMP="$BUILD_TS"
+if openclaw_is_full_git_commit "$BUILD_GIT_COMMIT"; then
+  export GIT_COMMIT="$BUILD_GIT_COMMIT"
+else
+  unset GIT_COMMIT
+fi
 GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || echo "0")
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-}"
-BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 if [[ -n "${BUILD_ARCHS:-}" ]]; then
   BUILD_ARCHS_VALUE="${BUILD_ARCHS}"
 elif [[ "$BUILD_CONFIG" == "release" ]]; then
@@ -150,6 +174,8 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
+require_swift_toolchain
+
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
   run_pnpm install --frozen-lockfile --config.node-linker=hoisted
@@ -194,7 +220,9 @@ cd "$ROOT_DIR/apps/macos"
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
+  echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
   swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
   swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
 done
 
@@ -217,7 +245,14 @@ plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier "$B
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionString "$APP_VERSION"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
-plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$GIT_COMMIT"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$BUILD_GIT_COMMIT"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  EMBEDDED_GIT_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit)"
+  if [[ "$EMBEDDED_GIT_COMMIT" != "$BUILD_GIT_COMMIT" ]]; then
+    echo "ERROR: Release app embedded Git commit '$EMBEDDED_GIT_COMMIT', expected '$BUILD_GIT_COMMIT'." >&2
+    exit 1
+  fi
+fi
 plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUFeedURL "$SPARKLE_FEED_URL"
 plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUPublicEDKey "$SPARKLE_PUBLIC_ED_KEY"
 plist_set_or_add_bool "$APP_ROOT/Contents/Info.plist" SUEnableAutomaticChecks "$AUTO_CHECKS"
@@ -283,6 +318,28 @@ echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
+echo "📦 Copying provider icon resources"
+PROVIDER_ICONS_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/ProviderIcons"
+if [ ! -d "$PROVIDER_ICONS_SRC" ]; then
+  echo "ERROR: Provider icon resources missing at $PROVIDER_ICONS_SRC" >&2
+  exit 1
+fi
+rm -rf "$APP_ROOT/Contents/Resources/ProviderIcons"
+cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"
+
+echo "📦 Copying CLI installer"
+INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
+if [ ! -f "$INSTALL_CLI_SRC" ]; then
+  echo "ERROR: CLI installer missing at $INSTALL_CLI_SRC" >&2
+  exit 1
+fi
+cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"
+chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"
+
+echo "🌐 Copying app localizations"
+node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
+  --output "$APP_ROOT/Contents/Resources"
+
 echo "📦 Copying Control UI assets"
 CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
 CONTROL_UI_DEST="$APP_ROOT/Contents/Resources/control-ui"
@@ -302,33 +359,6 @@ if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
 else
   echo "ERROR: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE" >&2
   exit 1
-fi
-
-echo "📦 Copying Textual resources"
-TEXTUAL_BUNDLE_DIR="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG"
-TEXTUAL_BUNDLE=""
-for candidate in \
-  "$TEXTUAL_BUNDLE_DIR/textual_Textual.bundle" \
-  "$TEXTUAL_BUNDLE_DIR/Textual_Textual.bundle"
-do
-  if [ -d "$candidate" ]; then
-    TEXTUAL_BUNDLE="$candidate"
-    break
-  fi
-done
-if [ -z "$TEXTUAL_BUNDLE" ]; then
-  TEXTUAL_BUNDLE="$(find "$BUILD_ROOT" -type d \( -name "textual_Textual.bundle" -o -name "Textual_Textual.bundle" \) -print -quit)"
-fi
-if [ -n "$TEXTUAL_BUNDLE" ] && [ -d "$TEXTUAL_BUNDLE" ]; then
-  rm -rf "$APP_ROOT/Contents/Resources/$(basename "$TEXTUAL_BUNDLE")"
-  cp -R "$TEXTUAL_BUNDLE" "$APP_ROOT/Contents/Resources/"
-else
-  if [[ "${ALLOW_MISSING_TEXTUAL_BUNDLE:-0}" == "1" ]]; then
-    echo "WARN: Textual resource bundle not found (continuing due to ALLOW_MISSING_TEXTUAL_BUNDLE=1)" >&2
-  else
-    echo "ERROR: Textual resource bundle not found. Set ALLOW_MISSING_TEXTUAL_BUNDLE=1 to bypass." >&2
-    exit 1
-  fi
 fi
 
 running_packaged_app_pids() {

@@ -25,11 +25,11 @@ data class NodeRuntimeFlags(
   val smsSearchPossible: Boolean,
   val callLogAvailable: Boolean,
   val photosAvailable: Boolean,
-  val voiceWakeEnabled: Boolean,
   val motionActivityAvailable: Boolean,
   val motionPedometerAvailable: Boolean,
   val installedAppsSharingEnabled: Boolean,
   val debugBuild: Boolean,
+  val voiceWakeEnabled: Boolean = false,
 )
 
 /** Per-command availability gates checked before advertising invoke methods. */
@@ -56,8 +56,8 @@ enum class NodeCapabilityAvailability {
   SmsAvailable,
   CallLogAvailable,
   PhotosAvailable,
-  VoiceWakeEnabled,
   MotionAvailable,
+  VoiceWakeEnabled,
 }
 
 /** Capability entry reported to the gateway when its availability gate passes. */
@@ -89,10 +89,6 @@ object InvokeCommandRegistry {
         name = OpenClawCapability.Sms.rawValue,
         availability = NodeCapabilityAvailability.SmsAvailable,
       ),
-      NodeCapabilitySpec(
-        name = OpenClawCapability.VoiceWake.rawValue,
-        availability = NodeCapabilityAvailability.VoiceWakeEnabled,
-      ),
       NodeCapabilitySpec(name = OpenClawCapability.Talk.rawValue),
       NodeCapabilitySpec(
         name = OpenClawCapability.Location.rawValue,
@@ -111,6 +107,10 @@ object InvokeCommandRegistry {
       NodeCapabilitySpec(
         name = OpenClawCapability.CallLog.rawValue,
         availability = NodeCapabilityAvailability.CallLogAvailable,
+      ),
+      NodeCapabilitySpec(
+        name = OpenClawCapability.VoiceWake.rawValue,
+        availability = NodeCapabilityAvailability.VoiceWakeEnabled,
       ),
     )
 
@@ -163,6 +163,7 @@ object InvokeCommandRegistry {
       ),
       InvokeCommandSpec(
         name = OpenClawTalkCommand.PttOnce.rawValue,
+        requiresForeground = true,
       ),
       InvokeCommandSpec(
         name = OpenClawCameraCommand.List.rawValue,
@@ -267,8 +268,8 @@ object InvokeCommandRegistry {
           NodeCapabilityAvailability.SmsAvailable -> flags.sendSmsAvailable || flags.readSmsAvailable
           NodeCapabilityAvailability.CallLogAvailable -> flags.callLogAvailable
           NodeCapabilityAvailability.PhotosAvailable -> flags.photosAvailable
-          NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
           NodeCapabilityAvailability.MotionAvailable -> flags.motionActivityAvailable || flags.motionPedometerAvailable
+          NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
         }
       }.map { it.name }
 

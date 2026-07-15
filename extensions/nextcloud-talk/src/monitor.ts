@@ -43,6 +43,15 @@ const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> 
     name: z.string(),
   }),
 });
+const NextcloudTalkWebhookEnvelopeSchema = z.object({
+  type: z.string().min(1),
+  object: z
+    .object({
+      type: z.string().min(1).optional(),
+    })
+    .passthrough()
+    .optional(),
+});
 const WEBHOOK_ERRORS = {
   missingSignatureHeaders: "Missing signature headers",
   invalidBackend: "Invalid backend",
@@ -51,13 +60,6 @@ const WEBHOOK_ERRORS = {
   payloadTooLarge: "Payload too large",
   internalServerError: "Internal server error",
 } as const;
-
-export class NextcloudTalkRetryableWebhookError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "NextcloudTalkRetryableWebhookError";
-  }
-}
 
 export async function processNextcloudTalkReplayGuardedMessage(params: {
   replayGuard: NextcloudTalkReplayGuard;
@@ -83,22 +85,13 @@ export async function processNextcloudTalkReplayGuardedMessage(params: {
     });
     return "processed";
   } catch (error) {
-    if (error instanceof NextcloudTalkRetryableWebhookError) {
-      params.replayGuard.releaseMessage({
-        accountId: params.accountId,
-        roomToken: params.message.roomToken,
-        messageId: params.message.messageId,
-        error,
-      });
-    } else {
-      // Generic failures are treated as non-retryable because the handler may already
-      // have produced a visible side effect, and replaying the webhook would duplicate it.
-      await params.replayGuard.commitMessage({
-        accountId: params.accountId,
-        roomToken: params.message.roomToken,
-        messageId: params.message.messageId,
-      });
-    }
+    // Failures are treated as non-retryable because the handler may already
+    // have produced a visible side effect, and replaying the webhook would duplicate it.
+    await params.replayGuard.commitMessage({
+      accountId: params.accountId,
+      roomToken: params.message.roomToken,
+      messageId: params.message.messageId,
+    });
     throw error;
   }
 }
@@ -184,13 +177,21 @@ function decodeWebhookCreateMessage(params: {
   | { kind: "message"; message: NextcloudTalkInboundMessage }
   | { kind: "ignore" }
   | { kind: "invalid" } {
+  const envelope = safeParseJsonWithSchema(NextcloudTalkWebhookEnvelopeSchema, params.body);
+  if (!envelope) {
+    writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
+    return { kind: "invalid" };
+  }
+  if (envelope.type !== "Create") {
+    return { kind: "ignore" };
+  }
+  if (envelope.object?.type && envelope.object.type !== "Note") {
+    return { kind: "ignore" };
+  }
   const payload = parseWebhookPayload(params.body);
   if (!payload) {
     writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
     return { kind: "invalid" };
-  }
-  if (payload.type !== "Create") {
-    return { kind: "ignore" };
   }
   return { kind: "message", message: payloadToInboundMessage(payload) };
 }
@@ -214,10 +215,7 @@ function payloadToInboundMessage(
   };
 }
 
-export function readNextcloudTalkWebhookBody(
-  req: IncomingMessage,
-  maxBodyBytes: number,
-): Promise<string> {
+function readNextcloudTalkWebhookBody(req: IncomingMessage, maxBodyBytes: number): Promise<string> {
   return readRequestBodyWithLimit(req, {
     // This read happens before signature verification, so keep the unauthenticated
     // body budget bounded even if the operator-configured post-parse limit is larger.

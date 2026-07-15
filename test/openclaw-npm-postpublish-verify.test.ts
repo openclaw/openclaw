@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
+  collectInstalledAlwaysAllowedRuntimeFacadeErrors,
+  collectInstalledBundledExtensionManifestErrors,
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
   collectInstalledPluginSdkZodArtifactErrors,
@@ -130,7 +132,7 @@ describe("npm registry provenance verification", () => {
 
     await expect(
       fetchRegistryJson("https://registry.example/openclaw", {
-        fetchImpl,
+        fetchImpl: fetchImpl as typeof fetch,
         timeoutMs: 1234,
       }),
     ).resolves.toEqual({ ok: true });
@@ -407,6 +409,79 @@ describe("collectInstalledPackageErrors", () => {
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
+  });
+
+  it("surfaces invalid installed bundled extension manifests", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
+      mkdirSync(join(packageRoot, "dist", "extensions", "telegram"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "extensions", "telegram", "package.json"),
+        "{not-json\n",
+        "utf8",
+      );
+      writeFileSync(
+        join(packageRoot, "dist", "extensions", "telegram", "runtime-api.js"),
+        "export {};\n",
+        "utf8",
+      );
+
+      const manifestErrors = collectInstalledBundledExtensionManifestErrors(packageRoot);
+      expect(manifestErrors).toHaveLength(1);
+      expect(manifestErrors[0]).toContain(
+        "installed bundled extension manifest invalid: failed to parse",
+      );
+      expect(manifestErrors[0]).toContain("dist/extensions/telegram/package.json");
+
+      expect(
+        collectInstalledPackageErrors({
+          expectedVersion: "2026.3.23",
+          installedVersion: "2026.3.23",
+          packageRoot,
+        }),
+      ).toContain(manifestErrors[0]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
+  function withInstalledPackageRoot(run: (packageRoot: string) => void): void {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-facade-runtime-"));
+    try {
+      run(packageRoot);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  }
+
+  function writeInstalledFile(packageRoot: string, relativePath: string): void {
+    const filePath = join(packageRoot, relativePath);
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, "export {};\n", "utf8");
+  }
+
+  it("reports the activation runtime and every missing allowlisted sidecar", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toEqual([
+        "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
+        "installed package allows bundled runtime facade image-generation-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/image-generation-core/runtime-api.js.",
+        "installed package allows bundled runtime facade media-understanding-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/media-understanding-core/runtime-api.js.",
+      ]);
+    });
+  });
+
+  it("accepts a package with the activation runtime and allowlisted sidecars", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(packageRoot, "dist/facade-activation-check.runtime.js");
+      writeInstalledFile(packageRoot, "dist/extensions/image-generation-core/runtime-api.js");
+      writeInstalledFile(packageRoot, "dist/extensions/media-understanding-core/runtime-api.js");
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
+    });
   });
 });
 

@@ -1,8 +1,12 @@
 // User-turn transcript type contracts shared by runtime and queue option types.
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "../config/sessions/session-transcript-turn-lifecycle.types.js";
 import type { InputProvenance } from "./input-provenance.js";
 
-export type UserTurnSessionEntry = {
+type UserTurnSessionEntry = {
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
@@ -23,13 +27,28 @@ export type UserTurnInput = {
   media?: readonly PersistedUserTurnMediaInput[] | null;
   timestamp?: number;
   idempotencyKey?: string;
+  senderIsOwner?: boolean;
   provenance?: InputProvenance;
   mediaOnlyText?: string;
+  /** Durable participant attribution. Callers must opt in at the product boundary. */
+  sender?: { id?: string | null; name?: string | null; username?: string | null } | null;
 };
 
 export type UserTurnTranscriptUpdateMode = "inline" | "none";
 
-export type UserTurnBeforeMessageWrite = (params: {
+export type UserTurnMessagePersistenceParams = {
+  input?: UserTurnInput;
+  message?: PersistedUserTurnMessage;
+  sessionId?: string;
+  agentId?: string;
+  sessionKey?: string;
+  cwd?: string;
+  config?: unknown;
+  updateMode?: UserTurnTranscriptUpdateMode;
+  beforeMessageWrite?: UserTurnBeforeMessageWrite;
+};
+
+type UserTurnBeforeMessageWrite = (params: {
   message: PersistedUserTurnMessage;
   agentId?: string;
   sessionKey?: string;
@@ -37,6 +56,7 @@ export type UserTurnBeforeMessageWrite = (params: {
 
 type UserTurnTranscriptPersistenceTarget = {
   sessionId: string;
+  expectedSessionId?: string;
   sessionKey: string;
   sessionEntry: UserTurnSessionEntry | undefined;
   sessionStore?: Record<string, UserTurnSessionEntry>;
@@ -48,20 +68,11 @@ type UserTurnTranscriptPersistenceTarget = {
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
 
-export type UserTurnTranscriptFileTarget = {
-  transcriptPath: string;
-  sessionId?: string;
-  agentId?: string;
-  sessionKey?: string;
-  cwd?: string;
-  config?: unknown;
-};
-
-export type UserTurnTranscriptTarget =
-  | UserTurnTranscriptPersistenceTarget
-  | UserTurnTranscriptFileTarget;
+export type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget;
 
 export type UserTurnTranscriptPersistResult = {
+  /** True only when this call inserted the transcript message. */
+  appended?: boolean;
   sessionFile: string;
   sessionEntry: UserTurnSessionEntry | undefined;
   messageId: string;
@@ -72,9 +83,46 @@ export type UserTurnTranscriptTargetResolver =
   | UserTurnTranscriptTarget
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
+export type PersistUserTurnTranscriptParams = {
+  input?: UserTurnInput;
+  message?: PersistedUserTurnMessage;
+  sessionId: string;
+  expectedSessionId?: string;
+  sessionKey: string;
+  sessionEntry: UserTurnSessionEntry | undefined;
+  sessionStore?: Record<string, UserTurnSessionEntry>;
+  storePath?: string;
+  agentId: string;
+  threadId?: string | number;
+  cwd?: string;
+  config?: unknown;
+  updateMode?: UserTurnTranscriptUpdateMode;
+  beforeMessageWrite?: UserTurnBeforeMessageWrite;
+  expectedSessionState?: SessionTranscriptTurnExpectedState;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+};
+
+type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
+
+export type CreateUserTurnTranscriptRecorderParams = {
+  input?: UserTurnInput;
+  message?: PersistedUserTurnMessage;
+  resolveInput?: UserTurnInputResolver;
+  target: UserTurnTranscriptTargetResolver;
+  updateMode?: UserTurnTranscriptUpdateMode;
+  beforeMessageWrite?: UserTurnBeforeMessageWrite;
+  errorContext?: string;
+  onPersistenceError?: (error: unknown) => void;
+  onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
+  expectedSessionState?: SessionTranscriptTurnExpectedState;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+};
+
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
+  getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
+  markSentToProvider?: () => void;
   markRuntimePersistencePending: (pending: Promise<void>) => void;
   markRuntimePersisted: (message?: PersistedUserTurnMessage) => void;
   markBlocked: () => void;
@@ -85,9 +133,19 @@ export type UserTurnTranscriptRecorder = {
   persistApproved: (params?: {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
+    cwd?: string;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
+  persistBlocked: (
+    message: PersistedUserTurnMessage,
+    params?: {
+      target?: UserTurnTranscriptTargetResolver;
+      updateMode?: UserTurnTranscriptUpdateMode;
+      cwd?: string;
+    },
+  ) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistFallback: (params?: {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
+    cwd?: string;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
 };

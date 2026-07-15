@@ -23,12 +23,12 @@ import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { log } from "./constants.js";
-import { resolveTokenExpiryState } from "./credential-state.js";
-import { formatAuthDoctorHint } from "./doctor.js";
 import {
-  readExternalCliBootstrapCredential,
-  readExternalCliFallbackCredential,
-} from "./external-cli-sync.js";
+  evaluateStoredCredentialEligibility,
+  resolveTokenExpiryState,
+} from "./credential-state.js";
+import { formatAuthDoctorHint } from "./doctor.js";
+import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
@@ -44,15 +44,6 @@ import {
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
-
-export {
-  isSafeToCopyOAuthIdentity,
-  isSameOAuthIdentity,
-  normalizeAuthEmailToken,
-  normalizeAuthIdentityToken,
-  shouldMirrorRefreshedOAuthCredential,
-} from "./oauth-identity.js";
-export type { OAuthMirrorDecision, OAuthMirrorDecisionReason } from "./oauth-identity.js";
 
 function listOAuthProviderIds(): string[] {
   if (typeof getOAuthProviders !== "function") {
@@ -201,6 +192,8 @@ async function refreshOAuthCredential(
   }
 
   if (credential.provider === "chutes") {
+    // Chutes refresh shipped before provider hooks and still covers registry-load
+    // windows where the synchronous hook resolver intentionally returns no owner.
     return await refreshChutesTokens({ credential });
   }
 
@@ -231,19 +224,12 @@ export async function refreshOAuthCredentialForRuntime(params: {
 const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,
-  readBootstrapCredential: ({ profileId, credential }) =>
+  readBootstrapCredential: ({ store, profileId, credential }) =>
     readExternalCliBootstrapCredential({
+      store,
       profileId,
       credential,
     }),
-  readFallbackCredential: ({ profileId, credential }) =>
-    credential.provider === "openai"
-      ? readExternalCliFallbackCredential({
-          profileId,
-          credential,
-          allowKeychainPrompt: false,
-        })
-      : null,
   isRefreshTokenReusedError,
 });
 
@@ -376,6 +362,9 @@ export async function resolveApiKeyForProfile(
   });
 
   if (cred.type === "api_key") {
+    if (!evaluateStoredCredentialEligibility({ credential: cred }).eligible) {
+      return null;
+    }
     const key = await resolveProfileSecretString({
       profileId,
       provider: cred.provider,
@@ -453,10 +442,6 @@ export async function resolveApiKeyForProfile(
         : loadAuthProfileStoreForSecretsRuntime(params.agentDir);
     const surfacedCause =
       error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
-    const surfacedMessageError =
-      error instanceof OAuthManagerRefreshError && error.code === "refresh_contention"
-        ? error
-        : surfacedCause;
     if (isRefreshTokenReusedError(surfacedCause)) {
       const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
         agentDir: params.agentDir,
@@ -506,7 +491,7 @@ export async function resolveApiKeyForProfile(
       }
     }
 
-    const message = extractErrorMessage(surfacedMessageError);
+    const message = extractErrorMessage(surfacedCause);
     const hint = await formatAuthDoctorHint({
       cfg,
       store: refreshedStore,
@@ -515,6 +500,7 @@ export async function resolveApiKeyForProfile(
     });
     throw new OAuthRefreshFailureError({
       provider: cred.provider,
+      profileId,
       message:
         `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
         "Please try again or re-authenticate." +

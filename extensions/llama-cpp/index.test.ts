@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
@@ -14,18 +15,30 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const memoryHostEmbeddingMocks = vi.hoisted(() => ({
   createLocalEmbeddingProvider: vi.fn(),
 }));
+const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
   createLocalEmbeddingProvider: memoryHostEmbeddingMocks.createLocalEmbeddingProvider,
 }));
 
 import llamaCppPlugin from "./index.js";
-import {
-  DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
-  createLlamaCppMemoryEmbeddingProvider,
-  formatLlamaCppSetupError,
-  llamaCppEmbeddingProviderAdapter,
-} from "./src/embedding-provider.js";
+import { llamaCppEmbeddingProviderAdapter } from "./src/embedding-provider.js";
+
+const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
+  "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";
+type AdapterCreateOptions = Parameters<typeof llamaCppEmbeddingProviderAdapter.create>[0];
+type MemoryCreateTestOptions = AdapterCreateOptions & {
+  fallback?: "none";
+  outputDimensionality?: number;
+};
+
+async function createLlamaCppMemoryEmbeddingProvider(options: MemoryCreateTestOptions) {
+  const { fallback: _fallback, outputDimensionality, ...adapterOptions } = options;
+  return await llamaCppEmbeddingProviderAdapter.create({
+    ...adapterOptions,
+    dimensions: outputDimensionality,
+  });
+}
 
 afterEach(() => {
   clearEmbeddingProviders();
@@ -59,7 +72,13 @@ describe("llama.cpp provider plugin", () => {
 
   it("adapts the worker-backed local embedding provider", async () => {
     const close = vi.fn();
-    memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mockResolvedValue({
+    const getRuntimeFacts = vi.fn(() => ({
+      engine: "llama.cpp" as const,
+      state: "ready" as const,
+      backend: "metal" as const,
+      buildType: "prebuilt" as const,
+    }));
+    const workerProvider = {
       id: "local",
       model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
       maxInputTokens: 2048,
@@ -67,7 +86,11 @@ describe("llama.cpp provider plugin", () => {
       embedBatchInputs: vi.fn(async () => [[0.3, 0.4]]),
       embedBatch: vi.fn(async () => [[1, 0]]),
       close,
+    };
+    Object.defineProperty(workerProvider, LOCAL_EMBEDDING_RUNTIME_FACTS, {
+      value: getRuntimeFacts,
     });
+    memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mockResolvedValue(workerProvider);
     const abortController = new AbortController();
 
     const result = await llamaCppEmbeddingProviderAdapter.create({
@@ -89,6 +112,20 @@ describe("llama.cpp provider plugin", () => {
 
     expect(provider.model).toBe(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL);
     expect(provider.maxInputTokens).toBe(2048);
+    const adaptedGetRuntimeFacts = Reflect.get(provider, LOCAL_EMBEDDING_RUNTIME_FACTS);
+    if (typeof adaptedGetRuntimeFacts !== "function") {
+      throw new Error("expected llama.cpp runtime facts carrier");
+    }
+    expect(adaptedGetRuntimeFacts()).toEqual({
+      engine: "llama.cpp",
+      state: "ready",
+      backend: "metal",
+      buildType: "prebuilt",
+    });
+    expect(result.runtime?.cacheKeyData).toEqual({
+      provider: "local",
+      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+    });
     expect(close).toHaveBeenCalledTimes(1);
     expect(memoryHostEmbeddingMocks.createLocalEmbeddingProvider).toHaveBeenCalledWith(
       {
@@ -104,9 +141,12 @@ describe("llama.cpp provider plugin", () => {
         nodeLlamaCppImportUrl: expect.stringContaining("node-llama-cpp"),
       },
     );
-    const workerProvider =
-      await memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mock.results[0].value;
-    expect(workerProvider.embedBatchInputs).toHaveBeenCalledWith([{ text: "doc" }], {
+    const mockResult = expectDefined(
+      memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mock.results[0],
+      "llama.cpp embedding provider result",
+    );
+    const createdWorkerProvider = await mockResult.value;
+    expect(createdWorkerProvider.embedBatchInputs).toHaveBeenCalledWith([{ text: "doc" }], {
       signal: abortController.signal,
     });
   });
@@ -119,16 +159,13 @@ describe("llama.cpp provider plugin", () => {
       embedBatch: vi.fn(),
     });
 
-    const result = await createLlamaCppMemoryEmbeddingProvider(
-      {
-        config: {},
-        provider: "local",
-        fallback: "none",
-        model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
-        outputDimensionality: 512,
-      },
-      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
-    );
+    const result = await createLlamaCppMemoryEmbeddingProvider({
+      config: {},
+      provider: "local",
+      fallback: "none",
+      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      outputDimensionality: 512,
+    });
     const resolvedIdentity = llamaCppEmbeddingProviderAdapter.resolveIndexIdentity?.({
       config: {},
       provider: "local",
@@ -168,16 +205,13 @@ describe("llama.cpp provider plugin", () => {
       embedBatch: vi.fn(),
     });
 
-    const result = await createLlamaCppMemoryEmbeddingProvider(
-      {
-        config: {},
-        provider: "local",
-        fallback: "none",
-        model: modelPath,
-        local: { modelPath },
-      },
-      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
-    );
+    const result = await createLlamaCppMemoryEmbeddingProvider({
+      config: {},
+      provider: "local",
+      fallback: "none",
+      model: modelPath,
+      local: { modelPath },
+    });
 
     expect(result.provider?.model).toBe(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL);
     expect(result.runtime?.cacheKeyData).toEqual({
@@ -236,7 +270,7 @@ describe("llama.cpp provider plugin", () => {
         local: { modelPath },
       }),
       {
-        nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js",
+        nodeLlamaCppImportUrl: expect.stringContaining("node-llama-cpp"),
       },
     );
   });
@@ -254,16 +288,13 @@ describe("llama.cpp provider plugin", () => {
       embedBatch: vi.fn(),
     });
 
-    const result = await createLlamaCppMemoryEmbeddingProvider(
-      {
-        config: {},
-        provider: "local",
-        fallback: "none",
-        model: modelPath,
-        local: { modelPath },
-      },
-      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
-    );
+    const result = await createLlamaCppMemoryEmbeddingProvider({
+      config: {},
+      provider: "local",
+      fallback: "none",
+      model: modelPath,
+      local: { modelPath },
+    });
 
     expect(result.provider?.model).toBe(modelPath);
     expect(result.runtime?.cacheKeyData).toEqual({
@@ -287,16 +318,13 @@ describe("llama.cpp provider plugin", () => {
       embedBatch: vi.fn(),
     });
 
-    const result = await createLlamaCppMemoryEmbeddingProvider(
-      {
-        config: {},
-        provider: "local",
-        fallback: "none",
-        model: modelPath,
-        local: { modelPath },
-      },
-      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
-    );
+    const result = await createLlamaCppMemoryEmbeddingProvider({
+      config: {},
+      provider: "local",
+      fallback: "none",
+      model: modelPath,
+      local: { modelPath },
+    });
 
     expect(result.provider?.model).toBe(modelPath);
     expect(result.runtime).not.toHaveProperty("indexIdentityAliases");
@@ -312,16 +340,13 @@ describe("llama.cpp provider plugin", () => {
       embedBatch: vi.fn(),
     });
 
-    const result = await createLlamaCppMemoryEmbeddingProvider(
-      {
-        config: {},
-        provider: "local",
-        fallback: "none",
-        model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
-        local: { modelPath: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL, modelCacheDir },
-      },
-      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
-    );
+    const result = await createLlamaCppMemoryEmbeddingProvider({
+      config: {},
+      provider: "local",
+      fallback: "none",
+      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      local: { modelPath: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL, modelCacheDir },
+    });
 
     expect(result.provider?.model).toBe(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL);
     expect(result.runtime?.cacheKeyData).toEqual({
@@ -403,16 +428,13 @@ describe("llama.cpp provider plugin", () => {
       embedBatch: vi.fn(),
     });
 
-    const result = await createLlamaCppMemoryEmbeddingProvider(
-      {
-        config: {},
-        provider: "local",
-        fallback: "none",
-        model: modelPath,
-        local: { modelPath, modelCacheDir },
-      },
-      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
-    );
+    const result = await createLlamaCppMemoryEmbeddingProvider({
+      config: {},
+      provider: "local",
+      fallback: "none",
+      model: modelPath,
+      local: { modelPath, modelCacheDir },
+    });
 
     expect(result.provider?.model).toBe(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL);
     expect(result.runtime?.indexIdentityAliases).toEqual([
@@ -438,7 +460,7 @@ describe("llama.cpp provider plugin", () => {
       code: "ERR_MODULE_NOT_FOUND",
     });
 
-    expect(formatLlamaCppSetupError(err)).toContain(
+    expect(llamaCppEmbeddingProviderAdapter.formatSetupError?.(err)).toContain(
       "openclaw plugins install @openclaw/llama-cpp-provider",
     );
   });

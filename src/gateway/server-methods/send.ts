@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   ErrorCodes,
   errorShape,
@@ -15,8 +16,9 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
+import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
   getRuntimeConfigSnapshot,
@@ -45,12 +47,21 @@ import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  isAgentHarnessSessionKey,
+  resolveMissingAgentHarnessSessionError,
+} from "../../sessions/agent-harness-session-key.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
+  parseAgentSessionKey,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
+import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -60,6 +71,73 @@ type InflightResult = {
   error?: ReturnType<typeof errorShape>;
   meta?: Record<string, unknown>;
 };
+
+type MessageActionToolContext = Omit<ChannelThreadingToolContext, "currentChatType">;
+
+function resolveTrustedMessageActionToolContext(params: {
+  client: Parameters<GatewayRequestHandlers["message.action"]>[0]["client"];
+  request: {
+    agentId?: string;
+    sessionKey?: string;
+    sessionId?: string;
+  };
+}):
+  | {
+      ok: true;
+      toolContext: ChannelThreadingToolContext | undefined;
+      requesterAccountId: string | undefined;
+      requesterSenderId: string | undefined;
+    }
+  | { ok: false; error: ReturnType<typeof errorShape> } {
+  // Current-turn metadata can relax channel read policy. It must come from the
+  // signed ingress-issued turn context, never from message.action request fields.
+  const identity = params.client?.internal?.agentRuntimeIdentity;
+  const messageActionContext = identity?.messageActionContext;
+  if (!identity || !messageActionContext) {
+    return {
+      ok: true,
+      toolContext: undefined,
+      requesterAccountId: undefined,
+      requesterSenderId: undefined,
+    };
+  }
+  if (Date.now() >= messageActionContext.expiresAtMs) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "message.action agent runtime context has expired",
+      ),
+    };
+  }
+  const requestSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(params.request.sessionKey);
+  const identitySessionKey = normalizeSessionKeyPreservingOpaquePeerIds(identity.sessionKey);
+  const identityAgentId = normalizeAgentId(identity.agentId);
+  const requestAgentId = normalizeOptionalString(params.request.agentId);
+  const sessionAgentId = parseAgentSessionKey(requestSessionKey)?.agentId;
+  const requestSessionId = normalizeOptionalString(params.request.sessionId);
+  if (
+    !requestSessionKey ||
+    requestSessionKey !== identitySessionKey ||
+    (requestAgentId && normalizeAgentId(requestAgentId) !== identityAgentId) ||
+    (sessionAgentId && normalizeAgentId(sessionAgentId) !== identityAgentId) ||
+    (messageActionContext.sessionId && requestSessionId !== messageActionContext.sessionId)
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "message.action agent runtime identity does not match the requested session",
+      ),
+    };
+  }
+  return {
+    ok: true,
+    toolContext: messageActionContext.toolContext,
+    requesterAccountId: messageActionContext.requesterAccountId,
+    requesterSenderId: messageActionContext.requesterSenderId,
+  };
+}
 
 const inflightByContext = new WeakMap<
   GatewayRequestContext,
@@ -106,6 +184,7 @@ function resolveGatewayInflightRequest(params: {
   prefix: "message.action" | "poll" | "send";
   idempotencyKey: string;
   respond: RespondFn;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
 }):
   | {
       kind: "ready";
@@ -118,7 +197,10 @@ function resolveGatewayInflightRequest(params: {
       done: Promise<void>;
     } {
   const idem = params.idempotencyKey;
-  const dedupeKey = `${params.prefix}:${idem}`;
+  const dedupeKey =
+    params.prefix === "message.action"
+      ? `${params.prefix}:${params.conversationReadOrigin ?? "delegated"}:${idem}`
+      : `${params.prefix}:${idem}`;
   const inflight = resolveGatewayInflightMap({
     context: params.context,
     dedupeKey,
@@ -177,17 +259,16 @@ async function resolveRequestedChannel(params: {
     }
 > {
   const channelInput = readStringValue(params.requestChannel);
-  const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
+  const normalizedChannel = channelInput ? normalizeMessageChannel(channelInput) : undefined;
+  if (params.rejectWebchatAsInternalOnly && normalizedChannel === INTERNAL_MESSAGE_CHANNEL) {
+    return {
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
+      ),
+    };
+  }
   if (channelInput && !normalizedChannel) {
-    const normalizedInput = normalizeOptionalLowercaseString(channelInput) ?? "";
-    if (params.rejectWebchatAsInternalOnly && normalizedInput === "webchat") {
-      return {
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
-        ),
-      };
-    }
     return {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
@@ -411,7 +492,7 @@ async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   }
 }
 
-const sourceReplyTranscriptMirrorQueues = new Map<string, Promise<void>>();
+const sourceReplyTranscriptMirrorQueue = new KeyedAsyncQueue();
 
 function resolveSourceReplyTranscriptMirrorQueueKey(
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0],
@@ -425,22 +506,11 @@ function scheduleDeliveredSourceReplyTranscriptMirror(params: {
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
 }): Promise<void> {
   const queueKey = resolveSourceReplyTranscriptMirrorQueueKey(params.mirror);
-  const previous = sourceReplyTranscriptMirrorQueues.get(queueKey);
   // Queue per session so current-conversation source replies are visible before
   // a following turn can read the transcript.
-  const queued = (async () => {
-    await previous?.catch(() => undefined);
-    await mirrorDeliveredSourceReplyToTranscriptBestEffort(params);
-  })();
-  sourceReplyTranscriptMirrorQueues.set(queueKey, queued);
-  void queued
-    .finally(() => {
-      if (sourceReplyTranscriptMirrorQueues.get(queueKey) === queued) {
-        sourceReplyTranscriptMirrorQueues.delete(queueKey);
-      }
-    })
-    .catch(() => undefined);
-  return queued;
+  return sourceReplyTranscriptMirrorQueue.enqueue(queueKey, () =>
+    mirrorDeliveredSourceReplyToTranscriptBestEffort(params),
+  );
 }
 
 export const sendHandlers: GatewayRequestHandlers = {
@@ -469,25 +539,25 @@ export const sendHandlers: GatewayRequestHandlers = {
       sessionId?: string;
       inboundTurnKind?: "user_request" | "room_event";
       agentId?: string;
-      toolContext?: {
-        currentChannelId?: string;
-        currentMessagingTarget?: string;
-        currentGraphChannelId?: string;
-        currentChannelProvider?: string;
-        currentThreadTs?: string;
-        currentMessageId?: string | number;
-        replyToMode?: "off" | "first" | "all" | "batched";
-        hasRepliedRef?: { value: boolean };
-        sameChannelThreadRequired?: boolean;
-        skipCrossContextDecoration?: boolean;
-      };
+      toolContext?: MessageActionToolContext;
+      conversationReadOrigin?: "direct-operator";
       idempotencyKey: string;
     };
+    const trustedContext = resolveTrustedMessageActionToolContext({ client, request });
+    if (!trustedContext.ok) {
+      respond(false, undefined, trustedContext.error);
+      return;
+    }
+    const conversationReadOrigin = resolveGatewayConversationReadOrigin({
+      client,
+      requestedOrigin: request.conversationReadOrigin,
+    });
     const inflight = resolveGatewayInflightRequest({
       context,
       prefix: "message.action",
       idempotencyKey: request.idempotencyKey,
       respond,
+      conversationReadOrigin,
     });
     if (inflight.kind === "handled") {
       await inflight.done;
@@ -542,17 +612,18 @@ export const sendHandlers: GatewayRequestHandlers = {
           cfg,
           params: request.params,
           accountId,
-          requesterAccountId: normalizeOptionalString(request.requesterAccountId) ?? undefined,
-          requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
+          requesterAccountId: trustedContext.requesterAccountId,
+          requesterSenderId: trustedContext.requesterSenderId,
           senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
             ? request.senderIsOwner === true
             : false,
+          conversationReadOrigin,
           sessionKey,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           inboundEventKind: request.inboundTurnKind,
           agentId,
           mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
-          toolContext: request.toolContext,
+          toolContext: trustedContext.toolContext,
           dryRun: false,
           gatewayClientScopes,
         });
@@ -574,7 +645,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             cfg,
             sessionKey,
             agentId,
-            toolContext: request.toolContext,
+            toolContext: trustedContext.toolContext,
             idempotencyKey: request.idempotencyKey,
             deliveredPayload: payload,
           },
@@ -771,6 +842,21 @@ export const sendHandlers: GatewayRequestHandlers = {
                 }
             : derivedRoute
           : null;
+        const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
+        if (outboundSessionKey && isAgentHarnessSessionKey(outboundSessionKey)) {
+          const { canonicalKey, entry } = loadSessionEntry(outboundSessionKey);
+          const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
+            canonicalKey,
+            entry,
+          );
+          if (missingHarnessSessionError) {
+            return {
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError),
+              meta: { channel },
+            };
+          }
+        }
         if (outboundRoute) {
           await ensureOutboundSessionEntry({
             cfg,
@@ -779,7 +865,6 @@ export const sendHandlers: GatewayRequestHandlers = {
             route: outboundRoute,
           });
         }
-        const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
         const outboundSession = buildOutboundSessionContext({
           cfg,
           agentId: effectiveAgentId,
@@ -966,3 +1051,4 @@ export const sendHandlers: GatewayRequestHandlers = {
     await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

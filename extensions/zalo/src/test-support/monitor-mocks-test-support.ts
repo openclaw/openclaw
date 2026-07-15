@@ -1,5 +1,6 @@
 // Zalo plugin module implements monitor mocks test support behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,
@@ -21,9 +22,7 @@ const runtimeModuleId = new URL("../runtime.js", import.meta.url).pathname;
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
-const loadedMonitorModules = new Set<MonitorModule>();
 const cachedMonitorModules = new Map<string, Promise<MonitorModule>>();
-let cachedWebhookModule: Promise<WebhookModule> | undefined;
 
 type ZaloLifecycleMocks = {
   setWebhookMock: AsyncUnknownMock;
@@ -92,7 +91,6 @@ async function importMonitorModule(params: {
   const module = (await import(
     `${monitorModuleUrl}?t=${params.cacheBust}-${Date.now()}`
   )) as MonitorModule;
-  loadedMonitorModules.add(module);
   return module;
 }
 
@@ -102,26 +100,24 @@ async function importSecretInputModule(cacheBust: string): Promise<SecretInputMo
   )) as SecretInputModule;
 }
 
-async function importCachedWebhookModule(): Promise<WebhookModule> {
-  cachedWebhookModule ??= import(webhookModuleUrl) as Promise<WebhookModule>;
-  return await cachedWebhookModule;
-}
+const importCachedWebhookModule = createLazyRuntimeModule(
+  () => import(webhookModuleUrl) as Promise<WebhookModule>,
+);
 
 export async function resetLifecycleTestState() {
   vi.clearAllMocks();
   (await importCachedWebhookModule()).clearZaloWebhookSecurityStateForTest();
-  for (const module of loadedMonitorModules) {
-    module.testing.clearHostedMediaRouteRefsForTest();
-  }
   setActivePluginRegistry(createEmptyPluginRegistry());
 }
 
 export function setLifecycleRuntimeCore(
   channel: NonNullable<NonNullable<Parameters<typeof createPluginRuntimeMock>[0]>["channel"]>,
+  state?: NonNullable<Parameters<typeof createPluginRuntimeMock>[0]>["state"],
 ) {
   getZaloRuntimeMock.mockReturnValue(
     createPluginRuntimeMock({
       channel,
+      ...(state ? { state } : {}),
     }),
   );
 }
@@ -140,7 +136,6 @@ export async function loadCachedLifecycleMonitorModule(cacheKey: string): Promis
     (async () => {
       installLifecycleModuleMocks();
       const module = (await import(`${monitorModuleUrl}?t=${key}`)) as MonitorModule;
-      loadedMonitorModules.add(module);
       return module;
     })();
   cachedMonitorModules.set(key, cached);

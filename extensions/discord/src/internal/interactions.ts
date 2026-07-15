@@ -37,9 +37,6 @@ import {
   type StructureClient,
 } from "./structures.js";
 
-export { OptionsHandler } from "./interaction-options.js";
-export { ModalFields } from "./modal-fields.js";
-
 type InteractionClient = StructureClient & {
   options: { clientId: string };
   componentHandler: {
@@ -113,7 +110,7 @@ function readInteractionUser(rawData: RawInteraction, client: InteractionClient)
   return null;
 }
 
-export class BaseInteraction {
+class BaseInteraction {
   readonly id: string;
   readonly token: string;
   readonly user: User | null;

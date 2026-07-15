@@ -1,5 +1,6 @@
 // Control-plane rate limiting bounds write-side RPC attempts per device/IP and
 // caps bucket growth against unique-key memory pressure.
+import { normalizeControlPlaneIdentityPart } from "./control-plane-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
 const CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS = 3;
@@ -16,21 +17,13 @@ type Bucket = {
 
 const controlPlaneBuckets = new Map<string, Bucket>();
 
-function normalizePart(value: unknown, fallback: string): string {
-  if (typeof value !== "string") {
-    return fallback;
-  }
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : fallback;
-}
-
 /** Builds a stable throttle key while avoiding shared fallback buckets for anonymous clients. */
-export function resolveControlPlaneRateLimitKey(client: GatewayClient | null): string {
-  const deviceId = normalizePart(client?.connect?.device?.id, "unknown-device");
-  const clientIp = normalizePart(client?.clientIp, "unknown-ip");
+function resolveControlPlaneRateLimitKey(client: GatewayClient | null): string {
+  const deviceId = normalizeControlPlaneIdentityPart(client?.connect?.device?.id, "unknown-device");
+  const clientIp = normalizeControlPlaneIdentityPart(client?.clientIp, "unknown-ip");
   if (deviceId === "unknown-device" && clientIp === "unknown-ip") {
     // Last-resort fallback: avoid cross-client contention when upstream identity is missing.
-    const connId = normalizePart(client?.connId, "");
+    const connId = normalizeControlPlaneIdentityPart(client?.connId, "");
     if (connId) {
       return `${deviceId}|${clientIp}|conn=${connId}`;
     }
@@ -113,13 +106,3 @@ export function pruneStaleControlPlaneBuckets(nowMs = Date.now()): number {
   }
   return pruned;
 }
-
-export const testing = {
-  getControlPlaneRateLimitBucketCount() {
-    return controlPlaneBuckets.size;
-  },
-  resetControlPlaneRateLimitState() {
-    controlPlaneBuckets.clear();
-  },
-};
-export { testing as __testing };

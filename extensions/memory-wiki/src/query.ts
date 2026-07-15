@@ -18,6 +18,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import pMap, { pMapSkip } from "p-map";
 import type { OpenClawConfig } from "../api.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
@@ -33,6 +34,7 @@ import { initializeMemoryWikiVault } from "./vault.js";
 const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
 const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
+const QUERY_PAGE_READ_CONCURRENCY = 16;
 const RELATED_BLOCK_PATTERN =
   /<!-- openclaw:wiki:related:start -->[\s\S]*?<!-- openclaw:wiki:related:end -->/g;
 const MARKDOWN_FRONTMATTER_PATTERN = /^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/;
@@ -245,12 +247,17 @@ async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
     await Promise.all(
       QUERY_DIRS.map(async (relativeDir) => {
         const dirPath = path.join(rootDir, relativeDir);
-        const entries = await fs.readdir(dirPath, { withFileTypes: true }).catch(() => []);
+        const entries = await fs
+          .readdir(dirPath, { withFileTypes: true, recursive: true })
+          .catch(() => []);
         return entries
           .filter(
             (entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md",
           )
-          .map((entry) => path.join(relativeDir, entry.name));
+          .map((entry) => {
+            const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
+            return path.relative(rootDir, absPath).split(path.sep).join("/");
+          });
       }),
     )
   ).flat();
@@ -266,15 +273,16 @@ async function readQueryableWikiPagesByPaths(
   rootDir: string,
   files: string[],
 ): Promise<QueryableWikiPage[]> {
-  const pages = await Promise.all(
-    files.map(async (relativePath) => {
+  return await pMap(
+    files,
+    async (relativePath) => {
       const absolutePath = path.join(rootDir, relativePath);
       const raw = await fs.readFile(absolutePath, "utf8");
       const summary = toWikiPageSummary({ absolutePath, relativePath, raw });
-      return summary ? { ...summary, raw } : null;
-    }),
+      return summary ? { ...summary, raw } : pMapSkip;
+    },
+    { concurrency: QUERY_PAGE_READ_CONCURRENCY, stopOnError: true },
   );
-  return pages.flatMap((page) => (page ? [page] : []));
 }
 
 function parseClaimsDigest(raw: string): QueryDigestClaim[] {
@@ -826,8 +834,9 @@ function buildDigestCandidatePaths(params: {
           (left, right) =>
             scoreDigestClaimMatch(right, queryLower) - scoreDigestClaimMatch(left, queryLower),
         );
-      if (matchingClaims.length > 0) {
-        score += scoreDigestClaimMatch(matchingClaims[0], queryLower);
+      const [bestMatchingClaim] = matchingClaims;
+      if (bestMatchingClaim) {
+        score += scoreDigestClaimMatch(bestMatchingClaim, queryLower);
         score += Math.min(10, (matchingClaims.length - 1) * 2);
       }
       score += scoreDigestSearchModeBoost({
@@ -931,8 +940,9 @@ function scorePage(page: QueryableWikiPage, query: string, mode: WikiSearchMode)
       queryLower,
     });
   const matchingClaims = getMatchingClaims(page, queryLower);
-  if (matchingClaims.length > 0) {
-    score += rankClaimMatch(page, matchingClaims[0], queryLower, queryTokens);
+  const [bestMatchingClaim] = matchingClaims;
+  if (bestMatchingClaim) {
+    score += rankClaimMatch(page, bestMatchingClaim, queryLower, queryTokens);
     score += Math.min(10, (matchingClaims.length - 1) * 2);
   }
   score += scorePageSearchModeBoost({
@@ -1015,7 +1025,7 @@ const SESSION_MEMORY_PATH_PREFIXES = ["sessions/", "qmd/sessions/", "qmd/session
 const SESSION_MEMORY_ROOT_PATHS = ["qmd/sessions"] as const;
 
 // Keep these path shapes aligned with source: "sessions" hits in session-search-visibility and session-transcript-hit.
-export function isSessionMemoryPath(relPath: string): boolean {
+function isSessionMemoryPath(relPath: string): boolean {
   const normalized = relPath.replace(/\\/g, "/");
   return (
     SESSION_MEMORY_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
@@ -1072,6 +1082,16 @@ async function resolveActiveMemoryManager(params: {
   } catch {
     return null;
   }
+}
+
+// Registered managers come from the active memory plugin; nothing enforces
+// the MemorySearchManager contract at runtime, so a partial manager would
+// otherwise surface as "... is not a function" from inside the bundle.
+function buildMemoryManagerContractError(method: "search" | "readFile"): Error {
+  return new Error(
+    `The active memory plugin's search manager does not implement ${method}() from the MemorySearchManager contract. ` +
+      `Set search.backend to "local" for wiki-only access, or use a memory plugin that implements the contract.`,
+  );
 }
 
 function buildMemorySearchTitle(resultPath: string): string {
@@ -1493,6 +1513,9 @@ export async function searchMemoryWiki(params: {
         agentSessionKey: params.agentSessionKey,
       })
     : null;
+  if (sharedMemoryManager && typeof sharedMemoryManager.search !== "function") {
+    throw buildMemoryManagerContractError("search");
+  }
   let rawMemoryResults = sharedMemoryManager
     ? await sharedMemoryManager.search(params.query, { maxResults })
     : [];
@@ -1590,6 +1613,9 @@ export async function getMemoryWikiPage(params: {
   if (!manager) {
     return null;
   }
+  if (typeof manager.readFile !== "function") {
+    throw buildMemoryManagerContractError("readFile");
+  }
 
   const lookupCandidates = buildLookupCandidates(params.lookup);
   const canReadSessionPath =
@@ -1638,3 +1664,4 @@ export async function getMemoryWikiPage(params: {
 
   return null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

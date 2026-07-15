@@ -34,6 +34,7 @@ import {
   loadPluginManifest,
   type OpenClawPackageManifest,
   type PluginManifestActivation,
+  type PluginManifestCatalog,
   type PluginManifestConfigContracts,
   type PluginManifest,
   type PluginManifestCapabilityProviderMetadata,
@@ -56,6 +57,7 @@ import {
   normalizeManifestChannelCommandDefaults,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
+import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
@@ -180,6 +182,8 @@ export type PluginManifestContractListKey =
   | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders"
+  | "workerProviders"
+  | "usageProviders"
   | "migrationProviders"
   | "gatewayMethodDispatch";
 
@@ -201,6 +205,8 @@ export type PluginManifestRecord = {
   id: string;
   name?: string;
   description?: string;
+  catalog?: PluginManifestCatalog;
+  icon?: string;
   version?: string;
   packageName?: string;
   packageVersion?: string;
@@ -228,6 +234,7 @@ export type PluginManifestRecord = {
   nonSecretAuthMarkers?: string[];
   commandAliases?: PluginManifestCommandAlias[];
   providerAuthEnvVars?: Record<string, string[]>;
+  providerUsageAuthEnvVars?: Record<string, string[]>;
   providerAuthAliases?: Record<string, string>;
   channelEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
@@ -377,6 +384,8 @@ function mergeManifestContracts(
     "webContentExtractors",
     "webFetchProviders",
     "webSearchProviders",
+    "workerProviders",
+    "usageProviders",
     "migrationProviders",
     "gatewayMethodDispatch",
     "tools",
@@ -440,6 +449,26 @@ function mergeCatalogChannelConfigs(params: {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+function mergeManifestCatalog(
+  manifestCatalog: PluginManifestCatalog | undefined,
+  officialCatalog: PluginManifestCatalog | undefined,
+): PluginManifestCatalog | undefined {
+  const featuredCandidate = manifestCatalog?.featured ?? officialCatalog?.featured;
+  const orderCandidate = manifestCatalog?.order ?? officialCatalog?.order;
+  const featured = typeof featuredCandidate === "boolean" ? featuredCandidate : undefined;
+  const order =
+    typeof orderCandidate === "number" && Number.isFinite(orderCandidate)
+      ? orderCandidate
+      : undefined;
+  if (featured === undefined && order === undefined) {
+    return undefined;
+  }
+  return {
+    ...(featured !== undefined ? { featured } : {}),
+    ...(order !== undefined ? { order } : {}),
+  };
+}
+
 function buildRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
@@ -487,6 +516,8 @@ function buildRecord(params: {
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
+    catalog: mergeManifestCatalog(params.manifest.catalog, officialCatalogManifest?.catalog),
+    icon: normalizeOptionalString(params.manifest.icon),
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,
@@ -523,6 +554,7 @@ function buildRecord(params: {
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
     commandAliases: params.manifest.commandAliases,
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
+    providerUsageAuthEnvVars: params.manifest.providerUsageAuthEnvVars,
     providerAuthAliases: params.manifest.providerAuthAliases,
     channelEnvVars: params.manifest.channelEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
@@ -735,6 +767,7 @@ function matchesInstalledPluginRecord(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
+  installPathOnly?: boolean;
 }): boolean {
   if (params.candidate.origin !== "global" && params.candidate.origin !== "config") {
     return false;
@@ -754,7 +787,11 @@ function matchesInstalledPluginRecord(params: {
       const resolved = resolveUserPath(entry, params.env);
       return safeRealpathSync(resolved) ?? resolved;
     });
-  const trackedPaths = [record.installPath, record.sourcePath]
+  // Security decisions must bind to the current install output. sourcePath can
+  // legitimately identify path installs, but it can also survive a source switch.
+  const trackedPaths = (
+    params.installPathOnly ? [record.installPath] : [record.installPath, record.sourcePath]
+  )
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
       const resolved = resolveUserPath(entry, params.env);
@@ -797,6 +834,7 @@ function isTrustedOfficialPluginInstall(params: {
       candidate: params.candidate,
       env: params.env,
       installRecords: params.installRecords,
+      installPathOnly: true,
     })
   ) {
     return false;
@@ -814,6 +852,13 @@ function isTrustedOfficialPluginInstall(params: {
   if (!installRecord) {
     return false;
   }
+  const officialClawHubInstall =
+    installRecord.source === "clawhub"
+      ? resolveTrustedSourceLinkedOfficialClawHubInstall({
+          pluginId: params.pluginId,
+          record: installRecord,
+        })
+      : undefined;
   if (
     installRecord.source === "npm" &&
     officialInstall?.npmSpec === packageName &&
@@ -826,14 +871,7 @@ function isTrustedOfficialPluginInstall(params: {
   ) {
     return true;
   }
-  if (
-    installRecord.source === "clawhub" &&
-    officialInstall?.clawhubSpec &&
-    installRecord.clawhubChannel === "official" &&
-    (installRecord.clawhubPackage === packageName ||
-      installRecord.spec === officialInstall.clawhubSpec ||
-      installRecord.resolvedSpec === officialInstall.clawhubSpec)
-  ) {
+  if (installRecord.source === "clawhub" && officialClawHubInstall) {
     return true;
   }
   return false;
@@ -1182,8 +1220,4 @@ export function loadPluginManifestRegistry(
   const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
-
-export const testing = {
-  mergeManifestContracts,
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

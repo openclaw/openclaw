@@ -17,7 +17,7 @@ const SKIP_VALUE = "__skip__";
 
 // Official plugin onboarding lists generic official plugins not already
 // configured and installs the selected ones through the trusted install flow.
-export type OfficialPluginOnboardingInstallEntry = {
+type OfficialPluginOnboardingInstallEntry = {
   pluginId: string;
   label: string;
   description?: string;
@@ -59,11 +59,7 @@ function formatInstallHint(install: PluginPackageInstall): string {
   return "install source";
 }
 
-export const testing = {
-  formatInstallHint,
-};
-
-export function resolveOfficialPluginOnboardingInstallEntries(params: {
+function resolveOfficialPluginOnboardingInstallEntries(params: {
   config: OpenClawConfig;
 }): OfficialPluginOnboardingInstallEntry[] {
   const entries: OfficialPluginOnboardingInstallEntry[] = [];
@@ -136,4 +132,3 @@ export async function setupOfficialPluginInstalls(params: {
   }
   return next;
 }
-export { testing as __testing };

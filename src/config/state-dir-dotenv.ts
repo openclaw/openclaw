@@ -1,7 +1,7 @@
 // Loads state-directory dotenv entries used by config and runtime startup.
 import fs from "node:fs";
 import path from "node:path";
-import dotenv from "dotenv";
+import { parse as parseDotEnv } from "dotenv";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -59,11 +59,10 @@ type ParsedStateDirDotEnv = {
   skippedShellReferenceKeys: string[];
 };
 
-function parseStateDirDotEnvContent(content: string): ParsedStateDirDotEnv {
-  const parsed = dotenv.parse(content);
+function parseStateDirDotEnvContent(content: string | Buffer): ParsedStateDirDotEnv {
   const entries: Record<string, string> = {};
   const skippedShellReferenceKeys: string[] = [];
-  for (const [rawKey, value] of Object.entries(parsed)) {
+  for (const [rawKey, value] of Object.entries(parseDotEnv(content))) {
     if (!value?.trim()) {
       continue;
     }
@@ -88,11 +87,6 @@ function parseStateDirDotEnvContent(content: string): ParsedStateDirDotEnv {
   return { entries, skippedShellReferenceKeys };
 }
 
-/** Reads a specific state directory `.env` as managed service env vars. */
-export function readStateDirDotEnvVarsFromStateDir(stateDir: string): Record<string, string> {
-  return readStateDirDotEnvFromStateDir(stateDir).entries;
-}
-
 /**
  * Read and parse the state-dir `.env`, returning both the persisted entries and
  * the keys that were skipped because they held unresolved shell references. The
@@ -102,7 +96,7 @@ export function readStateDirDotEnvVarsFromStateDir(stateDir: string): Record<str
 export function readStateDirDotEnvFromStateDir(stateDir: string): ParsedStateDirDotEnv {
   const dotEnvPath = path.join(stateDir, ".env");
   try {
-    return parseStateDirDotEnvContent(fs.readFileSync(dotEnvPath, "utf8"));
+    return parseStateDirDotEnvContent(fs.readFileSync(dotEnvPath));
   } catch {
     return { entries: {}, skippedShellReferenceKeys: [] };
   }
@@ -113,15 +107,13 @@ export function readStateDirDotEnvFromStateDir(stateDir: string): ParsedStateDir
  * a filtered record of key-value pairs suitable for a managed service
  * environment source.
  */
-export function readStateDirDotEnvVars(
-  env: Record<string, string | undefined>,
-): Record<string, string> {
+function readStateDirDotEnvVars(env: Record<string, string | undefined>): Record<string, string> {
   const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
-  return readStateDirDotEnvVarsFromStateDir(stateDir);
+  return readStateDirDotEnvFromStateDir(stateDir).entries;
 }
 
 /** Split view of durable gateway service env sources before precedence is applied. */
-export type DurableServiceEnvVarSources = {
+type DurableServiceEnvVarSources = {
   stateDirDotEnvEnvironment: Record<string, string>;
   configEnvironment: Record<string, string>;
   durableEnvironment: Record<string, string>;

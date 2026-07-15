@@ -5,11 +5,14 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelInboundEventContext,
-  type CommandTurnContext,
+  type CommandFacts,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
-import { deliverInboundReplyWithMessageSendContext } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  deliverInboundReplyWithMessageSendContext,
+  resolveChannelStreamingBlockEnabled,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -27,7 +30,6 @@ import type { GroupHistoryEntry } from "./inbound-context.js";
 import {
   createChannelMessageReplyPipeline,
   dispatchReplyWithBufferedBlockDispatcher,
-  finalizeInboundContext,
   getAgentScopedMediaLocalRoots,
   jidToE164,
   logVerbose,
@@ -111,6 +113,10 @@ function whatsAppReplyDeliveryVisibilityFromDurableResult(result: {
   return whatsAppReplyDeliveryVisibility(result.visibleReplySent === true);
 }
 
+function readTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function markWhatsAppReplyDeliveryErrorVisibleAfterFlush(
   error: unknown,
   flushResult: WhatsAppMediaOnlyFlushResult,
@@ -141,11 +147,34 @@ function logWhatsAppReplyDeliveryError(params: {
   );
 }
 
-function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): boolean | undefined {
-  if (typeof cfg.channels?.whatsapp?.blockStreaming !== "boolean") {
-    return undefined;
+function resolveWhatsAppDurableReplyToId(params: {
+  context: FinalizedMsgContext;
+  info: ReplyDeliveryInfo;
+  msg: AdmittedWebInboundMessage;
+  payload: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
+}): string | null {
+  if (params.payload.replyToId === null) {
+    return null;
   }
-  return !cfg.channels.whatsapp.blockStreaming;
+  const explicitPayloadReplyToId = readTrimmedString(params.payload.replyToId);
+  if (explicitPayloadReplyToId) {
+    return explicitPayloadReplyToId;
+  }
+  const hasVisibleInboundReplyTarget =
+    Boolean(readTrimmedString(params.context.ReplyToId)) ||
+    Boolean(readTrimmedString(params.context.ReplyToIdFull));
+  const currentInboundMessageId = readTrimmedString(params.msg.event.id);
+  if (params.info.kind === "final" && hasVisibleInboundReplyTarget && currentInboundMessageId) {
+    return currentInboundMessageId;
+  }
+  return null;
+}
+
+function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): boolean | undefined {
+  // The monitor snapshot pins the account-resolved streaming object onto the
+  // root channel entry, so this root-level read is already account-scoped.
+  const enabled = resolveChannelStreamingBlockEnabled(cfg.channels?.whatsapp);
+  return typeof enabled === "boolean" ? !enabled : undefined;
 }
 
 function resolveWhatsAppDeliverablePayload(
@@ -268,10 +297,7 @@ export function resolveWhatsAppResponsePrefix(params: {
 export async function buildWhatsAppInboundContext(params: {
   bodyForAgent?: string;
   combinedBody: string;
-  commandBody?: string;
-  commandAuthorized?: boolean;
-  commandTurn?: CommandTurnContext;
-  commandSource?: "text";
+  command?: CommandFacts;
   groupHistory?: GroupHistoryEntry[];
   groupMemberRoster?: Map<string, string>;
   groupSystemPrompt?: string;
@@ -288,6 +314,7 @@ export async function buildWhatsAppInboundContext(params: {
   const admission = requireWhatsAppInboundAdmission(params.msg);
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
+  const wasMentioned = params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned;
   const inboundHistory =
     conversationKind === "group"
       ? buildInboundHistoryFromEntries({
@@ -315,7 +342,6 @@ export async function buildWhatsAppInboundContext(params: {
   );
   return buildChannelInboundEventContext({
     channel: "whatsapp",
-    finalize: finalizeInboundContext,
     supplemental: {
       quote: params.visibleReplyTo
         ? {
@@ -354,22 +380,23 @@ export async function buildWhatsAppInboundContext(params: {
       bodyForAgent: params.bodyForAgent ?? params.msg.payload.body,
       inboundHistory,
       rawBody: params.rawBody ?? params.msg.payload.body,
-      commandBody: params.commandBody ?? params.msg.payload.body,
+      commandBody: params.command?.body ?? params.msg.payload.body,
     },
     access: {
-      ...(params.msg.wasMentioned !== undefined
+      ...(wasMentioned !== undefined
         ? {
             mentions: {
               canDetectMention: conversationKind === "group",
-              wasMentioned: params.msg.wasMentioned,
+              wasMentioned,
+              requireMention: params.msg.groupMention?.requireMention,
             },
           }
         : {}),
       commands: {
-        authorized: params.commandAuthorized,
+        authorized: params.command?.authorized === true,
       },
     },
-    commandTurn: params.commandTurn,
+    command: params.command,
     extra: {
       Transcript: params.transcript,
       GroupSubject: params.msg.group?.subject,
@@ -379,53 +406,11 @@ export async function buildWhatsAppInboundContext(params: {
         fallbackE164: params.sender.e164,
       }),
       SenderE164: params.sender.e164,
-      CommandSource:
-        params.commandSource ??
-        (params.commandTurn?.source === "native" || params.commandTurn?.source === "text"
-          ? params.commandTurn.source
-          : undefined),
       ReplyThreading: params.replyThreading,
       SuppressMessageReceivedHooks: params.suppressMessageReceivedHooks,
       ...(params.msg.payload.location ? toLocationContext(params.msg.payload.location) : {}),
     },
   });
-}
-
-function normalizeCommandTurnFromContext(value: unknown): CommandTurnContext | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Partial<CommandTurnContext>;
-  const kind = record.kind;
-  const source = record.source;
-  if (kind === "native" && source === "native" && typeof record.authorized === "boolean") {
-    return {
-      kind: "native",
-      source: "native",
-      authorized: record.authorized,
-      commandName: typeof record.commandName === "string" ? record.commandName : undefined,
-      body: typeof record.body === "string" ? record.body : undefined,
-    };
-  }
-  if (kind === "text-slash" && source === "text" && typeof record.authorized === "boolean") {
-    return {
-      kind: "text-slash",
-      source: "text",
-      authorized: record.authorized,
-      commandName: typeof record.commandName === "string" ? record.commandName : undefined,
-      body: typeof record.body === "string" ? record.body : undefined,
-    };
-  }
-  if (kind === "normal" && source === "message") {
-    return {
-      kind: "normal",
-      source: "message",
-      authorized: false,
-      commandName: typeof record.commandName === "string" ? record.commandName : undefined,
-      body: typeof record.body === "string" ? record.body : undefined,
-    };
-  }
-  return undefined;
 }
 
 export function resolveWhatsAppDmRouteTarget(params: {
@@ -507,7 +492,7 @@ export function updateWhatsAppMainLastRoute(params: {
 export async function dispatchWhatsAppBufferedReply(params: {
   cfg: ReturnType<LoadConfigFn>;
   connectionId: string;
-  context: Record<string, unknown>;
+  context: FinalizedMsgContext;
   deliverReply: (params: {
     replyResult: ReplyPayload;
     normalizedReplyResult?: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
@@ -559,27 +544,11 @@ export async function dispatchWhatsAppBufferedReply(params: {
     accountId: params.route.accountId,
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
-  const sourceReplyChatType =
-    typeof params.context.ChatType === "string" ? params.context.ChatType : conversationKind;
-  const sourceReplyCommandSource =
-    params.context.CommandSource === "native" || params.context.CommandSource === "text"
-      ? params.context.CommandSource
-      : undefined;
-  const sourceReplyCommandTurn = normalizeCommandTurnFromContext(params.context.CommandTurn);
-  const sourceReplyCommandAuthorized =
-    typeof params.context.CommandAuthorized === "boolean"
-      ? params.context.CommandAuthorized
-      : undefined;
   const sourceReplyDeliveryMode =
-    sourceReplyChatType === "group" || sourceReplyChatType === "channel"
+    params.context.ChatType === "group" || params.context.ChatType === "channel"
       ? resolveChannelMessageSourceReplyDeliveryMode({
           cfg: params.cfg,
-          ctx: {
-            ChatType: sourceReplyChatType,
-            CommandTurn: sourceReplyCommandTurn,
-            CommandSource: sourceReplyCommandSource,
-            CommandAuthorized: sourceReplyCommandAuthorized,
-          },
+          ctx: params.context,
         })
       : undefined;
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
@@ -687,10 +656,16 @@ export async function dispatchWhatsAppBufferedReply(params: {
               channel: "whatsapp",
               accountId: params.route.accountId,
               agentId: params.route.agentId,
-              ctxPayload: params.context as FinalizedMsgContext,
+              ctxPayload: params.context,
               payload: normalizedDeliveryPayload,
               info,
               to: conversationId,
+              replyToId: resolveWhatsAppDurableReplyToId({
+                context: params.context,
+                info,
+                msg: params.msg,
+                payload: normalizedDeliveryPayload,
+              }),
               formatting: {
                 textLimit,
                 tableMode,
@@ -777,7 +752,9 @@ export async function dispatchWhatsAppBufferedReply(params: {
       // Message-tool-only unmentioned group turns have no automatic visible reply.
       // Suppress composing there so silent background runs do not leak presence.
       suppressTyping:
-        sourceRepliesAreToolOnly && conversationKind === "group" && !params.msg.wasMentioned,
+        sourceRepliesAreToolOnly &&
+        conversationKind === "group" &&
+        !(params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned),
       disableBlockStreaming,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       onModelSelected: params.onModelSelected,
@@ -867,3 +844,4 @@ async function finalizeWhatsAppStatusReaction(params: {
   }
   await params.controller.restoreInitial();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

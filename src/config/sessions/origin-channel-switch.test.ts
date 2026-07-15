@@ -220,3 +220,73 @@ describe("session origin across a channel switch (real inbound-event context bui
     expect(afterTelegram.origin?.nativeChannelId).toBeUndefined();
   });
 });
+
+describe("session origin across a non-delivery turn", () => {
+  const webchatTurn = {
+    Provider: "webchat",
+    Surface: "webchat",
+    OriginatingChannel: "webchat",
+    ChatType: "direct",
+  } satisfies Partial<MsgContext>;
+
+  it("keeps the bound Slack channel identity across a non-deliver gateway webchat turn", () => {
+    const afterSlack = applyOrigin(undefined, slackTurn);
+    const afterWebchat = applyOrigin(afterSlack, webchatTurn);
+
+    expect(afterWebchat.origin?.nativeChannelId).toBe("D111SLACK");
+    expect(afterWebchat.origin?.nativeDirectUserId).toBe("U0001");
+    expect(afterWebchat.origin?.accountId).toBe("slack-team-1");
+    expect(afterWebchat.origin?.threadId).toBe("1700000000.000100");
+  });
+
+  it("keeps the bound channel identity across a heartbeat tick", () => {
+    const afterSlack = applyOrigin(undefined, slackTurn);
+    const afterHeartbeat = applyOrigin(afterSlack, {
+      Provider: "heartbeat",
+      Surface: "heartbeat",
+      OriginatingChannel: "heartbeat",
+      ChatType: "direct",
+    } satisfies Partial<MsgContext>);
+
+    expect(afterHeartbeat.origin?.nativeChannelId).toBe("D111SLACK");
+    expect(afterHeartbeat.origin?.threadId).toBe("1700000000.000100");
+  });
+
+  it("keeps the bound channel identity across a cron-event turn that omits the channel", () => {
+    const afterSlack = applyOrigin(undefined, slackTurn);
+    const afterCron = applyOrigin(afterSlack, {
+      Provider: "cron-event",
+      ChatType: "direct",
+      From: "cron:job_REDACTED",
+      To: "cron:job_REDACTED",
+    } satisfies Partial<MsgContext>);
+
+    expect(afterCron.origin?.nativeChannelId).toBe("D111SLACK");
+    expect(afterCron.origin?.nativeDirectUserId).toBe("U0001");
+    expect(afterCron.origin?.accountId).toBe("slack-team-1");
+    expect(afterCron.origin?.threadId).toBe("1700000000.000100");
+  });
+
+  it("keeps the bound channel identity across an exec-event turn that omits the channel", () => {
+    const afterSlack = applyOrigin(undefined, slackTurn);
+    const afterExec = applyOrigin(afterSlack, {
+      Provider: "exec-event",
+      ChatType: "direct",
+      From: "exec:run_REDACTED",
+      To: "exec:run_REDACTED",
+    } satisfies Partial<MsgContext>);
+
+    expect(afterExec.origin?.nativeChannelId).toBe("D111SLACK");
+    expect(afterExec.origin?.threadId).toBe("1700000000.000100");
+  });
+
+  it("still adopts a real channel after an intervening non-delivery turn", () => {
+    const afterSlack = applyOrigin(undefined, slackTurn);
+    const afterWebchat = applyOrigin(afterSlack, webchatTurn);
+    const afterTelegram = applyOrigin(afterWebchat, telegramTurn);
+
+    expect(afterTelegram.origin?.provider).toBe("telegram");
+    expect(afterTelegram.origin?.nativeChannelId).toBeUndefined();
+    expect(afterTelegram.origin?.threadId).toBeUndefined();
+  });
+});

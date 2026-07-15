@@ -1,11 +1,13 @@
 // Qa Lab plugin module implements suite runtime flow behavior.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { formatErrorMessage as formatQaErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-host-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/runtime-doctor";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   callQaBrowserRequest,
@@ -22,10 +24,12 @@ import {
 } from "./discovery-eval.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { assertNoGatewayLogSentinels, scanGatewayLogSentinels } from "./gateway-log-sentinel.js";
+import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { hasModelSwitchContinuitySignal } from "./model-switch-eval.js";
 import { qaChannelPlugin } from "./runtime-api.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { createQaScenarioRuntimeApi, type QaScenarioRuntimeEnv } from "./scenario-runtime-api.js";
 import {
   callPluginToolsMcp,
@@ -45,7 +49,9 @@ import {
   resolveGeneratedImagePath,
   runAgentPrompt,
   runQaCli,
+  seedQaSessionTranscript,
   startAgentRun,
+  waitForAgentHistoryReply,
   waitForAgentRun,
   writeWorkspaceSkill,
 } from "./suite-runtime-agent.js";
@@ -54,6 +60,7 @@ import {
   fetchJson,
   patchConfig,
   readConfigSnapshot,
+  restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
   waitForGatewayHealthy,
   waitForQaChannelReady,
@@ -85,6 +92,39 @@ type QaSuiteScenarioFlowEnv = {
   transport: QaSuiteRuntimeEnv["transport"] & QaScenarioRuntimeEnv["transport"];
 } & Omit<QaSuiteRuntimeEnv, "transport">;
 
+function activeMemoryToggleKey(sessionKey: string) {
+  return createHash("sha256").update(sessionKey, "utf8").digest("hex");
+}
+
+function setActiveMemorySessionDisabled(
+  env: QaSuiteScenarioFlowEnv,
+  sessionKey: string,
+  disabled: boolean,
+) {
+  const store = createPluginStateSyncKeyedStore<{
+    sessionKey: string;
+    disabled: true;
+    updatedAt: number;
+  }>("active-memory", {
+    namespace: "session-toggles",
+    maxEntries: 10_000,
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
+    },
+  });
+  const key = activeMemoryToggleKey(sessionKey);
+  if (disabled) {
+    store.register(key, {
+      sessionKey,
+      disabled: true,
+      updatedAt: Date.now(),
+    });
+    return;
+  }
+  store.delete(key);
+}
+
 type QaSuiteStep = {
   name: string;
   run: () => Promise<string | void>;
@@ -100,6 +140,37 @@ type QaSuiteScenarioResult = {
   }>;
   details?: string;
 };
+
+export async function runQaSuiteScenarioSteps(
+  name: string,
+  steps: QaSuiteStep[],
+): Promise<QaSuiteScenarioResult> {
+  const stepResults: QaSuiteScenarioResult["steps"] = [];
+  for (const step of steps) {
+    try {
+      if (process.env.OPENCLAW_QA_DEBUG === "1") {
+        console.error(`[qa-suite] start scenario="${name}" step="${step.name}"`);
+      }
+      const details = await step.run();
+      if (process.env.OPENCLAW_QA_DEBUG === "1") {
+        console.error(`[qa-suite] pass scenario="${name}" step="${step.name}"`);
+      }
+      stepResults.push({
+        name: step.name,
+        status: "pass",
+        ...(details ? { details } : {}),
+      });
+    } catch (error) {
+      const details = formatQaErrorMessage(error);
+      if (process.env.OPENCLAW_QA_DEBUG === "1") {
+        console.error(`[qa-suite] fail scenario="${name}" step="${step.name}" details=${details}`);
+      }
+      stepResults.push({ name: step.name, status: "fail", details });
+      return { name, status: "fail", steps: stepResults, details };
+    }
+  }
+  return { name, status: "pass", steps: stepResults };
+}
 
 type QaSuiteScenarioDepsParams = {
   env: QaSuiteScenarioFlowEnv;
@@ -151,7 +222,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     browserSnapshot: qaBrowserSnapshot,
     browserAct: qaBrowserAct,
     webOpenPage: async (webParams: Parameters<typeof qaWebOpenPage>[0]) => {
-      const opened = await qaWebOpenPage(webParams);
+      const opened = await qaWebOpenPage({ ...webParams, repoRoot: params.env.repoRoot });
       params.env.webSessionIds.add(opened.pageId);
       return opened;
     },
@@ -163,10 +234,12 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     patchConfig,
     applyConfig,
     readConfigSnapshot,
+    restartGatewayWithConfigPatch,
     createSession,
     readEffectiveTools,
     readSkillStatus,
     readRawQaSessionStore,
+    seedQaSessionTranscript,
     readGatewayLogs: () => params.env.gateway.logs?.() ?? "",
     markGatewayLogCursor: () => (params.env.gateway.logs?.() ?? "").length,
     scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) =>
@@ -179,6 +252,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     resolveGeneratedImagePath,
     startAgentRun,
     waitForAgentRun,
+    waitForAgentHistoryReply,
     listCronJobs,
     findManagedDreamingCronJob,
     waitForCronRunCompletion,
@@ -204,6 +278,8 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     extractQaToolPayload,
     formatMemoryDreamingDay,
     resolveSessionTranscriptsDirForAgent,
+    activeMemoryToggleKey,
+    setActiveMemorySessionDisabled,
     buildAgentSessionKey,
     normalizeLowercaseStringOrEmpty,
     formatErrorMessage: params.formatErrorMessage,
@@ -218,7 +294,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
   };
 }
 
-export function createQaSuiteScenarioFlowApi(params: QaSuiteScenarioFlowApiParams) {
+function createQaSuiteScenarioFlowApi(params: QaSuiteScenarioFlowApiParams) {
   return createQaScenarioRuntimeApi({
     env: params.env,
     scenario: params.scenario,
@@ -231,5 +307,65 @@ export function createQaSuiteScenarioFlowApi(params: QaSuiteScenarioFlowApiParam
       resolveQaLiveTurnTimeoutMs: params.resolveQaLiveTurnTimeoutMs,
     }),
     constants: params.constants,
+  });
+}
+
+export function createQaSuiteScenarioStepRunner(
+  env: QaSuiteScenarioFlowEnv,
+  scenario: QaSeedScenarioWithSource,
+  vars: Record<string, unknown>,
+  deps: {
+    liveTurnTimeoutMs: QaSuiteScenarioDepsParams["liveTurnTimeoutMs"];
+    runScenario: QaSuiteScenarioDepsParams["runScenario"];
+  } = {
+    liveTurnTimeoutMs: resolveQaLiveTurnTimeoutMs,
+    runScenario: runQaSuiteScenarioSteps,
+  },
+): QaSuiteScenarioDepsParams["runScenario"] {
+  const prepareFlow = env.transport.prepareFlow;
+  const execution = scenario.execution;
+  if (!prepareFlow || execution.kind !== "flow") {
+    return deps.runScenario;
+  }
+  return async (name, steps) =>
+    await deps.runScenario(name, [
+      {
+        name: `Prepare ${env.transport.label}`,
+        run: async () => {
+          const prepared = await prepareFlow({
+            config: execution.config ?? {},
+            gateway: env.gateway,
+            outputDir: env.outputDir,
+            timeoutMs: execution.timeoutMs ?? deps.liveTurnTimeoutMs(env, 60_000),
+          });
+          if (prepared) {
+            Object.assign(vars, prepared);
+          }
+        },
+      },
+      ...steps,
+    ]);
+}
+
+export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowApiParams) {
+  if (params.scenario.execution.kind !== "flow") {
+    throw new Error(`scenario is not a flow: ${params.scenario.id}`);
+  }
+  if (!params.scenario.execution.flow) {
+    throw new Error(`scenario missing flow: ${params.scenario.id}`);
+  }
+  const vars: Record<string, unknown> = {};
+  const api = createQaSuiteScenarioFlowApi({
+    ...params,
+    runScenario: createQaSuiteScenarioStepRunner(params.env, params.scenario, vars, {
+      liveTurnTimeoutMs: params.liveTurnTimeoutMs,
+      runScenario: params.runScenario,
+    }),
+  });
+  return await runScenarioFlow({
+    api,
+    flow: params.scenario.execution.flow,
+    scenarioTitle: params.scenario.title,
+    vars,
   });
 }

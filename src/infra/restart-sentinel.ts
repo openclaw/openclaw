@@ -2,6 +2,7 @@
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -16,13 +17,13 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 
-export type RestartSentinelLog = {
+type RestartSentinelLog = {
   stdoutTail?: string | null;
   stderrTail?: string | null;
   exitCode?: number | null;
 };
 
-export type RestartSentinelStep = {
+type RestartSentinelStep = {
   name: string;
   command: string;
   cwd?: string | null;
@@ -30,9 +31,10 @@ export type RestartSentinelStep = {
   log?: RestartSentinelLog | null;
 };
 
-export type RestartSentinelStats = {
+type RestartSentinelStats = {
   mode?: string;
   root?: string;
+  requiresRestart?: boolean;
   handoffId?: string;
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
@@ -70,7 +72,7 @@ export type RestartSentinelPayload = {
   stats?: RestartSentinelStats | null;
 };
 
-export type RestartSentinel = {
+type RestartSentinel = {
   version: 1;
   payload: RestartSentinelPayload;
 };
@@ -340,9 +342,21 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   return lines.join("\n");
 }
 
+function isRestartRequiredConfigWriteSentinel(payload: RestartSentinelPayload): boolean {
+  return (
+    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
+    payload.status === "ok" &&
+    payload.stats?.requiresRestart === true
+  );
+}
+
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
   if (payload.kind === "config-auto-recovery") {
     return "Gateway auto-recovery";
+  }
+  if (isRestartRequiredConfigWriteSentinel(payload)) {
+    const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
+    return `Gateway restart required${mode}`.trim();
   }
   const kind = payload.kind;
   const status = payload.status;
@@ -359,5 +373,5 @@ export function trimLogTail(input?: string | null, maxChars = 8000) {
   if (text.length <= maxChars) {
     return text;
   }
-  return `…${text.slice(text.length - maxChars)}`;
+  return `…${sliceUtf16Safe(text, text.length - maxChars)}`;
 }

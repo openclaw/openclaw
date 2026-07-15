@@ -33,7 +33,7 @@ export function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-export function sendText(res: ServerResponse, status: number, body: string) {
+function sendText(res: ServerResponse, status: number, body: string) {
   res.statusCode = status;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.end(body);
@@ -134,6 +134,14 @@ export function setSseHeaders(res: ServerResponse) {
   res.flushHeaders?.();
 }
 
+/** Abort reason used when the HTTP client disconnects before delivery. */
+class ClientDisconnectError extends Error {
+  constructor(message = "HTTP client disconnected") {
+    super(message);
+    this.name = "ClientDisconnectError";
+  }
+}
+
 export function watchClientDisconnect(
   req: IncomingMessage,
   res: ServerResponse,
@@ -153,7 +161,7 @@ export function watchClientDisconnect(
   const handleClose = () => {
     onDisconnect?.();
     if (!abortController.signal.aborted) {
-      abortController.abort();
+      abortController.abort(new ClientDisconnectError());
     }
   };
   for (const socket of sockets) {

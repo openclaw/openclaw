@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeInlineImageBase64 } from "@openclaw/media-core/inline-image-data-url";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { makeMissingToolResult } from "./session-transcript-repair.js";
@@ -57,6 +58,10 @@ const sessionRepairCache = new Map<string, SessionRepairCacheEntry>();
 export function invalidateSessionFileRepairCache(sessionFile: string): void {
   const trimmed = sessionFile.trim();
   if (trimmed) {
+    if (parseSqliteSessionFileMarker(trimmed)) {
+      sessionRepairCache.delete(trimmed);
+      return;
+    }
     sessionRepairCache.delete(path.resolve(trimmed));
   }
 }
@@ -69,6 +74,9 @@ type SessionMessageEntry = {
 async function readSessionRepairSnapshot(
   sessionFile: string,
 ): Promise<SessionRepairFileSnapshot | undefined> {
+  if (parseSqliteSessionFileMarker(sessionFile)) {
+    return undefined;
+  }
   try {
     const stat = await fs.stat(sessionFile, { bigint: true });
     return {
@@ -412,6 +420,78 @@ function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMess
   );
 }
 
+function normalizeTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isOpenAIResponsesReplayApi(value: unknown): boolean {
+  const api = normalizeTrimmedString(value);
+  return (
+    api === "openai-responses" ||
+    api === "azure-openai-responses" ||
+    api === "openai-codex-responses"
+  );
+}
+
+function isTranscriptOnlyDeliveryMirrorEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+    return false;
+  }
+  const message = record.message as { role?: unknown; provider?: unknown; model?: unknown };
+  return (
+    message.role === "assistant" &&
+    normalizeTrimmedString(message.provider) === "openclaw" &&
+    (normalizeTrimmedString(message.model) === "delivery-mirror" ||
+      normalizeTrimmedString(message.model) === "gateway-injected")
+  );
+}
+
+function isResponsesMessageToolRepairCandidate(entry: unknown): entry is SessionMessageEntry {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+    return false;
+  }
+  const message = record.message as {
+    role?: unknown;
+    api?: unknown;
+    stopReason?: unknown;
+  };
+  return (
+    message.role === "assistant" &&
+    isOpenAIResponsesReplayApi(message.api) &&
+    message.stopReason !== "error" &&
+    message.stopReason !== "aborted"
+  );
+}
+
+function isMessageToolCallName(value: unknown): boolean {
+  return normalizeTrimmedString(value).toLowerCase() === "message";
+}
+
+function findNextSessionMessageEntry(
+  entries: unknown[],
+  startIndex: number,
+): SessionMessageEntry | undefined {
+  for (let i = startIndex + 1; i < entries.length; i += 1) {
+    const entry = entries[i];
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as { type?: unknown; message?: unknown };
+    if (record.type === "message" && record.message && typeof record.message === "object") {
+      return entry as SessionMessageEntry;
+    }
+  }
+  return undefined;
+}
+
 function collectPersistedToolResultIds(entries: unknown[]): Set<string> {
   const ids = new Set<string>();
   for (const entry of entries) {
@@ -478,6 +558,56 @@ function insertMissingCodeModeToolResults(
     );
     for (const toolCall of toolCalls) {
       if (resultIds.has(toolCall.id)) {
+        continue;
+      }
+      out.push(
+        makeSyntheticToolResultEntry({
+          parent: entry,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+        }),
+      );
+      resultIds.add(toolCall.id);
+      insertedToolResults += 1;
+    }
+  }
+
+  return {
+    entries: insertedToolResults > 0 ? out : entries,
+    insertedToolResults,
+    resultIds,
+  };
+}
+
+function insertMissingMessageToolDeliveryMirrorResults(
+  entries: unknown[],
+  existingResultIds: ReadonlySet<string> = new Set(),
+): {
+  entries: unknown[];
+  insertedToolResults: number;
+  resultIds: Set<string>;
+} {
+  const resultIds = new Set(existingResultIds);
+  for (const resultId of collectPersistedToolResultIds(entries)) {
+    resultIds.add(resultId);
+  }
+  let insertedToolResults = 0;
+  const out: unknown[] = [];
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i];
+    out.push(entry);
+    if (!isResponsesMessageToolRepairCandidate(entry)) {
+      continue;
+    }
+    if (!isTranscriptOnlyDeliveryMirrorEntry(findNextSessionMessageEntry(entries, i))) {
+      continue;
+    }
+    const toolCalls = extractToolCallsFromAssistant(
+      entry.message as unknown as Extract<AgentMessage, { role: "assistant" }>,
+    );
+    for (const toolCall of toolCalls) {
+      if (!isMessageToolCallName(toolCall.name) || resultIds.has(toolCall.id)) {
         continue;
       }
       out.push(
@@ -632,17 +762,24 @@ async function tryIncrementalSessionRepair(params: {
   if (hasEntryRepairs(repairedEntries)) {
     return undefined;
   }
-  const repairedToolResults = insertMissingCodeModeToolResults(
+  const codeModeToolResultRepair = insertMissingCodeModeToolResults(
     repairedEntries.entries,
     params.cached.toolResultIds,
   );
-  if (repairedToolResults.insertedToolResults > 0) {
+  if (codeModeToolResultRepair.insertedToolResults > 0) {
+    return undefined;
+  }
+  const messageDeliveryToolResultRepair = insertMissingMessageToolDeliveryMirrorResults(
+    codeModeToolResultRepair.entries,
+    codeModeToolResultRepair.resultIds,
+  );
+  if (messageDeliveryToolResultRepair.insertedToolResults > 0) {
     return undefined;
   }
 
   rememberSessionRepair(params.sessionFile, {
     snapshot: afterReadSnapshot,
-    toolResultIds: repairedToolResults.resultIds,
+    toolResultIds: messageDeliveryToolResultRepair.resultIds,
     endsWithNewline: true,
   });
   return {
@@ -662,6 +799,9 @@ export async function repairSessionFileIfNeeded(params: {
   const sessionFileInput = params.sessionFile.trim();
   if (!sessionFileInput) {
     return { repaired: false, droppedLines: 0, reason: "missing session file" };
+  }
+  if (parseSqliteSessionFileMarker(sessionFileInput)) {
+    return { repaired: false, droppedLines: 0, reason: "sqlite transcript" };
   }
   const sessionFile = path.resolve(sessionFileInput);
   const beforeReadSnapshot = await readSessionRepairSnapshot(sessionFile);
@@ -718,8 +858,22 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
-  const repairedToolResults = insertMissingCodeModeToolResults(entries);
-  const insertedToolResults = repairedToolResults.insertedToolResults;
+  const codeModeToolResultRepair = insertMissingCodeModeToolResults(entries);
+  let insertedToolResults = codeModeToolResultRepair.insertedToolResults;
+  if (codeModeToolResultRepair.insertedToolResults > 0) {
+    entries.splice(0, entries.length, ...codeModeToolResultRepair.entries);
+  }
+
+  const messageDeliveryToolResultRepair = insertMissingMessageToolDeliveryMirrorResults(
+    entries,
+    codeModeToolResultRepair.resultIds,
+  );
+  insertedToolResults += messageDeliveryToolResultRepair.insertedToolResults;
+  if (messageDeliveryToolResultRepair.insertedToolResults > 0) {
+    entries.splice(0, entries.length, ...messageDeliveryToolResultRepair.entries);
+  }
+  const repairedToolResultIds = messageDeliveryToolResultRepair.resultIds;
+
   if (!hasEntryRepairs(repairedEntries) && insertedToolResults === 0) {
     const afterReadSnapshot = await readSessionRepairSnapshot(sessionFile);
     const validatedSnapshot =
@@ -731,7 +885,7 @@ export async function repairSessionFileIfNeeded(params: {
     if (validatedSnapshot) {
       rememberSessionRepair(sessionFile, {
         snapshot: validatedSnapshot,
-        toolResultIds: repairedToolResults.resultIds,
+        toolResultIds: repairedToolResultIds,
         endsWithNewline: content.endsWith("\n"),
       });
     } else {
@@ -742,9 +896,6 @@ export async function repairSessionFileIfNeeded(params: {
       droppedLines: 0,
       ...(validatedSnapshot ? { validatedSnapshot } : {}),
     };
-  }
-  if (insertedToolResults > 0) {
-    entries.splice(0, entries.length, ...repairedToolResults.entries);
   }
 
   const cleaned = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
@@ -802,7 +953,7 @@ export async function repairSessionFileIfNeeded(params: {
   if (repairedSnapshot) {
     rememberSessionRepair(sessionFile, {
       snapshot: repairedSnapshot,
-      toolResultIds: repairedToolResults.resultIds,
+      toolResultIds: repairedToolResultIds,
       endsWithNewline: true,
     });
   } else {
@@ -830,3 +981,4 @@ export async function repairSessionFileIfNeeded(params: {
     ...(retainedBackupPath ? { backupPath: retainedBackupPath } : {}),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
