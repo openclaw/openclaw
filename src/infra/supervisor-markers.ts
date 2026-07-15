@@ -1,5 +1,10 @@
 // Defines process supervisor marker labels for gateway diagnostics.
-import { GATEWAY_LAUNCH_AGENT_LABEL, resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+import { spawnSync } from "node:child_process";
+import {
+  GATEWAY_LAUNCH_AGENT_LABEL,
+  GATEWAY_WINDOWS_TASK_NAME,
+  resolveGatewayLaunchAgentLabel,
+} from "../daemon/constants.js";
 
 const SUPERVISOR_HINTS = {
   launchd: ["OPENCLAW_LAUNCHD_LABEL"],
@@ -50,6 +55,28 @@ function isCurrentGatewayLaunchdJob(env: NodeJS.ProcessEnv): boolean {
   return env.XPC_SERVICE_NAME?.trim() === GATEWAY_LAUNCH_AGENT_LABEL;
 }
 
+const SCHTASKS_QUERY_TIMEOUT_MS = 3_000;
+
+/**
+ * Probe for the OpenClaw gateway scheduled task on Windows via schtasks /Query.
+ * Returns true when the task exists and is queryable, regardless of environment
+ * variables. This covers the case where the gateway was started manually (e.g.
+ * `openclaw.mjs gateway`) instead of through the scheduled task, so the
+ * expected service env vars are missing.
+ */
+function probeWindowsScheduledTask(taskName: string): boolean {
+  try {
+    const result = spawnSync("schtasks.exe", ["/Query", "/TN", taskName], {
+      timeout: SCHTASKS_QUERY_TIMEOUT_MS,
+      stdio: "pipe",
+      windowsHide: true,
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
 /** Detects the current platform supervisor from process environment hints. */
 export function detectRespawnSupervisor(
   env: NodeJS.ProcessEnv = process.env,
@@ -74,7 +101,21 @@ export function detectRespawnSupervisor(
     }
     const marker = env.OPENCLAW_SERVICE_MARKER?.trim();
     const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
-    return marker && serviceKind === "gateway" ? "schtasks" : null;
+    if (marker && serviceKind === "gateway") {
+      return "schtasks";
+    }
+    // If both service markers are explicitly set and don't match gateway,
+    // respect the explicit signal (e.g. marker=worker means "not a gateway").
+    // If only one is set (incomplete signal), we can't be certain — fall
+    // through to the schtasks probe below.
+    if (marker && serviceKind && serviceKind !== "gateway") {
+      return null;
+    }
+    // Fallback: probe schtasks directly when no env vars are set at all (e.g.
+    // gateway started manually instead of through the scheduled task).
+    if (probeWindowsScheduledTask(GATEWAY_WINDOWS_TASK_NAME)) {
+      return "schtasks";
+    }
   }
   return null;
 }

@@ -99,6 +99,28 @@ describe("scripts bounded response reader", () => {
     },
   );
 
+  it.each(helpers)("accepts safe integer %s content-length values", async (_name, read) => {
+    const response = {
+      headers: new Headers({
+        "content-length": String(Number.MAX_SAFE_INTEGER),
+      }),
+      body: {
+        async cancel() {},
+        getReader() {
+          return {
+            async read() {
+              return { done: true, value: undefined };
+            },
+            async cancel() {},
+            releaseLock() {},
+          };
+        },
+      },
+    } as unknown as Response;
+
+    await expect(read(response, "probe", Number.MAX_SAFE_INTEGER)).resolves.toBe("");
+  });
+
   it.each(helpers)(
     "rejects unsafe decimal %s content-length values before reading",
     async (_name, read) => {
