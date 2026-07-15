@@ -19,6 +19,7 @@ const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
   "base64",
 );
+const AMBIGUOUS_WEBM = Buffer.from("1a45dfa3874282847765626d", "hex");
 
 describe("media understanding attachment MIME detection", () => {
   afterEach(() => {
@@ -60,5 +61,23 @@ describe("media understanding attachment MIME detection", () => {
     });
 
     expect(result.mime).toBe("image/png");
+  });
+
+  it("preserves remote audio metadata for an ambiguous WebM container", async () => {
+    const url = "https://example.com/voice.webm";
+    readRemoteMediaBufferMock.mockResolvedValue({
+      buffer: AMBIGUOUS_WEBM,
+      contentType: "audio/webm",
+      fileName: "voice.webm",
+    });
+    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "audio/webm" }]);
+
+    const result = await cache.getBuffer({
+      attachmentIndex: 0,
+      maxBytes: 1024,
+      timeoutMs: 1000,
+    });
+
+    expect(result.mime).toBe("audio/webm");
   });
 });

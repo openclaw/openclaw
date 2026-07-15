@@ -133,6 +133,24 @@ describe("mime detection", () => {
     });
   });
 
+  it("preserves audio metadata for ambiguous WebM container bytes", async () => {
+    // Minimal EBML header declaring WebM; file-type correctly recognizes the container
+    // but defaults it to video/webm because no track metadata is present.
+    const webm = Buffer.from("1a45dfa3874282847765626d", "hex");
+
+    await expectDetectedMime({
+      input: { buffer: webm, filePath: "voice.webm", headerMime: "audio/webm" },
+      expected: "audio/webm",
+    });
+  });
+
+  it("preserves audio metadata when an MP4 extension cannot identify track kind", async () => {
+    await expectDetectedMime({
+      input: { filePath: "voice.mp4", headerMime: "audio/mp4" },
+      expected: "audio/mp4",
+    });
+  });
+
   it("detects HTML files by extension (no magic bytes)", async () => {
     const buf = Buffer.from("<!DOCTYPE html><html><body>test</body></html>");
     const mime = await detectMime({ buffer: buf, filePath: "/tmp/report.html" });

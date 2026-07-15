@@ -176,10 +176,20 @@ export async function detectMime(opts: {
 
   // Prefer sniffed types, but don't let generic container types override a more
   // specific extension mapping (e.g. XLSX vs ZIP).
-  if (sniffedGenericContainer && extMime && !extMime.startsWith("image/")) {
-    return extMime;
+  const inferred =
+    sniffedGenericContainer && extMime && !extMime.startsWith("image/")
+      ? extMime
+      : (sniffed ?? extMime);
+  // Container sniffers commonly default WebM/MP4/Ogg to video without parsing tracks.
+  // Preserve a concrete audio hint only when the container subtype itself agrees.
+  if (
+    headerMime?.startsWith("audio/") &&
+    inferred?.startsWith("video/") &&
+    headerMime.slice("audio/".length) === inferred.slice("video/".length)
+  ) {
+    return headerMime;
   }
-  return sniffed ?? extMime ?? headerMime;
+  return inferred ?? headerMime;
 }
 
 /** Returns the preferred file extension for a normalized or raw MIME string. */
