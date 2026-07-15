@@ -291,7 +291,7 @@ export async function listDueCommitmentsForSession(params: {
     database.db,
     commitmentsDb
       .selectFrom("commitments")
-      .select((eb) => eb.fn.countAll<number>().as("count"))
+      .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
       .where("agent_id", "=", params.agentId)
       .where("session_key", "=", params.sessionKey)
       .where("status", "=", "sent")
@@ -358,7 +358,7 @@ export async function listDueCommitmentSessionKeys(params: {
     database.db,
     commitmentsDb
       .selectFrom("commitments")
-      .select(["session_key", (eb) => eb.fn.countAll<number>().as("count")])
+      .select(["session_key", (eb) => eb.fn.countAll<number | bigint>().as("count")])
       .where("agent_id", "=", params.agentId)
       .where("status", "=", "sent")
       .where("sent_at_ms", ">=", nowMs - ROLLING_DAY_MS)
