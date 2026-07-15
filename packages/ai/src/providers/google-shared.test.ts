@@ -8,9 +8,10 @@ import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
   consumeGoogleGenerateContentStream,
+  isGemma4Model,
 } from "./google-shared.js";
 
-const model: Model<"google-generative-ai"> = {
+const baseModel: Model<"google-generative-ai"> = {
   id: "gemini-test",
   name: "Gemini Test",
   api: "google-generative-ai",
@@ -32,9 +33,9 @@ function createOutput(): AssistantMessage {
   return {
     role: "assistant",
     content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
+    api: baseModel.api,
+    provider: baseModel.provider,
+    model: baseModel.id,
     usage: {
       input: 0,
       output: 0,
@@ -56,7 +57,7 @@ function createOutput(): AssistantMessage {
 
 describe("buildGoogleSimpleThinking", () => {
   it("keeps thinking disabled when a non-reasoning model clamps low to off", () => {
-    const nonReasoningModel = { ...model, reasoning: false };
+    const nonReasoningModel = { ...baseModel, reasoning: false };
 
     expect(buildGoogleSimpleThinking(nonReasoningModel, { reasoning: "low" })).toEqual({
       enabled: false,
@@ -67,7 +68,7 @@ describe("buildGoogleSimpleThinking", () => {
     "keeps thinking disabled when reasoning=%s clamps to off",
     (reasoning) => {
       const offOnlyThinkingModel = {
-        ...model,
+        ...baseModel,
         id: "gemini-3-flash-preview",
         thinkingLevelMap: {
           minimal: null,
@@ -128,7 +129,7 @@ describe("consumeGoogleGenerateContentStream", () => {
           },
         } as GenerateContentResponse,
       ]),
-      model,
+      model: baseModel,
       output,
       stream,
       nextToolCallId: (name) => `generated-${name}`,
@@ -194,7 +195,7 @@ describe("consumeGoogleGenerateContentStream", () => {
           ],
         } as unknown as GenerateContentResponse,
       ]),
-      model,
+      model: baseModel,
       output,
       stream,
       nextToolCallId: (name) => `generated-${name}`,
@@ -237,7 +238,7 @@ describe("consumeGoogleGenerateContentStream", () => {
           ],
         } as GenerateContentResponse,
       ]),
-      model,
+      model: baseModel,
       output,
       stream,
       nextToolCallId: (name) => `generated-${name}`,
@@ -265,7 +266,7 @@ describe("consumeGoogleGenerateContentStream", () => {
 describe("buildGoogleGenerateContentParams", () => {
   it("forwards stop sequences to Google generation config", () => {
     const params = buildGoogleGenerateContentParams(
-      model,
+      baseModel,
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
       { stop: ["STOP"] },
     );
@@ -274,12 +275,47 @@ describe("buildGoogleGenerateContentParams", () => {
   });
 
   it("strips the internal cache boundary marker from systemInstruction", () => {
-    const params = buildGoogleGenerateContentParams(model, {
+    const params = buildGoogleGenerateContentParams(baseModel, {
       systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
       messages: [{ role: "user", content: "hello", timestamp: 0 }],
     });
 
     expect(params.config?.systemInstruction).toBe("Stable\nDynamic");
     expect(JSON.stringify(params)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+  });
+});
+
+describe("isGemma4Model regex anchoring", () => {
+  function makeModel(id: string): Model<"google-generative-ai"> {
+    return { ...baseModel, id };
+  }
+
+  it("matches bare gemma-4 family ids", () => {
+    expect(isGemma4Model(makeModel("gemma-4-preview"))).toBe(true);
+    expect(isGemma4Model(makeModel("gemma4-pro"))).toBe(true);
+    expect(isGemma4Model(makeModel("gemma-4-9b"))).toBe(true);
+  });
+
+  it("matches provider-prefixed gemma-4 family ids", () => {
+    expect(isGemma4Model(makeModel("google/gemma-4-preview"))).toBe(true);
+    expect(isGemma4Model(makeModel("models/gemma4-pro"))).toBe(true);
+  });
+
+  it("rejects ids with extra characters before the model family", () => {
+    // "supergemma-4" has no ^ or / before "gemma" → rejected by (?:^|\/) prefix anchor.
+    expect(isGemma4Model(makeModel("supergemma-4-preview"))).toBe(false);
+    expect(isGemma4Model(makeModel("x-gemma-4-preview"))).toBe(false);
+    expect(isGemma4Model(makeModel("megamma-4"))).toBe(false);
+  });
+
+  it("rejects ids where gemma-4 is a substring of a different version", () => {
+    expect(isGemma4Model(makeModel("gemma-40"))).toBe(false);
+    expect(isGemma4Model(makeModel("gemma-400b"))).toBe(false);
+  });
+
+  it("rejects unrelated model ids", () => {
+    expect(isGemma4Model(makeModel("gemini-2.5-pro"))).toBe(false);
+    expect(isGemma4Model(makeModel("gemini-3-pro-preview"))).toBe(false);
+    expect(isGemma4Model(makeModel("claude-sonnet-4-6"))).toBe(false);
   });
 });
