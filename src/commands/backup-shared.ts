@@ -110,7 +110,7 @@ export function buildBackupArchivePath(archiveRoot: string, sourcePath: string):
 }
 
 /** Resolve a backup plan from explicit paths, deduplicating assets already covered by parents. */
-export async function resolveBackupPlanFromPaths(params: {
+async function resolveBackupPlanFromPaths(params: {
   stateDir: string;
   configPath: string;
   oauthDir: string;
@@ -247,6 +247,12 @@ export async function resolveBackupPlanFromPaths(params: {
     workspaceDirs: workspaceDirs.map((entry) => path.resolve(entry)),
     included,
     skipped,
+  };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.backupPlanTestApi")] = {
+    resolveBackupPlanFromPaths,
   };
 }
 
