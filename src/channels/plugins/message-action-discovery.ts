@@ -248,24 +248,6 @@ export function resolveMessageActionDiscoveryForPlugin(params: {
 }
 
 /**
- * Lists message actions available across registered channel plugins.
- */
-export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
-  const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
-  for (const plugin of listChannelPlugins()) {
-    for (const action of resolveMessageActionDiscoveryForPlugin({
-      pluginId: plugin.id,
-      actions: plugin.actions,
-      context: { cfg },
-      includeActions: true,
-    }).actions) {
-      actions.add(action);
-    }
-  }
-  return Array.from(actions);
-}
-
-/**
  * Lists actions whose schemas do not block cross-channel tool usage.
  */
 export function listCrossChannelSchemaSupportedMessageActions(
@@ -315,7 +297,7 @@ export function listCrossChannelSchemaSupportedMessageActions(
 /**
  * Lists message capabilities advertised across registered channel plugins.
  */
-export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
+function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
   const capabilities = new Set<ChannelMessageCapability>();
   for (const plugin of listChannelPlugins()) {
     for (const capability of resolveMessageActionDiscoveryForPlugin({
@@ -333,7 +315,7 @@ export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMess
 /**
  * Lists message capabilities advertised by the current channel.
  */
-export function listChannelMessageCapabilitiesForChannel(
+function listChannelMessageCapabilitiesForChannel(
   params: ChannelMessageActionDiscoveryParams,
 ): ChannelMessageCapability[] {
   const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(params.channel);
@@ -465,10 +447,3 @@ export function channelSupportsMessageCapabilityForChannel(
 ): boolean {
   return listChannelMessageCapabilitiesForChannel(params).includes(capability);
 }
-
-export const testing = {
-  resetLoggedMessageActionErrors() {
-    loggedMessageActionErrors.clear();
-  },
-};
-export { testing as __testing };

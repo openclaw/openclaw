@@ -24,12 +24,12 @@ if (!codexRecord) {
 if (codexRecord.source !== "npm") {
   throw new Error(`expected npm codex install record, got ${codexRecord.source}`);
 }
-if (!String(codexRecord.spec || "").includes("@openclaw/codex")) {
+if (!codexRecord.spec?.includes("@openclaw/codex")) {
   throw new Error(`expected @openclaw/codex install spec, got ${codexRecord.spec}`);
 }
 
 const npmRoot = managedNpmRoot();
-const installPath = String(codexRecord.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
+const installPath = (codexRecord.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
 if (!installPath) {
   throw new Error(`missing codex installPath: ${JSON.stringify(codexRecord)}`);
 }
@@ -54,6 +54,21 @@ if (!openAiCodexPackageJson) {
   throw new Error("missing @openai/codex dependency under managed npm root");
 }
 assertPathInside(npmRoot, openAiCodexPackageJson, "@openai/codex dependency");
+const openAiCodexPackage = readJson(openAiCodexPackageJson);
+const codexBinPath =
+  typeof openAiCodexPackage.bin === "string"
+    ? openAiCodexPackage.bin
+    : openAiCodexPackage.bin && typeof openAiCodexPackage.bin.codex === "string"
+      ? openAiCodexPackage.bin.codex
+      : undefined;
+if (!codexBinPath) {
+  throw new Error(`@openai/codex package has no codex bin: ${openAiCodexPackageJson}`);
+}
+const codexBin = path.resolve(path.dirname(openAiCodexPackageJson), codexBinPath);
+if (!fs.existsSync(codexBin)) {
+  throw new Error(`missing managed Codex binary: ${codexBin}`);
+}
+assertPathInside(npmRoot, codexBin, "managed Codex binary");
 
 const list = readJson("/tmp/openclaw-plugins-list.json");
 const plugin = (list.plugins || []).find((entry) => entry.id === "codex");
@@ -76,8 +91,8 @@ if (!hasHarness) {
 }
 
 const primaryModel = cfg.agents?.defaults?.model?.primary;
-if (primaryModel !== "openai/gpt-5.5") {
-  throw new Error(`expected OpenAI onboarding model openai/gpt-5.5, got ${primaryModel}`);
+if (primaryModel !== "openai/gpt-5.6") {
+  throw new Error(`expected OpenAI onboarding model openai/gpt-5.6, got ${primaryModel}`);
 }
 const providerRuntime = cfg.models?.providers?.openai?.agentRuntime?.id;
 if (providerRuntime && providerRuntime !== "codex") {

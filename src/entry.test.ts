@@ -155,6 +155,73 @@ describe("entry precomputed command help fast path", () => {
     expect(outputPrecomputedNodesHelpTextCalls).toBe(1);
   });
 
+  it.each(["doctor", "gateway", "plugins", "sessions", "tasks"])(
+    "renders precomputed %s help from startup metadata without importing the full program",
+    async (commandName) => {
+      const outputPrecomputedSubcommandHelpTextCalls: string[] = [];
+
+      const handled = await tryHandlePrecomputedCommandHelpFastPath(
+        ["node", "openclaw", commandName, "--help"],
+        {
+          env: {},
+          outputPrecomputedSubcommandHelpText: (requestedCommandName) => {
+            outputPrecomputedSubcommandHelpTextCalls.push(requestedCommandName);
+            return true;
+          },
+        },
+      );
+
+      expect(handled).toBe(true);
+      expect(outputPrecomputedSubcommandHelpTextCalls).toEqual([commandName]);
+    },
+  );
+
+  it("renders precomputed subcommand help with leading root options", async () => {
+    const outputPrecomputedSubcommandHelpTextCalls: string[] = [];
+
+    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      ["node", "openclaw", "--profile", "work", "--no-color", "models", "-h"],
+      {
+        env: {},
+        outputPrecomputedSubcommandHelpText: (commandName) => {
+          outputPrecomputedSubcommandHelpTextCalls.push(commandName);
+          return true;
+        },
+      },
+    );
+
+    expect(handled).toBe(true);
+    expect(outputPrecomputedSubcommandHelpTextCalls).toEqual(["models"]);
+  });
+
+  it("keeps subcommand help fast path strict for extra or mixed flags", async () => {
+    const invocations = [
+      ["node", "openclaw", "doctor", "--version"],
+      ["node", "openclaw", "gateway", "-V"],
+      ["node", "openclaw", "doctor", "--help", "--version"],
+      ["node", "openclaw", "doctor", "--help", "--bogus"],
+      ["node", "openclaw", "doctor", "--help", "extra"],
+      ["node", "openclaw", "doctor", "--version", "-h"],
+      ["node", "openclaw", "--bogus", "doctor", "--help"],
+      ["node", "openclaw", "gateway", "status", "--help"],
+      ["node", "openclaw", "status", "--help"],
+    ];
+    let outputPrecomputedSubcommandHelpTextCalls = 0;
+
+    for (const argv of invocations) {
+      const handled = await tryHandlePrecomputedCommandHelpFastPath(argv, {
+        env: {},
+        outputPrecomputedSubcommandHelpText: () => {
+          outputPrecomputedSubcommandHelpTextCalls += 1;
+          return true;
+        },
+      });
+
+      expect(handled).toBe(false);
+    }
+    expect(outputPrecomputedSubcommandHelpTextCalls).toBe(0);
+  });
+
   it("defers nodes help when plugin config can change command metadata", async () => {
     let outputPrecomputedNodesHelpTextCalls = 0;
     let liveConfigChecks = 0;
@@ -185,6 +252,34 @@ describe("entry precomputed command help fast path", () => {
       {
         env: {},
         outputPrecomputedSecretsHelpText: () => false,
+      },
+    );
+
+    expect(handled).toBe(false);
+  });
+
+  it("falls through when startup metadata loading fails", async () => {
+    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      ["node", "openclaw", "secrets", "--help"],
+      {
+        env: {},
+        outputPrecomputedSecretsHelpText: () => {
+          throw new Error("startup metadata failed");
+        },
+      },
+    );
+
+    expect(handled).toBe(false);
+  });
+
+  it("falls through when the nodes live-config probe fails", async () => {
+    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      ["node", "openclaw", "nodes", "--help"],
+      {
+        env: {},
+        loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => {
+          throw new Error("live config failed");
+        },
       },
     );
 
@@ -287,5 +382,23 @@ describe("entry precomputed command help fast path", () => {
 
     expect(handled).toBe(false);
     expect(outputPrecomputedSecretsHelpTextCalls).toBe(0);
+  });
+
+  it("skips the host command help fast path when a container target comes from env", async () => {
+    let outputPrecomputedBrowserHelpTextCalls = 0;
+
+    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      ["node", "openclaw", "browser", "--help"],
+      {
+        env: { OPENCLAW_CONTAINER: "demo" },
+        outputPrecomputedBrowserHelpText: () => {
+          outputPrecomputedBrowserHelpTextCalls += 1;
+          return true;
+        },
+      },
+    );
+
+    expect(handled).toBe(false);
+    expect(outputPrecomputedBrowserHelpTextCalls).toBe(0);
   });
 });

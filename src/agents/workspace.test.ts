@@ -1,6 +1,7 @@
 // Workspace tests cover bootstrap seeding, attestation safety, bootstrap file
 // filtering, and setup-completion state for agent workspaces.
 import { createHash } from "node:crypto";
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,10 +24,9 @@ import {
   filterBootstrapFilesForSession,
   isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
-  reconcileWorkspaceBootstrapCompletion,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
-  resolveWorkspaceAttestationPath,
+  resolveWorkspaceAttestationPaths,
   WORKSPACE_VANISHED_ERROR_CODE,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
@@ -68,6 +68,14 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
 
 const WORKSPACE_STATE_PATH_SEGMENTS = ["openclaw-workspace-state.json"] as const;
 const LEGACY_WORKSPACE_STATE_PATH_SEGMENTS = [".openclaw", "workspace-state.json"] as const;
+
+function resolveCurrentWorkspaceAttestationPath(dir: string): string {
+  const [attestationPath] = resolveWorkspaceAttestationPaths(dir);
+  if (!attestationPath) {
+    throw new Error("expected current workspace attestation path");
+  }
+  return attestationPath;
+}
 
 async function readWorkspaceState(dir: string): Promise<{
   version: number;
@@ -171,7 +179,9 @@ describe("ensureAgentWorkspace", () => {
   it("refuses to re-seed a recently attested workspace after the directory disappears", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
-    await expect(fs.access(resolveWorkspaceAttestationPath(tempDir))).resolves.toBeUndefined();
+    await expect(
+      fs.access(resolveCurrentWorkspaceAttestationPath(tempDir)),
+    ).resolves.toBeUndefined();
 
     await fs.rm(tempDir, { recursive: true, force: true });
 
@@ -229,7 +239,7 @@ describe("ensureAgentWorkspace", () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const oldGeneratedAgents = "old generated agents\n";
     await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), oldGeneratedAgents);
-    const attestationPath = resolveWorkspaceAttestationPath(tempDir);
+    const attestationPath = resolveCurrentWorkspaceAttestationPath(tempDir);
     await fs.mkdir(path.dirname(attestationPath), { recursive: true });
     await fs.writeFile(
       attestationPath,
@@ -365,7 +375,7 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await fs.rm(tempDir, { recursive: true, force: true });
     const staleDate = new Date(Date.now() - 25 * 60 * 60 * 1000);
-    await fs.utimes(resolveWorkspaceAttestationPath(tempDir), staleDate, staleDate);
+    await fs.utimes(resolveCurrentWorkspaceAttestationPath(tempDir), staleDate, staleDate);
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
@@ -400,7 +410,7 @@ describe("ensureAgentWorkspace", () => {
     "refuses to re-seed when a recent owned marker becomes unreadable",
     async () => {
       const tempDir = await makeTempWorkspace("openclaw-workspace-");
-      const attestationPath = resolveWorkspaceAttestationPath(tempDir);
+      const attestationPath = resolveCurrentWorkspaceAttestationPath(tempDir);
       await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
       await fs.chmod(attestationPath, 0o000);
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -419,7 +429,7 @@ describe("ensureAgentWorkspace", () => {
     "refuses to re-seed when the state marker directory is unreadable",
     async () => {
       const tempDir = await makeTempWorkspace("openclaw-workspace-");
-      const attestationDir = path.dirname(resolveWorkspaceAttestationPath(tempDir));
+      const attestationDir = path.dirname(resolveCurrentWorkspaceAttestationPath(tempDir));
       await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
       await fs.chmod(attestationDir, 0o000);
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -438,7 +448,7 @@ describe("ensureAgentWorkspace", () => {
     "ignores symlinked attestation markers without overwriting the target",
     async () => {
       const tempDir = await makeTempWorkspace("openclaw-workspace-");
-      const attestationPath = resolveWorkspaceAttestationPath(tempDir);
+      const attestationPath = resolveCurrentWorkspaceAttestationPath(tempDir);
       const symlinkTargetPath = `${attestationPath}-target`;
       const targetContent = "outside-marker\n";
       await fs.mkdir(path.dirname(attestationPath), { recursive: true });
@@ -617,15 +627,71 @@ describe("ensureAgentWorkspace", () => {
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
 
-    const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
-    expect(result.repaired).toBe(true);
-    expect(result.bootstrapExists).toBe(false);
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     const state = await readWorkspaceState(tempDir);
     expect(state.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
     await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
     await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+  });
+
+  it("retries transient profile reads before stale bootstrap repair", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_IDENTITY_FILENAME,
+      content: "# IDENTITY.md\n\n- **Name:** Example\n",
+    });
+
+    const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
+    const originalReadFile = fs.readFile.bind(fs);
+    let identityReads = 0;
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (filePath, options) => {
+      if (filePath === identityPath) {
+        identityReads += 1;
+        if (identityReads === 1) {
+          throw Object.assign(
+            new Error("Unknown system error -11: Unknown system error -11, read"),
+            { code: "EAGAIN", errno: -11 },
+          );
+        }
+      }
+      return await originalReadFile(filePath, options as never);
+    }) as typeof fs.readFile);
+
+    try {
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+      expect(identityReads).toBeGreaterThanOrEqual(2);
+      await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it("propagates a transient profile read after the retry budget is exhausted", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
+    const originalReadFile = fs.readFile.bind(fs);
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (filePath, options) => {
+      if (filePath === identityPath) {
+        throw Object.assign(new Error("Unknown system error -11, read"), {
+          code: "EAGAIN",
+          errno: -11,
+        });
+      }
+      return await originalReadFile(filePath, options as never);
+    }) as typeof fs.readFile);
+
+    try {
+      await expect(
+        ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+      ).rejects.toMatchObject({ code: "EAGAIN" });
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it("records stale bootstrap completion when BOOTSTRAP.md cleanup fails", async () => {
@@ -642,10 +708,7 @@ describe("ensureAgentWorkspace", () => {
       .mockRejectedValueOnce(Object.assign(new Error("not a directory"), { code: "ENOTDIR" }));
 
     try {
-      const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
-
-      expect(result.repaired).toBe(true);
-      expect(result.bootstrapExists).toBe(true);
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
       expect(rmSpy).toHaveBeenCalledWith(bootstrapPath, { force: true });
       await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
       const state = await readWorkspaceState(tempDir);
@@ -666,9 +729,7 @@ describe("ensureAgentWorkspace", () => {
       content: "# SOUL.md\n\nUse a concise, practical voice.\n",
     });
 
-    const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
-    expect(result.repaired).toBe(true);
-    expect(result.bootstrapExists).toBe(false);
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
   });
 
@@ -678,9 +739,7 @@ describe("ensureAgentWorkspace", () => {
     await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
     await fs.writeFile(path.join(tempDir, ".git", "HEAD"), "ref: refs/heads/main\n");
 
-    const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
-    expect(result.repaired).toBe(false);
-    expect(result.bootstrapExists).toBe(true);
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
     await expect(
       fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
@@ -830,6 +889,144 @@ describe("loadWorkspaceBootstrapFiles", () => {
       expect(agents?.content).toBeUndefined();
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries a transient bootstrap read instead of dropping the file for the turn", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: "# AGENTS.md\n\nkeep me\n",
+    });
+
+    const originalReadFileSync = syncFs.readFileSync.bind(syncFs);
+    let readFileSyncCalls = 0;
+    let threwTransient = false;
+    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation(((
+      target: unknown,
+      options: unknown,
+    ) => {
+      readFileSyncCalls += 1;
+      if (!threwTransient) {
+        threwTransient = true;
+        throw Object.assign(new Error("Unknown system error -11: read"), {
+          code: "EAGAIN",
+          errno: -11,
+        });
+      }
+      return originalReadFileSync(target as never, options as never);
+    }) as typeof syncFs.readFileSync);
+
+    try {
+      const files = await loadWorkspaceBootstrapFiles(tempDir);
+      expect(threwTransient).toBe(true);
+      // The retry re-opens and reads again, so the failed first read is followed
+      // by at least one more successful read.
+      expect(readFileSyncCalls).toBeGreaterThanOrEqual(2);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toContain("keep me");
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it("marks a bootstrap file missing after transient read retries are exhausted", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: "# AGENTS.md\n",
+    });
+
+    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation((() => {
+      throw Object.assign(new Error("Unknown system error -11: read"), {
+        code: "EAGAIN",
+        errno: -11,
+      });
+    }) as typeof syncFs.readFileSync);
+
+    try {
+      // Unlike the template check, this reader returns an io failure (not a
+      // throw) when the budget is exhausted, so the file surfaces as missing.
+      const files = await loadWorkspaceBootstrapFiles(tempDir);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(true);
+      expect(agents?.content).toBeUndefined();
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it("retries a transient boundary-resolution failure before dropping a bootstrap file", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: "# AGENTS.md\n\nboundary retry\n",
+    });
+
+    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const originalLstat = syncFs.promises.lstat.bind(syncFs.promises);
+    let agentsLstatAttempts = 0;
+    const lstatSpy = vi.spyOn(syncFs.promises, "lstat").mockImplementation((async (
+      target: unknown,
+      options?: unknown,
+    ) => {
+      if (String(target) === agentsPath && ++agentsLstatAttempts === 1) {
+        throw Object.assign(new Error("Unknown system error -11: lstat"), {
+          code: "EAGAIN",
+          errno: -11,
+        });
+      }
+      return await originalLstat(target as never, options as never);
+    }) as typeof syncFs.promises.lstat);
+
+    try {
+      const files = await loadWorkspaceBootstrapFiles(tempDir);
+      expect(agentsLstatAttempts).toBe(2);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toContain("boundary retry");
+    } finally {
+      lstatSpy.mockRestore();
+    }
+  });
+
+  it("retries a transient open failure before dropping a bootstrap file", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: "# AGENTS.md\n\nopen retry\n",
+    });
+
+    // openRootFile reports a transient open failure as reason "io"; the reader
+    // must retry it (re-open) rather than drop the file for the turn.
+    const originalOpenSync = syncFs.openSync.bind(syncFs);
+    let threwTransientOpen = false;
+    const openSpy = vi.spyOn(syncFs, "openSync").mockImplementation(((
+      ...args: Parameters<typeof syncFs.openSync>
+    ) => {
+      if (!threwTransientOpen) {
+        threwTransientOpen = true;
+        throw Object.assign(new Error("Unknown system error -11: open"), {
+          code: "EAGAIN",
+          errno: -11,
+        });
+      }
+      return originalOpenSync(...args);
+    }) as typeof syncFs.openSync);
+
+    try {
+      const files = await loadWorkspaceBootstrapFiles(tempDir);
+      expect(threwTransientOpen).toBe(true);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toContain("open retry");
+    } finally {
+      openSpy.mockRestore();
     }
   });
 });

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import dotenv from "dotenv";
+import { parse as parseDotEnv } from "dotenv";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
@@ -29,14 +29,14 @@ type GlobalRuntimeDotEnvOptions = {
   stateEnvPath?: string;
 };
 
-function readGlobalRuntimeDotEnvFile(params: {
+export function readDotEnvFile(params: {
   entryFilter?: (key: string, value: string) => boolean;
   filePath: string;
   quiet?: boolean;
 }): LoadedDotEnvFile | null {
-  let content: string;
+  let content: Buffer;
   try {
-    content = fs.readFileSync(params.filePath, "utf8");
+    content = fs.readFileSync(params.filePath);
   } catch (error) {
     if (!params.quiet) {
       const code =
@@ -48,17 +48,8 @@ function readGlobalRuntimeDotEnvFile(params: {
     return null;
   }
 
-  let parsed: Record<string, string>;
-  try {
-    parsed = dotenv.parse(content);
-  } catch (error) {
-    if (!params.quiet) {
-      logger.warn(`Failed to parse ${params.filePath}: ${String(error)}`, { error });
-    }
-    return null;
-  }
   const entries: DotEnvEntry[] = [];
-  for (const [rawKey, value] of Object.entries(parsed)) {
+  for (const [rawKey, value] of Object.entries(parseDotEnv(content))) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (key && (params.entryFilter?.(key, value) ?? true)) {
       entries.push({ key, value });
@@ -137,12 +128,12 @@ export function loadGlobalRuntimeDotEnvFiles(opts?: GlobalRuntimeDotEnvOptions) 
     process.env.OPENCLAW_STATE_DIR?.trim() !== undefined &&
     path.resolve(stateEnvPath) !== path.resolve(defaultStateEnvPath);
   const globalEnvs = globalEnvPaths.map((filePath) =>
-    readGlobalRuntimeDotEnvFile({ entryFilter: opts?.entryFilter, filePath, quiet }),
+    readDotEnvFile({ entryFilter: opts?.entryFilter, filePath, quiet }),
   );
   const parsedFiles = [...globalEnvs];
   let gatewayEnv: LoadedDotEnvFile | null = null;
   if (!hasExplicitNonDefaultStateDir) {
-    gatewayEnv = readGlobalRuntimeDotEnvFile({
+    gatewayEnv = readDotEnvFile({
       entryFilter: opts?.entryFilter,
       filePath: path.join(
         resolveRequiredHomeDir(process.env, os.homedir),

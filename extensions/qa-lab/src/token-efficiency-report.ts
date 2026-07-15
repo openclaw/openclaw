@@ -1,14 +1,15 @@
 // Qa Lab plugin module implements token efficiency report behavior.
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
+import { resolveRuntimeParityUsagePolicy } from "./runtime-parity.js";
 
-export type TokenEfficiencyRuntimeUsage = {
+type TokenEfficiencyRuntimeUsage = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
   toolCallCount: number;
 };
 
-export type TokenEfficiencyRow = {
+type TokenEfficiencyRow = {
   scenarioId: string;
   usageSource: "live-usage" | "mock-estimate";
   openclaw: TokenEfficiencyRuntimeUsage;
@@ -19,13 +20,14 @@ export type TokenEfficiencyRow = {
   toolsUsed: string[];
 };
 
-export type TokenEfficiencyReport = {
+type TokenEfficiencyReport = {
   status: "evaluated" | "estimated" | "skipped";
   runtimePair: [RuntimeId, RuntimeId];
   generatedAt: string;
   providerMode?: string;
   thresholdPercent: number;
   rows: TokenEfficiencyRow[];
+  notApplicableScenarios: Array<{ scenarioId: string; reason: string }>;
   aggregate: {
     openclaw: { totalTokens: number; p50PerScenario: number; p90PerScenario: number };
     codex: { totalTokens: number; p50PerScenario: number; p90PerScenario: number };
@@ -51,7 +53,7 @@ export type TokenEfficiencySuiteSummary = {
   };
 };
 
-export type BuildTokenEfficiencyReportParams = {
+type BuildTokenEfficiencyReportParams = {
   summary: TokenEfficiencySuiteSummary;
   generatedAt?: string;
   thresholdPercent?: number;
@@ -181,6 +183,26 @@ function liveEvidenceFailures(row: TokenEfficiencyRow): string[] {
   return failures;
 }
 
+function liveUsageShapeFailures(
+  scenarioId: string,
+  runtime: RuntimeId,
+  usage: RuntimeParityCell["usage"],
+): string[] {
+  const failures: string[] = [];
+  for (const key of ["inputTokens", "outputTokens", "totalTokens"] as const) {
+    const value: unknown = usage[key];
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      !Number.isInteger(value) ||
+      value < 0
+    ) {
+      failures.push(`${scenarioId} ${runtime} live usage ${key} must be a non-negative integer`);
+    }
+  }
+  return failures;
+}
+
 export function buildTokenEfficiencyReport(
   params: BuildTokenEfficiencyReportParams,
 ): TokenEfficiencyReport {
@@ -202,6 +224,7 @@ export function buildTokenEfficiencyReport(
       ...(providerMode ? { providerMode } : {}),
       thresholdPercent,
       rows: [],
+      notApplicableScenarios: [],
       aggregate: ZERO_AGGREGATE,
       pass: !liveUsage,
       failures: liveUsage ? [noCapturesReason] : [],
@@ -210,7 +233,37 @@ export function buildTokenEfficiencyReport(
     };
   }
 
-  const rows = parityResults.map((result) =>
+  const notApplicableScenarios = parityResults.flatMap((result) => {
+    const usage = resolveRuntimeParityUsagePolicy(result.runtimeParityUsage);
+    return usage.expectation === "not-applicable"
+      ? [{ scenarioId: result.scenarioId, reason: usage.reason }]
+      : [];
+  });
+  const usageApplicableResults = parityResults.filter(
+    (result) =>
+      resolveRuntimeParityUsagePolicy(result.runtimeParityUsage).expectation ===
+      "assistant-message-required",
+  );
+  if (usageApplicableResults.length === 0) {
+    const noApplicableReason =
+      "No usage-applicable runtime parity captures were present in the suite summary.";
+    return {
+      status: liveUsage ? "evaluated" : "skipped",
+      runtimePair,
+      generatedAt: params.generatedAt ?? new Date().toISOString(),
+      ...(providerMode ? { providerMode } : {}),
+      thresholdPercent,
+      rows: [],
+      notApplicableScenarios,
+      aggregate: ZERO_AGGREGATE,
+      pass: !liveUsage,
+      failures: liveUsage ? [noApplicableReason] : [],
+      ...(liveUsage ? {} : { skipReason: noApplicableReason }),
+      notes: ["Token efficiency requires at least one assistant-message usage capture."],
+    };
+  }
+
+  const rows = usageApplicableResults.map((result) =>
     buildRow({
       result,
       thresholdPercent,
@@ -218,8 +271,16 @@ export function buildTokenEfficiencyReport(
     }),
   );
   const aggregate = buildAggregate(rows);
-  const failures = rows.flatMap((row) => {
-    const rowFailures = liveUsage ? liveEvidenceFailures(row) : [];
+  const failures = rows.flatMap((row, index) => {
+    const result = usageApplicableResults[index];
+    const rowFailures =
+      liveUsage && result
+        ? [
+            ...liveUsageShapeFailures(row.scenarioId, "openclaw", result.cells.openclaw.usage),
+            ...liveUsageShapeFailures(row.scenarioId, "codex", result.cells.codex.usage),
+            ...liveEvidenceFailures(row),
+          ]
+        : [];
     if (row.flagged) {
       rowFailures.push(
         `${row.scenarioId} token delta=${formatPercent(row.deltaPercent)} exceeds ${thresholdPercent.toFixed(1)}% Codex increase threshold`,
@@ -235,6 +296,7 @@ export function buildTokenEfficiencyReport(
     ...(providerMode ? { providerMode } : {}),
     thresholdPercent,
     rows,
+    notApplicableScenarios,
     aggregate,
     pass: failures.length === 0,
     failures,
@@ -286,6 +348,14 @@ export function renderTokenEfficiencyMarkdownReport(report: TokenEfficiencyRepor
       lines.push(
         `| ${row.scenarioId} | ${row.usageSource} | ${row.openclaw.inputTokens}/${row.openclaw.outputTokens}/${row.openclaw.totalTokens}/${row.openclaw.toolCallCount} | ${row.codex.inputTokens}/${row.codex.outputTokens}/${row.codex.totalTokens}/${row.codex.toolCallCount} | ${formatPercent(row.deltaPercent)} | ${row.classification} | ${row.flagged ? "yes" : "no"} | ${row.toolsUsed.join(", ")} |`,
       );
+    }
+    lines.push("");
+  }
+
+  if (report.notApplicableScenarios.length > 0) {
+    lines.push("## Usage Not Applicable", "");
+    for (const scenario of report.notApplicableScenarios) {
+      lines.push(`- ${scenario.scenarioId}: ${scenario.reason}`);
     }
     lines.push("");
   }

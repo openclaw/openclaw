@@ -11,8 +11,8 @@ import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.
 import type {
   FinalizedMsgContext,
   InboundSourceModality,
-  MentionSource,
   MsgContext,
+  SupplementalContextFacts,
 } from "../../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -27,7 +27,7 @@ import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
 
-export type { InboundEventKind } from "../inbound-event/kind.js";
+export type { SupplementalContextFacts } from "../../auto-reply/templating.js";
 
 /** Admission decision for an inbound channel event before agent dispatch. */
 export type ChannelTurnAdmission =
@@ -107,96 +107,6 @@ export type ReplyPlanFacts = {
   sourceReplyDeliveryMode?: "thread" | "reply" | "channel" | "direct" | "none";
 };
 
-/** Allowlist projection used by access checks without exposing raw configured entries. */
-export type ProjectedAllowlistAccessFacts = {
-  configured: boolean;
-  matched: boolean;
-  reasonCode?: string;
-  matchedEntryIds: string[];
-  invalidEntryCount: number;
-  disabledEntryCount: number;
-  accessGroups: {
-    referenced: string[];
-    matched: string[];
-    missing: string[];
-    unsupported: string[];
-    failed: string[];
-  };
-};
-
-/** Event-level access projection for commands, reactions, buttons, and native events. */
-export type ProjectedEventAccessFacts = {
-  kind:
-    | "message"
-    | "reaction"
-    | "button"
-    | "postback"
-    | "native-command"
-    | "slash-command"
-    | "system";
-  authMode: "inbound" | "command" | "origin-subject" | "route-only" | "none";
-  mayPair: boolean;
-  authorized: boolean;
-  reasonCode?: string;
-  hasOriginSubject: boolean;
-  originSubjectMatched: boolean;
-};
-
-/** Access decisions for DMs, groups, commands, events, and mention gating. */
-export type AccessFacts = {
-  dm?: {
-    decision: "allow" | "pairing" | "deny";
-    reason?: string;
-    /**
-     * @deprecated Shared ingress projections redact allowlist entries and return an empty compat list.
-     * Use allowlist diagnostics instead.
-     */
-    allowFrom: string[];
-    allowlist?: ProjectedAllowlistAccessFacts;
-  };
-  group?: {
-    policy: "open" | "allowlist" | "disabled";
-    routeAllowed: boolean;
-    senderAllowed: boolean;
-    /**
-     * @deprecated Shared ingress projections redact allowlist entries and return an empty compat list.
-     * Use allowlist diagnostics instead.
-     */
-    allowFrom: string[];
-    requireMention: boolean;
-    allowlist?: ProjectedAllowlistAccessFacts;
-  };
-  commands?: {
-    authorized?: boolean;
-    shouldBlockControlCommand?: boolean;
-    reasonCode?: string;
-    useAccessGroups: boolean;
-    allowTextCommands: boolean;
-    modeWhenAccessGroupsOff?: "allow" | "deny" | "configured";
-    /**
-     * @deprecated Shared ingress projections do not expose raw authorizer lists.
-     * Use authorized and reasonCode instead.
-     */
-    authorizers: Array<{ configured: boolean; allowed: boolean }>;
-  };
-  event?: ProjectedEventAccessFacts;
-  mentions?: {
-    canDetectMention: boolean;
-    wasMentioned: boolean;
-    hasAnyMention?: boolean;
-    explicitlyMentionedBot?: boolean;
-    mentionedUserIds?: string[];
-    mentionedSubteamIds?: string[];
-    mentionSource?: MentionSource;
-    implicitMentionKinds?: Array<
-      "reply_to_bot" | "quoted_bot" | "bot_thread_participant" | "native"
-    >;
-    requireMention?: boolean;
-    effectiveWasMentioned?: boolean;
-    shouldSkip?: boolean;
-  };
-};
-
 /** Message text/history facts passed into templating and dispatch. */
 export type MessageFacts = {
   inboundEventKind?: InboundEventKind;
@@ -217,39 +127,6 @@ export type CommandFacts = {
   body?: string;
   name?: string;
   authorized?: boolean;
-};
-
-/** Quoted, forwarded, thread, and untrusted context facts attached to an inbound turn. */
-export type SupplementalContextFacts = {
-  quote?: {
-    id?: string;
-    fullId?: string;
-    body?: string;
-    sender?: string;
-    senderAllowed?: boolean;
-    isExternal?: boolean;
-    isQuote?: boolean;
-  };
-  forwarded?: {
-    from?: string;
-    fromType?: string;
-    fromId?: string;
-    date?: number;
-    senderAllowed?: boolean;
-  };
-  thread?: {
-    id?: string;
-    starterBody?: string;
-    historyBody?: string;
-    label?: string;
-    parentSessionKey?: string;
-    modelParentSessionKey?: string;
-    senderAllowed?: boolean;
-  };
-  untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
-  groupSystemPrompt?: string;
-  /** Prompt-like group metadata from user-controlled sources; never enters the system prompt. */
-  untrustedGroupSystemPrompt?: string;
 };
 
 /** Inbound media facts supplied to the agent context. */
@@ -301,7 +178,7 @@ export type ChannelDeliveryResult = {
 };
 
 /** Durable outbound delivery options available to channel turn delivery adapters. */
-export type ChannelTurnDurableDeliveryOptions = Pick<
+type ChannelTurnDurableDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
   "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
 > & {
@@ -366,13 +243,10 @@ export type ChannelTurnDroppedHistoryOptions = {
 };
 
 /** Dispatcher options excluding delivery hooks owned by the channel turn adapter. */
-export type ChannelTurnDispatcherOptions = Omit<
-  ReplyDispatcherWithTypingOptions,
-  "deliver" | "onError"
->;
+type ChannelTurnDispatcherOptions = Omit<ReplyDispatcherWithTypingOptions, "deliver" | "onError">;
 
 /** Reply pipeline options excluding cfg/agent/channel identity supplied by the turn. */
-export type ChannelTurnReplyPipelineOptions = Omit<
+type ChannelTurnReplyPipelineOptions = Omit<
   CreateChannelReplyPipelineParams,
   "cfg" | "agentId" | "channel" | "accountId"
 >;
@@ -401,6 +275,11 @@ export type AssembledChannelTurn = {
   botLoopProtection?: ChannelBotLoopProtectionFacts;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
+  /**
+   * Observes turn adoption without waiting for settle. Threaded into
+   * replyOptions for the agent runner (after recovery persist attempt).
+   */
+  onTurnAdopted?: () => void | Promise<void>;
 };
 
 /** Channel turn with dispatch runner already prepared. */
@@ -433,7 +312,7 @@ export type ChannelTurnResolved<TDispatchResult = DispatchFromConfigResult> =
     });
 
 /** Ordered lifecycle stage names emitted to channel turn log hooks. */
-export type ChannelTurnStage =
+type ChannelTurnStage =
   | "ingest"
   | "classify"
   | "preflight"
@@ -447,7 +326,7 @@ export type ChannelTurnStage =
 /** Structured channel turn log event. */
 export type ChannelTurnLogEvent = {
   stage: ChannelTurnStage;
-  event: "start" | "done" | "drop" | "handled" | "error";
+  event: "start" | "done" | "drop" | "handled" | "error" | "warning";
   channel: string;
   accountId?: string;
   messageId?: string;
@@ -477,7 +356,7 @@ export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResu
 };
 
 /** Adapter contract for ingesting, classifying, resolving, and finalizing raw channel events. */
-export type ChannelTurnAdapter<TRaw, TDispatchResult = DispatchFromConfigResult> = {
+type ChannelTurnAdapter<TRaw, TDispatchResult = DispatchFromConfigResult> = {
   ingest: (raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null;
   classify?: (input: NormalizedTurnInput) => Promise<ChannelEventClass> | ChannelEventClass;
   preflight?: (
@@ -504,4 +383,10 @@ export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResul
   raw: TRaw;
   adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
   log?: (event: ChannelTurnLogEvent) => void;
+  /**
+   * Observes turn adoption without waiting for settle. Fired after the
+   * recovery-context persist attempt (context may be absent when source
+   * delivery is suppressed). Default callers still await full settle.
+   */
+  onTurnAdopted?: () => void | Promise<void>;
 };

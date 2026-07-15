@@ -1,5 +1,10 @@
 // Nextcloud Talk plugin module implements send behavior.
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import {
   convertMarkdownTables,
@@ -13,6 +18,37 @@ import {
 } from "./send.runtime.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
+// Nextcloud Talk runs against self-hosted servers whose responses are not
+// trusted to be small. Cap error bodies so a hostile or misbehaving endpoint
+// cannot stream an unbounded body into memory. (Success JSON is bounded by the
+// shared readProviderJsonResponse helper.)
+const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES = 8 * 1024;
+const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;
+const NEXTCLOUD_TALK_SEND_TIMEOUT_MS = 30_000;
+
+/** Collapses whitespace and caps an error-body prefix to a short, log-safe snippet. */
+function collapseErrorSnippet(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length > NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS) {
+    return `${truncateUtf16Safe(collapsed, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS)}…`;
+  }
+  return collapsed;
+}
+
+/** Reads a bounded, collapsed error-body snippet without buffering hostile responses. */
+async function readNextcloudTalkErrorSnippet(response: Response): Promise<string> {
+  try {
+    // readResponseTextLimited caps the read at the byte budget and cancels the
+    // upstream stream once full, so a hostile endpoint cannot stream an
+    // unbounded body into memory. Collapse the bounded prefix locally to keep a
+    // short, log-safe error snippet (no new plugin SDK surface required).
+    const text = await readResponseTextLimited(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES);
+    return collapseErrorSnippet(text);
+  } catch {
+    return "";
+  }
+}
+
 type NextcloudTalkSendOpts = {
   cfg: CoreConfig;
   baseUrl?: string;
@@ -20,6 +56,7 @@ type NextcloudTalkSendOpts = {
   accountId?: string;
   replyTo?: string;
   verbose?: boolean;
+  timeoutMs?: number;
 };
 
 function resolveCredentials(
@@ -157,11 +194,12 @@ export async function sendMessageNextcloudTalk(
     },
     auditContext: "nextcloud-talk-send",
     policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+    timeoutMs: opts.timeoutMs ?? NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
   });
 
   try {
     if (!response.ok) {
-      const errorBody = await response.text().catch(() => "");
+      const errorBody = await readNextcloudTalkErrorSnippet(response);
       const status = response.status;
       let errorMsg = `Nextcloud Talk send failed (${status})`;
 
@@ -184,14 +222,14 @@ export async function sendMessageNextcloudTalk(
     let messageId = "unknown";
     let timestamp: number | undefined;
     try {
-      const data = (await response.json()) as {
+      const data = await readProviderJsonResponse<{
         ocs?: {
           data?: {
             id?: number | string;
             timestamp?: number;
           };
         };
-      };
+      }>(response, "Nextcloud Talk send");
       if (data.ocs?.data?.id != null) {
         messageId = String(data.ocs.data.id);
       }
@@ -199,7 +237,8 @@ export async function sendMessageNextcloudTalk(
         timestamp = data.ocs.data.timestamp;
       }
     } catch {
-      // Response parsing failed, but message was sent.
+      // Response parsing failed (including an over-limit body), but the message
+      // was already accepted by the server, so keep the "unknown" receipt.
     }
 
     if (opts.verbose) {
@@ -255,11 +294,12 @@ export async function sendReactionNextcloudTalk(
     },
     auditContext: "nextcloud-talk-reaction",
     policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+    timeoutMs: opts.timeoutMs ?? NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
   });
 
   try {
     if (!response.ok) {
-      const errorBody = await response.text().catch(() => "");
+      const errorBody = await readNextcloudTalkErrorSnippet(response);
       throw new Error(`Nextcloud Talk reaction failed: ${response.status} ${errorBody}`.trim());
     }
 

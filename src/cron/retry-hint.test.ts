@@ -1,6 +1,10 @@
 // Retry hint tests cover user-facing guidance for failed cron retry timing.
 import { describe, expect, it } from "vitest";
 import { resolveCronExecutionRetryHint } from "./retry-hint.js";
+import {
+  preExecutionTimeoutErrorMessage,
+  setupTimeoutErrorMessage,
+} from "./service/execution-errors.js";
 
 describe("resolveCronExecutionRetryHint", () => {
   it("matches classified transient errors", () => {
@@ -37,6 +41,15 @@ describe("resolveCronExecutionRetryHint", () => {
     });
   });
 
+  it("classifies cron pre-execution watchdog failures as timeout retries", () => {
+    for (const message of [setupTimeoutErrorMessage(), preExecutionTimeoutErrorMessage()]) {
+      expect(resolveCronExecutionRetryHint(message, ["timeout"])).toEqual({
+        retryable: true,
+        category: "timeout",
+      });
+    }
+  });
+
   it("does not classify bare 5xx-looking numbers as server_error", () => {
     for (const message of [
       "context limit 512 exceeded",
@@ -69,5 +82,23 @@ describe("resolveCronExecutionRetryHint", () => {
         category: "server_error",
       });
     }
+  });
+
+  it("classifies session lifecycle claim conflicts as transient regardless of retryOn (#106875)", () => {
+    for (const message of [
+      'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      'Error: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      'Error: Session "agent:main:cron:job-1" was deleted while starting work. Retry.',
+    ]) {
+      expect(resolveCronExecutionRetryHint(message, ["network"])).toEqual({ retryable: true });
+    }
+  });
+
+  it("does not classify archived-session work-start errors as transient", () => {
+    expect(
+      resolveCronExecutionRetryHint(
+        'Error: Session "agent:main:main" is archived. Restore it before starting new work.',
+      ),
+    ).toEqual({ retryable: false });
   });
 });

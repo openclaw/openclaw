@@ -22,7 +22,7 @@ export type DeliveryQueueRowMetadata = {
 };
 
 /** Persisted queue entry fields common to all delivery queue payloads. */
-export type DeliveryQueueEntryState = {
+type DeliveryQueueEntryState = {
   id: string;
   enqueuedAt: number;
   retryCount: number;
@@ -31,6 +31,8 @@ export type DeliveryQueueEntryState = {
   platformSendStartedAt?: number;
   recoveryState?: string;
 };
+
+type FailPendingDeliveryQueueEntryResult = { status: "failed" } | { status: "not_pending" };
 
 type QueueRow = {
   id: string;
@@ -57,9 +59,15 @@ function enoent(queueName: string, id: string): Error & { code: string } {
   return err;
 }
 
-function inflate(row: QueueRow): DeliveryQueueEntryState {
+function inflate(row: QueueRow): DeliveryQueueEntryState | null {
+  let parsed: DeliveryQueueEntryState;
+  try {
+    parsed = JSON.parse(row.entry_json) as DeliveryQueueEntryState;
+  } catch {
+    return null;
+  }
   return {
-    ...(JSON.parse(row.entry_json) as DeliveryQueueEntryState),
+    ...parsed,
     id: row.id,
     enqueuedAt: Number(row.enqueued_at),
     retryCount: Number(row.retry_count),
@@ -205,7 +213,7 @@ export function loadDeliveryQueueEntries(
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
   ).rows as QueueRow[];
-  return rows.map(inflate);
+  return rows.map(inflate).filter((entry): entry is DeliveryQueueEntryState => entry != null);
 }
 
 /** Delete a pending delivery queue entry after successful delivery. */
@@ -236,6 +244,41 @@ export function updateDeliveryQueueEntry(
   upsertDeliveryQueueEntry({ queueName, entry: update(current), stateDir });
 }
 
+/** Dead-lettered entry counts for one queue namespace. */
+type FailedDeliveryQueueCount = {
+  queueName: string;
+  count: number;
+  oldestFailedAt: number | null;
+};
+
+/** Count dead-lettered (failed) entries per queue namespace for health reporting. */
+export function countFailedDeliveryQueueEntries(stateDir?: string): FailedDeliveryQueueCount[] {
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select((eb) => [
+        "queue_name",
+        eb.fn.countAll().as("failed_count"),
+        eb.fn.min("failed_at").as("oldest_failed_at"),
+      ])
+      .where("status", "=", "failed")
+      .groupBy("queue_name")
+      .orderBy("queue_name", "asc"),
+  ).rows as Array<{
+    queue_name: string;
+    failed_count: number | bigint;
+    oldest_failed_at: number | bigint | null;
+  }>;
+  return rows.map((row) => ({
+    queueName: row.queue_name,
+    count: Number(row.failed_count),
+    oldestFailedAt: row.oldest_failed_at == null ? null : Number(row.oldest_failed_at),
+  }));
+}
+
 /** Mark a pending delivery queue entry as failed for later diagnostics. */
 export function moveDeliveryQueueEntryToFailed(
   queueName: string,
@@ -247,4 +290,38 @@ export function moveDeliveryQueueEntryToFailed(
     throw enoent(queueName, id);
   }
   upsertDeliveryQueueEntry({ queueName, entry: current, status: "failed", stateDir });
+}
+
+/** Atomically fail a queue row only while its persisted status is still pending. */
+export function failPendingDeliveryQueueEntry(params: {
+  queueName: string;
+  id: string;
+  expectedStatus: "pending";
+  lastError: string;
+  entry: DeliveryQueueEntryState;
+  stateDir?: string;
+}): FailPendingDeliveryQueueEntryResult {
+  if (params.entry.id !== params.id) {
+    throw new Error(`Delivery queue entry id mismatch: ${params.entry.id} != ${params.id}`);
+  }
+  const now = Date.now();
+  const failedEntry = { ...params.entry, lastError: params.lastError };
+  const database = openStateDatabase(params.stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const result = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .updateTable("delivery_queue_entries")
+      .set({
+        status: "failed",
+        last_error: params.lastError,
+        entry_json: JSON.stringify(failedEntry),
+        updated_at: now,
+        failed_at: now,
+      })
+      .where("queue_name", "=", params.queueName)
+      .where("id", "=", params.id)
+      .where("status", "=", params.expectedStatus),
+  );
+  return result.numAffectedRows === 1n ? { status: "failed" } : { status: "not_pending" };
 }

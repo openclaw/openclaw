@@ -1,6 +1,7 @@
 // Detects and decodes Windows console output encodings.
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getWindowsCmdExePath } from "./windows-install-roots.js";
 
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
@@ -25,7 +26,7 @@ let cachedWindowsConsoleEncoding: string | null | undefined;
 let cachedWindowsSystemEncoding: string | null | undefined;
 
 /** Extracts a Windows console code page number from localized `chcp` output. */
-export function parseWindowsCodePage(raw: string): number | null {
+function parseWindowsCodePage(raw: string): number | null {
   if (!raw) {
     return null;
   }
@@ -49,7 +50,7 @@ export function resolveWindowsConsoleEncoding(): string | null {
     return cachedWindowsConsoleEncoding;
   }
   try {
-    const result = spawnSync("cmd.exe", ["/d", "/s", "/c", "chcp"], {
+    const result = spawnSync(getWindowsCmdExePath(), ["/d", "/s", "/c", "chcp"], {
       windowsHide: true,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -65,7 +66,7 @@ export function resolveWindowsConsoleEncoding(): string | null {
 }
 
 /** Resolves and caches the Windows system encoding used by legacy text files. */
-export function resolveWindowsSystemEncoding(): string | null {
+function resolveWindowsSystemEncoding(): string | null {
   if (process.platform !== "win32") {
     return null;
   }
@@ -160,6 +161,7 @@ export function createWindowsOutputDecoder(params?: {
       : null;
   const utf8Decoder =
     platform === "win32" && legacyDecoder ? new TextDecoder("utf-8", { fatal: true }) : null;
+  const streamingUtf8Decoder = legacyDecoder ? null : new TextDecoder("utf-8");
   let useLegacyDecoder = false;
   let pendingUtf8Bytes = Buffer.alloc(0);
 
@@ -167,7 +169,7 @@ export function createWindowsOutputDecoder(params?: {
     decode(chunk) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       if (!legacyDecoder || !utf8Decoder) {
-        return buffer.toString("utf8");
+        return streamingUtf8Decoder?.decode(buffer, { stream: true }) ?? "";
       }
       if (useLegacyDecoder) {
         return legacyDecoder.decode(buffer, { stream: true });
@@ -188,7 +190,7 @@ export function createWindowsOutputDecoder(params?: {
     },
     flush() {
       if (!legacyDecoder || !utf8Decoder) {
-        return "";
+        return streamingUtf8Decoder?.decode() ?? "";
       }
       if (useLegacyDecoder) {
         return legacyDecoder.decode();
@@ -210,13 +212,11 @@ export function createWindowsOutputDecoder(params?: {
 function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
   let index = buffer.length - 1;
   let continuationBytes = 0;
-  while (
-    index >= 0 &&
-    buffer[index] !== undefined &&
-    buffer[index] >= 0x80 &&
-    buffer[index] <= 0xbf &&
-    continuationBytes < 3
-  ) {
+  while (index >= 0 && continuationBytes < 3) {
+    const byte = buffer.at(index);
+    if (byte === undefined || byte < 0x80 || byte > 0xbf) {
+      break;
+    }
     continuationBytes += 1;
     index -= 1;
   }
@@ -224,7 +224,10 @@ function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
     return buffer;
   }
 
-  const leadByte = buffer[index];
+  const leadByte = buffer.at(index);
+  if (leadByte === undefined) {
+    return Buffer.alloc(0);
+  }
   const sequenceLength = getUtf8SequenceLength(leadByte);
   if (sequenceLength <= 1) {
     return Buffer.alloc(0);

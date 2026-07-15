@@ -1,8 +1,6 @@
 /**
  * Resolves memory-search source, sync, and ranking configuration.
  */
-import os from "node:os";
-import path from "node:path";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -16,7 +14,6 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import {
   isMemoryMultimodalEnabled,
@@ -25,7 +22,8 @@ import {
 } from "../memory-host-sdk/multimodal.js";
 import { getEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
-import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { clampInt, clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 export type ResolvedMemorySearchConfig = {
@@ -63,7 +61,7 @@ export type ResolvedMemorySearchConfig = {
   };
   store: {
     driver: "sqlite";
-    path: string;
+    databasePath: string;
     fts: {
       tokenizer: "unicode61" | "trigram";
     };
@@ -137,6 +135,12 @@ const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES = 60;
 const MAX_REMOTE_BATCH_TIMEOUT_MINUTES = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
 
+type ConfiguredMemoryEmbeddingProvider = {
+  defaultModel?: string;
+  transport?: "local" | "remote";
+  supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;
+};
+
 function resolveRemoteBatchPollIntervalMs(
   overrideValue: number | undefined,
   defaultValue: number | undefined,
@@ -177,23 +181,22 @@ function normalizeSources(
   return Array.from(normalized);
 }
 
-function resolveStorePath(agentId: string, raw?: string): string {
-  const stateDir = resolveStateDir(process.env, os.homedir);
-  const fallback = path.join(stateDir, "memory", `${agentId}.sqlite`);
-  if (!raw) {
-    return fallback;
-  }
-  const withToken = raw.includes("{agentId}") ? raw.replaceAll("{agentId}", agentId) : raw;
-  return resolveUserPath(withToken);
-}
-
 function getConfiguredMemoryEmbeddingProvider(
   providerId: string,
   cfg: OpenClawConfig,
-): ReturnType<typeof getMemoryEmbeddingProvider> {
+): ConfiguredMemoryEmbeddingProvider | undefined {
+  // `none` is the built-in FTS-only sentinel, never a plugin capability.
+  // Avoid cold plugin discovery when semantic memory is intentionally disabled.
+  if (normalizeProviderId(providerId) === "none") {
+    return undefined;
+  }
   const directAdapter = getMemoryEmbeddingProvider(providerId);
   if (directAdapter) {
     return directAdapter;
+  }
+  const genericAdapter = getEmbeddingProvider(providerId, cfg);
+  if (genericAdapter) {
+    return genericAdapter;
   }
   const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
   const ownerApi = providerConfig?.api?.trim();
@@ -227,7 +230,7 @@ function mergeConfig(
   const overrideRemote = overrides?.remote;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
   const fallbackAdapter =
-    fallback && fallback !== "none"
+    normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
       ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)
       : undefined;
   const hasRemoteConfig = Boolean(
@@ -304,7 +307,7 @@ function mergeConfig(
   };
   const store = {
     driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
-    path: resolveStorePath(agentId, overrides?.store?.path ?? defaults?.store?.path),
+    databasePath: resolveOpenClawAgentSqlitePath({ agentId, env: process.env }),
     fts,
     vector,
   };
@@ -478,11 +481,15 @@ export function resolveMemorySearchConfig(
   if (!resolved.enabled) {
     return null;
   }
+  const isFtsOnly = normalizeProviderId(resolved.provider) === "none";
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
-  const multimodalProvider = getConfiguredMemoryEmbeddingProvider(resolved.provider, cfg);
+  const multimodalProvider = isFtsOnly
+    ? undefined
+    : getConfiguredMemoryEmbeddingProvider(resolved.provider, cfg);
   // Custom provider ids can map to a memory adapter through models.providers.<id>.api.
   // Keep multimodal validation on that config-aware adapter, not the raw id.
   if (
+    !isFtsOnly &&
     multimodalActive &&
     ((multimodalProvider &&
       !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)) ||

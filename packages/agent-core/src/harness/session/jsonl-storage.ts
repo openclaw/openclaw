@@ -1,7 +1,13 @@
 // Agent Core module implements jsonl storage behavior.
-import type { FileSystem, JsonlSessionMetadata, SessionTreeEntry } from "../types.js";
-import { SessionError, toError } from "../types.js";
-import { getFileSystemResultOrThrow } from "./repo-utils.js";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import type {
+  FileError,
+  FileSystem,
+  JsonlSessionMetadata,
+  Result,
+  SessionTreeEntry,
+} from "../types.js";
+import { SessionError } from "../types.js";
 import {
   appendParentIdAfterEntry,
   BaseSessionStorage,
@@ -21,6 +27,17 @@ interface SessionHeader {
   timestamp: string;
   cwd: string;
   parentSession?: string;
+}
+
+function getFileSystemResultOrThrow<TValue>(
+  result: Result<TValue, FileError>,
+  message: string,
+): TValue {
+  if (!result.ok) {
+    const code = result.error.code === "not_found" ? "not_found" : "storage";
+    throw new SessionError(code, `${message}: ${result.error.message}`, result.error);
+  }
+  return result.value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -53,7 +70,11 @@ function parseHeaderLine(line: string, filePath: string): SessionHeader {
   try {
     parsed = JSON.parse(line);
   } catch (error) {
-    throw invalidSession(filePath, "first line is not a valid session header", toError(error));
+    throw invalidSession(
+      filePath,
+      "first line is not a valid session header",
+      toErrorObject(error, "Non-Error thrown"),
+    );
   }
   if (!isRecord(parsed)) {
     throw invalidSession(filePath, "first line is not a valid session header");
@@ -94,7 +115,12 @@ function parseEntryLine(line: string, filePath: string, lineNumber: number): Ses
   try {
     parsed = JSON.parse(line);
   } catch (error) {
-    throw invalidEntry(filePath, lineNumber, "is not valid JSON", toError(error));
+    throw invalidEntry(
+      filePath,
+      lineNumber,
+      "is not valid JSON",
+      toErrorObject(error, "Non-Error thrown"),
+    );
   }
   if (!isRecord(parsed)) {
     throw invalidEntry(filePath, lineNumber, "is not a valid session entry");
@@ -170,17 +196,25 @@ async function loadJsonlStorage(
     await fs.readTextFile(filePath),
     `Failed to read session ${filePath}`,
   );
-  const lines = content.split("\n").filter((line) => line.trim());
-  if (lines.length === 0) {
+  const lines = content.split("\n");
+  const headerIndex = lines.findIndex((line) => line.trim());
+  if (headerIndex === -1) {
     throw invalidSession(filePath, "missing session header");
   }
 
-  const header = parseHeaderLine(lines[0], filePath);
+  const headerLine = lines.at(headerIndex);
+  if (headerLine === undefined) {
+    throw invalidSession(filePath, "missing session header");
+  }
+  const header = parseHeaderLine(headerLine, filePath);
   const entries: SessionTreeEntry[] = [];
   let leafId: string | null = null;
   let appendParentId: string | null = null;
-  for (let i = 1; i < lines.length; i++) {
-    const entry = parseEntryLine(lines[i], filePath, i + 1);
+  for (const [offset, line] of lines.slice(headerIndex + 1).entries()) {
+    if (!line.trim()) {
+      continue;
+    }
+    const entry = parseEntryLine(line, filePath, headerIndex + offset + 2);
     entries.push(entry);
     const leafUpdate = leafIdUpdateAfterEntry(entry);
     if (leafUpdate !== undefined) {

@@ -3,9 +3,9 @@
  */
 import { redactIdentifier } from "../../../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
+import { sanitizeForConsole } from "../../console-sanitize.js";
 import {
   buildApiErrorObservationFields,
-  sanitizeForConsole,
   shouldSuppressRawErrorConsoleSuffix,
 } from "../../embedded-agent-error-observation.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
@@ -37,7 +37,7 @@ type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" |
  * Derives timeout failure reasons for logs that were built from timeout state
  * before the normal provider error classifier had a raw error to inspect.
  */
-export function normalizeFailoverDecisionObservationBase(
+function normalizeFailoverDecisionObservationBase(
   base: FailoverDecisionLoggerBase,
 ): FailoverDecisionLoggerBase {
   return {

@@ -12,6 +12,7 @@ import type {
 import { pushInactiveSurfaceWarning, pushWarning } from "./runtime-shared.js";
 import type { RuntimeWebDiagnostic, RuntimeWebDiagnosticCode } from "./runtime-web-tools.types.js";
 export { isRecord } from "./shared.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "./shared.js";
 
 const loadResolveManifestContractOwnerPluginId = createLazyRuntimeNamedExport(
@@ -35,7 +36,7 @@ export type SecretResolutionResult<TSource extends string> = {
 /**
  * Metadata fields shared by runtime web search and fetch provider selection.
  */
-export type RuntimeWebProviderMetadataBase<TSource extends string> = {
+type RuntimeWebProviderMetadataBase<TSource extends string> = {
   providerConfigured?: string;
   providerSource: "configured" | "auto-detect" | "none";
   selectedProvider?: string;
@@ -46,7 +47,7 @@ export type RuntimeWebProviderMetadataBase<TSource extends string> = {
 /**
  * Parameters shared by web search/fetch provider selection after provider surface discovery.
  */
-export type RuntimeWebProviderSelectionParams<
+type RuntimeWebProviderSelectionParams<
   TProvider extends {
     id: string;
     requiresCredential?: boolean;
@@ -213,7 +214,7 @@ function setResolvedCredentialPath(params: {
 /**
  * Provider set plus effective config state for one runtime web tool surface.
  */
-export type RuntimeWebProviderSurface<TProvider extends { id: string }> = {
+type RuntimeWebProviderSurface<TProvider extends { id: string }> = {
   providers: TProvider[];
   configuredProvider?: string;
   enabled: boolean;
@@ -223,7 +224,7 @@ export type RuntimeWebProviderSurface<TProvider extends { id: string }> = {
 /**
  * Parameters for resolving configured/available providers before credential selection.
  */
-export type ResolveRuntimeWebProviderSurfaceParams<
+type ResolveRuntimeWebProviderSurfaceParams<
   TProvider extends {
     id: string;
     requiresCredential?: boolean;
@@ -404,7 +405,8 @@ export async function resolveRuntimeWebProviderSelection<
     let keylessFallbackProvider: TProvider | undefined;
 
     for (const provider of candidates) {
-      if (provider.requiresCredential === false) {
+      const isKeyless = provider.requiresCredential === false;
+      if (isKeyless) {
         if (!params.configuredProvider && !params.allowKeylessAutoSelect) {
           continue;
         }
@@ -412,13 +414,6 @@ export async function resolveRuntimeWebProviderSelection<
           keylessFallbackProvider ||= provider;
           continue;
         }
-        selectedProvider = provider.id;
-        selectedResolution = {
-          source: "missing" as TSource,
-          secretRefConfigured: false,
-          fallbackUsedAfterRefFailure: false,
-        };
-        break;
       }
 
       const path = params.inactivePathsForProvider(provider)[0] ?? "";
@@ -507,7 +502,37 @@ export async function resolveRuntimeWebProviderSelection<
         });
       }
 
+      if (
+        isKeyless &&
+        selectedCandidateResolution.secretRefConfigured &&
+        !selectedCandidateResolution.value
+      ) {
+        continue;
+      }
+
+      if (isKeyless && !params.configuredProvider && !selectedCandidateResolution.value) {
+        continue;
+      }
+
       if (params.configuredProvider) {
+        selectedProvider = provider.id;
+        selectedResolution = selectedCandidateResolution;
+        if (selectedCandidateResolution.value) {
+          setResolvedCredentialPath({
+            resolvedConfig: params.resolvedConfig,
+            path: selectedCandidatePath,
+            value: selectedCandidateResolution.value,
+          });
+          params.setResolvedCredential({
+            resolvedConfig: params.resolvedConfig,
+            provider,
+            value: selectedCandidateResolution.value,
+          });
+        }
+        break;
+      }
+
+      if (isKeyless) {
         selectedProvider = provider.id;
         selectedResolution = selectedCandidateResolution;
         if (selectedCandidateResolution.value) {
@@ -574,7 +599,9 @@ export async function resolveRuntimeWebProviderSelection<
       }
     } else {
       if (!selectedProvider && unresolvedWithoutFallback.length > 0) {
-        failUnresolvedNoFallback(unresolvedWithoutFallback[0]);
+        failUnresolvedNoFallback(
+          expectDefined(unresolvedWithoutFallback[0], "unresolved without fallback entry at 0"),
+        );
       }
 
       if (selectedProvider) {

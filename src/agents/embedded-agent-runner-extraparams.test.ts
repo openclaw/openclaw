@@ -294,7 +294,7 @@ function createAnthropicFastModeWrapper(baseStreamFn: StreamFn | undefined, fast
   return createAnthropicServiceTierWrapper(baseStreamFn, fastMode ? "auto" : "standard_only");
 }
 
-import { isAnthropicBedrockModel } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
+import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "../llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.js";
 import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
 import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
@@ -355,7 +355,10 @@ function installFullProviderRuntimeDepsForTest() {
         return createTestOpenAIProviderWrapper(params, false);
       }
       if (params.provider === "amazon-bedrock") {
-        return isAnthropicBedrockModel(params.context.modelId)
+        return isAnthropicFamilyCacheTtlEligible({
+          provider: params.provider,
+          modelId: params.context.modelId,
+        })
           ? params.context.streamFn
           : createTestBedrockNoCacheWrapper(params.context.streamFn);
       }
@@ -1067,14 +1070,14 @@ describe("applyExtraParamsToAgent", () => {
   it("strips xai Responses reasoning payload fields", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "xai",
-      applyModelId: "grok-4.20-beta-latest-reasoning",
+      applyModelId: "grok-4.20-0309-reasoning",
       model: {
         api: "openai-responses",
         provider: "xai",
-        id: "grok-4.20-beta-latest-reasoning",
+        id: "grok-4.20-0309-reasoning",
       } as unknown as Model<"openai-responses">,
       payload: {
-        model: "grok-4.20-beta-latest-reasoning",
+        model: "grok-4.20-0309-reasoning",
         input: [],
         reasoning: { effort: "high", summary: "auto" },
         reasoningEffort: "high",
@@ -4453,3 +4456,4 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.prompt_cache_retention).toBe("24h");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

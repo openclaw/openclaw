@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Gateway sessions.resolve implementation helper.
 // Resolves key/sessionId/label selectors into one canonical session key.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -7,7 +8,7 @@ import {
   errorShape,
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { updateSessionStore, type SessionEntry } from "../config/sessions.js";
+import { canonicalizeSessionEntryAliases, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
@@ -15,7 +16,6 @@ import {
   filterAndSortSessionEntries,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
-  migrateAndPruneGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
@@ -158,11 +158,12 @@ export async function resolveSessionKeyFromResolveParams(params: {
     if (!legacyKey) {
       return noSessionFoundResult({ p, message: `No session found: ${key}` });
     }
-    await updateSessionStore(target.storePath, (s) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store: s });
-      if (!s[primaryKey] && s[legacyKey]) {
-        s[primaryKey] = s[legacyKey];
-      }
+    await canonicalizeSessionEntryAliases({
+      storePath: target.storePath,
+      target: {
+        canonicalKey: target.canonicalKey,
+        storeKeys: target.storeKeys,
+      },
     });
     const refreshedTarget = resolveGatewaySessionStoreTargetWithStore({
       cfg,
@@ -261,10 +262,13 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const labelKey = list.sessions[0].key;
+  const labelKey = expectDefined(list.sessions[0], "sessions entry at 0").key;
   const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey]);
   if (agentCheckLabel) {
     return agentCheckLabel;
   }
-  return { ok: true, key: list.sessions[0].key };
+  return {
+    ok: true,
+    key: expectDefined(list.sessions[0], "sessions entry at 0").key,
+  };
 }

@@ -1,6 +1,6 @@
 // Zalo tests cover monitor.pairing.lifecycle plugin behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
@@ -8,6 +8,7 @@ import {
   settleAsyncWork,
 } from "./test-support/lifecycle-test-support.js";
 import {
+  loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendMessageMock,
   setLifecycleRuntimeCore,
@@ -17,6 +18,10 @@ import {
 describe("Zalo pairing lifecycle", () => {
   const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
   const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
+
+  beforeAll(async () => {
+    await loadCachedLifecycleMonitorModule("zalo-pairing-lifecycle");
+  });
 
   beforeEach(async () => {
     await resetLifecycleTestState();
@@ -96,6 +101,58 @@ describe("Zalo pairing lifecycle", () => {
       expect(sendPayload.chat_id).toBe("dm-pairing-1");
       expect(sendPayload.text).toContain("PAIRCODE");
       expect(sendOptions).toBeUndefined();
+    } finally {
+      await monitor.stop();
+    }
+  });
+
+  it("keeps existing pairing-request reads and writes scoped to the provider account", async () => {
+    upsertPairingRequestMock.mockResolvedValueOnce({ code: "PAIRCODE", created: false });
+    const monitor = await startWebhookLifecycleMonitor({
+      ...createLifecycleMonitorSetup({
+        accountId: "work",
+        dmPolicy: "pairing",
+        allowFrom: [],
+      }),
+      cacheKey: "zalo-pairing-existing-request",
+    });
+
+    try {
+      await withServer(
+        (req, res) => {
+          void monitor.route.handler(req, res);
+        },
+        async (baseUrl) => {
+          const { first, replay } = await postWebhookReplay({
+            baseUrl,
+            path: "/hooks/zalo",
+            secret: "supersecret",
+            payload: createTextUpdate({
+              messageId: `zalo-pairing-existing-${Date.now()}`,
+              userId: "user-unauthorized",
+              userName: "Unauthorized User",
+              chatId: "dm-pairing-existing",
+            }),
+          });
+          expect(first.status).toBe(200);
+          expect(replay.status).toBe(200);
+          await settleAsyncWork();
+        },
+      );
+
+      expect(readAllowFromStoreMock).toHaveBeenCalledOnce();
+      expect(readAllowFromStoreMock).toHaveBeenCalledWith({
+        channel: "zalo",
+        accountId: "work",
+      });
+      expect(upsertPairingRequestMock).toHaveBeenCalledOnce();
+      expect(upsertPairingRequestMock).toHaveBeenCalledWith({
+        channel: "zalo",
+        accountId: "work",
+        id: "user-unauthorized",
+        meta: { name: "Unauthorized User" },
+      });
+      expect(sendMessageMock).not.toHaveBeenCalled();
     } finally {
       await monitor.stop();
     }

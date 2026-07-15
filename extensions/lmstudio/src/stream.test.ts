@@ -2,7 +2,8 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
+
+let wrapLmstudioInferencePreload: typeof import("./stream.js").wrapLmstudioInferencePreload;
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
 const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
@@ -88,6 +89,18 @@ function expectBaseStreamModelFields(baseStream: StreamFn, fields: Record<string
     throw new Error("Expected base stream context");
   }
   expect(call[2]).toBeUndefined();
+}
+
+function expectBaseStreamCallModelFields(
+  baseStream: StreamFn,
+  callIndex: number,
+  fields: Record<string, unknown>,
+) {
+  const call = (baseStream as unknown as { mock: { calls: unknown[][] } }).mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected base stream call ${callIndex}`);
+  }
+  expectRecordFields(requireRecord(call[0], "base stream model"), fields);
 }
 
 async function collectEvents(stream: ReturnType<StreamFn>): Promise<StreamEvent[]> {
@@ -181,8 +194,9 @@ function runWrappedLmstudioStream(
 }
 
 describe("lmstudio stream wrapper", () => {
-  beforeEach(() => {
-    resetLmstudioPreloadCooldownForTest();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ wrapLmstudioInferencePreload } = await import("./stream.js"));
   });
 
   afterEach(() => {
@@ -192,7 +206,6 @@ describe("lmstudio stream wrapper", () => {
     resolveLmstudioRuntimeApiKeyMock.mockReset();
     resolveLmstudioProviderHeadersMock.mockResolvedValue(undefined);
     resolveLmstudioRuntimeApiKeyMock.mockResolvedValue(undefined);
-    resetLmstudioPreloadCooldownForTest();
   });
 
   it("preloads LM Studio model before inference using model context window", async () => {
@@ -215,6 +228,25 @@ describe("lmstudio stream wrapper", () => {
       requestedContextLength: 131072,
       apiKey: "lmstudio-token",
       ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
+    });
+  });
+
+  it("streams with the canonical model key returned by preload", async () => {
+    ensureLmstudioModelLoadedMock.mockResolvedValueOnce("gemma-4-e4b-it-ultra-uncensored-heretic");
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const variantKey = "gemma-4-e4b-it-ultra-uncensored-heretic@q4_k_m";
+    const stream = runWrappedLmstudioStream(wrapped, { id: `lmstudio/${variantKey}` });
+    const events = await collectEvents(stream);
+
+    expectSingleDoneEvent(events);
+    expectEnsureLoadedFields({
+      modelKey: variantKey,
+      baseUrl: "http://localhost:1234/v1",
+    });
+    expectBaseStreamModelFields(baseStream, {
+      provider: "lmstudio",
+      id: "gemma-4-e4b-it-ultra-uncensored-heretic",
     });
   });
 
@@ -298,6 +330,57 @@ describe("lmstudio stream wrapper", () => {
     const events = await collectEvents(stream);
     expectSingleDoneEvent(events);
     expect(baseStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams with the canonical model key when preload fails after discovery", async () => {
+    ensureLmstudioModelLoadedMock.mockRejectedValueOnce(
+      Object.assign(new Error("load failed"), {
+        resolvedModelKey: "gemma-4-e4b-it-ultra-uncensored-heretic",
+      }),
+    );
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const stream = runWrappedLmstudioStream(wrapped, {
+      id: "lmstudio/gemma-4-e4b-it-ultra-uncensored-heretic@q4_k_m",
+    });
+    const events = await collectEvents(stream);
+
+    expectSingleDoneEvent(events);
+    expect(baseStream).toHaveBeenCalledTimes(1);
+    expectBaseStreamModelFields(baseStream, {
+      provider: "lmstudio",
+      id: "gemma-4-e4b-it-ultra-uncensored-heretic",
+    });
+  });
+
+  it("reuses the canonical model key while preload failure cooldown is active", async () => {
+    const canonicalKey = "gemma-4-e4b-it-ultra-uncensored-heretic";
+    const variantModel = {
+      id: `lmstudio/${canonicalKey}@q4_k_m`,
+    };
+    ensureLmstudioModelLoadedMock.mockRejectedValueOnce(
+      Object.assign(new Error("load failed"), {
+        resolvedModelKey: canonicalKey,
+      }),
+    );
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+
+    const firstEvents = await collectEvents(runWrappedLmstudioStream(wrapped, variantModel));
+    const secondEvents = await collectEvents(runWrappedLmstudioStream(wrapped, variantModel));
+
+    expectSingleDoneEvent(firstEvents);
+    expectSingleDoneEvent(secondEvents);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+    expect(baseStream).toHaveBeenCalledTimes(2);
+    expectBaseStreamCallModelFields(baseStream, 0, {
+      provider: "lmstudio",
+      id: canonicalKey,
+    });
+    expectBaseStreamCallModelFields(baseStream, 1, {
+      provider: "lmstudio",
+      id: canonicalKey,
+    });
   });
 
   it("skips native model preload when provider params disable it", async () => {
@@ -595,6 +678,7 @@ describe("lmstudio stream wrapper", () => {
       "start",
       "toolcall_start",
       "toolcall_delta",
+      "toolcall_end",
       "done",
     ]);
     const done = events.find((event) => event.type === "done") as {
@@ -641,6 +725,7 @@ describe("lmstudio stream wrapper", () => {
       "start",
       "toolcall_start",
       "toolcall_delta",
+      "toolcall_end",
       "done",
     ]);
     const done = events.find((event) => event.type === "done") as {

@@ -1,11 +1,29 @@
-// Memory Core tests cover manager cache plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Memory Core tests cover manager cache plugin behavior.
 import {
   closeManagedCacheEntries,
   getOrCreateManagedCacheEntry,
   resolveSingletonManagedCache,
-  type ManagedCache,
 } from "./manager-cache.js";
+
+type ManagedCache<T> = ReturnType<typeof resolveSingletonManagedCache<T>>;
+
+function createDeferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
+  return { promise, resolve, reject };
+}
 
 type TestEntry = {
   id: string;
@@ -21,19 +39,6 @@ function createEntry(id: string): TestEntry {
     id,
     close: vi.fn(async () => {}),
   };
-}
-
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
 }
 
 describe("manager cache", () => {
@@ -101,7 +106,7 @@ describe("manager cache", () => {
     const first = createEntry("first");
     const second = createEntry("second");
     cachesForCleanup.push(cache);
-    const gate = createDeferred<void>();
+    const gate = createDeferred();
 
     const pendingFirst = getOrCreateManagedCacheEntry({
       cache: cache.cache,

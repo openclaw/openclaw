@@ -3,13 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildParseArgv,
   getFlagValue,
-  getCommandPath,
   getCommandPositionalsWithRootOptions,
   getCommandPathWithRootOptions,
   getPrimaryCommand,
   getPositiveIntFlagValue,
   getVerboseFlag,
-  hasHelpOrVersion,
   hasFlag,
   isHelpOrVersionInvocation,
   isRootHelpInvocation,
@@ -18,61 +16,10 @@ import {
   normalizeRootHelpTargetArgv,
   normalizeRootLogLevelArgv,
   normalizeRootNoColorArgv,
-  shouldMigrateState,
   shouldMigrateStateFromPath,
 } from "./argv.js";
 
 describe("argv helpers", () => {
-  it.each([
-    {
-      name: "help flag",
-      argv: ["node", "openclaw", "--help"],
-      expected: true,
-    },
-    {
-      name: "version flag",
-      argv: ["node", "openclaw", "-V"],
-      expected: true,
-    },
-    {
-      name: "normal command",
-      argv: ["node", "openclaw", "status"],
-      expected: false,
-    },
-    {
-      name: "root -v alias",
-      argv: ["node", "openclaw", "-v"],
-      expected: true,
-    },
-    {
-      name: "root -v alias with profile",
-      argv: ["node", "openclaw", "--profile", "work", "-v"],
-      expected: true,
-    },
-    {
-      name: "root -v alias with log-level",
-      argv: ["node", "openclaw", "--log-level", "debug", "-v"],
-      expected: true,
-    },
-    {
-      name: "subcommand -v should not be treated as version",
-      argv: ["node", "openclaw", "acp", "-v"],
-      expected: false,
-    },
-    {
-      name: "root -v alias with equals profile",
-      argv: ["node", "openclaw", "--profile=work", "-v"],
-      expected: true,
-    },
-    {
-      name: "subcommand path after global root flags should not be treated as version",
-      argv: ["node", "openclaw", "--dev", "skills", "list", "-v"],
-      expected: false,
-    },
-  ])("detects help/version flags: $name", ({ argv, expected }) => {
-    expect(hasHelpOrVersion(argv)).toBe(expected);
-  });
-
   it.each([
     {
       name: "known command group help command help flag",
@@ -442,7 +389,7 @@ describe("argv helpers", () => {
       expected: ["status"],
     },
   ])("extracts command path: $name", ({ argv, expected }) => {
-    expect(getCommandPath(argv, 2)).toEqual(expected);
+    expect(getCommandPathWithRootOptions(argv, 2)).toEqual(expected);
   });
 
   it("extracts command path while skipping known root option values", () => {
@@ -562,6 +509,16 @@ describe("argv helpers", () => {
       argv: ["node", "openclaw", "--", "--timeout=99"],
       expected: undefined,
     },
+    {
+      name: "repeated flag uses final value",
+      argv: ["node", "openclaw", "status", "--timeout", "100", "--timeout=200"],
+      expected: "200",
+    },
+    {
+      name: "missing repeated value remains invalid",
+      argv: ["node", "openclaw", "status", "--timeout", "--timeout", "200"],
+      expected: null,
+    },
   ])("extracts flag values: $name", ({ argv, expected }) => {
     expect(getFlagValue(argv, "--timeout")).toBe(expected);
   });
@@ -598,17 +555,37 @@ describe("argv helpers", () => {
     {
       name: "invalid integer",
       argv: ["node", "openclaw", "status", "--timeout", "nope"],
-      expected: undefined,
+      expected: null,
     },
     {
       name: "non-decimal integer",
       argv: ["node", "openclaw", "status", "--timeout", "0x10"],
-      expected: undefined,
+      expected: null,
     },
     {
       name: "partial integer",
       argv: ["node", "openclaw", "status", "--timeout", "5s"],
-      expected: undefined,
+      expected: null,
+    },
+    {
+      name: "zero",
+      argv: ["node", "openclaw", "status", "--timeout", "0"],
+      expected: null,
+    },
+    {
+      name: "negative integer",
+      argv: ["node", "openclaw", "status", "--timeout", "-5"],
+      expected: null,
+    },
+    {
+      name: "repeated value uses final valid integer",
+      argv: ["node", "openclaw", "status", "--timeout", "nope", "--timeout", "5000"],
+      expected: 5000,
+    },
+    {
+      name: "repeated value rejects final invalid integer",
+      argv: ["node", "openclaw", "status", "--timeout", "5000", "--timeout", "nope"],
+      expected: null,
     },
   ])("parses positive integer flag values: $name", ({ argv, expected }) => {
     expect(getPositiveIntFlagValue(argv, "--timeout")).toBe(expected);
@@ -681,19 +658,8 @@ describe("argv helpers", () => {
       expected: ["bun", "src/entry.ts", "status"],
     },
   ] as const)("builds parse argv from raw args: $name", ({ rawArgs, expected }) => {
-    const parsed = buildParseArgv({
-      programName: "openclaw",
-      rawArgs: [...rawArgs],
-    });
+    const parsed = buildParseArgv([...rawArgs]);
     expect(parsed).toEqual([...expected]);
-  });
-
-  it("builds parse argv from fallback args", () => {
-    const fallbackArgv = buildParseArgv({
-      programName: "openclaw",
-      fallbackArgv: ["status"],
-    });
-    expect(fallbackArgv).toEqual(["node", "openclaw", "status"]);
   });
 
   it.each([
@@ -711,7 +677,8 @@ describe("argv helpers", () => {
     { argv: ["node", "openclaw", "agents", "list"], expected: true },
     { argv: ["node", "openclaw", "message", "send"], expected: true },
   ] as const)("decides when to migrate state: $argv", ({ argv, expected }) => {
-    expect(shouldMigrateState([...argv])).toBe(expected);
+    const commandPath = getCommandPathWithRootOptions([...argv], 2);
+    expect(shouldMigrateStateFromPath(commandPath)).toBe(expected);
   });
 
   it.each([

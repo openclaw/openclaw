@@ -5,12 +5,31 @@ require "fileutils"
 require "tmpdir"
 require "tempfile"
 require "cgi"
+require "digest/md5"
+require "time"
 
 default_platform(:ios)
 
 APP_STORE_APP_IDENTIFIER = "ai.openclawfoundation.app"
 DEFAULT_APP_STORE_CONNECT_KEYCHAIN_SERVICE = "openclaw-app-store-connect-key"
-DEFAULT_SNAPSHOT_DEVICES = ["iPhone 16 Pro Max", "iPad Pro 13-inch (M4)"].freeze
+DEFAULT_SNAPSHOT_DEVICE_FAMILIES = [
+  {
+    label: "iPhone",
+    patterns: [
+      /\AiPhone .* Pro Max\z/,
+      /\AiPhone .* Plus\z/,
+      /\AiPhone .*\z/
+    ]
+  },
+  {
+    label: "13-inch iPad",
+    patterns: [
+      /\AiPad Pro 13-inch/,
+      /\AiPad Air 13-inch/,
+      /\AiPad .*13-inch/
+    ]
+  }
+].freeze
 DEFAULT_WATCH_SNAPSHOT_DEVICE = "Apple Watch Ultra 3 (49mm)"
 WATCH_SCREENSHOT_MODE_DEFAULTS_KEY = "openclaw.watch.screenshotMode"
 WATCH_SNAPSHOT_STATUS_BAR_TIME = "09:41"
@@ -30,6 +49,14 @@ PUBLIC_METADATA_FILENAMES = [
   "subtitle.txt",
   "support_url.txt"
 ].freeze
+APP_REVIEW_NOTES_METADATA_FILENAMES = [
+  "notes.txt",
+  "review_notes.txt"
+].freeze
+APP_STORE_SCREENSHOT_LIMIT_PER_SET = 10
+APP_STORE_SCREENSHOT_SET_DELETE_TIMEOUT_SECONDS = 120
+APP_STORE_SCREENSHOT_PROCESSING_TIMEOUT_SECONDS = 3600
+APP_STORE_SCREENSHOT_PROCESSING_POLL_SECONDS = 5
 
 def load_env_file(path)
   return unless File.exist?(path)
@@ -62,10 +89,6 @@ def release_notes_upload_requested?
   ENV["DELIVER_RELEASE_NOTES"] == "1"
 end
 
-def screenshot_paths
-  Dir[File.join(__dir__, "screenshots", "**", "*.png")]
-end
-
 def validate_required_screenshots!(paths)
   missing_families = REQUIRED_SCREENSHOT_FAMILIES.filter_map do |name, pattern|
     name unless paths.any? { |path| File.basename(path).match?(pattern) }
@@ -77,9 +100,21 @@ end
 
 def snapshot_devices
   raw = ENV["OPENCLAW_SNAPSHOT_DEVICES"].to_s.strip
-  return DEFAULT_SNAPSHOT_DEVICES if raw.empty?
+  return default_snapshot_devices if raw.empty?
 
   raw.split(",").map(&:strip).reject(&:empty?)
+end
+
+def default_snapshot_devices
+  names = available_simulator_devices.map { |device| device["name"].to_s }.reject(&:empty?).uniq
+
+  DEFAULT_SNAPSHOT_DEVICE_FAMILIES.map do |family|
+    match = family.fetch(:patterns).filter_map do |pattern|
+      names.find { |name| name.match?(pattern) }
+    end.first
+    UI.user_error!("No available #{family.fetch(:label)} simulator found for App Store screenshots.") if match.nil?
+    match
+  end
 end
 
 def watch_snapshot_device
@@ -111,6 +146,51 @@ def resolve_simulator_device(name)
 
   UI.important("Apple Watch simulator '#{name}' was not found; using '#{fallback.fetch("name")}'.")
   fallback
+end
+
+def install_ready_for_review_edit_state_lookup!
+  require "spaceship"
+
+  app_class = Spaceship::ConnectAPI::App
+  app_class.class_eval do
+    unless method_defined?(:openclaw_get_edit_app_store_version_without_ready_for_review)
+      alias_method :openclaw_get_edit_app_store_version_without_ready_for_review, :get_edit_app_store_version
+    end
+
+    unless method_defined?(:openclaw_fetch_edit_app_info_without_ready_for_review)
+      alias_method :openclaw_fetch_edit_app_info_without_ready_for_review, :fetch_edit_app_info
+    end
+
+    def get_edit_app_store_version(client: nil, platform: nil, includes: Spaceship::ConnectAPI::AppStoreVersion::ESSENTIAL_INCLUDES)
+      version = openclaw_get_edit_app_store_version_without_ready_for_review(client: client, platform: platform, includes: includes)
+      return version if version
+
+      # First public releases can leave the only version in READY_FOR_REVIEW.
+      # Fastlane 2.236.1 excludes that state and then tries to create an illegal
+      # second version; use the existing review-ready version as the edit target.
+      client ||= Spaceship::ConnectAPI
+      platform ||= Spaceship::ConnectAPI::Platform::IOS
+      filter = {
+        appVersionState: Spaceship::ConnectAPI::AppStoreVersion::AppVersionState::READY_FOR_REVIEW,
+        platform: platform
+      }
+
+      get_app_store_versions(client: client, filter: filter, includes: includes)
+        .sort_by { |candidate| Gem::Version.new(candidate.version_string) }
+        .last
+    end
+
+    def fetch_edit_app_info(client: nil, includes: Spaceship::ConnectAPI::AppInfo::ESSENTIAL_INCLUDES)
+      app_info = openclaw_fetch_edit_app_info_without_ready_for_review(client: client, includes: includes)
+      return app_info if app_info
+
+      client ||= Spaceship::ConnectAPI
+      client
+        .get_app_infos(app_id: id, includes: includes)
+        .to_models
+        .find { |candidate| candidate.state == Spaceship::ConnectAPI::AppInfo::State::READY_FOR_REVIEW }
+    end
+  end
 end
 
 def bundle_identifier_for_product(product_path)
@@ -210,6 +290,7 @@ def normalize_watch_screenshot_status_bar(path)
   script = <<~SWIFT
     import AppKit
     import Foundation
+    import ImageIO
 
     let path = CommandLine.arguments[1]
     let timeText = CommandLine.arguments[2]
@@ -221,36 +302,37 @@ def normalize_watch_screenshot_status_bar(path)
       exit(2)
     }
 
-    let width = CGFloat(cgImage.width)
-    let height = CGFloat(cgImage.height)
-    guard let bitmap = NSBitmapImageRep(
-      bitmapDataPlanes: nil,
-      pixelsWide: Int(width),
-      pixelsHigh: Int(height),
-      bitsPerSample: 8,
-      samplesPerPixel: 4,
-      hasAlpha: true,
-      isPlanar: false,
-      colorSpaceName: .deviceRGB,
-      bytesPerRow: 0,
-      bitsPerPixel: 0),
-      let graphicsContext = NSGraphicsContext(bitmapImageRep: bitmap)
+    let width = cgImage.width
+    let height = cgImage.height
+    let drawWidth = CGFloat(width)
+    let drawHeight = CGFloat(height)
+    let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    guard let bitmapContext = CGContext(
+      data: nil,
+      width: width,
+      height: height,
+      bitsPerComponent: 8,
+      bytesPerRow: width * 4,
+      space: colorSpace,
+      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
     else {
       fputs("Failed to create normalized screenshot bitmap at \\(path)\\n", stderr)
       exit(3)
     }
 
-    bitmap.size = NSSize(width: width, height: height)
+    let graphicsContext = NSGraphicsContext(cgContext: bitmapContext, flipped: false)
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = graphicsContext
+    NSColor.black.setFill()
+    NSBezierPath(rect: NSRect(x: 0, y: 0, width: drawWidth, height: drawHeight)).fill()
     source.draw(
-      in: NSRect(x: 0, y: 0, width: width, height: height),
-      from: NSRect(x: 0, y: 0, width: width, height: height),
-      operation: .copy,
+      in: NSRect(x: 0, y: 0, width: drawWidth, height: drawHeight),
+      from: NSRect(x: 0, y: 0, width: drawWidth, height: drawHeight),
+      operation: .sourceOver,
       fraction: 1.0)
 
     NSColor.black.setFill()
-    NSBezierPath(rect: NSRect(x: width - 146, y: height - 92, width: 124, height: 70)).fill()
+    NSBezierPath(rect: NSRect(x: drawWidth - 146, y: drawHeight - 92, width: 124, height: 70)).fill()
 
     let paragraphStyle = NSMutableParagraphStyle()
     paragraphStyle.alignment = .right
@@ -260,17 +342,26 @@ def normalize_watch_screenshot_status_bar(path)
       .paragraphStyle: paragraphStyle,
     ]
     timeText.draw(
-      in: NSRect(x: width - 134, y: height - 82, width: 102, height: 44),
+      in: NSRect(x: drawWidth - 134, y: drawHeight - 82, width: 102, height: 44),
       withAttributes: attributes)
     NSGraphicsContext.restoreGraphicsState()
 
-    guard let png = bitmap.representation(using: .png, properties: [:])
+    guard let output = bitmapContext.makeImage(),
+          let destination = CGImageDestinationCreateWithURL(
+            URL(fileURLWithPath: path) as CFURL,
+            "public.png" as CFString,
+            1,
+            nil)
     else {
       fputs("Failed to encode normalized screenshot at \\(path)\\n", stderr)
       exit(4)
     }
 
-    try png.write(to: URL(fileURLWithPath: path))
+    CGImageDestinationAddImage(destination, output, nil)
+    guard CGImageDestinationFinalize(destination) else {
+      fputs("Failed to write normalized screenshot at \\(path)\\n", stderr)
+      exit(5)
+    }
   SWIFT
 
   Tempfile.create(["openclaw-watch-status-bar", ".swift"]) do |file|
@@ -293,6 +384,8 @@ def capture_watch_screenshot
   Dir[File.join(output_dir, "Apple Watch*-*.png")].each { |path| FileUtils.rm_f(path) }
   FileUtils.rm_rf(derived_data_path)
 
+  # Single-target watch apps only expose generic simulator build destinations in Xcode.
+  # Keep the selected UDID for install/launch/screenshot below.
   sh(
     xcodebuild_shell_join([
       "xcodebuild",
@@ -303,7 +396,7 @@ def capture_watch_screenshot
       "-configuration",
       "Debug",
       "-destination",
-      "platform=watchOS Simulator,id=#{udid}",
+      "generic/platform=watchOS Simulator",
       "-derivedDataPath",
       derived_data_path,
       "build",
@@ -311,10 +404,8 @@ def capture_watch_screenshot
   )
 
   UI.user_error!("Watch screenshot build did not produce #{app_path}.") unless File.exist?(app_path)
-  extension_path = File.join(app_path, "PlugIns", "OpenClawWatchExtension.appex")
   watch_app_identifier = bundle_identifier_for_product(app_path)
-  watch_extension_identifier = bundle_identifier_for_product(extension_path)
-  screenshot_mode_bundle_identifiers = [watch_app_identifier, watch_extension_identifier]
+  screenshot_mode_bundle_identifiers = [watch_app_identifier]
 
   sh("#{shell_join(["xcrun", "simctl", "boot", udid])} >/dev/null 2>&1 || true")
   sh(shell_join(["xcrun", "simctl", "bootstatus", udid, "-b"]))
@@ -431,6 +522,18 @@ def preserve_local_signing
   end
 end
 
+def without_xcode_xcconfig_file
+  existing = ENV["XCODE_XCCONFIG_FILE"]
+  ENV.delete("XCODE_XCCONFIG_FILE")
+  yield
+ensure
+  if env_present?(existing)
+    ENV["XCODE_XCCONFIG_FILE"] = existing
+  else
+    ENV.delete("XCODE_XCCONFIG_FILE")
+  end
+end
+
 def app_store_signing_manifest
   JSON.parse(File.read(File.join(ios_root, "Config", "AppStoreSigning.json")))
 end
@@ -491,6 +594,15 @@ def produce_services_for_target(target)
   services = {}
   if target.fetch("capabilities").include?("PUSH_NOTIFICATIONS")
     services[:push_notification] = "on"
+  end
+  if target.fetch("capabilities").include?("APP_GROUPS")
+    services[:app_group] = "on"
+  end
+  if target.fetch("capabilities").include?("APP_ATTEST")
+    services[:app_attest] = "on"
+  end
+  if target.fetch("capabilities").include?("HEALTH_KIT")
+    services[:health_kit] = "on"
   end
   services
 end
@@ -567,6 +679,15 @@ def profile_plist_value(profile_path, key_path)
   end
 end
 
+def profile_plist_array_values(profile_path, key_path)
+  raw = profile_plist_value(profile_path, key_path)
+  return [] unless raw
+
+  raw.lines.map(&:strip).reject do |line|
+    line.empty? || line == "Array {" || line == "}"
+  end
+end
+
 def validate_match_profile_capabilities!(target)
   capabilities = target.fetch("capabilities")
   return if capabilities.empty?
@@ -579,6 +700,35 @@ def validate_match_profile_capabilities!(target)
     if aps_environment != "production"
       UI.user_error!(
         "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing production push entitlement; expected aps-environment=production, got #{aps_environment || "missing"}."
+      )
+    end
+  end
+
+  if capabilities.include?("APP_GROUPS")
+    expected_app_groups = target.fetch("appGroups")
+    actual_app_groups = profile_plist_array_values(profile_path, "Entitlements:com.apple.security.application-groups")
+    missing = expected_app_groups - actual_app_groups
+    unless missing.empty?
+      UI.user_error!(
+        "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing App Groups #{missing.join(", ")}; actual groups: #{actual_app_groups.empty? ? "missing" : actual_app_groups.join(", ")}."
+      )
+    end
+  end
+
+  if capabilities.include?("APP_ATTEST")
+    app_attest_environments = profile_plist_array_values(profile_path, "Entitlements:com.apple.developer.devicecheck.appattest-environment")
+    unless app_attest_environments.include?("production")
+      UI.user_error!(
+        "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing production App Attest entitlement; actual environments: #{app_attest_environments.empty? ? "missing" : app_attest_environments.join(", ")}."
+      )
+    end
+  end
+
+  if capabilities.include?("HEALTH_KIT")
+    health_kit = profile_plist_value(profile_path, "Entitlements:com.apple.developer.healthkit")
+    if health_kit != "true"
+      UI.user_error!(
+        "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing HealthKit entitlement."
       )
     end
   end
@@ -597,22 +747,68 @@ def release_signing_check!
   sync_app_store_signing!(readonly: true)
 end
 
-def release_notes_path
-  File.join(__dir__, "metadata", "en-US", "release_notes.txt")
+def render_ios_release_notes(release_version:)
+  script_path = File.join(repo_root, "scripts", "ios-version.ts")
+  args = [
+    "node",
+    "--import",
+    "tsx",
+    script_path,
+    "--field",
+    "releaseNotes"
+  ]
+  args.push("--version", release_version) if env_present?(release_version)
+  stdout, stderr, status = Open3.capture3(
+    *args,
+    chdir: repo_root
+  )
+  return stdout if status.success?
+
+  detail = stderr.to_s.strip
+  detail = stdout.to_s.strip if detail.empty?
+  UI.user_error!("Failed to render iOS release notes: #{detail}")
 end
 
-def release_notes_metadata_path
-  source = release_notes_path
-  UI.user_error!("Missing release notes at #{source}. Run `pnpm ios:version:sync`.") unless File.exist?(source)
-
+def release_notes_metadata_path(release_version:)
   temp_root = Dir.mktmpdir("openclaw-release-notes")
   target_dir = File.join(temp_root, "en-US")
   FileUtils.mkdir_p(target_dir)
-  FileUtils.cp(source, File.join(target_dir, "release_notes.txt"))
+  File.write(File.join(target_dir, "release_notes.txt"), render_ios_release_notes(release_version: release_version))
   temp_root
 end
 
-def public_metadata_path
+def app_review_notes_markdown_path
+  File.join(ios_root, "APP-REVIEW-NOTES.md")
+end
+
+def app_review_notes_pdf_path
+  File.join(ios_root, "build", "app-review", "APP-REVIEW-NOTES.pdf")
+end
+
+def generate_app_review_notes_pdf!
+  source = app_review_notes_markdown_path
+  UI.user_error!("Missing App Review notes at #{source}.") unless File.exist?(source)
+
+  output = app_review_notes_pdf_path
+  FileUtils.mkdir_p(File.dirname(output))
+  sh(shell_join(["xcrun", "swift", File.join(repo_root, "scripts", "ios-app-review-notes-pdf.swift"), source, output]))
+  output
+end
+
+def assert_no_app_review_notes_field_metadata!(metadata_path)
+  notes_dir = File.join(metadata_path, "review_information")
+  APP_REVIEW_NOTES_METADATA_FILENAMES.each do |filename|
+    path = File.join(notes_dir, filename)
+    next unless File.exist?(path)
+
+    UI.user_error!(
+      "Refusing to upload App Review Notes metadata from #{path}. " \
+        "Maintain the App Store Connect Notes field manually so the live setup code is not stored in this repo."
+    )
+  end
+end
+
+def public_metadata_path(release_version: nil)
   source = File.join(__dir__, "metadata")
   temp_root = Dir.mktmpdir("openclaw-app-store-metadata")
   Dir.children(source).each do |entry|
@@ -622,17 +818,280 @@ def public_metadata_path
 
     FileUtils.cp_r(source_entry, File.join(temp_root, entry))
   end
+  Dir[File.join(temp_root, "*", "release_notes.txt")].each { |path| FileUtils.rm_f(path) }
+  if release_notes_upload_requested?
+    target_dir = File.join(temp_root, "en-US")
+    FileUtils.mkdir_p(target_dir)
+    File.write(File.join(target_dir, "release_notes.txt"), render_ios_release_notes(release_version: release_version))
+  end
   temp_root
 end
 
-def read_ios_version_metadata
+def app_store_screenshot_root
+  File.join(__dir__, "screenshots")
+end
+
+def app_store_screenshot_manifest
+  require "deliver/loader"
+
+  Deliver::Loader.load_app_screenshots(app_store_screenshot_root, false)
+end
+
+def resolve_app_store_connect_app(app_identifier:, app_id:)
+  require "spaceship"
+
+  app = if env_present?(app_id) && !env_present?(app_identifier)
+          Spaceship::ConnectAPI::App.get(app_id: app_id)
+        else
+          Spaceship::ConnectAPI::App.find(app_identifier || APP_STORE_APP_IDENTIFIER)
+        end
+  UI.user_error!("Could not find App Store Connect app #{app_identifier || app_id || APP_STORE_APP_IDENTIFIER}.") unless app
+  app
+end
+
+def resolve_app_store_connect_version(app:, short_version:)
+  version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+  UI.user_error!("Could not find an editable App Store Connect version for #{app.name}.") unless version
+  if version.version_string != short_version
+    UI.user_error!(
+      "Editable App Store Connect version mismatch for #{app.name}: expected #{short_version}, got #{version.version_string}."
+    )
+  end
+  version
+end
+
+def app_store_screenshot_sets_for_display_type(localization:, display_type:)
+  localization
+    .get_app_screenshot_sets(includes: "appScreenshots")
+    .select { |set| set.screenshot_display_type == display_type }
+end
+
+def clear_app_store_screenshot_sets!(localization:)
+  existing_sets = localization.get_app_screenshot_sets(includes: "appScreenshots")
+  return if existing_sets.empty?
+
+  existing_sets.each do |set|
+    UI.message("Deleting existing #{localization.locale} #{set.screenshot_display_type} screenshot set #{set.id}.")
+    set.delete!
+  end
+
+  deadline = Time.now + APP_STORE_SCREENSHOT_SET_DELETE_TIMEOUT_SECONDS
+  loop do
+    sets = localization.get_app_screenshot_sets(includes: "appScreenshots")
+    return if sets.empty?
+
+    if Time.now >= deadline
+      UI.user_error!(
+        "Timed out waiting for App Store Connect to delete #{localization.locale} screenshot sets: #{sets.map(&:id).join(', ')}."
+      )
+    end
+    sleep(3)
+  end
+end
+
+def app_store_screenshot_expected_rows(screenshots)
+  screenshots.map do |screenshot|
+    {
+      checksum: Digest::MD5.file(screenshot.path).hexdigest,
+      file_name: File.basename(screenshot.path)
+    }
+  end
+end
+
+def app_store_screenshot_actual_rows(app_screenshot_set)
+  (app_screenshot_set.app_screenshots || []).map do |screenshot|
+    {
+      checksum: screenshot.source_file_checksum,
+      file_name: screenshot.file_name,
+      state: (screenshot.asset_delivery_state || {})["state"]
+    }
+  end
+end
+
+def format_app_store_screenshot_rows(rows)
+  rows.map do |row|
+    [row[:file_name], row[:checksum], row[:state]].compact.join(" ")
+  end.join(", ")
+end
+
+def app_store_screenshot_processing_timeout_seconds
+  raw = ENV["DELIVER_SCREENSHOT_PROCESSING_TIMEOUT"].to_s.strip
+  return APP_STORE_SCREENSHOT_PROCESSING_TIMEOUT_SECONDS if raw.empty?
+
+  unless raw.match?(/\A\d+\z/) && raw.to_i.positive?
+    UI.user_error!("Invalid DELIVER_SCREENSHOT_PROCESSING_TIMEOUT '#{raw}'. Expected a positive number of seconds.")
+  end
+  raw.to_i
+end
+
+def app_store_screenshot_state_counts(screenshots)
+  screenshots.each_with_object({}) do |screenshot, counts|
+    state = (screenshot.asset_delivery_state || {})["state"] || "UNKNOWN"
+    counts[state] ||= 0
+    counts[state] += 1
+  end
+end
+
+def wait_for_app_store_screenshots_processing!(screenshot_ids:, locale:, display_type:)
+  timeout_seconds = app_store_screenshot_processing_timeout_seconds
+  deadline = Time.now + timeout_seconds
+  loop do
+    screenshots = screenshot_ids.map do |screenshot_id|
+      Spaceship::ConnectAPI.get_app_screenshot(app_screenshot_id: screenshot_id).first
+    end
+
+    failed = screenshots.select(&:error?)
+    unless failed.empty?
+      details = failed.map { |screenshot| "#{screenshot.file_name}: #{screenshot.error_messages.join(', ')}" }
+      UI.user_error!("App Store Connect failed processing #{locale} #{display_type} screenshots: #{details.join('; ')}.")
+    end
+    return screenshots if screenshots.all?(&:complete?)
+
+    if Time.now >= deadline
+      states = app_store_screenshot_state_counts(screenshots)
+      UI.user_error!(
+        "Timed out after #{timeout_seconds}s waiting for App Store Connect to process #{locale} #{display_type} screenshots: #{states}."
+      )
+    end
+
+    UI.verbose("Waiting for #{locale} #{display_type} screenshots to finish processing: #{app_store_screenshot_state_counts(screenshots)}.")
+    sleep(APP_STORE_SCREENSHOT_PROCESSING_POLL_SECONDS)
+  end
+end
+
+def validate_app_store_screenshot_target_counts!(screenshots_by_target)
+  screenshots_by_target.each do |(locale, display_type), screenshots|
+    next if screenshots.length <= APP_STORE_SCREENSHOT_LIMIT_PER_SET
+
+    UI.user_error!(
+      "Found #{screenshots.length} screenshots for #{locale} #{display_type}; App Store Connect allows #{APP_STORE_SCREENSHOT_LIMIT_PER_SET}."
+    )
+  end
+end
+
+def verify_app_store_screenshot_set!(app_screenshot_set:, screenshots:, locale:, display_type:)
+  expected = app_store_screenshot_expected_rows(screenshots)
+  timeout_seconds = app_store_screenshot_processing_timeout_seconds
+  deadline = Time.now + timeout_seconds
+  actual = []
+
+  loop do
+    app_screenshot_set = Spaceship::ConnectAPI::AppScreenshotSet.get(app_screenshot_set_id: app_screenshot_set.id)
+    actual = app_store_screenshot_actual_rows(app_screenshot_set)
+    actual_identity = actual.map { |row| { checksum: row[:checksum], file_name: row[:file_name] } }
+    incomplete = actual.reject { |row| row[:state] == "COMPLETE" }
+
+    return if actual_identity == expected && incomplete.empty?
+
+    if actual.length > expected.length
+      UI.user_error!(
+        "App Store Connect screenshot verification failed for #{locale} #{display_type}. " \
+          "Expected: #{format_app_store_screenshot_rows(expected)}. " \
+          "Actual: #{format_app_store_screenshot_rows(actual)}."
+      )
+    end
+
+    if Time.now >= deadline
+      UI.user_error!(
+        "Timed out after #{timeout_seconds}s waiting for App Store Connect screenshot verification for #{locale} #{display_type}. " \
+          "Expected: #{format_app_store_screenshot_rows(expected)}. " \
+          "Actual: #{format_app_store_screenshot_rows(actual)}."
+      )
+    end
+
+    UI.verbose(
+      "Waiting for App Store Connect screenshot verification for #{locale} #{display_type}: " \
+        "#{format_app_store_screenshot_rows(actual)}."
+    )
+    sleep(APP_STORE_SCREENSHOT_PROCESSING_POLL_SECONDS)
+  end
+end
+
+def replace_app_store_screenshot_set!(localization:, display_type:, screenshots:)
+  existing_sets = app_store_screenshot_sets_for_display_type(localization: localization, display_type: display_type)
+  unless existing_sets.empty?
+    UI.user_error!(
+      "App Store Connect still has #{localization.locale} #{display_type} screenshot sets after reset: #{existing_sets.map(&:id).join(', ')}."
+    )
+  end
+
+  UI.message("Creating #{localization.locale} #{display_type} screenshot set.")
+  app_screenshot_set = localization.create_app_screenshot_set(attributes: { screenshotDisplayType: display_type })
+  uploaded_ids = screenshots.map.with_index do |screenshot, index|
+    started_at = Time.now
+    uploaded = app_screenshot_set.upload_screenshot(path: screenshot.path, wait_for_processing: false)
+    UI.message(
+      "Uploaded #{localization.locale} #{display_type} screenshot #{index + 1}/#{screenshots.length}: " \
+        "#{File.basename(screenshot.path)} (#{(Time.now - started_at).round(1)}s)."
+    )
+    uploaded.id
+  end
+  wait_for_app_store_screenshots_processing!(
+    screenshot_ids: uploaded_ids,
+    locale: localization.locale,
+    display_type: display_type
+  )
+
+  app_screenshot_set = Spaceship::ConnectAPI::AppScreenshotSet.get(app_screenshot_set_id: app_screenshot_set.id)
+  app_screenshot_set = app_screenshot_set.reorder_screenshots(app_screenshot_ids: uploaded_ids)
+  verify_app_store_screenshot_set!(
+    app_screenshot_set: app_screenshot_set,
+    screenshots: screenshots,
+    locale: localization.locale,
+    display_type: display_type
+  )
+end
+
+# Fastlane deliver can duplicate complete screenshots when its verification retry
+# runs before App Store Connect consistently lists processed assets. Keep the
+# screenshot write path serial and assert the remote set equals the local files.
+def upload_app_store_screenshots_deterministically!(app_identifier:, app_id:, short_version:, screenshots:)
+  app = resolve_app_store_connect_app(app_identifier: app_identifier, app_id: app_id)
+  version = resolve_app_store_connect_version(app: app, short_version: short_version)
+  localizations_by_locale = version.get_app_store_version_localizations.each_with_object({}) do |localization, index|
+    index[localization.locale] = localization
+  end
+
+  screenshots_by_target = screenshots
+    .sort_by { |screenshot| [screenshot.language.to_s, screenshot.display_type.to_s, File.basename(screenshot.path)] }
+    .group_by { |screenshot| [screenshot.language, screenshot.display_type] }
+  validate_app_store_screenshot_target_counts!(screenshots_by_target)
+
+  missing_locales = screenshots_by_target.keys.map(&:first).uniq.reject { |locale| localizations_by_locale.key?(locale) }
+  unless missing_locales.empty?
+    UI.user_error!(
+      "App Store Connect localizations are missing for screenshot locales #{missing_locales.join(', ')}. " \
+        "Upload metadata for these locales before uploading screenshots."
+    )
+  end
+
+  screenshots_by_target.keys.map(&:first).uniq.each do |locale|
+    clear_app_store_screenshot_sets!(localization: localizations_by_locale.fetch(locale))
+  end
+
+  screenshots_by_target.each do |(locale, display_type), target_screenshots|
+    replace_app_store_screenshot_set!(
+      localization: localizations_by_locale.fetch(locale),
+      display_type: display_type,
+      screenshots: target_screenshots
+    )
+  end
+
+  UI.success("Uploaded and verified #{screenshots.length} App Store screenshots for #{short_version}.")
+end
+
+def read_ios_version_metadata(release_version: nil)
   script_path = File.join(repo_root, "scripts", "ios-version.ts")
-  stdout, stderr, status = Open3.capture3(
+  args = [
     "node",
     "--import",
     "tsx",
     script_path,
     "--json",
+  ]
+  args.push("--version", release_version) if env_present?(release_version)
+  stdout, stderr, status = Open3.capture3(
+    *args,
     chdir: repo_root
   )
 
@@ -657,21 +1116,26 @@ rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from iOS version helper: #{e.message}")
 end
 
-def sync_ios_versioning!
+def sync_ios_versioning!(release_version: nil)
   script_path = File.join(repo_root, "scripts", "ios-sync-versioning.ts")
-  stdout, stderr, status = Open3.capture3(
+  args = [
     "node",
     "--import",
     "tsx",
     script_path,
     "--check",
+  ]
+  args.push("--version", release_version) if env_present?(release_version)
+  stdout, stderr, status = Open3.capture3(
+    *args,
     chdir: repo_root
   )
   return if status.success?
 
   detail = stderr.to_s.strip
   detail = stdout.to_s.strip if detail.empty?
-  UI.user_error!("iOS versioning artifacts are stale. Run `pnpm ios:version:sync`.\n#{detail}")
+  check_command = env_present?(release_version) ? "pnpm ios:version:check -- --version #{release_version}" : "pnpm ios:version:check"
+  UI.user_error!("iOS versioning inputs are invalid. Run `#{check_command}`.\n#{detail}")
 end
 
 def shell_join(parts)
@@ -679,12 +1143,22 @@ def shell_join(parts)
 end
 
 def xcodebuild_shell_join(parts)
-  xcode_path = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
+  # Keep caller-provided pinned Swift tools ahead of Homebrew. Replacing PATH
+  # here makes archive build phases bypass the versions verified by the caller.
+  xcode_path = [
+    *ENV.fetch("PATH", "").split(File::PATH_SEPARATOR),
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+  ].reject(&:empty?).uniq.join(File::PATH_SEPARATOR)
   shell_join(["env", "PATH=#{xcode_path}", *parts])
 end
 
-def resolve_release_build_number(api_key:, short_version:)
-  explicit = ENV["IOS_RELEASE_BUILD_NUMBER"]
+def resolve_release_build_number(api_key:, short_version:, explicit_build_number: nil)
+  explicit = explicit_build_number.to_s.strip
   if env_present?(explicit)
     UI.user_error!("Invalid iOS release build number '#{explicit}'. Expected digits only.") unless explicit.match?(/\A\d+\z/)
     UI.message("Using explicit iOS release build number #{explicit}.")
@@ -702,21 +1176,135 @@ def resolve_release_build_number(api_key:, short_version:)
   next_build.to_s
 end
 
-def release_build_number_needs_app_store_connect_auth?
-  explicit = ENV["IOS_RELEASE_BUILD_NUMBER"]
+def release_build_number_needs_app_store_connect_auth?(explicit_build_number: nil)
+  explicit = explicit_build_number.to_s.strip
   !env_present?(explicit)
 end
 
 def prepare_app_store_release!(version:, build_number:)
   script_path = File.join(repo_root, "scripts", "ios-release-prepare.sh")
   UI.message("Preparing iOS App Store release #{version} (build #{build_number}).")
-  sh(shell_join(["bash", script_path, "--build-number", build_number]))
+  sh(shell_join(["bash", script_path, "--version", version, "--build-number", build_number]))
 
   release_xcconfig = File.join(ios_root, "build", "AppStoreRelease.xcconfig")
   UI.user_error!("Missing App Store release xcconfig at #{release_xcconfig}.") unless File.exist?(release_xcconfig)
 
   ENV["XCODE_XCCONFIG_FILE"] = release_xcconfig
   release_xcconfig
+end
+
+def mobile_release_ref_script
+  File.join(repo_root, "scripts", "mobile-release-ref.ts")
+end
+
+def release_git_sha
+  stdout, stderr, status = Open3.capture3("git", "rev-parse", "HEAD", chdir: repo_root)
+  UI.user_error!("Unable to resolve release Git SHA: #{stderr.strip}") unless status.success?
+  stdout.strip
+end
+
+def normalize_release_git_sha(value)
+  commit = value.to_s.strip.downcase
+  UI.user_error!("Release build commit must be a full 40-character hexadecimal SHA.") unless commit.match?(/\A[0-9a-f]{40}\z/)
+  commit
+end
+
+def normalize_release_build_timestamp(value)
+  timestamp = value.to_s.strip
+  unless timestamp.match?(/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z\z/)
+    UI.user_error!("Release build timestamp must be an ISO-8601 UTC timestamp ending in Z.")
+  end
+  begin
+    parsed = Time.iso8601(timestamp)
+  rescue ArgumentError
+    UI.user_error!("Release build timestamp must be a valid ISO-8601 UTC timestamp.")
+  end
+  fraction = timestamp[/\.(\d{1,3})Z\z/, 1].to_s.ljust(3, "0")
+  canonical_input = timestamp.sub(/(?:\.\d{1,3})?Z\z/, ".#{fraction}Z")
+  normalized = parsed.utc.iso8601(3)
+  UI.user_error!("Release build timestamp must be a valid ISO-8601 UTC timestamp.") unless normalized == canonical_input
+  normalized
+end
+
+def verify_apple_release_source!(expected_commit)
+  script_path = File.join(repo_root, "scripts", "apple-release-source-check.sh")
+  sh(shell_join([
+    "bash",
+    script_path,
+    "--root",
+    repo_root,
+    "--expected-commit",
+    expected_commit
+  ]))
+end
+
+def pin_release_build_provenance!
+  commit = [ENV["GIT_COMMIT"], ENV["GIT_SHA"]].find { |value| env_present?(value) } || release_git_sha
+  timestamp = env_present?(ENV["OPENCLAW_BUILD_TIMESTAMP"]) ? ENV["OPENCLAW_BUILD_TIMESTAMP"] : Time.now.utc.iso8601(3)
+  normalized_commit = normalize_release_git_sha(commit)
+  verify_apple_release_source!(normalized_commit)
+  ENV["GIT_COMMIT"] = normalized_commit
+  ENV["OPENCLAW_BUILD_TIMESTAMP"] = normalize_release_build_timestamp(timestamp)
+  {
+    git_commit: ENV.fetch("GIT_COMMIT"),
+    build_timestamp: ENV.fetch("OPENCLAW_BUILD_TIMESTAMP")
+  }
+end
+
+def mobile_release_ref_command(command, platform:, version:, build: nil, version_code: nil, sha: nil)
+  args = [
+    "node",
+    "--import",
+    "tsx",
+    mobile_release_ref_script,
+    command,
+    "--platform",
+    platform,
+    "--version",
+    version,
+    "--root",
+    repo_root,
+  ]
+  args.push("--build", build.to_s) if build
+  args.push("--version-code", version_code.to_s) if version_code
+  args.push("--sha", sha.to_s) if sha
+  sh(shell_join(args))
+end
+
+def ensure_mobile_release_ref_available!(platform:, version:, build: nil, version_code: nil, sha: nil)
+  mobile_release_ref_command(
+    "preflight",
+    platform: platform,
+    version: version,
+    build: build,
+    version_code: version_code,
+    sha: sha
+  )
+end
+
+def record_mobile_release_ref!(platform:, version:, build: nil, version_code: nil, sha: nil)
+  mobile_release_ref_command(
+    "record",
+    platform: platform,
+    version: version,
+    build: build,
+    version_code: version_code,
+    sha: sha
+  )
+end
+
+def validate_app_store_ipa!(ipa_path, expected_commit:, expected_build_timestamp:)
+  script_path = File.join(repo_root, "scripts", "ios-validate-app-store-ipa.sh")
+  sh(shell_join([
+    "bash",
+    script_path,
+    "--ipa",
+    ipa_path,
+    "--expected-commit",
+    expected_commit,
+    "--expected-build-timestamp",
+    expected_build_timestamp
+  ]))
 end
 
 def build_app_store_release(context)
@@ -728,6 +1316,7 @@ def build_app_store_release(context)
   output_name = "OpenClaw-#{version}.ipa"
   expected_ipa_path = File.join(output_directory, output_name)
 
+  verify_apple_release_source!(context[:git_commit])
   FileUtils.mkdir_p(output_directory)
   FileUtils.rm_rf(archive_path)
   Dir[File.join(output_directory, "*.ipa")].each { |path| FileUtils.rm_f(path) }
@@ -769,6 +1358,11 @@ def build_app_store_release(context)
   UI.user_error!("xcodebuild export produced multiple IPAs in #{output_directory}: #{exported_ipas.join(", ")}") if exported_ipas.length > 1
   exported_ipa = exported_ipas.first
   FileUtils.mv(exported_ipa, expected_ipa_path) unless exported_ipa == expected_ipa_path
+  validate_app_store_ipa!(
+    expected_ipa_path,
+    expected_commit: context[:git_commit],
+    expected_build_timestamp: context[:build_timestamp]
+  )
 
   {
     archive_path: archive_path,
@@ -829,18 +1423,30 @@ end
 platform :ios do
   private_lane :prepare_app_store_context do |options|
     require_api_key = options[:require_api_key] == true
-    needs_api_key = require_api_key || release_build_number_needs_app_store_connect_auth?
+    release_version = options[:release_version].to_s.strip
+    explicit_build_number = options[:build_number].to_s.strip
+    needs_api_key = require_api_key || release_build_number_needs_app_store_connect_auth?(explicit_build_number: explicit_build_number)
     api_key = needs_api_key ? app_store_connect_api_key_config : nil
-    sync_ios_versioning!
-    version_metadata = read_ios_version_metadata
+    if release_version.empty?
+      UI.user_error!("Missing iOS release version. Use `pnpm ios:release:upload -- --version YYYY.M.D` or pass `release_version:YYYY.M.D` to the Fastlane lane.")
+    end
+    sync_ios_versioning!(release_version: release_version)
+    version_metadata = read_ios_version_metadata(release_version: release_version)
     version = version_metadata[:version]
     short_version = version_metadata[:short_version]
-    build_number = resolve_release_build_number(api_key: api_key, short_version: short_version)
+    provenance = pin_release_build_provenance!
+    build_number = resolve_release_build_number(
+      api_key: api_key,
+      short_version: short_version,
+      explicit_build_number: explicit_build_number
+    )
     release_xcconfig = prepare_app_store_release!(version: version, build_number: build_number)
 
     {
       api_key: api_key,
+      build_timestamp: provenance[:build_timestamp],
       build_number: build_number,
+      git_commit: provenance[:git_commit],
       release_xcconfig: release_xcconfig,
       short_version: short_version,
       version: version
@@ -879,8 +1485,12 @@ platform :ios do
   end
 
   desc "Build an App Store distribution archive locally without uploading"
-  lane :app_store_archive do
-    context = prepare_app_store_context(require_api_key: false)
+  lane :app_store_archive do |options|
+    context = prepare_app_store_context(
+      require_api_key: false,
+      release_version: options[:release_version],
+      build_number: options[:build_number]
+    )
     build = build_app_store_release(context)
     UI.success("Built iOS App Store archive: version=#{build[:version]} short=#{build[:short_version]} build=#{build[:build_number]}")
     build
@@ -888,9 +1498,34 @@ platform :ios do
     ENV.delete("XCODE_XCCONFIG_FILE")
   end
 
-  desc "Build + upload an App Store distribution build to App Store Connect"
-  lane :app_store do
-    context = prepare_app_store_context(require_api_key: true)
+  desc "Generate screenshots, update App Store metadata and review attachment, then upload an App Store build"
+  lane :release_upload do |options|
+    unless ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] == "1"
+      UI.user_error!("Use `pnpm ios:release:upload`; direct Fastlane upload is disabled.")
+    end
+
+    release_signing_check!
+    context = prepare_app_store_context(
+      require_api_key: true,
+      release_version: options[:release_version],
+      build_number: options[:build_number]
+    )
+    release_sha = context[:git_commit]
+    ensure_mobile_release_ref_available!(
+      platform: "ios",
+      version: context[:short_version],
+      build: context[:build_number],
+      sha: release_sha
+    )
+    without_xcode_xcconfig_file do
+      preserve_local_signing do
+        screenshots(release_version: context[:version], build_number: context[:build_number])
+      end
+    end
+    ENV["DELIVER_SCREENSHOTS"] = "1"
+    ENV["DELIVER_RELEASE_NOTES"] = "1"
+    metadata(release_version: context[:short_version])
+
     build = build_app_store_release(context)
 
     upload_to_testflight(
@@ -899,30 +1534,11 @@ platform :ios do
       skip_waiting_for_build_processing: true,
       uses_non_exempt_encryption: false
     )
-
-    UI.success("Uploaded iOS App Store build: version=#{build[:version]} short=#{build[:short_version]} build=#{build[:build_number]}")
-  ensure
-    ENV.delete("XCODE_XCCONFIG_FILE")
-  end
-
-  desc "Generate screenshots, update App Store version metadata, then upload an App Store build"
-  lane :release_upload do
-    release_signing_check!
-    preserve_local_signing do
-      screenshots
-    end
-    ENV["DELIVER_SCREENSHOTS"] = "1"
-    ENV["DELIVER_RELEASE_NOTES"] = "1"
-    metadata
-
-    context = prepare_app_store_context(require_api_key: true)
-    build = build_app_store_release(context)
-
-    upload_to_testflight(
-      api_key: context[:api_key],
-      ipa: build[:ipa_path],
-      skip_waiting_for_build_processing: true,
-      uses_non_exempt_encryption: false
+    record_mobile_release_ref!(
+      platform: "ios",
+      version: build[:short_version],
+      build: build[:build_number],
+      sha: release_sha
     )
 
     UI.success("Uploaded iOS App Store build: version=#{build[:version]} short=#{build[:short_version]} build=#{build[:build_number]}")
@@ -931,10 +1547,15 @@ platform :ios do
     ENV.delete("XCODE_XCCONFIG_FILE")
   end
 
-  desc "Upload App Store metadata (and optionally screenshots)"
-  lane :metadata do
-    sync_ios_versioning!
-    version_metadata = read_ios_version_metadata
+  desc "Upload App Store metadata, App Review PDF attachment, and optionally screenshots"
+  lane :metadata do |options|
+    install_ready_for_review_edit_state_lookup!
+    release_version = options[:release_version].to_s.strip
+    if release_version.empty?
+      UI.user_error!("Missing iOS release version. Use `pnpm ios:release:upload -- --version YYYY.M.D` or `fastlane ios metadata release_version:YYYY.M.D`.")
+    end
+    sync_ios_versioning!(release_version: release_version)
+    version_metadata = read_ios_version_metadata(release_version: release_version)
     api_key = app_store_connect_api_key_config
     clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
     app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
@@ -943,19 +1564,22 @@ platform :ios do
     app_id = nil unless env_present?(app_id)
 
     if screenshot_upload_requested?
-      paths = screenshot_paths
-      if paths.empty?
+      screenshots_to_upload = app_store_screenshot_manifest
+      if screenshots_to_upload.empty?
         UI.user_error!("DELIVER_SCREENSHOTS=1 but no PNG screenshots were found under apps/ios/fastlane/screenshots.")
       end
-      validate_required_screenshots!(paths)
+      validate_required_screenshots!(screenshots_to_upload.map(&:path))
     end
 
-    metadata_path = public_metadata_path
+    assert_no_app_review_notes_field_metadata!(File.join(__dir__, "metadata"))
+    metadata_path = public_metadata_path(release_version: release_version)
     skip_metadata = ENV["DELIVER_METADATA"] != "1"
     if release_notes_upload_requested? && skip_metadata
-      metadata_path = release_notes_metadata_path
+      metadata_path = release_notes_metadata_path(release_version: release_version)
       skip_metadata = false
     end
+    assert_no_app_review_notes_field_metadata!(metadata_path) unless skip_metadata
+    app_review_attachment_file = skip_metadata ? nil : generate_app_review_notes_pdf!
 
     deliver_options = {
       api_key: api_key,
@@ -965,10 +1589,11 @@ platform :ios do
       primary_category: "PRODUCTIVITY",
       secondary_category: "UTILITIES",
       metadata_path: metadata_path,
-      skip_screenshots: !screenshot_upload_requested?,
+      skip_screenshots: true,
       skip_metadata: skip_metadata,
       skip_binary_upload: true,
-      overwrite_screenshots: screenshot_upload_requested?,
+      overwrite_screenshots: false,
+      app_review_attachment_file: app_review_attachment_file,
       skip_app_version_update: false,
       submit_for_review: false,
       run_precheck_before_submit: false
@@ -981,12 +1606,27 @@ platform :ios do
     end
 
     deliver(**deliver_options)
+    if screenshot_upload_requested?
+      upload_app_store_screenshots_deterministically!(
+        app_identifier: app_identifier,
+        app_id: app_id,
+        short_version: version_metadata[:short_version],
+        screenshots: screenshots_to_upload
+      )
+    end
   end
 
   desc "Generate deterministic iOS screenshots for App Store metadata"
-  lane :screenshots do
+  lane :screenshots do |options|
+    version_args = []
+    release_version = options[:release_version].to_s.strip
+    build_number = options[:build_number].to_s.strip
+    version_args += ["--version", release_version] unless release_version.empty?
+    version_args += ["--build-number", build_number] unless build_number.empty?
+
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
-    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh")]))
+    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
+    sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
     sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
 
     capture_ios_screenshots(
@@ -995,6 +1635,9 @@ platform :ios do
       configuration: "Debug",
       devices: snapshot_devices,
       languages: ["en-US"],
+      # The scheme also carries functional UI tests (share extension); the
+      # screenshot lane must only drive the deterministic snapshot suite.
+      only_testing: ["OpenClawUITests/OpenClawSnapshotUITests"],
       launch_arguments: ["--openclaw-screenshot-mode"],
       output_directory: File.join(ios_root, "fastlane", "screenshots"),
       clear_previous_screenshots: true,
@@ -1006,13 +1649,20 @@ platform :ios do
       xcargs: "-allowProvisioningUpdates"
     )
 
-    watch_screenshot
+    watch_screenshot(release_version: release_version, build_number: build_number)
   end
 
   desc "Generate deterministic Apple Watch screenshot for App Store metadata"
-  lane :watch_screenshot do
+  lane :watch_screenshot do |options|
+    version_args = []
+    release_version = options[:release_version].to_s.strip
+    build_number = options[:build_number].to_s.strip
+    version_args += ["--version", release_version] unless release_version.empty?
+    version_args += ["--build-number", build_number] unless build_number.empty?
+
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
-    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh")]))
+    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
+    sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
     sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
     capture_watch_screenshot
   end

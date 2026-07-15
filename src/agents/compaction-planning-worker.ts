@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { toErrorObject } from "../infra/errors.js";
 import {
   buildHistoryPrunePlan,
   buildOversizedFallbackPlan,
@@ -60,7 +61,7 @@ function runCompactionPlanningWorker(params: {
 }): Promise<CompactionPlanningWorkerValue> {
   if (params.signal?.aborted) {
     return Promise.reject(
-      toLintErrorObject(
+      toErrorObject(
         params.signal.reason ?? new Error("compaction planning aborted"),
         "Non-Error rejection",
       ),
@@ -105,7 +106,7 @@ function runCompactionPlanningWorker(params: {
       settle(
         () =>
           reject(
-            toLintErrorObject(
+            toErrorObject(
               params.signal?.reason ?? new Error("compaction planning aborted"),
               "Non-Error rejection",
             ),
@@ -362,22 +363,13 @@ export async function computeAdaptiveChunkRatioWithWorker(params: {
 }
 
 /** Test-only worker internals for URL resolution and error-path coverage. */
-export const compactionPlanningWorkerTesting = {
+const compactionPlanningWorkerTesting = {
   resolveCompactionPlanningWorkerUrl,
   runCompactionPlanningWorker,
-  CompactionPlanningWorkerError,
 };
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.compactionPlanningWorkerTestApi")
+  ] = compactionPlanningWorkerTesting;
 }

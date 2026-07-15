@@ -50,6 +50,7 @@ describe("buildChannelInboundEventContext", () => {
         name: "User One",
         username: "userone",
         tag: "User#0001",
+        isBot: true,
         roles: ["admin"],
       },
       conversation: {
@@ -81,11 +82,12 @@ describe("buildChannelInboundEventContext", () => {
       },
       access: {
         commands: {
-          authorizers: [{ configured: true, allowed: true }],
+          authorized: true,
         },
         mentions: {
           canDetectMention: true,
           wasMentioned: true,
+          requireMention: false,
           explicitlyMentionedBot: true,
           mentionSource: "explicit_bot",
           mentionedUserIds: ["bot-1"],
@@ -137,6 +139,7 @@ describe("buildChannelInboundEventContext", () => {
       From: "test:user:u1",
       To: "test:room:room-1",
       SessionKey: "agent:main:test:group:room-1",
+      AgentId: "main",
       AccountId: "acct",
       ParentSessionKey: "agent:main:test:group",
       ModelParentSessionKey: "agent:main:test:model",
@@ -152,6 +155,7 @@ describe("buildChannelInboundEventContext", () => {
       MediaTypes: ["image/png", "audio/mpeg"],
       MediaTranscribedIndexes: [1],
       ChatType: "group",
+      ChatId: "room-1",
       ConversationLabel: "Room One",
       GroupSubject: "Room One",
       GroupSpace: "workspace",
@@ -160,11 +164,13 @@ describe("buildChannelInboundEventContext", () => {
       SenderId: "u1",
       SenderUsername: "userone",
       SenderTag: "User#0001",
+      SenderIsBot: true,
       MemberRoleIds: ["admin"],
       Timestamp: 123,
       Provider: "test-provider",
       Surface: "test-surface",
       WasMentioned: true,
+      GroupRequireMention: false,
       ExplicitlyMentionedBot: true,
       MentionedUserIds: ["bot-1"],
       ImplicitMentionKinds: ["reply_to_bot"],
@@ -192,23 +198,50 @@ describe("buildChannelInboundEventContext", () => {
     }
   });
 
-  it("uses resolved command authorization instead of recomputing authorizers", async () => {
+  it("preserves channel-owned hook context without rendering it as prompt text", () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        channelContext: {
+          sender: { id: "sender-1", customSenderField: "sender-meta" },
+          chat: { id: "chat-1", customChatField: "chat-meta" },
+        },
+      }),
+    );
+
+    expect(ctx.ChannelContext).toEqual({
+      sender: { id: "sender-1", customSenderField: "sender-meta" },
+      chat: { id: "chat-1", customChatField: "chat-meta" },
+    });
+    expect(ctx.Body).not.toContain("customSenderField");
+    expect(ctx.BodyForAgent).not.toContain("customSenderField");
+  });
+
+  it("uses resolved command authorization", async () => {
     const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
         access: {
           commands: {
             authorized: false,
-            shouldBlockControlCommand: true,
-            reasonCode: "control_command_unauthorized",
-            allowTextCommands: true,
-            useAccessGroups: true,
-            authorizers: [{ configured: true, allowed: true }],
           },
         },
       }),
     );
 
     expect(ctx.CommandAuthorized).toBe(false);
+  });
+
+  it("carries the routed agent for unscoped session keys", async () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        route: {
+          agentId: "bound-agent",
+          routeSessionKey: "feishu:direct:ou_user1",
+        },
+      }),
+    );
+
+    expect(ctx.AgentId).toBe("bound-agent");
+    expect(ctx.SessionKey).toBe("feishu:direct:ou_user1");
   });
 
   it("carries room event semantics into the finalized context", async () => {
@@ -308,20 +341,6 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.To).toBe("test:room:room-1");
     expect(ctx.OriginatingTo).toBe("test:room:room-1:topic:topic-42");
     expect(ctx.MessageThreadId).toBe("topic-42");
-  });
-
-  it("keeps legacy command authorization fallback for authorizer arrays", async () => {
-    const ctx = buildChannelInboundEventContext(
-      createBaseContextParams({
-        access: {
-          commands: {
-            authorizers: [{ configured: true, allowed: true }],
-          },
-        },
-      }),
-    );
-
-    expect(ctx.CommandAuthorized).toBe(true);
   });
 
   it("derives command turns from normalized command facts", async () => {

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GITHUB_ERROR_BODY_MAX_BYTES,
+  GITHUB_RESPONSE_BODY_MAX_BYTES,
   canAutoscrubPullRequest,
   createAutoscrubCommit,
   dependencyGuardCommentAuthors,
@@ -579,7 +580,7 @@ describe("dependency guard script", () => {
       "base:/repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=base-sha",
       "write:graphql",
     ]);
-    expect(calls[1].variables).toMatchObject({
+    expect(calls[1]?.variables).toMatchObject({
       input: {
         branch: {
           repositoryNameWithOwner: "contributor/openclaw",
@@ -667,6 +668,21 @@ describe("dependency guard script", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("bounds successful GitHub API response bodies", async () => {
+    const request = githubApi("token", {
+      responseMaxBodyBytes: 64,
+      fetchImpl: (() =>
+        Promise.resolve(
+          new Response("x".repeat(65), {
+            headers: { "content-length": "65" },
+          }),
+        )) as typeof fetch,
+    }).request("/repos/openclaw/openclaw");
+
+    await expect(request).rejects.toThrow("GitHub response body exceeded 64 bytes");
+    expect(GITHUB_RESPONSE_BODY_MAX_BYTES).toBeGreaterThan(64);
   });
 
   it("aborts stalled GitHub API fetches at the request timeout", async () => {

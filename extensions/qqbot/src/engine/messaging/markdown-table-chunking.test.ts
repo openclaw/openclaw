@@ -1,12 +1,8 @@
 // QQ Bot Markdown chunking tests cover message-boundary table repair.
 import { describe, expect, it } from "vitest";
-import {
-  chunkQQBotMarkdownText,
-  createQQBotMarkdownChunker,
-  type QQBotBaseMarkdownChunker,
-} from "./markdown-table-chunking.js";
+import { chunkQQBotMarkdownText, createQQBotMarkdownChunker } from "./markdown-table-chunking.js";
 
-const baseChunker: QQBotBaseMarkdownChunker = (text, limit) =>
+const baseChunker = (text: string, limit: number): string[] =>
   text.length <= limit ? [text] : [text.slice(0, limit), text.slice(limit)];
 
 describe("chunkQQBotMarkdownText", () => {
@@ -46,6 +42,15 @@ describe("chunkQQBotMarkdownText", () => {
     ).toEqual([["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n")]);
   });
 
+  it("confirms a table when the separator uses one or two dashes, not only three", () => {
+    // GFM delimiter cells need only one or more dashes; a sub-3-dash separator previously failed
+    // recognition, so the header and all rows but the last were silently dropped on send.
+    for (const separator of ["|--|--|", "|-|-|", "|:--|--:|"]) {
+      const text = ["| Id | Value |", separator, "| 1 | alpha |", "| 2 | beta |"].join("\n");
+      expect(chunkQQBotMarkdownText(text, 200, baseChunker)).toEqual([text]);
+    }
+  });
+
   it("flushes a possible table header as text when the next block is not a separator", () => {
     const chunker = createQQBotMarkdownChunker((text) => [text]);
 
@@ -80,6 +85,16 @@ describe("chunkQQBotMarkdownText", () => {
     expect(chunks.at(-1)).toBe(
       ["| Id | Error | Retry |", "|---|---|---|", "| 004 | ok | zero |"].join("\n"),
     );
+  });
+
+  it("keeps escaped pipes inside oversized table cells", () => {
+    const value = "long value ".repeat(12);
+    const text = ["| Label | Value |", "|---|---|", `| a \\| b | ${value} |`].join("\n");
+
+    const chunks = chunkQQBotMarkdownText(text, 80, baseChunker);
+
+    expect(chunks.join("\n")).toContain("Label: a | b");
+    expect(chunks.join("\n")).toContain("Value: long value");
   });
 
   it("buffers a table row fragment across streaming block flushes", () => {
@@ -250,5 +265,33 @@ describe("chunkQQBotMarkdownText", () => {
       ["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n"),
       "后置说明第一段，表格结束后继续普通文字。\n后置说明第二段。",
     ]);
+  });
+});
+
+describe("table-cell splitting", () => {
+  it("preserves a literal backslash before an oversized cell delimiter", () => {
+    const text = [
+      "| First | Second |",
+      "|---|---|",
+      `| a \\\\ | ${"long value ".repeat(12)} |`,
+    ].join("\n");
+
+    const chunks = chunkQQBotMarkdownText(text, 80, baseChunker);
+
+    expect(chunks.join("\n")).toContain("First: a \\");
+    expect(chunks.join("\n")).toContain("Second: long value");
+  });
+
+  it("unescapes pipes when flushing a partial row in an active table", () => {
+    const chunker = createQQBotMarkdownChunker(baseChunker);
+    expect(
+      chunker.chunkText(
+        ["| First | Second |", "|---|---|", "| ready | complete |"].join("\n"),
+        200,
+      ),
+    ).toEqual([["| First | Second |", "|---|---|", "| ready | complete |"].join("\n")]);
+
+    expect(chunker.chunkText("| a \\| b | c", 200)).toEqual([]);
+    expect(chunker.flushPendingText(200)).toEqual([["First: a | b", "Second: c"].join("\n")]);
   });
 });

@@ -509,6 +509,52 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("relays the latest replaceable assistant snapshot instead of superseded drafts", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-replaceable-assistant",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-replaceable-assistant",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    emitAgentEvent({
+      runId: "run-replaceable-assistant",
+      stream: "assistant",
+      data: {
+        text: "coordination draft",
+        delta: "coordination draft",
+        replaceable: true,
+      },
+    });
+    emitAgentEvent({
+      runId: "run-replaceable-assistant",
+      stream: "assistant",
+      data: {
+        text: "final answer",
+        delta: "",
+        replace: true,
+        replaceable: true,
+      },
+    });
+    emitAgentEvent({
+      runId: "run-replaceable-assistant",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 1_000,
+        endedAt: 2_000,
+      },
+    });
+
+    const texts = collectedTexts();
+    expectNoTextWithFragment(texts, "coordination draft");
+    expectTextWithFragment(texts, "codex: final answer");
+    relay.dispose();
+  });
+
   it("relays commentary-phase assistant text in parent progress mode by default", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-commentary-default",
@@ -710,7 +756,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("emits full preamble item progress after the previous snapshot flushed", () => {
+  it("omits already flushed preamble item progress from later prefix snapshots", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-preamble-item-after-flush",
       parentSessionKey: "agent:main:main",
@@ -744,7 +790,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
     vi.advanceTimersByTime(15);
 
-    expect(collectedTexts()).toEqual(["codex: Checking", "codex: Checking the app-server stream"]);
+    expect(collectedTexts()).toEqual(["codex: Checking", "codex: the app-server stream"]);
     relay.dispose();
   });
 
@@ -945,7 +991,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("applies legacy account streamMode opt-outs", () => {
+  it("applies account streaming mode opt-outs", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-account-stream-mode-off",
       parentSessionKey: "agent:main:main",
@@ -962,7 +1008,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
             },
             accounts: {
               work: {
-                streamMode: "off",
+                streaming: { mode: "off" },
               },
             },
           },
@@ -1360,6 +1406,37 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it.each([
+    {
+      name: "preview cutoff",
+      delta: `${"a".repeat(218)}😀tail`,
+      expected: `${"a".repeat(218)}…`,
+    },
+    {
+      name: "retained buffer start",
+      delta: `😀${"b".repeat(3_999)}`,
+      expected: `${"b".repeat(219)}…`,
+    },
+  ])("keeps $name on UTF-16 boundaries", ({ delta, expected }) => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-utf16-safe",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:utf16-safe",
+      agentId: "codex",
+      streamFlushMs: 0,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-utf16-safe",
+      stream: "assistant",
+      data: { delta },
+    });
+
+    expect(collectedTexts()[1]).toBe(`codex: ${expected}`);
+    relay.dispose();
+  });
+
   it("resolves ACP spawn stream log path from session metadata", () => {
     readAcpSessionEntryMock.mockReturnValue({
       storePath: "/tmp/openclaw/agents/codex/sessions/sessions.json",
@@ -1390,3 +1467,4 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(options.storePath).toBe("/tmp/openclaw/agents/codex/sessions/sessions.json");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -13,9 +13,10 @@ describe("Docker E2E client scripts", () => {
     expect(source).toContain("../../dist/commitments/runtime.js");
     expect(source).toContain("../../dist/commitments/store.js");
     expect(source).toContain("verifyQueueCap()");
-    expect(source).toContain("verifyExtractionStoresMetadataOnly()");
-    expect(source).toContain("verifyLegacySourceIsPrunedOnDueRead()");
-    expect(source).toContain("verifyExpiryTransitionsAndStripsLegacySource()");
+    expect(source).toContain("verifyExtractionStoresTypedMetadataOnly()");
+    expect(source).toContain("verifyDoctorImportAndRuntimeIsolation()");
+    expect(source).toContain("verifyExpiryTransition()");
+    expect(source).toContain('[entry, "doctor", "--fix", "--yes", "--force"]');
     expect(source).toContain("CALL_TOOL");
   });
 

@@ -89,18 +89,21 @@ async function resolveGeneratedImagePath(params: {
   const startedAt = Date.now();
   while (Date.now() - startedAt < params.timeoutMs) {
     if (params.env.mock) {
-      const requests = await fetchJson<Array<{ allInputText?: string; toolOutput?: string }>>(
-        `${params.env.mock.baseUrl}/debug/requests`,
-      );
-      for (let index = requests.length - 1; index >= 0; index -= 1) {
-        const request = requests[index];
-        if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
-          continue;
+      try {
+        const requests = await fetchJson<Array<{ allInputText?: string; toolOutput?: string }>>(
+          `${params.env.mock.baseUrl}/debug/requests`,
+        );
+        for (const request of requests.toReversed()) {
+          if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
+            continue;
+          }
+          const mediaPath = extractMediaPathFromText(request.toolOutput);
+          if (mediaPath) {
+            return mediaPath;
+          }
         }
-        const mediaPath = extractMediaPathFromText(request.toolOutput);
-        if (mediaPath) {
-          return mediaPath;
-        }
+      } catch {
+        // The mock debug endpoint is best-effort; generated media files are the durable fallback.
       }
     }
 
@@ -148,6 +151,8 @@ async function ensureImageGenerationConfigured(env: QaSuiteRuntimeEnv) {
       providerBaseUrl: env.mock ? `${env.mock.baseUrl}/v1` : undefined,
       requiredPluginIds: env.transport.requiredPluginIds,
       existingPluginIds: readPluginAllow(snapshot.config),
+      forcedRuntime:
+        env.gateway?.runtimeEnv?.OPENCLAW_QA_FORCE_RUNTIME === "codex" ? "codex" : undefined,
     }),
   });
   await waitForGatewayHealthy(env);

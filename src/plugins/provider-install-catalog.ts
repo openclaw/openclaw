@@ -367,6 +367,9 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
             cliDescription: choice.cliDescription,
             onboardingScopes: normalizeProviderAuthChoiceScopes(choice.onboardingScopes),
           }),
+          ...(choice.deprecatedChoiceIds?.length
+            ? { deprecatedChoiceIds: [...choice.deprecatedChoiceIds] }
+            : {}),
           label,
           origin: "bundled",
           install,
@@ -434,5 +437,19 @@ export function resolveProviderInstallCatalogEntry(
   }
   return resolveProviderInstallCatalogEntries(params).find(
     (entry) => entry.choiceId === normalizedChoiceId,
+  );
+}
+
+/** Resolves an uninstalled provider's deprecated setup choice to its replacement entry. */
+export function resolveDeprecatedProviderInstallCatalogEntry(
+  choiceId: string,
+  params?: ProviderInstallCatalogParams,
+): ProviderInstallCatalogEntry | undefined {
+  const normalizedChoiceId = choiceId.trim();
+  if (!normalizedChoiceId) {
+    return undefined;
+  }
+  return resolveProviderInstallCatalogEntries(params).find((entry) =>
+    entry.deprecatedChoiceIds?.includes(normalizedChoiceId),
   );
 }

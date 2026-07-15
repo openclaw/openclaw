@@ -61,6 +61,7 @@ function stripHeartbeatHtmlComments(content: string): string[] {
  * - Whitespace / empty lines
  * - Markdown/HTML comments
  * - Markdown ATX headers (`#`, `##`, ...)
+ * - One-line HTML comments (`<!-- ... -->`)
  * - Markdown fence markers such as ``` or ```markdown
  * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
  *
@@ -92,13 +93,16 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     if (/^#+(\s|$)/.test(trimmed)) {
       continue;
     }
+    if (/^<!--.*-->$/.test(trimmed)) {
+      continue;
+    }
     // Skip empty markdown list items like "- [ ]" or "* [ ]" or just "- "
     if (/^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed)) {
       continue;
     }
-    // Ignore markdown fence markers that were added for doc rendering but do
-    // not carry task semantics in the workspace template body.
-    if (/^```[A-Za-z0-9_-]*$/.test(trimmed)) {
+    // Ignore markdown fence markers and HTML comments that only document the
+    // workspace template; neither carries heartbeat task semantics.
+    if (/^```[A-Za-z0-9_-]*$/.test(trimmed) || /^<!--.*-->$/.test(trimmed)) {
       continue;
     }
     // Found a non-empty, non-comment line - there's actionable content
@@ -261,8 +265,7 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
   const lines = stripHeartbeatHtmlComments(content);
   let inTasksBlock = false;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  for (const [i, line] of lines.entries()) {
     const trimmed = line.trim();
 
     // Detect tasks block start.
@@ -301,8 +304,7 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
       let prompt = "";
 
       // Look ahead for interval and prompt
-      for (let j = i + 1; j < lines.length; j++) {
-        const nextLine = lines[j];
+      for (const nextLine of lines.slice(i + 1)) {
         const nextTrimmed = nextLine.trim();
 
         // End of this task

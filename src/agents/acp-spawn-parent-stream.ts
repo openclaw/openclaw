@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import {
   isAcpTagVisible,
@@ -50,9 +51,9 @@ function truncate(value: string, maxChars: number): string {
     return value;
   }
   if (maxChars <= 1) {
-    return value.slice(0, maxChars);
+    return truncateUtf16Safe(value, maxChars);
   }
-  return `${value.slice(0, maxChars - 1)}…`;
+  return `${truncateUtf16Safe(value, maxChars - 1)}…`;
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -121,20 +122,10 @@ function mergeStreamingEntry(
   if (!override) {
     return base;
   }
-  const overrideStreaming = asObjectRecord(override.streaming);
-  const legacyOverrideMode =
-    override.streamMode !== undefined &&
-    (override.streaming === undefined || overrideStreaming) &&
-    overrideStreaming?.mode === undefined
-      ? { mode: override.streamMode }
-      : undefined;
   return {
     ...base,
     ...override,
-    streaming: mergeStreamingConfig(
-      mergeStreamingConfig(base.streaming, override.streaming),
-      legacyOverrideMode,
-    ),
+    streaming: mergeStreamingConfig(base.streaming, override.streaming),
   };
 }
 
@@ -142,8 +133,7 @@ function hasConfiguredPreviewStreamMode(entry: StreamingCompatEntry): boolean {
   return (
     asObjectRecord(entry.streaming)?.mode !== undefined ||
     typeof entry.streaming === "string" ||
-    typeof entry.streaming === "boolean" ||
-    entry.streamMode !== undefined
+    typeof entry.streaming === "boolean"
   );
 }
 
@@ -431,6 +421,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   let disposed = false;
   let pendingText = "";
   let pendingProgressKind: string | undefined;
+  let replaceableAssistantSnapshot: string | undefined;
   const itemProgressTextById = new Map<string, string>();
   let lastProgressAt = Date.now();
   let stallNotified = false;
@@ -502,13 +493,22 @@ export function startAcpSpawnParentStreamRelay(params: {
     pendingProgressKind = kind;
     pendingText += delta;
     if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
-      pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
+      pendingText = sliceUtf16Safe(pendingText, -STREAM_BUFFER_MAX_CHARS);
     }
     if (pendingText.length >= STREAM_SNIPPET_MAX_CHARS || delta.includes("\n\n")) {
       flushPending();
       return;
     }
     scheduleFlush();
+  };
+
+  const flushReplaceableAssistantSnapshot = () => {
+    const snapshot = replaceableAssistantSnapshot;
+    replaceableAssistantSnapshot = undefined;
+    if (!snapshot?.trim()) {
+      return;
+    }
+    appendVisibleProgress(snapshot, "assistant:replaceable");
   };
 
   const appendItemProgressSnapshot = (snapshot: { itemId: string; text: string }) => {
@@ -523,8 +523,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       pendingText = "";
     }
     itemProgressTextById.set(snapshot.itemId, snapshot.text);
-    const delta =
-      isPrefixUpdate && hasPendingSnapshot ? snapshot.text.slice(previous.length) : snapshot.text;
+    const delta = isPrefixUpdate ? snapshot.text.slice(previous.length) : snapshot.text;
     appendVisibleProgress(delta, kind);
   };
 
@@ -605,10 +604,27 @@ export function startAcpSpawnParentStreamRelay(params: {
       const assistantPhase = normalizeAssistantPhase(
         (data as { phase?: unknown } | undefined)?.phase,
       );
-      const deltaCandidate =
-        (data as { delta?: unknown } | undefined)?.delta ??
-        (data as { text?: unknown } | undefined)?.text;
-      const delta = typeof deltaCandidate === "string" ? deltaCandidate : undefined;
+      const textCandidate = (data as { text?: unknown } | undefined)?.text;
+      const deltaCandidate = (data as { delta?: unknown } | undefined)?.delta;
+      const snapshot =
+        typeof textCandidate === "string"
+          ? textCandidate
+          : typeof deltaCandidate === "string"
+            ? deltaCandidate
+            : undefined;
+      if ((data as { replaceable?: unknown } | undefined)?.replaceable === true) {
+        if (snapshot?.trim()) {
+          replaceableAssistantSnapshot = snapshot;
+          lastProgressAt = Date.now();
+          logEvent("assistant_replaceable_snapshot", {
+            text: snapshot,
+            ...(assistantPhase ? { phase: assistantPhase } : {}),
+          });
+        }
+        return;
+      }
+
+      const delta = typeof deltaCandidate === "string" ? deltaCandidate : snapshot;
       if (!delta || !delta.trim()) {
         return;
       }
@@ -622,6 +638,7 @@ export function startAcpSpawnParentStreamRelay(params: {
         return;
       }
 
+      replaceableAssistantSnapshot = undefined;
       appendVisibleProgress(delta, `assistant:${assistantPhase ?? "unknown"}`);
       return;
     }
@@ -697,6 +714,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     const phase = normalizeOptionalString((event.data as { phase?: unknown } | undefined)?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
+      flushReplaceableAssistantSnapshot();
       flushPending();
       const startedAt = asFiniteNumber(
         (event.data as { startedAt?: unknown } | undefined)?.startedAt,
@@ -719,6 +737,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
 
     if (phase === "error") {
+      flushReplaceableAssistantSnapshot();
       flushPending();
       const errorText = normalizeOptionalString(
         (event.data as { error?: unknown } | undefined)?.error,
@@ -754,3 +773,4 @@ export type AcpSpawnParentRelayHandle = {
   dispose: () => void;
   notifyStarted: () => void;
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

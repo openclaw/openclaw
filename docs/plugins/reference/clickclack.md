@@ -12,11 +12,11 @@ Adds the Clickclack channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/clickclack`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/clickclack`
 
 ## Surface
 
-channels: clickclack
+channels: `clickclack`
 
 ## Related docs
 

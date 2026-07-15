@@ -1,5 +1,6 @@
 {
   "id": "opencode-go",
+  "icon": "https://cdn.simpleicons.org/opencode",
   "activation": {
     "onStartup": false
   },
@@ -83,6 +84,7 @@
       "provider": "opencode-go",
       "method": "api-key",
       "choiceId": "opencode-go",
+      "appGuidedSecret": true,
       "choiceLabel": "OpenCode Go catalog",
       "groupId": "opencode",
       "groupLabel": "OpenCode",

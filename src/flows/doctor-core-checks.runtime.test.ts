@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   disposeBundleRuntime: vi.fn(),
   loadModelCatalog: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
   normalizeProviderToolSchemasWithPlugin: vi.fn(),
+  buildGatewayProbeConnectionDetails: vi.fn(),
+  probeGatewayStatus: vi.fn(),
+  readGatewayServiceState: vi.fn(),
+  resolveGatewayService: vi.fn(() => ({ label: "openclaw-gateway" })),
   resolvePluginProviders: vi.fn((): Array<Record<string, unknown>> => []),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
 }));
@@ -35,6 +39,19 @@ vi.mock("../agents/agent-tools.js", () => ({
   createOpenClawCodingTools: mocks.createOpenClawCodingTools,
 }));
 
+vi.mock("../gateway/call.js", () => ({
+  buildGatewayProbeConnectionDetails: mocks.buildGatewayProbeConnectionDetails,
+}));
+
+vi.mock("../cli/daemon-cli/probe.js", () => ({
+  probeGatewayStatus: mocks.probeGatewayStatus,
+}));
+
+vi.mock("../daemon/service.js", () => ({
+  readGatewayServiceState: mocks.readGatewayServiceState,
+  resolveGatewayService: mocks.resolveGatewayService,
+}));
+
 vi.mock("../plugins/provider-runtime.js", () => ({
   inspectProviderToolSchemasWithPlugin: () => [],
   normalizeProviderToolSchemasWithPlugin: mocks.normalizeProviderToolSchemasWithPlugin,
@@ -48,8 +65,12 @@ vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
 }));
 
-const { collectProviderCatalogProjectionFindings, collectRuntimeToolSchemaFindings } =
-  await import("./doctor-core-checks.runtime.js");
+const {
+  collectGatewayDaemonFindings,
+  collectGatewayHealthFindings,
+  collectProviderCatalogProjectionFindings,
+  collectRuntimeToolSchemaFindings,
+} = await import("./doctor-core-checks.runtime.js");
 
 function tool(name: string, parameters: unknown): AnyAgentTool {
   return {
@@ -79,6 +100,22 @@ describe("doctor runtime tool schema checks", () => {
     mocks.normalizeProviderToolSchemasWithPlugin
       .mockReset()
       .mockImplementation(({ context }) => context.tools);
+    mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
+      url: "http://127.0.0.1:5829",
+    });
+    mocks.probeGatewayStatus.mockReset().mockResolvedValue({
+      ok: true,
+      server: { version: "2026.6.26" },
+    });
+    mocks.readGatewayServiceState.mockReset().mockResolvedValue({
+      installed: true,
+      loaded: true,
+      running: true,
+      env: {},
+      command: { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" },
+      runtime: { status: "running" },
+    });
+    mocks.resolveGatewayService.mockClear();
     mocks.resolvePluginProviders.mockReset().mockReturnValue([]);
     mocks.resolveDefaultModelForAgent.mockClear();
   });
@@ -500,6 +537,100 @@ describe("doctor runtime tool schema checks", () => {
         },
       }),
     ).resolves.toEqual([]);
+  });
+});
+
+describe("doctor gateway runtime checks", () => {
+  beforeEach(() => {
+    mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
+      url: "http://127.0.0.1:5829",
+    });
+    mocks.probeGatewayStatus.mockReset().mockResolvedValue({
+      ok: true,
+      server: { version: "2026.6.26" },
+    });
+    mocks.readGatewayServiceState.mockReset().mockResolvedValue({
+      installed: true,
+      loaded: true,
+      running: true,
+      env: {},
+      command: { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" },
+      runtime: { status: "running" },
+    });
+    mocks.resolveGatewayService.mockReset().mockReturnValue({ label: "openclaw-gateway" });
+  });
+
+  it("reports unreachable gateway health probes", async () => {
+    mocks.probeGatewayStatus.mockResolvedValueOnce({
+      ok: false,
+      error: "connect ECONNREFUSED 127.0.0.1:5829",
+    });
+
+    await expect(
+      collectGatewayHealthFindings({ cfg: { gateway: { mode: "local" } } }),
+    ).resolves.toContainEqual({
+      checkId: "core/doctor/gateway-health",
+      severity: "warning",
+      message: "Gateway is not reachable: connect ECONNREFUSED 127.0.0.1:5829",
+      path: "gateway.mode",
+      target: "http://127.0.0.1:5829",
+      fixHint:
+        "Start the Gateway service or run `openclaw doctor --fix` for service repair prompts.",
+    });
+  });
+
+  it("redacts sensitive remote gateway URLs from health finding targets", async () => {
+    mocks.buildGatewayProbeConnectionDetails.mockResolvedValueOnce({
+      url: "wss://user:pass@gateway.example.test/rpc?token=secret&safe=value",
+    });
+    mocks.probeGatewayStatus.mockResolvedValueOnce({
+      ok: false,
+      error: "remote gateway did not answer",
+    });
+
+    const findings = await collectGatewayHealthFindings({
+      cfg: { gateway: { mode: "remote", remote: { url: "wss://gateway.example.test/rpc" } } },
+    });
+
+    expect(findings).toContainEqual({
+      checkId: "core/doctor/gateway-health",
+      severity: "warning",
+      message: "Gateway is not reachable: remote gateway did not answer",
+      path: "gateway.remote.url",
+      target: "wss://***:***@gateway.example.test/rpc?token=***&safe=value",
+      fixHint: "Verify the remote Gateway URL, network path, TLS settings, and credentials.",
+    });
+    expect(JSON.stringify(findings)).not.toContain("user:pass");
+    expect(JSON.stringify(findings)).not.toContain("token=secret");
+  });
+
+  it("reports missing local gateway daemon service", async () => {
+    mocks.readGatewayServiceState.mockResolvedValueOnce({
+      installed: false,
+      loaded: false,
+      running: false,
+      env: {},
+      command: null,
+    });
+
+    await expect(
+      collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } }),
+    ).resolves.toContainEqual({
+      checkId: "core/doctor/gateway-daemon",
+      severity: "warning",
+      message: "Gateway service is not installed.",
+      path: "gateway.mode",
+      target: "openclaw-gateway",
+      fixHint: "Run `openclaw doctor --fix` or `openclaw gateway install` to install it.",
+    });
+  });
+
+  it("skips daemon findings for remote gateway mode", async () => {
+    await expect(
+      collectGatewayDaemonFindings({ cfg: { gateway: { mode: "remote" } } }),
+    ).resolves.toEqual([]);
+
+    expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
   });
 });
 
@@ -1030,3 +1161,4 @@ describe("doctor provider catalog projection checks", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

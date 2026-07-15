@@ -21,16 +21,7 @@ export type ThreadBindingRecord = {
   metadata?: Record<string, unknown>;
 };
 
-export type PersistedThreadBindingRecord = ThreadBindingRecord & {
-  sessionKey?: string;
-  /** @deprecated Legacy absolute expiry timestamp; migrated on load. */
-  expiresAt?: number;
-};
-
-export type PersistedThreadBindingsPayload = {
-  version: 1;
-  bindings: Record<string, PersistedThreadBindingRecord>;
-};
+export type PersistedThreadBindingRecord = ThreadBindingRecord;
 
 export type ThreadBindingManager = {
   accountId: string;

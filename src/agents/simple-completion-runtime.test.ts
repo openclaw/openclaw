@@ -3,6 +3,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
+import {
+  looksLikeSecretSentinel,
+  mintSecretSentinel,
+  resolveSecretSentinel,
+} from "../secrets/sentinel.js";
+import type { resolveModelAsync } from "./embedded-agent-runner/model.js";
+import { fingerprintResolvedProviderAuth } from "./execution-auth-binding.js";
+import { bindSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
 
 // Hoisted mocks keep Vitest module replacement stable while the implementation
 // under test imports auth, model resolution, and transport helpers at module load.
@@ -12,10 +20,10 @@ const hoisted = vi.hoisted(() => ({
   getApiKeyForModelMock: vi.fn(),
   applyLocalNoAuthHeaderOverrideMock: vi.fn(),
   setRuntimeApiKeyMock: vi.fn(),
-  resolveCopilotApiTokenMock: vi.fn(),
   prepareProviderRuntimeAuthMock: vi.fn(),
   prepareModelForSimpleCompletionMock: vi.fn((params: { model: unknown }) => params.model),
   completeMock: vi.fn(),
+  ensureAuthProfileStoreMock: vi.fn(),
 }));
 
 vi.mock("../llm/stream.js", () => ({
@@ -27,21 +35,22 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModelAsync: hoisted.resolveModelAsyncMock,
 }));
 
+vi.mock("./auth-profiles/store.js", () => ({
+  ensureAuthProfileStore: hoisted.ensureAuthProfileStoreMock,
+}));
+
 vi.mock("./simple-completion-transport.js", () => ({
   prepareModelForSimpleCompletion: hoisted.prepareModelForSimpleCompletionMock,
 }));
 
 vi.mock("./model-auth.js", () => ({
+  applySecretRefHeaderSentinels: (model: unknown) => model,
   formatMissingAuthError: vi.fn(
     (auth: { source: string; mode: string }, provider: string) =>
       `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
   ),
   getApiKeyForModel: hoisted.getApiKeyForModelMock,
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
-}));
-
-vi.mock("./github-copilot-token.js", () => ({
-  resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
 }));
 
 vi.mock("../plugins/provider-runtime.runtime.js", () => ({
@@ -60,10 +69,10 @@ beforeEach(() => {
   hoisted.getApiKeyForModelMock.mockReset();
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockReset();
   hoisted.setRuntimeApiKeyMock.mockReset();
-  hoisted.resolveCopilotApiTokenMock.mockReset();
   hoisted.prepareProviderRuntimeAuthMock.mockReset();
   hoisted.prepareModelForSimpleCompletionMock.mockReset();
   hoisted.completeMock.mockReset();
+  hoisted.ensureAuthProfileStoreMock.mockReset();
 
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockImplementation((model: unknown) => model);
   hoisted.prepareModelForSimpleCompletionMock.mockImplementation(
@@ -89,13 +98,17 @@ beforeEach(() => {
     source: "env:TEST_API_KEY",
     mode: "api-key",
   });
-  hoisted.resolveCopilotApiTokenMock.mockResolvedValue({
-    token: "copilot-runtime-token",
-    expiresAt: Date.now() + 60_000,
-    source: "cache:/tmp/copilot-token.json",
-    baseUrl: "https://api.individual.githubcopilot.com",
-  });
-  hoisted.prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
+  hoisted.prepareProviderRuntimeAuthMock.mockImplementation(
+    async (params: { provider: string }) => {
+      return params.provider === "github-copilot"
+        ? {
+            apiKey: "copilot-runtime-token",
+            baseUrl: "https://api.individual.githubcopilot.com",
+          }
+        : undefined;
+    },
+  );
+  hoisted.ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
 });
 
 function expectPreparedModelResult(
@@ -128,6 +141,10 @@ describe("prepareSimpleCompletionModel", () => {
       provider: "anthropic",
       modelId: "claude-opus-4-6",
       agentDir: "/tmp/openclaw-agent",
+      modelResolver: bindSimpleCompletionModelResolverWorkspace(
+        hoisted.resolveModelAsyncMock as typeof resolveModelAsync,
+        "/tmp/runtime-workspace",
+      ),
     });
 
     expectPreparedModelResult(result);
@@ -136,6 +153,51 @@ describe("prepareSimpleCompletionModel", () => {
     expect(result.auth.mode).toBe("api-key");
     expect(result.auth.source).toBe("env:TEST_API_KEY");
     expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith("anthropic", "sk-test");
+    expect(callArg(hoisted.prepareProviderRuntimeAuthMock)).toMatchObject({
+      workspaceDir: "/tmp/runtime-workspace",
+    });
+  });
+
+  it("captures the exact locked auth owner used by a bound completion", async () => {
+    const credential = {
+      type: "api_key" as const,
+      provider: "anthropic",
+      key: "sk-p2",
+    };
+    const store = { version: 1, profiles: { "anthropic:p2": credential } };
+    hoisted.ensureAuthProfileStoreMock.mockReturnValueOnce(store);
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "sk-p2",
+      profileId: "anthropic:p2",
+      source: "profile:anthropic:p2",
+      mode: "api-key",
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: {},
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentDir: "/tmp/openclaw-agent",
+      profileId: "anthropic:p2",
+      bindAuthOwner: true,
+    });
+
+    expectPreparedModelResult(result);
+    expect(result.sourceAuthFingerprint).toBe(
+      fingerprintResolvedProviderAuth({
+        apiKey: "sk-p2",
+        profileId: "anthropic:p2",
+        source: "profile:anthropic:p2",
+        mode: "api-key",
+      }),
+    );
+    expect(hoisted.getApiKeyForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "anthropic:p2",
+        lockedProfile: true,
+        store,
+      }),
+    );
   });
 
   it("returns error when model resolution fails", async () => {
@@ -238,13 +300,22 @@ describe("prepareSimpleCompletionModel", () => {
       modelId: "gpt-4.1",
     });
 
-    expect(hoisted.resolveCopilotApiTokenMock).toHaveBeenCalledWith({
-      githubToken: "ghu_test",
+    expect(callArg(hoisted.prepareProviderRuntimeAuthMock)).toMatchObject({
+      provider: "github-copilot",
+      context: {
+        apiKey: "ghu_test",
+        authMode: "token",
+        modelId: "gpt-4.1",
+      },
     });
-    expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith(
-      "github-copilot",
-      "copilot-runtime-token",
-    );
+    const [storedProvider, storedKey] = hoisted.setRuntimeApiKeyMock.mock.calls[0] as [
+      string,
+      string,
+    ];
+    expect(storedProvider).toBe("github-copilot");
+    expect(looksLikeSecretSentinel(storedKey)).toBe(true);
+    expect(storedKey).not.toBe("copilot-runtime-token");
+    expect(resolveSecretSentinel(storedKey)).toBe("copilot-runtime-token");
   });
 
   it("returns exchanged copilot token in auth.apiKey for github-copilot provider", async () => {
@@ -277,8 +348,40 @@ describe("prepareSimpleCompletionModel", () => {
 
     // Callers must only receive the short-lived Copilot runtime token. The
     // original GitHub token is broader auth material and must not leave prep.
-    expect(result.auth.apiKey).toBe("copilot-runtime-token");
+    expect(looksLikeSecretSentinel(result.auth.apiKey ?? "")).toBe(true);
+    expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("copilot-runtime-token");
     expect(result.auth.apiKey).not.toBe("ghu_original_github_token");
+  });
+
+  it("keeps an exchanged Copilot token opaque when its source is a sentinel", async () => {
+    const sourceSecret = "github-source-secret";
+    const sourceSentinel = mintSecretSentinel(sourceSecret, {
+      label: "model-auth:github-copilot",
+    });
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: { provider: "github-copilot", id: "gpt-4.1" },
+      authStorage: { setRuntimeApiKey: hoisted.setRuntimeApiKeyMock },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: sourceSentinel,
+      source: "profile:github-copilot:default",
+      mode: "token",
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "github-copilot",
+      modelId: "gpt-4.1",
+    });
+
+    expect(callArg(hoisted.prepareProviderRuntimeAuthMock)).toMatchObject({
+      provider: "github-copilot",
+      context: { apiKey: sourceSentinel },
+    });
+    expectPreparedModelResult(result);
+    expect(looksLikeSecretSentinel(result.auth.apiKey ?? "")).toBe(true);
+    expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("copilot-runtime-token");
   });
 
   it("applies exchanged copilot baseUrl to returned model", async () => {
@@ -297,10 +400,8 @@ describe("prepareSimpleCompletionModel", () => {
       source: "profile:github-copilot:default",
       mode: "token",
     });
-    hoisted.resolveCopilotApiTokenMock.mockResolvedValueOnce({
-      token: "copilot-runtime-token",
-      expiresAt: Date.now() + 60_000,
-      source: "cache:/tmp/copilot-token.json",
+    hoisted.prepareProviderRuntimeAuthMock.mockResolvedValueOnce({
+      apiKey: "copilot-runtime-token",
       baseUrl: "https://api.copilot.enterprise.example",
     });
 
@@ -428,13 +529,18 @@ describe("prepareSimpleCompletionModel", () => {
     expect(runtimeAuthInput.context?.authMode).toBe("api-key");
     expect(runtimeAuthInput.context?.modelId).toBe("anthropic.claude-opus-4-7");
     expect(runtimeAuthInput.context?.profileId).toBe("mantle");
-    expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith(
-      "amazon-bedrock-mantle",
-      "bedrock-runtime-token",
-    );
+    const [storedProvider, storedKey] = hoisted.setRuntimeApiKeyMock.mock.calls[0] as [
+      string,
+      string,
+    ];
+    expect(storedProvider).toBe("amazon-bedrock-mantle");
+    expect(looksLikeSecretSentinel(storedKey)).toBe(true);
+    expect(storedKey).not.toBe("bedrock-runtime-token");
+    expect(resolveSecretSentinel(storedKey)).toBe("bedrock-runtime-token");
     expectPreparedModelResult(result);
     expect(result.model.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic");
-    expect(result.auth.apiKey).toBe("bedrock-runtime-token");
+    expect(looksLikeSecretSentinel(result.auth.apiKey ?? "")).toBe(true);
+    expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("bedrock-runtime-token");
   });
 
   it("can skip agent model/auth discovery for config-scoped one-shot completions", async () => {
@@ -645,46 +751,90 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
     );
   });
 
-  it("normalizes OpenClaw-only thinking levels before using shared model runtime simple completion", async () => {
-    const model = {
-      provider: "openai",
-      id: "gpt-5.4",
-      name: "gpt-5.4",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 4096,
-    } satisfies Model<"openai-responses">;
+  it.each(["max", "ultra"] as const)(
+    "normalizes OpenClaw-only %s before using shared model runtime simple completion",
+    async (reasoning) => {
+      const model = {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+      } satisfies Model<"openai-responses">;
 
-    await completeWithPreparedSimpleCompletionModel({
-      model,
-      auth: {
-        apiKey: "sk-test",
-        source: "env:OPENAI_API_KEY",
-        mode: "api-key",
-      },
-      context: {
-        messages: [{ role: "user", content: "pong", timestamp: 1 }],
-      },
-      options: {
-        reasoning: "max",
-      },
-    });
+      await completeWithPreparedSimpleCompletionModel({
+        model,
+        auth: {
+          apiKey: "sk-test",
+          source: "env:OPENAI_API_KEY",
+          mode: "api-key",
+        },
+        context: {
+          messages: [{ role: "user", content: "pong", timestamp: 1 }],
+        },
+        options: { reasoning },
+      });
 
-    expect(hoisted.completeMock).toHaveBeenCalledWith(
-      model,
-      {
-        messages: [{ role: "user", content: "pong", timestamp: 1 }],
-      },
-      {
-        reasoning: "xhigh",
-        apiKey: "sk-test",
-      },
-    );
-  });
+      expect(hoisted.completeMock).toHaveBeenCalledWith(
+        model,
+        {
+          messages: [{ role: "user", content: "pong", timestamp: 1 }],
+        },
+        {
+          reasoning: "xhigh",
+          apiKey: "sk-test",
+        },
+      );
+    },
+  );
+
+  it.each(["max", "ultra"] as const)(
+    "uses max for GPT-5.6 simple completions requested with %s",
+    async (reasoning) => {
+      const model = {
+        provider: "openai",
+        id: "gpt-5.6-terra",
+        name: "gpt-5.6-terra",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 372_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      } satisfies Model<"openai-responses">;
+
+      await completeWithPreparedSimpleCompletionModel({
+        model,
+        auth: {
+          apiKey: "sk-test",
+          source: "env:OPENAI_API_KEY",
+          mode: "api-key",
+        },
+        context: {
+          messages: [{ role: "user", content: "pong", timestamp: 1 }],
+        },
+        options: { reasoning },
+      });
+
+      expect(hoisted.completeMock).toHaveBeenCalledWith(
+        model,
+        {
+          messages: [{ role: "user", content: "pong", timestamp: 1 }],
+        },
+        {
+          reasoning: "max",
+          apiKey: "sk-test",
+        },
+      );
+    },
+  );
 
   it("omits reasoning for local simple completion when thinking is off", async () => {
     const model = {
@@ -721,6 +871,53 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
         messages: [{ role: "user", content: "pong", timestamp: 1 }],
       },
       {
+        apiKey: "sk-test",
+      },
+    );
+  });
+
+  it("preserves explicit off for a prepared Claude Sonnet 5 alias", async () => {
+    const model = {
+      provider: "anthropic",
+      id: "production-sonnet",
+      name: "Production Sonnet",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      params: { canonicalModelId: "claude-sonnet-5" },
+    } satisfies Model<"anthropic-messages">;
+    const preparedModel = {
+      ...model,
+      api: "openclaw-provider-simple:anthropic:production-sonnet",
+    } satisfies Model;
+    hoisted.prepareModelForSimpleCompletionMock.mockReturnValueOnce(preparedModel);
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "sk-test",
+        source: "env:ANTHROPIC_API_KEY",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: {
+        reasoning: "off",
+      },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      preparedModel,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        reasoning: "off",
         apiKey: "sk-test",
       },
     );

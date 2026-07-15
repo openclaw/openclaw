@@ -10,6 +10,8 @@ import {
   sortUniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import { resolveInlineCommandMatch } from "../infra/shell-inline-command.js";
+import { POSIX_SHELL_WRAPPERS } from "../infra/shell-wrapper-resolution.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { VERSION } from "../version.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
@@ -45,11 +47,9 @@ export type ServiceConfigIssue = {
   level?: "recommended" | "aggressive";
 };
 
-export type ServiceConfigAudit = {
-  ok: boolean;
-  issues: ServiceConfigIssue[];
-};
-
+export type ServiceConfigAudit =
+  | { ok: true; issues: ServiceConfigIssue[] }
+  | { ok: false; issues: ServiceConfigIssue[] };
 export const SERVICE_AUDIT_CODES = {
   gatewayCommandMissing: "gateway-command-missing",
   gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
@@ -85,6 +85,22 @@ export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean
 
 function hasGatewaySubcommand(programArguments?: string[]): boolean {
   return Boolean(programArguments?.some((arg) => arg === "gateway"));
+}
+
+const POSIX_SERVICE_INLINE_COMMAND_FLAGS = new Set(["-c"]);
+const POSIX_SERVICE_SHELL_WRAPPERS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
+
+function isOpaquePosixShellInlineCommand(programArguments: string[]): boolean {
+  const executable = programArguments[0]?.trim();
+  const shellName = executable ? path.posix.basename(executable).toLowerCase() : "";
+  if (!POSIX_SERVICE_SHELL_WRAPPERS.has(shellName)) {
+    return false;
+  }
+  return (
+    resolveInlineCommandMatch(programArguments, POSIX_SERVICE_INLINE_COMMAND_FLAGS, {
+      allowCombinedC: true,
+    }).command !== null
+  );
 }
 
 function parseSystemdUnit(content: string): {
@@ -249,7 +265,10 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
   if (!programArguments || programArguments.length === 0) {
     return;
   }
-  if (!hasGatewaySubcommand(programArguments)) {
+  if (
+    !hasGatewaySubcommand(programArguments) &&
+    !isOpaquePosixShellInlineCommand(programArguments)
+  ) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayCommandMissing,
       message: "Service command does not include the gateway subcommand",
@@ -278,8 +297,7 @@ function readGatewayServiceCommandPortState(
   if (!programArguments || programArguments.length === 0) {
     return { kind: "missing" };
   }
-  for (let index = 0; index < programArguments.length; index += 1) {
-    const arg = programArguments[index];
+  for (const [index, arg] of programArguments.entries()) {
     if (arg === "--port") {
       return parseGatewayPortArg(programArguments[index + 1]);
     }
@@ -288,11 +306,6 @@ function readGatewayServiceCommandPortState(
     }
   }
   return { kind: "missing" };
-}
-
-export function readGatewayServiceCommandPort(programArguments?: string[]): number | undefined {
-  const servicePort = readGatewayServiceCommandPortState(programArguments);
-  return servicePort.kind === "valid" ? servicePort.port : undefined;
 }
 
 function auditGatewayServicePort(params: {
@@ -547,7 +560,7 @@ async function auditGatewayRuntime(
   if (isBunRuntime(execPath)) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
-      message: "Gateway service uses Bun; Bun is incompatible with WhatsApp + Telegram channels.",
+      message: "Gateway service uses Bun; OpenClaw runtime state requires node:sqlite.",
       detail: execPath,
       level: "recommended",
     });
@@ -571,7 +584,7 @@ async function auditGatewayRuntime(
         issues.push({
           code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
           message:
-            "System Node 22 LTS (22.19+) or Node 24 not found; install it before migrating away from version managers.",
+            "System Node 22 LTS (22.22.3+) or Node 24.15+ not found; install it before migrating away from version managers.",
           level: "recommended",
         });
       }
@@ -653,5 +666,5 @@ export async function auditGatewayServiceConfig(params: {
     await auditLaunchdPlist(params.env, issues);
   }
 
-  return { ok: issues.length === 0, issues };
+  return issues.length === 0 ? { ok: true, issues } : { ok: false, issues };
 }

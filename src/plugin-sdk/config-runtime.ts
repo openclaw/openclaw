@@ -4,20 +4,14 @@
  * config-mutation, and runtime-config-snapshot.
  */
 
-import {
+export {
+  getSessionEntry,
   listSessionEntries,
-  loadSessionEntry as getSessionEntry,
+  patchSessionEntry,
   readSessionUpdatedAt,
-} from "../config/sessions/session-accessor.js";
-import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
-
-/**
- * @deprecated Use getSessionEntry/listSessionEntries for reads and
- * patchSessionEntry/upsertSessionEntry for writes. loadSessionStore keeps the
- * legacy mutable whole-store shape and will remain a compatibility escape hatch.
- */
-export const loadSessionStore = loadSessionStoreImpl;
-export { getSessionEntry, listSessionEntries, readSessionUpdatedAt };
+  updateSessionStoreEntry,
+  upsertSessionEntry,
+} from "./session-store-runtime.js";
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
@@ -145,17 +139,13 @@ export type {
   TtsPersonaPromptConfig,
   TtsProvider,
 } from "../config/types.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+// SDK-facing names are a shipped plugin contract; internals route through the
+// session accessor so the storage backend can change beneath them.
 export {
-  clearSessionStoreCacheForTest,
-  patchSessionEntry,
-  recordSessionMetaFromInbound,
-  saveSessionStore,
-  updateLastRoute,
-  updateSessionStore,
-  updateSessionStoreEntry,
-  upsertSessionEntry,
-  resolveSessionStoreEntry,
-} from "../config/sessions/store.js";
+  recordInboundSessionMeta as recordSessionMetaFromInbound,
+  updateSessionLastRoute as updateLastRoute,
+} from "../config/sessions/session-accessor.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveStorePath } from "../config/sessions/paths.js";
 export type { SessionResetMode } from "../config/sessions/reset.js";

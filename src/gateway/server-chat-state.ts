@@ -10,12 +10,70 @@ export type ChatRunTiming = {
   receivedAtMs: number;
 };
 
-export type ChatRunEntry = {
+export type ChatRunRegistration = {
   sessionKey: string;
   agentId?: string;
   clientRunId: string;
   chatSendTiming?: ChatRunTiming;
 };
+
+export type ChatRunEntry = ChatRunRegistration & {
+  registeredAtMs: number;
+  registeredSequence: number;
+};
+
+export type ChatAbortMarker = number | { abortedAtMs: number; sequence: number };
+
+let chatRunOrderingSequence = 0;
+
+function nextChatRunOrderingSequence(): number {
+  chatRunOrderingSequence += 1;
+  return chatRunOrderingSequence;
+}
+
+/** Stamp a chat run registration with the process-local ordering metadata used for abort freshness checks. */
+export function createChatRunEntry(entry: ChatRunRegistration): ChatRunEntry {
+  return {
+    ...entry,
+    registeredAtMs: Date.now(),
+    registeredSequence: nextChatRunOrderingSequence(),
+  };
+}
+
+/** Create an abort marker ordered against chat run registrations, using a shared monotonic sequence. */
+export function createChatAbortMarker(now = Date.now()): ChatAbortMarker {
+  return { abortedAtMs: now, sequence: nextChatRunOrderingSequence() };
+}
+
+/** Return the wall-clock timestamp used by maintenance TTL pruning for both legacy and structured markers. */
+export function chatAbortMarkerTimestampMs(marker: ChatAbortMarker): number {
+  return typeof marker === "number" ? marker : marker.abortedAtMs;
+}
+
+/**
+ * Return whether an abort marker should suppress events for the given chat run registration.
+ * Structured markers compare the monotonic sequence first so same-millisecond aborts stay ordered;
+ * legacy numeric markers fall back to timestamp comparison, and a missing entry preserves old suppress-on-presence behavior.
+ */
+export function isChatAbortMarkerCurrent(
+  marker: ChatAbortMarker | undefined,
+  entry?: Pick<ChatRunEntry, "registeredAtMs" | "registeredSequence">,
+): boolean {
+  if (marker === undefined) {
+    return false;
+  }
+  if (!entry) {
+    return true;
+  }
+  if (typeof marker !== "number" && typeof entry.registeredSequence === "number") {
+    return marker.sequence >= entry.registeredSequence;
+  }
+  if (typeof entry.registeredAtMs !== "number") {
+    return true;
+  }
+  const abortedAtMs = typeof marker === "number" ? marker : marker.abortedAtMs;
+  return abortedAtMs >= entry.registeredAtMs;
+}
 
 export type BufferedAgentEvent = {
   sessionKey?: string;
@@ -24,7 +82,7 @@ export type BufferedAgentEvent = {
 };
 
 export type ChatRunRegistry = {
-  add: (sessionId: string, entry: ChatRunEntry) => void;
+  add: (sessionId: string, entry: ChatRunRegistration) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
   shift: (sessionId: string) => ChatRunEntry | undefined;
   remove: (sessionId: string, clientRunId: string, sessionKey?: string) => ChatRunEntry | undefined;
@@ -35,12 +93,13 @@ export type ChatRunRegistry = {
 export function createChatRunRegistry(): ChatRunRegistry {
   const chatRunSessions = new Map<string, ChatRunEntry[]>();
 
-  const add = (sessionId: string, entry: ChatRunEntry) => {
+  const add = (sessionId: string, entry: ChatRunRegistration) => {
+    const registeredEntry = createChatRunEntry(entry);
     const queue = chatRunSessions.get(sessionId);
     if (queue) {
-      queue.push(entry);
+      queue.push(registeredEntry);
     } else {
-      chatRunSessions.set(sessionId, [entry]);
+      chatRunSessions.set(sessionId, [registeredEntry]);
     }
   };
 
@@ -96,7 +155,7 @@ export type ChatRunState = {
   deltaLastBroadcastText: Map<string, string>;
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, BufferedAgentEvent>;
-  abortedRuns: Map<string, number>;
+  abortedRuns: Map<string, ChatAbortMarker>;
   clearRun: (runId: string) => void;
   clear: () => void;
 };
@@ -112,7 +171,7 @@ export function createChatRunState(): ChatRunState {
   const deltaLastBroadcastText = new Map<string, string>();
   const agentDeltaSentAt = new Map<string, number>();
   const bufferedAgentEvents = new Map<string, BufferedAgentEvent>();
-  const abortedRuns = new Map<string, number>();
+  const abortedRuns = new Map<string, ChatAbortMarker>();
 
   const clearRun = (runId: string) => {
     rawBuffers.delete(runId);
@@ -170,10 +229,15 @@ export type SessionEventSubscriberRegistry = {
 };
 
 export type SessionMessageSubscriberRegistry = {
-  subscribe: (connId: string, sessionKey: string) => void;
+  subscribe: (
+    connId: string,
+    sessionKey: string,
+    opts?: { includeApprovals?: boolean },
+  ) => (() => void) | undefined;
   unsubscribe: (connId: string, sessionKey: string) => void;
   unsubscribeAll: (connId: string) => void;
   get: (sessionKey: string) => ReadonlySet<string>;
+  getApprovals: (sessionKey: string) => ReadonlySet<string>;
   clear: () => void;
 };
 
@@ -217,17 +281,23 @@ export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRe
 export function createSessionMessageSubscriberRegistry(): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
   const connToSessionKeys = new Map<string, Set<string>>();
+  const approvalSessionToConnIds = new Map<string, Set<string>>();
+  const connToApprovalSessionKeys = new Map<string, Set<string>>();
   const empty = new Set<string>();
 
   const normalize = (value: string): string => value.trim();
 
-  return {
-    subscribe: (connId: string, sessionKey: string) => {
+  const registry: SessionMessageSubscriberRegistry = {
+    subscribe: (connId: string, sessionKey: string, opts) => {
       const normalizedConnId = normalize(connId);
       const normalizedSessionKey = normalize(sessionKey);
       if (!normalizedConnId || !normalizedSessionKey) {
-        return;
+        return undefined;
       }
+      const hadMessages =
+        sessionToConnIds.get(normalizedSessionKey)?.has(normalizedConnId) ?? false;
+      const hadApprovals =
+        approvalSessionToConnIds.get(normalizedSessionKey)?.has(normalizedConnId) ?? false;
       const connIds = sessionToConnIds.get(normalizedSessionKey) ?? new Set<string>();
       connIds.add(normalizedConnId);
       sessionToConnIds.set(normalizedSessionKey, connIds);
@@ -235,6 +305,42 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       const sessionKeys = connToSessionKeys.get(normalizedConnId) ?? new Set<string>();
       sessionKeys.add(normalizedSessionKey);
       connToSessionKeys.set(normalizedConnId, sessionKeys);
+
+      if (opts?.includeApprovals) {
+        const approvalConnIds =
+          approvalSessionToConnIds.get(normalizedSessionKey) ?? new Set<string>();
+        approvalConnIds.add(normalizedConnId);
+        approvalSessionToConnIds.set(normalizedSessionKey, approvalConnIds);
+
+        const approvalSessionKeys =
+          connToApprovalSessionKeys.get(normalizedConnId) ?? new Set<string>();
+        approvalSessionKeys.add(normalizedSessionKey);
+        connToApprovalSessionKeys.set(normalizedConnId, approvalSessionKeys);
+      } else {
+        const approvalConnIds = approvalSessionToConnIds.get(normalizedSessionKey);
+        approvalConnIds?.delete(normalizedConnId);
+        if (approvalConnIds?.size === 0) {
+          approvalSessionToConnIds.delete(normalizedSessionKey);
+        }
+        const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
+        approvalSessionKeys?.delete(normalizedSessionKey);
+        if (approvalSessionKeys?.size === 0) {
+          connToApprovalSessionKeys.delete(normalizedConnId);
+        }
+      }
+      // Replay setup subscribes before reading its snapshot. Preserve the exact
+      // prior state so a failed read cannot leave a ghost or remove a retry.
+      return () => {
+        if (!hadMessages) {
+          registry.unsubscribe(normalizedConnId, normalizedSessionKey);
+          return;
+        }
+        registry.subscribe(
+          normalizedConnId,
+          normalizedSessionKey,
+          hadApprovals ? { includeApprovals: true } : undefined,
+        );
+      };
     },
     unsubscribe: (connId: string, sessionKey: string) => {
       const normalizedConnId = normalize(connId);
@@ -254,6 +360,20 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
         sessionKeys.delete(normalizedSessionKey);
         if (sessionKeys.size === 0) {
           connToSessionKeys.delete(normalizedConnId);
+        }
+      }
+      const approvalConnIds = approvalSessionToConnIds.get(normalizedSessionKey);
+      if (approvalConnIds) {
+        approvalConnIds.delete(normalizedConnId);
+        if (approvalConnIds.size === 0) {
+          approvalSessionToConnIds.delete(normalizedSessionKey);
+        }
+      }
+      const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
+      if (approvalSessionKeys) {
+        approvalSessionKeys.delete(normalizedSessionKey);
+        if (approvalSessionKeys.size === 0) {
+          connToApprovalSessionKeys.delete(normalizedConnId);
         }
       }
     },
@@ -277,6 +397,16 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
         }
       }
       connToSessionKeys.delete(normalizedConnId);
+
+      const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
+      for (const sessionKey of approvalSessionKeys ?? []) {
+        const connIds = approvalSessionToConnIds.get(sessionKey);
+        connIds?.delete(normalizedConnId);
+        if (connIds?.size === 0) {
+          approvalSessionToConnIds.delete(sessionKey);
+        }
+      }
+      connToApprovalSessionKeys.delete(normalizedConnId);
     },
     get: (sessionKey: string) => {
       const normalizedSessionKey = normalize(sessionKey);
@@ -285,11 +415,21 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       }
       return sessionToConnIds.get(normalizedSessionKey) ?? empty;
     },
+    getApprovals: (sessionKey: string) => {
+      const normalizedSessionKey = normalize(sessionKey);
+      if (!normalizedSessionKey) {
+        return empty;
+      }
+      return approvalSessionToConnIds.get(normalizedSessionKey) ?? empty;
+    },
     clear: () => {
       sessionToConnIds.clear();
       connToSessionKeys.clear();
+      approvalSessionToConnIds.clear();
+      connToApprovalSessionKeys.clear();
     },
   };
+  return registry;
 }
 
 /** Create the run-id recipient registry used for streaming tool events. */

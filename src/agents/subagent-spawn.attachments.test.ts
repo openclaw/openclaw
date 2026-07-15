@@ -29,61 +29,6 @@ beforeAll(async () => {
   });
 });
 
-describe("decodeStrictBase64", () => {
-  const maxBytes = 1024;
-
-  it("valid base64 returns buffer with correct bytes", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
-    const input = "hello world";
-    const encoded = Buffer.from(input).toString("base64");
-    const result = decodeStrictBase64(encoded, maxBytes);
-    expect(result?.toString("utf8")).toBe(input);
-  });
-
-  it("empty string returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
-    expect(decodeStrictBase64("", maxBytes)).toBeNull();
-  });
-
-  it("bad padding (length % 4 !== 0) returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
-    expect(decodeStrictBase64("abc", maxBytes)).toBeNull();
-  });
-
-  it("non-base64 chars returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
-    expect(decodeStrictBase64("!@#$", maxBytes)).toBeNull();
-  });
-
-  it("whitespace-only returns null (empty after strip)", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
-    expect(decodeStrictBase64("   ", maxBytes)).toBeNull();
-  });
-
-  it("pre-decode oversize guard: encoded string > maxEncodedBytes * 2 returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
-    // Pre-decode guard rejects obviously oversized payloads before allocating
-    // the decoded buffer.
-    const oversized = "A".repeat(2737);
-    expect(decodeStrictBase64(oversized, maxBytes)).toBeNull();
-  });
-
-  it("decoded byteLength exceeds maxDecodedBytes returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
-    const bigBuf = Buffer.alloc(1025, 0x42);
-    const encoded = bigBuf.toString("base64");
-    expect(decodeStrictBase64(encoded, maxBytes)).toBeNull();
-  });
-
-  it("valid base64 at exact boundary returns Buffer", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
-    const exactBuf = Buffer.alloc(1024, 0x41);
-    const encoded = exactBuf.toString("base64");
-    const result = decodeStrictBase64(encoded, maxBytes);
-    expect(result?.byteLength).toBe(1024);
-  });
-});
-
 describe("spawnSubagentDirect filename validation", () => {
   beforeEach(async () => {
     workspaceDirOverride = fs.mkdtempSync(
@@ -131,6 +76,39 @@ describe("spawnSubagentDirect filename validation", () => {
       ctx,
     );
   }
+
+  it.each([
+    ["empty", ""],
+    ["bad padding", "abc"],
+    ["invalid characters", "!@#$"],
+    ["whitespace only", "   "],
+    ["pre-decode oversize", "A".repeat(2737)],
+    ["decoded oversize", Buffer.alloc(1025, 0x42).toString("base64")],
+  ])("rejects %s base64 attachments through the spawn boundary", async (_label, content) => {
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      tools: {
+        sessions_spawn: {
+          attachments: {
+            enabled: true,
+            maxFiles: 50,
+            maxFileBytes: 1024,
+            maxTotalBytes: 5 * 1024 * 1024,
+          },
+        },
+      },
+    });
+    const result = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [{ name: "file.bin", content, encoding: "base64" }],
+      },
+      ctx,
+    );
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("attachments_invalid_base64_or_too_large"),
+    });
+  });
 
   it("name with / returns attachments_invalid_name", async () => {
     const result = await spawnWithName("foo/bar");

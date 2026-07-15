@@ -12,10 +12,9 @@ import * as externalCliSync from "./external-cli-sync.js";
 import {
   areOAuthCredentialsEquivalent,
   overlayRuntimeExternalOAuthProfiles,
-  shouldPersistRuntimeExternalOAuthProfile,
   type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileStore } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
 type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
@@ -29,7 +28,7 @@ type ExternalCliOverlayOptions = {
 let resolveExternalAuthProfilesForRuntime: ResolveExternalAuthProfiles | undefined;
 
 /** Test-only resolver injection for provider external auth profiles. */
-export const testing = {
+const testing = {
   resetResolveExternalAuthProfilesForTest(): void {
     resolveExternalAuthProfilesForRuntime = undefined;
   },
@@ -37,6 +36,10 @@ export const testing = {
     resolveExternalAuthProfilesForRuntime = resolver;
   },
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.externalAuthTestApi")] =
+    testing;
+}
 
 function normalizeExternalAuthProfile(
   profile: ProviderExternalAuthProfile,
@@ -148,34 +151,6 @@ export function overlayExternalAuthProfiles(
   });
 }
 
-/** Return whether an external runtime OAuth profile should be persisted. */
-export function shouldPersistExternalAuthProfile(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  credential: OAuthCredential;
-  agentDir?: string;
-  env?: NodeJS.ProcessEnv;
-  config?: OpenClawConfig;
-  externalCliProviderIds?: Iterable<string>;
-  externalCliProfileIds?: Iterable<string>;
-}): boolean {
-  const profiles = listRuntimeExternalAuthProfiles({
-    store: params.store,
-    agentDir: params.agentDir,
-    env: params.env,
-    externalCli: {
-      config: params.config,
-      externalCliProviderIds: params.externalCliProviderIds,
-      externalCliProfileIds: params.externalCliProfileIds,
-    },
-  });
-  return shouldPersistRuntimeExternalOAuthProfile({
-    profileId: params.profileId,
-    credential: params.credential,
-    profiles,
-  });
-}
-
 /** Persist safe external CLI OAuth profiles that own their local profile slot. */
 export function syncPersistedExternalCliAuthProfiles(
   store: AuthProfileStore,
@@ -207,5 +182,3 @@ export function syncPersistedExternalCliAuthProfiles(
   }
   return next ?? store;
 }
-
-export { testing as __testing };

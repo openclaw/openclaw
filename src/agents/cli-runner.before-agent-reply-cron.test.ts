@@ -1,4 +1,6 @@
 /** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliOutput } from "./cli-output.js";
@@ -54,6 +56,9 @@ vi.mock("./cli-runner/execute.runtime.js", () => ({
 
 vi.mock("./cli-runner/claude-live-session.js", () => ({
   closeClaudeLiveSessionForContext: closeClaudeLiveSessionForContextMock,
+  getClaudeLiveSessionGenerationForOwner: vi.fn(() => undefined),
+  hasClaudeLiveSessionForOwner: vi.fn(() => false),
+  shouldUseClaudeLiveSession: vi.fn(() => false),
 }));
 
 vi.mock("../gateway/mcp-http.js", () => ({
@@ -88,8 +93,8 @@ function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
     bootstrapPromptWarningLines: [],
     authEpochVersion: 0,
     backendResolved: {},
-    preparedBackend: {},
-    reusableCliSession: {},
+    preparedBackend: { backend: { sessionMode: "none" } },
+    reusableCliSession: { mode: "none" },
   } as unknown;
 }
 
@@ -146,6 +151,7 @@ describe("runCliAgent cron before_agent_reply seam", () => {
         ...baseRunParams,
         trigger: "cron",
         jobId: "cron-job-123",
+        chatId: "native-chat-123",
         onExecutionPhase,
       });
 
@@ -164,8 +170,12 @@ describe("runCliAgent cron before_agent_reply seam", () => {
       expect(hookContext?.sessionKey).toBe(baseRunParams.sessionKey);
       expect(hookContext?.workspaceDir).toBe(baseRunParams.workspaceDir);
       expect(hookContext?.trigger).toBe("cron");
+      expect(hookContext?.chatId).toBeUndefined();
+      expect(hookContext?.channel).toBeUndefined();
       expect(executePreparedCliRunMock).not.toHaveBeenCalled();
       expect(result.payloads?.[0]?.text).toBe("dreaming claimed via cli runner");
+      expect(result.meta.agentMeta?.sessionId).toBe("");
+      expect(result.meta.agentMeta?.clearCliSessionBinding).toBeUndefined();
 
       const syntheticTurnLog = logInfoSpy.mock.calls
         .map(([message]) => message)
@@ -179,6 +189,36 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     } finally {
       logInfoSpy.mockRestore();
     }
+  });
+
+  it("clears stateless CLI bindings when before_agent_reply claims a cron turn", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({ handled: true });
+
+    const result = await runCliAgent({
+      ...baseRunParams,
+      trigger: "cron",
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "codex-cli": {
+                command: "codex",
+                args: ["exec"],
+                output: "text",
+                input: "arg",
+                sessionMode: "none",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.meta.agentMeta?.sessionId).toBe("");
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
   });
 
   it("does not run prepareCliRunContext when the cron hook claims (no resource allocation, no leak)", async () => {
@@ -300,7 +340,10 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
     expect(closeClaudeLiveSessionForContextMock).toHaveBeenCalledTimes(1);
     expect(closeClaudeLiveSessionForContextMock).toHaveBeenCalledWith(
-      await prepareCliRunContextMock.mock.results[0].value,
+      await expectDefined(
+        prepareCliRunContextMock.mock.results[0],
+        "prepareCliRunContextMock.mock.results[0] test invariant",
+      ).value,
     );
   });
 
