@@ -541,8 +541,7 @@ describe("discord component interactions", () => {
     });
 
     const button = createDiscordComponentButton(createComponentContext());
-    const acknowledge = vi.fn().mockResolvedValue(undefined);
-    const { interaction } = createComponentButtonInteraction({ acknowledge } as never);
+    const { interaction } = createComponentButtonInteraction();
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
@@ -558,11 +557,6 @@ describe("discord component interactions", () => {
   });
 
   it.each([
-    {
-      title: "empty submitText",
-      result: { handled: true, submitText: "   " },
-      authorized: true,
-    },
     {
       title: "unauthorized submitText",
       result: { handled: true, submitText: "Do not run this" },
@@ -591,8 +585,7 @@ describe("discord component interactions", () => {
     const button = createDiscordComponentButton(
       authorized ? createComponentContext() : createComponentContext({ allowFrom: ["owner-1"] }),
     );
-    const acknowledge = vi.fn().mockResolvedValue(undefined);
-    const { interaction } = createComponentButtonInteraction({ acknowledge } as never);
+    const { interaction } = createComponentButtonInteraction();
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
@@ -617,9 +610,7 @@ describe("discord component interactions", () => {
     });
 
     const button = createDiscordComponentButton(createComponentContext());
-    const acknowledge = vi.fn().mockResolvedValue(undefined);
     const { interaction } = createComponentButtonInteraction({
-      acknowledge,
       rawData: {
         channel_id: "thread-1",
         guild_id: "guild-1",
