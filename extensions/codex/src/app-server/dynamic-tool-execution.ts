@@ -503,10 +503,15 @@ function readComputerToolTimeoutMs(value: JsonValue | undefined): number {
   // Node discovery can make two calls when it falls back from node.list to the
   // legacy pairing list. Screenshot/wait then capture once; input also acts.
   const gatewayCallCount = action === "screenshot" || action === "wait" ? 3 : 4;
-  const durationMs =
-    action === "wait" || action === "hold_key"
-      ? (readNumericTimeoutMs(args?.duration) ?? 0) * 1000
-      : 0;
+  // Reject hex/exponent duration strings while preserving fractional numeric
+  // seconds (the duration contract is seconds, not integer-only).
+  const durationSeconds =
+    typeof args?.duration === "number" && Number.isFinite(args.duration)
+      ? Math.max(0, args.duration)
+      : typeof args?.duration === "string"
+        ? (parseStrictNonNegativeInteger(args.duration) ?? 0)
+        : 0;
+  const durationMs = action === "wait" || action === "hold_key" ? durationSeconds * 1000 : 0;
   // `timeoutMs` is a per-Gateway-call transport budget, not the whole dynamic
   // tool deadline. Computer use can resolve a node, perform/wait, then capture.
   return (
