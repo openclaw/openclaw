@@ -274,7 +274,6 @@ extensions/qa-matrix/src/runners/contract/scenario-runtime-approval.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-room.ts
 extensions/qa-matrix/src/runners/contract/scenarios.test.ts
-extensions/qa-matrix/src/substrate/client.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.ts
 extensions/qqbot/src/engine/messaging/outbound-deliver.ts
