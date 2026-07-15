@@ -36,7 +36,7 @@ import {
   resetCliAuthEpochTestDeps,
   setCliAuthEpochTestDeps,
 } from "../cli-auth-epoch.test-support.js";
-import { testing as cliBackendsTesting } from "../cli-backends.js";
+import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
@@ -44,11 +44,8 @@ import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
-import {
-  prepareCliRunContext,
-  setCliRunnerPrepareTestDeps,
-  shouldSkipLocalCliCredentialEpoch,
-} from "./prepare.js";
+import { prepareCliRunContext } from "./prepare.js";
+import { setCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
 import type { RunCliAgentParams } from "./types.js";
 
 type McpLoopbackClientGrant = ReturnType<
@@ -289,7 +286,7 @@ type CliContextBudgetTestCase = {
   modelAliases?: Record<string, string>;
 };
 
-describe("shouldSkipLocalCliCredentialEpoch", () => {
+describe("prepareCliRunContext", () => {
   it.each<CliContextBudgetTestCase>([
     {
       name: "Claude CLI with a selected-agent cap",
@@ -466,38 +463,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     vi.unstubAllEnvs();
     sessionFileEnvSnapshot?.restore();
     sessionFileEnvSnapshot = undefined;
-  });
-
-  it("skips local cli auth only when a profile-owned execution was prepared", () => {
-    expect(
-      shouldSkipLocalCliCredentialEpoch({
-        authEpochMode: "profile-only",
-        authProfileId: "openai:default",
-        authCredential: {
-          type: "oauth",
-          provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-        },
-        preparedExecution: {
-          env: {
-            CODEX_HOME: "/tmp/codex-home",
-          },
-        },
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps local cli auth in the epoch when the selected profile has no bridgeable execution", () => {
-    expect(
-      shouldSkipLocalCliCredentialEpoch({
-        authEpochMode: "profile-only",
-        authProfileId: "openai:default",
-        authCredential: undefined,
-        preparedExecution: null,
-      }),
-    ).toBe(false);
   });
 
   it("honors an explicit auth agent directory independently of session identity", async () => {

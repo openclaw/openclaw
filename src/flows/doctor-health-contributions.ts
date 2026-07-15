@@ -113,7 +113,7 @@ function shouldSkipLegacyUpdateDoctorConfigWrite(params: { env: NodeJS.ProcessEn
   return true;
 }
 
-export function createDoctorHealthContribution(params: {
+function createDoctorHealthContribution(params: {
   id: string;
   label: string;
   healthCheckIds?: readonly string[];
@@ -1529,7 +1529,7 @@ async function runSkillWorkshopToolPolicyHealth(ctx: DoctorHealthFlowContext): P
   await runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy");
 }
 
-export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
+function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     createDoctorHealthContribution({
       id: "doctor:gateway-config",
@@ -2281,5 +2281,11 @@ export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext)
   for (const contribution of resolveDoctorHealthContributions()) {
     await contribution.run(ctx);
   }
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.doctorHealthContributionsTestApi")
+  ] = { createDoctorHealthContribution, resolveDoctorHealthContributions };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

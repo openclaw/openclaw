@@ -27,8 +27,8 @@ import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state
 import {
   collectStaleConfiguredAuthOrderWarnings,
   maybeRepairStaleConfiguredAuthOrders,
-  repairStaleConfiguredAuthOrders,
 } from "./stale-auth-order.js";
+import { repairStaleConfiguredAuthOrders } from "./stale-auth-order.test-support.js";
 
 const pluginMetadataMocks = vi.hoisted(() => {
   const snapshot = {

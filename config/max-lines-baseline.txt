@@ -516,7 +516,6 @@ src/agents/model-fallback.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
-src/agents/modes/interactive/theme/theme.ts
 src/agents/openai-completions-transport.ts
 src/agents/openai-responses-transport.ts
 src/agents/openai-transport-stream.base.test-utils.ts
@@ -768,7 +767,6 @@ src/config/schema.ts
 src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
-src/config/sessions/session-accessor.ts
 src/config/sessions/sessions.test.ts
 src/config/sessions/store.pruning.integration.test.ts
 src/config/sessions/store.ts

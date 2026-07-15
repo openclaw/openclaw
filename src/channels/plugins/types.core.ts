@@ -139,6 +139,7 @@ export type ChannelSetupInput = {
   groupChannels?: string[];
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
+  workspace?: string;
 };
 
 export type ChannelStatusIssue = {

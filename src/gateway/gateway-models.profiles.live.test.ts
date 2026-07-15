@@ -28,7 +28,7 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { collectAnthropicApiKeys } from "../agents/live-auth-keys.js";
+import { collectProviderApiKeys } from "../agents/live-auth-keys.js";
 import { appendPrioritizedDynamicLiveModels } from "../agents/live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
@@ -4630,7 +4630,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     logProgress(
       `[${params.label}] heartbeat=${Math.max(1, Math.round(GATEWAY_LIVE_HEARTBEAT_MS / 1_000))}s probe-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_PROBE_TIMEOUT_MS / 1_000))}s agent-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS / 1_000))}s agent-wait=${Math.max(1, Math.round(GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS / 1_000))}s model-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_MODEL_TIMEOUT_MS / 1_000))}s transcript-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS / 1_000))}s`,
     );
-    const anthropicKeys = collectAnthropicApiKeys();
+    const anthropicKeys = process.env.ANTHROPIC_OAUTH_TOKEN?.trim()
+      ? []
+      : collectProviderApiKeys("anthropic");
     if (anthropicKeys.length > 0) {
       process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
       logProgress(`[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`);

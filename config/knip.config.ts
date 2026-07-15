@@ -13,10 +13,18 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
+  "src/agents/compaction-planning.worker.ts!",
+  "scripts/print-cli-backend-live-metadata.ts!",
+  "scripts/repro/code-mode-namespace-live.ts!",
   "src/audit/audit-event-writer.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
   "src/agents/subagent-orphan-recovery.ts!",
+  // Task cancellation loads this control facade by string path to avoid a registry cycle.
+  "src/tasks/task-registry-control.runtime.ts!",
+  // Human plugin listing lazily loads its formatter to keep JSON startup lean.
+  "src/cli/plugins-list-format.ts!",
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",

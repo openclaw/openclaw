@@ -537,11 +537,13 @@ CREATE INDEX IF NOT EXISTS idx_agent_model_catalogs_agent_dir
 CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   attachment_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
+  agent_id TEXT,
   message_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT,
   retention_class TEXT,
   alt TEXT NOT NULL,
+  original_media_root TEXT NOT NULL,
   original_media_id TEXT NOT NULL,
   original_media_subdir TEXT NOT NULL,
   original_content_type TEXT NOT NULL,
@@ -549,7 +551,8 @@ CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   original_height INTEGER,
   original_size_bytes INTEGER,
   original_filename TEXT,
-  record_json TEXT NOT NULL
+  record_json TEXT NOT NULL,
+  cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))
 );
 
 CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_session
@@ -557,6 +560,13 @@ CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_session
 
 CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_message
   ON managed_outgoing_image_records(session_key, message_id, attachment_id)
+  WHERE message_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_agent_session
+  ON managed_outgoing_image_records(session_key, agent_id, created_at DESC, attachment_id);
+
+CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_agent_message
+  ON managed_outgoing_image_records(session_key, agent_id, message_id, attachment_id)
   WHERE message_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS channel_pairing_requests (
@@ -994,6 +1004,16 @@ CREATE INDEX IF NOT EXISTS idx_skill_uploads_expiry
 CREATE INDEX IF NOT EXISTS idx_skill_uploads_idempotency
   ON skill_uploads(idempotency_key_hash)
   WHERE idempotency_key_hash IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS skill_upload_chunks (
+  upload_id TEXT NOT NULL,
+  byte_offset INTEGER NOT NULL CHECK (byte_offset >= 0),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+  chunk_blob BLOB NOT NULL,
+  PRIMARY KEY (upload_id, byte_offset),
+  FOREIGN KEY (upload_id) REFERENCES skill_uploads(upload_id) ON DELETE CASCADE,
+  CHECK (length(chunk_blob) = size_bytes)
+);
 
 CREATE TABLE IF NOT EXISTS capture_sessions (
   id TEXT NOT NULL PRIMARY KEY,

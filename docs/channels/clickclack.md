@@ -12,20 +12,50 @@ Use this when you want an OpenClaw agent to appear as a ClickClack bot user. Cli
 
 ## Quick setup
 
-Create a bot token on the ClickClack server:
+In ClickClack, open **Workspace settings → Integrations → OpenClaw**, create a
+bot, and copy its token. Then configure the channel:
 
 ```bash
-clickclack admin bot create \
-  --workspace <workspace_id> \
-  --name "OpenClaw" \
-  --handle openclaw \
-  --scopes bot:write \
-  --plain
+openclaw channels add clickclack --base-url https://clickclack.example.com --token ccb_... --workspace default
 ```
 
-For a user-owned bot, add `--owner <user_id>`.
+`workspace` accepts a workspace id (`wsp_...`), slug, or display name.
+`channels add` verifies the server, token, and workspace after saving, then
+reports whether the running gateway picked up the new account. If OpenClaw is
+already running, ClickClack connects automatically and no second command is
+needed. Otherwise, start it with:
 
-Configure OpenClaw:
+```bash
+openclaw gateway
+```
+
+For guided setup, run:
+
+```bash
+openclaw onboard
+```
+
+Select ClickClack, then enter the server URL, bot token, and workspace when
+prompted. Guided setup checks the server, token, and workspace after saving; a
+failed check does not discard the configuration.
+
+### Alternative: env-based token
+
+The default account can read `CLICKCLACK_BOT_TOKEN` instead of storing a token
+in config:
+
+```bash
+export CLICKCLACK_BOT_TOKEN="ccb_..."
+openclaw channels add clickclack --base-url https://clickclack.example.com --workspace default --use-env
+openclaw gateway
+```
+
+Named accounts must use a configured token or token file; the shared env
+variable is intentionally limited to the default account.
+
+### JSON5 reference
+
+The equivalent config shape is:
 
 ```json5
 {
@@ -41,21 +71,18 @@ Configure OpenClaw:
 }
 ```
 
-Then run:
-
-```bash
-export CLICKCLACK_BOT_TOKEN="ccb_..."
-openclaw gateway
-```
-
-An account counts as configured only when `baseUrl`, `token`, and `workspace` are all set. `workspace` accepts a workspace id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
+An account counts as configured only when `baseUrl`, a token source, and
+`workspace` are all set. A token source can be `token`, `tokenFile`, or
+`CLICKCLACK_BOT_TOKEN` for the default account. `workspace` accepts a workspace
+id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 
 ### Account config keys
 
 | Key                     | Default             | Notes                                                                                   |
 | ----------------------- | ------------------- | --------------------------------------------------------------------------------------- |
 | `baseUrl`               | none (required)     | ClickClack server URL.                                                                  |
-| `token`                 | none (required)     | Plain string or secret ref (`source: "env" \| "file" \| "exec"`).                       |
+| `token`                 | none                | Bot token as a plain string or secret ref (`source: "env" \| "file" \| "exec"`).        |
+| `tokenFile`             | none                | Path to a bot-token file; takes precedence over `token`.                                |
 | `workspace`             | none (required)     | Workspace id, slug, or name.                                                            |
 | `replyMode`             | `"agent"`           | `"agent"` runs the full agent pipeline; `"model"` sends short direct model completions. |
 | `defaultTo`             | `"channel:general"` | Target used when an outbound path gives no target.                                      |

@@ -38,7 +38,7 @@ let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 let geminiCliCache: CachedValue<GeminiCliCredential> | null = null;
 
 /** Clears in-memory CLI credential caches for isolated tests. */
-export function resetCliCredentialCachesForTest(): void {
+function resetCliCredentialCachesForTest(): void {
   claudeCliCache = null;
   codexCliCache = null;
   minimaxCliCache = null;
@@ -553,7 +553,7 @@ export function readClaudeCliCredentialsCached(options?: {
 }
 
 /** Reads Codex CLI OAuth credentials from Keychain or CODEX_HOME auth.json. */
-export function readCodexCliCredentials(options?: {
+function readCodexCliCredentials(options?: {
   codexHome?: string;
   allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
@@ -682,4 +682,11 @@ export function readGeminiCliCredentialsCached(options?: {
     },
     readSourceFingerprint: () => readFileMtimeMs(credPath),
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliCredentialsTestApi")] = {
+    readCodexAuth: readCodexCliCredentials,
+    resetCaches: resetCliCredentialCachesForTest,
+  };
 }

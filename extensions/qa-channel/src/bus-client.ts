@@ -38,6 +38,8 @@ export type {
 
 type JsonResult<T> = Promise<T>;
 const QA_BUS_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+/** Total deadline for local qa-bus state requests. */
+const QA_BUS_STATE_TIMEOUT_MS = 10_000;
 
 function buildQaBusUrl(baseUrl: string, path: string): URL {
   const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
@@ -304,6 +306,7 @@ export async function getQaBusState(baseUrl: string): Promise<QaBusStateSnapshot
     url: buildQaBusUrl(baseUrl, "/v1/state").toString(),
     policy: { allowPrivateNetwork: true },
     auditContext: "qa-channel.bus-state",
+    timeoutMs: QA_BUS_STATE_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {

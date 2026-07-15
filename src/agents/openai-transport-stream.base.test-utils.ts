@@ -2,7 +2,6 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import { testing } from "./openai-transport-stream.js";
 import {
   resolveAzureOpenAIApiVersion,
   type OpenAIResponsesOutput,
@@ -17,6 +16,7 @@ import {
   streamChunks,
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
+import { testing } from "./openai-transport-stream.test-support.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 import {
   buildTransportAwareSimpleStreamFn,

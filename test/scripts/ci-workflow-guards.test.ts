@@ -2643,13 +2643,16 @@ describe("ci workflow guards", () => {
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
+    expect(runStep.env.JOB_CONTEXT_JSON).toBe("${{ toJSON(job) }}");
     // Shard execution policy lives in the unit-tested wrapper script. Frozen
     // release targets load that wrapper from the exact trusted workflow SHA.
     for (const expected of [
       'runner="scripts/ci-run-node-test-shard.mjs"',
       'if [[ ! -f "$runner" ]]',
-      'git fetch --no-tags --depth=1 origin "$GITHUB_SHA"',
-      'git show "${GITHUB_SHA}:${file}" > "${harness_root}/${file}"',
+      "job_workflow_repository=$(jq -r '.workflow_repository // empty' <<<\"$JOB_CONTEXT_JSON\")",
+      "job_workflow_sha=$(jq -r '.workflow_sha // empty' <<<\"$JOB_CONTEXT_JSON\")",
+      'git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"',
+      'git show "${job_workflow_sha}:${file}" > "${harness_root}/${file}"',
       'node "$runner"',
     ]) {
       expect(runStep.run).toContain(expected);
