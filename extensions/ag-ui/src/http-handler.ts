@@ -10,6 +10,10 @@ import type { RunAgentInput, Message } from "@ag-ui/core";
 import { EventEncoder } from "@ag-ui/encoder";
 import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk";
 import {
+  getSessionEntry,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import {
   setWriter,
   clearWriter,
   markClientToolNames,
@@ -504,7 +508,7 @@ function parseDataUri(
   if (!value.startsWith("data:")) return null;
   const match = /^data:([^;,]+)[^,]*,(.*)$/s.exec(value);
   if (!match) return null;
-  return { mimeType: match[1] || "image/png", data: match[2] };
+  return { mimeType: match[1] || "image/png", data: match[2] ?? "" };
 }
 
 /**
@@ -878,9 +882,6 @@ async function dispatchAuthenticatedAguiRequest(
     const hasImages = promptImages.length > 0;
 
     if (!messageBody.trim()) {
-      console.log(
-        `[ag-ui] 400: empty extracted body, roles=[${messages.map((m) => m.role).join(",")}], contents=[${messages.map((m) => JSON.stringify(m.content)).join(",")}]`,
-      );
       sendJson(res, 400, {
         error: {
           message: "Could not extract a prompt from `messages`.",
@@ -1207,6 +1208,23 @@ async function dispatchAuthenticatedAguiRequest(
       const agentDir = runtime.agent.resolveAgentDir(cfg, agentId);
       const timeoutMs = runtime.agent.resolveAgentTimeoutMs({ cfg });
       await runtime.agent.ensureAgentWorkspace({ dir: workspaceDir });
+
+      // SQLite session model (OpenClaw 2026.7+): runEmbeddedAgent opens the
+      // session transcript by sessionId and fails ("Cannot open SQLite session
+      // without session entry") if no entry maps that id to our sessionKey. The
+      // old file-backed model auto-created it. Create it on the FIRST turn of a
+      // conversation; skip when it already exists so later turns keep their
+      // transcript, sessionFile, and accumulated metadata. The check-then-create
+      // is unlocked: AG-UI drives a conversation's turns sequentially, and
+      // `embeddedSessionId` is a deterministic hash of `sessionKey`, so a racing
+      // cold turn would at worst redundantly re-create the same entry.
+      if (!getSessionEntry({ agentId, sessionKey })) {
+        await upsertSessionEntry({
+          agentId,
+          sessionKey,
+          entry: { sessionId: embeddedSessionId, updatedAt: Date.now() },
+        });
+      }
 
       const clientTools = (input.tools ?? []).map((t) => ({
         type: "function" as const,
