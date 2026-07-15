@@ -415,15 +415,17 @@ describe("parseLineDirectives", () => {
       expect(collectRenderedStrings(flexMessage.contents, [])).not.toContain("");
     });
 
-    it("drops doubled commas in device controls", () => {
+    it("drops doubled commas and blank labels in device controls", () => {
       const result = parseLineDirectives({
-        text: "[[device: TV | Box | Playing | Play:toggle,, Menu:menu]]",
+        text: "[[device: TV | Box | Playing | Play:toggle,, :ignored, Menu:menu]]",
       });
       const flexMessage = requireFlexMessage(
         getLineData(result).flexMessage,
-        "device double comma",
+        "device blank controls",
       );
-      expect(collectRenderedStrings(flexMessage.contents, [])).not.toContain("");
+      const renderedStrings = collectRenderedStrings(flexMessage.contents, []);
+      expect(renderedStrings).toEqual(expect.arrayContaining(["Play", "Menu"]));
+      expect(renderedStrings).not.toContain("");
     });
   });
 

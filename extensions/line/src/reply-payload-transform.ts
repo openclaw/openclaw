@@ -323,12 +323,16 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
       const [, deviceType, status, controlsStr] = parts;
       const deviceKey = toSlug(deviceName || "device");
       const controls = controlsStr
-        ? normalizeStringEntries(controlsStr.split(",")).map((ctrlStr) => {
+        ? normalizeStringEntries(controlsStr.split(",")).flatMap((ctrlStr) => {
             const controlParts = ctrlStr.split(":").map((s) => s.trim());
             const label = expectDefined(controlParts[0], "device control label");
+            // A nonempty raw entry can still parse to `:data`; LINE rejects a blank action label.
+            if (!label) {
+              return [];
+            }
             const data = controlParts[1];
             const action = data || normalizeLowercaseStringOrEmpty(label).replace(/\s+/g, "_");
-            return { label, data: lineActionData(action, { "line.device": deviceKey }) };
+            return [{ label, data: lineActionData(action, { "line.device": deviceKey }) }];
           })
         : [];
 
