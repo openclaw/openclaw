@@ -309,9 +309,7 @@ final class StatusItemMouseRouter: NSResponder {
         self.track(button)
 
         guard self.eventMonitor == nil else { return }
-        self.eventMonitor = self.eventMonitorInstaller(
-            [.leftMouseDown, .rightMouseDown])
-        { [weak self] event in
+        self.eventMonitor = Self.installMonitor(using: self.eventMonitorInstaller) { [weak self] event in
             guard let self else { return event }
             return self.route(event)
         }
@@ -333,13 +331,35 @@ final class StatusItemMouseRouter: NSResponder {
     }
 
     func route(_ event: NSEvent) -> NSEvent? {
-        guard let button, Self.contains(event, in: button) else { return event }
+        Self.route(
+            event,
+            hitsTarget: self.button.map { Self.contains(event, in: $0) } ?? false,
+            onLeftClick: { self.onLeftClick?() },
+            onRightClick: { self.onRightClick?() })
+    }
+
+    static func installMonitor(
+        using installer: EventMonitorInstaller,
+        handler: @escaping EventMonitorHandler) -> Any?
+    {
+        installer([.leftMouseDown, .rightMouseDown]) { event in
+            handler(event)
+        }
+    }
+
+    static func route(
+        _ event: NSEvent,
+        hitsTarget: Bool,
+        onLeftClick: () -> Void,
+        onRightClick: () -> Void) -> NSEvent?
+    {
+        guard hitsTarget else { return event }
         switch event.type {
         case .leftMouseDown:
-            self.onLeftClick?()
+            onLeftClick()
             return nil
         case .rightMouseDown:
-            self.onRightClick?()
+            onRightClick()
             return nil
         default:
             return event

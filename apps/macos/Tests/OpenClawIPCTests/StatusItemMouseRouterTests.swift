@@ -6,136 +6,85 @@ import Testing
 @MainActor
 struct StatusItemMouseRouterTests {
     @Test func `installed monitor consumes the target event before native dispatch`() throws {
-        let (window, button) = Self.makeButtonWindow()
-        defer { window.close() }
-
         let monitorToken = NSObject()
         var installedMask: NSEvent.EventTypeMask = []
         var installedHandler: StatusItemMouseRouter.EventMonitorHandler?
-        var removedMonitor = false
         var leftClicks = 0
-        let router = StatusItemMouseRouter(
-            eventMonitorInstaller: { mask, handler in
+        let installedToken = try #require(StatusItemMouseRouter.installMonitor(
+            using: { mask, handler in
                 installedMask = mask
                 installedHandler = handler
                 return monitorToken
             },
-            eventMonitorRemover: { monitor in
-                removedMonitor = monitor as AnyObject === monitorToken
-            })
-        router.install(
-            on: button,
-            onLeftClick: { leftClicks += 1 },
-            onRightClick: {},
-            onHoverChanged: { _ in })
+            handler: { event in
+                StatusItemMouseRouter.route(
+                    event,
+                    hitsTarget: true,
+                    onLeftClick: { leftClicks += 1 },
+                    onRightClick: {})
+            }))
 
         #expect(installedMask == [.leftMouseDown, .rightMouseDown])
+        #expect(installedToken as AnyObject === monitorToken)
         let handler = try #require(installedHandler)
-        let left = try Self.mouseEvent(.leftMouseDown, window: window, location: NSPoint(x: 30, y: 30))
+        let left = try Self.mouseEvent(.leftMouseDown)
         #expect(handler(left) == nil)
         #expect(leftClicks == 1)
-
-        router.uninstall()
-        #expect(removedMonitor)
     }
 
     @Test func `routes left and right clicks without opening the native menu`() throws {
-        let (window, button) = Self.makeButtonWindow()
-        defer { window.close() }
-
         var leftClicks = 0
         var rightClicks = 0
-        var hoverStates: [Bool] = []
-        let router = StatusItemMouseRouter()
-        router.install(
-            on: button,
+        let left = try Self.mouseEvent(.leftMouseDown)
+        let right = try Self.mouseEvent(.rightMouseDown)
+
+        #expect(StatusItemMouseRouter.route(
+            left,
+            hitsTarget: true,
             onLeftClick: { leftClicks += 1 },
-            onRightClick: { rightClicks += 1 },
-            onHoverChanged: { hoverStates.append($0) })
-        defer { router.uninstall() }
-
-        let left = try Self.mouseEvent(.leftMouseDown, window: window, location: NSPoint(x: 30, y: 30))
-        let right = try Self.mouseEvent(.rightMouseDown, window: window, location: NSPoint(x: 30, y: 30))
-        let outside = try Self.mouseEvent(.leftMouseDown, window: window, location: NSPoint(x: 5, y: 5))
-
-        #expect(router.route(left) == nil)
+            onRightClick: { rightClicks += 1 }) == nil)
         #expect(leftClicks == 1)
         #expect(rightClicks == 0)
 
-        #expect(router.route(right) == nil)
+        #expect(StatusItemMouseRouter.route(
+            right,
+            hitsTarget: true,
+            onLeftClick: { leftClicks += 1 },
+            onRightClick: { rightClicks += 1 }) == nil)
         #expect(leftClicks == 1)
         #expect(rightClicks == 1)
-
-        let routedOutside = try #require(router.route(outside))
-        #expect(routedOutside === outside)
-
-        router.mouseEntered(with: left)
-        router.mouseExited(with: left)
-        #expect(hoverStates == [true, false])
     }
 
-    @Test func `replacement button becomes the only click target`() throws {
-        let (firstWindow, firstButton) = Self.makeButtonWindow()
-        let (secondWindow, secondButton) = Self.makeButtonWindow()
-        defer {
-            firstWindow.close()
-            secondWindow.close()
-        }
-
+    @Test func `non-target and unrelated events continue to native dispatch`() throws {
         var leftClicks = 0
         var rightClicks = 0
-        let router = StatusItemMouseRouter()
-        defer { router.uninstall() }
+        let nonTarget = try Self.mouseEvent(.leftMouseDown)
+        let unrelated = try Self.mouseEvent(.mouseMoved)
 
-        router.install(
-            on: firstButton,
+        let routedNonTarget = try #require(StatusItemMouseRouter.route(
+            nonTarget,
+            hitsTarget: false,
             onLeftClick: { leftClicks += 1 },
-            onRightClick: { rightClicks += 1 },
-            onHoverChanged: { _ in })
-        router.install(
-            on: secondButton,
+            onRightClick: { rightClicks += 1 }))
+        let routedUnrelated = try #require(StatusItemMouseRouter.route(
+            unrelated,
+            hitsTarget: true,
             onLeftClick: { leftClicks += 1 },
-            onRightClick: { rightClicks += 1 },
-            onHoverChanged: { _ in })
+            onRightClick: { rightClicks += 1 }))
 
-        let staleClick = try Self.mouseEvent(
-            .leftMouseDown,
-            window: firstWindow,
-            location: NSPoint(x: 30, y: 30))
-        let currentClick = try Self.mouseEvent(
-            .rightMouseDown,
-            window: secondWindow,
-            location: NSPoint(x: 30, y: 30))
-
-        let routedStaleClick = try #require(router.route(staleClick))
-        #expect(routedStaleClick === staleClick)
-        #expect(router.route(currentClick) == nil)
+        #expect(routedNonTarget === nonTarget)
+        #expect(routedUnrelated === unrelated)
         #expect(leftClicks == 0)
-        #expect(rightClicks == 1)
+        #expect(rightClicks == 0)
     }
 
-    private static func makeButtonWindow() -> (NSWindow, NSView) {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 120, height: 80),
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: false)
-        let button = NSView(frame: NSRect(x: 20, y: 20, width: 40, height: 24))
-        window.contentView?.addSubview(button)
-        return (window, button)
-    }
-
-    private static func mouseEvent(
-        _ type: NSEvent.EventType,
-        window: NSWindow,
-        location: NSPoint) throws -> NSEvent
-    {
+    private static func mouseEvent(_ type: NSEvent.EventType) throws -> NSEvent {
         try #require(NSEvent.mouseEvent(
             with: type,
-            location: location,
+            location: .zero,
             modifierFlags: [],
             timestamp: 0,
-            windowNumber: window.windowNumber,
+            windowNumber: 0,
             context: nil,
             eventNumber: 1,
             clickCount: 1,
