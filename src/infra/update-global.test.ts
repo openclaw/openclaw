@@ -54,6 +54,26 @@ async function writeGlobalPackageJson(packageRoot: string, version = "1.0.0") {
   );
 }
 
+async function writePnpmIsolatedPackage(params: {
+  globalRoot: string;
+  installName: string;
+  version: string;
+}): Promise<string> {
+  const installDir = path.join(params.globalRoot, params.installName);
+  const packageRoot = path.join(installDir, "node_modules", "openclaw");
+  await fs.mkdir(packageRoot, { recursive: true });
+  await Promise.all([
+    writeGlobalPackageJson(packageRoot, params.version),
+    fs.writeFile(
+      path.join(installDir, "package.json"),
+      JSON.stringify({ private: true, dependencies: { openclaw: params.version } }),
+      "utf8",
+    ),
+  ]);
+  await fs.symlink(installDir, path.join(params.globalRoot, `hash-${params.installName}`), "dir");
+  return packageRoot;
+}
+
 async function writeBundledPluginPackageJson(
   packageRoot: string,
   pluginId: string,
@@ -636,13 +656,27 @@ describe("update global helpers", () => {
     });
   });
 
-  it("detects pnpm 11 isolated global installs from the package listing", async () => {
+  it("detects pnpm 11 isolated global installs from the active project link", async () => {
     await withTempDir({ prefix: "openclaw-update-pnpm-isolated-root-" }, async (base) => {
       const npmRoot = path.join(base, "npm", "lib", "node_modules");
       const pnpmGlobalDir = path.join(base, "pnpm-home", "global");
       const pnpmGlobalRoot = path.join(pnpmGlobalDir, "v11");
-      const pkgRoot = path.join(pnpmGlobalRoot, "a1b2", "node_modules", "openclaw");
-      await fs.mkdir(pkgRoot, { recursive: true });
+      const pkgRoot = await writePnpmIsolatedPackage({
+        globalRoot: pnpmGlobalRoot,
+        installName: "a1b2",
+        version: "2026.7.1",
+      });
+      const hashLinkedPkgRoot = path.join(pnpmGlobalRoot, "hash-a1b2", "node_modules", "openclaw");
+      const pnpmHomeAlias = path.join(base, "pnpm-home-alias");
+      await fs.symlink(path.join(base, "pnpm-home"), pnpmHomeAlias, "dir");
+      const aliasedPkgRoot = path.join(
+        pnpmHomeAlias,
+        "global",
+        "v11",
+        "a1b2",
+        "node_modules",
+        "openclaw",
+      );
       await fs.mkdir(path.join(npmRoot, "openclaw"), { recursive: true });
 
       const runCommand: CommandRunner = async (argv) => {
@@ -653,27 +687,18 @@ describe("update global helpers", () => {
         if (command === "pnpm root -g") {
           return { stdout: `${pnpmGlobalRoot}\n`, stderr: "", code: 0 };
         }
-        if (command === "pnpm list -g --json --depth=0 openclaw") {
-          return {
-            stdout: JSON.stringify([
-              {
-                path: pnpmGlobalRoot,
-                private: true,
-                dependencies: {
-                  openclaw: { from: "openclaw", version: "2026.7.1", path: pkgRoot },
-                },
-              },
-            ]),
-            stderr: "",
-            code: 0,
-          };
-        }
         throw new Error(`unexpected command: ${command}`);
       };
 
       await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe(
         "pnpm",
       );
+      await expect(
+        detectGlobalInstallManagerForRoot(runCommand, hashLinkedPkgRoot, 1000),
+      ).resolves.toBe("pnpm");
+      await expect(
+        detectGlobalInstallManagerForRoot(runCommand, aliasedPkgRoot, 1000),
+      ).resolves.toBe("pnpm");
       await expect(
         resolveGlobalInstallTarget({
           manager: "pnpm",

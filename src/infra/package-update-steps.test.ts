@@ -744,38 +744,26 @@ describe("runGlobalPackageUpdateSteps", () => {
     }
   });
 
-  it("verifies pnpm 11 updates against the replacement isolated package root", async () => {
+  it("verifies pnpm 11 replacements in the invoking root when PATH uses another root", async () => {
     await withTempDir({ prefix: "openclaw-package-update-pnpm-isolated-" }, async (base) => {
       const globalDir = path.join(base, "pnpm-home", "global");
       const globalRoot = path.join(globalDir, "v11");
+      const pathGlobalRoot = path.join(base, "path-pnpm-home", "global", "v11");
       const oldPackageRoot = path.join(globalRoot, "old", "node_modules", "openclaw");
       const newPackageRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
-      let currentPackageRoot = oldPackageRoot;
+      await fs.mkdir(pathGlobalRoot, { recursive: true });
       await writePackageRoot(oldPackageRoot, "1.0.0");
+      await fs.writeFile(
+        path.join(globalRoot, "old", "package.json"),
+        JSON.stringify({ private: true, dependencies: { openclaw: "1.0.0" } }),
+        "utf8",
+      );
+      await fs.symlink(path.join(globalRoot, "old"), path.join(globalRoot, "hash-openclaw"), "dir");
 
       const runCommand: CommandRunner = async (argv) => {
         const command = argv.join(" ");
         if (command === "pnpm root -g") {
-          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
-        }
-        if (command === "pnpm list -g --json --depth=0 openclaw") {
-          return {
-            stdout: JSON.stringify([
-              {
-                path: globalRoot,
-                private: true,
-                dependencies: {
-                  openclaw: {
-                    from: "openclaw",
-                    version: currentPackageRoot === oldPackageRoot ? "1.0.0" : "2.0.0",
-                    path: currentPackageRoot,
-                  },
-                },
-              },
-            ]),
-            stderr: "",
-            code: 0,
-          };
+          return { stdout: `${pathGlobalRoot}\n`, stderr: "", code: 0 };
         }
         throw new Error(`unexpected command: ${command}`);
       };
@@ -790,9 +778,19 @@ describe("runGlobalPackageUpdateSteps", () => {
           "--allow-build=openclaw",
           "openclaw@2.0.0",
         ]);
-        await fs.rm(oldPackageRoot, { recursive: true, force: true });
+        await fs.rm(path.join(globalRoot, "hash-openclaw"), { force: true });
+        await fs.rm(path.join(globalRoot, "old"), { recursive: true, force: true });
         await writePackageRoot(newPackageRoot, "2.0.0");
-        currentPackageRoot = newPackageRoot;
+        await fs.writeFile(
+          path.join(globalRoot, "new", "package.json"),
+          JSON.stringify({ private: true, dependencies: { openclaw: "2.0.0" } }),
+          "utf8",
+        );
+        await fs.symlink(
+          path.join(globalRoot, "new"),
+          path.join(globalRoot, "hash-openclaw"),
+          "dir",
+        );
         return {
           name,
           command: argv.join(" "),

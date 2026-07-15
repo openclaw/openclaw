@@ -695,6 +695,7 @@ export async function runGlobalPackageUpdateSteps(params: {
             runCommand: params.runCommand,
             timeoutMs: params.timeoutMs,
             packageName: params.packageName,
+            pkgRoot: params.installTarget.packageRoot,
           })
         : null;
     const livePackageRoot =
