@@ -65,7 +65,11 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
       debounceMs?: number;
     };
   };
-  reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
+  reload?: {
+    configPrefixes: string[];
+    noopPrefixes?: string[];
+    accountScopedRestart?: boolean;
+  };
   setupWizard?: ChannelPluginSetupWizard;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;

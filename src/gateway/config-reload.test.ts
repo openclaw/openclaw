@@ -180,9 +180,26 @@ describe("buildGatewayReloadPlan", () => {
       noopPrefixes: ["channels.whatsapp"],
     },
   };
+  const mattermostPlugin: ChannelPlugin = {
+    id: "mattermost",
+    meta: {
+      id: "mattermost",
+      label: "Mattermost",
+      selectionLabel: "Mattermost",
+      docsPath: "/channels/mattermost",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({}),
+    },
+    reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
+  };
   const registry = createTestRegistry([
     { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
     { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+    { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
   ]);
   registry.reloads = [
     {
@@ -376,24 +393,31 @@ describe("buildGatewayReloadPlan", () => {
 
   it("targets only changed non-default channel accounts", () => {
     const plan = buildGatewayReloadPlan([
-      "channels.telegram.accounts.alpha.enabled",
-      "channels.telegram.accounts.beta.commands",
+      "channels.mattermost.accounts.alpha.enabled",
+      "channels.mattermost.accounts.beta.commands",
     ]);
 
     expect(plan.restartChannels).toEqual(new Set());
     expect(plan.restartChannelAccounts).toEqual(
-      new Map([["telegram", new Set(["alpha", "beta"])]]),
+      new Map([["mattermost", new Set(["alpha", "beta"])]]),
     );
+  });
+
+  it("keeps non-isolated channel account changes on the wholesale path", () => {
+    const plan = buildGatewayReloadPlan(["channels.telegram.accounts.alpha.enabled"]);
+
+    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+    expect(plan.restartChannelAccounts).toEqual(new Map());
   });
 
   it("keeps default account and channel-wide changes on the wholesale path", () => {
     const plan = buildGatewayReloadPlan([
-      "channels.telegram.accounts.alpha.enabled",
-      "channels.telegram.accounts.default.commands",
-      "channels.telegram.botToken",
+      "channels.mattermost.accounts.alpha.enabled",
+      "channels.mattermost.accounts.default.commands",
+      "channels.mattermost.botToken",
     ]);
 
-    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+    expect(plan.restartChannels).toEqual(new Set(["mattermost"]));
     expect(plan.restartChannelAccounts).toEqual(new Map());
   });
 
@@ -1688,30 +1712,30 @@ describe("startGatewayConfigReloader", () => {
   it("runs account-scoped channel changes through hot reload", async () => {
     const channelRegistry = createTestRegistry([
       {
-        pluginId: "telegram",
+        pluginId: "mattermost",
         plugin: {
-          id: "telegram",
+          id: "mattermost",
           meta: {
-            id: "telegram",
-            label: "Telegram",
-            selectionLabel: "Telegram",
-            docsPath: "/channels/telegram",
+            id: "mattermost",
+            label: "Mattermost",
+            selectionLabel: "Mattermost",
+            docsPath: "/channels/mattermost",
             blurb: "test",
           },
           capabilities: { chatTypes: ["direct"] },
           config: { listAccountIds: () => ["default", "alpha"], resolveAccount: () => ({}) },
-          reload: { configPrefixes: ["channels.telegram"] },
+          reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
         } satisfies ChannelPlugin,
         source: "test",
       },
     ]);
     const initialConfig = {
       gateway: { reload: { debounceMs: 0 } },
-      channels: { telegram: { accounts: { alpha: { enabled: false } } } },
+      channels: { mattermost: { accounts: { alpha: { enabled: false } } } },
     } as OpenClawConfig;
     const nextConfig = {
       gateway: { reload: { debounceMs: 0 } },
-      channels: { telegram: { accounts: { alpha: { enabled: true } } } },
+      channels: { mattermost: { accounts: { alpha: { enabled: true } } } },
     } as OpenClawConfig;
     const harness = createReloaderHarness(
       vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "account-reload" })),
@@ -1724,7 +1748,7 @@ describe("startGatewayConfigReloader", () => {
       await vi.runAllTimersAsync();
 
       const [plan] = getOnlyHotReloadCall(harness);
-      expect(plan.restartChannelAccounts).toEqual(new Map([["telegram", new Set(["alpha"])]]));
+      expect(plan.restartChannelAccounts).toEqual(new Map([["mattermost", new Set(["alpha"])]]));
       expect(harness.onNoopConfigCommit).not.toHaveBeenCalled();
     } finally {
       releasePinnedPluginChannelRegistry(channelRegistry);

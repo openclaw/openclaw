@@ -165,6 +165,10 @@ describe("mattermostPlugin", () => {
     });
   });
 
+  it("opts into account-scoped config restarts", () => {
+    expect(mattermostPlugin.reload).toMatchObject({ accountScopedRestart: true });
+  });
+
   describe("messaging", () => {
     it("keeps @username targets", () => {
       const normalize = requireMattermostNormalizeTarget();

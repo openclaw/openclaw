@@ -798,7 +798,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
-    reload: { configPrefixes: ["channels.mattermost"] },
+    reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
     configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,

@@ -47,6 +47,7 @@ type ReloadAction =
   | "restart-health-monitor"
   | "reload-plugins"
   | "dispose-mcp-runtimes"
+  | `restart-channel-account:${ChannelId}`
   | `restart-channel:${ChannelId}`;
 
 type GatewayReloadPlanOptions = {
@@ -182,13 +183,16 @@ function listReloadRules(): ReloadRule[] {
     return cachedReloadRules;
   }
   // Channel docking: plugins contribute hot reload/no-op prefixes here.
-  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) =>
-    (plugin.reload?.configPrefixes ?? [])
+  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => {
+    const restartAction = plugin.reload?.accountScopedRestart
+      ? (`restart-channel-account:${plugin.id}` as ReloadAction)
+      : (`restart-channel:${plugin.id}` as ReloadAction);
+    return (plugin.reload?.configPrefixes ?? [])
       .map(
         (prefix): ReloadRule => ({
           prefix,
           kind: "hot",
-          actions: [`restart-channel:${plugin.id}` as ReloadAction],
+          actions: [restartAction],
         }),
       )
       .concat(
@@ -198,8 +202,8 @@ function listReloadRules(): ReloadRule[] {
             kind: "none",
           }),
         ),
-      ),
-  );
+      );
+  });
   const channelPluginStateRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
     {
       prefix: `plugins.entries.${plugin.id}`,
@@ -387,8 +391,8 @@ export function buildGatewayReloadPlan(
   };
 
   const applyAction = (action: ReloadAction, originatingPath: string) => {
-    if (action.startsWith("restart-channel:")) {
-      const channel = action.slice("restart-channel:".length) as ChannelId;
+    if (action.startsWith("restart-channel-account:")) {
+      const channel = action.slice("restart-channel-account:".length) as ChannelId;
       const accountId = extractAccountIdFromPath(channel, originatingPath);
       if (accountId !== null) {
         let set = restartChannelAccounts.get(channel);
@@ -399,6 +403,11 @@ export function buildGatewayReloadPlan(
         set.add(accountId);
         return;
       }
+      plan.restartChannels.add(channel);
+      return;
+    }
+    if (action.startsWith("restart-channel:")) {
+      const channel = action.slice("restart-channel:".length) as ChannelId;
       plan.restartChannels.add(channel);
       return;
     }

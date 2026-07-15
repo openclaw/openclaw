@@ -3130,14 +3130,17 @@ describe("gateway channel hot reload handlers", () => {
     };
   }
 
-  async function withDiscordAccounts(accountIds: string[], run: () => Promise<void>) {
+  async function withDiscordAccountResolver(
+    listAccountIds: () => string[],
+    run: () => Promise<void>,
+  ) {
     const registry = createTestRegistry([
       {
         pluginId: "discord",
         plugin: {
           ...createChannelTestPluginBase({
             id: "discord",
-            config: { listAccountIds: () => accountIds },
+            config: { listAccountIds },
           }),
         },
         source: "test",
@@ -3149,6 +3152,10 @@ describe("gateway channel hot reload handlers", () => {
     } finally {
       releasePinnedPluginChannelRegistry(registry);
     }
+  }
+
+  async function withDiscordAccounts(accountIds: string[], run: () => Promise<void>) {
+    await withDiscordAccountResolver(() => accountIds, run);
   }
 
   it("restarts only the changed account", async () => {
@@ -3234,6 +3241,101 @@ describe("gateway channel hot reload handlers", () => {
     });
 
     expect(events).toEqual(["stop:discord:undefined", "start:discord:undefined"]);
+  });
+
+  it("requests recovery when account enumeration fails after config commit", async () => {
+    const channels = {
+      stop: vi.fn(async () => {}),
+      start: vi.fn(async () => {}),
+    };
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const { applyHotReload } = createReloadHandlersForTest(
+      undefined,
+      channels,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
+
+    await withChannelReloadsEnabled(async () => {
+      await withDiscordAccountResolver(
+        () => {
+          throw new Error("account enumeration failed");
+        },
+        async () => {
+          await applyHotReload(createAccountReloadPlan(["alpha"]), {});
+        },
+      );
+    });
+
+    expect(channels.stop).not.toHaveBeenCalled();
+    expect(channels.start).not.toHaveBeenCalled();
+    expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+  });
+
+  it("skips per-account restarts for channels already queued for wholesale restart", async () => {
+    const events: string[] = [];
+    const channels = {
+      stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`stop:${channel}:${accountId}`);
+      }),
+      start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`start:${channel}:${accountId}`);
+      }),
+    };
+    const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
+
+    await withChannelReloadsEnabled(async () => {
+      await withDiscordAccounts(["default", "alpha"], async () => {
+        await applyHotReload(
+          createAccountReloadPlan(["alpha"], { restartChannels: new Set(["discord"]) }),
+          {},
+        );
+      });
+    });
+
+    expect(events).toEqual(["stop:discord:undefined", "start:discord:undefined"]);
+  });
+
+  it("aggregates targeted and wholesale stop failures into one suppressed recovery request", async () => {
+    const events: string[] = [];
+    const channels = {
+      stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`stop:${channel}:${accountId}`);
+        throw new Error("stop failed");
+      }),
+      start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`start:${channel}:${accountId}`);
+      }),
+    };
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const { applyHotReload } = createReloadHandlersForTest(
+      undefined,
+      channels,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+      {
+        getChannelAutostartSuppression: () => ({
+          reason: "crash-loop-breaker",
+          message: "safe mode",
+        }),
+      },
+    );
+
+    await withChannelReloadsEnabled(async () => {
+      await withDiscordAccounts(["default", "alpha"], async () => {
+        await applyHotReload(
+          createAccountReloadPlan(["alpha"], {
+            restartChannels: new Set<ChannelKind>(["telegram"]),
+          }),
+          {},
+        );
+      });
+    });
+
+    expect(events).toEqual(["stop:discord:alpha", "stop:telegram:undefined"]);
+    expect(requestRecoveryRestart).toHaveBeenCalledOnce();
   });
 
   it("stops account targets without restarting them while autostart is suppressed", async () => {

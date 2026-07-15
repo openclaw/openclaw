@@ -24,7 +24,7 @@ export const mattermostSetupPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     media: true,
     nativeCommands: true,
   },
-  reload: { configPrefixes: ["channels.mattermost"] },
+  reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
   configSchema: MattermostChannelConfigSchema,
   config: {
     ...mattermostConfigAdapter,

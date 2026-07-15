@@ -960,9 +960,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         ) {
           continue;
         }
-        const listedAccountIds = new Set(
-          getChannelPlugin(channel)?.config.listAccountIds(nextConfig) ?? [],
-        );
+        let listedAccountIds: Set<string>;
+        try {
+          listedAccountIds = new Set(
+            getChannelPlugin(channel)?.config.listAccountIds(nextConfig) ?? [],
+          );
+        } catch (err) {
+          scheduleRecoveryRestart(`channel account enumeration (${channel})`, err);
+          continue;
+        }
         if ([...accountIds].some((accountId) => !listedAccountIds.has(accountId))) {
           channelsToRestart.add(channel);
           continue;
