@@ -1,5 +1,6 @@
 // Agent Core module implements kill tree behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 const DEFAULT_GRACE_MS = 3000;
 const MAX_GRACE_MS = 60_000;
@@ -16,9 +17,14 @@ export type KillProcessTreeOptions = {
  *   first (without /F), then force-kills if process survives.
  * - Unix: send SIGTERM to process group first, wait grace period, then SIGKILL.
  *
- * When the child was spawned with `detached: false`, pass `detached: false` to
- * skip the Unix `process.kill(-pid, ...)` group-kill. That avoids signaling the
- * gateway's own process group.
+ * Group kill (`process.kill(-pid, ...)`) is only used when the PID is verified
+ * as its own process group leader, unless `detached: true` is explicitly passed.
+ * This prevents accidentally signaling the gateway's process group when the
+ * child shares its parent's group.
+ *
+ * - `detached: false`: skip group kill unconditionally.
+ * - `detached: true`: use group kill unconditionally (trust caller).
+ * - `detached` omitted: use group kill only when PID is the group leader.
  */
 export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): void {
   if (!Number.isFinite(pid) || pid <= 0) {
@@ -35,7 +41,8 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
     return;
   }
 
-  const useGroupKill = opts?.detached !== false;
+  const useGroupKill =
+    opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid));
   if (opts?.force === true) {
     signalProcessTreeUnix(pid, "SIGKILL", useGroupKill);
     return;
@@ -68,7 +75,9 @@ export function signalProcessTree(
     return;
   }
 
-  signalProcessTreeUnix(pid, signal, opts?.detached !== false);
+  const useGroupKill =
+    opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid));
+  signalProcessTreeUnix(pid, signal, useGroupKill);
 }
 
 function normalizeGraceMs(value?: number): number {
@@ -82,6 +91,70 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check whether a PID is its own process group leader.
+ * Uses `ps -p <pid> -o pgid=` to read the process group ID and compares it
+ * to the PID. Falls back to `false` on any error, which safely skips group
+ * kill in environments where `ps` is unavailable.
+ *
+ * Linux fallback: if ps is unavailable (ENOENT), attempts to read
+ * /proc/<pid>/stat field 5 (pgid) as a secondary check.
+ */
+function isProcessGroupLeader(pid: number): boolean {
+  try {
+    const res = spawnSync("ps", ["-p", String(pid), "-o", "pgid="], {
+      encoding: "utf8",
+      timeout: 500,
+    });
+    if (!res.error && res.status === 0) {
+      const pgid = Number.parseInt(res.stdout.trim(), 10);
+      if (Number.isFinite(pgid) && pgid === pid) {
+        return true;
+      }
+    }
+  } catch {
+    // ps failed, fall through to secondary check
+  }
+
+  // Secondary: /proc/<pid>/stat (Linux only). No-op on macOS/Windows.
+  if (process.platform === "linux") {
+    return isProcessGroupLeaderFromProc(pid);
+  }
+  return false;
+}
+
+/**
+ * Linux-only fallback: read /proc/<pid>/stat field 5 (pgid) to check
+ * whether the process is its own process group leader.
+ */
+function isProcessGroupLeaderFromProc(pid: number): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, { encoding: "utf8" });
+    // /proc/<pid>/stat format: pid (comm) state ppid pgrp ...
+    // Field 5 (1-indexed) is pgrp (process group ID)
+    const fields = stat.split(" ");
+    if (fields.length >= 5) {
+      // The 5th field is the process group ID (pgrp)
+      // Format is "pid (comm) state ppid pgrp session tty_nr ..."
+      // We need to find the actual 5th field considering parentheses in comm
+      // Find the last ')' to reliably locate field 5
+      const lastParenIdx = stat.lastIndexOf(")");
+      if (lastParenIdx > 0) {
+        const afterComm = stat.slice(lastParenIdx + 1).trimStart();
+        const parts = afterComm.split(/\s+/);
+        if (parts.length >= 3) {
+          // parts[0] = state, parts[1] = ppid, parts[2] = pgrp
+          const pgid = Number.parseInt(parts[2] ?? "", 10);
+          return Number.isFinite(pgid) && pgid === pid;
+        }
+      }
+    }
+    return false;
   } catch {
     return false;
   }

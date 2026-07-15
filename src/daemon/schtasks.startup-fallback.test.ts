@@ -206,6 +206,8 @@ function expectGatewayTermination(pid: number) {
     expect(killProcessTree).not.toHaveBeenCalled();
     return;
   }
+  // Gateway listener PIDs are resolved by argv/port ownership, not spawn-time detached facts,
+  // so they should use the leader-checked default without explicit detached override.
   expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
 }
 

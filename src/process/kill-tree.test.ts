@@ -3,8 +3,9 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
-const { spawnMock } = vi.hoisted(() => ({
+const { spawnMock, spawnSyncMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
+  spawnSyncMock: vi.fn(),
 }));
 
 vi.mock("node:child_process", async () => {
@@ -13,6 +14,7 @@ vi.mock("node:child_process", async () => {
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
       spawn: (...args: unknown[]) => spawnMock(...args),
+      spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
     },
   );
 });
@@ -32,6 +34,23 @@ function expectTaskkillCall(index: number, args: string[]) {
   ]);
 }
 
+/**
+ * Mock isProcessGroupLeader to return true for specific PIDs.
+ * This simulates that `ps -p <pid> -o pgid=` returns the same pid,
+ * indicating the process is its own group leader.
+ */
+function mockIsProcessGroupLeader(...pids: number[]) {
+  spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+    if (command === "ps" && args[0] === "-p" && args[2] === "-o" && args[3] === "pgid=") {
+      const pid = Number.parseInt(args[1] ?? "", 10);
+      if (pids.includes(pid)) {
+        return { status: 0, stdout: String(pid) };
+      }
+    }
+    return { status: 1, stdout: "" };
+  });
+}
+
 describe("killProcessTree", () => {
   let killSpy: ReturnType<typeof vi.spyOn>;
 
@@ -41,6 +60,7 @@ describe("killProcessTree", () => {
 
   beforeEach(() => {
     spawnMock.mockClear();
+    spawnSyncMock.mockClear();
     killSpy = vi.spyOn(process, "kill");
     vi.useFakeTimers();
   });
@@ -101,6 +121,7 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withMockedPlatform("linux", async () => {
+      mockIsProcessGroupLeader(3333);
       killProcessTree(3333, { graceMs: 10 });
 
       await vi.advanceTimersByTimeAsync(10);
@@ -120,6 +141,7 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withMockedPlatform("linux", async () => {
+      mockIsProcessGroupLeader(4444);
       killProcessTree(4444, { graceMs: 5 });
 
       await vi.advanceTimersByTimeAsync(5);
@@ -133,6 +155,7 @@ describe("killProcessTree", () => {
     killSpy.mockImplementation(() => true);
 
     await withMockedPlatform("linux", async () => {
+      mockIsProcessGroupLeader(4949);
       killProcessTree(4949, { force: true });
       await vi.advanceTimersByTimeAsync(60_000);
 
@@ -154,6 +177,7 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withMockedPlatform("linux", async () => {
+      mockIsProcessGroupLeader(4545);
       killProcessTree(4545, { graceMs: 5 });
 
       await vi.advanceTimersByTimeAsync(5);
@@ -197,6 +221,7 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withMockedPlatform("linux", async () => {
+      mockIsProcessGroupLeader(6666);
       killProcessTree(6666, { graceMs: 10 });
       await vi.advanceTimersByTimeAsync(10);
 
@@ -204,10 +229,54 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Unix falls back to single-pid kill when ps throws", async () => {
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("linux", async () => {
+      // Mock ps to throw an error
+      spawnSyncMock.mockImplementation(() => {
+        throw new Error("ps ENOENT");
+      });
+      killProcessTree(8888, { graceMs: 10 });
+      await vi.advanceTimersByTimeAsync(10);
+
+      // Should use positive PID (single-pid kill), not negative PID (group kill)
+      expect(killSpy).toHaveBeenCalledWith(8888, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-8888, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-8888, "SIGKILL");
+    });
+  });
+
+  it("on Unix falls back to single-pid kill when ps returns different PGID", async () => {
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("linux", async () => {
+      // Mock ps to return a different PGID (process is not the group leader)
+      spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+        if (command === "ps" && args[0] === "-p" && args[2] === "-o" && args[3] === "pgid=") {
+          const pid = Number.parseInt(args[1] ?? "", 10);
+          if (pid === 9999) {
+            // Return a different PGID to indicate this PID is NOT the group leader
+            return { status: 0, stdout: "12345\n" };
+          }
+        }
+        return { status: 1, stdout: "" };
+      });
+      killProcessTree(9999, { graceMs: 10 });
+      await vi.advanceTimersByTimeAsync(10);
+
+      // Should use positive PID (single-pid kill), not negative PID (group kill)
+      expect(killSpy).toHaveBeenCalledWith(9999, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-9999, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-9999, "SIGKILL");
+    });
+  });
+
   it("on Unix sends a single requested tree signal without scheduling escalation", async () => {
     killSpy.mockImplementation(() => true);
 
     await withMockedPlatform("linux", async () => {
+      mockIsProcessGroupLeader(7777);
       signalProcessTree(7777, "SIGTERM");
 
       await vi.advanceTimersByTimeAsync(60_000);
