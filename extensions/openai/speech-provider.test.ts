@@ -596,3 +596,39 @@ describe("buildOpenAISpeechProvider", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("openai speech provider isConfigured", () => {
+  const originalKey = process.env.OPENAI_API_KEY;
+
+  afterEach(() => {
+    if (originalKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = originalKey;
+    }
+  });
+
+  it("returns true when a valid apiKey is set", () => {
+    process.env.OPENAI_API_KEY = "sk-test";
+    const provider = buildOpenAISpeechProvider();
+    expect(provider.isConfigured({ providerConfig: {} })).toBe(true);
+  });
+
+  it("returns false when apiKey is missing", () => {
+    delete process.env.OPENAI_API_KEY;
+    const provider = buildOpenAISpeechProvider();
+    expect(provider.isConfigured({ providerConfig: {} })).toBe(false);
+  });
+
+  it("returns false when apiKey is whitespace-only", () => {
+    process.env.OPENAI_API_KEY = "   ";
+    const provider = buildOpenAISpeechProvider();
+    expect(provider.isConfigured({ providerConfig: {} })).toBe(false);
+  });
+
+  it("returns false when apiKey is empty string", () => {
+    process.env.OPENAI_API_KEY = "";
+    const provider = buildOpenAISpeechProvider();
+    expect(provider.isConfigured({ providerConfig: {} })).toBe(false);
+  });
+});
