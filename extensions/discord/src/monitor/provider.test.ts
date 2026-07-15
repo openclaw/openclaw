@@ -12,6 +12,10 @@ import {
   getProviderMonitorTestMocks,
   resetDiscordProviderMonitorMocks,
 } from "../test-support/provider.test-support.js";
+import {
+  formatDiscordDeployErrorDetails,
+  formatDiscordDeployErrorMessage,
+} from "./provider.deploy-errors.js";
 
 const {
   clientConstructorOptionsMock,
@@ -44,7 +48,7 @@ const { voiceAutoJoinMock } = vi.hoisted(() => ({
 }));
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
-let providerTesting: typeof import("./provider.js").testing;
+let providerTesting: typeof import("./provider.test-support.js").discordProviderTestSupport;
 let runtimeEnvModule: typeof import("openclaw/plugin-sdk/runtime-env");
 
 function createAcpRuntimeError(code: string, message: string): Error & { code: string } {
@@ -254,10 +258,12 @@ describe("monitorDiscordProvider", () => {
     }));
     runtimeEnvModule = await import("openclaw/plugin-sdk/runtime-env");
     vi.spyOn(runtimeEnvModule, "logVerbose").mockImplementation(() => undefined);
-    ({ monitorDiscordProvider, testing: providerTesting } = await import("./provider.js"));
+    ({ monitorDiscordProvider } = await import("./provider.js"));
+    ({ discordProviderTestSupport: providerTesting } = await import("./provider.test-support.js"));
   });
 
   beforeEach(() => {
+    providerTesting.reset();
     resetDiscordProviderMonitorMocks();
     voiceAutoJoinMock.mockClear();
     vi.mocked(runtimeEnvModule.logVerbose).mockClear();
@@ -977,7 +983,7 @@ describe("monitorDiscordProvider", () => {
       deployTimeoutMs: 15_000,
     });
 
-    expect(providerTesting.formatDiscordDeployErrorMessage(error)).toBe(
+    expect(formatDiscordDeployErrorMessage(error)).toBe(
       "Discord REST PATCH /applications/app-1/commands/cmd-1 timed out (timeout=15s, observed=24.7s)",
     );
   });
@@ -1014,7 +1020,7 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("formats Discord deploy rate limits without raw response bodies", () => {
-    const details = providerTesting.formatDiscordDeployErrorDetails({
+    const details = formatDiscordDeployErrorDetails({
       status: 429,
       rawBody: {
         message: "You are being rate limited.",
@@ -1027,7 +1033,7 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("does not parse malformed Discord deploy retry_after values", () => {
-    const details = providerTesting.formatDiscordDeployErrorDetails({
+    const details = formatDiscordDeployErrorDetails({
       status: 429,
       rawBody: {
         message: "You are being rate limited.",
@@ -1040,7 +1046,7 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("rejects malformed Discord deploy rate-limit status values", () => {
-    const details = providerTesting.formatDiscordDeployErrorDetails({
+    const details = formatDiscordDeployErrorDetails({
       status: 429.5,
       rawBody: {
         message: "You are being rate limited.",
@@ -1054,7 +1060,7 @@ describe("monitorDiscordProvider", () => {
 
   it("keeps truncated Discord deploy response bodies UTF-16 safe", () => {
     const prefix = "a".repeat(798);
-    const details = providerTesting.formatDiscordDeployErrorDetails({
+    const details = formatDiscordDeployErrorDetails({
       rawBody: `${prefix}😀tail`,
     });
 
@@ -1062,7 +1068,7 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("formats rejected Discord deploy entries with command details", () => {
-    const details = providerTesting.formatDiscordDeployErrorDetails({
+    const details = formatDiscordDeployErrorDetails({
       status: 400,
       discordCode: 50035,
       rawBody: {

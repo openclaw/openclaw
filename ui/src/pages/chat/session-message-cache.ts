@@ -10,7 +10,7 @@ import {
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import type { ChatHistoryPagination } from "./chat-history.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { readTranscriptSequence } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
@@ -80,21 +80,6 @@ function resolveChatMessageCacheKey(
   const agentId = resolveCacheAgentId(host, target);
   const sessionKey = resolveCanonicalSessionKey(host, target.sessionKey);
   return `agent:${agentId}:${sessionKey}`;
-}
-
-export function cacheChatMessages(
-  cache: ChatMessageCache,
-  host: ChatMessageCacheHost,
-  target: ChatMessageCacheTarget,
-  messages: unknown[],
-): void {
-  const cacheKey = resolveChatMessageCacheKey(host, target);
-  const existing = getSessionCacheValue(cache, cacheKey)?.snapshot;
-  cacheChatSessionSnapshot(cache, host, target, {
-    messages,
-    pagination: existing?.pagination ?? { hasMore: false },
-    sessionId: existing?.sessionId ?? null,
-  });
 }
 
 export function appendChatMessageToCache(

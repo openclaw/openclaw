@@ -833,6 +833,7 @@ export const telegramPlugin = createChatChannelPlugin({
     messaging: {
       defaultMarkdownTableMode: "block",
       targetPrefixes: ["telegram", "tg"],
+      numericTopicShorthand: true,
       normalizeTarget: normalizeTelegramMessagingTarget,
       resolveInboundConversation: ({ to, conversationId, threadId }) =>
         resolveTelegramInboundConversation({ to, conversationId, threadId }),

@@ -991,6 +991,135 @@ describe("handleChatGatewayEvent", () => {
     }
   });
 
+  it("does not publish Done while a yielded turn has registered continuation work", () => {
+    vi.useFakeTimers();
+    try {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "Restarting now",
+        chatStreamStartedAt: 100,
+      }) as ChatState & {
+        chatRunStatus?: unknown;
+        sessionsResult?: {
+          ts: number;
+          path: string;
+          count: number;
+          defaults: Record<string, unknown>;
+          sessions: Array<Record<string, unknown>>;
+        };
+      };
+      state.sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: true,
+            activeRunIds: ["run-1"],
+            status: "running",
+            startedAt: 100,
+          },
+        ],
+      };
+
+      expect(
+        handleChatGatewayEvent(state, {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+          stopReason: "end_turn",
+          yielded: true,
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "The gateway will restart; I will resume verification afterward.",
+              },
+            ],
+          },
+        }),
+      ).toBe("final");
+
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatStream).toBeNull();
+      expect(state.chatRunStatus).toBeNull();
+      expect(state.sessionsResult.sessions[0]).toMatchObject({
+        hasActiveRun: false,
+        activeRunIds: [],
+        status: "running",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not infer pending continuation from end_turn without yielded metadata", () => {
+    vi.useFakeTimers();
+    try {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "Final response",
+      }) as ChatState & {
+        chatRunStatus?: { phase?: string } | null;
+      };
+
+      expect(
+        handleChatGatewayEvent(state, {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+          stopReason: "end_turn",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Final response" }],
+          },
+        }),
+      ).toBe("final");
+
+      expect(state.chatRunStatus?.phase).toBe("done");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not suppress completion for stale yielded metadata on another stop reason", () => {
+    vi.useFakeTimers();
+    try {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "Final response",
+      }) as ChatState & {
+        chatRunStatus?: { phase?: string } | null;
+      };
+
+      expect(
+        handleChatGatewayEvent(state, {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+          stopReason: "completed",
+          yielded: true,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Final response" }],
+          },
+        }),
+      ).toBe("final");
+
+      expect(state.chatRunStatus?.phase).toBe("done");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("still drops events when neither session key nor active run id matches", () => {
     const state = createState({
       sessionKey: "main",

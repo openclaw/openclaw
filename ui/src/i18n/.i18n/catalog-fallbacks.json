@@ -1,5 +1,28 @@
 {
-  "fallbacks": {},
-  "sourceHash": "85e004373478d946c5002519a35b2c50e1aa220fd2a81f7c1c80ded99bc7dc4e",
+  "fallbacks": {
+    "newSession.cloudSyncsFolder": [
+      "ar",
+      "de",
+      "es",
+      "fa",
+      "fr",
+      "hi",
+      "id",
+      "it",
+      "ja-JP",
+      "ko",
+      "nl",
+      "pl",
+      "pt-BR",
+      "ru",
+      "th",
+      "tr",
+      "uk",
+      "vi",
+      "zh-CN",
+      "zh-TW"
+    ]
+  },
+  "sourceHash": "bd7720cbb311b6d966553d28ed5a01d4badd6edf08980b1c7824328f1533b8fd",
   "version": 1
 }

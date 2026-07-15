@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import { isManagedWorktreeOwnerActive } from "../worktree-owner-activity.js";
 import { createWorktreesHandlers } from "./worktrees.js";
 
 const record: ManagedWorktreeRecord = {
@@ -72,7 +73,7 @@ describe("worktrees gateway methods", () => {
     ]);
     expect(service.gc).toHaveBeenCalledWith({
       limits: {},
-      isOwnerActive: expect.any(Function),
+      isOwnerActive: isManagedWorktreeOwnerActive,
     });
 
     expect(service.create).toHaveBeenCalledWith({

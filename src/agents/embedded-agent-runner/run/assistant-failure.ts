@@ -29,7 +29,7 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 const MAX_EMPTY_ERROR_RETRIES = 3;
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 
-export type EmbeddedRunAssistantFailureOutcome = {
+type EmbeddedRunAssistantFailureOutcome = {
   action: "retry" | "proceed";
   thinkLevel: ThinkLevel;
   authRetryPending: boolean;

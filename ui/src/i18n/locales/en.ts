@@ -475,6 +475,7 @@ export const en: TranslationMap = {
     cloudSecureContextRequired:
       "Cloud workers need a secure browser context so recovery can protect your task.",
     cloudStartFailed: "The session was created locally, but cloud startup failed: {error}",
+    cloudSyncsFolder: "Syncs {folder} to the cloud worker",
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     browse: "Browse folders",
@@ -1575,6 +1576,8 @@ export const en: TranslationMap = {
     attachSession: "Attach session",
     attachFailed: "Could not attach terminal session",
     starting: "Starting terminal…",
+    connecting: "Connecting to session…",
+    connectionTimedOut: "Session did not connect within 30 seconds.",
     tabLabel: "shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",
