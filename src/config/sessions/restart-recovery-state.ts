@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
   RestartRecoveryTerminalDeliveryEvidence,
   RestartRecoveryTerminalDeliveryEvidenceResult,
@@ -299,8 +300,7 @@ export function normalizeRestartRecoveryEntryFields(
   );
   assign(
     "restartRecoveryTerminalDeliveryEvidence",
-    JSON.stringify(entry.restartRecoveryTerminalDeliveryEvidence) ===
-      JSON.stringify(terminalDeliveryEvidence)
+    isDeepStrictEqual(entry.restartRecoveryTerminalDeliveryEvidence, terminalDeliveryEvidence)
       ? entry.restartRecoveryTerminalDeliveryEvidence
       : terminalDeliveryEvidence,
   );
