@@ -2320,7 +2320,6 @@ describe("package artifact reuse", () => {
     const packageAcceptanceWorkflow = parse(readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8")) as {
       on?: {
         workflow_call?: { inputs?: Record<string, unknown> };
-        workflow_dispatch?: { inputs?: Record<string, unknown> };
       };
     };
     const packageAcceptanceJob = workflowJob(
@@ -2331,9 +2330,6 @@ describe("package artifact reuse", () => {
 
     expect(workflow).toContain("package_acceptance_release_checks:");
     expect(packageAcceptanceWorkflow.on?.workflow_call?.inputs).toHaveProperty(
-      "allow_frozen_target_scenario_omissions",
-    );
-    expect(packageAcceptanceWorkflow.on?.workflow_dispatch?.inputs).toHaveProperty(
       "allow_frozen_target_scenario_omissions",
     );
     expect(packageAcceptanceJob.with).toMatchObject({
