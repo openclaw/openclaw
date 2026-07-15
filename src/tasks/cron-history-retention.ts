@@ -9,10 +9,18 @@ function isTerminalTask(task: TaskRecord): boolean {
   return task.status !== "queued" && task.status !== "running";
 }
 
+function cronStoreKeyForRetention(task: TaskRecord): string | undefined {
+  const detail = task.detail;
+  if (detail === null || typeof detail !== "object" || Array.isArray(detail)) {
+    return undefined;
+  }
+  return typeof detail.storeKey === "string" ? detail.storeKey : undefined;
+}
+
 export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]): Set<string> {
-  // sourceId is the ledger's global cron-job owner key; storeKey remains only
-  // a history-read partition and must not split the per-source retention cap.
-  const bySource = new Map<string, TaskRecord[]>();
+  // Cron job ids are unique within one configured store. Rows from releases
+  // before storeKey was recorded remain together in the undefined partition.
+  const byStoreAndSource = new Map<string | undefined, Map<string, TaskRecord[]>>();
   for (const task of tasks) {
     if (
       task.runtime !== "cron" ||
@@ -22,19 +30,24 @@ export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]):
     ) {
       continue;
     }
+    const storeKey = cronStoreKeyForRetention(task);
+    const bySource = byStoreAndSource.get(storeKey) ?? new Map<string, TaskRecord[]>();
     const rows = bySource.get(task.sourceId) ?? [];
     rows.push(task);
     bySource.set(task.sourceId, rows);
+    byStoreAndSource.set(storeKey, bySource);
   }
   const overflow = new Set<string>();
-  for (const rows of bySource.values()) {
-    rows.sort((left, right) => {
-      const leftAt = left.endedAt ?? left.lastEventAt ?? left.createdAt;
-      const rightAt = right.endedAt ?? right.lastEventAt ?? right.createdAt;
-      return rightAt - leftAt || right.taskId.localeCompare(left.taskId);
-    });
-    for (const task of rows.slice(CRON_HISTORY_KEEP_PER_JOB)) {
-      overflow.add(task.taskId);
+  for (const bySource of byStoreAndSource.values()) {
+    for (const rows of bySource.values()) {
+      rows.sort((left, right) => {
+        const leftAt = left.endedAt ?? left.lastEventAt ?? left.createdAt;
+        const rightAt = right.endedAt ?? right.lastEventAt ?? right.createdAt;
+        return rightAt - leftAt || right.taskId.localeCompare(left.taskId);
+      });
+      for (const task of rows.slice(CRON_HISTORY_KEEP_PER_JOB)) {
+        overflow.add(task.taskId);
+      }
     }
   }
   return overflow;
