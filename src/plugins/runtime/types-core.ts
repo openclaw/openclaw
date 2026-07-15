@@ -189,7 +189,7 @@ export type RunHeartbeatOnceOptions = {
   heartbeat?: { target?: string };
 };
 
-export type LlmCompleteMessage = {
+type LlmCompleteMessage = {
   role: "system" | "user" | "assistant";
   content: string;
 };

@@ -84,12 +84,12 @@ type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin
 
 export type PluginTextTransformRegistration = PluginTextTransforms;
 
-export type OpenClawPluginSessionStateApi = {
+type OpenClawPluginSessionStateApi = {
   /** Register plugin-owned session state projected into Gateway session rows. */
   registerSessionExtension: (extension: PluginSessionExtensionRegistration) => void;
 };
 
-export type OpenClawPluginSessionWorkflowApi = {
+type OpenClawPluginSessionWorkflowApi = {
   /** Queue one plugin-owned context injection for the next agent turn in a session. */
   enqueueNextTurnInjection: (
     injection: PluginNextTurnInjection,
@@ -119,31 +119,31 @@ export type OpenClawPluginSessionWorkflowApi = {
   ) => Promise<PluginSessionTurnUnscheduleByTagResult>;
 };
 
-export type OpenClawPluginSessionControlsApi = {
+type OpenClawPluginSessionControlsApi = {
   /** Register a typed session action that clients can dispatch through the Gateway. */
   registerSessionAction: (action: PluginSessionActionRegistration) => void;
   /** Register a generic Control UI contribution descriptor. */
   registerControlUiDescriptor: (descriptor: PluginControlUiDescriptor) => void;
 };
 
-export type OpenClawPluginSessionApi = {
+type OpenClawPluginSessionApi = {
   state: OpenClawPluginSessionStateApi;
   workflow: OpenClawPluginSessionWorkflowApi;
   controls: OpenClawPluginSessionControlsApi;
 };
 
-export type OpenClawPluginAgentEventsApi = {
+type OpenClawPluginAgentEventsApi = {
   /** Subscribe to sanitized agent events through the host-owned plugin lifecycle. */
   registerAgentEventSubscription: (subscription: PluginAgentEventSubscriptionRegistration) => void;
   /** Emit a host-routed, plugin-attributed event for workflow/UI subscribers. */
   emitAgentEvent: (params: PluginAgentEventEmitParams) => PluginAgentEventEmitResult;
 };
 
-export type OpenClawPluginAgentApi = {
+type OpenClawPluginAgentApi = {
   events: OpenClawPluginAgentEventsApi;
 };
 
-export type OpenClawPluginRunContextApi = {
+type OpenClawPluginRunContextApi = {
   /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
   setRunContext: (patch: PluginRunContextPatch) => boolean;
   /** Read namespaced plugin data for a run. */
@@ -152,7 +152,7 @@ export type OpenClawPluginRunContextApi = {
   clearRunContext: (params: { runId: string; namespace?: string }) => void;
 };
 
-export type OpenClawPluginLifecycleApi = {
+type OpenClawPluginLifecycleApi = {
   /** Register cleanup hooks for plugin-owned host state and background work. */
   registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
 };

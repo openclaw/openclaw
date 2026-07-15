@@ -22,6 +22,10 @@ export class Agent extends CoreAgent {
 
 // OpenClaw-owned reusable agent core
 export { runAgentLoop } from "../../packages/agent-core/src/index.js";
+// Documented proxy stream API stays until this entrypoint's announced
+// public demotion window (registry: plugin-sdk-agent-core-public-demotion).
+export { streamProxy } from "../agents/runtime/proxy.js";
+export type { ProxyAssistantMessageEvent, ProxyStreamOptions } from "../agents/runtime/proxy.js";
 export {
   bashExecutionToText,
   buildSessionContext,

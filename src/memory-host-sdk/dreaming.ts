@@ -15,11 +15,11 @@ import {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
-export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
-export const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
-export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
-export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
+const DEFAULT_MEMORY_DREAMING_ENABLED = false;
+const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
+const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
+const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
+const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
 export const MANAGED_MEMORY_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
@@ -32,47 +32,41 @@ export const LEGACY_MEMORY_LIGHT_DREAMING_EVENT_TEXT = "__openclaw_memory_core_l
 export const LEGACY_MEMORY_REM_DREAMING_CRON_NAME = "Memory REM Dreaming";
 export const LEGACY_MEMORY_REM_DREAMING_CRON_TAG = "[managed-by=memory-core.dreaming.rem]";
 export const LEGACY_MEMORY_REM_DREAMING_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
-
-export const DEFAULT_MEMORY_LIGHT_DREAMING_CRON_EXPR = "0 */6 * * *";
-export const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
-export const DEFAULT_MEMORY_LIGHT_DREAMING_LIMIT = 100;
-export const DEFAULT_MEMORY_LIGHT_DREAMING_DEDUPE_SIMILARITY = 0.9;
-
-export const DEFAULT_MEMORY_DEEP_DREAMING_CRON_EXPR = "0 3 * * *";
+const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
+const DEFAULT_MEMORY_LIGHT_DREAMING_LIMIT = 100;
+const DEFAULT_MEMORY_LIGHT_DREAMING_DEDUPE_SIMILARITY = 0.9;
 export const DEFAULT_MEMORY_DEEP_DREAMING_LIMIT = 10;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.8;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS = 14;
-export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS = 30;
+const DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS = 30;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS = 160;
 
-export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_ENABLED = true;
-export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_TRIGGER_BELOW_HEALTH = 0.35;
-export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_LOOKBACK_DAYS = 30;
-export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MAX_CANDIDATES = 20;
-export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MIN_CONFIDENCE = 0.9;
-export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_AUTO_WRITE_MIN_CONFIDENCE = 0.97;
+const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_ENABLED = true;
+const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_TRIGGER_BELOW_HEALTH = 0.35;
+const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_LOOKBACK_DAYS = 30;
+const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MAX_CANDIDATES = 20;
+const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MIN_CONFIDENCE = 0.9;
+const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_AUTO_WRITE_MIN_CONFIDENCE = 0.97;
+const DEFAULT_MEMORY_REM_DREAMING_LOOKBACK_DAYS = 7;
+const DEFAULT_MEMORY_REM_DREAMING_LIMIT = 10;
+const DEFAULT_MEMORY_REM_DREAMING_MIN_PATTERN_STRENGTH = 0.75;
 
-export const DEFAULT_MEMORY_REM_DREAMING_CRON_EXPR = "0 5 * * 0";
-export const DEFAULT_MEMORY_REM_DREAMING_LOOKBACK_DAYS = 7;
-export const DEFAULT_MEMORY_REM_DREAMING_LIMIT = 10;
-export const DEFAULT_MEMORY_REM_DREAMING_MIN_PATTERN_STRENGTH = 0.75;
+const DEFAULT_MEMORY_DREAMING_SPEED = "balanced";
+const DEFAULT_MEMORY_DREAMING_THINKING = "medium";
+const DEFAULT_MEMORY_DREAMING_BUDGET = "medium";
 
-export const DEFAULT_MEMORY_DREAMING_SPEED = "balanced";
-export const DEFAULT_MEMORY_DREAMING_THINKING = "medium";
-export const DEFAULT_MEMORY_DREAMING_BUDGET = "medium";
+type MemoryDreamingSpeed = "fast" | "balanced" | "slow";
+type MemoryDreamingThinking = "low" | "medium" | "high";
+type MemoryDreamingBudget = "cheap" | "medium" | "expensive";
+type MemoryDreamingStorageMode = "inline" | "separate" | "both";
 
-export type MemoryDreamingSpeed = "fast" | "balanced" | "slow";
-export type MemoryDreamingThinking = "low" | "medium" | "high";
-export type MemoryDreamingBudget = "cheap" | "medium" | "expensive";
-export type MemoryDreamingStorageMode = "inline" | "separate" | "both";
+type MemoryLightDreamingSource = "daily" | "sessions" | "recall";
+type MemoryDeepDreamingSource = "daily" | "memory" | "sessions" | "logs" | "recall";
+type MemoryRemDreamingSource = "memory" | "daily" | "deep";
 
-export type MemoryLightDreamingSource = "daily" | "sessions" | "recall";
-export type MemoryDeepDreamingSource = "daily" | "memory" | "sessions" | "logs" | "recall";
-export type MemoryRemDreamingSource = "memory" | "daily" | "deep";
-
-export type MemoryDreamingExecutionConfig = {
+type MemoryDreamingExecutionConfig = {
   speed: MemoryDreamingSpeed;
   thinking: MemoryDreamingThinking;
   budget: MemoryDreamingBudget;
@@ -87,7 +81,7 @@ export type MemoryDreamingStorageConfig = {
   separateReports: boolean;
 };
 
-export type MemoryLightDreamingConfig = {
+type MemoryLightDreamingConfig = {
   enabled: boolean;
   cron: string;
   lookbackDays: number;
@@ -97,7 +91,7 @@ export type MemoryLightDreamingConfig = {
   execution: MemoryDreamingExecutionConfig;
 };
 
-export type MemoryDeepDreamingRecoveryConfig = {
+type MemoryDeepDreamingRecoveryConfig = {
   enabled: boolean;
   triggerBelowHealth: number;
   lookbackDays: number;
@@ -106,7 +100,7 @@ export type MemoryDeepDreamingRecoveryConfig = {
   autoWriteMinConfidence: number;
 };
 
-export type MemoryDeepDreamingConfig = {
+type MemoryDeepDreamingConfig = {
   enabled: boolean;
   cron: string;
   limit: number;
@@ -121,7 +115,7 @@ export type MemoryDeepDreamingConfig = {
   execution: MemoryDreamingExecutionConfig;
 };
 
-export type MemoryRemDreamingConfig = {
+type MemoryRemDreamingConfig = {
   enabled: boolean;
   cron: string;
   lookbackDays: number;
@@ -133,7 +127,7 @@ export type MemoryRemDreamingConfig = {
 
 export type MemoryDreamingPhaseName = "light" | "deep" | "rem";
 
-export type MemoryDreamingConfig = {
+type MemoryDreamingConfig = {
   enabled: boolean;
   frequency: string;
   timezone?: string;
@@ -149,12 +143,12 @@ export type MemoryDreamingConfig = {
   };
 };
 
-export type MemoryDreamingWorkspace = {
+type MemoryDreamingWorkspace = {
   workspaceDir: string;
   agentIds: string[];
 };
 
-export type MemoryDreamingWorkspaceOptions = {
+type MemoryDreamingWorkspaceOptions = {
   primaryWorkspaceDir?: string | null;
   primaryAgentId?: string | null;
   env?: NodeJS.ProcessEnv;

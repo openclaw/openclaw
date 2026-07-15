@@ -29,7 +29,7 @@ function resolveCachedPreferredTmpDir(): string {
 }
 
 /** Builds the baseline local media root allowlist from state/config directories. */
-export function buildMediaLocalRoots(
+function buildMediaLocalRoots(
   stateDir: string,
   configDir: string,
   options: BuildMediaLocalRootsOptions = {},

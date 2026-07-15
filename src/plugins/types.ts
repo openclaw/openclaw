@@ -7,16 +7,6 @@
 export type { AgentHarness } from "../agents/harness/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type {
-  AgentToolResultMiddleware,
-  AgentToolResultMiddlewareContext,
-  AgentToolResultMiddlewareEvent,
-  AgentToolResultMiddlewareHarness,
-  AgentToolResultMiddlewareOptions,
-  AgentToolResultMiddlewareResult,
-  AgentToolResultMiddlewareRuntime,
-  OpenClawAgentToolResult,
-} from "./agent-tool-result-middleware-types.js";
-export type {
   CliBackendAuthEpochMode,
   CliBackendExecutionMode,
   CliBackendNormalizeConfigContext,
@@ -29,7 +19,6 @@ export type {
   CliBackendSideQuestionToolMode,
   CliBackendThinkingLevel,
   CliBundleMcpMode,
-  PluginTextReplacement,
   PluginTextTransforms,
 } from "./cli-backend.types.js";
 export type {
@@ -37,48 +26,11 @@ export type {
   PluginConversationBindingRequestParams,
   PluginConversationBindingRequestResult,
   PluginConversationBindingResolvedEvent,
-  PluginConversationBindingResolutionDecision,
 } from "./conversation-binding.types.js";
 export * from "./hook-types.js";
-export type {
-  PluginAgentEventEmitParams,
-  PluginAgentEventEmitResult,
-  PluginAgentEventSubscriptionRegistration,
-  PluginAgentTurnPrepareEvent,
-  PluginAgentTurnPrepareResult,
-  PluginControlUiDescriptor,
-  PluginHeartbeatPromptContributionEvent,
-  PluginHeartbeatPromptContributionResult,
-  PluginJsonValue,
-  PluginNextTurnInjection,
-  PluginNextTurnInjectionEnqueueResult,
-  PluginNextTurnInjectionRecord,
-  PluginRunContextGetParams,
-  PluginRunContextPatch,
-  PluginRuntimeLifecycleRegistration,
-  PluginSessionActionContext,
-  PluginSessionActionRegistration,
-  PluginSessionActionResult,
-  PluginSessionAttachmentParams,
-  PluginSessionAttachmentResult,
-  PluginSessionExtensionProjection,
-  PluginSessionExtensionRegistration,
-  PluginSessionSchedulerJobHandle,
-  PluginSessionSchedulerJobRegistration,
-  PluginSessionTurnScheduleParams,
-  PluginSessionTurnUnscheduleByTagParams,
-  PluginSessionTurnUnscheduleByTagResult,
-  PluginToolMetadataRegistration,
-  PluginTrustedToolPolicyRegistration,
-} from "./host-hooks.js";
+export type { PluginAgentTurnPrepareResult, PluginNextTurnInjectionRecord } from "./host-hooks.js";
 export type { PluginLogger } from "./logger-types.js";
-export type {
-  PluginBundleFormat,
-  PluginConfigUiHint,
-  PluginDiagnostic,
-  PluginFormat,
-} from "./manifest-types.js";
-export type { PluginKind } from "./plugin-kind.types.js";
+export type { PluginConfigUiHint } from "./manifest-types.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
 export type {
   ProviderApplyConfigDefaultsContext,
@@ -88,19 +40,14 @@ export type {
 export type {
   ProviderAuthOptionBag,
   ProviderExternalAuthProfile,
-  ProviderExternalOAuthProfile,
   ProviderResolveExternalAuthProfilesContext,
-  ProviderResolveExternalOAuthProfilesContext,
   ProviderResolveSyntheticAuthContext,
-  ProviderSyntheticAuthResult,
 } from "./provider-external-auth.types.js";
 export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 export type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingPolicyContext,
-  ProviderThinkingProfile,
 } from "./provider-thinking.types.js";
-export type { PluginRuntime } from "./runtime/types.js";
 export type {
   OpenClawPluginActiveModelContext,
   OpenClawPluginHookOptions,
@@ -117,19 +64,13 @@ export type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
   WebFetchCredentialResolutionSource,
-  WebFetchProviderContext,
-  WebFetchProviderId,
   WebFetchProviderPlugin,
   WebFetchProviderToolDefinition,
-  WebFetchRuntimeMetadataContext,
   WebSearchCredentialResolutionSource,
-  WebSearchProviderContext,
-  WebSearchProviderId,
   WebSearchProviderPlugin,
   WebSearchProviderSetupContext,
   WebSearchProviderToolDefinition,
   WebSearchProviderToolExecutionContext,
-  WebSearchRuntimeMetadataContext,
 } from "./web-provider-types.js";
 export type * from "./types.mcp-connection.js";
 

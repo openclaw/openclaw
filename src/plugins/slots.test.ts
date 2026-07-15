@@ -1,8 +1,8 @@
 /** Tests plugin slot normalization and exclusive slot selection behavior. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginKind } from "./plugin-kind.types.js";
 import { applyExclusiveSlotSelection, hasKind, kindsEqual } from "./slots.js";
-import type { PluginKind } from "./types.js";
 
 describe("applyExclusiveSlotSelection", () => {
   const createMemoryConfig = (plugins?: OpenClawConfig["plugins"]): OpenClawConfig => ({

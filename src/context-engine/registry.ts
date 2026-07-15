@@ -27,7 +27,7 @@ import type {
  * Provides config and path information so plugins can initialize engines
  * without fragile workarounds.
  */
-export type ContextEngineFactoryContext = {
+type ContextEngineFactoryContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -42,7 +42,7 @@ export type ContextEngineFactoryContext = {
  * backward compatible because TypeScript permits assigning functions with
  * fewer parameters to wider signatures.
  */
-export type ContextEngineFactory = (
+type ContextEngineFactory = (
   ctx: ContextEngineFactoryContext,
 ) => ContextEngine | Promise<ContextEngine>;
 type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };

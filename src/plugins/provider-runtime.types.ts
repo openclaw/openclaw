@@ -11,7 +11,7 @@ import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 type ModelProviderRequestTransportOverrides =
   import("../agents/provider-request-config.js").ModelProviderRequestTransportOverrides;
 
-export type ProviderRuntimeProviderConfig = {
+type ProviderRuntimeProviderConfig = {
   baseUrl?: string;
   api?: ModelProviderConfig["api"];
   auth?: ModelProviderConfig["auth"];
@@ -168,7 +168,7 @@ export type ProviderResolveUsageAuthContext = {
   resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
 };
 
-export type ProviderUsageAuthToken = {
+type ProviderUsageAuthToken = {
   token: string;
   accountId?: string;
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
@@ -240,7 +240,7 @@ export type ProviderAuthDoctorHintContext = {
  * into the merged `extraParams` object. Return the full next extraParams object.
  */
 /** Provider-facing effort after OpenClaw lowers orchestration-only modes. */
-export type ProviderTransportThinkingLevel = Exclude<ThinkLevel, "ultra">;
+type ProviderTransportThinkingLevel = Exclude<ThinkLevel, "ultra">;
 
 export type ProviderPrepareExtraParamsContext = {
   config?: OpenClawConfig;
