@@ -374,4 +374,52 @@ describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
       updatedAt: 2,
     });
   });
+
+  it("preserves an in-place nested cache update", async () => {
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5.4",
+    };
+    const staleAutoEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: probe.fallbackProvider,
+      modelOverride: probe.fallbackModel,
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: probe.provider,
+      modelOverrideFallbackOriginModel: probe.model,
+      cliSessionBindings: {
+        codex: { sessionId: "old-cli-session" },
+      },
+    };
+    const activeSessionStore = { main: staleAutoEntry };
+    state.updateSessionEntryMock.mockImplementationOnce(
+      async (_scope: unknown, update: (entry: SessionEntry) => unknown) => {
+        const persistedEntry = structuredClone(staleAutoEntry);
+        const patch = await update(persistedEntry);
+        staleAutoEntry.cliSessionBindings!.codex!.sessionId = "new-cli-session";
+        return { ...persistedEntry, ...(patch as Partial<SessionEntry>) };
+      },
+    );
+
+    await clearRecoveredAutoFallbackPrimaryProbeSelection({
+      run: {
+        provider: probe.provider,
+        model: probe.model,
+        autoFallbackPrimaryProbe: probe,
+      } as FollowupRun["run"],
+      provider: probe.provider,
+      model: probe.model,
+      sessionKey: "main",
+      activeSessionStore,
+      getActiveSessionEntry: () => staleAutoEntry,
+      storePath: "/tmp/sessions.sqlite",
+    });
+
+    expect(activeSessionStore.main).toBe(staleAutoEntry);
+    expect(activeSessionStore.main.cliSessionBindings?.codex?.sessionId).toBe("new-cli-session");
+    expect(activeSessionStore.main.modelOverride).toBe(probe.fallbackModel);
+  });
 });

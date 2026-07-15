@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -12,11 +13,7 @@ import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../se
 import type { FollowupRun } from "./queue.js";
 
 function sessionEntryMatchesSnapshot(entry: SessionEntry, snapshot: SessionEntry): boolean {
-  const fields = new Set<keyof SessionEntry>([
-    ...(Object.keys(entry) as Array<keyof SessionEntry>),
-    ...(Object.keys(snapshot) as Array<keyof SessionEntry>),
-  ]);
-  return [...fields].every((field) => Object.is(entry[field], snapshot[field]));
+  return isDeepStrictEqual(entry, snapshot);
 }
 
 /** Decides whether to retry after rechecking auto-fallback primary probe state. */
@@ -111,7 +108,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
   if (!activeSessionEntry || !entryMatchesAutoFallbackPrimaryProbe(activeSessionEntry, probe)) {
     return;
   }
-  const activeSessionEntryBeforeUpdate = { ...activeSessionEntry };
+  const activeSessionEntryBeforeUpdate = structuredClone(activeSessionEntry);
   if (!params.storePath) {
     clearAutoFallbackPrimaryProbeSelection(activeSessionEntry);
     params.activeSessionStore[params.sessionKey] = activeSessionEntry;
