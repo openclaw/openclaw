@@ -2,8 +2,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
-  hasCanonicalOperatorApprovalKinds,
-  repairOperatorApprovalKinds,
+  assertCanonicalOperatorApprovalKinds,
+  repairOperatorApprovalSchema,
 } from "./openclaw-state-db-operator-approval-migration.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
@@ -42,11 +42,15 @@ describe("repairOperatorApprovalKinds", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(legacyTwoKindCreateSql());
     seedRow(db, "exec");
-    expect(hasCanonicalOperatorApprovalKinds(db)).toBe(false);
+    expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).toThrow(
+      "legacy operator approval schema",
+    );
 
-    expect(repairOperatorApprovalKinds(db)).toBe(true);
+    expect(repairOperatorApprovalSchema(db)).toEqual([
+      "Migrated shared state operator approvals → OpenClaw system changes",
+    ]);
 
-    expect(hasCanonicalOperatorApprovalKinds(db)).toBe(true);
+    expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
     const rows = db.prepare("SELECT approval_id, kind FROM operator_approvals").all();
     expect(rows).toEqual([{ approval_id: "a1", kind: "exec" }]);
     db.close();
@@ -55,7 +59,7 @@ describe("repairOperatorApprovalKinds", () => {
   it("is a no-op when the schema is already canonical", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(canonicalOperatorApprovalCreateSql());
-    expect(repairOperatorApprovalKinds(db)).toBe(false);
+    expect(repairOperatorApprovalSchema(db)).toEqual([]);
     db.close();
   });
 
@@ -68,7 +72,7 @@ describe("repairOperatorApprovalKinds", () => {
     );
     seedRow(db, "custom-thing");
 
-    expect(repairOperatorApprovalKinds(db)).toBe(false);
+    expect(repairOperatorApprovalSchema(db)).toEqual([]);
 
     // The unrecognized table is left untouched.
     const rows = db.prepare("SELECT approval_id, kind FROM operator_approvals").all();
