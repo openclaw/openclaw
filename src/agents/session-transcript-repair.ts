@@ -1,8 +1,4 @@
-/**
- * Transcript repair helpers for tool-call replay.
- *
- * Normalizes raw tool-call blocks and synthesizes missing tool results without rewriting trusted local payloads.
- */
+/** Transcript repair helpers for tool-call replay. */
 import {
   hasNonEmptyString as hasNonEmptyStringField,
   normalizeLowercaseStringOrEmpty,
@@ -107,9 +103,8 @@ function isFinalizedOpenAIResponsesToolCall(
 }
 
 function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
-  // This repair path normalizes replay shape only. Tool payloads are local
-  // trusted-operator transcript state per SECURITY.md, so do not redact or
-  // rewrite sessions_spawn arguments here.
+  // This repair path normalizes replay shape only. Tool payloads are trusted
+  // operator transcript state per SECURITY.md, do not redact or rewrite.
   const rawName = readStringValue(block.name);
   const trimmedName = rawName?.trim();
   const hasTrimmedName = typeof trimmedName === "string" && trimmedName.length > 0;
@@ -189,10 +184,8 @@ const SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY = "openclawSyntheticMissingToolRe
 function makeMissingToolResult(params: {
   toolCallId: string;
   toolName?: string;
-  // OpenAI Responses/Codex replay should match upstream Codex's "aborted"
-  // function_call_output normalization; live coverage in
-  // openai-reasoning-compat.live.test.ts and tool-replay-repair.live.test.ts
-  // sends this repaired history to real models. Other providers keep the older,
+  // OpenAI Responses/Codex replay matches upstream Codex's "aborted"
+  // function_call_output normalization. Other providers keep the older
   // explicit OpenClaw diagnostic text unless the caller opts in.
   text?: string;
 }): Extract<AgentMessage, { role: "toolResult" }> {
@@ -293,10 +286,7 @@ type ToolCallInputRepairOptions = {
   allowProviderOwnedThinkingReplay?: boolean;
 };
 
-type ErroredAssistantResultPolicy = "preserve" | "drop";
-
 type ToolUseResultPairingOptions = {
-  erroredAssistantResultPolicy?: ErroredAssistantResultPolicy;
   missingToolResultText?: string;
 };
 
@@ -537,17 +527,13 @@ export function sanitizeToolUseResultPairing(
   return repairToolUseResultPairing(messages, options).messages;
 }
 
-type ToolUseRepairReport = {
+export type ToolUseRepairReport = {
   messages: AgentMessage[];
   added: Array<Extract<AgentMessage, { role: "toolResult" }>>;
   droppedDuplicateCount: number;
   droppedOrphanCount: number;
   moved: boolean;
 };
-
-function shouldDropErroredAssistantResults(options?: ToolUseResultPairingOptions): boolean {
-  return options?.erroredAssistantResultPolicy === "drop";
-}
 
 function assistantHasToolCalls(message: AgentMessage): boolean {
   if (!message || typeof message !== "object" || message.role !== "assistant") {
@@ -588,11 +574,9 @@ export function repairToolUseResultPairing(
   options?: ToolUseResultPairingOptions,
 ): ToolUseRepairReport {
   // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
-  // immediately followed by matching tool results. Session files can end up with results
-  // displaced (e.g. after user turns) or duplicated. Repair by:
-  // - moving matching toolResult messages directly after their assistant toolCall turn
-  // - inserting synthetic error toolResults for missing ids
-  // - dropping duplicate toolResults for the same id (anywhere in the transcript)
+  // immediately followed by matching tool results. Session files can have displaced or
+  // duplicated results. Repair by moving toolResults after their toolCall turn, inserting
+  // synthetic error toolResults for missing ids, and dropping duplicates.
   const out: AgentMessage[] = [];
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   const seenToolResultIds = new Set<string>();
@@ -740,25 +724,14 @@ export function repairToolUseResultPairing(
       }
     }
 
-    // Aborted/errored assistant turns should never synthesize missing tool results, but
-    // the replay sanitizer can still legitimately retain real tool results for surviving
-    // tool calls in the same turn after malformed siblings are dropped.
+    // Aborted/errored assistant turns may have interrupted tool calls. However, we should
+    // NOT synthesize tool results for errored/aborted messages, as their tool_use blocks
+    // may be incomplete/malformed, which causes API 400 errors about mismatched tool_use_id.
+    // See: https://github.com/openclaw/openclaw/issues/107145
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
-      if (!shouldDropErroredAssistantResults(options)) {
-        out.push(msg);
-        for (const toolCall of toolCalls) {
-          const result = spanResultsById.get(toolCall.id);
-          if (!result) {
-            continue;
-          }
-          pushToolResult(result);
-        }
-      } else if (spanResultsById.size > 0) {
-        changed = true;
-      } else {
-        changed = true;
-      }
+      // Skip synthesis for errored/aborted assistant messages - pass through unchanged
+      out.push(msg);
       for (const rem of remainder) {
         out.push(rem);
       }

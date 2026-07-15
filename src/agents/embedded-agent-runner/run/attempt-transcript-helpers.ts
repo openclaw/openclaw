@@ -33,8 +33,9 @@ export function repairAttemptToolUseResultPairing(
   messages: AgentMessage[],
   isOpenAIResponsesApi: boolean,
 ): AgentMessage[] {
+  // Note: erroredAssistantResultPolicy was removed. Aborted/error messages now
+  // pass through unchanged without synthesizing tool results.
   return sanitizeToolUseResultPairing(messages, {
-    erroredAssistantResultPolicy: "drop",
     ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
   });
 }

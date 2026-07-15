@@ -795,7 +795,6 @@ export async function sanitizeSessionHistory(params: {
   const openAIRepairedToolCalls =
     isOpenAIResponsesApi && policy.repairToolUseResultPairing
       ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
-          erroredAssistantResultPolicy: "drop",
           // Match upstream Codex history normalization for OpenAI Responses:
           // missing function_call_output entries are model-visible "aborted".
           missingToolResultText: "aborted",
@@ -824,9 +823,7 @@ export async function sanitizeSessionHistory(params: {
   // the same ordering repair is live-tested with Gemini 3 Flash.
   const repairedTools =
     !isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(sanitizedToolIds, {
-          erroredAssistantResultPolicy: "drop",
-        })
+      ? sanitizeToolUseResultPairing(sanitizedToolIds, {})
       : sanitizedToolIds;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
@@ -852,7 +849,6 @@ export async function sanitizeSessionHistory(params: {
   const responsesProviderRepaired =
     isOpenAIResponsesApi && policy.repairToolUseResultPairing
       ? sanitizeToolUseResultPairing(sanitizedWithProvider, {
-          erroredAssistantResultPolicy: "drop",
           // Provider replay hooks run after the core repair pipeline and may
           // rewrite history. Keep the final Responses invariant guarded by the
           // same Codex-compatible repair instead of failing on hook output.

@@ -1601,7 +1601,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
           // assistant message that contained the matching tool_use.
           const limited = transcriptPolicy.repairToolUseResultPairing
             ? sanitizeToolUseResultPairing(truncated, {
-                erroredAssistantResultPolicy: "drop",
                 ...(effectiveModel.api === "openai-responses" ||
                 effectiveModel.api === "azure-openai-responses" ||
                 effectiveModel.api === "openai-chatgpt-responses"
