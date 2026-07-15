@@ -57,16 +57,9 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
-const {
-  getLoadConfigMock,
-  getOnHandler,
-  replySpy,
-  sendMessageSpy,
-  telegramBotDepsForTest,
-  telegramBotRuntimeForTest,
-} = harness;
-const { createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-  await import("./bot-core.js");
+const { getLoadConfigMock, getOnHandler, replySpy, sendMessageSpy, telegramBotDepsForTest } =
+  harness;
+const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const { runWithTelegramSpooledReplayUpdate, runWithTelegramUpdateProcessingFrame } =
   await import("./bot-processing-outcome.js");
 const { MediaFetchError } = await import("./telegram-media.runtime.js");
@@ -250,15 +243,9 @@ describe("createTelegramBot channel_post media", () => {
         ...opts,
         telegramDeps: telegramBotDepsForTest,
       });
-    setTelegramBotRuntimeForTest(
-      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-    );
   });
 
   beforeEach(() => {
-    setTelegramBotRuntimeForTest(
-      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-    );
     saveRemoteMedia.mockReset();
     saveRemoteMedia.mockImplementation(
       async (params: { fetchImpl: typeof fetch; maxBytes: number; url: string }) => {

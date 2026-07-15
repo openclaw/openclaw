@@ -20,12 +20,19 @@ type TerminalFactory = typeof import("./terminal-runtime.ts").createIsolatedGhos
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 
 function createTerminalController(dispose: () => void = vi.fn()) {
+  const wasmTerm = {};
+  const renderer = {
+    setTheme: vi.fn(),
+    render: vi.fn(),
+  };
   return {
     readOnly: false,
     terminal: {
       cols: 100,
       rows: 30,
       viewportY: 0,
+      wasmTerm,
+      renderer,
       write: vi.fn(),
       focus: vi.fn(),
       reset: vi.fn(),
@@ -193,6 +200,47 @@ describe("OpenClawTerminalPanel", () => {
         params: { sessionId: "session-1", cols: 120, rows: 40 },
       });
     });
+  });
+
+  it("forces a full render after hiding and showing the panel", async () => {
+    const controller = createTerminalController();
+    let createOptions: CreateOptions | undefined;
+    createGhosttyTerminalMock.mockImplementation(async (options: CreateOptions) => {
+      createOptions = options;
+      return controller;
+    });
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string) =>
+        (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    panel.toggle();
+
+    await vi.waitFor(() => expect(createOptions?.parent.isConnected).toBe(true));
+    controller.fit.mockClear();
+    controller.terminal.renderer.render.mockClear();
+
+    panel.toggle();
+    await panel.updateComplete;
+    expect(createOptions?.parent.isConnected).toBe(false);
+
+    panel.toggle();
+    await panel.updateComplete;
+
+    expect(createOptions?.parent.isConnected).toBe(true);
+    expect(controller.fit).toHaveBeenCalled();
+    expect(controller.terminal.renderer.render).toHaveBeenCalledWith(
+      controller.terminal.wasmTerm,
+      true,
+      0,
+      controller.terminal,
+      0,
+    );
   });
 
   it("flushes keystrokes entered while open is in flight after resize resync", async () => {

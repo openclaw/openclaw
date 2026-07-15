@@ -138,7 +138,6 @@
   "test-env",
   "test-fixtures",
   "test-node-mocks",
-  "testing",
   "temp-path",
   "time-runtime",
   "logging-core",
