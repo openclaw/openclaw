@@ -466,6 +466,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private func restoreLinkBrowserWidth(_ persistedWidth: CGFloat?) {
         let splitView = self.splitViewController.splitView
         splitView.layoutSubtreeIfNeeded()
+        // AppKit requires adjusted, current pane frames before divider positions
+        // are meaningful. Uncollapsing invalidates those frames.
+        splitView.adjustSubviews()
         let width = DashboardWindowLayout.linkBrowserWidth(
             splitWidth: splitView.bounds.width,
             dividerThickness: splitView.dividerThickness,
@@ -1302,11 +1305,7 @@ extension DashboardWindowController {
     }
 
     func _testSetLinkBrowserWidth(_ width: CGFloat) {
-        let splitView = self.splitViewController.splitView
-        splitView.setPosition(
-            splitView.bounds.width - splitView.dividerThickness - width,
-            ofDividerAt: 0)
-        splitView.layoutSubtreeIfNeeded()
+        self.restoreLinkBrowserWidth(width)
         self.linkBrowserSplitView._testCompleteDividerDrag()
     }
 
