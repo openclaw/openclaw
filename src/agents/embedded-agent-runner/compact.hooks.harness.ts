@@ -1067,3 +1067,4 @@ export async function loadCompactHooksHarness(): Promise<{
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

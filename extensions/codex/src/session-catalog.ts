@@ -594,6 +594,7 @@ async function readCodexSessionTranscript(params: {
       ...(params.cursor ? { cursor: params.cursor } : {}),
     },
     timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+    scopes: ["operator.write"],
   });
   const page = parseTranscriptPage(unwrapNodeInvokePayload(raw));
   return {
@@ -1335,3 +1336,4 @@ export const codexSessionCatalogRuntime = {
   continueNode: continueNodeCodexSession,
   archiveLocal: archiveLocalCodexSession,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

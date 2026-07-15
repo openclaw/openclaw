@@ -78,10 +78,22 @@ vi.mock("./app-server/shared-client.js", () => ({
 vi.mock("./app-server/transcript-mirror.js", () => ({
   importCodexThreadHistoryToTranscript: transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
 }));
-vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>()),
-  runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-}));
+vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
+  return {
+    ...actual,
+    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
+    resolveExecutableFromPathEnv: (
+      command: string,
+      pathEnv: string,
+      env?: NodeJS.ProcessEnv,
+      options?: { withPathEnv?: boolean },
+    ) =>
+      options?.withPathEnv
+        ? actual.resolveExecutableFromPathEnv(command, pathEnv, env, { withPathEnv: true })
+        : actual.resolveExecutableFromPathEnv(command, pathEnv, env),
+  };
+});
 
 type CreateSessionEntryParams = Parameters<
   PluginRuntime["agent"]["session"]["createSessionEntry"]
@@ -777,6 +789,7 @@ describe("Codex supervision catalog", () => {
         command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
         params: expect.not.objectContaining({ archived: expect.anything() }),
         timeoutMs: 65_000,
+        scopes: ["operator.write"],
       }),
     );
     expect(JSON.stringify(result)).not.toContain("private");
@@ -926,12 +939,14 @@ describe("Codex supervision catalog", () => {
       expect.objectContaining({
         nodeId: "healthy",
         params: { cursor: "healthy-page-2", limit: 7, searchTerm: "match" },
+        scopes: ["operator.write"],
       }),
     );
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "broken",
         params: { cursor: "broken-page-2", limit: 7, searchTerm: "match" },
+        scopes: ["operator.write"],
       }),
     );
     expect(result.hosts).toEqual([
@@ -3422,6 +3437,8 @@ describe("Codex supervision actions", () => {
       command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
       params: { threadId: "thread-remote", cursor: "remote-turns-1", limit: 25 },
       timeoutMs: 65_000,
+      scopes: ["operator.write"],
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

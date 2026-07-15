@@ -16,7 +16,9 @@ OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
 ## Surface
 
-skills; session catalog: pi
+skills
+
+<!-- openclaw-plugin-reference:manual-start -->
 
 ## Pi native sessions
 
@@ -29,6 +31,8 @@ from the directory containing their `settings.json` file.
 
 Turn **Pi Session Catalog** off under **Config > Plugins > ACPX Runtime** to
 disable discovery. It is enabled by default.
+
+<!-- openclaw-plugin-reference:manual-end -->
 
 ## Related docs
 

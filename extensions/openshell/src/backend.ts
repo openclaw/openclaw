@@ -61,7 +61,7 @@ function buildOpenShellDirectoryUploadArgs(params: {
   ];
 }
 
-export const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
+const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   "set -eu",
   'die() { echo "$1" >&2; exit 1; }',
   "validate_basename() {",
@@ -162,7 +162,7 @@ export const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   "    ;;",
   "esac",
 ].join("\n");
-export const ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT = [
+const ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT = [
   "set -e",
   'target="$1"',
   'root="${2:-$1}"',
@@ -1001,3 +1001,4 @@ function isRemotePathInside(root: string, candidate: string): boolean {
     (relative !== ".." && !relative.startsWith("../") && !path.posix.isAbsolute(relative))
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

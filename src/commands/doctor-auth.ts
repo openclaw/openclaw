@@ -194,7 +194,7 @@ function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTar
 }
 
 /** Returns the short doctor hint for disabled or cooldown auth profiles. */
-export function resolveUnusableProfileHint(params: {
+function resolveUnusableProfileHint(params: {
   kind: "cooldown" | "disabled";
   reason?: string;
 }): string {
@@ -227,7 +227,7 @@ function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | nul
 }
 
 /** Formats provider OAuth refresh failures as actionable doctor note lines. */
-export function formatOAuthRefreshFailureDoctorLine(params: {
+function formatOAuthRefreshFailureDoctorLine(params: {
   profileId: string;
   provider: string;
   message: string;

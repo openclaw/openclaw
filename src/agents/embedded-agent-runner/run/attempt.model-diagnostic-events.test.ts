@@ -1253,3 +1253,4 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(events[1]).not.toHaveProperty("errorCategory");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

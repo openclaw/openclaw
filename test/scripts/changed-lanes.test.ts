@@ -1429,6 +1429,7 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
+      "max-lines suppression ratchet",
       "changelog attributions",
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
@@ -2233,17 +2234,17 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
-  it("adds the changed-file LOC ratchet with worktree and staged scopes", () => {
+  it("adds the max-lines suppression ratchet with worktree and staged bases", () => {
     const result = detectChangedLanes(["src/runtime.ts"]);
     const worktreePlan = createChangedCheckPlan(result, { base: "main", head: "feature" });
     const stagedPlan = createChangedCheckPlan(result, { staged: true });
 
     expect(
-      worktreePlan.commands.find((command) => command.name === "TypeScript LOC ratchet"),
-    ).toMatchObject({ args: ["check:loc", "--base", "main", "--", "src/runtime.ts"] });
+      worktreePlan.commands.find((command) => command.name === "max-lines suppression ratchet"),
+    ).toMatchObject({ args: ["check:max-lines-ratchet", "--base", "main"] });
     expect(
-      stagedPlan.commands.find((command) => command.name === "TypeScript LOC ratchet"),
-    ).toMatchObject({ args: ["check:loc", "--staged", "--", "src/runtime.ts"] });
+      stagedPlan.commands.find((command) => command.name === "max-lines suppression ratchet"),
+    ).toMatchObject({ args: ["check:max-lines-ratchet", "--staged", "--base", "HEAD"] });
   });
 
   it("keeps the temp creation report out of non-test changed paths", () => {

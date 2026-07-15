@@ -143,22 +143,29 @@ Skills own workflows; root owns hard policy and routing.
 - Delegated Testbox rejects `--fresh-pr` and `--stop-after`; sync current checkout, workflow owns lifecycle.
 - PR review artifacts: keep template enum values; put evidence detail in summaries.
 - Crabbox request means real scenario proof: install/update/call/repro user path; not just copy tests and run them remotely.
+- Blacksmith Testbox delegated runs: omit `--stop-after`; unsupported, cleanup is delegated.
 - Visual proof: use Crabbox, set up like a user, then screenshot-verify. No harness/bypass/shortcut unless explicitly asked.
 - Trusted-source local agent work includes one/few focused tests, `git diff --check`, targeted formatting, and cheap static probes when dependencies already exist. Untrusted source executes none of its repository-controlled tooling locally. Computationally intensive work uses the selected remote box.
 - In Codex or linked worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
 - Direct Blacksmith lease: use `blacksmith testbox run`; Crabbox wrapper reuse needs a wrapper-created lease.
+- Wrapper Testbox reuse requires its local SSH key; missing after restart/handoff means warm fresh.
 - Dirty-sync generator proof: compare hashes before/after; `git diff` includes the synced patch.
 - Crabbox wrapper `stop` has no `--timing-json`; use `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <id>`.
 - Repo-native PR worktree may omit `node_modules`; prove remotely, then use `git commit --no-verify`, not `scripts/committer`.
 - Release-branch formatting: Testbox or existing binary; never local `pnpm exec` reconciliation.
+- Targeted local format/lint: existing `./node_modules/.bin/*`; never `pnpm exec` reconciliation.
 - Parallel agents share the checkout; never switch its branch while sibling work runs.
 - Testbox status: `blacksmith testbox status --id <tbx_id>`; no `--json` flag.
 - QA CLI `--output-dir` must be repo-relative.
 - Full suites, changed gates, builds, typechecks, lint fan-out, Docker/package/E2E/live/cross-OS proof, or anything computationally intensive: Crabbox/Testbox.
+- Testbox owns Chromium; never pass Crabbox `--browser` to `provider=blacksmith-testbox`.
+- Testbox warmup must print a lease id; silent success is unusable. Verify before reuse; fall back to one-shot `run`.
 - If local proof fans out or becomes expensive, stop it and lazily acquire the remote box.
 - Before handoff/push: prove touched surface. Before landing to `main`: proof matches actual risk. Bounded behavior-neutral refactor: focused tests/checks enough; no issue proof or full/broad suite by default.
 - Release-branch full validation: freeze the product-complete **Code SHA**, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`; no raw dispatch without `target_context_ref`.
 - Pre-land/pre-commit code changes: mandatory fresh `$autoreview` until no accepted/actionable findings remain. Do not land code on CI, ClawSweeper, prior review comments, or your own manual review alone unless user explicitly opts out or scope is truly trivial/docs-only. If findings want refactor, refactor; no ugly fixes.
+- Autoreview uncommitted changes: `--mode uncommitted`; no `dirty` mode.
+- Autoreview staged/uncommitted diff: use `--mode uncommitted`; no `staged` mode.
 - If proof is blocked, say exactly what is missing and why.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
 - Docs/changelog-only and CI/workflow metadata-only: `git diff --check` plus relevant docs/workflow sanity; escalate only if scripts/config/generated/package/runtime behavior changed.
@@ -173,19 +180,22 @@ Skills own workflows; root owns hard policy and routing.
 - Issue/PR start: `git status -sb`; if clean, `git pull --ff-only`; if dirty, yell before pull/rebase.
 - PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
 - `gh pr view` takes the branch positionally; no `--head` flag.
+- `gh pr diff` has no `--stat`; use `gh pr view --json changedFiles,additions,deletions` or `git diff --stat`.
 - zsh: quote `gh api` endpoints containing `?` or brackets; otherwise glob expansion corrupts the invocation.
 - Blacksmith Testbox status/stop: `--id <tbx_id>`; no status JSON flag.
 - Crabbox final timing JSON = proof complete; if portal sync hangs after it, interrupt wrapper only.
 - Sparse-sync temp checkout may claim kept Testbox; repo-path reuse needs `--reclaim`.
 - GitHub Actions: resolve workflow files from `.github/workflows` or API; never infer filenames from display names.
+- Yielded exec: retain the returned session id before polling; never blind-retry.
 - zsh: quote command globs; unmatched patterns abort before the tool runs.
+- Nested remote shell: avoid local `$()` expansion; use remote-safe validation.
 - zsh: don't use `path` as a variable; it rewrites `$PATH`.
 - `scripts/pr` artifacts: preserve template enum values; validate before prepare.
 - `scripts/pr` subcommands require a PR number; no subcommand `--help` placeholder.
 - `scripts/pr` review: checkout main baseline, then PR, before artifact validation.
 - Review artifacts: validate from PR-head mode; moving main invalidates main-baseline guard.
 - `scripts/pr` prepare/merge: `main` PRs only; non-main uses reviewed release-branch flow.
-- PR head changed: rerun `scripts/pr review-init`; checkout alone leaves stale guard SHA.
+- After every PR push, rerun `scripts/pr review-init`; checkout alone leaves stale guard SHA.
 - `rg`: options/globs before `--`; `--` immediately before a leading-dash pattern only.
 - `gh --jq` is not standalone `jq`; pipe JSON to `jq` for variables or `--arg`.
 - `gh api --paginate '<endpoint>' | jq -s ...`; gh `--slurp` may emit nothing and forbids `--jq`/`--template`.
@@ -221,7 +231,7 @@ Skills own workflows; root owns hard policy and routing.
 - GitHub issue/PR create: read `$agent-transcript`; ask about sanitized transcript logs when available.
 - Contributor PRs: parsed context requires authored `What Problem This Solves` and `Evidence` sections. Do not require field-level proof forms; reviewers inspect code, tests, and CI for correctness.
 - PR artifacts/screenshots: attach to PR/comment/external artifact store. Never push screenshots, videos, proof images, or proof assets to OpenClaw or any product repo branch, including temp artifact branches. Use Crabbox artifact publishing plus the manifest URL. Do not commit `.github/pr-assets`.
-- CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need. Never `gh run watch`; its 3s polling exhausts API quota. Use sparse GraphQL rollups.
+- CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need. Never `gh run watch`; its 3s polling exhausts API quota. Use sparse GraphQL rollups. Filter `gh run list` by workflow/branch/commit; broad JSON lists can exceed relay caps. `gh --jq` has no jq `--arg`; use `--commit` for SHA filtering.
 - Trusted-workflow release-branch CI: pass `target_ref` + `release_candidate_ref`; never `release_gate` (requires workflow head == target).
 - Agent PR landing to `main`: use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents so prepare verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full gates locally. `prepare-run` fails fast; invoke only after exact-head CI is complete and green. For owner-approved reviewed fork code without hosted Testbox, use `OPENCLAW_PR_GATES_REMOTE=testbox` instead. Do not rebase only because `main` advanced; merge drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts. Do not idle on `auto-response` or `check-docs`.
 - Non-main PRs: do not run `scripts/pr prepare-run` or `merge-run`; they diff against `main`. Use review artifacts, exact base-head CI, revalidate `headRefOid`, then `gh pr merge --match-head-commit <verified-sha>`.
@@ -262,6 +272,7 @@ Skills own workflows; root owns hard policy and routing.
 - Cycles: keep `pnpm check:import-cycles` + architecture/madge green.
 - Classes: no prototype mixins/mutations. Prefer inheritance/composition. Tests prefer per-instance stubs.
 - Split files around ~700 LOC when clarity/testability improves.
+- Never add a `max-lines` suppression. Existing suppressions are grandfathered TODOs; split the file and remove its suppression plus baseline entry.
 - Naming: **OpenClaw** product/docs; `openclaw` CLI/package/path/config.
 - English: American spelling.
 

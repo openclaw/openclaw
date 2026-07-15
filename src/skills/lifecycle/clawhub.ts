@@ -487,6 +487,7 @@ async function fetchInstallVerificationLock(params: {
   ownerHandle?: string;
   version?: string;
   baseUrl?: string;
+  logger?: Logger;
 }): Promise<ClawHubSkillVerificationLock | undefined> {
   try {
     const verification = await fetchClawHubSkillVerification({
@@ -496,7 +497,10 @@ async function fetchInstallVerificationLock(params: {
       baseUrl: params.baseUrl,
     });
     return snapshotClawHubSkillVerification(verification);
-  } catch {
+  } catch (err) {
+    params.logger?.warn?.(
+      `Skill verification for ${formatClawHubSkillRef(params)} failed: ${formatErrorMessage(err)}`,
+    );
     return undefined;
   }
 }
@@ -1472,6 +1476,7 @@ async function performClawHubSkillInstall(
           ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
           version: verificationVersion,
           baseUrl: params.baseUrl,
+          logger: params.logger,
         }),
       ]);
       const sourceUrl =
@@ -1679,3 +1684,4 @@ export async function untrackClawHubSkill(workspaceDir: string, slug: string): P
   delete lock.skills[trackedSlug];
   await writeClawHubSkillsLockfile(workspaceDir, lock);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

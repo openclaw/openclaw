@@ -192,12 +192,6 @@ function commandLookupKey(
   return `${client.apiBaseUrl}:${accountId}:${registered.teamId}:${registered.id}`;
 }
 
-export function resetMattermostSlashCommandValidationCacheForTests(): void {
-  commandLookupInflight.clear();
-  commandValidationFailureCache.clear();
-  commandValidationLookupRateLimit.clear();
-}
-
 export function clearMattermostSlashCommandValidationCacheForAccount(accountId: string): void {
   for (const [key, entry] of commandValidationFailureCache) {
     if (entry.accountId === accountId) {
@@ -946,3 +940,4 @@ async function handleSlashCommandAsync(params: {
       }),
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

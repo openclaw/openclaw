@@ -30,7 +30,6 @@ import {
   extractShellWrapperCommand,
   isShellWrapperInvocation,
 } from "../infra/exec-wrapper-resolution.js";
-import { listHostDirectories } from "../infra/host-directory-listing.js";
 import {
   inspectHostExecEnvOverrides,
   sanitizeHostExecEnv,
@@ -38,7 +37,6 @@ import {
 } from "../infra/host-env-security.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
-  NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
@@ -49,6 +47,7 @@ import {
   handleClaudeCliNodeInvoke,
   type NodeHostInvokeRuntime,
 } from "./invoke-agent-cli-claude-handler.js";
+import { invokeNodeFileCommand } from "./invoke-file-commands.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -63,6 +62,7 @@ import type {
   SystemRunParams,
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
+import { buildNodeEventParams } from "./node-event-params.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
@@ -659,15 +659,12 @@ async function dispatchInvoke(
     return;
   }
 
-  if (command === NODE_FS_LIST_DIR_COMMAND) {
-    try {
-      const params = decodeParams<{ path?: unknown }>(frame.paramsJSON);
-      if (params.path !== undefined && typeof params.path !== "string") {
-        throw new Error("INVALID_REQUEST: path must be a string");
-      }
-      await sendJsonPayloadResult(client, frame, await listHostDirectories(params.path));
-    } catch (err) {
-      await sendInvalidRequestResult(client, frame, err);
+  const fileCommand = await invokeNodeFileCommand(command, frame.paramsJSON);
+  if (fileCommand) {
+    if ("error" in fileCommand) {
+      await sendInvalidRequestResult(client, frame, fileCommand.error);
+    } else {
+      await sendJsonPayloadResult(client, frame, fileCommand.payload);
     }
     return;
   }
@@ -697,9 +694,11 @@ async function dispatchInvoke(
     });
     return;
   }
-
   try {
-    const pluginResult = await invokePlugin(command, frame.paramsJSON, runtime.pluginCommandIo);
+    const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
+    const invokeContext =
+      context && frame.sessionKey ? { ...context, sessionKey: frame.sessionKey } : context;
+    const pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
     if (pluginResult !== null) {
       await sendRawPayloadResult(client, frame, pluginResult);
       return;
@@ -1068,17 +1067,6 @@ function buildNodeInvokeResultParams(
   return params;
 }
 
-function buildNodeEventParams(
-  event: string,
-  payload: unknown,
-): { event: string; payloadJSON: string | null } {
-  const payloadJSON = payload === undefined ? undefined : JSON.stringify(payload);
-  return {
-    event,
-    payloadJSON: typeof payloadJSON === "string" ? payloadJSON : null,
-  };
-}
-
 async function sendNodeEvent(client: NodeHostClient, event: string, payload: unknown) {
   try {
     await client.request("node.event", buildNodeEventParams(event, payload));
@@ -1093,3 +1081,4 @@ export const testing = {
   clarifyNodeExecCwdSpawnError,
   runCommand,
 } as const;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

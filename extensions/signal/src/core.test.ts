@@ -19,6 +19,7 @@ import {
 import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client-adapter.js";
 import {
+  isSignalSenderAllowed,
   looksLikeUuid,
   normalizeSignalAllowRecipient,
   resolveSignalPeerId,
@@ -27,7 +28,6 @@ import {
 } from "./identity.js";
 import { probeSignal } from "./probe.js";
 import {
-  clearSignalReplyAuthorsForTest,
   registerSignalReplyContext,
   resolveSignalReplyContextWithPersistence,
 } from "./reply-authors.js";
@@ -59,7 +59,7 @@ describe("looksLikeUuid", () => {
 });
 
 describe("signal sender identity", () => {
-  it("prefers sourceNumber over sourceUuid", () => {
+  it("prefers sourceNumber over sourceUuid and keeps the uuid as an alias", () => {
     const sender = resolveSignalSender({
       sourceNumber: " +15550001111 ",
       sourceUuid: "123e4567-e89b-12d3-a456-426614174000",
@@ -68,6 +68,7 @@ describe("signal sender identity", () => {
       kind: "phone",
       raw: "+15550001111",
       e164: "+15550001111",
+      aliases: { uuid: "123e4567-e89b-12d3-a456-426614174000" },
     });
   });
 
@@ -101,6 +102,30 @@ describe("signal sender identity", () => {
     const sender = { kind: "uuid", raw: "123e4567-e89b-12d3-a456-426614174000" } as const;
     expect(resolveSignalRecipient(sender)).toBe("123e4567-e89b-12d3-a456-426614174000");
     expect(resolveSignalPeerId(sender)).toBe("uuid:123e4567-e89b-12d3-a456-426614174000");
+  });
+});
+
+describe("isSignalSenderAllowed", () => {
+  const uuid = "f4d0fe67-3b38-446d-828e-317c285ffa75";
+  const e164 = "+34688329273";
+
+  it("matches a phone-primary sender against a uuid allow entry via the alias", () => {
+    const sender = resolveSignalSender({ sourceNumber: e164, sourceUuid: uuid });
+    if (!sender) {
+      throw new Error("expected Signal sender");
+    }
+    expect(isSignalSenderAllowed(sender, [`uuid:${uuid}`])).toBe(true);
+  });
+
+  it("does not match unrelated allow entries even when an alias is present", () => {
+    const sender = resolveSignalSender({ sourceNumber: e164, sourceUuid: uuid });
+    if (!sender) {
+      throw new Error("expected Signal sender");
+    }
+    expect(isSignalSenderAllowed(sender, ["+15550009999"])).toBe(false);
+    expect(isSignalSenderAllowed(sender, ["uuid:00000000-0000-0000-0000-000000000000"])).toBe(
+      false,
+    );
   });
 });
 
@@ -1010,7 +1035,6 @@ describe("signal outbound", () => {
     await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toEqual({
       ambiguous: true,
     });
-    await clearSignalReplyAuthorsForTest();
   });
 
   it("keeps newer reply context when older events arrive out of order", async () => {
@@ -1032,11 +1056,9 @@ describe("signal outbound", () => {
       author: "+15551234567",
       body: "newer",
     });
-    await clearSignalReplyAuthorsForTest();
   });
 
   it("hydrates durable Signal sends with stored native quote context", async () => {
-    await clearSignalReplyAuthorsForTest();
     await registerSignalReplyContext({
       to: "signal:+15555550123",
       replyToId: "1700000000001",
@@ -1063,7 +1085,6 @@ describe("signal outbound", () => {
       replyToAuthor: "+15555550123",
       replyToBody: "original message",
     });
-    await clearSignalReplyAuthorsForTest();
   });
 
   it("declares message adapter durable text and media with receipt proofs", async () => {
@@ -1264,3 +1285,4 @@ describe("signal setup parsing", () => {
     expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

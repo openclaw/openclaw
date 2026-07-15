@@ -27,12 +27,12 @@ import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveFallbackCandidateRun } from "./agent-runner-auth-profile.js";
 import {
   buildEmptyInteractiveReplyPayload,
   buildKnownAgentRunFailureReplyPayload,
   buildContextOverflowRecoveryText,
   computeContextAwareReserveTokensFloor,
-  MAX_LIVE_SWITCH_RETRIES,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
@@ -470,7 +470,6 @@ function createFollowupRun(): FollowupRun {
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
-      thinkLevel: "low",
       verboseLevel: "off",
       elevatedLevel: "off",
       bashElevated: {
@@ -1406,6 +1405,7 @@ describe("runAgentTurnWithFallback", () => {
   afterEach(() => {
     // Fake-timer tests in this describe must not leak into --isolate=false peers.
     vi.useRealTimers();
+    cliBackendsTesting.resetDepsForTest();
     vi.clearAllMocks();
   });
 
@@ -1445,6 +1445,7 @@ describe("runAgentTurnWithFallback", () => {
         defaults: {
           models: {
             "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            "demo/basic": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -2081,7 +2082,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(rechecked.hasAutoFallbackProvenance).toBeUndefined();
   });
 
-  it("keeps fallback auth available when a primary probe falls back", async () => {
+  it("keeps fallback auth available when a primary probe falls back", () => {
     const probe = {
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -2096,21 +2097,7 @@ describe("runAgentTurnWithFallback", () => {
     followupRun.run.authProfileId = "anthropic:primary";
     followupRun.run.authProfileIdSource = "auto";
     followupRun.run.autoFallbackPrimaryProbe = probe;
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("google", "gemini-3-pro"),
-      provider: "google",
-      model: "gemini-3-pro",
-      attempts: [{ provider: "anthropic", model: "claude-sonnet-4-6", error: "rate limit" }],
-    }));
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "fallback" }],
-      meta: {},
-    });
-
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
-
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run", {
+    expect(resolveFallbackCandidateRun(followupRun.run, "google", "gemini-3-pro")).toMatchObject({
       provider: "google",
       model: "gemini-3-pro",
       authProfileId: "google:fallback",
@@ -4041,6 +4028,21 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   it("does not pass CLI runtime overrides as embedded harness ids for fallback providers", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend, config }) =>
+        backend === "claude-cli" && config
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined,
+    });
     state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("openai", "gpt-5.4"),
@@ -8703,11 +8705,11 @@ describe("runAgentTurnWithFallback", () => {
       resolvedVerboseLevel: "off",
     });
 
-    // After MAX_LIVE_SWITCH_RETRIES (2) the loop must break instead of continuing
+    // After two retries the loop must break instead of continuing
     // forever. The result should be a final error, not an infinite hang.
     expect(result.kind).toBe("final");
-    // 1 initial + MAX_LIVE_SWITCH_RETRIES retries = exact total invocations
-    expect(switchCallCount).toBe(1 + MAX_LIVE_SWITCH_RETRIES);
+    // One initial attempt plus two retries.
+    expect(switchCallCount).toBe(3);
   });
 
   it("propagates auth profile state on bounded live model switch retries (#58348)", async () => {
@@ -9235,3 +9237,4 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

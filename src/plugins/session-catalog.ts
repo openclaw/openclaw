@@ -23,7 +23,14 @@ export type SessionCatalogContinueProviderParams = Omit<
 export type SessionCatalogArchiveProviderParams = Omit<SessionsCatalogArchiveParams, "catalogId">;
 
 export type SessionCatalogTerminalPlan =
-  | { kind: "local"; argv: string[]; cwd?: string; title?: string }
+  | {
+      kind: "local";
+      argv: string[];
+      cwd?: string;
+      title?: string;
+      /** PATH that resolved argv[0], needed by env-based script interpreters. */
+      pathEnv?: string;
+    }
   | {
       kind: "node";
       nodeId: string;
@@ -60,13 +67,16 @@ export type SessionUpstreamProbe = {
   ownRecentUserTexts: string[];
 };
 
-export type SessionUpstreamActivity = {
-  sessionKey: string;
-  humanTurns: number;
-  nextMarker: SessionUpstreamJsonValue;
-  occurredAt?: number;
-  dedupeId?: string;
-};
+export type SessionUpstreamActivity =
+  | {
+      kind: "activity";
+      sessionKey: string;
+      humanTurns: number;
+      nextMarker: SessionUpstreamJsonValue;
+      occurredAt?: number;
+      dedupeId?: string;
+    }
+  | { kind: "missing"; sessionKey: string };
 
 export type SessionCatalogContinueProviderResult = {
   sessionKey: string;

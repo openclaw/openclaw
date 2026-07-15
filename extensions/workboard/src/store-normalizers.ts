@@ -1,25 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-  MAX_ATTACHMENT_BYTES,
-  MAX_CARD_ARTIFACTS,
-  MAX_CARD_ATTACHMENTS,
-  MAX_CARD_ATTEMPTS,
-  MAX_CARD_COMMENTS,
-  MAX_CARD_DIAGNOSTICS,
-  MAX_CARD_EVENTS,
-  MAX_CARD_LINKS,
-  MAX_CARD_METADATA_BYTES,
-  MAX_CARD_NOTIFICATIONS,
-  MAX_CARD_PROOF,
-  MAX_CARD_WORKER_LOGS,
-} from "./store-constants.js";
-import type {
-  WorkboardAttachmentInput,
-  WorkboardBoardInput,
-  WorkboardNotificationSubscribeInput,
-  WorkboardProofInput,
-} from "./store-inputs.js";
-import {
+  isValidWorkboardBoardId,
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
@@ -66,7 +47,27 @@ import {
   type WorkboardWorkerLog,
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
-} from "./types.js";
+} from "@openclaw/workboard-contract";
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_CARD_ARTIFACTS,
+  MAX_CARD_ATTACHMENTS,
+  MAX_CARD_ATTEMPTS,
+  MAX_CARD_COMMENTS,
+  MAX_CARD_DIAGNOSTICS,
+  MAX_CARD_EVENTS,
+  MAX_CARD_LINKS,
+  MAX_CARD_METADATA_BYTES,
+  MAX_CARD_NOTIFICATIONS,
+  MAX_CARD_PROOF,
+  MAX_CARD_WORKER_LOGS,
+} from "./store-constants.js";
+import type {
+  WorkboardAttachmentInput,
+  WorkboardBoardInput,
+  WorkboardNotificationSubscribeInput,
+  WorkboardProofInput,
+} from "./store-inputs.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
 
 export function normalizeOptionalString(value: unknown): string | undefined {
@@ -79,10 +80,8 @@ export function normalizeBoardId(value: unknown, fallback?: string): string | un
     return undefined;
   }
   const boardId = raw.toLowerCase();
-  if (!/^[a-z0-9][a-z0-9._-]{0,79}$/.test(boardId)) {
-    throw new Error(
-      "board id must start with a letter or number and use letters, numbers, dots, dashes, or underscores.",
-    );
+  if (!isValidWorkboardBoardId(boardId)) {
+    throw new Error("board id must match [a-z0-9][a-z0-9._-]{0,79}.");
   }
   return boardId;
 }
@@ -1338,3 +1337,4 @@ export function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMeta
   }
   return next;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

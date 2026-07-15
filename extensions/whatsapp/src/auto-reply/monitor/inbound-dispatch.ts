@@ -398,7 +398,7 @@ export async function buildWhatsAppInboundContext(params: {
           }
         : {}),
       commands: {
-        authorized: params.commandAuthorized,
+        authorized: params.commandAuthorized === true,
       },
     },
     commandTurn: params.commandTurn,
@@ -907,3 +907,4 @@ async function finalizeWhatsAppStatusReaction(params: {
   }
   await params.controller.restoreInitial();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

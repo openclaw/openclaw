@@ -1,5 +1,5 @@
 // Exercises per-session fallback skip markers, TTL expiry, and opt-in cache defaults.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetFallbackSkipCacheForTest,
   getFallbackCandidateSkipReason,
@@ -13,6 +13,7 @@ describe("fallback-skip-cache", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     resetFallbackSkipCacheForTest();
   });
 
@@ -262,39 +263,49 @@ describe("fallback-skip-cache", () => {
     ).toBe(false);
   });
 
-  it("uses OPENCLAW_FALLBACK_SKIP_TTL_MS as an opt-in default TTL", () => {
-    const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
-    process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
-    try {
-      markFallbackCandidateSkipped({
+  it("does not enable the cache for a suffixed TTL value", () => {
+    vi.stubEnv("OPENCLAW_FALLBACK_SKIP_TTL_MS", "1000ms");
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth",
+      now: 1_000,
+    });
+    expect(
+      isFallbackCandidateSkipped({
         sessionId: "s1",
         provider: "anthropic",
         model: "claude-opus-4-7",
-        reason: "auth",
         now: 1_000,
-      });
-      expect(
-        isFallbackCandidateSkipped({
-          sessionId: "s1",
-          provider: "anthropic",
-          model: "claude-opus-4-7",
-          now: 60_000,
-        }),
-      ).toBe(true);
-      expect(
-        isFallbackCandidateSkipped({
-          sessionId: "s1",
-          provider: "anthropic",
-          model: "claude-opus-4-7",
-          now: 61_001,
-        }),
-      ).toBe(false);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
-      } else {
-        process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = previous;
-      }
-    }
+      }),
+    ).toBe(false);
+  });
+
+  it("uses OPENCLAW_FALLBACK_SKIP_TTL_MS as an opt-in default TTL", () => {
+    vi.stubEnv("OPENCLAW_FALLBACK_SKIP_TTL_MS", "60000");
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth",
+      now: 1_000,
+    });
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 60_000,
+      }),
+    ).toBe(true);
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 61_001,
+      }),
+    ).toBe(false);
   });
 });

@@ -15,7 +15,7 @@ import {
 } from "./sdk-alias.js";
 
 /** Jiti-based module loader used for plugin source/runtime imports. */
-type PluginModuleLoader = ReturnType<typeof createJiti>;
+type PluginModuleLoader = (target: string) => unknown;
 export type PluginModuleLoaderFactory = typeof createJiti;
 export type PluginModuleLoaderCache = Pick<
   PluginLruCache<PluginModuleLoader>,
@@ -205,18 +205,7 @@ function createLazySourceTransformLoader(params: {
         tryNative: false,
       },
     );
-    loadWithSourceTransform = new Proxy(jitiLoader, {
-      apply(target, thisArg, argArray) {
-        const [first, ...rest] = argArray as [unknown, ...unknown[]];
-        if (typeof first === "string") {
-          return Reflect.apply(target, thisArg, [
-            toSourceTransformImportPath(first),
-            ...rest,
-          ] as never) as never;
-        }
-        return Reflect.apply(target, thisArg, argArray as never) as never;
-      },
-    });
+    loadWithSourceTransform = (target) => jitiLoader(toSourceTransformImportPath(target));
     return loadWithSourceTransform;
   };
 }
@@ -234,10 +223,7 @@ function createPluginModuleLoader(params: {
     ...params,
   });
   const loadedTargetExports = new Map<string, unknown>();
-  const loadCachedTarget = (target: string, rest: unknown[], load: () => unknown): unknown => {
-    if (rest.length > 0) {
-      return load();
-    }
+  const loadCachedTarget = (target: string, load: () => unknown): unknown => {
     if (loadedTargetExports.has(target)) {
       return loadedTargetExports.get(target);
     }
@@ -250,17 +236,13 @@ function createPluginModuleLoader(params: {
   // jiti's alias rewriting to surface a narrow SDK slice), route every
   // target through jiti so those alias rewrites still apply.
   if (!params.tryNative) {
-    return ((target: string, ...rest: unknown[]) => {
-      return loadCachedTarget(target, rest, () => {
+    return (target) =>
+      loadCachedTarget(target, () => {
         pluginModuleLoaderStats.calls += 1;
         pluginModuleLoaderStats.sourceTransformForced += 1;
         recordSourceTransformTarget(target);
-        return (getLoadWithSourceTransform() as (t: string, ...a: unknown[]) => unknown)(
-          target,
-          ...rest,
-        );
+        return getLoadWithSourceTransform()(target);
       });
-    }) as PluginModuleLoader;
   }
   // Otherwise prefer native require() for already-compiled JS artifacts
   // (the bundled plugin public surfaces shipped in dist/). jiti's transform
@@ -269,8 +251,8 @@ function createPluginModuleLoader(params: {
   // for TS / TSX sources and for the small set of require(esm) /
   // async-module fallbacks `tryNativeRequireJavaScriptModule` declines to
   // handle.
-  return ((target: string, ...rest: unknown[]) => {
-    return loadCachedTarget(target, rest, () => {
+  return (target) =>
+    loadCachedTarget(target, () => {
       pluginModuleLoaderStats.calls += 1;
       const native = tryNativeRequireJavaScriptModule(target, {
         allowWindows: true,
@@ -285,12 +267,8 @@ function createPluginModuleLoader(params: {
       pluginModuleLoaderStats.nativeMisses += 1;
       pluginModuleLoaderStats.sourceTransformFallbacks += 1;
       recordSourceTransformTarget(target);
-      return (getLoadWithSourceTransform() as (t: string, ...a: unknown[]) => unknown)(
-        target,
-        ...rest,
-      );
+      return getLoadWithSourceTransform()(target);
     });
-  }) as PluginModuleLoader;
 }
 
 export function getCachedPluginModuleLoader(

@@ -11,18 +11,24 @@ import {
   NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
+  NODE_TERMINAL_UPLOAD_COMMAND,
 } from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { ensureTerminalUploadCleanup } from "../infra/terminal-file-upload.js";
 import { logDebug } from "../logger.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
+import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
+import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import type { NodeHostClient } from "./client.js";
 import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } from "./invoke.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
+import { buildNodeEventParams } from "./node-event-params.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import {
   ensureNodeHostPluginRegistry,
   isRegisteredNodeHostCommandDuplex,
   listRegisteredNodeHostCapsAndCommands,
+  watchRegisteredNodeHostCommandAvailability,
 } from "./plugin-node-host.js";
 import { scanNodeHostedSkills } from "./skills.js";
 
@@ -45,6 +51,7 @@ type PreparedNodeHostRuntime = {
   start(params: {
     client: NodeHostClient;
     onInventoryChanged?: (inventory: NodeHostInventory) => void;
+    onManifestChanged?: (manifest: NodeHostManifest) => void;
   }): ActiveNodeHostRuntime;
 };
 
@@ -59,12 +66,9 @@ type ActiveNodeHostRuntime = {
 type NodeInvokeInputTarget = {
   nextInputSeq: number;
   input?: (payloadJSON: string) => void;
-  // PTY handlers attach only after async spawn, while Gateway input may arrive immediately.
-  // Keep that spawn-window input so the sequence cannot wedge before registration.
-  pendingInput: Array<{ payloadJSON: string; bytes: number }>;
-  pendingInputBytes: number;
+  // Buffer spawn-window input so its sequence cannot wedge before PTY registration.
+  pendingInput: BoundedBuffer<string>;
   inputFailed: boolean;
-  abort: (reason: Error) => void;
 };
 
 const MAX_PENDING_INVOKE_INPUT_BYTES = 64 * 1024;
@@ -85,17 +89,11 @@ function dispatchNodeInvokeInput(
     target.input(payloadJSON);
     return true;
   }
-  const bytes = Buffer.byteLength(payloadJSON, "utf8");
-  if (target.pendingInputBytes + bytes > MAX_PENDING_INVOKE_INPUT_BYTES) {
-    target.pendingInput.length = 0;
-    target.pendingInputBytes = 0;
+  if (!target.pendingInput.push(payloadJSON)) {
     target.inputFailed = true;
-    target.abort(new Error("terminal input exceeded the 64 KiB pre-spawn buffer"));
     logDebug("node-host: aborted invoke after buffered input exceeded 64 KiB");
     return false;
   }
-  target.pendingInput.push({ payloadJSON, bytes });
-  target.pendingInputBytes += bytes;
   return true;
 }
 
@@ -107,10 +105,9 @@ function registerNodeInvokeInputHandler(
     return;
   }
   target.input = input;
-  for (const pending of target.pendingInput.splice(0)) {
-    input(pending.payloadJSON);
+  for (const pending of target.pendingInput.drain()) {
+    input(pending);
   }
-  target.pendingInputBytes = 0;
 }
 
 function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
@@ -216,22 +213,40 @@ function createInventory(params: {
   return { skills: params.skills, pluginTools };
 }
 
+function sameStringList(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sameManifest(left: NodeHostManifest, right: NodeHostManifest): boolean {
+  return (
+    left.pathEnv === right.pathEnv &&
+    sameStringList(left.caps, right.caps) &&
+    sameStringList(left.commands, right.commands)
+  );
+}
+
 export async function prepareNodeHostRuntime(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   /** The embedded app worker never advertises native agent runs. */
   enableAgentRuns?: boolean;
+  /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
+  enableDuplexPluginCommands?: boolean;
 }): Promise<PreparedNodeHostRuntime> {
+  void ensureTerminalUploadCleanup();
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
   await ensureNodeHostPluginRegistry({ config, env });
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
-  const duplexEnabled = params?.enableAgentRuns === true;
-  const pluginNodeHost = listRegisteredNodeHostCapsAndCommands(
-    { config, env },
-    { includeDuplex: duplexEnabled },
-  );
+  const duplexEnabled =
+    params?.enableAgentRuns === true || params?.enableDuplexPluginCommands === true;
+  const availabilityContext = { config, env };
+  const resolvePluginNodeHost = () =>
+    listRegisteredNodeHostCapsAndCommands(availabilityContext, {
+      includeDuplex: duplexEnabled,
+    });
+  const pluginNodeHost = resolvePluginNodeHost();
   // Opt-in and binary resolution are node-local enforcement points. A Gateway
   // cannot advertise or enable this command on the host's behalf.
   const claudePath =
@@ -239,20 +254,22 @@ export async function prepareNodeHostRuntime(params?: {
       ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
-  const manifest: NodeHostManifest = {
-    caps: [...new Set(["system", "mcp", ...pluginNodeHost.caps])].toSorted(),
+  const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
+    caps: [...new Set(["system", "mcp", ...pluginManifest.caps])].toSorted(),
     commands: [
       ...new Set([
         ...NODE_SYSTEM_RUN_COMMANDS,
         ...NODE_EXEC_APPROVALS_COMMANDS,
         NODE_FS_LIST_DIR_COMMAND,
+        NODE_TERMINAL_UPLOAD_COMMAND,
         NODE_MCP_TOOLS_CALL_COMMAND,
         ...(claudePath ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : []),
-        ...pluginNodeHost.commands,
+        ...pluginManifest.commands,
       ]),
     ].toSorted(),
     pathEnv,
-  };
+  });
+  const manifest = buildManifest(pluginNodeHost);
   const initialInventory = createInventory({
     skills,
     pluginTools: pluginNodeHost.nodePluginTools,
@@ -261,13 +278,19 @@ export async function prepareNodeHostRuntime(params?: {
   return {
     manifest,
     initialInventory,
-    start({ client, onInventoryChanged }) {
+    start({ client, onInventoryChanged, onManifestChanged }) {
       const mcpAbort = new AbortController();
       const skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<
         string,
         NodeInvokeInputTarget & { controller: AbortController }
       >();
+      const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
+        sendNodeEvent: async (event, payload) =>
+          await client.request("node.event", buildNodeEventParams(event, payload)),
+      };
+      let currentPluginNodeHost = pluginNodeHost;
+      let currentManifest = manifest;
       let manager: NodeHostMcpManager | undefined;
       const startup = startNodeHostMcpManager(config.nodeHost?.mcp?.servers, {
         signal: mcpAbort.signal,
@@ -276,12 +299,36 @@ export async function prepareNodeHostRuntime(params?: {
         onInventoryChanged?.(
           createInventory({
             skills,
-            pluginTools: pluginNodeHost.nodePluginTools,
+            pluginTools: currentPluginNodeHost.nodePluginTools,
             mcpManager: manager,
           }),
         );
         return resolved;
       });
+      const refreshAvailability = () => {
+        const nextPluginNodeHost = resolvePluginNodeHost();
+        const nextManifest = buildManifest(nextPluginNodeHost);
+        currentPluginNodeHost = nextPluginNodeHost;
+        onInventoryChanged?.(
+          createInventory({
+            skills,
+            pluginTools: currentPluginNodeHost.nodePluginTools,
+            mcpManager: manager,
+          }),
+        );
+        if (!sameManifest(currentManifest, nextManifest)) {
+          currentManifest = nextManifest;
+          onManifestChanged?.(nextManifest);
+        }
+      };
+      const stopAvailabilityWatch = onManifestChanged
+        ? watchRegisteredNodeHostCommandAvailability(availabilityContext, refreshAvailability)
+        : () => {};
+      // The watcher cannot replay a socket change between preparation and
+      // registration. Resolve once after attachment to close that race.
+      if (onManifestChanged) {
+        refreshAvailability();
+      }
       return {
         async invoke(frame) {
           const duplexCommand = duplexEnabled && isRegisteredNodeHostCommandDuplex(frame.command);
@@ -294,10 +341,18 @@ export async function prepareNodeHostRuntime(params?: {
               ? {
                   controller,
                   nextInputSeq: 0,
-                  pendingInput: [],
-                  pendingInputBytes: 0,
+                  pendingInput: new BoundedBuffer<string>(
+                    MAX_PENDING_INVOKE_INPUT_BYTES,
+                    {
+                      mode: "fail-closed",
+                      onOverflow: () =>
+                        controller.abort(
+                          new Error("terminal input exceeded the 64 KiB pre-spawn buffer"),
+                        ),
+                    },
+                    (payload) => Buffer.byteLength(payload, "utf8"),
+                  ),
                   inputFailed: false,
-                  abort: (reason) => controller.abort(reason),
                 }
               : undefined;
           if (active) {
@@ -329,6 +384,7 @@ export async function prepareNodeHostRuntime(params?: {
               ...(claudePath ? { claudePath } : {}),
               ...(controller ? { signal: controller.signal } : {}),
               ...(pluginCommandIo ? { pluginCommandIo } : {}),
+              pluginCommandContext,
             });
           } finally {
             progress?.stop();
@@ -355,6 +411,7 @@ export async function prepareNodeHostRuntime(params?: {
         },
         async close() {
           this.cancelAll();
+          stopAvailabilityWatch();
           mcpAbort.abort();
           const resolved = manager ?? (await startup.catch(() => undefined));
           await resolved?.close();

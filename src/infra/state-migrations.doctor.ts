@@ -1254,3 +1254,4 @@ export async function autoMigrateLegacyState(params: {
     ...(notices.length > 0 ? { notices } : {}),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

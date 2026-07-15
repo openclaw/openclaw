@@ -1769,3 +1769,4 @@ export async function createQaLabApp(root: HTMLDivElement) {
   setInterval(() => void refresh(), 1_000);
   setInterval(() => void pollUiVersion(), 1_000);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

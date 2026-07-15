@@ -953,6 +953,7 @@ export async function listClaudeSessionCatalog(params: {
             ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
           },
           timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+          scopes: ["operator.write"],
         });
         return Object.assign(common, parseCatalogPage(unwrapNodePayload(raw)));
       } catch {
@@ -1009,6 +1010,7 @@ async function readClaudeSessionTranscript(params: {
       ...(params.cursor ? { cursor: params.cursor } : {}),
     },
     timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+    scopes: ["operator.write"],
   });
   const page = unwrapNodePayload(raw);
   if (
@@ -1080,6 +1082,7 @@ export async function resolveNodeClaudeRecord(params: {
         ...(cursor ? { cursor } : {}),
       },
       timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+      scopes: ["operator.write"],
     });
     const page = parseCatalogPage(unwrapNodePayload(raw));
     const record = page.sessions.find((candidate) => candidate.threadId === params.threadId);
@@ -1333,3 +1336,4 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
   };
   api.registerSessionCatalog(provider);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
