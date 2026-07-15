@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   appendChatMessageToCache,
-  cacheChatMessages,
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
   readChatSessionSnapshot,
@@ -13,6 +12,19 @@ function createHost() {
     assistantAgentId: "ops",
     agentsList: { defaultId: "ops", mainKey: "home" },
   };
+}
+
+function cacheChatMessages(
+  cache: ChatMessageCache,
+  host: Parameters<typeof cacheChatSessionSnapshot>[1],
+  target: Parameters<typeof cacheChatSessionSnapshot>[2],
+  messages: unknown[],
+): void {
+  cacheChatSessionSnapshot(cache, host, target, {
+    messages,
+    pagination: { hasMore: false },
+    sessionId: null,
+  });
 }
 
 describe("session message cache", () => {

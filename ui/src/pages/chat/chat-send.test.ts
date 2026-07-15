@@ -33,7 +33,7 @@ import {
 import { handleChatInputHistoryKey } from "./input-history.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
-  cacheChatMessages,
+  cacheChatSessionSnapshot,
   readChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
@@ -59,6 +59,19 @@ function requireChatMessageCache(host: ChatHost): ChatMessageCache {
     throw new Error("Expected chat message cache");
   }
   return host.chatMessagesBySession;
+}
+
+function cacheChatMessages(
+  cache: ChatMessageCache,
+  host: Parameters<typeof cacheChatSessionSnapshot>[1],
+  target: Parameters<typeof cacheChatSessionSnapshot>[2],
+  messages: unknown[],
+): void {
+  cacheChatSessionSnapshot(cache, host, target, {
+    messages,
+    pagination: { hasMore: false },
+    sessionId: null,
+  });
 }
 
 const executeSlashCommandMock = vi.hoisted(() => vi.fn());
