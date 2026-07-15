@@ -121,4 +121,35 @@ describe("probeSlack transport", () => {
       await server.close();
     }
   });
+
+  it("aborts a response that keeps trickling bytes past the probe deadline", async () => {
+    clearSlackTransportEnv();
+    let requestCount = 0;
+    const server = await startServer((request, response) => {
+      requestCount += 1;
+      request.resume();
+      response.writeHead(200, { "content-type": "application/json" });
+      const trickle = setInterval(() => response.write(" "), 25);
+      const finish = setTimeout(() => {
+        clearInterval(trickle);
+        response.end(`${JSON.stringify({ ok: true })}\n`);
+      }, 750);
+      response.once("close", () => {
+        clearInterval(trickle);
+        clearTimeout(finish);
+      });
+    });
+    try {
+      process.env.SLACK_API_URL = server.apiUrl;
+      const start = performance.now();
+
+      await expect(probeSlack("probe-token", 100)).resolves.toMatchObject({ ok: false });
+
+      expect(performance.now() - start).toBeLessThan(500);
+      expect(requestCount).toBe(1);
+      await expect.poll(() => server.sockets.size, { timeout: 1000 }).toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
 });
