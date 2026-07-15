@@ -816,10 +816,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(result.payloads).toEqual([
       {
-        text: finalText,
         mediaUrl: "https://example.test/recovered-output.png",
         mediaUrls: ["https://example.test/recovered-output.png"],
+        audioAsVoice: undefined,
+        trustedLocalMedia: undefined,
       },
+      { text: finalText },
     ]);
   });
 
