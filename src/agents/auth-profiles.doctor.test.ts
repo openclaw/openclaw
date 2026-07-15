@@ -3,35 +3,9 @@
  * Covers provider-specific repair hints without invoking real auth flows.
  */
 import { describe, expect, it } from "vitest";
-import {
-  formatAuthDoctorHint,
-  formatAuthDoctorHintWithPluginBuilder,
-} from "./auth-profiles/doctor.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
-
-const EMPTY_STORE: AuthProfileStore = {
-  version: 1,
-  profiles: {},
-};
+import { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
 
 describe("formatAuthDoctorHint", () => {
-  it("does not report restored qwen portal auth as removed", async () => {
-    let pluginBuilderCalled = false;
-    const hint = await formatAuthDoctorHintWithPluginBuilder(
-      {
-        store: EMPTY_STORE,
-        provider: "qwen-portal",
-      },
-      async () => {
-        pluginBuilderCalled = true;
-        return undefined;
-      },
-    );
-
-    expect(pluginBuilderCalled).toBe(true);
-    expect(hint).toBe("");
-  });
-
   it("guides legacy qwen portal oauth profiles to re-authenticate", async () => {
     const hint = await formatAuthDoctorHint({
       store: {
@@ -53,5 +27,71 @@ describe("formatAuthDoctorHint", () => {
     expect(hint).toBe(
       "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current portal token: openclaw onboard --auth-choice qwen-oauth.",
     );
+  });
+
+  it("guides an unsupported github-copilot enterprise profile to login again", async () => {
+    const hint = await formatAuthDoctorHint({
+      store: {
+        version: 1,
+        profiles: {
+          "github-copilot:default": {
+            type: "oauth",
+            provider: "github-copilot",
+            access: "fake",
+            refresh: "fake",
+            expires: 0,
+            enterpriseUrl: "attacker.example",
+          },
+        },
+      },
+      provider: "github-copilot",
+      profileId: "github-copilot:default",
+    });
+
+    expect(hint).toContain("unsupported enterprise domain");
+    expect(hint).toContain("openclaw models auth login --provider github-copilot --force");
+  });
+
+  it("accepts a github-copilot profile on a ghe.com tenant", async () => {
+    const hint = await formatAuthDoctorHint({
+      store: {
+        version: 1,
+        profiles: {
+          "github-copilot:default": {
+            type: "oauth",
+            provider: "github-copilot",
+            access: "fake",
+            refresh: "fake",
+            expires: 0,
+            enterpriseUrl: "acme.ghe.com",
+          },
+        },
+      },
+      provider: "github-copilot",
+      profileId: "github-copilot:default",
+    });
+
+    expect(hint).not.toContain("unsupported enterprise domain");
+  });
+
+  it("accepts a public github.com profile", async () => {
+    const hint = await formatAuthDoctorHint({
+      store: {
+        version: 1,
+        profiles: {
+          "github-copilot:default": {
+            type: "oauth",
+            provider: "github-copilot",
+            access: "fake",
+            refresh: "fake",
+            expires: 0,
+          },
+        },
+      },
+      provider: "github-copilot",
+      profileId: "github-copilot:default",
+    });
+
+    expect(hint).not.toContain("unsupported enterprise domain");
   });
 });

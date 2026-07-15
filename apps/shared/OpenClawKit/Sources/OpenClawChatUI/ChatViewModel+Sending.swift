@@ -249,23 +249,17 @@ extension OpenClawChatViewModel {
 
     private func handleLocalSlashCommandIfNeeded(_ command: String, draftInput: String) async -> Bool {
         if command == "/new" {
-            if self.input == draftInput {
-                self.input = ""
-            }
+            if self.input == draftInput { self.input = "" }
             await self.performStartNewSession(worktree: false)
             return true
         }
         if Self.resetTriggers.contains(command) {
-            if self.input == draftInput {
-                self.input = ""
-            }
+            if self.input == draftInput { self.input = "" }
             await self.performReset()
             return true
         }
         if Self.compactTriggers.contains(command) {
-            if self.input == draftInput {
-                self.input = ""
-            }
+            if self.input == draftInput { self.input = "" }
             await self.performCompact()
             return true
         }
@@ -474,9 +468,8 @@ extension OpenClawChatViewModel {
     private func beginLiveSend(_ draft: SendDraft) -> LiveSendAttempt {
         self.errorText = nil
         let runId = UUID().uuidString
-        let storedThinkingLevel = self.thinkingLevel
+        let storedThinkingLevel = self.preferredThinkingLevel
         self.pendingRuns.insert(runId)
-        self.armPendingRunTimeout(runId: runId)
         self.logDiagnostic(
             "chat.ui send queued sessionKey=\(draft.session.key) "
                 + "localRunId=\(runId) pending=\(self.pendingRunCount)")
@@ -564,7 +557,7 @@ extension OpenClawChatViewModel {
     private func deliverLiveSend(_ attempt: LiveSendAttempt) async {
         let sessionKey = attempt.draft.session.key
         do {
-            await self.waitForPendingModelPatches(in: sessionKey)
+            await self.waitForPendingSessionSettings(in: sessionKey)
             guard self.isCurrentSession(attempt.draft.session) else { return }
             self.logDiagnostic(
                 "chat.ui transport send start sessionKey=\(sessionKey) "
@@ -624,11 +617,7 @@ extension OpenClawChatViewModel {
                 runId: response.runId,
                 after: attempt.userMessageTimestamp)
         {
-            self.armPostSendRefreshFallback(
-                runId: response.runId,
-                sessionSnapshot: attempt.draft.session,
-                userMessageTimestamp: attempt.userMessageTimestamp)
-            self.armRunCompletionRefresh(
+            self.armPendingRunOwner(
                 runId: response.runId,
                 sessionSnapshot: attempt.draft.session,
                 userMessageTimestamp: attempt.userMessageTimestamp)
@@ -656,7 +645,10 @@ extension OpenClawChatViewModel {
             self.pendingToolCallsById = [:]
             self.updateStreamingAssistantText(nil)
         } else {
-            self.armPendingRunTimeout(runId: remoteRunId)
+            self.armPendingRunOwner(
+                runId: remoteRunId,
+                sessionSnapshot: remoteRunScope.session,
+                userMessageTimestamp: remoteRunScope.latestUserTurn?.timestamp)
         }
         return reusedRunAlreadyFinal
     }

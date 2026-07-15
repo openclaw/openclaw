@@ -1,4 +1,7 @@
 // Core runtime types define system, config, and task helper contracts for plugins.
+import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.js";
+import type { ConfigMutationBase } from "../../config/mutation-types.js";
+import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
@@ -10,16 +13,11 @@ import type {
 } from "../../plugin-sdk/tts-runtime.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
-export type { HeartbeatRunResult };
-
-export type RuntimeRequestHeartbeatOptions = Parameters<
+type RuntimeRequestHeartbeatOptions = Parameters<
   typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
 >[0];
 
-export type RuntimeRequestHeartbeatNowOptions = Omit<
-  RuntimeRequestHeartbeatOptions,
-  "source" | "intent"
-> &
+type RuntimeRequestHeartbeatNowOptions = Omit<RuntimeRequestHeartbeatOptions, "source" | "intent"> &
   Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
 
 type RuntimeWriteConfigOptions = {
@@ -28,7 +26,7 @@ type RuntimeWriteConfigOptions = {
   unsetPaths?: string[][];
 };
 
-export type DeepReadonly<T> = T extends (...args: never[]) => unknown
+type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
   : T extends readonly (infer U)[]
     ? ReadonlyArray<DeepReadonly<U>>
@@ -38,13 +36,15 @@ export type DeepReadonly<T> = T extends (...args: never[]) => unknown
 
 type RuntimeConfigAfterWrite = import("../../config/config.js").ConfigWriteAfterWrite;
 type RuntimeConfigReplaceResult = import("../../config/mutate.js").ConfigReplaceResult;
-type RuntimeConfigMutationBase = import("../../config/mutate.js").ConfigMutationBase;
+type RuntimeProviderListParams = {
+  config?: import("../../config/types.openclaw.js").OpenClawConfig;
+};
 type RuntimeConfigMutationContext = {
   snapshot: import("../../config/types.openclaw.js").ConfigFileSnapshot;
   previousHash: string | null;
 };
 type RuntimeMutateConfigFileParams<T = void> = {
-  base?: RuntimeConfigMutationBase;
+  base?: ConfigMutationBase;
   baseHash?: string;
   afterWrite: RuntimeConfigAfterWrite;
   writeOptions?: RuntimeWriteConfigOptions;
@@ -60,6 +60,9 @@ type RuntimeReplaceConfigFileParams = {
   writeOptions?: RuntimeWriteConfigOptions;
 };
 type RuntimeSessionEntry = import("../../config/sessions/types.js").SessionEntry;
+type RuntimeSessionPluginExtensions =
+  | Record<string, Record<string, SessionPluginJsonValue>>
+  | undefined;
 type RuntimeSessionStoreReadParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
@@ -73,6 +76,57 @@ type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
   entry: RuntimeSessionEntry;
 };
+type RuntimeCreateSessionEntryResult = {
+  key: string;
+  agentId: string;
+  sessionId: string;
+  entry: RuntimeSessionEntry;
+};
+type RuntimeCreateSessionEntryFinalPatch = {
+  pluginExtensions: RuntimeSessionPluginExtensions;
+};
+type RuntimeCreateSessionEntryBaseParams = {
+  cfg: import("../../config/types.openclaw.js").OpenClawConfig;
+  key: string;
+  agentId?: string;
+  label?: string;
+  spawnedCwd?: string;
+  /** Bind the created session's CLI execution to this paired node. */
+  execNode?: string;
+  /** Working directory interpreted only by execNode. */
+  execCwd?: string;
+  initialEntry:
+    | {
+        agentHarnessId: string;
+        modelSelectionLocked?: true;
+        pluginExtensions?: RuntimeSessionPluginExtensions;
+      }
+    | {
+        cliBackendId: string;
+        model: string;
+        cliSessionBinding: import("../../config/sessions/types.js").CliSessionBinding;
+        modelSelectionLocked: true;
+        pluginExtensions?: RuntimeSessionPluginExtensions;
+        /** Registry-injected owner; plugin callers cannot select another owner. */
+        pluginOwnerId?: string;
+      };
+};
+type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
+  (
+    | {
+        /** Retry an interrupted initializer only when persisted trusted state matches exactly. */
+        recoverMatchingInitialEntry: true;
+        afterCreate: (
+          created: RuntimeCreateSessionEntryResult,
+        ) => Promise<RuntimeCreateSessionEntryFinalPatch>;
+      }
+    | {
+        recoverMatchingInitialEntry?: never;
+        afterCreate?: (
+          created: RuntimeCreateSessionEntryResult,
+        ) => Promise<RuntimeCreateSessionEntryFinalPatch | void>;
+      }
+  );
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
   fallbackEntry?: RuntimeSessionEntry;
   maintenanceConfig?: import("../../config/sessions/store.js").ResolvedSessionMaintenanceConfigInput;
@@ -101,15 +155,19 @@ type RuntimeSessionStoreEntryUpdateParams = {
   takeCacheOwnership?: boolean;
   requireWriteSuccess?: boolean;
 };
+/** @public Part of the PluginRuntime declaration contract. */
 export type PluginRuntimeThinkingPolicyRequest = {
   provider?: string | null;
   model?: string | null;
   catalog?: import("../../auto-reply/thinking.js").ThinkingCatalogEntry[];
+  agentRuntime?: string | null;
 };
+/** @public Part of the PluginRuntime declaration contract. */
 export type PluginRuntimeThinkingPolicyLevel = {
   id: import("../../auto-reply/thinking.js").ThinkLevel;
   label: string;
 };
+/** @public Part of the PluginRuntime declaration contract. */
 export type PluginRuntimeThinkingPolicy = {
   levels: PluginRuntimeThinkingPolicyLevel[];
   defaultLevel?: import("../../auto-reply/thinking.js").ThinkLevel | null;
@@ -247,6 +305,9 @@ export type PluginRuntimeCore = {
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      createSessionEntry: (
+        params: RuntimeCreateSessionEntryParams,
+      ) => Promise<RuntimeCreateSessionEntryResult>;
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
@@ -259,37 +320,9 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
-      /**
-       * @deprecated Use getSessionEntry/listSessionEntries for reads and
-       * patchSessionEntry/upsertSessionEntry for writes. This whole-store
-       * helper is kept only during the transition before SQLite migration.
-       * Callers must migrate away from reading sessions.json directly.
-       */
-      loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
-      /**
-       * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-       * whole-store helper is kept only during the transition before SQLite
-       * migration. Callers must migrate away from writing sessions.json
-       * directly.
-       */
-      saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
-      /**
-       * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-       * whole-store helper is kept only during the transition before SQLite
-       * migration. Callers must migrate away from updating sessions.json
-       * directly.
-       */
-      updateSessionStore: typeof import("../../config/sessions/store.js").updateSessionStore;
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
-      /**
-       * @deprecated Use getSessionEntry to read session metadata by
-       * agent/session identity. This file-path helper is kept only during the
-       * transition before SQLite migration. Callers must migrate away from
-       * resolving transcript file paths directly.
-       */
-      resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };
   system: {
@@ -337,29 +370,29 @@ export type PluginRuntimeCore = {
       params: import("../../image-generation/runtime-types.js").GenerateImageParams,
     ) => Promise<import("../../image-generation/runtime-types.js").GenerateImageRuntimeResult>;
     listProviders: (
-      params?: import("../../image-generation/runtime-types.js").ListRuntimeImageGenerationProvidersParams,
-    ) => import("../../image-generation/runtime-types.js").RuntimeImageGenerationProvider[];
+      params?: RuntimeProviderListParams,
+    ) => import("../../image-generation/types.js").ImageGenerationProvider[];
   };
   videoGeneration: {
     generate: (
       params: import("../../video-generation/runtime-types.js").GenerateVideoParams,
     ) => Promise<import("../../video-generation/runtime-types.js").GenerateVideoRuntimeResult>;
     listProviders: (
-      params?: import("../../video-generation/runtime-types.js").ListRuntimeVideoGenerationProvidersParams,
-    ) => import("../../video-generation/runtime-types.js").RuntimeVideoGenerationProvider[];
+      params?: RuntimeProviderListParams,
+    ) => import("../../video-generation/types.js").VideoGenerationProvider[];
   };
   musicGeneration: {
     generate: (
       params: import("../../music-generation/runtime-types.js").GenerateMusicParams,
     ) => Promise<import("../../music-generation/runtime-types.js").GenerateMusicRuntimeResult>;
     listProviders: (
-      params?: import("../../music-generation/runtime-types.js").ListRuntimeMusicGenerationProvidersParams,
-    ) => import("../../music-generation/runtime-types.js").RuntimeMusicGenerationProvider[];
+      params?: RuntimeProviderListParams,
+    ) => import("../../music-generation/types.js").MusicGenerationProvider[];
   };
   webSearch: {
     listProviders: (
-      params?: import("../../web-search/runtime-types.js").ListWebSearchProvidersParams,
-    ) => import("../../web-search/runtime-types.js").RuntimeWebSearchProviderEntry[];
+      params?: RuntimeProviderListParams,
+    ) => import("../web-provider-types.js").PluginWebSearchProviderEntry[];
     search: (
       params: import("../../web-search/runtime-types.js").RunWebSearchParams,
     ) => Promise<import("../../web-search/runtime-types.js").RunWebSearchResult>;
@@ -387,10 +420,7 @@ export type PluginRuntimeCore = {
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
-      options?: Omit<
-        import("../../channels/message/ingress-queue.js").CreateChannelIngressQueueOptions,
-        "channelId"
-      >,
+      options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
     ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
       TPayload,
       TMetadata,
@@ -408,6 +438,14 @@ export type PluginRuntimeCore = {
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
+    acquireLocalService: (
+      target: {
+        providerId: string;
+        baseUrl: string;
+        headers?: HeadersInit;
+      },
+      signal?: AbortSignal | null,
+    ) => Promise<{ release: () => void } | undefined>;
   };
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */

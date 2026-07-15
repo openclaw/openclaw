@@ -118,6 +118,7 @@
     },
     "streaming.enabled": {
       "label": "Enable Streaming",
+      "help": "Classic streaming transcription currently requires the Twilio call provider.",
       "advanced": true
     },
     "streaming.provider": {
@@ -534,7 +535,7 @@
           },
           "consultThinkingLevel": {
             "type": "string",
-            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
+            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"]
           },
           "consultFastMode": {
             "type": "boolean"

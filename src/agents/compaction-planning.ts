@@ -87,7 +87,7 @@ function normalizeCompactionParts(parts: number, messageCount: number): number {
 }
 
 /** Splits messages into roughly equal token-share chunks without separating active tool pairs. */
-export function splitMessagesByTokenShare(
+function splitMessagesByTokenShare(
   messages: AgentMessage[],
   parts = DEFAULT_PARTS,
 ): AgentMessage[][] {
@@ -131,9 +131,11 @@ export function splitMessagesByTokenShare(
     return true;
   };
 
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    const messageTokens = perMessageTokens[index];
+  for (const [index, message] of messages.entries()) {
+    const messageTokens = perMessageTokens.at(index);
+    if (messageTokens === undefined) {
+      throw new Error("Compaction token estimates are out of sync with messages");
+    }
 
     if (
       pendingToolCallIds.size === 0 &&
@@ -195,10 +197,7 @@ export function splitMessagesByTokenShare(
 }
 
 /** Chunks messages by a max-token budget while applying the shared estimator safety margin. */
-export function chunkMessagesByMaxTokens(
-  messages: AgentMessage[],
-  maxTokens: number,
-): AgentMessage[][] {
+function chunkMessagesByMaxTokens(messages: AgentMessage[], maxTokens: number): AgentMessage[][] {
   if (messages.length === 0) {
     return [];
   }
@@ -214,9 +213,11 @@ export function chunkMessagesByMaxTokens(
   let currentChunk: AgentMessage[] = [];
   let currentTokens = 0;
 
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    const messageTokens = perMessageTokens[index];
+  for (const [index, message] of messages.entries()) {
+    const messageTokens = perMessageTokens.at(index);
+    if (messageTokens === undefined) {
+      throw new Error("Compaction token estimates are out of sync with messages");
+    }
     if (currentChunk.length > 0 && currentTokens + messageTokens > effectiveMax) {
       chunks.push(currentChunk);
       currentChunk = [];
@@ -298,9 +299,11 @@ export function buildOversizedFallbackPlan(params: {
   const perMessageTokens = estimatePerMessageTokens(params.messages);
   const oversizedThreshold = params.contextWindow * 0.5;
 
-  for (let index = 0; index < params.messages.length; index += 1) {
-    const msg = params.messages[index];
-    const tokens = perMessageTokens[index];
+  for (const [index, msg] of params.messages.entries()) {
+    const tokens = perMessageTokens.at(index);
+    if (tokens === undefined) {
+      throw new Error("Compaction token estimates are out of sync with messages");
+    }
     if (tokens * SAFETY_MARGIN > oversizedThreshold) {
       const role = (msg as { role?: string }).role ?? "message";
       oversizedNotes.push(
@@ -340,7 +343,7 @@ export function buildStageSplitPlan(params: {
 }
 
 /** Drops oldest token-share chunks until history fits the requested context share. */
-export function pruneHistoryForContextShare(params: {
+function pruneHistoryForContextShare(params: {
   messages: AgentMessage[];
   maxContextTokens: number;
   maxHistoryShare?: number;
@@ -373,6 +376,9 @@ export function pruneHistoryForContextShare(params: {
       break;
     }
     const [dropped, ...rest] = chunks;
+    if (!dropped) {
+      break;
+    }
     const flatRest = rest.flat();
 
     // After dropping a chunk, repair tool_use/tool_result pairing to handle

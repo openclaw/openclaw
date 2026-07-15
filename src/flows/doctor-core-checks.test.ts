@@ -95,6 +95,9 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async collectProviderCatalogProjectionFindings() {
       return [];
     },
+    async collectLocalAudioAccelerationFindings() {
+      return [];
+    },
     async collectGatewayHealthFindings() {
       return [];
     },
@@ -168,6 +171,27 @@ describe("CORE_HEALTH_CHECKS", () => {
         check.description.endsWith("represented in the health registry."),
       ),
     ).toBe(false);
+  });
+
+  it("reports local STT auto-selection diagnostics", async () => {
+    const finding: HealthFinding = {
+      checkId: "core/doctor/local-audio-acceleration",
+      severity: "info",
+      message:
+        "Local STT auto-selection: whisper-cli (capable=metal, observed=unknown); build capability is not runtime observation.",
+    };
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async collectLocalAudioAccelerationFindings() {
+            return [finding];
+          },
+        }),
+      ),
+      "core/doctor/local-audio-acceleration",
+    );
+
+    await expect(check.detect({ mode: "lint", runtime, cfg: {} })).resolves.toEqual([finding]);
   });
 
   it("warns when autonomous Skill Workshop capture is enabled but policy hides its tool", async () => {
@@ -740,10 +764,7 @@ describe("CORE_HEALTH_CHECKS", () => {
         createDeps({
           async collectWorkspaceSuggestionNotes(): Promise<readonly string[]> {
             return [
-              [
-                "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
-                "- Keep ~/.openclaw out of git; it contains credentials and session history.",
-              ].join("\n"),
+              "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended",
               "Memory system not found in workspace.",
             ];
           },
@@ -769,7 +790,8 @@ describe("CORE_HEALTH_CHECKS", () => {
       expect.objectContaining({
         checkId: "core/doctor/workspace-suggestions",
         severity: "info",
-        message: "Tip: back up the workspace in a private git repo (GitHub or GitLab).",
+        message:
+          "Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended",
       }),
     );
     expect(findings).toContainEqual(

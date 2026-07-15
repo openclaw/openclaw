@@ -44,6 +44,7 @@ import {
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
+import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -1384,7 +1385,7 @@ async function writeAgentDigestArtifacts(params: {
   return updatedFiles;
 }
 
-export async function compileMemoryWikiVault(
+async function compileMemoryWikiVaultUnlocked(
   config: ResolvedMemoryWikiConfig,
 ): Promise<CompileMemoryWikiResult> {
   await initializeMemoryWikiVault(config);
@@ -1471,6 +1472,14 @@ export async function compileMemoryWikiVault(
   };
 }
 
+export async function compileMemoryWikiVault(
+  config: ResolvedMemoryWikiConfig,
+): Promise<CompileMemoryWikiResult> {
+  return await withMemoryWikiVaultMutation(config.vault.path, () =>
+    compileMemoryWikiVaultUnlocked(config),
+  );
+}
+
 async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {
   const required = [
     path.join(rootDir, "index.md"),
@@ -1517,3 +1526,4 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
     compile,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

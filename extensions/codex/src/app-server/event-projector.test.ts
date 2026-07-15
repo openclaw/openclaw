@@ -22,11 +22,7 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  CodexAppServerEventProjector,
-  type CodexAppServerEventProjectorOptions,
-  type CodexAppServerToolTelemetry,
-} from "./event-projector.js";
+import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
@@ -36,6 +32,10 @@ const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
+type CodexAppServerEventProjectorOptions = ConstructorParameters<
+  typeof CodexAppServerEventProjector
+>[3];
+type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 
 function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => {
@@ -138,6 +138,13 @@ function buildEmptyToolTelemetry(): CodexAppServerToolTelemetry {
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
   };
+}
+
+function expectUsageLimitPromptError(value: unknown): Error & { status: 429 } {
+  expect(value).toBeInstanceOf(Error);
+  const error = value as Error & { status?: unknown };
+  expect(error.status).toBe(429);
+  return error as Error & { status: 429 };
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -272,6 +279,24 @@ function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotific
       turn: { id: TURN_ID, status, items },
     },
   } as ProjectorNotification;
+}
+
+function pendingCommandStarted(id: string): ProjectorNotification {
+  return forCurrentTurn("item/started", {
+    item: {
+      type: "commandExecution",
+      id,
+      command: "/bin/bash -lc 'sleep 600'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "inProgress",
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: null,
+      durationMs: null,
+    },
+  });
 }
 
 describe("CodexAppServerEventProjector", () => {
@@ -445,6 +470,18 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["assistant"]);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain(params.prompt);
+  });
+
+  it("tags mirrored prompts with the exact upstream user text", async () => {
+    const projector = await createProjector(undefined, {
+      upstreamUserText: "decorated upstream prompt",
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const userMessage = requireRecord(result.messagesSnapshot[0], "user message");
+    expect(userMessage["__openclaw"]).toMatchObject({
+      upstreamUserText: "decorated upstream prompt",
+    });
   });
 
   it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {
@@ -675,6 +712,83 @@ describe("CodexAppServerEventProjector", () => {
       hadPotentialSideEffects: true,
       replaySafe: false,
     });
+  });
+
+  it("supersedes terminal assistant text before raw image persistence settles", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-before-image", text: "stale answer" },
+      }),
+    );
+    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(true);
+
+    let resolveMedia: (() => void) | undefined;
+    const mediaPersistence = new Promise<void>((resolve) => {
+      resolveMedia = resolve;
+    });
+    const mediaProjection = (
+      projector as unknown as {
+        generatedMediaProjection: { recordRaw(item: unknown): Promise<void> };
+      }
+    ).generatedMediaProjection;
+    vi.spyOn(mediaProjection, "recordRaw").mockReturnValue(mediaPersistence);
+
+    const pending = projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "image_generation_call",
+          id: "image-after-answer",
+          status: "completed",
+          result: tinyPngBase64,
+        },
+      }),
+    );
+
+    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(false);
+    resolveMedia?.();
+    await pending;
+  });
+
+  it("does not let delayed raw completion consume a newer assistant echo", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-a", text: "rewritten A" },
+      }),
+    );
+
+    const rawAnswerA = projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "answer-a",
+          role: "assistant",
+          content: [{ type: "output_text", text: "original A" }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-b", text: "rewritten B" },
+      }),
+    );
+    await rawAnswerA;
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "answer-b",
+          role: "assistant",
+          content: [{ type: "output_text", text: "original B" }],
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["rewritten B"]);
+    expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "rewritten B" }]);
   });
 
   it("keeps raw image-generation results replay-invalid when media save fails", async () => {
@@ -1030,17 +1144,21 @@ describe("CodexAppServerEventProjector", () => {
       );
     }
 
-    const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<
-        string,
-        {
-          rawSignatures: Array<{ length: number; prefix: string }>;
-          streamedRawSignature?: { length: number; prefix: string };
-        }
-      >;
-    };
-    expect(echoState.toolProgressEchoesByItem.size).toBe(1);
-    const state = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo");
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<
+            string,
+            {
+              rawSignatures: Array<{ length: number; prefix: string }>;
+              streamedRawSignature?: { length: number; prefix: string };
+            }
+          >;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    expect(echoState.size).toBe(1);
+    const state = echoState.get("cmd-streamed-echo");
     // Stream owns one dedicated slot; FIFO stays empty for pure stream accumulation.
     expect(state?.rawSignatures).toEqual([]);
     const latestRaw = state?.streamedRawSignature;
@@ -1092,16 +1210,20 @@ describe("CodexAppServerEventProjector", () => {
         delta: rawOutput,
       }),
     );
-    const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<
-        string,
-        {
-          rawSignatures: Array<{ length: number; prefix: string }>;
-          streamedRawSignature?: { length: number; prefix: string };
-        }
-      >;
-    };
-    const state = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo-newline");
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<
+            string,
+            {
+              rawSignatures: Array<{ length: number; prefix: string }>;
+              streamedRawSignature?: { length: number; prefix: string };
+            }
+          >;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    const state = echoState.get("cmd-streamed-echo-newline");
     expect(state?.streamedRawSignature?.length).toBe(rawOutput.trim().length);
 
     await projector.handleNotification(
@@ -1651,6 +1773,38 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual([]);
   });
 
+  it("keeps missing tool detail without overriding an explicit abort", async () => {
+    const projector = await createProjector();
+    projector.markAborted();
+
+    await projector.handleNotification(pendingCommandStarted("cmd-aborted"));
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(true);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.lastToolError).toMatchObject({
+      toolName: "bash",
+      error: expect.stringContaining("without a matching tool.result"),
+    });
+  });
+
+  it("fails closed when interrupted status has no abort marker", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(pendingCommandStarted("cmd-interrupted"));
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(false);
+    expect(result.promptError).toContain("without a matching tool.result");
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.lastToolError).toBeUndefined();
+  });
+
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
     const projector = await createProjector();
 
@@ -1704,9 +1858,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
-    expect(result.promptError).toContain("Wait until the reset time");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
+    expect(promptError.message).toContain("Wait until the reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1733,8 +1888,9 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1773,8 +1929,9 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1799,9 +1956,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
-    expect(result.promptError).not.toContain("Codex did not return a reset time");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
+    expect(promptError.message).not.toContain("Codex did not return a reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -2643,6 +2801,100 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContentItem.toolName).toBe("bash");
     expect(toolResultContentItem.toolCallId).toBe("cmd-1");
     expect(toolResultContentItem.content).toBe("ok");
+  });
+
+  it("preserves structured file-change diffs in mirrored transcript calls", async () => {
+    const projector = await createProjector();
+    const changes = [
+      {
+        path: "src/updated.ts",
+        kind: { type: "update", move_path: null },
+        diff: [
+          "--- a/src/updated.ts",
+          "+++ b/src/updated.ts",
+          "@@ -1 +1,2 @@",
+          "-old",
+          "+new",
+          "+another",
+          "",
+        ].join("\n"),
+      },
+      {
+        path: "src/created.ts",
+        kind: { type: "add" },
+        diff: "first\nsecond\n",
+      },
+      {
+        path: "src/deleted.ts",
+        kind: { type: "delete" },
+        diff: "removed\n",
+      },
+    ];
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "fileChange",
+          id: "patch-structured",
+          changes,
+          status: "completed",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const assistant = requireRecord(result.messagesSnapshot[1], "assistant tool call message");
+    const assistantContent = requireArray(assistant.content, "assistant content");
+    const toolCall = requireRecord(assistantContent[0], "file-change tool call");
+    const expectedChanges = [
+      { ...changes[0], stat: { added: 2, removed: 1 } },
+      { ...changes[1], stat: { added: 2, removed: 0 } },
+      { ...changes[2], stat: { added: 0, removed: 1 } },
+    ];
+    expect(toolCall.name).toBe("apply_patch");
+    expect(toolCall.arguments).toEqual({ changes: expectedChanges });
+    expect(toolCall.input).toEqual({ changes: expectedChanges });
+  });
+
+  it("bounds mirrored file-change diffs without losing full stats", async () => {
+    const diff = [
+      "--- a/src/large.ts",
+      "+++ b/src/large.ts",
+      "@@ -1 +1,200 @@",
+      "-old",
+      ...Array.from({ length: 200 }, (_, index) => `+${index}-${"x".repeat(96)}`),
+      "",
+    ].join("\n");
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "fileChange",
+          id: "patch-large",
+          changes: [{ path: "src/large.ts", kind: { type: "update" }, diff }],
+          status: "completed",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const assistant = requireRecord(result.messagesSnapshot[1], "assistant tool call message");
+    const assistantContent = requireArray(assistant.content, "assistant content");
+    const toolCall = requireRecord(assistantContent[0], "file-change tool call");
+    const args = requireRecord(toolCall.arguments, "file-change arguments");
+    const projectedChanges = requireArray(args.changes, "projected file changes");
+    const projectedChange = requireRecord(projectedChanges[0], "projected file change");
+    const projectedDiff = projectedChange.diff;
+    expect(typeof projectedDiff).toBe("string");
+    if (typeof projectedDiff !== "string") {
+      throw new Error("Expected bounded file-change diff");
+    }
+    expect(projectedDiff.length).toBeLessThanOrEqual(12_000);
+    expect(projectedDiff.endsWith("\n")).toBe(true);
+    expect(diff.startsWith(projectedDiff)).toBe(true);
+    expect(projectedChange.diffTruncated).toBe(true);
+    expect(projectedChange.stat).toEqual({ added: 200, removed: 1 });
   });
 
   it.each([
@@ -3582,6 +3834,44 @@ describe("CodexAppServerEventProjector", () => {
     expect(item.content).toContain("showing 10000");
   });
 
+  it.each([
+    { prefixLength: 7_999, delta: "😀tail", expectedChunk: "" },
+    { prefixLength: 7_998, delta: "x😀tail", expectedChunk: "x\n" },
+  ])(
+    "keeps streamed progress UTF-16 safe with $prefixLength chars already emitted",
+    async ({ prefixLength, delta, expectedChunk }) => {
+      const onToolResult = vi.fn();
+      const projector = await createProjector({
+        ...(await createParams()),
+        verboseLevel: "full",
+        onToolResult,
+      });
+
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-progress-utf16",
+          delta: "a".repeat(prefixLength),
+        }),
+      );
+      onToolResult.mockClear();
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-progress-utf16",
+          delta,
+        }),
+      );
+
+      expect(onToolResult).toHaveBeenCalledTimes(1);
+      expect(onToolResult).toHaveBeenCalledWith({
+        text: `🛠️ Bash\n\`\`\`txt\n${expectedChunk}...(truncated)...\n\`\`\``,
+      });
+      const text = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
+      expect(text).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
+    },
+  );
+
   it("freezes streamed raw prefix after UTF-16-safe truncation so full-output echoes stay suppressed", async () => {
     const projector = await createProjector();
     // First over-cap delta ends mid-surrogate: truncateUtf16Safe backs up and
@@ -3606,15 +3896,14 @@ describe("CodexAppServerEventProjector", () => {
       );
     }
 
-    const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<
-        string,
-        {
-          streamedRawSignature?: { length: number; prefix: string };
-        }
-      >;
-    };
-    const state = echoState.toolProgressEchoesByItem.get("cmd-freeze-prefix");
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<string, { streamedRawSignature?: { length: number; prefix: string } }>;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    const state = echoState.get("cmd-freeze-prefix");
     expect(state?.streamedRawSignature).toBeDefined();
     expect(fullOutput.startsWith(state!.streamedRawSignature!.prefix)).toBe(true);
     expect(state!.streamedRawSignature!.length).toBe(fullOutput.length);
@@ -5861,3 +6150,4 @@ describe("CodexAppServerEventProjector", () => {
     expect(started.scope).toBe("thread");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

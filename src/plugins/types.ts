@@ -1,4 +1,3 @@
-// Defines the public plugin API and runtime extension contracts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type {
@@ -24,6 +23,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
@@ -119,6 +119,7 @@ import type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
+import type { PluginLogger } from "./logger-types.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
@@ -128,6 +129,7 @@ import type {
   ProviderResolveConfigApiKeyContext,
 } from "./provider-config-context.types.js";
 import type {
+  ProviderAuthOptionBag,
   ProviderExternalAuthProfile,
   ProviderExternalOAuthProfile,
   ProviderResolveExternalAuthProfilesContext,
@@ -143,20 +145,21 @@ import type {
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginHookOptions,
   OpenClawPluginToolFactory,
   OpenClawPluginToolOptions,
 } from "./tool-types.js";
+import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
 import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
-
 type ModelProviderRequestTransportOverrides =
   import("../agents/provider-request-config.js").ModelProviderRequestTransportOverrides;
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
-
 export type { PluginRuntime } from "./runtime/types.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
+export type * from "./types.mcp-connection.js";
 export type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -237,26 +240,12 @@ export type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
-
-export type ProviderAuthOptionBag = {
-  token?: string;
-  tokenProvider?: string;
-  secretInputMode?: SecretInputMode;
-  [key: string]: unknown;
-};
-
-/** Logger passed into plugin registration, services, and CLI surfaces. */
-export type PluginLogger = {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-};
-
+export type { PluginLogger } from "./logger-types.js";
 export type { PluginKind } from "./plugin-kind.types.js";
 export type {
   ProviderExternalAuthProfile,
   ProviderExternalOAuthProfile,
+  ProviderAuthOptionBag,
   ProviderResolveExternalAuthProfilesContext,
   ProviderResolveExternalOAuthProfilesContext,
   ProviderResolveSyntheticAuthContext,
@@ -338,6 +327,8 @@ export type ProviderAuthContext = {
   workspaceDir?: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
+  /** Cancels browser callbacks, device polling, and other app-owned auth work. */
+  signal?: AbortSignal;
   /**
    * Optional onboarding CLI options that triggered this auth flow.
    *
@@ -661,6 +652,8 @@ export type ProviderUsageAuthToken = {
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
   subscriptionType?: string;
   rateLimitTier?: string;
+  /** Account email captured on the resolved credential, when known. */
+  email?: string;
 };
 
 /**
@@ -697,6 +690,8 @@ export type ProviderFetchUsageSnapshotContext = {
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
   subscriptionType?: string;
   rateLimitTier?: string;
+  /** Account email captured on the resolved credential, when known. */
+  email?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
 };
@@ -722,6 +717,9 @@ export type ProviderAuthDoctorHintContext = {
  * Use this to set provider defaults or rewrite provider-specific config keys
  * into the merged `extraParams` object. Return the full next extraParams object.
  */
+/** Provider-facing effort after OpenClaw lowers orchestration-only modes. */
+export type ProviderTransportThinkingLevel = Exclude<ThinkLevel, "ultra">;
+
 export type ProviderPrepareExtraParamsContext = {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -732,7 +730,7 @@ export type ProviderPrepareExtraParamsContext = {
   modelId: string;
   model?: ProviderRuntimeModel;
   extraParams?: Record<string, unknown>;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderTransportThinkingLevel;
 };
 
 export type ProviderExtraParamsForTransportContext = Omit<
@@ -1259,6 +1257,74 @@ export type ProviderTransformSystemPromptContext = ProviderSystemPromptContribut
 };
 
 export type PluginTextTransformRegistration = PluginTextTransforms;
+
+/** JSON-compatible provider settings for one configured worker profile. */
+export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
+
+/** SSH endpoint material returned by a worker provider after provisioning. */
+export type WorkerSshEndpoint = {
+  host: string;
+  port: number;
+  user: string;
+  /** OpenSSH public host-key line obtained from trusted provisioning output. */
+  hostKey: string;
+  /** Secret reference only; providers must never return plaintext key material. */
+  keyRef: SecretRef;
+};
+
+/** Resolved SSH client identity. Providers may return a local path or ephemeral material. */
+export type WorkerSshIdentity =
+  | { kind: "path"; path: string }
+  | { kind: "material"; contents: string };
+
+/** Durable context supplied when a worker provider resolves the identity it minted. */
+export type WorkerSshIdentityRequest = {
+  leaseId: string;
+  profile: WorkerProfile;
+  keyRef: SecretRef;
+};
+
+/** Durable lease identity and endpoint returned by a successful provision operation. */
+export type WorkerLease = {
+  leaseId: string;
+  ssh: WorkerSshEndpoint;
+};
+
+/** Authoritative inspection result for an already-known worker lease. */
+export type WorkerLeaseStatus =
+  | { status: "active" }
+  | { status: "destroyed" }
+  | { status: "unknown" };
+
+/** Permanent provider rejection recorded as a terminal worker failure. */
+export class WorkerProviderError extends Error {
+  readonly code = "invalid_profile";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkerProviderError";
+  }
+}
+
+/** Cloud-worker lifecycle capability registered by a plugin. */
+export type WorkerProvider = {
+  id: string;
+  /**
+   * Provision or adopt the lease for this operation id.
+   * Repeating the same operation id must be idempotent across gateway restarts.
+   */
+  provision: (profile: WorkerProfile, operationId: string) => Promise<WorkerLease>;
+  /** Throws on transient/indeterminate failures; `unknown` means authoritative absence. */
+  inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
+  /**
+   * Resolves provider-owned dynamic identities. When absent, the gateway uses its generic
+   * SecretRef resolver; when present, failures are authoritative and never fall back.
+   */
+  resolveSshIdentity?: (request: WorkerSshIdentityRequest) => Promise<WorkerSshIdentity>;
+  renew?: (leaseId: string) => Promise<void>;
+  /** Idempotent; resolves only after the provider can prove teardown. */
+  destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
+};
 
 /** Text-inference provider capability registered by a plugin. */
 export type ProviderPlugin = {
@@ -1964,7 +2030,15 @@ export type PluginCommandDiagnosticsSession = {
   sessionKey?: string;
   /** Ephemeral OpenClaw session id when available. */
   sessionId?: string;
-  /** Transcript file for this OpenClaw session when available. */
+  /**
+   * Deprecated transcript locator for this OpenClaw session when available.
+   *
+   * SQLite-backed sessions use a `sqlite:<agentId>:<sessionId>:<storePath>`
+   * marker, not a filesystem path. Use session id/key plus transcript-runtime
+   * helpers for active transcript reads.
+   *
+   * @deprecated Use session identity fields with `plugin-sdk/session-transcript-runtime`.
+   */
   sessionFile?: string;
   /** Embedded agent harness selected for this session. */
   agentHarnessId?: string;
@@ -2002,7 +2076,15 @@ export type PluginCommandContext = {
   sessionKey?: string;
   /** Ephemeral host session id for the active conversation when available. */
   sessionId?: string;
-  /** Transcript file for the active OpenClaw session when available. */
+  /**
+   * Deprecated transcript locator for the active OpenClaw session when available.
+   *
+   * SQLite-backed sessions use a `sqlite:<agentId>:<sessionId>:<storePath>`
+   * marker, not a filesystem path. Use session id/key plus transcript-runtime
+   * helpers for active transcript reads.
+   *
+   * @deprecated Use session identity fields with `plugin-sdk/session-transcript-runtime`.
+   */
   sessionFile?: string;
   /** Raw command arguments after the command name */
   args?: string;
@@ -2024,7 +2106,7 @@ export type PluginCommandContext = {
   diagnosticsSessions?: PluginCommandDiagnosticsSession[];
   /** Host-bound runtime capabilities scoped to this command invocation. */
   runtimeContext?: {
-    llm?: import("./runtime/types-core.js").PluginRuntimeCore["llm"];
+    llm?: Pick<import("./runtime/types-core.js").PluginRuntimeCore["llm"], "complete">;
   };
   /** Internal diagnostics-only marker that exec approval already authorized upload. */
   diagnosticsUploadApproved?: boolean;
@@ -2220,12 +2302,11 @@ export type OpenClawPluginReloadRegistration = {
   noopPrefixes?: string[];
 };
 
-export type OpenClawPluginNodeHostCommand = {
-  command: string;
-  cap?: string;
-  dangerous?: boolean;
-  handle: (paramsJSON?: string | null) => Promise<string>;
-};
+export type {
+  OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeHostCommandAvailabilityContext,
+  OpenClawPluginNodeHostCommandIo,
+} from "./types.node-host.js";
 
 export type OpenClawPluginNodeInvokeTransportResult =
   | {
@@ -2359,6 +2440,7 @@ export type OpenClawPluginServiceContext = {
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
@@ -2477,6 +2559,8 @@ export type MigrationItem = {
   message?: string;
   reason?: string;
   sensitive?: boolean;
+  /** Core-owned source revision bound by reviewed embedded migration flows. */
+  sourceRevision?: { algorithm: "sha256"; digest: string };
   details?: Record<string, unknown>;
 };
 
@@ -2523,6 +2607,10 @@ export type MigrationProviderContext = {
   runtime?: PluginRuntime;
   logger: PluginLogger;
   stateDir: string;
+  /** Explicit destination agent for embedded migration surfaces such as Control UI. */
+  targetAgentId?: string;
+  /** Optional item-kind scope used by embedded migration surfaces to avoid unrelated discovery. */
+  itemKinds?: readonly string[];
   source?: string;
   includeSecrets?: boolean;
   overwrite?: boolean;
@@ -2537,6 +2625,8 @@ export type MigrationProviderPlugin = {
   id: string;
   label: string;
   description?: string;
+  /** Item kinds this provider can expose without requiring a full plan. */
+  supportedItemKinds?: readonly string[];
   detect?: (ctx: MigrationProviderContext) => MigrationDetection | Promise<MigrationDetection>;
   prepareApply?: (
     ctx: MigrationProviderContext,
@@ -2672,6 +2762,9 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a plugin-owned resolver for browser-style hosted media URLs. */
   registerHostedMediaResolver: (resolver: OpenClawPluginHostedMediaResolver) => void;
+  /** Bind a declared MCP server's transport to the trusted message requester. */ registerMcpServerConnectionResolver: (
+    resolver: import("./types.mcp-connection.js").OpenClawPluginMcpServerConnectionResolver,
+  ) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
   /**
@@ -2686,6 +2779,8 @@ export type OpenClawPluginApi = {
     handler: GatewayRequestHandler,
     opts?: { scope?: OperatorScope },
   ) => void;
+  /** Register a read-only external-session catalog with optional native adoption actions. */
+  registerSessionCatalog: (provider: SessionCatalogProvider) => void;
   registerCli: (
     registrar: OpenClawPluginCliRegistrar,
     opts?: {
@@ -2732,6 +2827,8 @@ export type OpenClawPluginApi = {
   registerAutoEnableProbe: (probe: PluginSetupAutoEnableProbe) => void;
   /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
+  /** Register a cloud-worker lifecycle provider. */
+  registerWorkerProvider: (provider: WorkerProvider) => void;
   /** Register provider-owned model catalog rows for text and media generation. */
   registerModelCatalogProvider: (provider: UnifiedModelCatalogProviderPlugin) => void;
   /** Register a general embedding provider (embedding capability). */
@@ -2951,3 +3048,4 @@ export type OpenClawPluginApi = {
 
 // Plugin hook contracts now live in hook-types.ts so hook runners can import a
 // leaf contract surface instead of pulling the full plugin runtime barrel.
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

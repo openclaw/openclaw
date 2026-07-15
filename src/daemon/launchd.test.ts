@@ -6,10 +6,6 @@ import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
-  LAUNCH_AGENT_PROCESS_TYPE,
-  LAUNCH_AGENT_STDIN_PATH,
-  LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
-  LAUNCH_AGENT_UMASK_DECIMAL,
 } from "./launchd-plist.js";
 import {
   installLaunchAgent,
@@ -57,8 +53,8 @@ const state = vi.hoisted(() => ({
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   scheduleDetachedLaunchdRestartHandoff: vi.fn<
-    (_params: unknown) => { ok: boolean; pid?: number; detail?: string }
-  >(() => ({ ok: true, pid: 7331 })),
+    (_params: unknown) => { ok: true; value: number | undefined } | { ok: false; error: string }
+  >(() => ({ ok: true, value: 7331 })),
 }));
 const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number) => number[]>(() => []),
@@ -422,7 +418,7 @@ beforeEach(() => {
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReset();
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
     ok: true,
-    pid: 7331,
+    value: 7331,
   });
   vi.clearAllMocks();
 });
@@ -1046,6 +1042,33 @@ describe("launchctl list detection", () => {
 });
 
 describe("launchd bootstrap repair", () => {
+  it("migrates inline secrets before making an existing plist readable", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    const warn = vi.fn();
+    const secret = "legacy-secret";
+    state.files.set(wrapperPath, "custom wrapper");
+    state.files.set(
+      plistPath,
+      createTestLaunchAgentPlist({
+        label: "ai.openclaw.gateway",
+        programArguments: defaultProgramArguments,
+        environment: { OPENAI_API_KEY: secret },
+      }),
+    );
+    state.fileModes.set(plistPath, 0o600);
+
+    await repairLaunchAgentBootstrap({ env, warn });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("custom behavior"));
+    expect(state.files.get(plistPath)).not.toContain(secret);
+    expect(state.fileModes.get(plistPath)).toBe(0o644);
+    expect(state.files.get("/Users/test/.openclaw/service-env/ai.openclaw.gateway.env")).toContain(
+      secret,
+    );
+  });
+
   it("enables and bootstraps the resolved label without kickstarting the fresh agent", async () => {
     const env = createDefaultLaunchdEnv();
     const repair = await repairLaunchAgentBootstrap({ env });
@@ -1411,18 +1434,18 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<true/>");
     expect(plist).toContain("<key>StandardInPath</key>");
-    expect(plist).toContain(`<string>${LAUNCH_AGENT_STDIN_PATH}</string>`);
+    expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<key>StandardOutPath</key>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
     expect(plist).not.toContain("<key>SuccessfulExit</key>");
     expect(plist).toContain("<key>ExitTimeOut</key>");
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS}</integer>`);
     expect(plist).toContain("<key>ProcessType</key>");
-    expect(plist).toContain(`<string>${LAUNCH_AGENT_PROCESS_TYPE}</string>`);
+    expect(plist).toContain("<string>Interactive</string>");
     expect(plist).toContain("<key>Umask</key>");
-    expect(plist).toContain(`<integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>`);
+    expect(plist).toContain("<integer>63</integer>");
     expect(plist).toContain("<key>ThrottleInterval</key>");
-    expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
+    expect(plist).toContain("<integer>10</integer>");
   });
 
   it("rewrites the plist before bootstrap during restart fallback", async () => {
@@ -1486,7 +1509,7 @@ describe("launchd install", () => {
     expect(state.dirModes.get(env.HOME!)).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
-    expect(state.fileModes.get(plistPath)).toBe(0o600);
+    expect(state.fileModes.get(plistPath)).toBe(0o644);
   });
 
   it("stops LaunchAgent via bootout by default, preserving KeepAlive for future crashes", async () => {
@@ -2274,7 +2297,7 @@ describe("launchd install", () => {
     const env = createDefaultLaunchdEnv();
     launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
       ok: false,
-      detail: "spawn failed",
+      error: "spawn failed",
     });
 
     await expect(
@@ -2421,3 +2444,4 @@ describe("resolveLaunchAgentPlistPath", () => {
     ).toThrow("Invalid launchd label");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

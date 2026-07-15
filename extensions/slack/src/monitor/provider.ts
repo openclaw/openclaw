@@ -64,25 +64,21 @@ import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import {
   createSlackBoltApp,
-  createSlackSocketDisconnectWaiter,
   formatSlackChannelResolved,
   formatSlackUserResolved,
   gracefulStopSlackApp,
   publishSlackConnectedStatus,
   publishSlackDisconnectedStatus,
   resolveSlackBoltInterop,
-  resolveSlackSocketShutdownClient,
   startSlackSocketAndWaitForDisconnect,
   type SlackBoltResolvedExports,
 } from "./provider-support.js";
 import {
   formatSlackSocketModeSharedConnectionWarning,
   formatUnknownError,
-  getSocketEmitter,
   isNonRecoverableSlackAuthError,
   registerSlackSocketModeConnectionDiagnostics,
   SLACK_SOCKET_RECONNECT_POLICY,
-  waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
 import { setSlackDefaultSendIdentity } from "./send.runtime.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
@@ -133,7 +129,7 @@ function resolveStableSlackUserAllowlistEntries(entries: string[]): SlackUserRes
   return resolved;
 }
 
-export function formatSlackSocketReconnectMessage(params: {
+function formatSlackSocketReconnectMessage(params: {
   event: string;
   attempt: number;
   delayMs: number;
@@ -143,7 +139,7 @@ export function formatSlackSocketReconnectMessage(params: {
   return `slack socket disconnected (${params.event}); reconnecting in ${Math.round(params.delayMs / 1000)}s (attempt ${params.attempt}/∞)${suffix}`;
 }
 
-export function formatSlackSocketStartRetryMessage(params: {
+function formatSlackSocketStartRetryMessage(params: {
   attempt: number;
   delayMs: number;
   error: unknown;
@@ -501,10 +497,20 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     });
   }
 
-  registerSlackMonitorEvents({ ctx, account, handleSlackMessage, trackEvent });
-  if (installationIdentity.kind !== "enterprise") {
-    await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
-  }
+  // Resolve command registration first so App Home never advertises an inactive single command.
+  const commandRegistration =
+    installationIdentity.kind === "enterprise"
+      ? ({ mode: "disabled" } as const)
+      : await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
+  const appHomeSlashCommandName =
+    commandRegistration.mode === "single" ? commandRegistration.name : undefined;
+  registerSlackMonitorEvents({
+    ctx,
+    account,
+    handleSlackMessage,
+    appHomeSlashCommandName,
+    trackEvent,
+  });
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
@@ -540,7 +546,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
                 unresolved.push(entry.input);
                 continue;
               }
-              mapping.push(formatSlackChannelResolved(entry));
+              const resolvedLabel = formatSlackChannelResolved(entry);
+              if (resolvedLabel) {
+                mapping.push(resolvedLabel);
+              }
               const existing = nextChannels[entry.id] ?? {};
               nextChannels[entry.id] = { ...source, ...existing };
             }
@@ -765,24 +774,5 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 }
 
-export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
-
 export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
-
-export const testing = {
-  formatSlackChannelResolved,
-  formatSlackUserResolved,
-  publishSlackConnectedStatus,
-  publishSlackDisconnectedStatus,
-  resolveSlackSocketShutdownClient,
-  gracefulStopSlackApp,
-  resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  resolveSlackBoltInterop,
-  createSlackBoltApp,
-  createSlackSocketDisconnectWaiter,
-  startSlackSocketAndWaitForDisconnect,
-  getSocketEmitter,
-  waitForSlackSocketDisconnect,
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

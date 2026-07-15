@@ -199,12 +199,8 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     else { continue }
                     // Per the WebRTC stats spec audioLevel is linear 0...1:
                     // media-source is the local mic, inbound-rtp the remote voice.
-                    if stat.type == "media-source" {
-                        input = level.doubleValue
-                    }
-                    if stat.type == "inbound-rtp" {
-                        output = level.doubleValue
-                    }
+                    if stat.type == "media-source" { input = level.doubleValue }
+                    if stat.type == "inbound-rtp" { output = level.doubleValue }
                 }
                 continuation.resume(returning: (input, output))
             }
@@ -278,11 +274,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.activeToolRunIds.removeAll()
         for runId in runIds {
             Task { [gateway, sessionKey] in
-                let params = ["sessionKey": sessionKey, "runId": runId]
-                guard let data = try? JSONSerialization.data(withJSONObject: params),
-                      let json = String(data: data, encoding: .utf8)
-                else { return }
-                _ = try? await gateway.request(method: "chat.abort", paramsJSON: json, timeoutSeconds: 5)
+                let request = OpenClawChatGatewayRequests.abortRun(
+                    sessionKey: sessionKey,
+                    agentID: nil,
+                    runID: runId,
+                    requestTimeoutMs: 5000)
+                _ = try? await gateway.request(request)
             }
         }
     }
@@ -514,17 +511,13 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 stream: stream,
                 since: historySince,
                 timeoutSeconds: Self.toolResultTimeoutSeconds)
-            if Task.isCancelled || self.stopped {
-                return
-            }
+            if Task.isCancelled || self.stopped { return }
             self.trace("tool call chat result ready callId=\(callId) runId=\(runId) chars=\(result.count)")
             self.submitToolResult(callId: callId, result: ["result": result])
         } catch is CancellationError {
             return
         } catch {
-            if Task.isCancelled || self.stopped {
-                return
-            }
+            if Task.isCancelled || self.stopped { return }
             Self.logger.error("realtime tool call failed: \(error.localizedDescription, privacy: .public)")
             self.trace("tool call failed callId=\(callId) error=\(error.localizedDescription)")
             if let runId = activeToolRunIds[callId] {
@@ -567,9 +560,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         } catch is CancellationError {
             return
         } catch {
-            if Task.isCancelled || self.stopped {
-                return
-            }
+            if Task.isCancelled || self.stopped { return }
             Self.logger.error("realtime control tool failed: \(error.localizedDescription, privacy: .public)")
             self.trace("control tool failed callId=\(callId) error=\(error.localizedDescription)")
             self.submitToolResult(callId: callId, result: [
@@ -618,11 +609,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private func abortChatRun(runId: String) async {
-        let params = ["sessionKey": sessionKey, "runId": runId]
-        guard let data = try? JSONSerialization.data(withJSONObject: params),
-              let json = String(data: data, encoding: .utf8)
-        else { return }
-        _ = try? await self.gateway.request(method: "chat.abort", paramsJSON: json, timeoutSeconds: 5)
+        let request = OpenClawChatGatewayRequests.abortRun(
+            sessionKey: self.sessionKey,
+            agentID: nil,
+            runID: runId,
+            requestTimeoutMs: 5000)
+        _ = try? await self.gateway.request(request)
     }
 
     private static func decodeJSONObject(_ json: String) throws -> Any {
@@ -703,9 +695,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private nonisolated static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {
         let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if incoming == current {
-            return true
-        }
+        if incoming == current { return true }
         return (incoming == "agent:main:main" && current == "main") ||
             (incoming == "main" && current == "agent:main:main")
     }
@@ -772,20 +762,11 @@ final class TalkRealtimeWebRTCSession: NSObject {
         timeoutSeconds: Int) async throws -> AgentWaitResponse
     {
         let timeoutMs = max(1, timeoutSeconds) * 1000
-        let params: [String: Any] = [
-            "runId": runId,
-            "timeoutMs": timeoutMs,
-        ]
-        let data = try JSONSerialization.data(withJSONObject: params)
-        guard let json = String(data: data, encoding: .utf8) else {
-            throw NSError(domain: "TalkRealtimeWebRTC", code: 17, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode OpenClaw wait request",
-            ])
-        }
-        let response = try await gateway.request(
-            method: "agent.wait",
-            paramsJSON: json,
-            timeoutSeconds: timeoutSeconds + Self.agentWaitRequestGraceSeconds)
+        let request = OpenClawChatGatewayRequests.agentWait(
+            runID: runId,
+            timeoutMs: timeoutMs,
+            requestGraceMs: Self.agentWaitRequestGraceSeconds * 1000)
+        let response = try await gateway.request(request)
         return try JSONDecoder().decode(AgentWaitResponse.self, from: response)
     }
 
@@ -814,14 +795,8 @@ final class TalkRealtimeWebRTCSession: NSObject {
         sessionKey: String,
         since: Double) async throws -> String?
     {
-        let params: [String: Any] = ["sessionKey": sessionKey]
-        let data = try JSONSerialization.data(withJSONObject: params)
-        guard let json = String(data: data, encoding: .utf8) else {
-            throw NSError(domain: "TalkRealtimeWebRTC", code: 18, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode OpenClaw history request",
-            ])
-        }
-        let response = try await gateway.request(method: "chat.history", paramsJSON: json, timeoutSeconds: 15)
+        let request = OpenClawChatGatewayRequests.history(sessionKey: sessionKey, agentID: nil)
+        let response = try await gateway.request(request)
         let history = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: response)
         let messages = history.messages ?? []
         let decoded: [OpenClawChatMessage] = messages.compactMap { item in

@@ -210,9 +210,11 @@ enum OpenClawBrand {
 
 struct OpenClawActivationGlyph: View {
     let size: CGFloat
+    /// Opt-in tap Easter eggs; leave off when the glyph sits inside a control.
+    var interactive = false
 
     var body: some View {
-        OpenClawMascotView(floats: false)
+        OpenClawMascotView(floats: false, interactive: self.interactive)
             .frame(width: self.size, height: self.size)
             .shadow(
                 color: OpenClawBrand.activationGlow.opacity(0.18),
@@ -268,7 +270,6 @@ private struct OpenClawCraftSurfaceModifier: ViewModifier {
 struct OpenClawPrimaryActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     var height: CGFloat = 54
-    var cornerRadius: CGFloat = 18
 
     private var resolvedCornerRadius: CGFloat {
         self.height / 2
@@ -347,7 +348,6 @@ struct OpenClawPrimaryActionButtonStyle: ButtonStyle {
 struct OpenClawSecondaryActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     var height: CGFloat = 50
-    var cornerRadius: CGFloat = 18
     var shadowOpacity: Double = 0.035
 
     private var resolvedCornerRadius: CGFloat {

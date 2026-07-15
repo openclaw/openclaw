@@ -455,6 +455,7 @@ Notes:
 - Uses core `messages.tts` configuration and provider selection.
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
+- Core passes a resolved request deadline to provider `listVoices` hooks; provider-specific timeout settings may override it.
 - Voice listings can include richer metadata such as locale, gender, and personality tags for provider-aware pickers.
 - OpenAI and ElevenLabs support telephony today. Microsoft does not.
 
@@ -525,7 +526,7 @@ const video = await api.runtime.mediaUnderstanding.describeVideoFile({
 
 const extraction = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
   provider: "codex",
-  model: "gpt-5.5",
+  model: "gpt-5.6-sol",
   input: [
     {
       type: "image",
@@ -578,6 +579,7 @@ Plugins can also launch background subagent runs through `api.runtime.subagent`:
 const result = await api.runtime.subagent.run({
   sessionKey: "agent:main:subagent:search-helper",
   message: "Expand this query into focused follow-up searches.",
+  toolsAlsoAllow: ["my_plugin_progress"],
   provider: "openai",
   model: "gpt-4.1-mini",
   deliver: false,
@@ -587,6 +589,7 @@ const result = await api.runtime.subagent.run({
 Notes:
 
 - `provider` and `model` are optional per-run overrides, not persistent session changes.
+- `toolsAlsoAllow` accepts exact, uniquely owned tool names registered by the calling plugin. Core and ambiguous names are rejected. It is additive to the normal profile, but operator allowlists and denies remain authoritative.
 - OpenClaw only honors those override fields for trusted callers.
 - For plugin-owned fallback runs, operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`.
 - Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets, or `"*"` to allow any target explicitly.
@@ -674,6 +677,7 @@ Notes:
   - `trusted-proxy` callers that do send `x-openclaw-scopes` get the declared scopes instead
   - a route can opt into `gatewayRuntimeScopeSurface: "trusted-operator"` to always honor `x-openclaw-scopes` for identity-bearing auth modes (falling back to the full CLI default scope set when the header is absent)
 - Practical rule: do not assume a gateway-auth plugin route is an implicit admin surface. If your route needs admin-only behavior, opt into `trusted-operator` scope surface, require an identity-bearing auth mode, and document the explicit `x-openclaw-scopes` header contract.
+- After route matching and authentication, ordinary handlers participate in Gateway root-work admission. A prepared or restarting Gateway returns `503` before invoking the handler. The narrow exception is a manifest-entitled `auth: "gateway"` route that also opts into the route-specific `trusted-operator` surface; it remains reachable so suspension control dispatch cannot be stranded, while ordinary sibling routes from the same plugin remain behind the admission boundary. WebSocket `handleUpgrade` ownership uses the same atomic admission boundary; once the handler accepts a socket, the socket's later lifetime is plugin-owned and is not tracked by this boundary.
 
 ## Plugin SDK import paths
 
@@ -738,7 +742,8 @@ fallback rules, provider mapping, and plugin author checklist.
 
 Send-capable plugins declare what they can render through message capabilities:
 
-- `presentation` for semantic presentation blocks (`text`, `context`, `divider`, `chart`, `buttons`, `select`)
+- `presentation` for semantic presentation blocks (`text`, `context`,
+  `divider`, `chart`, `table`, `buttons`, `select`)
 - `delivery-pin` for pinned-delivery requests
 
 Core decides whether to render the presentation natively or degrade it to text.

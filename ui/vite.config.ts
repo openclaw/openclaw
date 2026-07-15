@@ -4,15 +4,11 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import type { Plugin, UserConfig } from "vite";
-import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
-import {
-  deriveControlUiBuildId,
-  normalizeControlUiBuildId,
-  normalizeControlUiBuildTimestamp,
-  normalizeControlUiCommit,
-  type ControlUiBuildInfo,
-} from "./src/build-info.ts";
+import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
+import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
+import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -40,6 +36,42 @@ const commonJsOptimizeDeps = [
   "highlight.js/lib/languages/xml",
   "highlight.js/lib/languages/yaml",
 ] as const;
+// npm excludes dist/**/*.map; sidecars would bypass that rule and ship source
+// maps that the browser never needs during normal runtime.
+const controlUiPrecompressedAssetExtensions = new Set([
+  ".css",
+  ".js",
+  ".json",
+  ".svg",
+  ".txt",
+  ".wasm",
+  ".webmanifest",
+]);
+
+export function createControlUiPrecompressedAssetVariants(
+  fileName: string,
+  source: string | Uint8Array,
+): Array<{ fileName: string; source: Buffer }> {
+  if (
+    !fileName.startsWith("assets/") ||
+    !controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
+  ) {
+    return [];
+  }
+  const body = typeof source === "string" ? Buffer.from(source) : Buffer.from(source);
+  return [
+    {
+      fileName: `${fileName}.br`,
+      source: brotliCompressSync(body, {
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 9 },
+      }),
+    },
+    {
+      fileName: `${fileName}.gz`,
+      source: gzipSync(body, { level: 9 }),
+    },
+  ];
+}
 
 function normalizeBase(input: string): string {
   const trimmed = input.trim();
@@ -79,17 +111,43 @@ function readGitCommit(): string | null {
   }
 }
 
+function readGitBranch(): string | null {
+  try {
+    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--abbrev-ref", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return raw.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function readGitDirty(): boolean | null {
+  try {
+    const raw = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return Boolean(raw.trim());
+  } catch {
+    return null;
+  }
+}
+
 type ControlUiBuildInfoSources = {
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   readPackageVersion?: () => string | null;
   readGitCommit?: () => string | null;
+  readGitBranch?: () => string | null;
+  readGitDirty?: () => boolean | null;
 };
 
 function normalizeBuildTimestamp(value: string | undefined, now: () => Date): string | null {
   const explicit = value?.trim();
   if (explicit) {
-    const timestamp = normalizeControlUiBuildTimestamp(explicit);
+    const timestamp = normalizeControlUiBuildInfo({ builtAt: explicit }).builtAt;
     if (!timestamp) {
       throw new Error(
         "OPENCLAW_BUILD_TIMESTAMP must be a valid UTC ISO-8601 timestamp ending in Z",
@@ -111,18 +169,20 @@ export function resolveControlUiBuildInfo(
     { name: "GIT_SHA", value: env.GIT_SHA?.trim() },
   ].find((source) => source.value);
   const explicitCommit = explicitCommitSource?.value;
-  const envCommit = explicitCommit ? normalizeControlUiCommit(explicitCommit) : null;
+  const envCommit = explicitCommit
+    ? normalizeControlUiBuildInfo({ commit: explicitCommit }).commit
+    : null;
   if (explicitCommitSource && !envCommit) {
     throw new Error(`${explicitCommitSource.name} must be a full 40-character hexadecimal SHA`);
   }
   const gitCommit = explicitCommit ? null : (sources.readGitCommit ?? readGitCommit)();
-  const normalizedGitCommit = normalizeControlUiCommit(gitCommit);
+  const normalizedGitCommit = normalizeControlUiBuildInfo({ commit: gitCommit }).commit;
   if (gitCommit?.trim() && !normalizedGitCommit) {
     throw new Error("git rev-parse HEAD must return a full 40-character hexadecimal SHA");
   }
   // GITHUB_SHA names the workflow invocation and can differ from a checked-out tag.
   const githubCommit = explicitCommit || gitCommit?.trim() ? null : env.GITHUB_SHA?.trim();
-  const normalizedGithubCommit = normalizeControlUiCommit(githubCommit);
+  const normalizedGithubCommit = normalizeControlUiBuildInfo({ commit: githubCommit }).commit;
   if (githubCommit && !normalizedGithubCommit) {
     throw new Error("GITHUB_SHA must be a full 40-character hexadecimal SHA");
   }
@@ -131,13 +191,24 @@ export function resolveControlUiBuildInfo(
     env.OPENCLAW_BUILD_TIMESTAMP,
     sources.now ?? (() => new Date()),
   );
+  // Branch/dirty identity is advisory: the readers return null instead of
+  // throwing, so malformed environment or Git state never blocks a build.
+  // Tags must not be presented as branches in GitHub-built artifacts.
+  const githubBranch = env.GITHUB_REF_TYPE === "branch" ? env.GITHUB_REF_NAME : null;
+  const branch =
+    normalizeControlUiBuildInfo({ branch: env.GIT_BRANCH }).branch ??
+    normalizeControlUiBuildInfo({ branch: githubBranch }).branch ??
+    normalizeControlUiBuildInfo({ branch: (sources.readGitBranch ?? readGitBranch)() }).branch;
+  const dirty = (sources.readGitDirty ?? readGitDirty)();
   const metadata = { version, commit, builtAt };
   const explicitBuildId = env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
   return {
     ...metadata,
-    buildId: explicitBuildId
-      ? normalizeControlUiBuildId(explicitBuildId)
-      : deriveControlUiBuildId(metadata),
+    branch,
+    dirty,
+    buildId: normalizeControlUiBuildInfo(
+      explicitBuildId ? { ...metadata, buildId: explicitBuildId } : metadata,
+    ).buildId,
   };
 }
 
@@ -211,6 +282,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
+    sourcePackageAlias("workboard-contract"),
   ];
 }
 
@@ -299,6 +371,24 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
   };
 }
 
+function controlUiPrecompressedAssetsPlugin(): Plugin {
+  return {
+    name: "control-ui-precompressed-assets",
+    apply: "build",
+    writeBundle(_options, bundle) {
+      for (const output of Object.values(bundle)) {
+        // Vite's post-build import analysis rewrites lazy preload markers in a
+        // later generateBundle hook. Read from disk here so sidecars always
+        // encode the exact final bytes that the identity response serves.
+        const source = fs.readFileSync(path.join(outDir, output.fileName));
+        for (const variant of createControlUiPrecompressedAssetVariants(output.fileName, source)) {
+          fs.writeFileSync(path.join(outDir, variant.fileName), variant.source);
+        }
+      }
+    },
+  };
+}
+
 export default function controlUiViteConfig(): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
@@ -331,9 +421,13 @@ export default function controlUiViteConfig(): UserConfig {
       outDir,
       emptyOutDir: true,
       sourcemap: true,
-      rollupOptions: {
+      rolldownOptions: {
+        // Explicit groups do not absorb each other's dependencies. These settings
+        // preserve execution order while keeping the startup chunks bounded.
+        preserveEntrySignatures: "allow-extension",
         output: {
-          manualChunks: controlUiManualChunk,
+          codeSplitting: controlUiCodeSplitting,
+          strictExecutionOrder: true,
         },
       },
       // Keep CI/onboard logs clean; the app chunk is split into stable runtime buckets above.
@@ -346,6 +440,7 @@ export default function controlUiViteConfig(): UserConfig {
     },
     plugins: [
       controlUiBrowserOnlySharedModuleAliases(),
+      controlUiPrecompressedAssetsPlugin(),
       controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId),
       {
         name: "control-ui-dev-stubs",

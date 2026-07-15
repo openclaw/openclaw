@@ -1,32 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Floating approval UI listing every pending pairing request as a card.
-/// Liquid Glass surface on macOS 26+, material fallback on macOS 15.
+/// Approval dialog listing every pending pairing request as a card. The host
+/// panel draws native window chrome; this view only lays out the content.
 struct PairingApprovalPanelView: View {
     let center: PairingApprovalCenter
 
-    /// Transparent margin around the glass so the drawn shadow has room;
-    /// the NSPanel shadow is disabled (it would trace a square window edge).
-    static let shadowMargin: CGFloat = 32
-
     var body: some View {
-        self.surface
+        self.content
             .frame(width: PairingApprovalPanelController.panelWidth)
-            .compositingGroup()
-            .shadow(color: .black.opacity(0.28), radius: 22, x: 0, y: 10)
-            .padding(Self.shadowMargin)
-    }
-
-    @ViewBuilder
-    private var surface: some View {
-        if #available(macOS 26.0, *) {
-            self.content
-                .glassEffect(.regular, in: .rect(cornerRadius: 24))
-        } else {
-            self.content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
-        }
     }
 
     private var content: some View {
@@ -40,22 +22,55 @@ struct PairingApprovalPanelView: View {
                     ForEach(cards) { card in
                         PairingRequestCardView(
                             card: card,
-                            isBusy: self.center.decisionsInFlight.contains(card.requestId),
                             isOnlyRequest: cards.count == 1,
                             onDecision: { self.center.decide(card, $0) })
                     }
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
-            HStack {
-                Spacer()
-                Button("Not Now") { self.center.snooze() }
-                    .keyboardShortcut(.cancelAction)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-            }
+            self.footer(cards: cards)
         }
         .padding(18)
+    }
+
+    /// Single request keeps the minimal "Not Now" footer; multiple requests
+    /// add one-click bulk actions so a queue never needs card-by-card clicks.
+    @ViewBuilder
+    private func footer(cards: [PairingApprovalCenter.Card]) -> some View {
+        let notNow = Button("Not Now") { self.center.snooze() }
+            .keyboardShortcut(.cancelAction)
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        if cards.count > 1 {
+            HStack(spacing: 8) {
+                notNow
+                Spacer()
+                // No keyboard shortcuts here: bulk approval is a security
+                // decision and must never be a stray Return press. Both
+                // actions resolve the rendered `cards` snapshot, never the
+                // live queue, so a request that arrives mid-click cannot be
+                // approved before it was ever displayed.
+                Button(role: .destructive) {
+                    self.center.decideAll(cards, .reject)
+                } label: {
+                    Text("Reject All")
+                        .padding(.horizontal, 6)
+                }
+                .pairingActionStyle(prominent: false)
+                Button {
+                    self.center.decideAll(cards, .approve)
+                } label: {
+                    Text("Approve All")
+                        .padding(.horizontal, 6)
+                }
+                .pairingActionStyle(prominent: true)
+            }
+        } else {
+            HStack {
+                Spacer()
+                notNow
+            }
+        }
     }
 
     private func header(cards: [PairingApprovalCenter.Card]) -> some View {
@@ -77,7 +92,6 @@ struct PairingApprovalPanelView: View {
 
 struct PairingRequestCardView: View {
     let card: PairingApprovalCenter.Card
-    let isBusy: Bool
     let isOnlyRequest: Bool
     let onDecision: (PairingApprovalCenter.Decision) -> Void
 
@@ -113,8 +127,6 @@ struct PairingRequestCardView: View {
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 16).fill(.quinary))
-        .disabled(self.isBusy)
-        .opacity(self.isBusy ? 0.6 : 1)
     }
 
     private var icon: some View {
@@ -184,44 +196,45 @@ struct PairingRequestCardView: View {
         .onHover { self.isHoveringDetail = $0 }
     }
 
-    @ViewBuilder
     private var approveButton: some View {
-        let button = Button {
+        Button {
             self.onDecision(.approve)
         } label: {
             Text(self.card.kind == .node ? "Approve Node" : "Approve Device")
                 .padding(.horizontal, 6)
         }
-        let shortcut: KeyboardShortcut? = self.isOnlyRequest ? .defaultAction : nil
-        if #available(macOS 26.0, *) {
-            button
-                .buttonStyle(.glassProminent)
-                .buttonBorderShape(.capsule)
-                .keyboardShortcut(shortcut)
-        } else {
-            button
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-                .keyboardShortcut(shortcut)
-        }
+        .pairingActionStyle(prominent: true)
+        .keyboardShortcut(self.isOnlyRequest ? .defaultAction : nil)
     }
 
-    @ViewBuilder
     private var rejectButton: some View {
-        let button = Button(role: .destructive) {
+        Button(role: .destructive) {
             self.onDecision(.reject)
         } label: {
             Text("Reject")
                 .padding(.horizontal, 6)
         }
+        .pairingActionStyle(prominent: false)
+    }
+}
+
+extension View {
+    /// Shared capsule styling for pairing decision buttons: Liquid Glass on
+    /// macOS 26+, bordered fallback on macOS 15.
+    @ViewBuilder
+    func pairingActionStyle(prominent: Bool) -> some View {
         if #available(macOS 26.0, *) {
-            button
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
+            if prominent {
+                self.buttonStyle(.glassProminent).buttonBorderShape(.capsule)
+            } else {
+                self.buttonStyle(.glass).buttonBorderShape(.capsule)
+            }
         } else {
-            button
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
+            if prominent {
+                self.buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
+            } else {
+                self.buttonStyle(.bordered).buttonBorderShape(.capsule)
+            }
         }
     }
 }

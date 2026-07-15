@@ -485,6 +485,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
     },
   },
   shouldTreatDeliveredTextAsVisible: shouldTreatSlackDeliveredTextAsVisible,
+  preferFinalAssistantVisibleText: true,
   shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
     shouldSuppressLocalSlackExecApprovalPrompt({
       cfg,
@@ -564,6 +565,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         deps: ctx.deps,
         send,
         tokenOverride,
+        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
       }),
     });
   },
@@ -657,6 +659,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     },
     messaging: {
       targetPrefixes: ["slack"],
+      directTargetStyle: "user-prefixed",
+      targetIdComparison: "lowercase",
       normalizeTarget: normalizeSlackMessagingTarget,
       // Session and delivery identities stay folded; Slack API boundaries restore ID casing.
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
@@ -946,3 +950,4 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
   },
   outbound: slackChannelOutbound,
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

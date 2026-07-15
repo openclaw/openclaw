@@ -50,17 +50,19 @@ import {
   TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
 } from "./spooled-update-retry-policy.js";
 import {
+  isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess,
+  isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
+} from "./telegram-ingress-claim-owner.js";
+import {
   claimNextTelegramSpooledUpdate,
   completeTelegramSpooledUpdateWithRetry,
   failTelegramSpooledUpdateClaim,
-  isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
   refreshTelegramSpooledUpdateClaim,
   releaseTelegramSpooledUpdateClaim,
   resolveTelegramIngressSpoolDir,
-  TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
   writeTelegramSpooledUpdate,
   type ClaimedTelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
@@ -72,6 +74,8 @@ import { createTelegramWebhookStatusPublisher } from "./webhook-status.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const TELEGRAM_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const TELEGRAM_WEBHOOK_ACCEPTED_VALUE = "durable";
 const TELEGRAM_WEBHOOK_SPOOLED_DRAIN_INTERVAL_MS = 500;
 const TELEGRAM_WEBHOOK_SPOOLED_CLAIM_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS = 25 * 60_000;
@@ -246,6 +250,9 @@ function isTrustedProxyAddress(
     }
     if (trimmed.includes("/")) {
       const [address, prefix] = trimmed.split("/", 2);
+      if (address === undefined || prefix === undefined) {
+        continue;
+      }
       const parsedPrefix = parseStrictNonNegativeInteger(prefix);
       const family = net.isIP(address);
       if (family === 4 && parsedPrefix !== undefined && parsedPrefix >= 0 && parsedPrefix <= 32) {
@@ -765,9 +772,10 @@ export async function startTelegramWebhook(opts: {
         staleMs: 0,
         shouldRecover: (claim) =>
           !activeWebhookSpooledLaneKeys.has(resolveWebhookSpooledUpdateLaneKey(claim.update)) &&
-          !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim, {
-            maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
-          }),
+          !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
+        shouldRecoverCorrupt: (claim) =>
+          !(claim.laneKey && activeWebhookSpooledLaneKeys.has(claim.laneKey)) &&
+          !isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess(claim),
       });
       const claimedLaneKeys = new Set(
         (
@@ -948,6 +956,7 @@ export async function startTelegramWebhook(opts: {
       });
       // Enqueue duplicate detection makes Telegram webhook retries idempotent:
       // re-posted update_ids map to the same spool row and still ack fast.
+      res.setHeader(TELEGRAM_WEBHOOK_ACCEPTED_HEADER, TELEGRAM_WEBHOOK_ACCEPTED_VALUE);
       respondText(200);
       status.noteWebhookUpdateReceived();
       requestWebhookSpoolDrain();
@@ -1098,3 +1107,4 @@ export async function startTelegramWebhook(opts: {
 
   return { server, bot, stop: shutdown };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

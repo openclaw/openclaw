@@ -3,7 +3,6 @@ import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debo
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
-import { resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
 import "./message-handler-mock-support.test-support.js";
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
@@ -21,7 +20,9 @@ type TestAttachment = {
 
 const runtimeApiMockState = getRuntimeApiMockState();
 const graphThreadMockState = vi.hoisted(() => ({
-  resolveTeamGroupId: vi.fn(async () => "group-1"),
+  resolveTeamGroupId: vi.fn(
+    async (params: { aadGroupId?: string }) => params.aadGroupId?.trim() || "group-1",
+  ),
   fetchChannelMessage: vi.fn<
     (
       token: string,
@@ -43,6 +44,8 @@ const graphThreadMockState = vi.hoisted(() => ({
     (token: string, chatId: string, messageId: string) => Promise<string | undefined>
   >(async () => undefined),
 }));
+let parentMessageSequence = 0;
+let currentParentMessageId = "";
 
 vi.mock("../graph-thread.js", () => {
   const stripHtmlFromTeamsMessage = (html: string) =>
@@ -123,14 +126,12 @@ describe("msteams monitor handler authz", () => {
   }
 
   function resetThreadMocks() {
+    currentParentMessageId = `parent-msg-${++parentMessageSequence}`;
     runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
     graphThreadMockState.resolveTeamGroupId.mockClear();
     graphThreadMockState.fetchChannelMessage.mockReset();
     graphThreadMockState.fetchThreadReplies.mockReset();
     graphThreadMockState.fetchChatMessageText.mockClear();
-    // Parent-context LRU + per-session dedupe are module-level; clear between
-    // cases so stale parent fetches from earlier tests don't bleed in.
-    resetThreadParentContextCachesForTest();
   }
 
   function createThreadMessage(params: {
@@ -267,10 +268,10 @@ describe("msteams monitor handler authz", () => {
         conversationType: "channel",
       },
       channelData: {
-        team: { id: "team123", name: "Team 123" },
-        channel: { name: "General" },
+        team: { id: "team123", name: "Team 123", aadGroupId: "graph-team-123" },
+        channel: { id: "19:graph-channel@thread.tacv2", name: "General" },
       },
-      extraActivity: { replyToId: "parent-msg" },
+      extraActivity: { replyToId: currentParentMessageId },
       attachments: params?.attachments ?? [],
     });
   }
@@ -435,10 +436,6 @@ describe("msteams monitor handler authz", () => {
         name: "New User",
       },
       agent: {
-        id: "bot-id",
-        name: "Bot",
-      },
-      bot: {
         id: "bot-id",
         name: "Bot",
       },
@@ -928,6 +925,7 @@ describe("msteams monitor handler authz", () => {
       "[Thread history]\nAlice: Allowed context\n[/Thread history]\n\nCurrent message",
     );
     expect(ctxPayload.GroupSpace).toBe("team123");
+    expect(ctxPayload.NativeChannelId).toBe("graph-team-123/19:graph-channel@thread.tacv2");
     expect(String((dispatched.ctxPayload as { BodyForAgent?: string }).BodyForAgent)).not.toContain(
       "Mallory",
     );

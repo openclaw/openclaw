@@ -25,7 +25,7 @@ import { authorizeAndResolveSlackSystemEventContext } from "./system-event-conte
 // workflows are uniform; the `gateway/channels/slack` subsystem renders as `[slack]`.
 const slackInboundLog = createSubsystemLogger("gateway/channels/slack").child("inbound");
 
-export function formatSlackInboundLogLine(params: {
+function formatSlackInboundLogLine(params: {
   workspaceId: string;
   channelId: string;
   channelType: string;
@@ -176,6 +176,7 @@ export function registerSlackMessageEvents(params: {
       body: args.body,
       context: args.context,
       client: args.client,
+      clientOptions: ctx.app.webClientOptions,
     });
     if (!resolved.ok) {
       logVerbose(`slack: drop event (${resolved.reason})`);

@@ -6,13 +6,13 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { saveAuthProfileStore } from "../../agents/auth-profiles/store.js";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.js";
+} from "../../agents/subagent-registry.test-helpers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   completeTaskRunByRunId,
@@ -20,7 +20,7 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
 import {
@@ -2195,7 +2195,7 @@ describe("buildStatusReply subagent summary", () => {
     }
   });
 
-  it("keeps /status on a session-pinned OpenClaw harness after config changes", async () => {
+  it("keeps /status on an explicit OpenClaw runtime override after config changes", async () => {
     registerStatusCodexHarness();
 
     const text = await buildStatusText({
@@ -2211,7 +2211,8 @@ describe("buildStatusReply subagent summary", () => {
         sessionId: "sess-status-pinned-agent",
         updatedAt: 0,
         fastMode: true,
-        agentHarnessId: "openclaw",
+        agentRuntimeOverride: "openclaw",
+        agentHarnessId: "codex",
       },
       sessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
@@ -2234,4 +2235,76 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalized).toContain("Fast");
     expect(normalized).not.toContain("codex");
   });
+
+  it("shows the effective Luna thinking level for a pinned Codex runtime", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-luna-codex",
+        updatedAt: 0,
+        thinkingLevel: "ultra",
+        agentRuntimeOverride: "codex",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      contextTokens: 32_000,
+      resolvedThinkLevel: "ultra",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => "ultra",
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Think: max");
+    expect(normalized).not.toContain("Think: ultra");
+  });
+
+  it("treats the persisted harness id as observational in /status", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-observed-agent",
+        updatedAt: 0,
+        agentHarnessId: "openclaw",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "oauth",
+      activeModelAuthOverride: "oauth",
+    });
+
+    expect(normalizeTestText(text)).toContain("Runtime: OpenAI Codex");
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

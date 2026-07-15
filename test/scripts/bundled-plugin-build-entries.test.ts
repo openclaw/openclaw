@@ -72,14 +72,12 @@ describe("bundled plugin build entries", () => {
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
-  it("keeps Codex Supervisor CLI metadata in bundled build and pack entries", () => {
+  it("keeps Codex CLI metadata in bundled build and standalone pack entries", () => {
     const entries = listBundledPluginBuildEntries();
-    const artifacts = listBundledPluginPackArtifacts();
+    const artifacts = listBundledPluginPackArtifacts({ includeRootPackageExcludedDirs: true });
 
-    expect(entries["extensions/codex-supervisor/cli-metadata"]).toBe(
-      "extensions/codex-supervisor/cli-metadata.ts",
-    );
-    expect(artifacts).toContain("dist/extensions/codex-supervisor/cli-metadata.js");
+    expect(entries["extensions/codex/cli-metadata"]).toBe("extensions/codex/cli-metadata.ts");
+    expect(artifacts).toContain("dist/extensions/codex/cli-metadata.js");
   });
 
   it("filters bundled plugin build entries for bounded script lanes", () => {
@@ -164,11 +162,12 @@ describe("bundled plugin build entries", () => {
   });
 
   it("keeps private QA bundles out of required npm pack artifacts", () => {
+    const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
+    expectNoPrefixMatches(Object.keys(entries), "extensions/qa-matrix/");
     expectNoPrefixMatches(artifacts, "dist/extensions/qa-channel/");
     expectNoPrefixMatches(artifacts, "dist/extensions/qa-lab/");
-    expectNoPrefixMatches(artifacts, "dist/extensions/qa-matrix/");
   });
 
   it("keeps explicitly downloadable plugins out of bundled package artifacts", () => {

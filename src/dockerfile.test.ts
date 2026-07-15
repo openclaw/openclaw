@@ -130,6 +130,35 @@ describe("Dockerfile", () => {
     );
   });
 
+  it("uses portable copies for workspace dependency inputs", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const workspaceDepsStart = dockerfile.indexOf(
+      "FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps",
+    );
+    const workspaceDepsEnd = dockerfile.indexOf("FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary");
+
+    expect(workspaceDepsStart).toBeGreaterThan(-1);
+    expect(workspaceDepsEnd).toBeGreaterThan(workspaceDepsStart);
+
+    const workspaceDeps = dockerfile.slice(workspaceDepsStart, workspaceDepsEnd);
+    const extractionIndex = workspaceDeps.indexOf(
+      'RUN mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}"',
+    );
+    const inputCopies = [
+      "COPY scripts/lib/docker-plugin-selection.mjs /tmp/docker-plugin-selection.mjs",
+      "COPY packages /tmp/packages",
+      "COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}",
+    ];
+
+    expect(extractionIndex).toBeGreaterThan(-1);
+    for (const copy of inputCopies) {
+      const copyIndex = workspaceDeps.indexOf(copy);
+      expect(copyIndex, copy).toBeGreaterThan(-1);
+      expect(copyIndex, copy).toBeLessThan(extractionIndex);
+    }
+    expect(workspaceDeps).not.toContain("--mount=type=bind");
+  });
+
   it("copies install workspace manifests before pnpm install", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
@@ -151,9 +180,6 @@ describe("Dockerfile", () => {
     expect(packageManifestIndex).toBeGreaterThan(-1);
     expect(extensionManifestIndex).toBeGreaterThan(-1);
     expect(dockerfile).toContain("for manifest in /tmp/packages/*/package.json");
-    expect(dockerfile).toContain(
-      "--mount=type=bind,source=scripts/lib/docker-plugin-selection.mjs,target=/tmp/docker-plugin-selection.mjs,readonly",
-    );
     expect(dockerfile).toContain(
       'node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS"',
     );

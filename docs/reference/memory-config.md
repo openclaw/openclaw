@@ -292,6 +292,8 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     openclaw memory index --force --agent main
     ```
 
+    Numeric `local.contextSize` values also inform node-llama-cpp's automatic GPU-layer placement so model weights and the requested embedding context are fitted together. `openclaw memory status --deep` reports last-known llama.cpp backend, device, offload, requested-context, and timestamped memory facts after the runtime has loaded; passive status does not load a model.
+
     Set `provider: "local"` explicitly for local GGUF embeddings. `hf:` and HTTP(S) model references are supported for explicit local configs (via node-llama-cpp's model resolution), but they do not change the default provider.
 
   </Accordion>
@@ -623,7 +625,7 @@ Requires `mcporter` installed and on PATH, plus a configured mcporter server tha
     | `limits.maxResults`       | `number` | `4`     | Max search results         |
     | `limits.maxSnippetChars`  | `number` | `450`   | Clamp snippet length       |
     | `limits.maxInjectedChars` | `number` | `2200`  | Clamp total injected chars |
-    | `limits.timeoutMs`        | `number` | `4000`  | Search timeout             |
+    | `limits.timeoutMs`        | `number` | `4000`  | QMD command timeout during QMD-backed search, including `memory_search`; setup, sync, builtin fallback, and supplemental work keep the default tool deadline |
   </Accordion>
   <Accordion title="Scope">
     Controls which sessions can receive QMD search results. Same schema as [`session.sendPolicy`](/gateway/config-agents#session):

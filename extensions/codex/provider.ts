@@ -2,6 +2,7 @@
  * Codex provider plugin and live app-server model catalog discovery.
  */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -33,12 +34,31 @@ const DEFAULT_DISCOVERY_TIMEOUT_MS = 2500;
 const LIVE_DISCOVERY_ENV = "OPENCLAW_CODEX_DISCOVERY_LIVE";
 const MODEL_DISCOVERY_PAGE_LIMIT = 100;
 const CODEX_APP_SERVER_SETUP_METHOD_ID = "app-server";
-const CODEX_DEFAULT_MODEL_REF = `${CODEX_PROVIDER_ID}/${FALLBACK_CODEX_MODELS[0].id}`;
+const CODEX_DEFAULT_MODEL_REF = `${CODEX_PROVIDER_ID}/${
+  expectDefined(FALLBACK_CODEX_MODELS[0], "Codex fallback model catalog must not be empty").id
+}`;
 const codexCatalogLog = createSubsystemLogger("codex/catalog");
-const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
-const GPT_5_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
-
+const CODEX_REASONING_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
 export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+
+const GPT_56_MAX_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+const GPT_56_ULTRA_REASONING_EFFORTS = [...GPT_56_MAX_REASONING_EFFORTS, "ultra"] as const;
+const GPT_56_ULTRA_MODEL_IDS = new Set(["gpt-5.6-sol", "gpt-5.6-terra"]);
+const GPT_56_MAX_MODEL_IDS = new Set([...GPT_56_ULTRA_MODEL_IDS, "gpt-5.6-luna"]);
+const GPT_56_DEFAULT_REASONING_EFFORTS = new Map<string, CodexReasoningEffort>([
+  ["gpt-5.6-sol", "low"],
+  ["gpt-5.6-terra", "medium"],
+  ["gpt-5.6-luna", "medium"],
+]);
+const GPT_5_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
 
 type CodexModelLister = (options: {
   timeoutMs: number;
@@ -48,18 +68,23 @@ type CodexModelLister = (options: {
   sharedClient?: boolean;
 }) => Promise<CodexAppServerModelListResult>;
 
-type CodexRateLimitReader = (options: {
+type CodexUsageRead = {
+  rateLimits: unknown;
+  accountEmail?: string;
+};
+
+type CodexUsageReader = (options: {
   timeoutMs: number;
   agentDir?: string;
   authProfileId?: string;
-  config?: Parameters<typeof requestCodexAppServerRateLimitsLazy>[0]["config"];
+  config?: Parameters<typeof requestCodexAppServerUsageLazy>[0]["config"];
   startOptions?: CodexAppServerStartOptions;
-}) => Promise<unknown>;
+}) => Promise<CodexUsageRead>;
 
 type BuildCodexProviderOptions = {
   pluginConfig?: unknown;
   listModels?: CodexModelLister;
-  readRateLimits?: CodexRateLimitReader;
+  readUsage?: CodexUsageReader;
 };
 
 type BuildCatalogOptions = {
@@ -128,24 +153,28 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
       const runtimePluginConfig = resolvePluginConfigObject(ctx.config, CODEX_PROVIDER_ID);
       const pluginConfig = runtimePluginConfig ?? (ctx.config ? undefined : options.pluginConfig);
       const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-      const rateLimits = await (options.readRateLimits ?? requestCodexAppServerRateLimitsLazy)({
+      const usage = await (options.readUsage ?? requestCodexAppServerUsageLazy)({
         timeoutMs: ctx.timeoutMs,
         agentDir: ctx.agentDir,
         ...(ctx.authProfileId ? { authProfileId: ctx.authProfileId } : {}),
         config: ctx.config,
         startOptions: appServer.start,
       });
-      return buildCodexAppServerUsageSnapshot(rateLimits);
+      const snapshot = buildCodexAppServerUsageSnapshot(usage.rateLimits);
+      const accountEmail = ctx.email ?? usage.accountEmail;
+      return accountEmail && !snapshot.error ? { ...snapshot, accountEmail } : snapshot;
     },
-    resolveThinkingProfile: ({ modelId, compat }) => ({
-      levels: [
-        { id: "off" },
-        ...resolveCodexThinkingEfforts({
-          modelId,
-          supportedReasoningEfforts: readCodexSupportedReasoningEfforts(compat),
-        }).map((id) => ({ id })),
-      ],
-    }),
+    resolveThinkingProfile: ({ modelId, compat }) => {
+      const efforts = resolveCodexThinkingEfforts({
+        modelId,
+        supportedReasoningEfforts: readCodexSupportedReasoningEfforts(compat),
+      });
+      const defaultLevel = GPT_56_DEFAULT_REASONING_EFFORTS.get(modelId.trim().toLowerCase());
+      return {
+        levels: [{ id: "off" }, ...efforts.map((id) => ({ id }))],
+        ...(defaultLevel && efforts.includes(defaultLevel) ? { defaultLevel } : {}),
+      };
+    },
     resolveSystemPromptContribution: ({ config, modelId }) =>
       resolveCodexSystemPromptContribution({ config, modelId }),
     isModernModelRef: ({ modelId }) => isModernCodexModel(modelId),
@@ -237,7 +266,20 @@ async function listCodexAppServerModelsLazy(options: {
   return listCodexAppServerModels(options);
 }
 
-async function requestCodexAppServerRateLimitsLazy(options: {
+function extractCodexAccountEmail(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as { account?: unknown; email?: unknown; accountEmail?: unknown };
+  const account =
+    record.account && typeof record.account === "object"
+      ? (record.account as { email?: unknown; accountEmail?: unknown })
+      : record;
+  const email = account.email ?? account.accountEmail;
+  return typeof email === "string" && email.trim() ? email.trim() : undefined;
+}
+
+async function requestCodexAppServerUsageLazy(options: {
   timeoutMs: number;
   agentDir?: string;
   authProfileId?: string;
@@ -245,17 +287,86 @@ async function requestCodexAppServerRateLimitsLazy(options: {
     typeof import("./src/app-server/request.js").requestCodexAppServerJson
   >[0]["config"];
   startOptions?: CodexAppServerStartOptions;
-}): Promise<unknown> {
-  const { requestCodexAppServerJson } = await import("./src/app-server/request.js");
-  return await requestCodexAppServerJson({
-    method: "account/rateLimits/read",
-    timeoutMs: options.timeoutMs,
-    agentDir: options.agentDir,
-    ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
-    config: options.config,
-    startOptions: options.startOptions,
-    isolated: true,
+}): Promise<{ rateLimits: unknown; accountEmail?: string }> {
+  const { withCodexAppServerJsonClient } = await import("./src/app-server/request.js");
+  // Bound the whole usage read (client acquisition + both requests) so the
+  // best-effort identity read can be capped against the time actually left.
+  const deadline = Date.now() + options.timeoutMs;
+  // One session serves both reads so the identity is guaranteed to belong to
+  // the same account the rate limits describe.
+  return await withCodexAppServerJsonClient(
+    {
+      timeoutMs: options.timeoutMs,
+      timeoutMessage: "codex app-server usage read timed out",
+      agentDir: options.agentDir,
+      ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
+      config: options.config,
+      startOptions: options.startOptions,
+      isolated: true,
+      // Keep isolated-client shutdown cheap so cleanup after a hung read cannot
+      // breach the usage deadline; the reserve below leaves room for it.
+      isolatedShutdown: CODEX_USAGE_ISOLATED_SHUTDOWN,
+    },
+    async (request) => {
+      const rateLimits = await request({ method: "account/rateLimits/read" });
+      // Identity is best-effort: rate limits stay useful without it, and a slow
+      // or hung account read must never turn a successful window fetch into a
+      // usage-snapshot timeout.
+      const accountEmail = await readCodexAccountEmailBestEffort(request, deadline);
+      return { rateLimits, ...(accountEmail ? { accountEmail } : {}) };
+    },
+  );
+}
+
+// Isolated usage-read shutdown: a throwaway read-only child, so force-kill
+// quickly and wait only briefly for exit. Its total bounds the reserve below.
+const CODEX_USAGE_ISOLATED_SHUTDOWN = { forceKillDelayMs: 200, exitTimeoutMs: 300 } as const;
+
+// Cap the best-effort identity read, and reserve enough of the shared usage
+// deadline for the isolated-client shutdown plus a margin so this read cannot
+// convert a successful rate-limit fetch into an outer timeout.
+const CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS = 4_000;
+const CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS = 250;
+const CODEX_USAGE_DEADLINE_RESERVE_MS =
+  CODEX_USAGE_ISOLATED_SHUTDOWN.forceKillDelayMs +
+  CODEX_USAGE_ISOLATED_SHUTDOWN.exitTimeoutMs +
+  CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS;
+
+async function readCodexAccountEmailBestEffort(
+  request: (params: { method: string; requestParams?: unknown }) => Promise<unknown>,
+  deadline: number,
+): Promise<string | undefined> {
+  const boundMs = Math.min(
+    CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS,
+    deadline - Date.now() - CODEX_USAGE_DEADLINE_RESERVE_MS,
+  );
+  // No usable budget left after the rate-limit read: keep the windows and skip
+  // identity rather than risk tripping the outer timeout.
+  if (boundMs <= 0) {
+    return undefined;
+  }
+  // account/read requires an (empty) params object per the app-server protocol
+  // (GetAccountParams; refreshToken defaults false when omitted).
+  // Resolves, never rejects: a failing account read yields undefined so the
+  // caller still returns the rate-limit windows.
+  const read = request({ method: "account/read", requestParams: {} }).then(
+    (account) => extractCodexAccountEmail(account),
+    () => undefined,
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), boundMs);
+    timer.unref?.();
   });
+  try {
+    return await Promise.race([read, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    // When the timer wins, the still-pending read settles after the client
+    // closes; it already swallows rejections, so there is nothing to leak.
+  }
 }
 
 function normalizeTimeoutMs(value: unknown): number {
@@ -301,7 +412,10 @@ export function readCodexSupportedReasoningEfforts(compat: unknown): string[] | 
   if (!Array.isArray(efforts)) {
     return undefined;
   }
-  return efforts.filter((effort): effort is string => typeof effort === "string");
+  const strings = efforts.filter((effort): effort is string => typeof effort === "string");
+  // Direct OpenAI Responses metadata advertises `none`; Codex model/list does
+  // not. Do not let the direct API contract override native Codex capabilities.
+  return strings.some((effort) => effort.trim().toLowerCase() === "none") ? undefined : strings;
 }
 
 function resolveCodexThinkingEfforts(params: {
@@ -334,10 +448,14 @@ export function resolveCodexSupportedReasoningEffort(params: {
   if (supported.includes(params.requested)) {
     return params.requested;
   }
+  // Ultra enables proactive multi-agent behavior, so it must be explicit.
+  // Lower-effort fallback may select Max or below, never Ultra.
+  const fallbackEfforts =
+    params.requested === "ultra" ? supported : supported.filter((effort) => effort !== "ultra");
   const requestedRank = CODEX_REASONING_EFFORTS.indexOf(params.requested);
   return (
-    supported.find((effort) => CODEX_REASONING_EFFORTS.indexOf(effort) >= requestedRank) ??
-    supported.at(-1)
+    fallbackEfforts.find((effort) => CODEX_REASONING_EFFORTS.indexOf(effort) >= requestedRank) ??
+    fallbackEfforts.at(-1)
   );
 }
 
@@ -346,17 +464,23 @@ export function resolveCodexFallbackReasoningEfforts(
   modelId: string,
 ): readonly CodexReasoningEffort[] | undefined {
   const normalized = modelId.trim().toLowerCase();
-  return normalized === "gpt-5.5-pro" || normalized === "gpt-5.4-pro"
-    ? GPT_5_PRO_REASONING_EFFORTS
-    : undefined;
+  if (GPT_56_ULTRA_MODEL_IDS.has(normalized)) {
+    return GPT_56_ULTRA_REASONING_EFFORTS;
+  }
+  if (normalized === "gpt-5.6-luna") {
+    return GPT_56_MAX_REASONING_EFFORTS;
+  }
+  if (normalized === "gpt-5.5-pro" || normalized === "gpt-5.4-pro") {
+    return GPT_5_PRO_REASONING_EFFORTS;
+  }
+  return undefined;
 }
 
 /** Return whether the model uses the modern Codex reasoning profile. */
 export function isModernCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   return (
-    lower === "gpt-5.6" ||
-    lower.startsWith("gpt-5.6-") ||
+    GPT_56_MAX_MODEL_IDS.has(lower) ||
     lower === "gpt-5.5" ||
     lower === "gpt-5.5-pro" ||
     lower === "gpt-5.4" ||
@@ -369,5 +493,5 @@ export function isModernCodexModel(modelId: string): boolean {
 /** Return whether Codex accepts the preview GPT-5.6 `max` reasoning effort. */
 export function isMaxReasoningCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
-  return lower === "gpt-5.6" || lower.startsWith("gpt-5.6-");
+  return GPT_56_MAX_MODEL_IDS.has(lower);
 }

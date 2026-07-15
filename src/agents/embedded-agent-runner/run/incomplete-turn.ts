@@ -132,9 +132,9 @@ const RETRY_GUARD_MODEL_APIS = new Set([
 // surfacing the existing incomplete-turn error path.
 export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
 export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = 1;
-export const REASONING_ONLY_RETRY_INSTRUCTION =
+const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
-export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
+const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 
 /**
@@ -526,6 +526,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     | "didDeliverSourceReplyViaMessageTool"
     | "messagingToolSourceReplyPayloads"
     | "replayMetadata"
+    | "currentAttemptReplayMetadata"
   >;
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
@@ -535,7 +536,12 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   if (hasAttemptTerminalState(params.attempt)) {
     return false;
   }
-  if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {
+  // Current-attempt evidence avoids blocking on prior committed effects; older
+  // harnesses retain the cumulative, fail-closed behavior.
+  const retryReplayMetadata = resolveAttemptReplayMetadata({
+    replayMetadata: params.attempt.currentAttemptReplayMetadata ?? params.attempt.replayMetadata,
+  });
+  if (retryReplayMetadata.hadPotentialSideEffects) {
     return false;
   }
 
@@ -815,3 +821,4 @@ function isIncompleteTurnRecoverySupportedProviderModel(params: {
   const modelId = typeof params.modelId === "string" ? params.modelId : "";
   return GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(modelId));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,6 +1,8 @@
 // Stores and verifies web push subscriptions and delivery payloads.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import type { PushSubscription, VapidKeys } from "web-push";
 import { resolveStateDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { sha256HexPrefix } from "./crypto-digest.js";
@@ -8,10 +10,8 @@ import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
 // --- Types ---
 
-type WebPushSubscription = {
+type WebPushSubscription = PushSubscription & {
   subscriptionId: string;
-  endpoint: string;
-  keys: { p256dh: string; auth: string };
   createdAtMs: number;
   updatedAtMs: number;
 };
@@ -20,11 +20,7 @@ type WebPushRegistrationState = {
   subscriptionsByEndpointHash: Record<string, WebPushSubscription>;
 };
 
-type VapidKeyPair = {
-  publicKey: string;
-  privateKey: string;
-  subject: string;
-};
+type VapidKeyPair = VapidKeys & { subject: string };
 
 type WebPushSendResult = {
   ok: boolean;
@@ -188,7 +184,7 @@ export async function registerWebPushSubscription(
   });
 }
 
-export async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
+async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
   const state = await loadState(baseDir);
   return Object.values(state.subscriptionsByEndpointHash);
 }
@@ -284,7 +280,8 @@ export async function broadcastWebPush(
       ? r.value
       : {
           ok: false,
-          subscriptionId: subscriptions[i].subscriptionId,
+          subscriptionId: expectDefined(subscriptions[i], "subscriptions entry at i")
+            .subscriptionId,
           error: r.reason instanceof Error ? r.reason.message : "unknown error",
         },
   );
@@ -293,7 +290,7 @@ export async function broadcastWebPush(
   const expiredEndpoints = mapped
     .map((result, i) => ({ result, sub: subscriptions[i] }))
     .filter(({ result }) => !result.ok && (result.statusCode === 410 || result.statusCode === 404))
-    .map(({ sub }) => sub.endpoint);
+    .map(({ sub }) => expectDefined(sub, "push web sub").endpoint);
 
   if (expiredEndpoints.length > 0) {
     await Promise.allSettled(

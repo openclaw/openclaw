@@ -14,7 +14,6 @@ import {
   TELEGRAM_CANONICAL_SCENARIO_IDS,
   TELEGRAM_DEFAULT_CANONICAL_SCENARIO_IDS,
   WHATSAPP_CANONICAL_SCENARIO_IDS,
-  WHATSAPP_MOCK_DEFAULT_CANONICAL_SCENARIO_IDS,
   whatsappDefaultCanonicalScenarioIds,
   listCanonicalScenarios,
   runCanonicalLiveScenarios,
@@ -23,13 +22,14 @@ import { loadNonYamlScenarioRefs } from "./live-transport-scenarios.js";
 
 describe("canonical live-transport scenarios", () => {
   it("loads every migrated routing, command, and session-context scenario from YAML", () => {
+    const whatsAppMockDefaultIds = whatsappDefaultCanonicalScenarioIds("mock-openai");
     const telegram = listCanonicalScenarios({
       ids: TELEGRAM_CANONICAL_SCENARIO_IDS,
       defaultIds: TELEGRAM_DEFAULT_CANONICAL_SCENARIO_IDS,
     });
     const whatsapp = listCanonicalScenarios({
       ids: WHATSAPP_CANONICAL_SCENARIO_IDS,
-      defaultIds: WHATSAPP_MOCK_DEFAULT_CANONICAL_SCENARIO_IDS,
+      defaultIds: whatsAppMockDefaultIds,
     });
 
     expect(telegram.map(({ id }) => id).toSorted()).toEqual(
@@ -42,7 +42,7 @@ describe("canonical live-transport scenarios", () => {
       expect.arrayContaining([...TELEGRAM_DEFAULT_CANONICAL_SCENARIO_IDS]),
     );
     expect(whatsapp.filter(({ defaultEnabled }) => defaultEnabled).map(({ id }) => id)).toEqual(
-      expect.arrayContaining([...WHATSAPP_MOCK_DEFAULT_CANONICAL_SCENARIO_IDS]),
+      expect.arrayContaining([...whatsAppMockDefaultIds]),
     );
     expect(whatsappDefaultCanonicalScenarioIds("live-frontier")).toEqual(["whatsapp-help-command"]);
     expect(telegram.find(({ id }) => id === "telegram-status-command")?.regressionRefs).toEqual([
@@ -74,6 +74,10 @@ describe("canonical live-transport scenarios", () => {
 
   it("runs canonical live aliases through the runtime lab launcher", async () => {
     runQaFlowSuiteFromRuntime.mockResolvedValueOnce({ summaryPath: "/tmp/summary.json" });
+    const sutOpenClawCommand = {
+      executablePath: "/usr/local/bin/openclaw-telegram-sut-launcher",
+      usePackagedPlugins: true,
+    };
 
     await runCanonicalLiveScenarios({
       channelId: "telegram",
@@ -85,6 +89,7 @@ describe("canonical live-transport scenarios", () => {
       options: {
         providerMode: "mock-openai",
         repoRoot: "/tmp/openclaw-repo",
+        sutOpenClawCommand,
       },
       scenarioIds: ["telegram-help-command"],
     });
@@ -94,6 +99,7 @@ describe("canonical live-transport scenarios", () => {
         channelDriver: "live",
         channelId: "telegram",
         scenarioIds: ["telegram-help-command"],
+        sutOpenClawCommand,
       }),
     );
   });

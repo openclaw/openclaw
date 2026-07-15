@@ -29,19 +29,29 @@ final class CanvasManager {
         return base.appendingPathComponent("OpenClaw/canvas", isDirectory: true)
     }()
 
-    func show(sessionKey: String, path: String? = nil, placement: CanvasPlacement? = nil) throws -> String {
-        try self.showDetailed(sessionKey: sessionKey, target: path, placement: placement).directory
+    func show(
+        sessionKey: String,
+        path: String? = nil,
+        placement: CanvasPlacement? = nil,
+        trustedA2UIActions: Bool = false) throws -> String
+    {
+        try self.showDetailed(
+            sessionKey: sessionKey,
+            target: path,
+            placement: placement,
+            trustedA2UIActions: trustedA2UIActions).directory
     }
 
     func showDetailed(
         sessionKey: String,
         target: String? = nil,
-        placement: CanvasPlacement? = nil) throws -> CanvasShowResult
+        placement: CanvasPlacement? = nil,
+        trustedA2UIActions: Bool = false) throws -> CanvasShowResult
     {
         Self.logger.debug(
             """
             showDetailed start session=\(sessionKey, privacy: .public) \
-            target=\(target ?? "", privacy: .public) \
+            hasTarget=\(target != nil) \
             placement=\(placement != nil)
             """)
         let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
@@ -61,7 +71,7 @@ final class CanvasManager {
 
             // Existing session: only navigate when an explicit target was provided.
             if let normalizedTarget {
-                controller.load(target: normalizedTarget)
+                controller.load(target: normalizedTarget, trustedA2UIActions: trustedA2UIActions)
                 return self.makeShowResult(
                     directory: controller.directoryPath,
                     target: target,
@@ -99,8 +109,8 @@ final class CanvasManager {
 
         // New session: default to "/" so the user sees either the welcome page or `index.html`.
         let effectiveTarget = normalizedTarget ?? "/"
-        Self.logger.debug("showDetailed showCanvas effectiveTarget=\(effectiveTarget, privacy: .public)")
-        controller.showCanvas(path: effectiveTarget)
+        Self.logger.debug("showDetailed showCanvas hasExplicitTarget=\(normalizedTarget != nil)")
+        controller.showCanvas(path: effectiveTarget, trustedA2UIActions: trustedA2UIActions)
         Self.logger.debug("showDetailed showCanvas done")
         if normalizedTarget == nil {
             self.maybeAutoNavigateToA2UIAsync(controller: controller)
@@ -158,9 +168,9 @@ final class CanvasManager {
         if raw.isEmpty {
             Self.logger.debug("canvas plugin surface URL missing in gateway snapshot")
         } else {
-            Self.logger.debug("canvas plugin surface URL snapshot=\(raw, privacy: .public)")
+            Self.logger.debug("canvas plugin surface URL present in gateway snapshot")
         }
-        let a2uiUrl = Self.resolveA2UIHostUrl(from: raw)
+        let a2uiUrl = CanvasHostedURLResolver.resolveA2UIURL(surfaceURL: raw)
         if a2uiUrl == nil, !raw.isEmpty {
             Self.logger.debug("canvas plugin surface URL invalid; cannot resolve A2UI")
         }
@@ -193,14 +203,14 @@ final class CanvasManager {
             Self.logger.debug("canvas auto-nav skipped; target unchanged")
             return
         }
-        Self.logger.debug("canvas auto-nav -> \(a2uiUrl, privacy: .public)")
-        controller.load(target: a2uiUrl)
+        Self.logger.debug("canvas auto-nav to capability-scoped A2UI")
+        controller.load(target: a2uiUrl, trustedA2UIActions: true)
         self.lastAutoA2UIUrl = a2uiUrl
     }
 
     private func resolveA2UIHostUrl() async -> String? {
         let raw = await GatewayConnection.shared.canvasPluginSurfaceUrl()
-        return Self.resolveA2UIHostUrl(from: raw)
+        return CanvasHostedURLResolver.resolveA2UIURL(surfaceURL: raw)
     }
 
     func refreshDebugStatus() {
@@ -232,12 +242,6 @@ final class CanvasManager {
         controller.updateDebugStatus(enabled: enabled, title: title, subtitle: subtitle)
     }
 
-    private static func resolveA2UIHostUrl(from raw: String?) -> String? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty, let base = URL(string: trimmed) else { return nil }
-        return base.appendingPathComponent("__openclaw__/a2ui/").absoluteString + "?platform=macos"
-    }
-
     // MARK: - Anchoring
 
     private static func mouseAnchorProvider() -> NSRect? {
@@ -255,9 +259,7 @@ final class CanvasManager {
         guard !trimmed.isEmpty else { return nil }
 
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
-            if scheme == "https" || scheme == "http" || scheme == "file" {
-                return url
-            }
+            if scheme == "https" || scheme == "http" || scheme == "file" { return url }
         }
 
         // Convenience: existing absolute *file* paths resolve as local files.
@@ -304,18 +306,14 @@ final class CanvasManager {
         let withoutQuery = trimmed.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first
             .map(String.init) ?? trimmed
         var path = withoutQuery
-        if path.hasPrefix("/") {
-            path.removeFirst()
-        }
+        if path.hasPrefix("/") { path.removeFirst() }
         path = path.removingPercentEncoding ?? path
 
         // Root special-case: built-in scaffold page when no index exists.
         if path.isEmpty {
             let a = sessionDir.appendingPathComponent("index.html", isDirectory: false)
             let b = sessionDir.appendingPathComponent("index.htm", isDirectory: false)
-            if fm.fileExists(atPath: a.path) || fm.fileExists(atPath: b.path) {
-                return .ok
-            }
+            if fm.fileExists(atPath: a.path) || fm.fileExists(atPath: b.path) { return .ok }
             return .welcome
         }
 
@@ -343,9 +341,7 @@ final class CanvasManager {
     private static func indexExists(in dir: URL) -> Bool {
         let fm = FileManager()
         let a = dir.appendingPathComponent("index.html", isDirectory: false)
-        if fm.fileExists(atPath: a.path) {
-            return true
-        }
+        if fm.fileExists(atPath: a.path) { return true }
         let b = dir.appendingPathComponent("index.htm", isDirectory: false)
         return fm.fileExists(atPath: b.path)
     }

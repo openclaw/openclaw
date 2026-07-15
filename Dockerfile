@@ -32,10 +32,13 @@ ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 # Copy package.json files for workspace packages used by the install layer.
 # Manifest-only bundled plugins remain valid selections but need no workspace metadata.
-RUN --mount=type=bind,source=packages,target=/tmp/packages,readonly \
-    --mount=type=bind,source=${OPENCLAW_BUNDLED_PLUGIN_DIR},target=/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR},readonly \
-    --mount=type=bind,source=scripts/lib/docker-plugin-selection.mjs,target=/tmp/docker-plugin-selection.mjs,readonly \
-    mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
+# Use COPY because build-context bind mounts are unreliable across supported
+# Podman/Buildah hosts. Full trees stay in this disposable stage; later stages
+# receive only extracted manifests.
+COPY scripts/lib/docker-plugin-selection.mjs /tmp/docker-plugin-selection.mjs
+COPY packages /tmp/packages
+COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}
+RUN mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
     for manifest in /tmp/packages/*/package.json; do \
       [ -f "$manifest" ] || continue; \
       pkg_dir="${manifest%/package.json}"; \

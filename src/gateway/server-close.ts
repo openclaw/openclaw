@@ -6,6 +6,7 @@ import type { WebSocketServer } from "ws";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -614,7 +615,7 @@ export async function runGatewayClosePrelude(params: {
   disposeAuthRateLimiter?: () => void;
   disposeBrowserAuthRateLimiter: () => void;
   stopModelPricingRefresh?: () => void;
-  stopChannelHealthMonitor?: () => void;
+  stopChannelHealthMonitor?: () => Promise<void>;
   stopReadinessEventLoopHealth?: () => void;
   clearSecretsRuntimeSnapshot?: () => void;
   closeMcpServer?: () => Promise<void>;
@@ -625,7 +626,7 @@ export async function runGatewayClosePrelude(params: {
   params.disposeAuthRateLimiter?.();
   params.disposeBrowserAuthRateLimiter();
   params.stopModelPricingRefresh?.();
-  params.stopChannelHealthMonitor?.();
+  await params.stopChannelHealthMonitor?.();
   params.stopReadinessEventLoopHealth?.();
   params.clearSecretsRuntimeSnapshot?.();
   await params.closeMcpServer?.().catch(() => {});
@@ -695,7 +696,10 @@ export function createGatewayCloseHandler(
     lifecycleUnsub: (() => void) | null;
     taskUnsub: (() => void) | null;
     getPendingReplyCount?: () => number;
-    clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
+    clients: Set<{
+      connectionKind?: "gateway" | "worker";
+      socket: { close: (code: number, reason: string) => void };
+    }>;
     configReloader: { stop: () => Promise<void> };
     wss: WebSocketServer;
     httpServer: HttpServer;
@@ -722,8 +726,16 @@ export function createGatewayCloseHandler(
     const measureCloseStep = <T>(name: string, run: () => Promise<T> | T) =>
       measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
     try {
-      shutdownLog.info(`shutdown started: ${reason}`);
+      // Fence lane auto-resume timers before the first awaited shutdown step;
+      // later teardown can stall long enough for a TTL callback to mutate queues.
+      clearSessionSuspensionTimers();
+      // Debug-level: the signal handler already announced the stop/restart at
+      // info, and the completion line below reports duration and outcome.
+      shutdownLog.debug(`shutdown started: ${reason}`);
 
+      await measureCloseStep("config-reloader", () =>
+        shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
+      );
       await measureCloseStep("gateway-shutdown-hook", () =>
         shutdownStep(
           "gateway:shutdown",
@@ -868,9 +880,6 @@ export function createGatewayCloseHandler(
         ]);
       });
       await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
-      await measureCloseStep("config-reloader", () =>
-        shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
-      );
       await measureCloseStep("gmail-watcher", () =>
         shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings),
       );
@@ -919,7 +928,10 @@ export function createGatewayCloseHandler(
       let clientCloseFailures = 0;
       for (const c of params.clients) {
         try {
-          c.socket.close(1012, "service restart");
+          c.socket.close(
+            1012,
+            c.connectionKind === "worker" ? "gateway-shutdown" : "service restart",
+          );
         } catch {
           clientCloseFailures++;
         }
@@ -1039,3 +1051,4 @@ export function createGatewayCloseHandler(
     return { durationMs, warnings };
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

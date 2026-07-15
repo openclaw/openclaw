@@ -22,6 +22,7 @@ export type QaTransportGatewayClient = {
     method: string,
     params?: unknown,
     options?: {
+      expectFinal?: boolean;
       timeoutMs?: number;
     },
   ) => Promise<unknown>;
@@ -64,7 +65,7 @@ type QaTransportFailureAssertionOptions = {
   cursorSpace?: QaTransportFailureCursorSpace;
 };
 
-export type QaTransportOutboundMatch = {
+type QaTransportOutboundMatch = {
   conversation?: QaBusInboundMessageInput["conversation"];
   senderId?: string;
   sinceIndex?: number;
@@ -73,7 +74,7 @@ export type QaTransportOutboundMatch = {
   timeoutMs?: number;
 };
 
-export type QaTransportWaitForNoOutboundInput = {
+type QaTransportWaitForNoOutboundInput = {
   quietMs?: number;
   sinceIndex?: number;
 };
@@ -94,7 +95,7 @@ export type QaTransportOutboundSequenceMatch = {
   timeoutMs?: number;
 };
 
-export type QaTransportOutboundSequence = {
+type QaTransportOutboundSequence = {
   events: QaTransportOutboundEvent[];
   final: QaBusMessage;
 };
@@ -155,7 +156,7 @@ function assertNoFailureReplies(
   }
 }
 
-export function createFailureAwareTransportWaitForCondition(state: QaTransportState) {
+function createFailureAwareTransportWaitForCondition(state: QaTransportState) {
   return async function waitForTransportCondition<T>(
     check: () => T | Promise<T | null | undefined> | null | undefined,
     timeoutMs = 15_000,
@@ -357,6 +358,7 @@ export function createQaStateBackedTransportAdapter(
     ...(params.createRuntimeEnvPatch
       ? { createRuntimeEnvPatch: params.createRuntimeEnvPatch }
       : {}),
+    ...(params.prepareFlow ? { prepareFlow: params.prepareFlow } : {}),
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
   });
   return adapter;
@@ -415,6 +417,9 @@ export async function waitForQaTransportOutboundSequence(params: {
       return undefined;
     }
     const candidate = events[finalIndex];
+    if (!candidate) {
+      return undefined;
+    }
     const sequenceEvents = events.filter(({ message }) => message.id === candidate.message.id);
     const latest = sequenceEvents.at(-1);
     if (

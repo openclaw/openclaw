@@ -39,11 +39,11 @@ extension GatewayConnectionController {
         let requiresTLS = !trimmedHost.isEmpty && !LoopbackHost.isLocalNetworkHost(trimmedHost)
         let effectiveTLS = requestedTLS || requiresTLS
         let helperText: String? = if requiresTLS {
-            "Secure connection is required for this host."
+            String(localized: "Secure connection is required for this host.")
         } else if effectiveTLS {
             nil
         } else {
-            "Use only on a trusted private network."
+            String(localized: "Use only on a trusted private network.")
         }
         return GatewayManualTransportPresentation(
             requiresTLS: requiresTLS,
@@ -75,7 +75,7 @@ extension GatewayConnectionController {
             clientMode: "node",
             clientDisplayName: displayName,
             allowStoredDeviceAuth: allowStoredDeviceAuth,
-            deviceAuthGatewayID: deviceAuthGatewayID)
+            deviceAuthGatewayID: GatewayStableIdentifier.exact(deviceAuthGatewayID))
     }
 
     private func resolvedClientId(defaults: UserDefaults, stableID: String?) -> String {
@@ -117,20 +117,14 @@ extension GatewayConnectionController {
             UserDefaults.standard.object(forKey: "camera.enabled") == nil
                 ? true
                 : UserDefaults.standard.bool(forKey: "camera.enabled")
-        if cameraEnabled {
-            caps.append(OpenClawCapability.camera.rawValue)
-        }
+        if cameraEnabled { caps.append(OpenClawCapability.camera.rawValue) }
 
         let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
-        if voiceWakeEnabled {
-            caps.append(OpenClawCapability.voiceWake.rawValue)
-        }
+        if voiceWakeEnabled { caps.append(OpenClawCapability.voiceWake.rawValue) }
 
         let locationModeRaw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
         let locationMode = OpenClawLocationMode(rawValue: locationModeRaw) ?? .off
-        if locationMode != .off {
-            caps.append(OpenClawCapability.location.rawValue)
-        }
+        if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
 
         caps.append(OpenClawCapability.device.rawValue)
         caps.append(OpenClawCapability.talk.rawValue)
@@ -143,6 +137,9 @@ extension GatewayConnectionController {
         caps.append(OpenClawCapability.reminders.rawValue)
         if Self.motionAvailable() {
             caps.append(OpenClawCapability.motion.rawValue)
+        }
+        if HealthAuthorization.isEnabled {
+            caps.append(OpenClawCapability.health.rawValue)
         }
 
         return caps
@@ -203,6 +200,9 @@ extension GatewayConnectionController {
             commands.append(OpenClawMotionCommand.activity.rawValue)
             commands.append(OpenClawMotionCommand.pedometer.rawValue)
         }
+        if caps.contains(OpenClawCapability.health.rawValue) {
+            commands.append(OpenClawHealthCommand.summary.rawValue)
+        }
 
         return commands
     }
@@ -224,20 +224,14 @@ extension GatewayConnectionController {
         permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
 
         let calendarStatus = EKEventStore.authorizationStatus(for: .event)
-        permissions["calendar"] = Self.hasEventKitAccess(calendarStatus)
+        permissions["calendar"] = Self.hasEventKitReadAccess(calendarStatus)
         let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
-        permissions["reminders"] = Self.hasEventKitAccess(remindersStatus)
+        permissions["reminders"] = Self.hasEventKitReadAccess(remindersStatus)
 
         let motionStatus = CMMotionActivityManager.authorizationStatus()
         let pedometerStatus = CMPedometer.authorizationStatus()
         permissions["motion"] =
             motionStatus == .authorized || pedometerStatus == .authorized
-
-        let watchStatus = WatchMessagingService.currentStatusSnapshot()
-        permissions["watchSupported"] = watchStatus.supported
-        permissions["watchPaired"] = watchStatus.paired
-        permissions["watchAppInstalled"] = watchStatus.appInstalled
-        permissions["watchReachable"] = watchStatus.reachable
 
         return permissions
     }
@@ -258,8 +252,8 @@ extension GatewayConnectionController {
         }
     }
 
-    private static func hasEventKitAccess(_ status: EKAuthorizationStatus) -> Bool {
-        status == .fullAccess || status == .writeOnly
+    private static func hasEventKitReadAccess(_ status: EKAuthorizationStatus) -> Bool {
+        status == .fullAccess
     }
 
     private static func motionAvailable() -> Bool {
@@ -279,6 +273,14 @@ extension GatewayConnectionController {
 
     func _test_currentCommands() -> [String] {
         self.currentCommands()
+    }
+
+    func _test_currentPermissions() async -> [String: Bool] {
+        await self.currentPermissions()
+    }
+
+    static func _test_hasEventKitReadAccess(_ status: EKAuthorizationStatus) -> Bool {
+        self.hasEventKitReadAccess(status)
     }
 
     static func _test_isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {

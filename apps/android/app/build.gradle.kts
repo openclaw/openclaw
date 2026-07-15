@@ -164,9 +164,11 @@ android {
   productFlavors {
     create("play") {
       dimension = "store"
+      manifestPlaceholders["nodeForegroundServiceType"] = "connectedDevice|microphone"
     }
     create("thirdParty") {
       dimension = "store"
+      manifestPlaceholders["nodeForegroundServiceType"] = "connectedDevice|microphone|location"
     }
   }
 
@@ -322,12 +324,14 @@ dependencies {
   implementation(libs.kotlinx.serialization.json)
 
   implementation(libs.androidx.security.crypto)
-  // Read-only offline cache for chat sessions/transcripts (disposable, destructive migrations only).
+  // Room owns the disposable transcript cache and durable chat outbox; migrations preserve outbox rows.
   implementation(libs.androidx.room.runtime)
   ksp(libs.androidx.room.compiler)
   implementation(libs.androidx.exifinterface)
   implementation(libs.okhttp)
   implementation(libs.bcprov)
+  implementation(libs.coil.compose)
+  implementation(libs.coil.svg)
   implementation(libs.commonmark)
   implementation(libs.commonmark.ext.autolink)
   implementation(libs.commonmark.ext.gfm.strikethrough)

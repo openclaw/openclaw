@@ -17,6 +17,16 @@ describe("parseCommand", () => {
     expect(parseCommand("/gwstatus")).toEqual({ name: "gateway-status", args: "" });
   });
 
+  it("accepts the hidden retired-name alias", () => {
+    const retiredCommand = "/crestodian repair gateway"; // hidden alias
+    expect(parseCommand(retiredCommand)).toEqual({
+      name: "openclaw",
+      args: "repair gateway",
+    });
+    expect(getSlashCommands().map((command) => command.name)).not.toContain("crestodian"); // hidden alias
+    expect(helpText()).not.toContain("/crestodian"); // hidden alias
+  });
+
   it("returns empty name for empty input", () => {
     expect(parseCommand("   ")).toEqual({ name: "", args: "" });
   });
@@ -45,10 +55,10 @@ describe("getSlashCommands", () => {
     const commands = getSlashCommands();
     const status = commands.find((command) => command.name === "status");
     const gatewayStatus = commands.find((command) => command.name === "gateway-status");
-    const crestodian = commands.find((command) => command.name === "crestodian");
+    const openclaw = commands.find((command) => command.name === "openclaw");
     expect(status?.description).toBe("Show current status.");
     expect(gatewayStatus?.description).toBe("Show gateway status summary");
-    expect(crestodian?.description).toBe("Return to Crestodian");
+    expect(openclaw?.description).toBe("Return to OpenClaw");
   });
 
   it("distinguishes new-session and reset command descriptions", () => {
@@ -95,6 +105,29 @@ describe("getSlashCommands", () => {
     ]);
   });
 
+  it.each([
+    { model: "gpt-5.6-sol", agentRuntime: "codex", supportsUltra: true },
+    { model: "gpt-5.6-terra", agentRuntime: "codex", supportsUltra: true },
+    { model: "gpt-5.6-luna", agentRuntime: "codex", supportsUltra: false },
+    { model: "gpt-5.6-luna", agentRuntime: "openclaw", supportsUltra: true },
+  ])(
+    "uses the $agentRuntime profile for openai/$model thinking completions",
+    ({ model, agentRuntime, supportsUltra }) => {
+      const think = getSlashCommands({
+        provider: "openai",
+        model,
+        agentRuntime,
+        thinkingLevels: [],
+      }).find((command) => command.name === "think");
+      const completions = think?.getArgumentCompletions?.("");
+      if (!Array.isArray(completions)) {
+        throw new Error("expected synchronous thinking-level completions");
+      }
+
+      expect(completions.some((choice) => choice.value === "ultra")).toBe(supportsUltra);
+    },
+  );
+
   it("merges dynamic gateway commands", () => {
     const commands = getSlashCommands({
       dynamicCommands: [
@@ -132,7 +165,7 @@ describe("helpText", () => {
     expect(output).toContain("/fast <status|auto|on|off>");
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
-    expect(output).toContain("/crestodian [request]");
+    expect(output).toContain("/openclaw [request]");
   });
 
   it("does not advertise Gateway-owned commands in local mode", () => {

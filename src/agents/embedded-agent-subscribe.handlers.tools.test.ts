@@ -12,8 +12,11 @@ import {
   buildBlockedToolResult,
   recordAdjustedParamsForToolCall,
   recordStructuredReplayTrustForToolCall,
-  testing as beforeToolCallTesting,
 } from "./agent-tools.before-tool-call.js";
+import {
+  adjustedParamsByToolCallId,
+  buildAdjustedParamsKey,
+} from "./agent-tools.before-tool-call.state.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
@@ -29,6 +32,8 @@ import type {
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
 type PayloadToolMetas = Parameters<typeof buildEmbeddedRunPayloads>[0]["toolMetas"];
+
+const beforeToolCallTesting = { adjustedParamsByToolCallId, buildAdjustedParamsKey };
 
 function createTestContext(): {
   ctx: ToolHandlerContext;
@@ -2171,10 +2176,12 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         result: {
           details: {
             status: "approval-unavailable",
-            reason: "initiating-platform-disabled",
+            reason: "no-approval-route",
             channel: "discord",
             channelLabel: "Discord",
             accountId: "work",
+            host: "node",
+            nodeId: "node-mac-1",
           },
         },
       } as never,
@@ -2184,7 +2191,13 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       requireMockCallArg(onToolResult, 0, "tool result").text,
       "tool result text",
     );
-    expect(text).toContain("native chat exec approvals are not configured on Discord");
+    expect(text).toContain("no interactive approval client is currently available");
+    expect(text).toContain(
+      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+    );
+    expect(text).toContain(
+      "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
+    );
     expect(text).not.toContain("/approve");
     expect(text).not.toContain("Pending command:");
     expect(text).not.toContain("Host:");
@@ -3443,3 +3456,4 @@ describe("control UI credential redaction (issue #72283)", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

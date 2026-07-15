@@ -1,8 +1,10 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
   controlUiBrowserOnlySharedModuleAliases,
+  createControlUiPrecompressedAssetVariants,
   resolveControlUiBuildInfo,
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
@@ -22,6 +24,21 @@ function findStringAlias(key: string) {
 }
 
 describe("Control UI Vite config", () => {
+  it("emits Brotli and gzip variants only for bundled compressible assets", () => {
+    const source = "console.log('precompressed');\n".repeat(200);
+    const variants = createControlUiPrecompressedAssetVariants("assets/app-AbCd1234.js", source);
+
+    expect(variants.map((variant) => variant.fileName)).toEqual([
+      "assets/app-AbCd1234.js.br",
+      "assets/app-AbCd1234.js.gz",
+    ]);
+    expect(brotliDecompressSync(variants[0]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
+    expect(gunzipSync(variants[1]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
+    expect(createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
+    expect(createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
+    expect(createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual([]);
+  });
+
   it("embeds one canonical artifact identity from explicit build inputs", () => {
     const readGitCommit = vi.fn(() => "f".repeat(40));
     expect(
@@ -31,12 +48,16 @@ describe("Control UI Vite config", () => {
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T12:34:56Z",
         },
         readGitCommit,
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => "2026.7.10",
       }),
     ).toEqual({
       version: "2026.7.10",
       commit: "0123456789abcdef0123456789abcdef01234567",
       builtAt: "2026-07-10T12:34:56.000Z",
+      branch: null,
+      dirty: null,
       buildId: "2026.7.10-0123456789ab-2026-07-10T12-34-56.000Z",
     });
     expect(readGitCommit).not.toHaveBeenCalled();
@@ -48,12 +69,16 @@ describe("Control UI Vite config", () => {
         env: {},
         now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit: () => "a".repeat(40),
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => null,
       }),
     ).toEqual({
       version: null,
       commit: "a".repeat(40),
       builtAt: "2026-07-10T13:14:15.000Z",
+      branch: null,
+      dirty: null,
       buildId: "aaaaaaaaaaaa-2026-07-10T13-14-15.000Z",
     });
   });
@@ -99,11 +124,102 @@ describe("Control UI Vite config", () => {
     expect(readGitCommit).not.toHaveBeenCalled();
   });
 
+  it("prefers GIT_BRANCH over GitHub and checked-out Git branch identity", () => {
+    const readGitBranch = vi.fn(() => "git-fallback");
+    expect(
+      resolveControlUiBuildInfo({
+        env: {
+          GIT_BRANCH: " feature/from-env ",
+          GITHUB_REF_NAME: "feature/from-github",
+          GITHUB_REF_TYPE: "branch",
+        },
+        readGitBranch,
+        readGitCommit: () => null,
+        readGitDirty: () => null,
+        readPackageVersion: () => null,
+      }).branch,
+    ).toBe("feature/from-env");
+    expect(readGitBranch).not.toHaveBeenCalled();
+  });
+
+  it("uses GITHUB_REF_NAME only for branch refs", () => {
+    const readGitBranch = vi.fn(() => "git-fallback");
+    expect(
+      resolveControlUiBuildInfo({
+        env: { GITHUB_REF_NAME: "feature/github", GITHUB_REF_TYPE: "branch" },
+        readGitBranch,
+        readGitCommit: () => null,
+        readGitDirty: () => null,
+        readPackageVersion: () => null,
+      }).branch,
+    ).toBe("feature/github");
+    expect(readGitBranch).not.toHaveBeenCalled();
+
+    expect(
+      resolveControlUiBuildInfo({
+        env: { GITHUB_REF_NAME: "v2026.7.10", GITHUB_REF_TYPE: "tag" },
+        readGitBranch,
+        readGitCommit: () => null,
+        readGitDirty: () => null,
+        readPackageVersion: () => null,
+      }).branch,
+    ).toBe("git-fallback");
+  });
+
+  it("falls back to checked-out Git and treats detached HEAD as unknown", () => {
+    expect(
+      resolveControlUiBuildInfo({
+        env: {},
+        readGitBranch: () => "feature/from-git",
+        readGitCommit: () => null,
+        readGitDirty: () => null,
+        readPackageVersion: () => null,
+      }).branch,
+    ).toBe("feature/from-git");
+    expect(
+      resolveControlUiBuildInfo({
+        env: {},
+        readGitBranch: () => "HEAD",
+        readGitCommit: () => null,
+        readGitDirty: () => null,
+        readPackageVersion: () => null,
+      }).branch,
+    ).toBeNull();
+  });
+
+  it("captures clean, dirty, and unavailable Git worktree state", () => {
+    const resolveDirty = (readGitDirty: () => boolean | null) =>
+      resolveControlUiBuildInfo({
+        env: {},
+        readGitBranch: () => null,
+        readGitCommit: () => null,
+        readGitDirty,
+        readPackageVersion: () => null,
+      }).dirty;
+
+    expect(resolveDirty(() => true)).toBe(true);
+    expect(resolveDirty(() => false)).toBe(false);
+    expect(resolveDirty(() => null)).toBeNull();
+  });
+
   it("does not let a generic release selector replace the artifact build identity", () => {
     expect(
       resolveControlUiBuildInfo({
         env: {
           OPENCLAW_VERSION: "latest",
+          OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
+        },
+        readGitCommit: () => "a".repeat(40),
+        readPackageVersion: () => "2026.7.10",
+      }).buildId,
+    ).toBe("2026.7.10-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z");
+  });
+
+  it("ignores a whitespace-only explicit build id", () => {
+    expect(
+      resolveControlUiBuildInfo({
+        env: {
+          OPENCLAW_CONTROL_UI_BUILD_ID: "   ",
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
         },
         readGitCommit: () => "a".repeat(40),

@@ -9,6 +9,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type {
+  SpeechListVoicesRequest,
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,
   SpeechSynthesisRequest,
@@ -82,8 +83,8 @@ vi.mock("openclaw/plugin-sdk/channel-targets", () => ({
   },
 }));
 
-vi.mock("../api.js", async () => {
-  const actual = await vi.importActual<typeof import("../api.js")>("../api.js");
+vi.mock("openclaw/plugin-sdk/speech-core", async () => {
+  const actual = await vi.importActual("openclaw/plugin-sdk/speech-core");
   const mockProvider: SpeechProviderPlugin = {
     id: "mock",
     label: "Mock",
@@ -113,6 +114,7 @@ const {
   buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProvider,
+  listSpeechVoices,
   maybeApplyTtsToPayload,
   resolveTtsConfig,
   setSummarizationEnabled,
@@ -420,6 +422,31 @@ describe("speech-core native voice-note routing", () => {
     expect(result.success).toBe(true);
     const request = requireFirstSynthesisRequest("provider default timeout synthesis request");
     expect(request.timeoutMs).toBe(600_000);
+  });
+
+  it("resolves the configured timeout for voice listing", async () => {
+    const listVoicesMock = vi.fn(async (_request: SpeechListVoicesRequest) => []);
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        defaultTimeoutMs: 60_000,
+        listVoices: listVoicesMock,
+      }),
+    ]);
+
+    await listSpeechVoices({
+      provider: "mock",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            timeoutMs: 45_000,
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(listVoicesMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45_000 }));
   });
 
   it("caps oversized provider default TTS timeouts before synthesis", async () => {
@@ -1511,3 +1538,4 @@ describe("speech-core per-agent TTS config", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

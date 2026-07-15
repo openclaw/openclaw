@@ -114,24 +114,6 @@ async function waitForChildClose(
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
 
-  it("caps concurrent metadata render workers while preserving result order", async () => {
-    let active = 0;
-    let peakActive = 0;
-
-    const result = await __testing.mapWithConcurrency([1, 2, 3, 4, 5], 2, async (value) => {
-      active += 1;
-      peakActive = Math.max(peakActive, active);
-      await new Promise((resolve) => {
-        setTimeout(resolve, 1);
-      });
-      active -= 1;
-      return `rendered-${value}`;
-    });
-
-    expect(result).toEqual(["rendered-1", "rendered-2", "rendered-3", "rendered-4", "rendered-5"]);
-    expect(peakActive).toBe(2);
-  });
-
   it("fails command help rendering when captured output exceeds the byte limit", async () => {
     await expect(
       __testing.spawnText(["--eval", "process.stdout.write('x'.repeat(2048))"], {
@@ -158,7 +140,7 @@ describe("write-cli-startup-metadata", () => {
         failureMessage: "render failed",
         killGraceMs: 25,
         maxOutputBytes: 1024,
-        spawnProcess,
+        spawnProcess: spawnProcess as typeof spawn,
         timeoutMs: 5_000,
       });
 
@@ -182,7 +164,7 @@ describe("write-cli-startup-metadata", () => {
       failureMessage: "render failed",
       killGraceMs: 25,
       maxOutputBytes: 5,
-      spawnProcess,
+      spawnProcess: spawnProcess as typeof spawn,
       timeoutMs: 5_000,
     });
 
@@ -609,5 +591,65 @@ describe("write-cli-startup-metadata", () => {
     };
     expect(nodesRenderCount).toBe(3);
     expect(written.nodesHelpText).toContain("openclaw nodes 3");
+  });
+
+  it("regenerates help when build version or commit changes", async () => {
+    const tempRoot = createTempDir("openclaw-startup-metadata-build-identity-");
+    const distDir = path.join(tempRoot, "dist");
+    const extensionsDir = path.join(tempRoot, "extensions");
+    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    let renderCount = 0;
+
+    writeStartupMetadataSourceSignatureFixture(tempRoot);
+    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
+
+    const writeMetadata = async (): Promise<void> => {
+      await writeCliStartupMetadata({
+        distDir,
+        outputPath,
+        extensionsDir,
+        sourceRootDir: tempRoot,
+        renderBundledRootHelpText: async () => {
+          renderCount += 1;
+          return `Usage: openclaw ${renderCount}\n`;
+        },
+        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
+        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
+        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
+        renderSourceSubcommandHelpTextRecord: () => ({
+          doctor: "Usage: openclaw doctor\n",
+          gateway: "Usage: openclaw gateway\n",
+          models: "Usage: openclaw models\n",
+          plugins: "Usage: openclaw plugins\n",
+          sessions: "Usage: openclaw sessions\n",
+          tasks: "Usage: openclaw tasks\n",
+        }),
+      });
+    };
+
+    writeFixtureFile(
+      distDir,
+      "build-info.json",
+      JSON.stringify({ version: "2026.7.2", commit: "a".repeat(40) }),
+    );
+    await writeMetadata();
+    await writeMetadata();
+    expect(renderCount).toBe(1);
+
+    writeFixtureFile(
+      distDir,
+      "build-info.json",
+      JSON.stringify({ version: "2026.7.2", commit: "b".repeat(40) }),
+    );
+    await writeMetadata();
+    expect(renderCount).toBe(2);
+
+    writeFixtureFile(
+      distDir,
+      "build-info.json",
+      JSON.stringify({ version: "2026.7.3", commit: "b".repeat(40) }),
+    );
+    await writeMetadata();
+    expect(renderCount).toBe(3);
   });
 });

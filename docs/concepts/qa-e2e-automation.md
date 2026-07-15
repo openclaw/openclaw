@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "QA stack overview: qa-lab, qa-channel, repo-backed scenarios, live transport lanes, transport adapters, and reporting."
 read_when:
   - Understanding how the QA stack fits together
@@ -15,10 +16,9 @@ Pieces:
 
 - `extensions/qa-channel`: synthetic message channel with DM, channel, thread,
   reaction, edit, and delete surfaces.
-- `extensions/qa-lab`: debugger UI and QA bus for observing the transcript,
-  injecting inbound messages, and exporting a Markdown report.
-- `extensions/qa-matrix`: live-transport adapter that drives the real Matrix
-  plugin inside a child QA gateway.
+- `extensions/qa-lab`: debugger UI, QA bus, scenario profiles, and live
+  transport adapters for observing the transcript, injecting inbound messages,
+  and exporting a Markdown report.
 - `qa/`: repo-backed seed assets for the kickoff task and baseline QA
   scenarios.
 - [Mantis](/concepts/mantis): before/after live verification for bugs that
@@ -48,14 +48,11 @@ script aliases; both forms work.
 | `qa mock-openai`                                    | Start only the scenario-aware `mock-openai` provider server.                                                                                                                                                                                                        |
 | `qa credentials doctor` / `add` / `list` / `remove` | Manage the shared Convex credential pool.                                                                                                                                                                                                                           |
 | `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                                                                                                                   |
-| `qa matrix`                                         | Live transport lane against a disposable Tuwunel homeserver. See [Matrix QA](/concepts/qa-matrix).                                                                                                                                                                  |
+| `qa matrix`                                         | QA Lab Matrix profiles against a disposable Tuwunel homeserver. See [Matrix smoke lanes](#matrix-smoke-lanes).                                                                                                                                                      |
 | `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                                                                                           |
 | `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                                                                                                                          |
 | `qa whatsapp`                                       | Live transport lane against real WhatsApp Web accounts.                                                                                                                                                                                                             |
 | `qa mantis`                                         | Before/after verification runner for live transport bugs, with Discord status-reactions evidence, Crabbox desktop/browser smoke, and Slack-in-VNC smoke. See [Mantis](/concepts/mantis) and [Mantis Slack Desktop Runbook](/concepts/mantis-slack-desktop-runbook). |
-
-`qa matrix` is registered as a runner plugin (`extensions/qa-matrix`); every
-other lane above is built into `qa-lab` directly.
 
 ### Profile-backed `qa run`
 
@@ -131,7 +128,7 @@ when the QA Lab asset hash changes.
 
 <Note>
 Observability QA stays source-checkout only. The npm tarball intentionally
-omits QA Lab (and `qa-channel`/`qa-matrix`), so package Docker release lanes
+omits QA Lab (and `qa-channel`), so package Docker release lanes
 do not run `qa` commands. Run these from a built source checkout when
 changing diagnostics instrumentation.
 </Note>
@@ -167,11 +164,10 @@ tokens, or local paths.
 ### Matrix smoke lanes
 
 For a transport-real Matrix smoke lane that does not require model-provider
-credentials, run the fast profile with the deterministic mock OpenAI provider:
+credentials, run the release profile with the deterministic mock OpenAI provider:
 
 ```bash
-OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
-  pnpm openclaw qa matrix --provider-mode mock-openai --profile fast --fail-fast
+pnpm openclaw qa matrix --provider-mode mock-openai --profile release
 ```
 
 For the live-frontier provider lane, supply OpenAI-compatible credentials
@@ -179,17 +175,70 @@ explicitly:
 
 ```bash
 OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" \
-OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
-  pnpm openclaw qa matrix --provider-mode live-frontier --profile fast --fail-fast
+  pnpm openclaw qa matrix --provider-mode live-frontier --profile release
 ```
 
-The full CLI reference, profile/scenario catalog, env vars, and artifact
-layout for this lane live in [Matrix QA](/concepts/qa-matrix). At a glance: it
-provisions a disposable Tuwunel homeserver in Docker, registers temporary
-driver/SUT/observer users, runs the real Matrix plugin inside a child QA
-gateway scoped to that transport (no `qa-channel`), then writes a Markdown
-report, JSON summary, observed-events artifact, and combined output log under
-`.artifacts/qa-e2e/matrix-<timestamp>/`.
+Plain `pnpm openclaw qa matrix` runs the full `all` profile and continues after
+scenario failures. Use `--fail-fast` for a shorter feedback loop or repeat
+`--scenario <id>` to select individual scenarios; explicit scenario ids take
+precedence over `--profile`.
+
+| Profile      | Scenarios | Purpose                                                                                                                                  |
+| ------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `all`        | 92        | Complete catalog (default).                                                                                                              |
+| `release`    | 2         | Release-critical channel baseline and live allowlist reload.                                                                             |
+| `fast`       | 11        | Focused threading, reactions, approvals, policy, bot-gating, and encrypted-reply coverage.                                               |
+| `transport`  | 50        | Threading, DM/room routing, autojoin, approvals, reactions, restarts, mention/allowlist policy, edits, and multi-actor ordering.         |
+| `media`      | 7         | Image, generated-image, voice, attachment, unsupported-media, and encrypted-media coverage.                                              |
+| `e2ee-smoke` | 8         | Minimum encrypted reply, threading, bootstrap, recovery, restart, redaction, and failure coverage.                                       |
+| `e2ee-deep`  | 18        | State-loss, backup, key recovery, device hygiene, and SAS/QR/DM verification.                                                            |
+| `e2ee-cli`   | 9         | `openclaw matrix encryption setup`, recovery-key, multi-account, gateway round-trip, and self-verification commands through the harness. |
+
+The profile mapping lives in
+`extensions/qa-lab/src/live-transports/matrix/profiles.ts`. The declarative
+Matrix scenarios live under `qa/scenarios/channels/`; their live
+implementations live under
+`extensions/qa-lab/src/live-transports/matrix/scenarios/`.
+
+The adapter provisions a disposable Tuwunel homeserver in Docker (default
+image `ghcr.io/matrix-construct/tuwunel:v1.5.1`, server name `matrix-qa.test`,
+port `28008`), registers temporary driver, SUT, and observer users, seeds the
+required rooms, and records the redacted request/response boundary. It then
+runs the real Matrix plugin inside a child QA gateway scoped to that transport
+(no `qa-channel`) and tears the environment down.
+
+Common options:
+
+| Flag                     | Default           | Purpose                                                                              |
+| ------------------------ | ----------------- | ------------------------------------------------------------------------------------ |
+| `--profile <profile>`    | `all`             | Select one of the profiles above.                                                    |
+| `--scenario <id>`        | -                 | Select one scenario; repeatable.                                                     |
+| `--fail-fast`            | off               | Stop after the first failed check or scenario.                                       |
+| `--allow-failures`       | off               | Write artifacts without returning a failing exit code for scenario failures.         |
+| `--provider-mode <mode>` | `live-frontier`   | Use `mock-openai` for deterministic dispatch or `live-frontier` for a live provider. |
+| `--model <ref>`          | provider default  | Set the primary `provider/model` reference.                                          |
+| `--alt-model <ref>`      | provider default  | Set the alternate model used by scenarios that switch models.                        |
+| `--fast`                 | off               | Enable provider fast mode where supported.                                           |
+| `--output-dir <path>`    | generated         | Choose the report directory; relative paths resolve against `--repo-root`.           |
+| `--repo-root <path>`     | current directory | Run from a neutral working directory.                                                |
+| `--sut-account <id>`     | `sut`             | Select the Matrix account id in the child gateway config.                            |
+
+Matrix QA does not lease shared Matrix credentials: the adapter creates
+disposable users locally, so it does not accept `--credential-source` or
+`--credential-role`. Override the homeserver image with
+`OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE`; tune negative no-reply assertions with
+`OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS` (default `8000`, clamped to the active
+scenario timeout). The single-shot command normally forces a clean exit after
+artifacts flush because Matrix crypto native handles can outlive cleanup; set
+`OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT=1` only for a direct test harness that
+needs the command to return instead.
+
+Each run writes the normal QA Lab artifacts under the selected output
+directory: `qa-suite-report.md`, `qa-suite-summary.json`, `qa-evidence.json`,
+and a redacted `matrix-harness-*/matrix-qa-harness.json` manifest. If cleanup
+fails, run the printed `docker compose ... down --remove-orphans` recovery
+command. On slow runners, increase the no-reply window; on fast CI, a smaller
+window can shorten negative assertions.
 
 The scenarios cover transport behavior that unit tests cannot prove end to
 end: mention gating, allow-bot policies, allowlists, top-level and threaded
@@ -200,12 +249,14 @@ E2EE CLI profile also drives `openclaw matrix encryption setup` and
 verification commands through the same disposable homeserver before checking
 gateway replies.
 
+`matrix-room-block-streaming` and `subagent-thread-spawn` remain available by
+explicit `--scenario` selection but stay outside the default `all` profile.
+
 CI uses the same command surface in
-`.github/workflows/qa-live-transports-convex.yml`. Scheduled and default
-manual runs execute the fast Matrix profile with QA-provided live-frontier
-credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`.
-Manual `matrix_profile=all` fans out into five profile shards: `transport`,
-`media`, `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli`.
+`.github/workflows/qa-live-transports-convex.yml`. Scheduled and release runs
+execute the release scenarios. Manual `matrix_profile=all` dispatches fan out
+the `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` profiles;
+focused dispatches select `fast`, `release`, or `transport` in one job.
 
 ### Discord Mantis scenarios
 
@@ -222,7 +273,7 @@ logged-in Discord Web witness video when
 environment. That viewer profile is only for visual capture; the pass/fail
 decision still comes from the Discord REST oracle.
 
-For transport-real Discord, Slack, Telegram, and WhatsApp smoke lanes:
+For the other transport-real smoke lanes:
 
 ```bash
 pnpm openclaw qa discord
@@ -233,7 +284,7 @@ pnpm openclaw qa whatsapp
 
 They target a pre-existing real channel with two bots or accounts (driver +
 SUT). Required env vars, scenario lists, output artifacts, and the Convex
-credential pool are documented in
+credential pool for those four transports are documented in
 [Discord, Slack, Telegram, and WhatsApp QA reference](#discord-slack-telegram-and-whatsapp-qa-reference)
 below.
 
@@ -307,7 +358,7 @@ For an agent/CV style desktop task, run:
 pnpm openclaw qa mantis visual-task \
   --browser-url https://example.net \
   --expect-text "Example Domain" \
-  --vision-model openai/gpt-5.5
+  --vision-model openai/gpt-5.6-luna
 ```
 
 `visual-task` leases or reuses a Crabbox desktop/browser machine, starts
@@ -396,10 +447,9 @@ guest can write back through the mounted workspace.
 
 ## Discord, Slack, Telegram, and WhatsApp QA reference
 
-Matrix has a [dedicated page](/concepts/qa-matrix) because of its scenario
-count and Docker-backed homeserver provisioning. Discord, Slack, Telegram,
-and WhatsApp run against pre-existing real transports, so their reference
-lives here.
+The Matrix adapter uses the disposable Docker-backed lane documented above.
+Discord, Slack, Telegram, and WhatsApp run against pre-existing real
+transports, so their reference lives here.
 
 ### Shared CLI flags
 
@@ -560,8 +610,8 @@ Run the Mantis status-reaction scenario explicitly:
 pnpm openclaw qa discord \
   --scenario discord-status-reactions-tool-only \
   --provider-mode live-frontier \
-  --model openai/gpt-5.5 \
-  --alt-model openai/gpt-5.5 \
+  --model openai/gpt-5.6-luna \
+  --alt-model openai/gpt-5.6-luna \
   --fast
 ```
 
@@ -612,11 +662,30 @@ Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-l
 - `slack-canary`
 - `slack-mention-gating`
 - `slack-allowlist-block`
+- `slack-channel-disabled-warning` - opt-in real-Slack probe that confirms a
+  configured disabled channel emits a structured warning without replying.
 - `slack-top-level-reply-shape`
 - `slack-restart-resume`
+- `slack-progress-commentary-true`, `slack-progress-commentary-false`,
+  `slack-progress-commentary-omitted`, and
+  `slack-progress-commentary-verbose-dedupe` - opt-in real-Slack probes for
+  independent commentary/tool-progress controls, the omitted-key legacy
+  default, and single-delivery behavior when durable verbose progress is on.
 - `slack-reaction-glyph-native` - opt-in live message-tool reaction scenario.
   Instructs the agent to pass the exact `✅` glyph and confirms Slack stored
   `white_check_mark` for the SUT bot on the target message.
+- `slack-chart-presentation-native` - opt-in portable chart scenario that
+  verifies the native `data_visualization` block and exact accessible text.
+- `slack-table-presentation-native` - opt-in portable table scenario that
+  verifies the native `data_table` block, exact rows, and accessible text.
+- `slack-table-invalid-blocks-fallback` - opt-in direct-transport scenario
+  that sends a structurally readable over-limit raw table with 101 data rows
+  plus its header through the
+  production Slack send path, proves Slack itself returns `invalid_blocks`,
+  and verifies the stored formatting-disabled fallback is complete and has no
+  native data block. The report keeps only safe error-code, count, and boolean
+  evidence; raw synthetic table text follows
+  `OPENCLAW_QA_SLACK_CAPTURE_CONTENT`.
 - `slack-approval-exec-native` - opt-in native Slack exec approval scenario.
   Requests an exec approval through the gateway, verifies the Slack message
   has native approval buttons, resolves it, and verifies the resolved Slack
@@ -1219,7 +1288,7 @@ model refs and write a judged Markdown report:
 
 ```bash
 pnpm openclaw qa character-eval \
-  --model openai/gpt-5.5,thinking=medium,fast \
+  --model openai/gpt-5.6-luna,thinking=medium,fast \
   --model openai/gpt-5.2,thinking=xhigh \
   --model openai/gpt-5,thinking=xhigh \
   --model anthropic/claude-opus-4-8,thinking=high \
@@ -1227,7 +1296,7 @@ pnpm openclaw qa character-eval \
   --model zai/glm-5.1,thinking=high \
   --model moonshot/kimi-k2.5,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
-  --judge-model openai/gpt-5.5,thinking=xhigh,fast \
+  --judge-model openai/gpt-5.6-sol,thinking=xhigh,fast \
   --judge-model anthropic/claude-opus-4-8,thinking=high \
   --blind-judge-models \
   --concurrency 16 \
@@ -1245,7 +1314,7 @@ providers: the judge prompt still gets every transcript and run status, but
 candidate refs are replaced with neutral labels such as `candidate-01`; the
 report maps rankings back to real refs after parsing.
 
-Candidate runs default to `high` thinking, with `medium` for GPT-5.5 and
+Candidate runs default to `high` thinking, with `medium` for GPT-5.6 Luna and
 `xhigh` for older OpenAI eval refs that support it. Override a specific
 candidate inline with `--model provider/model,thinking=<level>`; inline
 options also support `fast`, `no-fast`, and `fast=<bool>`. `--thinking
@@ -1260,16 +1329,15 @@ Lower `--concurrency` or `--judge-concurrency` when provider limits or local
 gateway pressure make a run too noisy.
 
 When no candidate `--model` is passed, the character eval defaults to
-`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`,
+`openai/gpt-5.6-luna`, `openai/gpt-5.2`, `openai/gpt-5`,
 `anthropic/claude-opus-4-8`, `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`,
 `moonshot/kimi-k2.5`, and `google/gemini-3.1-pro-preview`. When no
 `--judge-model` is passed, the judges default to
-`openai/gpt-5.5,thinking=xhigh,fast` and
+`openai/gpt-5.6-sol,thinking=xhigh,fast` and
 `anthropic/claude-opus-4-8,thinking=high`.
 
 ## Related docs
 
-- [Matrix QA](/concepts/qa-matrix)
 - [Maturity scorecard](/maturity/scorecard)
 - [Personal agent benchmark pack](/concepts/personal-agent-benchmark-pack)
 - [QA Channel](/channels/qa-channel)

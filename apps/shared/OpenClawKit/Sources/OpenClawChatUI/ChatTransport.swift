@@ -3,10 +3,23 @@ import Foundation
 public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
+    case sessionsChanged(OpenClawChatSessionsChangedEvent)
     case chat(OpenClawChatEventPayload)
     case sessionMessage(OpenClawSessionMessageEventPayload)
     case agent(OpenClawAgentEventPayload)
     case seqGap
+}
+
+public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
+    public let sessionKey: String?
+    public let agentId: String?
+    public let reason: String
+
+    public init(sessionKey: String?, agentId: String? = nil, reason: String) {
+        self.sessionKey = sessionKey
+        self.agentId = agentId
+        self.reason = reason
+    }
 }
 
 /// One immutable transport route used by an entire outbox flush. Route-aware
@@ -89,6 +102,29 @@ public enum OpenClawChatTransportRouteLeaseResult: Sendable {
     case unavailable(reason: String?)
 }
 
+/// One physical gateway connection captured before a settings mutation waits
+/// behind earlier mutations for the same session.
+public struct OpenClawChatSessionSettingsRouteLease: Sendable {
+    public typealias PatchSessionSettings = @Sendable (
+        _ sessionKey: String,
+        _ agentID: String?,
+        _ patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+
+    private let patchSessionSettingsImpl: PatchSessionSettings
+
+    public init(patchSessionSettings: @escaping PatchSessionSettings) {
+        self.patchSessionSettingsImpl = patchSessionSettings
+    }
+
+    public func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+    {
+        try await self.patchSessionSettingsImpl(sessionKey, agentID, patch)
+    }
+}
+
 /// The transport rejected a send before it reached its request channel. This
 /// is the only failure class safe for automatic outbox retry.
 public enum OpenClawChatTransportSendError: Error, Sendable {
@@ -98,6 +134,98 @@ public enum OpenClawChatTransportSendError: Error, Sendable {
 public enum OpenClawChatTransportUpgradeMessage {
     public static let routingContract =
         "Update the gateway before sending queued messages. This version requires safe delivery routing."
+}
+
+public enum OpenClawChatRunTerminalState: Sendable, Equatable {
+    case completed
+    case failed(message: String)
+}
+
+public enum OpenClawChatRunObservation: Sendable, Equatable {
+    case terminal(OpenClawChatRunTerminalState)
+    case checkAgain
+    case unavailable
+
+    public static func fromWaitResponse(
+        status: String?,
+        endedAt: Double? = nil,
+        error: String? = nil,
+        stopReason: String? = nil,
+        livenessState: String? = nil,
+        yielded: Bool? = nil,
+        pendingError: Bool? = nil,
+        timeoutPhase: String? = nil,
+        providerStarted: Bool? = nil,
+        aborted: Bool? = nil) -> Self
+    {
+        let status = Self.normalized(status)
+        if status == "pending" {
+            return .checkAgain
+        }
+        if ["ok", "completed", "success", "succeeded"].contains(status) {
+            return .terminal(.completed)
+        }
+        if [
+            "error", "failed", "aborted", "cancelled", "canceled", "killed", "timed_out",
+        ].contains(status) {
+            return .terminal(.failed(message: Self.failureMessage(
+                status: status,
+                error: error,
+                stopReason: stopReason,
+                aborted: aborted)))
+        }
+        guard status == "timeout" else { return .unavailable }
+        guard pendingError != true else { return .checkAgain }
+
+        let timeoutPhase = Self.normalized(timeoutPhase)
+        let stopReason = Self.normalized(stopReason)
+        let terminalTimeout = ["preflight", "provider", "post_turn"].contains(timeoutPhase) ||
+            ["timeout", "timed_out"].contains(stopReason) ||
+            endedAt != nil ||
+            !Self.normalized(error).isEmpty ||
+            !stopReason.isEmpty ||
+            !Self.normalized(livenessState).isEmpty ||
+            yielded == true ||
+            aborted == true ||
+            (providerStarted == true && timeoutPhase != "queue" && timeoutPhase != "gateway_draining")
+        return terminalTimeout
+            ? .terminal(.failed(message: Self.failureMessage(
+                status: status,
+                error: error,
+                stopReason: stopReason,
+                aborted: aborted)))
+            : .checkAgain
+    }
+
+    private static func normalized(_ value: String?) -> String {
+        (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func failureMessage(
+        status: String,
+        error: String?,
+        stopReason: String?,
+        aborted: Bool?) -> String
+    {
+        if let error = error?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty {
+            return error
+        }
+        let stopReason = Self.normalized(stopReason)
+        if aborted == true || status == "aborted" || stopReason == "aborted" {
+            return "Run aborted"
+        }
+        if ["cancelled", "canceled", "killed"].contains(status) ||
+            ["cancelled", "canceled", "killed", "restart", "rpc", "stop", "user"].contains(stopReason)
+        {
+            return "Run cancelled"
+        }
+        if status == "timeout" || status == "timed_out" ||
+            stopReason == "timeout" || stopReason == "timed_out"
+        {
+            return "Run timed out"
+        }
+        return "Chat failed"
+    }
 }
 
 public protocol OpenClawChatTransport: Sendable {
@@ -146,10 +274,21 @@ public protocol OpenClawChatTransport: Sendable {
     func deleteSession(key: String) async throws
     func forkSession(parentKey: String) async throws -> String
     func setSessionModel(sessionKey: String, model: String?) async throws
+    func patchSessionModel(
+        sessionKey: String,
+        agentID: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws
+    func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+    /// Mutable gateway transports must capture the physical connection here;
+    /// queued settings work must never resolve its route after waiting.
+    func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease?
 
     func requestHealth(timeoutMs: Int) async throws -> Bool
-    func waitForRunCompletion(runId: String, timeoutMs: Int) async -> Bool
+    func waitForRunCompletion(runId: String, timeoutMs: Int) async -> OpenClawChatRunObservation
     func events() -> AsyncStream<OpenClawChatTransportEvent>
 
     func setActiveSessionKey(_ sessionKey: String) async throws
@@ -176,6 +315,16 @@ extension OpenClawChatTransport {
             requestHistory: { sessionKey in
                 try await transport.requestHistory(sessionKey: sessionKey)
             }))
+    }
+
+    public func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {
+        let transport = self
+        return OpenClawChatSessionSettingsRouteLease { sessionKey, agentID, patch in
+            try await transport.patchSessionSettings(
+                sessionKey: sessionKey,
+                agentID: agentID,
+                patch: patch)
+        }
     }
 
     public func sendMessage(
@@ -209,8 +358,8 @@ extension OpenClawChatTransport {
 
     public func setActiveSessionKey(_: String) async throws {}
 
-    public func waitForRunCompletion(runId _: String, timeoutMs _: Int) async -> Bool {
-        false
+    public func waitForRunCompletion(runId _: String, timeoutMs _: Int) async -> OpenClawChatRunObservation {
+        .unavailable
     }
 
     public func resetSession(sessionKey _: String) async throws {
@@ -307,11 +456,54 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "sessions.patch(model) not supported by this transport"])
     }
 
+    public func patchSessionModel(
+        sessionKey: String,
+        agentID _: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
+    {
+        try await self.setSessionModel(sessionKey: sessionKey, model: model)
+        return nil
+    }
+
     public func setSessionThinking(sessionKey _: String, thinkingLevel _: String) async throws {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.patch(thinkingLevel) not supported by this transport"])
+    }
+
+    public func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+    {
+        var result: OpenClawChatModelPatchResult?
+        if let model = patch.model {
+            result = try await self.patchSessionModel(
+                sessionKey: sessionKey,
+                agentID: agentID,
+                model: model)
+        }
+        if let thinkingLevelUpdate = patch.thinkingLevel {
+            guard let thinkingLevel = thinkingLevelUpdate else {
+                throw NSError(
+                    domain: "OpenClawChatTransport",
+                    code: 0,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "sessions.patch(thinkingLevel=null) not supported by this transport",
+                    ])
+            }
+            try await self.setSessionThinking(
+                sessionKey: sessionKey,
+                thinkingLevel: thinkingLevel)
+            result = OpenClawChatModelPatchResult(
+                key: result?.key ?? sessionKey,
+                modelProvider: result?.modelProvider,
+                model: result?.model,
+                thinkingLevel: thinkingLevel,
+                thinkingLevels: result?.thinkingLevels)
+        }
+        return result
     }
 }
 

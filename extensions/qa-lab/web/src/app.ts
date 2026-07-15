@@ -2,6 +2,7 @@
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { formatErrorMessage } from "./errors.js";
+import { getJson, getJsonNoStore, postJson } from "./http.js";
 import {
   type Bootstrap,
   type EvidenceEnvelope,
@@ -19,34 +20,6 @@ import {
   type UiState,
   renderQaLabUi,
 } from "./ui-render.js";
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path);
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
-  }
-  return (await response.json()) as T;
-}
-
-async function getJsonNoStore<T>(path: string): Promise<T> {
-  const response = await fetch(path, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
-  }
-  return (await response.json()) as T;
-}
-
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(payload.error || `${response.status} ${response.statusText}`);
-  }
-  return (await response.json()) as T;
-}
 
 function countCaptureDimension(
   events: UiState["captureEvents"],
@@ -267,11 +240,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
     const ev = state.snapshot?.events;
     return JSON.stringify({
       mc: msgs?.length ?? 0,
-      lm: msgs && msgs.length > 0 ? msgs[msgs.length - 1].id : null,
+      lm: msgs?.at(-1)?.id ?? null,
       cc: state.snapshot?.conversations.length ?? 0,
       tc: state.snapshot?.threads.length ?? 0,
       ec: ev?.length ?? 0,
-      lc: ev && ev.length > 0 ? ev[ev.length - 1].cursor : -1,
+      lc: ev?.at(-1)?.cursor ?? -1,
       rs: state.bootstrap?.runner.status,
       ra: state.bootstrap?.runner.startedAt,
       rf: state.bootstrap?.runner.finishedAt,
@@ -1769,3 +1742,4 @@ export async function createQaLabApp(root: HTMLDivElement) {
   setInterval(() => void refresh(), 1_000);
   setInterval(() => void pollUiVersion(), 1_000);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

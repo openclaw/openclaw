@@ -106,6 +106,7 @@ export type ProfileUsageStats = {
   blockedReason?: AuthProfileBlockedReason;
   blockedSource?: AuthProfileBlockedSource;
   blockedModel?: string;
+  blockedScope?: "model";
   cooldownUntil?: number;
   cooldownReason?: AuthProfileFailureReason;
   cooldownModel?: string;
@@ -150,6 +151,12 @@ export type AuthProfileStore = AuthProfileSecretsStore &
     /** True when the runtime external profile set was freshly resolved, even if empty. */
     runtimeExternalProfileIdsAuthoritative?: boolean;
   };
+
+/** Internal effective-store ownership metadata; never exposed through the plugin SDK. */
+export type RuntimeAuthProfileStore = AuthProfileStore & {
+  runtimeLocalProfileIds?: string[];
+  runtimeInheritsMainState?: boolean;
+};
 
 /** Result returned by config/store auth profile id repair. */
 export type AuthProfileIdRepairResult = {

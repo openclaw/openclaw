@@ -1,12 +1,15 @@
 // Handles session reset requests produced during agent runner execution.
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionTranscriptPath,
-} from "../../config/sessions.js";
+import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  isModelSelectionLocked,
+  ModelSelectionLockedError,
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+} from "../../sessions/model-overrides.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 
 type ResetSessionOptions = {
@@ -22,7 +25,7 @@ const deps = {
   error: (message: string) => defaultRuntime.error(message),
 };
 
-export function setAgentRunnerSessionResetTestDeps(overrides?: Partial<typeof deps>): void {
+function setAgentRunnerSessionResetTestDeps(overrides?: Partial<typeof deps>): void {
   Object.assign(deps, {
     generateSecureUuid,
     persistSessionResetLifecycle,
@@ -30,6 +33,12 @@ export function setAgentRunnerSessionResetTestDeps(overrides?: Partial<typeof de
     error: (message: string) => defaultRuntime.error(message),
     ...overrides,
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.agentRunnerSessionResetTestApi")
+  ] = { setAgentRunnerSessionResetTestDeps };
 }
 
 export async function resetReplyRunSession(params: {
@@ -50,6 +59,9 @@ export async function resetReplyRunSession(params: {
   const prevEntry = params.activeSessionStore[params.sessionKey] ?? params.activeSessionEntry;
   if (!prevEntry) {
     return false;
+  }
+  if (isModelSelectionLocked(prevEntry)) {
+    throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
   }
   const prevSessionId = params.options.cleanupTranscripts ? prevEntry.sessionId : undefined;
   const nextSessionId = deps.generateSecureUuid();
@@ -90,11 +102,11 @@ export async function resetReplyRunSession(params: {
     memoryFlushLastFailureError: undefined,
   };
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const nextSessionFile = resolveSessionTranscriptPath(
-    nextSessionId,
+  const nextSessionFile = formatSqliteSessionFileMarker({
     agentId,
-    params.messageThreadId,
-  );
+    sessionId: nextSessionId,
+    storePath: params.storePath,
+  });
   nextEntry.sessionFile = nextSessionFile;
   params.activeSessionStore[params.sessionKey] = nextEntry;
   try {

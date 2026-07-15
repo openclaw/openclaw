@@ -27,14 +27,12 @@ import type { MusicGenerationResult } from "./types.js";
 const log = createSubsystemLogger("music-generation");
 
 /** Injectable dependencies used by tests and alternate runtime hosts. */
-export type MusicGenerationRuntimeDeps = {
+type MusicGenerationRuntimeDeps = {
   getProvider?: typeof getMusicGenerationProvider;
   listProviders?: typeof listMusicGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;
   log?: Pick<typeof log, "debug">;
 };
-
-export type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 
 /** List runtime-visible music generation providers for a config snapshot. */
 export function listRuntimeMusicGenerationProviders(

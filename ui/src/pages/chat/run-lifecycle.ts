@@ -72,6 +72,8 @@ type ReconcileOptions = {
   clearRunStatus?: boolean;
   publishRunStatus?: boolean;
   armLocalTerminalReconcile?: boolean;
+  yielded?: boolean;
+  requestUpdate?: boolean;
 };
 
 type ChatAbortRunState = SessionScopeHost & {
@@ -126,7 +128,7 @@ export function isChatStopCommand(text: string) {
 
 type ChatAbortOptions = { preserveDraft?: boolean };
 
-export async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
+async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
   if (!state.client || !state.connected) {
     return false;
   }
@@ -272,6 +274,26 @@ function reconcileSessionRows(
   host.sessions?.reconcileRunTerminal(terminal);
 }
 
+function reconcileYieldedSessionRows(
+  host: RunLifecycleHost,
+  options: ReconcileOptions,
+  occurredAt: number,
+) {
+  if (!options.yielded) {
+    return;
+  }
+  const terminal: SessionRunTerminal = {
+    sessionKeys: [...sessionKeysFor(host, options)],
+    runId: options.runId ?? host.chatRunId ?? null,
+    status: "running",
+    endedAt: occurredAt,
+  };
+  if (host.sessionsResult) {
+    host.sessionsResult = reconcileSessionRunTerminal(host.sessionsResult, terminal);
+  }
+  host.sessions?.reconcileRunTerminal(terminal);
+}
+
 export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions = {}) {
   const occurredAt = Date.now();
   const runId = options.runId ?? host.chatRunId ?? null;
@@ -313,10 +335,16 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
       host.chatRunStatus = status;
       scheduleRunStatusClear(host, status);
     }
+  } else if (options.yielded) {
+    reconcileYieldedSessionRows(host, options, occurredAt);
+    host.lastLocalTerminalReconcile = null;
+    clearChatRunStatus(host);
   } else if (options.clearRunStatus) {
     clearChatRunStatus(host);
   }
-  host.requestUpdate?.();
+  if (options.requestUpdate !== false) {
+    host.requestUpdate?.();
+  }
 }
 
 function currentSessionRow(host: RunLifecycleHost) {

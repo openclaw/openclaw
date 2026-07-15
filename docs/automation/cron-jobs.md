@@ -142,7 +142,7 @@ Every job carries exactly one payload kind, chosen by flag:
   Model override; must resolve to an allowed model or the run fails with a validation error.
 </ParamField>
 <ParamField path="--fallbacks" type="string">
-  Per-job fallback model list, for example `--fallbacks openai/gpt-5.5,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
+  Per-job fallback model list, for example `--fallbacks openai/gpt-5.6-sol,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
 </ParamField>
 <ParamField path="--clear-fallbacks" type="boolean">
   On `cron edit`, removes the per-job fallback override so the job follows configured fallback precedence. Cannot combine with `--fallbacks`.
@@ -151,7 +151,7 @@ Every job carries exactly one payload kind, chosen by flag:
   On `cron edit`, removes the per-job model override so the job follows normal cron model precedence (stored cron-session override, else agent/default model). Cannot combine with `--model`.
 </ParamField>
 <ParamField path="--thinking" type="string">
-  Thinking level override (`off|minimal|low|medium|high|xhigh|adaptive|max`).
+  Thinking level override (`off|minimal|low|medium|high|xhigh|adaptive|max|ultra`). Available levels still depend on the selected model and agent runtime.
 </ParamField>
 <ParamField path="--clear-thinking" type="boolean">
   On `cron edit`, removes the per-job thinking override. Cannot combine with `--thinking`.
@@ -368,6 +368,8 @@ openclaw cron create "0 6 * * *" "Check ops queue" --name "Ops sweep" --session 
 openclaw cron edit <jobId> --clear-agent
 ```
 
+Archiving a session (Control UI, or `sessions.patch { archived: true }` from an operator-admin caller) disables every enabled cron job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session does not re-enable those jobs; use `openclaw cron enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
+
 `openclaw cron run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` for status `ok`, non-zero for `error`, `skipped`, or a wait timeout.
 
 The agent `cron` tool returns compact job summaries (`id`, `name`, `enabled`, `nextRunAtMs`, `scheduleKind`, `lastRunStatus`) from `cron(action: "list")`; use `cron(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the full response with delivery previews.
@@ -437,7 +439,7 @@ Query-string tokens are rejected.
     curl -X POST http://127.0.0.1:18789/hooks/agent \
       -H 'Authorization: Bearer SECRET' \
       -H 'Content-Type: application/json' \
-      -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.5"}'
+      -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.6-sol"}'
     ```
 
     Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
@@ -475,6 +477,12 @@ openclaw webhooks gmail setup --account openclaw@gmail.com
 ```
 
 This writes `hooks.gmail` config, enables the Gmail preset, and defaults to Tailscale Funnel for the push endpoint (`--tailscale funnel|serve|off`).
+
+<Warning>
+The Gmail preset's per-message session separates conversation context; it does not restrict the target agent's tools or workspace. Without a custom mapping that sets `agentId`, Gmail hooks run as the default agent.
+
+For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. If it needs to notify the main agent, allow only the required agent-to-agent handoff. See [Prompt injection](/gateway/security#prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent).
+</Warning>
 
 ### Gateway auto-start
 
@@ -517,12 +525,14 @@ When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `
 {
   hooks: {
     gmail: {
-      model: "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-      thinking: "off",
+      model: "openai/gpt-5.6-sol",
+      thinking: "high",
     },
   },
 }
 ```
+
+Use the latest-generation, best-tier model available from your provider for untrusted inboxes. The value above is an example; the model must exist in your configured catalog and allowlist.
 
 ## Configuration
 
@@ -543,7 +553,6 @@ When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `
     },
     webhookToken: "replace-with-dedicated-webhook-token",
     sessionRetention: "24h",
-    runLog: { maxBytes: "2mb", keepLines: 2000 },
   },
 }
 ```
@@ -564,7 +573,7 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
   </Accordion>
   <Accordion title="Maintenance">
-    `cron.sessionRetention` (default `24h`, `false` disables) prunes isolated run-session entries. `cron.runLog.keepLines` limits retained SQLite run-history rows per job; `maxBytes` is retained for config compatibility with older file-backed run logs.
+    `cron.sessionRetention` (default `24h`, `false` disables) prunes isolated run-session entries. Run history keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
   </Accordion>
   <Accordion title="Legacy store migration">
     On upgrade, run `openclaw doctor --fix` to import legacy `~/.openclaw/cron/jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files into SQLite and rename them with a `.migrated` suffix. Malformed job rows are skipped from runtime and copied to `jobs-quarantine.json` for later repair or review.

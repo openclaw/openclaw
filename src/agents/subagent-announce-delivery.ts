@@ -11,7 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded-read.js";
+import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -64,7 +64,7 @@ import {
   isEmbeddedRunAbandoned,
   getRuntimeConfig,
   formatEmbeddedAgentQueueFailureSummary,
-  loadSessionStore,
+  loadSessionEntry,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
   resolveAgentIdFromSessionKey,
@@ -173,21 +173,6 @@ function resolveBoundConversationOrigin(params: {
   const parentConversationId = conversation.parentConversationId?.trim() ?? "";
   const requesterConversationId = params.requesterConversation?.conversationId?.trim() ?? "";
   const requesterTo = params.requesterOrigin?.to?.trim();
-  if (
-    conversation.channel === "matrix" &&
-    parentConversationId &&
-    requesterConversationId &&
-    parentConversationId === requesterConversationId &&
-    requesterTo
-  ) {
-    return {
-      channel: conversation.channel,
-      accountId: conversation.accountId,
-      to: requesterTo,
-      ...(conversationId ? { threadId: conversationId } : {}),
-    };
-  }
-
   const boundTarget = routeToDeliveryFields(routeFromConversationRef(conversation));
   const inferredThreadId =
     boundTarget.threadId ??
@@ -721,8 +706,11 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const entry = store[canonicalKey];
+  const entry = loadSessionEntry({
+    storePath,
+    sessionKey: canonicalKey,
+    clone: false,
+  });
   return { cfg, entry, canonicalKey };
 }
 
@@ -730,8 +718,11 @@ export function loadSessionEntryByKey(sessionKey: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  return store[sessionKey];
+  return loadSessionEntry({
+    storePath,
+    sessionKey,
+    clone: false,
+  });
 }
 
 async function maybeSteerSubagentAnnounce(params: {
@@ -1142,6 +1133,7 @@ async function deliverTextCompletionDirect(params: {
       threadId: params.deliveryTarget.threadId,
       requesterSessionKey: params.requesterSessionKey,
       agentId,
+      conversationType: "direct",
       content,
       idempotencyKey,
       mirror: {
@@ -1941,7 +1933,7 @@ export async function deliverSubagentAnnouncement(params: {
   });
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(
     overrides?: Partial<SubagentAnnounceDeliveryDeps> & {
       callGateway?: typeof callGateway;
@@ -1973,4 +1965,9 @@ export const testing = {
   hasSessionFileChangedAnnounceError,
   isSessionFileChangedAnnounceError,
 };
-export { testing as __testing };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.subagentAnnounceDeliveryTestApi")
+  ] = testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

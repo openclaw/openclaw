@@ -13,14 +13,11 @@ import {
 } from "./compaction-planning-worker.js";
 import {
   BASE_CHUNK_RATIO,
-  chunkMessagesByMaxTokens,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
   MIN_CHUNK_RATIO,
-  pruneHistoryForContextShare,
   SAFETY_MARGIN,
-  splitMessagesByTokenShare,
   SUMMARIZATION_OVERHEAD_TOKENS,
 } from "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
@@ -31,14 +28,11 @@ import { generateSummary as agentGenerateSummary } from "./sessions/index.js";
 
 export {
   BASE_CHUNK_RATIO,
-  chunkMessagesByMaxTokens,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
   MIN_CHUNK_RATIO,
-  pruneHistoryForContextShare,
   SAFETY_MARGIN,
-  splitMessagesByTokenShare,
   SUMMARIZATION_OVERHEAD_TOKENS,
 };
 
@@ -110,7 +104,7 @@ function resolveIdentifierPreservationInstructions(
 }
 
 /** Combines identifier-preservation and caller-provided compaction instructions. */
-export function buildCompactionSummarizationInstructions(
+function buildCompactionSummarizationInstructions(
   customInstructions?: string,
   instructions?: CompactionSummarizationInstructions,
 ): string | undefined {
@@ -264,7 +258,7 @@ function generateSummary(
  * Summarize with progressive fallback for handling oversized messages.
  * If full summarization fails, tries partial summarization excluding oversized messages.
  */
-export async function summarizeWithFallback(params: {
+async function summarizeWithFallback(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
@@ -408,7 +402,11 @@ export async function summarizeInStages(params: {
   }
 
   if (partialSummaries.length === 1) {
-    return partialSummaries[0];
+    const summary = partialSummaries.at(0);
+    if (summary === undefined) {
+      throw new Error("Compaction summary plan produced no summary");
+    }
+    return summary;
   }
 
   // Capture once so timestamps are strictly monotonic across
@@ -417,7 +415,10 @@ export async function summarizeInStages(params: {
   const summaryMessages: AgentMessage[] = partialSummaries.map((summary, index) => {
     // serializeConversation preserves content but not timestamps, so chronology
     // must be explicit in the text consumed by the merge model.
-    const chunk = plan.chunks[index];
+    const chunk = plan.chunks.at(index);
+    if (!chunk) {
+      throw new Error(`Compaction summary plan is missing chunk ${index}`);
+    }
     const timeRange = extractChunkTimeRange(chunk);
     const label =
       index === 0
@@ -451,4 +452,11 @@ export function resolveContextWindowTokens(model?: ExtensionContext["model"]): n
   const effective =
     (model as { contextTokens?: number } | undefined)?.contextTokens ?? model?.contextWindow;
   return Math.max(1, Math.floor(effective ?? DEFAULT_CONTEXT_TOKENS));
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.compactionTestApi")] = {
+    buildCompactionSummarizationInstructions,
+    summarizeWithFallback,
+  };
 }
