@@ -1,13 +1,14 @@
 import type { PluginHookBeforeToolCallResult } from "openclaw/plugin-sdk/types";
 import { describe, expect, it, vi } from "vitest";
 import {
-  AUTHORIZATION_NONCE_PARAM,
   OnePasswordBroker,
   type AuditRow,
+  type PendingAuthorization,
   type StandingGrant,
 } from "./broker.js";
 import type { OnePasswordConfig, OnePasswordItemConfig } from "./config.js";
-import { MemoryKeyedStore } from "./memory-store.test-support.js";
+import { MemoryKeyedStore, MemorySyncKeyedStore } from "./memory-store.test-support.js";
+import { AUTHORIZATION_NONCE_PARAM } from "./pending-authorization.js";
 
 const invocation = {
   agentId: "agent-a",
@@ -59,21 +60,27 @@ function setup(nowValue = 1_000, configured = config()) {
   let currentConfig: OnePasswordConfig | undefined = configured;
   const audit = new MemoryKeyedStore<AuditRow>(() => now);
   const grants = new MemoryKeyedStore<StandingGrant>(() => now);
+  const pending = new MemorySyncKeyedStore<PendingAuthorization>(() => now);
+  const stores = { audit, grants, pending };
   const getItem = vi.fn(async () => ({
     value: ["fixture", "value"].join("-"),
     itemTitle: "Item title",
     fieldLabel: "credential",
   }));
-  const broker = new OnePasswordBroker({
-    resolveConfig: () => currentConfig,
-    opClient: { getItem },
-    stores: { audit, grants },
-    now: () => now,
-  });
+  const createBroker = () =>
+    new OnePasswordBroker({
+      resolveConfig: () => currentConfig,
+      opClient: { getItem },
+      stores,
+      now: () => now,
+    });
+  const broker = createBroker();
   return {
     broker,
+    createBroker,
     audit,
     grants,
+    pending,
     getItem,
     setConfig: (next: OnePasswordConfig | undefined) => {
       currentConfig = next;
@@ -284,6 +291,25 @@ describe("OnePasswordBroker validation and policy", () => {
     expect(rows.map((entry) => entry.value.outcome)).toEqual(["auto"]);
   });
 
+  it("shares pending authorizations across broker instances", async () => {
+    const { broker: hookBroker, createBroker } = setup();
+    const executeBroker = createBroker();
+    const issued = await before(hookBroker, "duplicate-instance-1", {
+      action: "get",
+      slug: "automatic",
+      reason: "cross-instance authorization",
+    });
+
+    await expect(
+      executeBroker.get(
+        "duplicate-instance-1",
+        { action: "get", slug: "automatic", reason: "cross-instance authorization" },
+        invocation,
+        nonceOf(issued),
+      ),
+    ).resolves.toMatchObject({ slug: "automatic" });
+  });
+
   it("isolates concurrent sessions that reuse a provider tool call id", async () => {
     const { broker, audit } = setup();
     const firstInvocation = {
@@ -342,8 +368,20 @@ describe("OnePasswordBroker validation and policy", () => {
     ]);
   });
 
-  it("never honors a model-supplied authorization nonce", async () => {
+  it("never grants access from a forged nonce without hook authorization", async () => {
     const { broker } = setup();
+    // No before_tool_call ran for this call: a fabricated nonce finds nothing
+    // and the identity fallback has no pending entry to match.
+    await expect(
+      broker.get(
+        "call-forged",
+        { action: "get", slug: "automatic", reason: "reject forged correlation" },
+        invocation,
+        "attacker-nonce",
+      ),
+    ).rejects.toMatchObject({ code: "POLICY_NOT_EVALUATED" });
+
+    // The hook always overwrites a model-supplied nonce with its own.
     const result = await before(broker, "call-1", {
       action: "get",
       slug: "automatic",
@@ -353,15 +391,6 @@ describe("OnePasswordBroker validation and policy", () => {
     const issuedNonce = nonceOf(result);
     expect(issuedNonce).toBeDefined();
     expect(issuedNonce).not.toBe("attacker-nonce");
-
-    await expect(
-      broker.get(
-        "call-1",
-        { action: "get", slug: "automatic", reason: "reject forged correlation" },
-        invocation,
-        "attacker-nonce",
-      ),
-    ).rejects.toMatchObject({ code: "POLICY_NOT_EVALUATED" });
     await expect(
       broker.get(
         "call-1",
@@ -370,6 +399,44 @@ describe("OnePasswordBroker validation and policy", () => {
         issuedNonce,
       ),
     ).resolves.toMatchObject({ slug: "automatic" });
+  });
+
+  it("authorizes via unique pending match when another hook drops the nonce param", async () => {
+    // before_tool_call results merge last-writer-wins across plugins, so a
+    // later params-returning hook can strip the nonce from the executed params.
+    const { broker } = setup();
+    await before(broker, "dropped-1", {
+      action: "get",
+      slug: "automatic",
+      reason: "nonce dropped by another hook",
+    });
+    await expect(
+      broker.get(
+        "dropped-1",
+        { action: "get", slug: "automatic", reason: "nonce dropped by another hook" },
+        invocation,
+        undefined,
+      ),
+    ).resolves.toMatchObject({ slug: "automatic" });
+  });
+
+  it("fails closed when a dropped nonce is ambiguous across pending entries", async () => {
+    const { broker } = setup();
+    for (let round = 0; round < 2; round += 1) {
+      await before(broker, "ambiguous-1", {
+        action: "get",
+        slug: "automatic",
+        reason: "same identity twice",
+      });
+    }
+    await expect(
+      broker.get(
+        "ambiguous-1",
+        { action: "get", slug: "automatic", reason: "same identity twice" },
+        invocation,
+        undefined,
+      ),
+    ).rejects.toMatchObject({ code: "POLICY_NOT_EVALUATED" });
   });
 
   it("persists allow-always grants and expires them", async () => {
@@ -701,6 +768,7 @@ describe("OnePasswordBroker cache and audit", () => {
     const cfg = config();
     const audit = new MemoryKeyedStore<AuditRow>();
     const grants = new MemoryKeyedStore<StandingGrant>();
+    const pending = new MemorySyncKeyedStore<PendingAuthorization>();
     const getItem = vi.fn(async () => ({
       value: ["fixture", "value"].join("-"),
       itemTitle: "Item",
@@ -709,7 +777,7 @@ describe("OnePasswordBroker cache and audit", () => {
     const broker = new OnePasswordBroker({
       resolveConfig: () => cfg,
       opClient: { getItem },
-      stores: { audit, grants },
+      stores: { audit, grants, pending },
     });
     const primed = await before(broker, "deny-cache-1", {
       action: "get",

@@ -4,8 +4,9 @@ import type {
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
 } from "openclaw/plugin-sdk/types";
-import { AUTHORIZATION_NONCE_PARAM, parseToolInput, type OnePasswordBroker } from "./broker.js";
+import { parseToolInput, type OnePasswordBroker } from "./broker.js";
 import { OnePasswordError } from "./errors.js";
+import { AUTHORIZATION_NONCE_PARAM } from "./pending-authorization.js";
 
 const OnePasswordToolSchema = {
   type: "object",

@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -13,6 +16,10 @@ import {
 } from "./config.js";
 import { OnePasswordError, type OnePasswordErrorCode } from "./errors.js";
 import type { OpClient, ResolvedSecret } from "./op-client.js";
+import {
+  AUTHORIZATION_NONCE_PARAM,
+  consumeUniquePendingAuthorization,
+} from "./pending-authorization.js";
 
 type AuditOutcome =
   | "auto"
@@ -60,6 +67,7 @@ type AuditErrorCode = OnePasswordErrorCode | AuditInternalErrorCode;
 type BrokerStores = {
   audit: PluginStateKeyedStore<AuditRow>;
   grants: PluginStateKeyedStore<StandingGrant>;
+  pending: PluginStateSyncKeyedStore<PendingAuthorization>;
 };
 
 type BrokerOptions = {
@@ -78,12 +86,11 @@ type AccessContext = {
   reason: string;
 };
 
-type PendingAuthorization = AccessContext & {
+export type PendingAuthorization = AccessContext & {
   outcome: "auto" | "approved" | "grant";
   persistGrant: boolean;
   configFingerprint: string;
   targetFingerprint: string;
-  expiresAtMs: number;
 };
 
 type CacheEntry = ResolvedSecret & {
@@ -118,12 +125,6 @@ type ListedItem = {
 
 const APPROVAL_TIMEOUT_MS = 600_000;
 const PENDING_AUTHORIZATION_TTL_MS = APPROVAL_TIMEOUT_MS;
-
-// Correlates hook authorization with execute: session fields differ across
-// that boundary in production and provider tool-call ids are not globally
-// unique, so the hook mints a UUID returned via adjusted params (handed
-// through unchanged by core); model-supplied values are always overwritten.
-export const AUTHORIZATION_NONCE_PARAM = "authorizationNonce";
 
 function textParam(params: Record<string, unknown>, key: string): string | undefined {
   const value = params[key];
@@ -190,7 +191,6 @@ export class OnePasswordBroker {
   private readonly stores: BrokerStores;
   private readonly now: () => number;
   private readonly cache = new Map<string, CacheEntry>();
-  private readonly pending = new Map<string, PendingAuthorization>();
   private lastConfigFingerprint: string | null | undefined;
 
   constructor(options: BrokerOptions) {
@@ -205,7 +205,7 @@ export class OnePasswordBroker {
       // A reload can revoke policy or retarget a slug. Cached secrets and
       // in-flight authorizations must not survive that ownership boundary.
       this.cache.clear();
-      this.pending.clear();
+      this.stores.pending.clear();
     }
     this.lastConfigFingerprint = fingerprint;
   }
@@ -219,6 +219,10 @@ export class OnePasswordBroker {
     const fingerprint = createHash("sha256").update(JSON.stringify(config)).digest("hex");
     this.observeConfigFingerprint(fingerprint);
     return { config, fingerprint };
+  }
+
+  private registerPending(nonce: string, authorization: PendingAuthorization): void {
+    this.stores.pending.register(nonce, authorization, { ttlMs: PENDING_AUTHORIZATION_TTL_MS });
   }
 
   private context(
@@ -253,15 +257,6 @@ export class OnePasswordBroker {
       outcome,
       ...(options.errorCode ? { errorCode: options.errorCode } : {}),
     });
-  }
-
-  private sweepPending(): void {
-    const now = this.now();
-    for (const [key, authorization] of this.pending) {
-      if (authorization.expiresAtMs <= now) {
-        this.pending.delete(key);
-      }
-    }
   }
 
   private async pruneStaleGrants(config: OnePasswordConfig): Promise<void> {
@@ -334,17 +329,15 @@ export class OnePasswordBroker {
       return { block: true, blockReason: `1Password access denied by policy for ${input.slug}` };
     }
 
-    this.sweepPending();
     const nonce = randomUUID();
     const authorizedParams = { ...event.params, [AUTHORIZATION_NONCE_PARAM]: nonce };
     if (item.policy === "auto") {
-      this.pending.set(nonce, {
+      this.registerPending(nonce, {
         ...context,
         outcome: "auto",
         persistGrant: false,
         configFingerprint,
         targetFingerprint: fingerprintOnePasswordTarget(item),
-        expiresAtMs: this.now() + PENDING_AUTHORIZATION_TTL_MS,
       });
       return { params: authorizedParams };
     }
@@ -359,13 +352,12 @@ export class OnePasswordBroker {
       grant.expiresAtMs > this.now() &&
       grant.targetFingerprint === fingerprintOnePasswordTarget(item)
     ) {
-      this.pending.set(nonce, {
+      this.registerPending(nonce, {
         ...context,
         outcome: "grant",
         persistGrant: false,
         configFingerprint,
         targetFingerprint: fingerprintOnePasswordTarget(item),
-        expiresAtMs: this.now() + PENDING_AUTHORIZATION_TTL_MS,
       });
       return { params: authorizedParams };
     }
@@ -386,18 +378,17 @@ export class OnePasswordBroker {
           context.agentId === "unknown"
             ? ["allow-once", "deny"]
             : ["allow-once", "allow-always", "deny"],
-        // Core fires onResolution without awaiting it; the synchronous pending.set
+        // Core fires onResolution without awaiting it; the synchronous store write
         // below is what guarantees the authorization exists before the tool
         // handler runs. Do not move it behind an await.
         onResolution: async (decision) => {
           if (decision === "allow-once" || decision === "allow-always") {
-            this.pending.set(nonce, {
+            this.registerPending(nonce, {
               ...context,
               outcome: "approved",
               persistGrant: decision === "allow-always" && context.agentId !== "unknown",
               configFingerprint,
               targetFingerprint: fingerprintOnePasswordTarget(item),
-              expiresAtMs: this.now() + PENDING_AUTHORIZATION_TTL_MS,
             });
             return;
           }
@@ -447,7 +438,6 @@ export class OnePasswordBroker {
     invocation: ToolInvocationContext,
     nonce: string | undefined,
   ): Promise<ResolvedSecret & { slug: string }> {
-    this.sweepPending();
     const fallbackContext: AccessContext = {
       agentId: invocation.agentId ?? "unknown",
       sessionKey: invocation.sessionKey ?? "unknown",
@@ -456,10 +446,9 @@ export class OnePasswordBroker {
       slug: input.slug,
       reason: input.reason,
     };
-    const authorization = nonce ? this.pending.get(nonce) : undefined;
-    if (nonce) {
-      this.pending.delete(nonce);
-    }
+    const authorization =
+      (nonce ? this.stores.pending.consume(nonce) : undefined) ??
+      consumeUniquePendingAuthorization(this.stores.pending, fallbackContext);
     if (
       !authorization ||
       authorization.slug !== input.slug ||
