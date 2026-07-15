@@ -54,6 +54,7 @@ export type QuickSettingsChannel = {
   id: string;
   label: string;
   connected: boolean;
+  configured?: boolean;
   detail?: string;
 };
 
@@ -439,11 +440,16 @@ function renderChannelsSection(props: QuickSettingsProps) {
             title: ch.label,
             control: ch.connected
               ? renderSettingsStatus({ kind: "ok", label: ch.detail ?? t("common.connected") })
-              : html`
-                  <button class="btn" @click=${() => props.onChannelConfigure?.(ch.id)}>
-                    ${t("quickSettings.channels.connect")}
-                  </button>
-                `,
+              : ch.configured
+                ? renderSettingsStatus({
+                    kind: "muted",
+                    label: ch.detail ?? t("common.configured"),
+                  })
+                : html`
+                    <button class="btn" @click=${() => props.onChannelConfigure?.(ch.id)}>
+                      ${t("quickSettings.channels.connect")}
+                    </button>
+                  `,
           }),
         );
   return renderTargetSection(

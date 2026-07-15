@@ -4,7 +4,7 @@ import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { FastMode } from "../../api/types.ts";
+import type { ChannelsStatusSnapshot, FastMode } from "../../api/types.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -154,26 +154,60 @@ function mcpServerCount(config: unknown): number {
     : 0;
 }
 
-function quickChannels(config: unknown): QuickSettingsChannel[] {
+export function quickChannels(
+  config: unknown,
+  snapshot: ChannelsStatusSnapshot | null | undefined,
+): QuickSettingsChannel[] {
   const configured = asConfigRecord(asConfigRecord(config)?.channels) ?? {};
   const configuredIds = Object.keys(configured).filter((id) => id.trim().length > 0);
-  const channelIds =
-    configuredIds.length > 0
-      ? configuredIds.toSorted((left, right) => left.localeCompare(right))
+  const liveIds = new Set<string>([
+    ...(snapshot?.channelOrder ?? []),
+    ...Object.keys(snapshot?.channels ?? {}),
+    ...Object.keys(snapshot?.channelAccounts ?? {}),
+    ...Object.keys(snapshot?.channelLabels ?? {}),
+  ]);
+  const channelIds = Array.from(new Set([...configuredIds, ...liveIds])).filter(
+    (id) => id.trim().length > 0,
+  );
+  const sortedIds =
+    channelIds.length > 0
+      ? channelIds.toSorted((left, right) => left.localeCompare(right))
       : KNOWN_CHANNELS.map(({ id }) => id);
   const labels = new Map<string, string>(
     KNOWN_CHANNELS.map(({ id, labelKey }) => [id, t(labelKey)]),
   );
-  return channelIds.map((id) => {
+  return sortedIds.map((id) => {
     const value = configured[id];
-    const connected = Boolean(value && typeof value === "object" && Object.keys(value).length);
+    const hasConfig = Boolean(value && typeof value === "object" && Object.keys(value).length);
+    const status = (snapshot?.channels?.[id] ?? null) as Record<string, unknown> | null;
+    const accounts = snapshot?.channelAccounts?.[id] ?? [];
+    const defaultAccountId = snapshot?.channelDefaultAccountId?.[id];
+    const defaultAccount =
+      (defaultAccountId
+        ? accounts.find((account) => account.accountId === defaultAccountId)
+        : undefined) ?? accounts[0] ?? null;
+    const connected =
+      status?.connected === true ||
+      defaultAccount?.connected === true ||
+      accounts.some((account) => account.connected === true);
+    const isConfigured =
+      hasConfig ||
+      status?.configured === true ||
+      defaultAccount?.configured === true ||
+      accounts.some((account) => account.configured === true || account.running === true);
     return {
       id,
       label:
+        snapshot?.channelLabels?.[id] ??
         labels.get(id) ??
         id.replace(/[-_]+/g, " ").replace(/\b\w/g, (character) => character.toUpperCase()),
       connected,
-      detail: connected ? t("common.configured") : undefined,
+      configured: isConfigured,
+      detail: connected
+        ? snapshot?.channelDetailLabels?.[id] ?? t("common.connected")
+        : isConfigured
+          ? t("common.configured")
+          : undefined,
     };
   });
 }
@@ -840,7 +874,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       currentModel: model,
       thinkingLevel,
       fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
-      channels: quickChannels(configObject),
+      channels: quickChannels(configObject, this.context.channels.state.channelsSnapshot),
       automation: {
         cronJobCount: 0,
         skillCount: 0,
