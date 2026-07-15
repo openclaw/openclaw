@@ -23,7 +23,33 @@ import {
   buildPluginLoaderJitiOptions,
 } from "../../../plugins/sdk-alias.js";
 import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.js";
-import * as bundledAgentCore from "../../runtime/index.js";
+import {
+  Agent,
+  bashExecutionToText,
+  buildSessionContext,
+  calculateContextTokens,
+  collectEntriesForBranchSummaryFromBranches,
+  compact,
+  estimateContextTokens,
+  estimateTokens,
+  findCutPoint,
+  findTurnStartIndex,
+  generateBranchSummary,
+  generateSummary,
+  getLastAssistantUsage,
+  openClawAgentCoreRuntime,
+  prepareBranchEntries,
+  prepareCompaction,
+  runAgentLoop,
+  serializeConversation,
+  shouldCompact,
+  uuidv7,
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+  DEFAULT_COMPACTION_SETTINGS,
+} from "../../runtime/index.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
@@ -43,6 +69,34 @@ import type {
 } from "./types.js";
 
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
+const bundledAgentCore = {
+  Agent,
+  bashExecutionToText,
+  buildSessionContext,
+  calculateContextTokens,
+  collectEntriesForBranchSummaryFromBranches,
+  compact,
+  estimateContextTokens,
+  estimateTokens,
+  findCutPoint,
+  findTurnStartIndex,
+  generateBranchSummary,
+  generateSummary,
+  getLastAssistantUsage,
+  openClawAgentCoreRuntime,
+  prepareBranchEntries,
+  prepareCompaction,
+  runAgentLoop,
+  serializeConversation,
+  shouldCompact,
+  uuidv7,
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+  DEFAULT_COMPACTION_SETTINGS,
+};
+
 const VIRTUAL_MODULES: Record<string, unknown> = {
   typebox: bundledTypebox,
   "typebox/compile": bundledTypeboxCompile,
