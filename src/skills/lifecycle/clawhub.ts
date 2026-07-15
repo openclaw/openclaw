@@ -979,13 +979,6 @@ async function writeClawHubSkillOrigin(
   await writeJson(targetPath, origin, { trailingNewline: true });
 }
 
-function resolveSkillSearchLimit(limit: number | undefined): number | undefined {
-  if (limit === undefined || !Number.isFinite(limit) || limit <= 0) {
-    return undefined;
-  }
-  return Math.trunc(limit);
-}
-
 export async function searchSkillsFromClawHub(params: {
   query?: string;
   limit?: number;
@@ -993,7 +986,7 @@ export async function searchSkillsFromClawHub(params: {
 }): Promise<ClawHubSkillSearchResult[]> {
   return await searchClawHubSkills({
     query: params.query?.trim() || "*",
-    limit: resolveSkillSearchLimit(params.limit),
+    limit: params.limit,
     baseUrl: params.baseUrl,
   });
 }

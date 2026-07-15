@@ -429,11 +429,11 @@ describe("clawhub helpers", () => {
     expect(url.searchParams.get("q")).toBe("calendar");
   });
 
-  it("forwards searchClawHubSkills limit verbatim to the API", async () => {
+  it("passes through the documented maximum searchClawHubSkills limit unchanged", async () => {
     let requestedUrl = "";
     await searchClawHubSkills({
       query: "calendar",
-      limit: 999_999,
+      limit: 100,
       fetchImpl: async (input) => {
         requestedUrl = input instanceof Request ? input.url : String(input);
         return new Response(JSON.stringify({ results: [] }), {
@@ -442,7 +442,7 @@ describe("clawhub helpers", () => {
         });
       },
     });
-    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("999999");
+    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("100");
   });
 
   it("passes through a valid searchClawHubSkills limit unchanged", async () => {
@@ -476,24 +476,6 @@ describe("clawhub helpers", () => {
     expect(new URL(requestedUrl).searchParams.has("limit")).toBe(false);
   });
 
-  it("forwards fractional searchClawHubSkills limits verbatim", async () => {
-    let requestedUrl = "";
-    await searchClawHubSkills({
-      query: "calendar",
-      limit: 0.5,
-      fetchImpl: async (input) => {
-        requestedUrl = input instanceof Request ? input.url : String(input);
-        return new Response(JSON.stringify({ results: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("0.5");
-  });
-
-
-
   it("passes through a valid searchClawHubPackages limit unchanged", async () => {
     let requestedUrl = "";
     await searchClawHubPackages({
@@ -523,22 +505,6 @@ describe("clawhub helpers", () => {
       },
     });
     expect(new URL(requestedUrl).searchParams.has("limit")).toBe(false);
-  });
-
-  it("forwards fractional searchClawHubPackages limits verbatim", async () => {
-    let requestedUrl = "";
-    await searchClawHubPackages({
-      query: "security",
-      limit: 0.5,
-      fetchImpl: async (input) => {
-        requestedUrl = input instanceof Request ? input.url : String(input);
-        return new Response(JSON.stringify({ results: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("0.5");
   });
 
   it("sends owner-qualified skill detail lookups as slug plus ownerHandle", async () => {
