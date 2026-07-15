@@ -75,6 +75,23 @@ describe("docsSearchCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("reports malformed docs search JSON with CLI context", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("{bad json", {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["bad-json"], runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Docs search failed: Docs search response is malformed JSON"),
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("SyntaxError"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("renders successful results from the Cloudflare docs search API", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
