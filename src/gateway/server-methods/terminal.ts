@@ -74,11 +74,15 @@ function createTerminalOpenDeadline(): TerminalOpenDeadline {
   };
 }
 
-function expireTerminalOpenDeadline(deadline: TerminalOpenDeadline): unknown {
+function terminalOpenRejection(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function expireTerminalOpenDeadline(deadline: TerminalOpenDeadline): Error {
   if (!deadline.controller.signal.aborted) {
     deadline.controller.abort(new TerminalOpenDeadlineError());
   }
-  return deadline.controller.signal.reason;
+  return terminalOpenRejection(deadline.controller.signal.reason);
 }
 
 async function waitForTerminalOpenDeadline<T>(
@@ -91,7 +95,7 @@ async function waitForTerminalOpenDeadline<T>(
   return await new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
-      reject(deadline.controller.signal.reason);
+      reject(expireTerminalOpenDeadline(deadline));
     };
     const timer = setTimeout(
       () => expireTerminalOpenDeadline(deadline),
@@ -108,7 +112,7 @@ async function waitForTerminalOpenDeadline<T>(
       }
       clearTimeout(timer);
       deadline.controller.signal.removeEventListener("abort", onAbort);
-      reject(error);
+      reject(terminalOpenRejection(error));
       return;
     }
     void promise.then(
@@ -128,7 +132,7 @@ async function waitForTerminalOpenDeadline<T>(
         }
         clearTimeout(timer);
         deadline.controller.signal.removeEventListener("abort", onAbort);
-        reject(error);
+        reject(terminalOpenRejection(error));
       },
     );
   });

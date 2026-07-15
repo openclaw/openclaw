@@ -95,7 +95,6 @@ export class TerminalSessionManager {
     // Reserve the slot before the async spawn so it is visible to concurrent opens.
     this.opening += 1;
     this.spawning += 1;
-    let pending!: TerminalPendingOpen;
     let reservationActive = true;
     const releaseReservation = () => {
       if (!reservationActive) {
@@ -105,7 +104,7 @@ export class TerminalSessionManager {
       this.opening -= 1;
       this.untrackPendingOpen(request.connId, pending);
     };
-    pending = {
+    const pending: TerminalPendingOpen = {
       agentId: request.agentId,
       abort: (message) => {
         pending.abortMessage ??= message;
