@@ -11,10 +11,8 @@ import {
   isReplyRunActiveForSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
-import {
-  markDiagnosticToolStartedForTest,
-  resetDiagnosticRunActivityForTest,
-} from "../../logging/diagnostic-run-activity.js";
+import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,

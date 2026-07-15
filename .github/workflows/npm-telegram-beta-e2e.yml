@@ -345,18 +345,33 @@ jobs:
             --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
             --arg run_id "$ARTIFACT_RUN_ID" \
             '(.id | tostring) == $run_id and
-             (.run_attempt | tostring) == $attempt and
-             .status == "completed" and
-             .conclusion == "success"' \
+             (.run_attempt | tostring) == $attempt' \
             <<< "$attempt_json" >/dev/null || {
             echo "Package Telegram artifact producer run attempt does not match the requested tuple." >&2
             exit 1
           }
           attempt_started_at="$(jq -er '.run_started_at | fromdateiso8601' <<< "$attempt_json")"
-          attempt_completed_at="$(jq -er '.updated_at | fromdateiso8601' <<< "$attempt_json")"
-          if (( artifact_created_at <= attempt_started_at || artifact_created_at > attempt_completed_at )); then
-            echo "Package Telegram artifact creation time is outside the declared producer run attempt." >&2
-            exit 1
+          if [[ "$ARTIFACT_RUN_ID" == "$GITHUB_RUN_ID" ]]; then
+            jq -e '.status == "in_progress" and .conclusion == null' \
+              <<< "$attempt_json" >/dev/null || {
+              echo "Current-run Package Telegram artifact is not from the active workflow attempt." >&2
+              exit 1
+            }
+            if (( artifact_created_at <= attempt_started_at )); then
+              echo "Package Telegram artifact predates the active producer run attempt." >&2
+              exit 1
+            fi
+          else
+            jq -e '.status == "completed" and .conclusion == "success"' \
+              <<< "$attempt_json" >/dev/null || {
+              echo "Completed Package Telegram artifact producer run attempt was not successful." >&2
+              exit 1
+            }
+            attempt_completed_at="$(jq -er '.updated_at | fromdateiso8601' <<< "$attempt_json")"
+            if (( artifact_created_at <= attempt_started_at || artifact_created_at > attempt_completed_at )); then
+              echo "Package Telegram artifact creation time is outside the declared producer run attempt." >&2
+              exit 1
+            fi
           fi
 
       - name: Download package-under-test artifact

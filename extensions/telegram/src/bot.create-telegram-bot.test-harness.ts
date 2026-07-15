@@ -379,6 +379,7 @@ type RichMessageParams = {
   chat_id?: string | number;
   message_id?: number;
   rich_message?: {
+    blocks?: Array<{ type?: string; text?: unknown }>;
     markdown?: string;
     html?: string;
   };
@@ -386,7 +387,22 @@ type RichMessageParams = {
 };
 
 function getRichMessageText(params: RichMessageParams): string {
-  return params.rich_message?.markdown ?? params.rich_message?.html ?? "";
+  const rich = params.rich_message;
+  if (!rich) {
+    return "";
+  }
+  if (rich.blocks) {
+    // Test harness only needs a readable plain-ish projection for assertions.
+    return rich.blocks
+      .map((block) => {
+        if (typeof block.text === "string") {
+          return block.text;
+        }
+        return JSON.stringify(block.text ?? "");
+      })
+      .join("\n");
+  }
+  return rich.markdown ?? rich.html ?? "";
 }
 
 function toLegacyMessageParams(params: RichMessageParams): Record<string, unknown> {

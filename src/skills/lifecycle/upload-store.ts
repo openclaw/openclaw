@@ -361,7 +361,7 @@ async function readCommittedRecord(
   return record;
 }
 
-export function createSkillUploadStore(options?: {
+function createSkillUploadStore(options?: {
   rootDir?: string;
   now?: () => number;
   ttlMs?: number;
@@ -608,3 +608,9 @@ export function createSkillUploadStore(options?: {
 }
 
 export const defaultSkillUploadStore = createSkillUploadStore();
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.skillUploadStoreTestApi")] = {
+    createSkillUploadStore,
+  };
+}

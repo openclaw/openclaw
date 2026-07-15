@@ -2641,13 +2641,23 @@ describe("ci workflow guards", () => {
     expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
-    expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
-    expect(runStep.run).toContain("env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON");
-    expect(runStep.run).toContain('["exec", "node", "scripts/test-projects.mjs", target]');
-    expect(runStep.run).toContain('if (plan.env && typeof plan.env === "object"');
-    expect(runStep.run).toContain("childEnv[key] = value");
+    expect(runStep.env.JOB_CONTEXT_JSON).toBe("${{ toJSON(job) }}");
+    // Shard execution policy lives in the unit-tested wrapper script. Frozen
+    // release targets load that wrapper from the exact trusted workflow SHA.
+    for (const expected of [
+      'runner="scripts/ci-run-node-test-shard.mjs"',
+      'if [[ ! -f "$runner" ]]',
+      "job_workflow_repository=$(jq -r '.workflow_repository // empty' <<<\"$JOB_CONTEXT_JSON\")",
+      "job_workflow_sha=$(jq -r '.workflow_sha // empty' <<<\"$JOB_CONTEXT_JSON\")",
+      'git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"',
+      'git show "${job_workflow_sha}:${file}" > "${harness_root}/${file}"',
+      'node "$runner"',
+    ]) {
+      expect(runStep.run).toContain(expected);
+    }
+    expect(existsSync("scripts/ci-run-node-test-shard.mjs")).toBe(true);
   });
 
   it("keeps the CI timing summary parked for timing optimization work", () => {

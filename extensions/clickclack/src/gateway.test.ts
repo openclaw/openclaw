@@ -472,6 +472,37 @@ describe("ClickClack gateway", () => {
     await run;
   });
 
+  it("cancels the reconnect delay when the gateway aborts", async () => {
+    vi.useFakeTimers();
+    try {
+      const firstSocket = new FakeSocket();
+      const secondSocket = new FakeSocket();
+      mocks.client.websocket.mockReturnValueOnce(firstSocket).mockReturnValueOnce(secondSocket);
+      const abort = new AbortController();
+      const ctx = createGatewayContext(abort.signal);
+      const run = startClickClackGatewayAccount(ctx);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mocks.client.websocket).toHaveBeenCalledTimes(1);
+
+      firstSocket.emit("close");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(1);
+
+      abort.abort();
+      await run;
+
+      expect(vi.getTimerCount()).toBe(0);
+      expect(mocks.client.websocket).toHaveBeenCalledTimes(1);
+      expect(ctx.setStatus).toHaveBeenLastCalledWith({
+        accountId: "default",
+        running: false,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not log reconnect warnings when abort closes a connecting websocket", async () => {
     const socket = new FakeSocket();
     socket.emitErrorOnClose = true;
@@ -542,6 +573,7 @@ describe("ClickClack gateway", () => {
       message: 'ClickClack ws message failed: {"code":"ECONNRESET","retryable":true}',
       cause: rejection,
     });
+    expect(socket.close).toHaveBeenCalledOnce();
     expect(ctx.setStatus).toHaveBeenLastCalledWith({
       accountId: "default",
       running: false,

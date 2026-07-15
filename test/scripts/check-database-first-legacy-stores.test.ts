@@ -81,7 +81,10 @@ describe("check-database-first-legacy-stores", () => {
   });
 
   it("ignores deeply nested type-only syntax", () => {
-    const nestedType = Array.from({ length: 600 }).reduce((type) => `Readonly<${type}>`, "string");
+    const nestedType = Array.from({ length: 600 }).reduce<string>(
+      (type) => `Readonly<${type}>`,
+      "string",
+    );
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
         type DeepRuntimeSchema = ${nestedType};
@@ -183,6 +186,49 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to the retired commitments JSON store", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "commitments", "commitments.json"), "{}\\n");
+      `,
+      "src/commitments/file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to retired managed-image record JSON", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "media", "outgoing", "records", \`\${id}.json\`), "{}\n");
+      `,
+      "src/gateway/managed-image-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to retired system-agent rescue approval stores", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "openclaw", "rescue-pending", \`\${key}.json\`), "{}\\n");
+        await fs.writeFile(path.join(stateDir, "crestodian", "rescue-pending", "old.json"), "{}\\n");
+      `,
+      "src/system-agent/rescue-writer.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 5 },
+    ]);
   });
 
   it("flags legacy paths with dynamic agent id segments", () => {

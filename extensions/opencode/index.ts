@@ -2,8 +2,8 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
+  buildProviderReplayFamilyHooks,
   matchesExactOrPrefix,
-  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -149,7 +149,7 @@ export default definePluginEntry({
         },
       },
       augmentModelCatalog: () => listOpencodeZenModelCatalogEntries(),
-      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
       resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
     });

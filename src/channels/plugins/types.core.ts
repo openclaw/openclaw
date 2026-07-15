@@ -139,6 +139,7 @@ export type ChannelSetupInput = {
   groupChannels?: string[];
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
+  workspace?: string;
 };
 
 export type ChannelStatusIssue = {
@@ -678,7 +679,7 @@ export type ChannelAgentPromptAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[] | undefined;
-  inboundFormattingHints?: (params: { accountId?: string | null }) =>
+  inboundFormattingHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
         text_markup: string;
         rules: string[];

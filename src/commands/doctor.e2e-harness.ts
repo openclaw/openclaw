@@ -280,6 +280,18 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/tui/last-session.json",
       hasLegacy: false,
     },
+    commitments: {
+      sourcePath: "/tmp/state/commitments/commitments.json",
+      hasLegacy: false,
+    },
+    managedOutgoingImages: {
+      sourceDir: "/tmp/state/media/outgoing/records",
+      hasLegacy: false,
+    },
+    rescuePending: {
+      sourcePaths: ["/tmp/state/crestodian/rescue-pending", "/tmp/state/openclaw/rescue-pending"],
+      hasLegacy: false,
+    },
     channelPairing: {
       sourceDir: "/tmp/oauth",
       files: [],

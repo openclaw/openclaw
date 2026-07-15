@@ -4149,6 +4149,53 @@ class AutoreviewHardeningTests(unittest.TestCase):
             ):
                 self.helper["safe_temp_root"](repo)
 
+    @unittest.skipIf(os.name == "nt", "POSIX Testbox temp-root behavior")
+    def test_testbox_parallel_test_temp_root_stays_within_socket_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            long_temp = root / ("macos-temp-root-" + "x" * 96)
+            long_temp.mkdir()
+
+            with mock.patch.object(
+                tempfile,
+                "gettempdir",
+                return_value=str(long_temp),
+            ), mock.patch.dict(
+                os.environ,
+                {"OPENCLAW_TESTBOX": "1"},
+            ):
+                selected = self.helper["parallel_test_temp_root"](repo)
+
+            self.assertEqual(selected, Path("/tmp").resolve())
+            socket_path = (
+                selected
+                / ("autoreview-test-home-" + "x" * 8)
+                / ".blacksmith"
+                / "c"
+                / "6d146d2f25180c1d.sock"
+            )
+            self.assertLess(len(os.fsencode(socket_path)), 104)
+
+    def test_parallel_test_temp_root_keeps_configured_root_without_testbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            configured_temp = root / "configured-temp"
+            configured_temp.mkdir()
+
+            with mock.patch.object(
+                tempfile,
+                "gettempdir",
+                return_value=str(configured_temp),
+            ), mock.patch.dict(
+                os.environ,
+                {"OPENCLAW_TESTBOX": "0"},
+            ):
+                selected = self.helper["parallel_test_temp_root"](repo)
+
+            self.assertEqual(selected, configured_temp.resolve())
+
     def test_claude_fable_alias_requires_fable_safe_mode_version(self) -> None:
         args = argparse.Namespace(
             claude_bin="claude",
