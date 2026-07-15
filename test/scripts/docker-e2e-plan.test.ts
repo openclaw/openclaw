@@ -817,6 +817,56 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
 
     expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toEqual(["published-upgrade-survivor"]);
+  });
+
+  it("omits baseline-only survivor lanes when the target lacks the implicit base scenario", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-no-base-upgrade-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(assertionsFile, 'const SCENARIOS = new Set(["unrelated"]);\n');
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.6.11",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toEqual(["published-upgrade-survivor"]);
+  });
+
+  it("reports an unsupported survivor lane beside runnable selected lanes", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-mixed-upgrade-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(assertionsFile, 'const SCENARIOS = new Set(["unrelated"]);\n');
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor", "plugin-binding-command-escape"],
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual(["plugin-binding-command-escape"]);
+    expect(plan.omittedUnsupportedLanes).toEqual(["published-upgrade-survivor"]);
+  });
+
+  it("reports an explicitly selected expanded survivor lane as unsupported", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-expanded-upgrade-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(assertionsFile, 'const SCENARIOS = new Set(["unrelated"]);\n');
+
+    const selectedLane = "published-upgrade-survivor-2026.6.11";
+    const plan = planFor({
+      selectedLaneNames: [selectedLane],
+      upgradeSurvivorBaselines: "2026.6.11",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toEqual([selectedLane]);
   });
 
   it("omits unsupported scenario-only survivor lanes without explicit baselines", () => {
