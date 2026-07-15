@@ -157,8 +157,12 @@ export async function runDoctorRepairSequence(params: {
       maybeRepairStalePluginConfig(state.candidate, env, {
         preservePluginIds: failedPluginIds,
         // A host-version-bound runtime can be absent between core swap and package
-        // convergence. Preserve only allowlist intent; other stale surfaces still clean up.
-        surfacePreservePluginIds: { allow: VERSION_BOUND_RUNTIME_PLUGIN_IDS },
+        // convergence. Preserve its allow, deny, and explicit enable/disable policy.
+        surfacePreservePluginIds: {
+          allow: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+          deny: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+          entries: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+        },
       }),
     );
   }

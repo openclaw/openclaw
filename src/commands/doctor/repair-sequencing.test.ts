@@ -983,10 +983,17 @@ describe("doctor repair sequencing", () => {
       (
         cfg: OpenClawConfig,
         _env: NodeJS.ProcessEnv | undefined,
-        params: { preservePluginIds?: string[]; surfacePreservePluginIds?: { allow?: string[] } },
+        params: {
+          preservePluginIds?: string[];
+          surfacePreservePluginIds?: { allow?: string[]; deny?: string[]; entries?: string[] };
+        },
       ) => {
         expect(params.preservePluginIds).toEqual(["brave"]);
-        expect(params.surfacePreservePluginIds).toEqual({ allow: new Set(["codex"]) });
+        expect(params.surfacePreservePluginIds).toEqual({
+          allow: new Set(["codex"]),
+          deny: new Set(["codex"]),
+          entries: new Set(["codex"]),
+        });
         return {
           config: {
             ...cfg,
@@ -1079,10 +1086,17 @@ describe("doctor repair sequencing", () => {
       (
         cfg: OpenClawConfig,
         _env: NodeJS.ProcessEnv | undefined,
-        params: { preservePluginIds?: string[]; surfacePreservePluginIds?: { allow?: string[] } },
+        params: {
+          preservePluginIds?: string[];
+          surfacePreservePluginIds?: { allow?: string[]; deny?: string[]; entries?: string[] };
+        },
       ) => {
         expect(params.preservePluginIds).toEqual(["whatsapp"]);
-        expect(params.surfacePreservePluginIds).toEqual({ allow: new Set(["codex"]) });
+        expect(params.surfacePreservePluginIds).toEqual({
+          allow: new Set(["codex"]),
+          deny: new Set(["codex"]),
+          entries: new Set(["codex"]),
+        });
         return {
           config: cfg,
           changes: [],

@@ -157,41 +157,62 @@ describe("doctor stale plugin config helpers", () => {
     expect(result.config.plugins?.allow).toEqual([]);
   });
 
-  it("preserves codex in allowlist when surfacePreservePluginIds.allow includes codex", () => {
+  it("preserves codex in policy surfaces while the version-bound plugin is absent", () => {
     const result = maybeRepairStalePluginConfig(
       {
         plugins: {
           allow: ["codex", "discord"],
           deny: ["codex"],
+          entries: {
+            codex: { enabled: false },
+          },
         },
       } as OpenClawConfig,
       undefined,
-      { surfacePreservePluginIds: { allow: ["codex"] } },
+      {
+        surfacePreservePluginIds: {
+          allow: ["codex"],
+          deny: ["codex"],
+          entries: ["codex"],
+        },
+      },
     );
 
-    // codex is preserved in allow (discord stays as known manifest plugin),
-    // but still removed from deny
     expect(result.config.plugins?.allow).toEqual(["codex", "discord"]);
-    expect(result.changes).toEqual(["- plugins.deny: removed 1 stale plugin id (codex)"]);
+    expect(result.config.plugins?.deny).toEqual(["codex"]);
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(false);
+    expect(result.changes).toEqual([]);
   });
 
-  it("does not preserve codex in non-allow surfaces when surfacePreservePluginIds.allow includes codex", () => {
+  it("does not preserve codex outside policy surfaces", () => {
     const result = maybeRepairStalePluginConfig(
       {
         plugins: {
           allow: ["codex"],
           entries: {
-            codex: { enabled: true },
+            codex: { enabled: false },
+          },
+          slots: {
+            memory: "codex",
           },
         },
       } as OpenClawConfig,
       undefined,
-      { surfacePreservePluginIds: { allow: ["codex"] } },
+      {
+        surfacePreservePluginIds: {
+          allow: ["codex"],
+          deny: ["codex"],
+          entries: ["codex"],
+        },
+      },
     );
 
     expect(result.config.plugins?.allow).toEqual(["codex"]);
-    expect(result.config.plugins?.entries?.codex).toBeUndefined();
-    expect(result.changes).toEqual(["- plugins.entries: removed 1 stale plugin entry (codex)"]);
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(false);
+    expect(result.config.plugins?.slots?.memory).toBe("memory-core");
+    expect(result.changes).toEqual([
+      "- plugins.slots: reset 1 stale plugin slot (memory: codex -> memory-core)",
+    ]);
   });
 
   it("does not report slot defaults or none as stale plugin refs", () => {
