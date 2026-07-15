@@ -1,6 +1,5 @@
 // ClickClack tests cover guided setup prompts and nonfatal live validation.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
   createPluginSetupWizardConfigure,
@@ -10,6 +9,7 @@ import {
   runSetupWizardFinalize,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
   me: vi.fn(),
@@ -31,6 +31,8 @@ vi.mock("./resolve.js", () => ({
 import { clickClackSetupPlugin } from "./channel.setup.js";
 import { clickClackSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const configuredAccount = {
   channels: {
@@ -103,31 +105,27 @@ describe("ClickClack setup wizard", () => {
       envValue: "ccb_env",
     });
 
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "clickclack-setup-token-"));
+    const tempDir = tempDirs.make("clickclack-setup-token-");
     const tokenFile = path.join(tempDir, "token");
     fs.writeFileSync(tokenFile, "ccb_file\n", "utf8");
-    try {
-      expect(
-        credential.inspect({
-          cfg: {
-            channels: {
-              clickclack: {
-                baseUrl: "https://clickclack.example",
-                tokenFile,
-                workspace: "default",
-              },
+    expect(
+      credential.inspect({
+        cfg: {
+          channels: {
+            clickclack: {
+              baseUrl: "https://clickclack.example",
+              tokenFile,
+              workspace: "default",
             },
-          } as CoreConfig,
-          accountId: "default",
-        }),
-      ).toMatchObject({
-        accountConfigured: true,
-        hasConfiguredValue: true,
-        resolvedValue: "ccb_file",
-      });
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+          },
+        } as CoreConfig,
+        accountId: "default",
+      }),
+    ).toMatchObject({
+      accountConfigured: true,
+      hasConfiguredValue: true,
+      resolvedValue: "ccb_file",
+    });
   });
 
   it("switches the default account to env auth before URL and workspace prompts", async () => {
