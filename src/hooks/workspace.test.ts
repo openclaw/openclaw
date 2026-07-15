@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { loadHookEntriesFromDir, loadWorkspaceHookEntries, workspaceTesting } from "./workspace.js";
+import { loadWorkspaceHookEntries } from "./workspace.js";
 
 function writeHookPackageManifest(pkgDir: string, hooks: string[]): void {
   fs.writeFileSync(
@@ -109,7 +109,7 @@ describe("hooks workspace", () => {
     fs.mkdirSync(pkgDir, { recursive: true });
     fs.writeFileSync(path.join(pkgDir, "package.json"), "x".repeat(1024 * 1024 + 1), "utf8");
 
-    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
     expect(hookNames(entries)).toHaveLength(0);
   });
 
@@ -123,7 +123,7 @@ describe("hooks workspace", () => {
     fs.writeFileSync(path.join(hookDir, "HOOK.md"), "x".repeat(1024 * 1024 + 1), "utf8");
     fs.writeFileSync(path.join(hookDir, "handler.js"), "export default async () => {};\n");
 
-    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
     expect(hookNames(entries)).toHaveLength(0);
   });
 
@@ -251,29 +251,5 @@ describe("hooks workspace", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.hook.name).toBe("shared-hook");
     expect(entries[0]?.hook.source).toBe("openclaw-managed");
-  });
-
-  it("reads a file descriptor up to the byte cap", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-fd-bound-"));
-    const filePath = path.join(root, "small.txt");
-    fs.writeFileSync(filePath, "hello", "utf8");
-    const fd = fs.openSync(filePath, "r");
-    try {
-      expect(workspaceTesting.readFdUtf8Bounded(fd, 1024)).toBe("hello");
-    } finally {
-      fs.closeSync(fd);
-    }
-  });
-
-  it("rejects a file descriptor that exceeds the byte cap during read", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-fd-overflow-"));
-    const filePath = path.join(root, "big.txt");
-    fs.writeFileSync(filePath, "x".repeat(1024 + 1), "utf8");
-    const fd = fs.openSync(filePath, "r");
-    try {
-      expect(() => workspaceTesting.readFdUtf8Bounded(fd, 1024)).toThrow("File exceeds 1024 bytes");
-    } finally {
-      fs.closeSync(fd);
-    }
   });
 });

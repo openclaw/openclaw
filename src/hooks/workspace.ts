@@ -203,12 +203,7 @@ function loadHooksFromDir(params: {
   return hooks;
 }
 
-/** Test-only hooks for exercising internal bounded-read helpers. */
-export const workspaceTesting = {
-  readFdUtf8Bounded,
-};
-
-export function loadHookEntriesFromDir(params: {
+function loadHookEntriesFromDir(params: {
   dir: string;
   source: HookSource;
   pluginId?: string;
