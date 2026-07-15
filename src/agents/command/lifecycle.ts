@@ -177,5 +177,3 @@ export function createAgentCommandLifecycle(params: {
     },
   };
 }
-
-export type AgentCommandLifecycle = ReturnType<typeof createAgentCommandLifecycle>;

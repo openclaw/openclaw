@@ -18,7 +18,7 @@ import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { persistSessionEntry as persistSessionEntryBase } from "./attempt-execution.shared.js";
 import type { AgentCommandOpts } from "./types.js";
 
-export type PersistSessionEntryParams = {
+type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath: string;

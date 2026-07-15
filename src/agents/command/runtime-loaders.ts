@@ -3,21 +3,20 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import type { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 
-export type AttemptExecutionRuntime = typeof import("./attempt-execution.runtime.js");
+type AttemptExecutionRuntime = typeof import("./attempt-execution.runtime.js");
 export type AgentAttemptResult = Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
-export type AcpManagerRuntime = typeof import("../../acp/control-plane/manager.js");
-export type AcpPolicyRuntime = typeof import("../../acp/policy.js");
-export type AcpRuntimeErrorsRuntime = typeof import("../../acp/runtime/errors.js");
-export type AcpSessionIdentifiersRuntime =
-  typeof import("@openclaw/acp-core/runtime/session-identifiers");
-export type DeliveryRuntime = typeof import("./delivery.runtime.js");
-export type SessionStoreRuntime = typeof import("./session-store.runtime.js");
-export type CliCompactionRuntime = typeof import("./cli-compaction.js");
-export type TranscriptResolveRuntime =
+type AcpManagerRuntime = typeof import("../../acp/control-plane/manager.js");
+type AcpPolicyRuntime = typeof import("../../acp/policy.js");
+type AcpRuntimeErrorsRuntime = typeof import("../../acp/runtime/errors.js");
+type AcpSessionIdentifiersRuntime = typeof import("@openclaw/acp-core/runtime/session-identifiers");
+type DeliveryRuntime = typeof import("./delivery.runtime.js");
+type SessionStoreRuntime = typeof import("./session-store.runtime.js");
+type CliCompactionRuntime = typeof import("./cli-compaction.js");
+type TranscriptResolveRuntime =
   typeof import("../../config/sessions/transcript-resolve.runtime.js");
-export type CliDepsRuntime = typeof import("../../cli/deps.js");
-export type ExecDefaultsRuntime = typeof import("../exec-defaults.js");
-export type SkillsRuntime = {
+type CliDepsRuntime = typeof import("../../cli/deps.js");
+type ExecDefaultsRuntime = typeof import("../exec-defaults.js");
+type SkillsRuntime = {
   getRemoteSkillEligibility: typeof getRemoteSkillEligibility;
   resolveReusableWorkspaceSkillSnapshot: typeof resolveReusableWorkspaceSkillSnapshot;
 };
