@@ -1,6 +1,75 @@
 // Qa Lab tests cover slack live plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing as testing } from "./slack-live.runtime.js";
+import { resolveSlackApprovalCheckpointConfig } from "./slack-live.approval-checkpoint.js";
+import {
+  matchesSlackApprovalPromptText,
+  matchesSlackApprovalResolvedUpdate,
+  resolveApprovalDecision,
+} from "./slack-live.approvals.js";
+import {
+  assertCodexApprovalTranscriptSucceeded,
+  buildCodexApprovalInstruction,
+  findPendingCodexPluginApprovalRecord,
+  quiesceCodexApprovalAgentRun,
+  readAcceptedAgentRunId,
+  resolveCodexFileApprovalTargetPath,
+  waitForSlackReaction,
+} from "./slack-live.codex-approval.js";
+import {
+  buildSlackQaConfig,
+  parseSlackQaCredentialPayload,
+  resolveSlackQaRuntimeEnv,
+} from "./slack-live.config.js";
+import {
+  assertSlackCodexApprovalModelSupported,
+  resolveSlackQaSutAccountId,
+} from "./slack-live.contracts.js";
+import { buildSlackInvalidBlocksTableProbe } from "./slack-live.invalid-blocks.js";
+import {
+  isSlackChannelReadyForQa,
+  observeSlackScenarioMessages,
+  resolveSlackChannelReadySince,
+  resolveSlackQaReadyTimeoutMs,
+  waitForSlackNoReply,
+} from "./slack-live.message-observations.js";
+import {
+  buildSlackApprovalCheckpointMessage,
+  collectSlackActionValues,
+  extractSlackNativeApprovalId,
+  runSlackTableInvalidBlocksFallbackScenario,
+} from "./slack-live.observations.js";
+import { findScenario, SLACK_QA_STANDARD_SCENARIO_IDS } from "./slack-live.scenarios.js";
+
+const testing = {
+  SLACK_QA_STANDARD_SCENARIO_IDS,
+  assertCodexApprovalTranscriptSucceeded,
+  assertSlackCodexApprovalModelSupported,
+  buildCodexApprovalInstruction,
+  buildSlackApprovalCheckpointMessage,
+  buildSlackInvalidBlocksTableProbe,
+  buildSlackQaConfig,
+  collectSlackActionValues,
+  extractSlackNativeApprovalId,
+  findPendingCodexPluginApprovalRecord,
+  findScenario,
+  isSlackChannelReadyForQa,
+  matchesSlackApprovalPromptText,
+  matchesSlackApprovalResolvedUpdate,
+  observeSlackScenarioMessages,
+  parseSlackQaCredentialPayload,
+  quiesceCodexApprovalAgentRun,
+  readAcceptedAgentRunId,
+  resolveApprovalDecision,
+  resolveCodexFileApprovalTargetPath,
+  resolveSlackApprovalCheckpointConfig,
+  resolveSlackChannelReadySince,
+  resolveSlackQaReadyTimeoutMs,
+  resolveSlackQaRuntimeEnv,
+  resolveSlackQaSutAccountId,
+  runSlackTableInvalidBlocksFallbackScenario,
+  waitForSlackNoReply,
+  waitForSlackReaction,
+};
 
 function renderExpectedSlackChartAccessibleText(summaryText: string) {
   return [

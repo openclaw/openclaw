@@ -10,7 +10,66 @@ import type {
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
 import { describe, expect, it, vi } from "vitest";
-import { __testing as testing } from "./whatsapp-live.runtime.js";
+import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
+import {
+  formatWhatsAppApprovalWaitDiagnostics,
+  matchesWhatsAppApprovalResolvedText,
+  runWhatsAppApprovalScenario,
+} from "./whatsapp-live.approvals.js";
+import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whatsapp-live.config.js";
+import {
+  WHATSAPP_QA_SCENARIO_POSTURES,
+  resolveWhatsAppQaMessageTargets,
+} from "./whatsapp-live.contracts.js";
+import {
+  callWhatsAppGatewayMessageAction,
+  callWhatsAppGatewayPoll,
+  callWhatsAppGatewaySend,
+  dedupeWhatsAppMessagesById,
+  findUnexpectedWhatsAppNoReplyMessage,
+  formatWhatsAppBatchMessageDiagnostics,
+  formatWhatsAppScenarioWaitDiagnostics,
+  isTransientWhatsAppQaDriverError,
+  runWhatsAppStructuredInboundChecks,
+  waitForScenarioObservedMessage,
+} from "./whatsapp-live.operations.js";
+import {
+  buildWhatsAppQaMockAuthAgentIds,
+  findScenarios,
+  WHATSAPP_QA_STANDARD_SCENARIO_IDS,
+} from "./whatsapp-live.scenarios.js";
+import {
+  assertSafeArchiveEntries,
+  isWhatsAppChannelReady,
+  unpackWhatsAppAuthArchive,
+} from "./whatsapp-live.setup.js";
+
+const testing = {
+  WHATSAPP_QA_SCENARIO_POSTURES,
+  WHATSAPP_QA_STANDARD_SCENARIO_IDS,
+  assertSafeArchiveEntries,
+  buildWhatsAppQaConfig,
+  buildWhatsAppQaMockAuthAgentIds,
+  callWhatsAppGatewayMessageAction,
+  callWhatsAppGatewayPoll,
+  callWhatsAppGatewaySend,
+  dedupeWhatsAppMessagesById,
+  findScenarios,
+  findUnexpectedWhatsAppNoReplyMessage,
+  fingerprintWhatsAppCredentialId: fingerprintQaCredentialId,
+  formatWhatsAppApprovalWaitDiagnostics,
+  formatWhatsAppBatchMessageDiagnostics,
+  formatWhatsAppScenarioWaitDiagnostics,
+  isTransientWhatsAppQaDriverError,
+  isWhatsAppChannelReady,
+  matchesWhatsAppApprovalResolvedText,
+  parseWhatsAppQaCredentialPayload,
+  resolveWhatsAppQaMessageTargets,
+  runWhatsAppApprovalScenario,
+  runWhatsAppStructuredInboundChecks,
+  unpackWhatsAppAuthArchive,
+  waitForScenarioObservedMessage,
+};
 
 const execFileAsync = promisify(execFile);
 
@@ -163,7 +222,6 @@ const DIRECT_GATEWAY_SCENARIO_IDS = [
   "whatsapp-reply-context-isolation",
   "whatsapp-reply-delivery-shape",
 ] as const satisfies readonly WhatsAppScenarioIdFilter[];
-const DIRECT_GATEWAY_LABEL_RE = /\b(?:direct Gateway|Gateway)\b/u;
 const NATIVE_APPROVAL_SCENARIO_IDS = [
   "whatsapp-approval-exec-deny-native",
   "whatsapp-approval-exec-native",

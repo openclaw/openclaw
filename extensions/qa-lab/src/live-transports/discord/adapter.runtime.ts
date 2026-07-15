@@ -59,7 +59,10 @@ export async function createDiscordQaTransportAdapter(
   let pollingError: Error | undefined;
   let afterSnowflake = discordSnowflakeForTimestamp(Date.now());
   const polling = (async () => {
-    while (!stopped) {
+    for (;;) {
+      if (stopped) {
+        return;
+      }
       try {
         const observed: Parameters<
           typeof discordQaScenarioSupport.testing.pollChannelMessages
@@ -87,7 +90,9 @@ export async function createDiscordQaTransportAdapter(
           throw error;
         }
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 250);
+      });
     }
   })().catch((error: unknown) => {
     if (!stopped) {
