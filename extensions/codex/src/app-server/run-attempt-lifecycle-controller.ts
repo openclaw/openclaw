@@ -25,6 +25,33 @@ import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 
+export function buildCodexLifecycleTerminalMeta(input: {
+  aborted: boolean;
+  timedOut: boolean;
+  yielded?: boolean;
+  abortStopReason?: string;
+}) {
+  if (input.timedOut || input.abortStopReason === "timeout") {
+    return {
+      aborted: true,
+      status: "timed_out",
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    } as const;
+  }
+  if (input.yielded && !input.aborted) {
+    return {
+      yielded: true,
+      livenessState: "paused",
+      stopReason: "end_turn",
+    } as const;
+  }
+  return input.aborted
+    ? ({ aborted: true, status: "cancelled", stopReason: "stop" } as const)
+    : undefined;
+}
+
 export function createCodexAttemptLifecycleController(
   resources: CodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
@@ -146,22 +173,18 @@ export function createCodexAttemptLifecycleController(
     });
     state.lifecycleTerminalEmitted = true;
   };
-  const buildLifecycleTerminalMeta = (input: { aborted: boolean; timedOut: boolean }) => {
+  const buildLifecycleTerminalMeta = (input: {
+    aborted: boolean;
+    timedOut: boolean;
+    yielded?: boolean;
+  }) => {
     const abortFields = input.aborted
       ? resolveAgentRunAbortLifecycleFields(runAbortController.signal)
       : undefined;
-    if (input.timedOut || abortFields?.stopReason === "timeout") {
-      return {
-        aborted: true,
-        status: "timed_out",
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      } as const;
-    }
-    return input.aborted
-      ? ({ aborted: true, status: "cancelled", stopReason: "stop" } as const)
-      : undefined;
+    return buildCodexLifecycleTerminalMeta({
+      ...input,
+      abortStopReason: abortFields?.stopReason,
+    });
   };
   const executionPhaseKeys = new Set<string>();
   const emitExecutionPhaseOnce = (
