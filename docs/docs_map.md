@@ -311,6 +311,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/clickclack
 - Headings:
   - H2: Quick setup
+  - H3: Alternative: env-based token
+  - H3: JSON5 reference
   - H3: Account config keys
   - H2: Multiple bots
   - H2: Reply modes
