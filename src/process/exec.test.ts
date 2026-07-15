@@ -194,7 +194,7 @@ describe("runCommandWithTimeout", () => {
     async () => {
       const result = await runCommandWithTimeout(
         [process.execPath, "-e", "setInterval(() => {}, 1_000)"],
-        { timeoutMs: 20, killSignal: "SIGKILL" },
+        { timeoutMs: 20, killSignal: "SIGKILL", killProcessTree: false },
       );
 
       expect(result).toMatchObject({
