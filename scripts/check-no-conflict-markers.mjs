@@ -78,28 +78,36 @@ export function findConflictMarkersInFiles(filePaths, readFile = fs.readFileSync
 
 /**
  * Parses output from `git grep -n -z -o -I -E` into violation records.
- * With -z, git grep terminates each output line with a newline and separates
- * the path from the line number (and the line number from the match text)
- * with NUL bytes. The record format for each line is:
+ * The record format is:
  *   path\0line-number\0match-text\n
+ * The path must be read from its NUL delimiter before any newline-based
+ * record splitting: -z reports paths verbatim, and git allows newlines in
+ * tracked filenames, so splitting the output on newlines first would cut a
+ * newline-containing path across two records and silently mangle it.
  * Keeping parsing to exact grep match records avoids reading candidate files
  * whole and keeps memory bounded regardless of file size.
  */
 function parseGitGrepConflictMarkerOutput(stdout) {
   const byPath = new Map();
-  const outputLines = stdout.toString("utf8").split("\n");
+  const output = stdout.toString("utf8");
+  let cursor = 0;
 
-  for (const outputLine of outputLines) {
-    if (outputLine.length === 0) {
-      continue;
+  while (cursor < output.length) {
+    const pathEnd = output.indexOf("\0", cursor);
+    if (pathEnd === -1) {
+      break;
     }
-    const fields = outputLine.split("\0");
-    if (fields.length < 3) {
-      continue;
+    const lineNumberEnd = output.indexOf("\0", pathEnd + 1);
+    if (lineNumberEnd === -1) {
+      break;
     }
-    const relativePath = fields[0];
-    const lineNumber = Number(fields[1]);
-    if (!Number.isFinite(lineNumber) || lineNumber <= 0) {
+    // With -o the match text is a single-line match, so the record ends at
+    // the next newline after the line-number field.
+    const matchEnd = output.indexOf("\n", lineNumberEnd + 1);
+    const relativePath = output.slice(cursor, pathEnd);
+    const lineNumber = Number(output.slice(pathEnd + 1, lineNumberEnd));
+    cursor = matchEnd === -1 ? output.length : matchEnd + 1;
+    if (!relativePath || !Number.isFinite(lineNumber) || lineNumber <= 0) {
       continue;
     }
     const existing = byPath.get(relativePath);

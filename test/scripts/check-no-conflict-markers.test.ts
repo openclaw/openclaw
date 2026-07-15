@@ -153,6 +153,34 @@ describe("check-no-conflict-markers", () => {
     ]);
   });
 
+  it("reports tracked filenames containing newlines without mangling the path", () => {
+    const rootDir = createTempDir("openclaw-conflict-markers-");
+    git(rootDir, "init", "-q");
+    git(rootDir, "config", "user.email", "test@example.com");
+    git(rootDir, "config", "user.name", "Test User");
+
+    // git allows newlines in tracked filenames and git grep -z prints the
+    // path verbatim; the parser must read the NUL-delimited path before any
+    // newline-based record splitting or the path is silently truncated.
+    const newlineFile = "docs/weird\nname.md";
+    const newlinePath = path.join(rootDir, newlineFile);
+    fs.mkdirSync(path.dirname(newlinePath), { recursive: true });
+    fs.writeFileSync(
+      newlinePath,
+      "before\n<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> branch\nafter\n",
+    );
+    git(rootDir, "add", newlineFile);
+
+    const violations = findConflictMarkersInTrackedFiles(rootDir);
+
+    expect(violations).toEqual([
+      {
+        filePath: newlineFile,
+        lines: [2, 4, 6],
+      },
+    ]);
+  });
+
   it("detects markers in a file larger than the previous scan byte limit without reading it whole", () => {
     const rootDir = createTempDir("openclaw-conflict-markers-");
     git(rootDir, "init", "-q");
