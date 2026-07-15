@@ -134,7 +134,10 @@ export async function restartGatewayChannels(options: {
               return;
             }
             params.logChannels.info(`stopping ${channel} channel before suppressed hot reload`);
-            await params.stopChannel(channel, undefined, { manual: false });
+            await params.stopChannel(channel, undefined, {
+              manual: false,
+              restartPending: false,
+            });
           },
           onFailure: (channel, err) => {
             params.logChannels.error(

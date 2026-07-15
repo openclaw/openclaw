@@ -226,6 +226,13 @@ type ChannelManagerOptions = {
 
 type StopChannelOptions = {
   manual?: boolean;
+  /**
+   * Whether this stop should surface as pending restart/recovery in runtime state.
+   * Non-manual stops still defer task-owned auto-restart to the caller; this
+   * only controls whether health/recovery surfaces should treat the stopped
+   * account as awaiting a queued replacement start.
+   */
+  restartPending?: boolean;
 };
 
 type ChannelAccountStopOutcome = { status: "fulfilled" } | { status: "rejected"; error: unknown };
@@ -1063,6 +1070,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     optsLocal: StopChannelOptions = {},
   ) => {
     const manual = optsLocal.manual ?? true;
+    const markRestartPending = optsLocal.restartPending ?? !manual;
     const plugin = getChannelPlugin(channelId);
     const store = getStore(channelId);
     const lifecycleIds = new Set<string>([
@@ -1160,7 +1168,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           }
           if (!stoppedCleanly) {
             const stoppedPatch = {
-              restartPending: !manual,
+              restartPending: markRestartPending,
               lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
             };
             if (manual) {
@@ -1171,6 +1179,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               });
             } else {
               setStoppedRuntime(channelId, id, stoppedPatch);
+            }
+            if (!manual && markRestartPending) {
               restartDeferredToCaller.delete(rKey);
               recoveryStopTimedOut.add(rKey);
             }
@@ -1185,7 +1195,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             store.tasks.delete(id);
           }
           setStoppedRuntime(channelId, id, {
-            restartPending: !manual,
+            restartPending: markRestartPending,
             lastStopAt: Date.now(),
           });
           return outcome;
