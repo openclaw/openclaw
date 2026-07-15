@@ -1544,6 +1544,9 @@ function stabilizeChatItems(
       previousGroupByMessageKey.set(message.key, item);
     }
   }
+  const nextNaturalGroupKeys = new Set(
+    next.filter((item) => item.kind === "group").map((item) => item.key),
+  );
   const claimedGroupKeys = new Set<string>();
   const reconciled = next.map((item) => {
     if (item.kind !== "group") {
@@ -1581,6 +1584,9 @@ function stabilizeChatItems(
       }
     }
     if (!best) {
+      return item;
+    }
+    if (best.group.key !== item.key && nextNaturalGroupKeys.has(best.group.key)) {
       return item;
     }
     claimedGroupKeys.add(best.group.key);
@@ -1659,10 +1665,7 @@ function updateCachedLiveStream(
   if (item.key !== expectedKey || input.stream === null) {
     return false;
   }
-  const text = trimAccumulatedStreamPrefix(
-    sanitizeStreamText(input.stream),
-    accumulatedPrefix,
-  );
+  const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream), accumulatedPrefix);
   if (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip) {
     return false;
   }

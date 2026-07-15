@@ -407,6 +407,32 @@ describe("buildCachedChatItems row identity", () => {
     expect(appended.key).toBe(initial.key);
   });
 
+  it("does not reclaim a group key naturally owned by another reordered group", () => {
+    resetChatThreadState();
+    const first = {
+      __openclaw: { id: "first", seq: 1 },
+      role: "user",
+      senderLabel: "same",
+      content: "First",
+      timestamp: 1,
+    };
+    const second = {
+      __openclaw: { id: "second", seq: 2 },
+      role: "user",
+      senderLabel: "same",
+      content: "Second",
+      timestamp: 2,
+    };
+    expect(messageGroups({ messages: [first, second] })).toHaveLength(1);
+
+    first.senderLabel = "different";
+    first.timestamp = 3;
+    const regrouped = messageGroups({ messages: [first, second] });
+
+    expect(regrouped).toHaveLength(2);
+    expect(new Set(regrouped.map((group) => group.key)).size).toBe(regrouped.length);
+  });
+
   it("keeps a projected-sibling group stable after an unrelated prepend", () => {
     resetChatThreadState();
     const siblings = [
