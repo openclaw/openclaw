@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readBoundedCodexNativePatchFailureDiagnostic } from "./notification-correlation.js";
 import {
   readCodexAppServerBinding,
   testCodexAppServerBindingStore,
@@ -58,6 +59,209 @@ describe("Codex app-server startup binding", () => {
       }),
     );
   }
+
+  it("reads a correlated native patch failure from a bounded fake rollout", async () => {
+    const agentDir = path.join(tempDir, "agent");
+    const codexHome = path.join(tempDir, "codex-home");
+    const rolloutDir = path.join(codexHome, "sessions", "2026", "07", "15");
+    await fs.mkdir(rolloutDir, { recursive: true });
+    await fs.writeFile(
+      path.join(rolloutDir, "rollout-2026-07-15T00-00-00-thread-1.jsonl"),
+      `${JSON.stringify({
+        payload: {
+          type: "patch_apply_end",
+          turn_id: "turn-1",
+          call_id: "patch-1",
+          status: "failed",
+          success: false,
+          stderr: "cannot write /Users/private/source.ts",
+          stdout: "checked /workspace/src/source.ts",
+          changes: {
+            "src/source.ts": { type: "update" },
+            "/Users/private/secret.ts": { type: "add" },
+          },
+        },
+      })}\n`,
+    );
+
+    const diagnostic = await readBoundedCodexNativePatchFailureDiagnostic({
+      agentDir,
+      codexHome,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "patch-1",
+    });
+
+    expect(diagnostic).toMatchObject({
+      fileChangeItemId: "patch-1",
+      nativePatchApplyEndObserved: true,
+      nativePatchApplyEndStatus: "failed",
+      nativePatchApplyEndSuccess: false,
+      nativePatchApplyEndScanBounded: true,
+      nativePatchApplyEndStderrPreview: "cannot write <redacted-filechange-path>",
+      nativePatchApplyEndStdoutPreview: "checked /workspace/src/source.ts",
+      nativePatchApplyEndChanges: [
+        { path: "src/source.ts", kind: "update" },
+        { path: "<redacted-filechange-path>", kind: "add" },
+      ],
+    });
+    expect(JSON.stringify(diagnostic)).not.toContain("/Users/private");
+  });
+
+  it("stops native patch failure inspection at the configured line bound", async () => {
+    const agentDir = path.join(tempDir, "agent");
+    const codexHome = path.join(tempDir, "codex-home");
+    const rolloutDir = path.join(codexHome, "sessions");
+    await fs.mkdir(rolloutDir, { recursive: true });
+    await fs.writeFile(
+      path.join(rolloutDir, "rollout-thread-1.jsonl"),
+      [
+        JSON.stringify({
+          payload: {
+            type: "patch_apply_end",
+            turn_id: "turn-1",
+            call_id: "patch-1",
+            status: "failed",
+            stderr: "bounded failure",
+          },
+        }),
+        JSON.stringify({ payload: { type: "noise" } }),
+        JSON.stringify({ payload: { type: "newer_noise" } }),
+      ].join("\n"),
+    );
+
+    const diagnostic = await readBoundedCodexNativePatchFailureDiagnostic({
+      agentDir,
+      codexHome,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "patch-1",
+      limits: { maxLines: 1 },
+    });
+
+    expect(diagnostic).toMatchObject({
+      nativePatchApplyEndObserved: false,
+      nativePatchApplyEndDiagnosticFallback: "scan_line_limit",
+      nativePatchApplyEndScanBounded: true,
+    });
+  });
+
+  it("rejects a suffix-colliding rollout with matching turn and call ids", async () => {
+    const agentDir = path.join(tempDir, "agent");
+    const codexHome = path.join(tempDir, "codex-home");
+    const rolloutDir = path.join(codexHome, "sessions");
+    await fs.mkdir(rolloutDir, { recursive: true });
+    await fs.writeFile(
+      path.join(rolloutDir, "rollout-2026-07-15T00-00-00-other-thread-1.jsonl"),
+      `${JSON.stringify({
+        payload: {
+          type: "patch_apply_end",
+          turn_id: "turn-1",
+          call_id: "patch-1",
+          status: "failed",
+          stderr: "must not correlate",
+        },
+      })}\n`,
+    );
+
+    const diagnostic = await readBoundedCodexNativePatchFailureDiagnostic({
+      agentDir,
+      codexHome,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "patch-1",
+    });
+
+    expect(diagnostic).toMatchObject({
+      nativePatchApplyEndObserved: false,
+      nativePatchApplyEndDiagnosticFallback: "rollout_unavailable",
+    });
+    expect(JSON.stringify(diagnostic)).not.toContain("must not correlate");
+  });
+
+  it.each(["diff --git a/src/a.ts b/src/a.ts", "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -1 +1 @@"])(
+    "rejects unified-diff preview shape %s",
+    async (unsafePreview) => {
+      const agentDir = path.join(tempDir, "agent");
+      const codexHome = path.join(tempDir, "codex-home");
+      const rolloutDir = path.join(codexHome, "sessions");
+      await fs.mkdir(rolloutDir, { recursive: true });
+      await fs.writeFile(
+        path.join(rolloutDir, "rollout-thread-1.jsonl"),
+        `${JSON.stringify({
+          payload: {
+            type: "patch_apply_end",
+            turn_id: "turn-1",
+            call_id: "patch-1",
+            status: "failed",
+            stderr: unsafePreview,
+            stdout: unsafePreview,
+          },
+        })}\n`,
+      );
+
+      const diagnostic = await readBoundedCodexNativePatchFailureDiagnostic({
+        agentDir,
+        codexHome,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "patch-1",
+      });
+
+      expect(diagnostic).toMatchObject({
+        nativePatchApplyEndObserved: true,
+        nativePatchApplyEndDiagnosticFallback: "unsafe_stderr_redacted",
+      });
+      expect(diagnostic.nativePatchApplyEndStderrPreview).toBeUndefined();
+      expect(diagnostic.nativePatchApplyEndStdoutPreview).toBeUndefined();
+      expect(JSON.stringify(diagnostic)).not.toContain(unsafePreview);
+    },
+  );
+
+  it("redacts secret-bearing ids, status, relative paths, and change kinds", async () => {
+    const agentDir = path.join(tempDir, "agent");
+    const codexHome = path.join(tempDir, "codex-home");
+    const rolloutDir = path.join(codexHome, "sessions");
+    const unsafeTurnId = "turn-TOKEN=turn-secret";
+    const unsafeCallId = "patch-PASSWORD=call-secret";
+    await fs.mkdir(rolloutDir, { recursive: true });
+    await fs.writeFile(
+      path.join(rolloutDir, "rollout-thread-1.jsonl"),
+      `${JSON.stringify({
+        payload: {
+          type: "patch_apply_end",
+          turn_id: unsafeTurnId,
+          call_id: unsafeCallId,
+          status: "TOKEN=status-secret",
+          success: false,
+          changes: {
+            "src/TOKEN=path-secret.ts": { type: "PASSWORD=kind-secret" },
+          },
+        },
+      })}\n`,
+    );
+
+    const diagnostic = await readBoundedCodexNativePatchFailureDiagnostic({
+      agentDir,
+      codexHome,
+      threadId: "thread-1",
+      turnId: unsafeTurnId,
+      callId: unsafeCallId,
+    });
+
+    expect(diagnostic).toMatchObject({
+      fileChangeItemId: "<redacted-call-id>",
+      turnId: "<redacted-turn-id>",
+      nativePatchApplyEndObserved: true,
+      nativePatchApplyEndStatus: "<redacted-status>",
+      nativePatchApplyEndChanges: [
+        { path: "<redacted-filechange-path>", kind: "<redacted-change-kind>" },
+      ],
+    });
+    expect(JSON.stringify(diagnostic)).not.toMatch(
+      /turn-secret|call-secret|status-secret|path-secret|kind-secret/u,
+    );
+  });
 
   it("does not use a default byte limit when maxActiveTranscriptBytes is unset", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");

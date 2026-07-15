@@ -34,6 +34,10 @@ import {
 } from "./event-projector-values.js";
 import type { CodexNativePreToolUseFailure } from "./native-hook-relay.js";
 import {
+  createCodexNativePatchFailureDiagnosticEmitter,
+  type CodexNativePatchFailureDiagnosticReader,
+} from "./native-patch-diagnostic-emitter.js";
+import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
 } from "./notification-correlation.js";
@@ -77,6 +81,7 @@ type CodexAppServerEventProjectorOptions = {
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
   onContextCompacted?: () => void;
   upstreamUserText?: string;
+  readNativePatchFailureDiagnostic?: CodexNativePatchFailureDiagnosticReader;
 };
 
 export class CodexAppServerEventProjector {
@@ -87,6 +92,9 @@ export class CodexAppServerEventProjector {
   private readonly activeCompactionItemIds = new Set<string>();
   private readonly terminalPresentationClearedItemIds = new Set<string>();
   private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
+  private readonly nativePatchFailureDiagnosticEmitter: ReturnType<
+    typeof createCodexNativePatchFailureDiagnosticEmitter
+  >;
   private readonly generatedMediaProjection: CodexGeneratedMediaProjection;
   private readonly eventProjection: CodexEventProjection;
   private readonly nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector;
@@ -106,6 +114,14 @@ export class CodexAppServerEventProjector {
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
   ) {
+    this.nativePatchFailureDiagnosticEmitter = createCodexNativePatchFailureDiagnosticEmitter({
+      attempt: params,
+      threadId,
+      turnId,
+      trajectoryRecorder: options.trajectoryRecorder,
+      emitAgentEvent: (event) => this.emitAgentEvent(event),
+      readDiagnostic: options.readNativePatchFailureDiagnostic,
+    });
     this.nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
       params,
       threadId,
@@ -554,6 +570,7 @@ export class CodexAppServerEventProjector {
       stream: "codex_app_server.item",
       data: { phase: "completed", itemId, type: item?.type },
     });
+    await this.nativePatchFailureDiagnosticEmitter.handle(item);
   }
 
   private handleTokenUsage(params: JsonObject): void {
@@ -614,6 +631,7 @@ export class CodexAppServerEventProjector {
       this.toolTranscriptProjection.emitAfterToolCallObservation(item);
       this.toolProgressProjection.emitToolResultSummary(item);
       this.toolProgressProjection.emitToolResultOutput(item);
+      await this.nativePatchFailureDiagnosticEmitter.handle(item);
     }
     this.activeCompactionItemIds.clear();
     await this.reasoningProjection.maybeEndReasoning();

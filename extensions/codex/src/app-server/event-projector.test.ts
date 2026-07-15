@@ -2856,6 +2856,144 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolCall.input).toEqual({ changes: expectedChanges });
   });
 
+  it("does not inspect rollout diagnostics for a successful native file change", async () => {
+    const readNativePatchFailureDiagnostic = vi.fn();
+    const projector = await createProjector(undefined, { readNativePatchFailureDiagnostic });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "fileChange",
+          id: "patch-success",
+          changes: [{ path: "src/safe.ts", kind: { type: "update" } }],
+          status: "completed",
+        },
+      }),
+    );
+
+    expect(readNativePatchFailureDiagnostic).not.toHaveBeenCalled();
+  });
+
+  it("emits one bounded redacted diagnostic for a failed native file change", async () => {
+    const onAgentEvent = vi.fn();
+    const recordEvent = vi.fn();
+    const params = await createParams();
+    const diagnostic = {
+      schema: "openclaw.sandbox.write_diagnostic.v1" as const,
+      operation: "apply_patch" as const,
+      boundary: "codex_native_patch_apply_end_rollout" as const,
+      phase: "native_patch_apply_end_observation" as const,
+      fileChangeItemId: "patch-failed",
+      turnId: TURN_ID,
+      nativePatchApplyEndObserved: true,
+      nativePatchApplyEndStatus: "failed",
+      nativePatchApplyEndSuccess: false,
+      nativePatchApplyEndStderrPreview: "cannot write <redacted-filechange-path>",
+      nativePatchApplyEndScanBounded: true as const,
+    };
+    const readNativePatchFailureDiagnostic = vi.fn().mockResolvedValue(diagnostic);
+    const projector = await createProjector(
+      { ...params, onAgentEvent },
+      {
+        readNativePatchFailureDiagnostic,
+        trajectoryRecorder: { recordEvent, flush: vi.fn() },
+      },
+    );
+    const failedItem = {
+      type: "fileChange",
+      id: "patch-failed",
+      changes: [],
+      status: "failed",
+    };
+
+    await projector.handleNotification(forCurrentTurn("item/completed", { item: failedItem }));
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: { id: TURN_ID, status: "completed", items: [failedItem] },
+      }),
+    );
+
+    expect(readNativePatchFailureDiagnostic).toHaveBeenCalledTimes(1);
+    expect(readNativePatchFailureDiagnostic).toHaveBeenCalledWith({
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      callId: "patch-failed",
+    });
+    expect(recordEvent).toHaveBeenCalledWith(
+      "diagnostic.native_patch_apply_end",
+      expect.objectContaining({ diagnostic }),
+    );
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "codex_app_server.native_patch_apply_end",
+        data: diagnostic,
+      }),
+    );
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("/Users/");
+  });
+
+  it("re-sanitizes every string field before emitting native patch diagnostics", async () => {
+    const onAgentEvent = vi.fn();
+    const recordEvent = vi.fn();
+    const params = await createParams();
+    const unsafeThreadId = "thread-TOKEN=thread-secret";
+    const unsafeTurnId = "turn-PASSWORD=turn-secret";
+    const unsafeCallId = "patch-SECRET=call-secret";
+    const readNativePatchFailureDiagnostic = vi.fn().mockResolvedValue({
+      schema: "openclaw.sandbox.write_diagnostic.v1",
+      operation: "apply_patch",
+      boundary: "codex_native_patch_apply_end_rollout",
+      phase: "native_patch_apply_end_observation",
+      fileChangeItemId: unsafeCallId,
+      turnId: unsafeTurnId,
+      nativePatchApplyEndObserved: true,
+      nativePatchApplyEndStatus: "TOKEN=status-secret",
+      nativePatchApplyEndStderrPreview: "diff --git a/secret b/secret",
+      nativePatchApplyEndStdoutPreview: "@@ -1 +1 @@",
+      nativePatchApplyEndChanges: [
+        { path: "src/API_KEY=path-secret.ts", kind: "PASSWORD=kind-secret" },
+      ],
+      nativePatchApplyEndDiagnosticFallback: "TOKEN=fallback-secret",
+      nativePatchApplyEndScanBounded: true,
+    });
+    const projector = new CodexAppServerEventProjector(
+      { ...params, onAgentEvent },
+      unsafeThreadId,
+      unsafeTurnId,
+      {
+        readNativePatchFailureDiagnostic,
+        trajectoryRecorder: { recordEvent, flush: vi.fn() },
+      },
+    );
+
+    await projector.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: unsafeThreadId,
+        turnId: unsafeTurnId,
+        item: { type: "fileChange", id: unsafeCallId, changes: [], status: "failed" },
+      },
+    });
+
+    const emitted = JSON.stringify({
+      agentEvents: onAgentEvent.mock.calls.filter(
+        ([event]) => event.stream === "codex_app_server.native_patch_apply_end",
+      ),
+      trajectoryEvents: recordEvent.mock.calls.filter(
+        ([eventName]) => eventName === "diagnostic.native_patch_apply_end",
+      ),
+    });
+    expect(emitted).not.toMatch(
+      /thread-secret|turn-secret|call-secret|status-secret|path-secret|kind-secret|fallback-secret|diff --git|@@ -1/u,
+    );
+    expect(emitted).toContain("<redacted-thread-id>");
+    expect(emitted).toContain("<redacted-turn-id>");
+    expect(emitted).toContain("<redacted-call-id>");
+    expect(emitted).toContain("<redacted-status>");
+    expect(emitted).toContain("<redacted-filechange-path>");
+    expect(emitted).toContain("<redacted-change-kind>");
+  });
+
   it("bounds mirrored file-change diffs without losing full stats", async () => {
     const diff = [
       "--- a/src/large.ts",
