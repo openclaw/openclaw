@@ -255,7 +255,6 @@ export type ConfigWriteOptions = {
    * Useful when the caller wants machine-readable output only (--json mode).
    */
   skipOutputLogs?: boolean;
-  warn?: (msg: string) => void;
   /**
    * Runtime reload intent for observers that react to committed config writes.
    * Omitted means the observer should use its normal reload plan.

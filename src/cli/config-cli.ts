@@ -2313,7 +2313,6 @@ async function runConfigOperations(params: {
       ...(normalizedExplicitSetPaths.length > 0
         ? { explicitSetPaths: normalizedExplicitSetPaths }
         : {}),
-      warn: (msg: string) => runtime.error(warn(msg)),
     },
   });
   if (removedGatewayAuthPaths.length > 0) {

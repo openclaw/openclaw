@@ -3715,14 +3715,13 @@ describe("config io write", () => {
         await fs.writeFile(configPath, configWithComments, "utf-8");
 
         const loggerWarn = vi.fn();
-        const optionsWarn = vi.fn();
         const io = createConfigIO({
           env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
           homedir: () => home,
           logger: { warn: loggerWarn, error: vi.fn() },
         });
 
-        await io.writeConfigFile({ gateway: { mode: "local" } }, { warn: optionsWarn });
+        await io.writeConfigFile({ gateway: { mode: "local" } });
 
         expect(loggerWarn).toHaveBeenCalledTimes(1);
         expect(loggerWarn.mock.calls[0]![0]).toMatch(/Config write will strip JSON5 comments/);

@@ -2613,14 +2613,13 @@ describe("config mutate helpers", () => {
         writeOptions: { expectedConfigPath: configPath },
       });
 
-    const warn = vi.fn();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     await replaceConfigFile({
       baseHash: snapshot.hash,
       writeOptions: {
         expectedConfigPath: snapshot.path,
         ownedConfigPathForWrite: snapshot.path,
         unsetPaths: [["plugins", "installs"]],
-        warn,
       },
       nextConfig: {
         plugins: {
@@ -2629,9 +2628,10 @@ describe("config mutate helpers", () => {
       },
     });
 
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]![0]).toMatch(/Config write will strip JSON5 comments from/);
-    expect(warn.mock.calls[0]![0]).toContain("plugins.json5");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]![0]).toMatch(/Config write will strip JSON5 comments from/);
+    expect(warnSpy.mock.calls[0]![0]).toContain("plugins.json5");
+    warnSpy.mockRestore();
 
     // Verify the include file was written without comments
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
@@ -2769,14 +2769,13 @@ describe("config mutate helpers", () => {
         writeOptions: { expectedConfigPath: configPath },
       });
 
-    const warn = vi.fn();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     await replaceConfigFile({
       baseHash: snapshot.hash,
       writeOptions: {
         expectedConfigPath: snapshot.path,
         ownedConfigPathForWrite: snapshot.path,
         unsetPaths: [["plugins", "installs"]],
-        warn,
         skipOutputLogs: true,
       },
       nextConfig: {
@@ -2786,7 +2785,8 @@ describe("config mutate helpers", () => {
       },
     });
 
-    expect(warn).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

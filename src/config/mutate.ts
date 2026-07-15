@@ -773,8 +773,6 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     });
   }
   const committedIncludeHash = hashConfigIncludeRaw(formatJsonFileValue(includedValueToWrite));
-  const { warn, skipOutputLogs } = params.writeOptions ?? {};
-  checkCommentLossWarning(previousIncludeRaw, expectedIncludeTarget, warn, skipOutputLogs);
   const callerPreCommit = params.writeOptions?.preCommitRuntimePreflight;
   assertConfigPathForWrite();
   await assertRootConfigStillMatchesSnapshot(params.snapshot);
@@ -784,6 +782,12 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       currentHash: hashConfigIncludeRaw(includeRawAtCommit),
     });
   }
+  checkCommentLossWarning(
+    previousIncludeRaw,
+    expectedIncludeTarget,
+    undefined,
+    params.writeOptions?.skipOutputLogs,
+  );
   await writeRootBoundJsonFile({
     configPath: params.snapshot.path,
     includePath,

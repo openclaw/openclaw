@@ -39,6 +39,6 @@ export const checkCommentLossWarning = (
   const msg =
     `Config write will strip JSON5 comments from ${filePath}. ` +
     "Use a separate tool to re-add documentation comments after modifications.";
-  warn?.(msg);
+  (warn ?? console.warn)(msg);
   return msg;
 };
