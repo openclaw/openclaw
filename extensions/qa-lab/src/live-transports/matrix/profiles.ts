@@ -125,7 +125,7 @@ const MATRIX_QA_E2EE_CLI_SCENARIO_IDS = [
   "matrix-e2ee-cli-self-verification",
 ] as const;
 
-export const MATRIX_QA_ALL_SCENARIO_IDS = Array.from(
+const MATRIX_QA_ALL_SCENARIO_IDS = Array.from(
   new Set([
     "channel-chat-baseline",
     ...MATRIX_QA_TRANSPORT_SCENARIO_IDS,

@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
+const runScenarioFlow = vi.hoisted(() => vi.fn(async (params: { api: unknown }) => params.api));
 const waitForOutboundMessage = vi.hoisted(() => vi.fn());
 const waitForTransportOutboundMessage = vi.hoisted(() => vi.fn());
 const waitForChannelOutboundMessage = vi.hoisted(() => vi.fn());
@@ -65,6 +66,10 @@ const assertNoGatewayLogSentinels = vi.hoisted(() => vi.fn());
 
 vi.mock("./scenario-runtime-api.js", () => ({
   createQaScenarioRuntimeApi,
+}));
+
+vi.mock("./scenario-flow-runner.js", () => ({
+  runScenarioFlow,
 }));
 
 vi.mock("./suite-runtime-transport.js", () => ({
@@ -163,7 +168,7 @@ vi.mock("./gateway-log-sentinel.js", () => ({
   assertNoGatewayLogSentinels,
 }));
 
-import { createQaSuiteScenarioFlowApi } from "./suite-runtime-flow.js";
+import { runQaSuiteScenarioDefinition } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 describe("qa suite runtime flow", () => {
@@ -207,7 +212,7 @@ describe("qa suite runtime flow", () => {
       alternateModel: "openai/gpt-5.6-luna-mini",
       mock: null,
       cfg: {} as QaSuiteRuntimeEnv["cfg"],
-    } satisfies Parameters<typeof createQaSuiteScenarioFlowApi>[0]["env"];
+    } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
     const scenario = {
       id: "session-memory-ranking",
       title: "Session memory ranking",
@@ -228,7 +233,7 @@ describe("qa suite runtime flow", () => {
     const resolveQaLiveTurnTimeoutMs = vi.fn();
     createQaScenarioRuntimeApi.mockReturnValue({ api: "ok" });
 
-    const result = createQaSuiteScenarioFlowApi({
+    const result = await runQaSuiteScenarioDefinition({
       env,
       scenario,
       runScenario,

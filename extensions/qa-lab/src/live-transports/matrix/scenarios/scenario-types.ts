@@ -16,7 +16,7 @@ export type MatrixQaCanaryArtifact = {
   token: string;
 };
 
-export type MatrixQaScenarioArtifacts = {
+type MatrixQaScenarioArtifacts = {
   accepted?: MatrixQaScenarioArtifacts;
   approval?: MatrixQaObservedEvent["approval"] & {
     eventId: string;

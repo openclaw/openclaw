@@ -1,11 +1,7 @@
 // Qa Lab Matrix tests cover config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import {
-  buildMatrixQaConfig,
-  buildMatrixQaConfigSnapshot,
-  summarizeMatrixQaConfigSnapshot,
-} from "./config.js";
+import { buildMatrixQaConfig } from "./config.js";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
 
 describe("matrix qa config", () => {
@@ -240,9 +236,10 @@ describe("matrix qa config", () => {
     expect(reset.channels?.matrix?.accounts?.sut?.streaming).toBeUndefined();
   });
 
-  it("builds an effective Matrix QA config snapshot for reporting", () => {
-    const snapshot = buildMatrixQaConfigSnapshot({
+  it("normalizes Matrix QA overrides into the written account config", () => {
+    const config = buildMatrixQaConfig({} as OpenClawConfig, {
       driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
       observerUserId: "@observer:matrix-qa.test",
       overrides: {
         autoJoin: "allowlist",
@@ -255,84 +252,21 @@ describe("matrix qa config", () => {
         groupPolicy: "open",
         streaming: true,
       },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
       sutUserId: "@sut:matrix-qa.test",
       topology,
     });
-
-    expect(snapshot).toEqual({
-      approvalForwarding: {
-        exec: false,
-        plugin: false,
-      },
-      allowBots: undefined,
-      autoJoin: "allowlist",
-      autoJoinAllowlist: ["!ops:matrix-qa.test"],
-      blockStreaming: true,
-      chunkMode: undefined,
-      dm: {
-        allowFrom: ["@driver:matrix-qa.test"],
-        enabled: true,
-        policy: "allowlist",
-        sessionScope: "per-room",
-        threadReplies: "inbound",
-      },
-      encryption: false,
-      execApprovals: undefined,
-      configuredBotRoles: [],
-      groupAllowFrom: ["@driver:matrix-qa.test"],
-      groupMentionPatterns: ["\\S"],
-      groupPolicy: "open",
-      groupsByKey: {
-        main: {
-          enabled: true,
-          requireMention: true,
-          roomId: "!main:matrix-qa.test",
-        },
-        secondary: {
-          enabled: true,
-          requireMention: true,
-          roomId: "!secondary:matrix-qa.test",
-        },
-      },
-      replyToMode: "off",
-      streaming: "partial",
-      streamingPreviewToolProgress: true,
-      textChunkLimit: undefined,
-      threadBindings: {},
-      threadReplies: "inbound",
+    const account = config.channels?.matrix?.accounts?.sut;
+    expect(account?.autoJoin).toBe("allowlist");
+    expect(account?.autoJoinAllowlist).toEqual(["!ops:matrix-qa.test"]);
+    expect(account?.dm?.sessionScope).toBe("per-room");
+    expect(account?.groupPolicy).toBe("open");
+    expect(account?.streaming).toEqual({
+      block: { enabled: true },
+      mode: "partial",
     });
-    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("allowBots=<default>");
-    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("configuredBotRoles=<none>");
-    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("groupMentionPatterns=\\S");
-    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("autoJoin=allowlist");
-    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("streaming=partial");
-    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain(
-      "streaming.preview.toolProgress=true",
-    );
-  });
-
-  it("builds Matrix QA config snapshots from structured streaming overrides", () => {
-    const snapshot = buildMatrixQaConfigSnapshot({
-      driverUserId: "@driver:matrix-qa.test",
-      observerUserId: "@observer:matrix-qa.test",
-      overrides: {
-        streaming: {
-          mode: "quiet",
-          preview: {
-            toolProgress: false,
-          },
-        },
-      },
-      sutUserId: "@sut:matrix-qa.test",
-      topology,
-    });
-
-    expect(snapshot.streaming).toBe("quiet");
-    expect(snapshot.streamingPreviewToolProgress).toBe(false);
-    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("streaming=quiet");
-    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain(
-      "streaming.preview.toolProgress=false",
-    );
+    expect(config.messages?.groupChat?.mentionPatterns).toEqual(["\\S"]);
   });
 
   it("applies Matrix approval delivery overrides with gateway forwarding enabled", () => {
@@ -375,17 +309,23 @@ describe("matrix qa config", () => {
   });
 
   it("resolves role-based Matrix sender allowlist overrides", () => {
-    const snapshot = buildMatrixQaConfigSnapshot({
+    const config = buildMatrixQaConfig({} as OpenClawConfig, {
       driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
       observerUserId: "@observer:matrix-qa.test",
       overrides: {
         groupAllowRoles: ["driver", "observer"],
       },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
       sutUserId: "@sut:matrix-qa.test",
       topology,
     });
 
-    expect(snapshot.groupAllowFrom).toEqual(["@driver:matrix-qa.test", "@observer:matrix-qa.test"]);
+    expect(config.channels?.matrix?.accounts?.sut?.groupAllowFrom).toEqual([
+      "@driver:matrix-qa.test",
+      "@observer:matrix-qa.test",
+    ]);
   });
 
   it("rejects configured bot roles without matching side-account auth", () => {

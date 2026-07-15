@@ -28,7 +28,7 @@ export function shouldRecordMatrixQaObservedEventUpdate(params: {
   );
 }
 
-export function buildMatrixQaE2eeStoragePaths(params: {
+function buildMatrixQaE2eeStoragePaths(params: {
   actorId: MatrixQaE2eeActorId;
   outputDir: string;
   scenarioId: string;

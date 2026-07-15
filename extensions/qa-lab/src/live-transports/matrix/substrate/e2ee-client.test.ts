@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
-  buildMatrixQaE2eeStoragePaths,
   prepareMatrixQaE2eeStorage,
   shouldRecordMatrixQaObservedEventUpdate,
 } from "./e2ee-client-internals.js";
@@ -13,7 +12,6 @@ import { findMatrixQaObservedEventMatch } from "./events.js";
 
 const testing = {
   MATRIX_QA_E2EE_SYNC_FILTER,
-  buildMatrixQaE2eeStoragePaths,
   findMatrixQaObservedEventMatch,
   prepareMatrixQaE2eeStorage,
   shouldRecordMatrixQaObservedEventUpdate,
@@ -28,31 +26,30 @@ describe("matrix qa e2ee client storage", () => {
     });
   });
 
-  it("shares persisted crypto and sync state by actor account", () => {
-    const first = testing.buildMatrixQaE2eeStoragePaths({
-      actorId: "driver",
-      outputDir: "/tmp/openclaw/.artifacts/qa-e2e/matrix-run",
-      scenarioId: "matrix-e2ee-basic-reply",
-    });
-    const second = testing.buildMatrixQaE2eeStoragePaths({
-      actorId: "driver",
-      outputDir: "/tmp/openclaw/.artifacts/qa-e2e/matrix-run",
-      scenarioId: "matrix-e2ee-qr-verification",
-    });
+  it("shares persisted crypto and sync state by actor account", async () => {
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-e2ee-account-"));
+    try {
+      const first = await testing.prepareMatrixQaE2eeStorage({
+        actorId: "driver",
+        outputDir,
+        scenarioId: "matrix-e2ee-basic-reply",
+      });
+      const second = await testing.prepareMatrixQaE2eeStorage({
+        actorId: "driver",
+        outputDir,
+        scenarioId: "matrix-e2ee-qr-verification",
+      });
 
-    expect(first.accountDir).toBe(
-      path.join(
-        "/tmp/openclaw/.artifacts/qa-e2e/matrix-run",
-        "matrix-e2ee",
-        "accounts",
-        "driver",
-        "account",
-      ),
-    );
-    expect(first.cryptoDatabasePrefix).toBe(second.cryptoDatabasePrefix);
-    expect(first.recoveryKeyPath).toBe(path.join(first.accountDir, "recovery-key.json"));
-    expect(first.storagePath).toBe(path.join(first.accountDir, "sync-store.json"));
-    expect(second.storagePath).toBe(first.storagePath);
+      expect(first.accountDir).toBe(
+        path.join(outputDir, "matrix-e2ee", "accounts", "driver", "account"),
+      );
+      expect(first.cryptoDatabasePrefix).toBe(second.cryptoDatabasePrefix);
+      expect(first.recoveryKeyPath).toBe(path.join(first.accountDir, "recovery-key.json"));
+      expect(first.storagePath).toBe(path.join(first.accountDir, "sync-store.json"));
+      expect(second.storagePath).toBe(first.storagePath);
+    } finally {
+      await rm(outputDir, { force: true, recursive: true });
+    }
   });
 
   it("keeps persisted crypto state private", async () => {

@@ -100,7 +100,7 @@ export type MatrixQaConfigOverrides = {
   toolProfile?: "coding" | "messaging" | "minimal";
 };
 
-export type MatrixQaConfigSnapshot = {
+type MatrixQaConfigSnapshot = {
   approvalForwarding: {
     exec: boolean;
     plugin: boolean;
@@ -324,10 +324,6 @@ function resolveMatrixQaGroupAllowFrom(params: {
   return [params.driverUserId];
 }
 
-function formatMatrixQaBoolean(value: boolean) {
-  return value ? "true" : "false";
-}
-
 function buildMatrixQaAccountDmConfig(params: {
   dmOverrides?: MatrixQaConfigOverrides["dm"];
   snapshot: MatrixQaConfigSnapshot;
@@ -499,7 +495,7 @@ function buildMatrixQaChannelAccountConfig(params: {
   };
 }
 
-export function buildMatrixQaConfigSnapshot(params: {
+function buildMatrixQaConfigSnapshot(params: {
   driverUserId: string;
   observerUserId: string;
   overrides?: MatrixQaConfigOverrides;
@@ -538,34 +534,6 @@ export function buildMatrixQaConfigSnapshot(params: {
       plugin: params.overrides?.approvalForwarding?.plugin ?? false,
     },
   };
-}
-
-export function summarizeMatrixQaConfigSnapshot(snapshot: MatrixQaConfigSnapshot) {
-  return [
-    `allowBots=${snapshot.allowBots ?? "<default>"}`,
-    `configuredBotRoles=${snapshot.configuredBotRoles.length > 0 ? snapshot.configuredBotRoles.join("|") : "<none>"}`,
-    `replyToMode=${snapshot.replyToMode}`,
-    `threadReplies=${snapshot.threadReplies}`,
-    `dm.enabled=${formatMatrixQaBoolean(snapshot.dm.enabled)}`,
-    `dm.policy=${snapshot.dm.policy}`,
-    `dm.sessionScope=${snapshot.dm.sessionScope}`,
-    `dm.threadReplies=${snapshot.dm.threadReplies}`,
-    `groupMentionPatterns=${snapshot.groupMentionPatterns.length > 0 ? snapshot.groupMentionPatterns.join("|") : "<default>"}`,
-    `streaming=${snapshot.streaming}`,
-    `streaming.preview.toolProgress=${formatMatrixQaBoolean(snapshot.streamingPreviewToolProgress)}`,
-    `textChunkLimit=${snapshot.textChunkLimit ?? "<default>"}`,
-    `chunkMode=${snapshot.chunkMode ?? "<default>"}`,
-    `execApprovals.enabled=${snapshot.execApprovals?.enabled ?? "<default>"}`,
-    `execApprovals.target=${snapshot.execApprovals?.target ?? "<default>"}`,
-    `blockStreaming=${formatMatrixQaBoolean(snapshot.blockStreaming)}`,
-    `autoJoin=${snapshot.autoJoin}`,
-    `encryption=${formatMatrixQaBoolean(snapshot.encryption)}`,
-    `startupVerification=${snapshot.startupVerification ?? "<default>"}`,
-    `threadBindings.enabled=${snapshot.threadBindings.enabled ?? "<default>"}`,
-    `threadBindings.spawnSessions=${snapshot.threadBindings.spawnSessions ?? "<default>"}`,
-    `approvals.exec.enabled=${formatMatrixQaBoolean(snapshot.approvalForwarding.exec)}`,
-    `approvals.plugin.enabled=${formatMatrixQaBoolean(snapshot.approvalForwarding.plugin)}`,
-  ].join(", ");
 }
 
 export function buildMatrixQaConfig(

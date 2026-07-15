@@ -20,7 +20,7 @@ import type {
 export type MatrixQaActorId = "driver" | "observer";
 
 export type MatrixQaSyncState = Partial<Record<MatrixQaActorId, string>>;
-export type MatrixQaSyncStreams = Partial<Record<MatrixQaActorId, MatrixQaRoomObserver>>;
+type MatrixQaSyncStreams = Partial<Record<MatrixQaActorId, MatrixQaRoomObserver>>;
 
 export type MatrixQaScenarioContext = {
   baseUrl: string;

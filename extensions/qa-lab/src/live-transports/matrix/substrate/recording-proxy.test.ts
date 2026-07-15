@@ -2,7 +2,8 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { startMatrixQaFaultProxy } from "./fault-proxy.js";
-import { normalizeMatrixQaRoute, startMatrixQaRecordingProxy } from "./recording-proxy.js";
+import { normalizeMatrixQaRoute } from "./recording-proxy-internals.js";
+import { startMatrixQaRecordingProxy } from "./recording-proxy.js";
 
 const closeCallbacks: Array<() => Promise<void>> = [];
 

@@ -6,7 +6,10 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { assertMatrixQaCliBackupRestoreFailed } from "./scenario-runtime-e2ee-destructive-recovery.js";
 import { findMatrixQaCliAccountRoot } from "./scenario-runtime-e2ee-state.js";
+
+const testing = { assertMatrixQaCliBackupRestoreFailed };
 
 const storageMetadataRuntime = {
   normalizeMatrixStorageMetadata(value: unknown) {

@@ -46,24 +46,6 @@ function matrixQaRoomSpecsEqual(left: MatrixQaTopologyRoomSpec, right: MatrixQaT
   );
 }
 
-export function buildDefaultMatrixQaTopologySpec(params: {
-  defaultRoomName: string;
-}): MatrixQaTopologySpec {
-  return {
-    defaultRoomKey: "main",
-    rooms: [
-      {
-        encrypted: false,
-        key: "main",
-        kind: "group",
-        members: ["driver", "observer", "sut"],
-        name: params.defaultRoomName,
-        requireMention: true,
-      },
-    ],
-  };
-}
-
 export function findMatrixQaProvisionedRoom(
   topology: MatrixQaProvisionedTopology,
   key: string,

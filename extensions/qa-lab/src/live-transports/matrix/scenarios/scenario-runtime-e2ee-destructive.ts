@@ -32,7 +32,6 @@ import {
 import {
   corruptMatrixQaCliIdbSnapshot,
   deleteMatrixQaServerRoomKeyBackup,
-  findMatrixQaCliAccountRoot,
   mutateMatrixQaCliStateLoss,
 } from "./scenario-runtime-e2ee-state.js";
 import {
@@ -1310,8 +1309,4 @@ export async function runMatrixQaE2eeHistoryExistsBackupEmptyScenario(
   }
 }
 
-export const testing = {
-  assertMatrixQaCliBackupRestoreFailed,
-  findMatrixQaCliAccountRoot,
-};
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

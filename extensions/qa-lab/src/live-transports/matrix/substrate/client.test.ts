@@ -8,7 +8,6 @@ import {
 } from "./client-message-content.js";
 import { createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
 import { createMatrixQaRoomObserver } from "./sync.js";
-import { buildDefaultMatrixQaTopologySpec } from "./topology.js";
 
 const testing = {
   buildMatrixQaMessageContent,
@@ -585,9 +584,19 @@ describe("matrix driver client", () => {
       roomName: "OpenClaw Matrix QA",
       sutLocalpart: "qa-sut",
       fetchImpl,
-      topology: buildDefaultMatrixQaTopologySpec({
-        defaultRoomName: "OpenClaw Matrix QA",
-      }),
+      topology: {
+        defaultRoomKey: "main",
+        rooms: [
+          {
+            encrypted: false,
+            key: "main",
+            kind: "group",
+            members: ["driver", "observer", "sut"],
+            name: "OpenClaw Matrix QA",
+            requireMention: true,
+          },
+        ],
+      },
     });
 
     expect(result.roomId).toBe("!room:matrix-qa.test");

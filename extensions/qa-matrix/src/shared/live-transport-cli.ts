@@ -5,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/qa-runtime";
 
 export {
-  createLazyCliRuntimeLoader,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "openclaw/plugin-sdk/qa-runtime";

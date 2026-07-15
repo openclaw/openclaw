@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MATRIX_QA_ALL_SCENARIO_IDS, resolveMatrixQaScenarioIds } from "./profiles.js";
+import { resolveMatrixQaScenarioIds } from "./profiles.js";
 
 describe("QA Lab Matrix profiles", () => {
   it("preserves the legacy profile sizes and default selection", () => {
-    expect(MATRIX_QA_ALL_SCENARIO_IDS).toHaveLength(93);
+    const allScenarioIds = resolveMatrixQaScenarioIds({ profile: "all" });
+    expect(allScenarioIds).toHaveLength(93);
     expect(resolveMatrixQaScenarioIds({ profile: "fast" })).toHaveLength(12);
     expect(resolveMatrixQaScenarioIds({ profile: "release" })).toEqual([
       "channel-chat-baseline",
@@ -14,9 +15,9 @@ describe("QA Lab Matrix profiles", () => {
     expect(resolveMatrixQaScenarioIds({ profile: "e2ee-smoke" })).toHaveLength(8);
     expect(resolveMatrixQaScenarioIds({ profile: "e2ee-deep" })).toHaveLength(18);
     expect(resolveMatrixQaScenarioIds({ profile: "e2ee-cli" })).toHaveLength(9);
-    expect(resolveMatrixQaScenarioIds({})).toEqual(MATRIX_QA_ALL_SCENARIO_IDS);
+    expect(resolveMatrixQaScenarioIds({})).toEqual(allScenarioIds);
     expect(resolveMatrixQaScenarioIds({ profile: "fast" })).toContain("channel-chat-baseline");
-    expect(MATRIX_QA_ALL_SCENARIO_IDS).toContain("channel-chat-baseline");
+    expect(allScenarioIds).toContain("channel-chat-baseline");
   });
 
   it("keeps profile ids unique and excludes the legacy explicit-only scenarios", () => {
@@ -33,7 +34,8 @@ describe("QA Lab Matrix profiles", () => {
       const scenarioIds = resolveMatrixQaScenarioIds({ profile });
       expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
     }
-    expect(MATRIX_QA_ALL_SCENARIO_IDS).not.toContain("matrix-room-block-streaming");
-    expect(MATRIX_QA_ALL_SCENARIO_IDS).not.toContain("subagent-thread-spawn");
+    const allScenarioIds = resolveMatrixQaScenarioIds({ profile: "all" });
+    expect(allScenarioIds).not.toContain("matrix-room-block-streaming");
+    expect(allScenarioIds).not.toContain("subagent-thread-spawn");
   });
 });

@@ -7,7 +7,7 @@ import type { MatrixQaProvisionResult } from "../substrate/client.js";
 import type { MatrixQaRoomObserver } from "../substrate/client.js";
 import { buildMatrixQaConfig, type MatrixQaConfigOverrides } from "../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
-import type { MatrixQaHarness } from "../substrate/harness.runtime.js";
+import type { startMatrixQaHarness } from "../substrate/harness.runtime.js";
 import { runMatrixQaCanary } from "./scenario-runtime-room.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 import type { MatrixQaCanaryArtifact } from "./scenario-types.js";
@@ -15,6 +15,7 @@ import type { MatrixQaCanaryArtifact } from "./scenario-types.js";
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 type FlowPreparationInput = Parameters<NonNullable<AdapterDefinition["prepareFlow"]>>[0];
+type MatrixQaHarness = Awaited<ReturnType<typeof startMatrixQaHarness>>;
 
 type MatrixQaScenarioEnvironmentParams = {
   accountId: string;
