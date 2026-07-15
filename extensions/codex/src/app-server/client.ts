@@ -32,7 +32,7 @@ import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 /** Minimum supported Codex app-server version exported for callers/tests. */
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
-const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 1_000_000;
+const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 8 * 1024 * 1024;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 600_000;
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
@@ -1025,3 +1025,4 @@ function formatExitValue(value: unknown): string {
   }
   return "unknown";
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

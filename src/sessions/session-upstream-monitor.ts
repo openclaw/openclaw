@@ -38,7 +38,7 @@ type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   }) => Promise<string[]>;
 };
 
-export type SessionUpstreamMonitor = { stop: () => void };
+type SessionUpstreamMonitor = { stop: () => void };
 
 type SessionUpstreamMissingCounter = {
   count: number;

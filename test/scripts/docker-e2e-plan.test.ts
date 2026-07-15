@@ -1,6 +1,6 @@
 // Docker E2E Plan tests cover docker e2e plan script behavior.
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -763,6 +763,46 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
+  it("omits trusted-current scenarios unsupported by a frozen target harness", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-upgrade-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(
+      assertionsFile,
+      [
+        "base",
+        "feishu-channel",
+        "bootstrap-persona",
+        "channel-post-core-restore",
+        "plugin-deps-cleanup",
+        "configured-plugin-installs",
+        "stale-source-plugin-shadow",
+        "tilde-log-path",
+        "versioned-runtime-deps",
+      ]
+        .map((scenario) => JSON.stringify(scenario))
+        .join("\n"),
+    );
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.6.11",
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.6.11",
+      "published-upgrade-survivor-2026.6.11-feishu-channel",
+      "published-upgrade-survivor-2026.6.11-bootstrap-persona",
+      "published-upgrade-survivor-2026.6.11-channel-post-core-restore",
+      "published-upgrade-survivor-2026.6.11-plugin-deps-cleanup",
+      "published-upgrade-survivor-2026.6.11-configured-plugin-installs",
+      "published-upgrade-survivor-2026.6.11-stale-source-plugin-shadow",
+      "published-upgrade-survivor-2026.6.11-tilde-log-path",
+      "published-upgrade-survivor-2026.6.11-versioned-runtime-deps",
+    ]);
+  });
+
   it("skips plugin dependency cleanup for baselines without packaged plugin dirs", () => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
@@ -1090,8 +1130,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "mcp-code-mode-gateway",
         "cron-mcp-cleanup",
         "agent-bundle-mcp-tools",
-        "crestodian-first-run",
-        "crestodian-rescue",
+        "system-agent-first-run",
+        "system-agent-rescue",
         "config-reload",
         "plugin-update",
         "plugins",
@@ -1119,8 +1159,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "mcp-code-mode-gateway", stateScenario: "empty" },
       { name: "cron-mcp-cleanup", stateScenario: "empty" },
       { name: "agent-bundle-mcp-tools", stateScenario: "empty" },
-      { name: "crestodian-first-run", stateScenario: "empty" },
-      { name: "crestodian-rescue", stateScenario: "empty" },
+      { name: "system-agent-first-run", stateScenario: "empty" },
+      { name: "system-agent-rescue", stateScenario: "empty" },
       { name: "config-reload", stateScenario: "empty" },
       { name: "plugin-update", stateScenario: "empty" },
       { name: "plugins", stateScenario: "empty" },

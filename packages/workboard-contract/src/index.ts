@@ -73,6 +73,11 @@ export const WORKBOARD_DIAGNOSTIC_KINDS = [
 ] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 export const WORKBOARD_NOTIFICATION_KINDS = ["completed", "failed", "stale"] as const;
+export const WORKBOARD_BOARD_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,79}$/;
+
+export function isValidWorkboardBoardId(value: unknown): value is string {
+  return typeof value === "string" && WORKBOARD_BOARD_ID_PATTERN.test(value);
+}
 
 export type WorkboardStatus = (typeof WORKBOARD_STATUSES)[number];
 export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
@@ -270,6 +275,22 @@ export type WorkboardBoardMetadata = {
   orchestration?: WorkboardOrchestrationSettings;
   createdAt: number;
   updatedAt: number;
+  archivedAt?: number;
+};
+
+export type WorkboardBoardSummary = {
+  id: string;
+  name?: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  defaultWorkspace?: WorkboardWorkspace;
+  orchestration?: WorkboardOrchestrationSettings;
+  total: number;
+  active: number;
+  archived: number;
+  byStatus: Partial<Record<WorkboardStatus, number>>;
+  updatedAt?: number;
   archivedAt?: number;
 };
 

@@ -1394,6 +1394,9 @@ describe("WhatsApp QA live runtime", () => {
       messageId: "driver-message-1",
       to: "+15550000001",
     });
+    expect(calls[2]?.payload).toMatchObject({
+      conversationReadOrigin: "direct-operator",
+    });
   });
 
   it("formats redacted wait diagnostics for unmatched WhatsApp observations", () => {
@@ -2945,3 +2948,4 @@ describe("WhatsApp QA live runtime", () => {
     expect(testing.isTransientWhatsAppQaDriverError(new Error("timed out waiting"))).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

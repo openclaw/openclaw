@@ -56,11 +56,7 @@ import {
   ToolInputError,
   type AnyAgentTool,
 } from "./tools/common.js";
-export {
-  CODE_MODE_EXEC_TOOL_NAME,
-  CODE_MODE_WAIT_TOOL_NAME,
-  isCodeModeControlTool,
-} from "./code-mode-control-tools.js";
+export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
@@ -75,7 +71,7 @@ const MAX_ACTIVE_CODE_MODE_RUNS = 64;
 type CodeModeLanguage = "javascript" | "typescript";
 
 /** Resolved Code Mode runtime limits and visible language options. */
-export type CodeModeConfig = {
+type CodeModeConfig = {
   enabled: boolean;
   runtime: "quickjs-wasi";
   mode: "only";
@@ -1747,3 +1743,4 @@ export const testing = {
     typescriptRuntimeForTest = runtime;
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

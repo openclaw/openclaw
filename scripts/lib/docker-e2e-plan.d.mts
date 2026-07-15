@@ -30,6 +30,7 @@ export type DockerE2ePlanOptions = {
   timingStore?: unknown;
   upgradeSurvivorBaselines?: string;
   upgradeSurvivorScenarios?: string;
+  upgradeSurvivorTargetRoot?: string;
 };
 
 export type DockerE2ePlan = {

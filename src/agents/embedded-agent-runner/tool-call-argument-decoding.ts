@@ -14,7 +14,7 @@ import type { MutableAssistantMessageEventStream } from "../stream-compat.js";
  * repairs only arguments, preserving user-facing assistant text exactly as emitted.
  */
 /** Recursively decodes HTML entities in string leaves of an object graph. */
-export function decodeHtmlEntitiesInObject(value: unknown): unknown {
+function decodeHtmlEntitiesInObject(value: unknown): unknown {
   if (typeof value === "string") {
     return decodeHtmlEntities(value);
   }

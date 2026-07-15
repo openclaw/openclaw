@@ -252,6 +252,7 @@ describe("scenario-flow-runner", () => {
         },
       },
       scenarioTitle: "qa-import",
+      vars: { preparedValue: "ready" },
       flow: {
         steps: [
           {
@@ -268,6 +269,7 @@ describe("scenario-flow-runner", () => {
                   expr: 'basename === "SKILL.md"',
                 },
               },
+              { assert: 'preparedValue === "ready"' },
             ],
             detailsExpr: "basename",
           },

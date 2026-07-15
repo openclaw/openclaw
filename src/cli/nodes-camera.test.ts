@@ -30,8 +30,8 @@ let parseCameraSnapPayload: typeof import("./nodes-camera.js").parseCameraSnapPa
 let resolveCameraClipTarget: typeof import("./nodes-camera.js").resolveCameraClipTarget;
 let resolveCameraSnapTargets: typeof import("./nodes-camera.js").resolveCameraSnapTargets;
 let writeCameraClipPayloadToFile: typeof import("./nodes-camera.js").writeCameraClipPayloadToFile;
+let writeCameraPayloadToFile: typeof import("./nodes-camera.js").writeCameraPayloadToFile;
 let writeBase64ToFile: typeof import("./nodes-camera.js").writeBase64ToFile;
-let writeUrlToFile: typeof import("./nodes-camera.js").writeUrlToFile;
 let parseScreenRecordPayload: typeof import("./nodes-screen.js").parseScreenRecordPayload;
 let parseScreenSnapshotPayload: typeof import("./nodes-screen.js").parseScreenSnapshotPayload;
 let screenRecordTempPath: typeof import("./nodes-screen.js").screenRecordTempPath;
@@ -81,8 +81,8 @@ describe("nodes camera helpers", () => {
       resolveCameraClipTarget,
       resolveCameraSnapTargets,
       writeCameraClipPayloadToFile,
+      writeCameraPayloadToFile,
       writeBase64ToFile,
-      writeUrlToFile,
     } = await import("./nodes-camera.js"));
     ({
       parseScreenRecordPayload,
@@ -304,7 +304,9 @@ describe("nodes camera helpers", () => {
     stubFetchResponse(new Response("url-content", { status: 200 }));
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
-      await writeUrlToFile(out, "https://198.51.100.42/clip.mp4", {
+      await writeCameraPayloadToFile({
+        filePath: out,
+        payload: { url: "https://198.51.100.42/clip.mp4" },
         expectedHost: "198.51.100.42",
       });
       await expect(readFileUtf8AndCleanup(out)).resolves.toBe("url-content");
@@ -317,7 +319,9 @@ describe("nodes camera helpers", () => {
   it("rejects url host mismatches", async () => {
     stubFetchResponse(new Response("url-content", { status: 200 }));
     await expect(
-      writeUrlToFile("/tmp/ignored", "https://198.51.100.42/clip.mp4", {
+      writeCameraPayloadToFile({
+        filePath: "/tmp/ignored",
+        payload: { url: "https://198.51.100.42/clip.mp4" },
         expectedHost: "198.51.100.43",
       }),
     ).rejects.toThrow(/must match node host/i);
@@ -366,7 +370,11 @@ describe("nodes camera helpers", () => {
         stubFetchResponse(response);
       }
       await expect(
-        writeUrlToFile("/tmp/ignored", url, { expectedHost: "198.51.100.42" }),
+        writeCameraPayloadToFile({
+          filePath: "/tmp/ignored",
+          payload: { url },
+          expectedHost: "198.51.100.42",
+        }),
       ).rejects.toThrow(expectedMessage);
     },
   );
@@ -402,7 +410,9 @@ describe("nodes camera helpers", () => {
       stubFetchResponse(tracked.response);
 
       await expect(
-        writeUrlToFile("/tmp/ignored", "https://198.51.100.42/down.bin", {
+        writeCameraPayloadToFile({
+          filePath: "/tmp/ignored",
+          payload: { url: "https://198.51.100.42/down.bin" },
           expectedHost: "198.51.100.42",
         }),
       ).rejects.toThrow(expectedMessage);
@@ -419,7 +429,9 @@ describe("nodes camera helpers", () => {
     });
 
     await expect(
-      writeUrlToFile("/tmp/ignored", "https://198.51.100.42/clip.mp4", {
+      writeCameraPayloadToFile({
+        filePath: "/tmp/ignored",
+        payload: { url: "https://198.51.100.42/clip.mp4" },
         expectedHost: "198.51.100.42",
       }),
     ).rejects.toThrow(/redirect host/i);
@@ -438,7 +450,11 @@ describe("nodes camera helpers", () => {
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "broken.bin");
       await expect(
-        writeUrlToFile(out, "https://198.51.100.42/broken.bin", { expectedHost: "198.51.100.42" }),
+        writeCameraPayloadToFile({
+          filePath: out,
+          payload: { url: "https://198.51.100.42/broken.bin" },
+          expectedHost: "198.51.100.42",
+        }),
       ).rejects.toThrow(/stream exploded/i);
       await expectPathMissing(out);
     });

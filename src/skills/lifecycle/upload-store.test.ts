@@ -5,11 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import {
-  createSkillUploadStore,
-  MAX_ACTIVE_SKILL_UPLOADS,
-  SkillUploadRequestError,
-} from "./upload-store.js";
+import { createSkillUploadStore, SkillUploadRequestError } from "./upload-store.js";
+
+const ACTIVE_UPLOAD_LIMIT = 32;
 
 let tempDirs: string[] = [];
 
@@ -67,7 +65,7 @@ describe("skill upload store", () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-store-"));
     try {
       const store = createSkillUploadStore({ rootDir });
-      for (let i = 0; i < MAX_ACTIVE_SKILL_UPLOADS; i += 1) {
+      for (let i = 0; i < ACTIVE_UPLOAD_LIMIT; i += 1) {
         await store.begin({
           kind: "skill-archive",
           slug: `active-${i}`,
@@ -504,7 +502,7 @@ describe("skill upload store", () => {
     await fs.rm(path.join(rootDir, first.uploadId, "metadata.json"), { force: true });
 
     // saturate the active-upload cap with unrelated uploads
-    for (let i = 0; i < MAX_ACTIVE_SKILL_UPLOADS; i++) {
+    for (let i = 0; i < ACTIVE_UPLOAD_LIMIT; i++) {
       await store.begin({ kind: "skill-archive", slug: `filler-${i}`, sizeBytes: 8 });
     }
 

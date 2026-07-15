@@ -147,7 +147,7 @@ export async function sendFileUrl(
  * The user_list endpoint uses the same base URL as the chatbot API but
  * with method=user_list instead of method=chatbot.
  */
-export async function fetchChatUsers(
+async function fetchChatUsers(
   incomingUrl: string,
   allowInsecureSsl = false,
   log?: { warn: (...args: unknown[]) => void },
@@ -182,9 +182,10 @@ export async function fetchChatUsers(
 
     const req = transport
       .get(listUrl, requestOptions, (res) => {
+        res.setEncoding("utf8");
         let data = "";
-        res.on("data", (c: Buffer) => {
-          data += c.toString();
+        res.on("data", (chunk: string) => {
+          data += chunk;
         });
         res.on("end", () => {
           const result = safeParseJsonWithSchema(ChatUserListResponseSchema, data);
@@ -324,13 +325,10 @@ function doPost(url: string, body: string, allowInsecureSsl = false): Promise<bo
         rejectUnauthorized: !allowInsecureSsl,
       },
       (res) => {
-        let data = "";
-        res.on("data", (chunk: Buffer) => {
-          data += chunk.toString();
-        });
         res.on("end", () => {
           resolve(res.statusCode === 200);
         });
+        res.resume();
       },
     );
 

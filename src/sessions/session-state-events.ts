@@ -649,7 +649,7 @@ export function sweepSessionStateWatchNotices(
 }
 
 /** Enforce bounded retained history without regressing durable per-session heads. */
-export function pruneSessionStateEvents(
+function pruneSessionStateEvents(
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
 ): void {
   const now = options.now ?? Date.now();
@@ -932,7 +932,4 @@ export function recordSubagentTerminalState(params: {
   });
 }
 
-export const sessionStateEventStoreLimits = {
-  maxRows: SESSION_STATE_MAX_ROWS,
-  retentionMs: SESSION_STATE_RETENTION_MS,
-} as const;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

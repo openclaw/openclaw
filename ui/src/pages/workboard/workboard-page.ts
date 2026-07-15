@@ -1,5 +1,6 @@
 import { consume } from "@lit/context";
-import { html, nothing } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
+import { property } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
@@ -20,11 +21,15 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
+import { searchForBoardFilter } from "./board-filter.ts";
+import type { WorkboardRouteData } from "./route.ts";
 import { renderWorkboard } from "./view.ts";
 
 class WorkboardPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
+
+  @property({ attribute: false }) routeData?: WorkboardRouteData;
 
   private readonly requestPageUpdate = () => this.context?.workboard.notify();
   private observedAgentScopeId: string | null | undefined;
@@ -105,11 +110,15 @@ class WorkboardPage extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     this.ensureInitialData();
+    this.syncWorkboardBoardFilter();
     this.syncWorkboardRuntime();
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
   }
 
-  override updated() {
+  override updated(changed: PropertyValues<this>) {
+    if (changed.has("routeData")) {
+      this.syncWorkboardBoardFilter();
+    }
     this.syncWorkboardRuntime();
     if (this.context?.workboard) {
       resumeWorkboardLiveRefresh(this.context.workboard);
@@ -215,6 +224,26 @@ class WorkboardPage extends OpenClawLightDomElement {
     }
   }
 
+  private syncWorkboardBoardFilter() {
+    const context = this.context;
+    const boardFilter = this.routeData?.boardFilter;
+    if (!context || !boardFilter || context.workboard.state.boardFilter === boardFilter) {
+      return;
+    }
+    context.workboard.state.boardFilter = boardFilter;
+    context.workboard.notify();
+  }
+
+  private setWorkboardBoardFilter(boardFilter: string) {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    context.replace("workboard", {
+      search: searchForBoardFilter(this.routeData?.search ?? "", boardFilter),
+    });
+  }
+
   override render() {
     const context = this.context;
     if (!context) {
@@ -251,6 +280,7 @@ class WorkboardPage extends OpenClawLightDomElement {
           context.navigate("chat", { search: searchForSession(sessionKey), hash: "" });
         },
         onReloadConfig: () => this.reloadConfig(),
+        onBoardFilterChange: (boardFilter) => this.setWorkboardBoardFilter(boardFilter),
         onRequestUpdate: this.requestPageUpdate,
       })}
     `;
