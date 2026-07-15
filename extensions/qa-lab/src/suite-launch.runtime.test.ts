@@ -3,10 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
+const { crablineRuntimeLoads, runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
+  crablineRuntimeLoads: vi.fn(),
   runQaFlowSuite: vi.fn(),
   runQaTestFileScenarios: vi.fn(),
 }));
+
+vi.mock("@openclaw/crabline", async (importOriginal) => {
+  crablineRuntimeLoads();
+  return await importOriginal<typeof import("@openclaw/crabline")>();
+});
 
 vi.mock("./suite.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./suite.js")>()),
@@ -106,6 +112,20 @@ describe("qa suite runtime launcher", () => {
     await Promise.all(
       tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
     );
+  });
+
+  it("keeps Crabline out of unrelated live transport startup", async () => {
+    expect(crablineRuntimeLoads).not.toHaveBeenCalled();
+
+    await runQaSuite({
+      repoRoot: process.cwd(),
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      channelId: "telegram",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(crablineRuntimeLoads).not.toHaveBeenCalled();
   });
 
   it("routes selected flow scenarios to the flow suite engine", async () => {
