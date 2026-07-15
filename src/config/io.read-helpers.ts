@@ -285,7 +285,7 @@ export function resolveConfigIncludesForRead(
   );
 }
 
-export type ConfigReadResolution = {
+type ConfigReadResolution = {
   resolvedConfigRaw: unknown;
   envSnapshotForRestore: Record<string, string | undefined>;
   envWarnings: EnvSubstitutionWarning[];

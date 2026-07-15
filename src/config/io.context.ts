@@ -49,7 +49,7 @@ import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
-export type ValidationPluginMetadataSnapshotLoader = {
+type ValidationPluginMetadataSnapshotLoader = {
   load: (config: OpenClawConfig) => PluginMetadataSnapshot;
   getSnapshot: () => PluginMetadataSnapshot | undefined;
 };

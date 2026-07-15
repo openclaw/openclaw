@@ -221,7 +221,7 @@ export function resolveConfigSizeBaselineBytes(params: {
   return Buffer.byteLength(canonical, "utf-8");
 }
 
-export function resolveConfigWriteMetadata(params: { before: unknown; after: OpenClawConfig }): {
+function resolveConfigWriteMetadata(params: { before: unknown; after: OpenClawConfig }): {
   hasMetaBefore: boolean;
   hasMetaAfter: boolean;
   gatewayModeBefore: string | null;
