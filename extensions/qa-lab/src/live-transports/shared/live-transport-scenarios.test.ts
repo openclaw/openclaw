@@ -8,7 +8,6 @@ import {
 import { describe, expect, it } from "vitest";
 import { discordQaLiveRuntime } from "../discord/discord-live.runtime.js";
 import { __testing as slackTesting } from "../slack/slack-live.runtime.js";
-import { __testing as telegramTesting } from "../telegram/telegram-live.runtime.js";
 import { __testing as whatsAppTesting } from "../whatsapp/whatsapp-live.runtime.js";
 import {
   buildLiveTransportCoverageLaneSummaries,
@@ -115,6 +114,7 @@ describe("live transport scenario helpers", () => {
     ]);
     expect(lanes.find((lane) => lane.transportId === "telegram")?.members).toContainEqual({
       standardId: "canary",
+      scenarioId: "channel-canary",
     });
     expect(lanes.find((lane) => lane.transportId === "slack")?.members).toContainEqual({
       standardId: "restart-resume",
@@ -151,10 +151,7 @@ describe("live transport scenario helpers", () => {
       expect.arrayContaining(slackTesting.SLACK_QA_STANDARD_SCENARIO_IDS),
     );
     expect(lanes.get("telegram")).toEqual(
-      expect.arrayContaining([
-        "help-command",
-        ...telegramTesting.TELEGRAM_QA_STANDARD_SCENARIO_IDS,
-      ]),
+      expect.arrayContaining(["canary", "help-command", "mention-gating"]),
     );
     expect(lanes.get("whatsapp")).toEqual(
       expect.arrayContaining([

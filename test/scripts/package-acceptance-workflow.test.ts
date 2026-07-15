@@ -1,6 +1,14 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -294,6 +302,7 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
     env: {
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
       FULL_RELEASE_VALIDATION_RUN_ID: "222",
+      OPENCLAW_NPM_RESUME_RUN_ID: "",
       PATH: process.env.PATH,
       PLUGINS: "",
       PLUGIN_PUBLISH_SCOPE: "all-publishable",
@@ -428,6 +437,14 @@ describe("package acceptance workflow", () => {
     expect(partialEvidence.stderr).toContain("require full_release_validation_run_id");
 
     expect(runReleasePublishInputValidation({ PUBLISH_OPENCLAW_NPM: "false" }).status).toBe(0);
+
+    const invalidResumeRun = runReleasePublishInputValidation({
+      OPENCLAW_NPM_RESUME_RUN_ID: "not-a-run-id",
+    });
+    expect(invalidResumeRun.status).toBe(1);
+    expect(invalidResumeRun.stderr).toContain(
+      "openclaw_npm_resume_run_id must be a positive GitHub Actions run id",
+    );
   });
 
   it("accepts only main-reachable protected SHA-pinned release publish tags", () => {
@@ -566,6 +583,72 @@ describe("package acceptance workflow", () => {
       'approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}"',
       'approve_clawhub_bootstrap_environments "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}"',
     ]);
+  });
+
+  it("compares dependency evidence zip contents independently of archive timestamps", () => {
+    const orchestration = workflowStep(
+      workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
+      "Dispatch publish workflows",
+    ).run;
+    if (!orchestration) {
+      throw new Error("Expected release publish orchestration script");
+    }
+    const matcher = shellFunctionSource(orchestration, "release_evidence_zip_trees_match");
+    const tempDir = tempDirs.make("release-evidence-zip-");
+    const sourceDir = `${tempDir}/source`;
+    const existingDir = `${tempDir}/existing`;
+    const sourceZip = `${tempDir}/source.zip`;
+    const existingZip = `${tempDir}/existing.zip`;
+    const symlinkZip = `${tempDir}/symlink.zip`;
+    const corruptZip = `${tempDir}/corrupt.zip`;
+    for (const dir of [sourceDir, existingDir]) {
+      mkdirSync(`${dir}/dependency-evidence`, { recursive: true });
+      writeFileSync(`${dir}/dependency-evidence/proof.json`, '{"ok":true}\n');
+    }
+    execFileSync("touch", ["-t", "198001010000", `${sourceDir}/dependency-evidence/proof.json`]);
+    execFileSync("touch", ["-t", "202001010000", `${existingDir}/dependency-evidence/proof.json`]);
+    execFileSync("zip", ["-X", "-q", sourceZip, "dependency-evidence/proof.json"], {
+      cwd: sourceDir,
+    });
+    execFileSync("zip", ["-X", "-q", existingZip, "dependency-evidence/proof.json"], {
+      cwd: existingDir,
+    });
+    symlinkSync("../../outside", `${existingDir}/dependency-evidence/link`);
+    execFileSync("zip", ["-X", "-y", "-q", symlinkZip, "dependency-evidence/link"], {
+      cwd: existingDir,
+    });
+    const sourceArchive = readFileSync(sourceZip);
+    writeFileSync(corruptZip, sourceArchive.subarray(0, sourceArchive.length - 10));
+
+    const compare = (left: string, right: string) =>
+      spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail\n${matcher}\nrelease_evidence_zip_trees_match "$1" "$2"`,
+          "bash",
+          left,
+          right,
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, RUNNER_TEMP: tempDir },
+        },
+      );
+
+    const result = compare(sourceZip, existingZip);
+    const symlinkResult = compare(symlinkZip, symlinkZip);
+    const corruptResult = compare(corruptZip, corruptZip);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(symlinkResult.status).toBe(1);
+    expect(symlinkResult.stderr).toContain("unsupported dependency evidence archive entry");
+    expect(corruptResult.status).toBe(1);
+    expect(corruptResult.stderr).toContain("dependency evidence ZIP comparison failed");
+    expect(orchestration).toContain("find dependency-evidence -type f -exec touch -t 198001010000");
+    expect(orchestration).toContain(
+      'attach_or_verify_release_asset "${asset_path}" "${asset_name}" zip-tree',
+    );
   });
 
   it("verifies immutable postpublish evidence before stable closeout reads it", () => {
@@ -3961,7 +4044,7 @@ describe("package artifact reuse", () => {
     );
     expect(releaseWorkflow).toContain("resolve_openclaw_npm_publish_state");
     expect(releaseWorkflow).toContain(
-      "already published on npm with this tag's preflight tarball; skipping the core npm dispatch and resuming the remaining publish stages",
+      "already published on npm with this tag's preflight tarball; resuming from",
     );
     expect(releaseWorkflow).toContain("Cut a correction tag instead of resuming this publish.");
     expect(
@@ -4005,6 +4088,24 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain('conclusion" == "skipped"');
     expect(releaseWorkflow).toContain("approve_child_publish_environment");
     expect(releaseWorkflow).toContain("Approve child release gate after parent release approval");
+    expect(releaseWorkflow).toContain("openclaw_npm_resume_run_id");
+    expect(releaseWorkflow).toContain(
+      '.name == "validate_publish_request" and .conclusion == "success"',
+    );
+    expect(releaseWorkflow).toContain("actions/workflows/openclaw-npm-release.yml\" --jq '.id'");
+    expect(releaseWorkflow).toContain(
+      '".github/workflows/openclaw-npm-release.yml@refs/tags/${resume_branch}"',
+    );
+    expect(releaseWorkflow).toContain("git/ref/tags/${resume_branch}");
+    expect(releaseWorkflow).toContain(".verification.verified");
+    expect(releaseWorkflow).toContain("compare/${resume_sha}...main");
+    expect(releaseWorkflow).toContain(
+      '"${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-postpublish-verify.ts"',
+    );
+    expect(releaseWorkflow).toContain(
+      '"${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-postpublish-verify.ts"',
+    );
+    expect(releaseWorkflow).toContain("--postpublish-verifier");
     expect(releaseWorkflow).toContain('"${verify_args[@]}"');
     expect(releaseWorkflow).toContain(
       "OpenClaw Release Publish must use trusted main workflow tooling",
@@ -4018,10 +4119,14 @@ describe("package artifact reuse", () => {
       '"${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha"',
     );
     expect(releaseWorkflow).toContain('--workflow-ref "${CHILD_WORKFLOW_REF}"');
-    expect(releaseWorkflow).toContain('OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${GITHUB_REF}"');
+    expect(releaseWorkflow).toContain('openclaw_npm_expected_workflow_ref="${GITHUB_REF}"');
     expect(releaseWorkflow).toContain(
-      'OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${PARENT_WORKFLOW_SHA}"',
+      'openclaw_npm_expected_workflow_sha="${PARENT_WORKFLOW_SHA}"',
     );
+    expect(releaseWorkflow).toContain(
+      'OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${openclaw_npm_expected_workflow_ref}"',
+    );
+    expect(releaseWorkflow).toContain('if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]');
     expect(releaseWorkflow).toContain("--skip-github-release");
     expect(clawHubReleasePlanScript).toContain("--plugin-clawhub-bootstrap-run");
     expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');

@@ -26,6 +26,7 @@ import {
 import {
   buildQaSuiteEvidenceSummary,
   QA_EVIDENCE_FILENAME,
+  type QaEvidenceTiming,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import {
@@ -88,6 +89,7 @@ import {
   shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 } from "./suite-planning.js";
+import { runQaSuiteRoundTripProbe, type QaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import {
   createQaSuiteScenarioStepRunner,
   runQaSuiteScenarioDefinition,
@@ -115,6 +117,7 @@ export type QaSuiteScenarioResult = {
   status: "pass" | "fail";
   steps: QaReportCheck[];
   details?: string;
+  timing?: QaEvidenceTiming;
   runtimeParity?: RuntimeParityResult;
 };
 
@@ -201,6 +204,7 @@ export type QaSuiteRunParams = {
   forcedRuntime?: RuntimeId;
   runtimePair?: [RuntimeId, RuntimeId];
   captureRuntimeParityCell?: boolean;
+  roundTripProbe?: QaSuiteRoundTripProbe;
   // Unified suite partitions consume child evidence in memory; only the
   // parent should write the aggregate qa-evidence.json artifact.
   writeEvidenceFile?: boolean;
@@ -545,6 +549,10 @@ function buildQaIsolatedScenarioWorkerParams(params: {
     transportReadyTimeoutMs: params.input?.transportReadyTimeoutMs,
     workerStartStaggerMs: params.input?.workerStartStaggerMs,
     forcedRuntime: params.input?.forcedRuntime,
+    roundTripProbe:
+      params.input?.roundTripProbe?.scenarioId === params.scenario.id
+        ? params.input.roundTripProbe
+        : undefined,
     writeEvidenceFile: params.input?.writeEvidenceFile,
   };
 }
@@ -1276,6 +1284,17 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     requested: requestedModels,
     scenarios: selectedScenarios,
   });
+  if (
+    params?.roundTripProbe &&
+    !selectedScenarios.some((scenario) => scenario.id === params.roundTripProbe?.scenarioId)
+  ) {
+    throw new Error(
+      `QA round-trip probe scenario is not selected: ${params.roundTripProbe.scenarioId}`,
+    );
+  }
+  if (params?.roundTripProbe && params.runtimePair) {
+    throw new Error("QA round-trip probes are not supported with runtime-pair runs.");
+  }
   const enabledPluginIds = [
     ...new Set([
       ...collectQaSuitePluginIds(selectedScenarios),
@@ -1443,7 +1462,14 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
 
     let isolatedRunFailed = false;
     let isolatedRunError: unknown;
+    let parentTransportCleaned = false;
     try {
+      if (params?.channelDriver === "live") {
+        // The parent only renders aggregate artifacts. Release its live credentials
+        // before child workers acquire the same exclusive transport lease.
+        parentTransportCleaned = true;
+        await transportFactoryResult.cleanup();
+      }
       updateScenarioRun();
       const workerStartStaggerMs =
         params?.workerStartStaggerMs ?? resolveQaSuiteWorkerStartStaggerMs(concurrency);
@@ -1616,7 +1642,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       throw error;
     } finally {
       const cleanupSteps: Array<() => Promise<void>> = [
-        () => transportFactoryResult.cleanup(),
+        ...(!parentTransportCleaned ? [() => transportFactoryResult.cleanup()] : []),
         () => disposeRegisteredAgentHarnesses(),
       ];
       if (ownsLab) {
@@ -1810,7 +1836,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       const runSelectedScenario = () => runScenarioDefinition(activeEnv, scenario);
       const scenarioRetryCount =
         scenario.execution.kind === "flow" ? scenario.execution.retryCount : undefined;
-      const result =
+      let result: QaSuiteScenarioResult =
         scenarioRetryCount === 0
           ? await runSelectedScenario()
           : await runQaScenarioWithFlakeRetry(runSelectedScenario, () =>
@@ -1819,6 +1845,27 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
                 `scenario retry (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
               ),
             );
+      if (result.status === "pass" && params?.roundTripProbe?.scenarioId === scenario.id) {
+        const probeResult = await runQaSuiteRoundTripProbe({
+          probe: params.roundTripProbe,
+          transport,
+        });
+        const probePassed = probeResult.passed >= params.roundTripProbe.count;
+        result = {
+          ...result,
+          status: probePassed ? "pass" : "fail",
+          details: [result.details, probeResult.details].filter(Boolean).join(" | "),
+          timing: probeResult.timing,
+          steps: [
+            ...result.steps,
+            {
+              name: "Round-trip samples",
+              status: probePassed ? "pass" : "fail",
+              details: probeResult.details,
+            },
+          ],
+        };
+      }
       sampleGatewayProcessRss(`scenario:${scenario.id}:finish`);
       scenarios.push(result);
       writeQaSuiteProgress(
