@@ -512,6 +512,76 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(loadInstalledPluginIndexInstallRecordsSync({ env, stateDir }).codex).toBeDefined();
   });
 
+  it("derives from the recorded npm generation when persisted plugin metadata points at an older generation", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = {};
+    const oldWhatsappDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/whatsapp",
+      pluginId: "whatsapp",
+      version: "2026.6.11",
+      layout: "generation",
+      generationKey: "whatsapp-2026.6.11",
+    });
+    const currentWhatsappDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/whatsapp",
+      pluginId: "whatsapp",
+      version: "2026.7.1",
+      layout: "generation",
+      generationKey: "whatsapp-2026.7.1",
+    });
+    const staleIndex = loadInstalledPluginIndex({
+      config,
+      env,
+      stateDir,
+      installRecords: {
+        whatsapp: {
+          source: "npm",
+          spec: "@openclaw/whatsapp@2026.6.11",
+          installPath: oldWhatsappDir,
+          version: "2026.6.11",
+          resolvedName: "@openclaw/whatsapp",
+          resolvedVersion: "2026.6.11",
+          resolvedSpec: "@openclaw/whatsapp@2026.6.11",
+        },
+      },
+    });
+    writePersistedInstalledPluginIndexSync(
+      {
+        ...staleIndex,
+        installRecords: {
+          whatsapp: {
+            source: "npm",
+            spec: "@openclaw/whatsapp@latest",
+            installPath: currentWhatsappDir,
+            version: "2026.7.1",
+            resolvedName: "@openclaw/whatsapp",
+            resolvedVersion: "2026.7.1",
+            resolvedSpec: "@openclaw/whatsapp@2026.7.1",
+          },
+        },
+      },
+      { stateDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    const whatsapp = requirePluginRecord(result.snapshot.plugins, "whatsapp");
+    expect(whatsapp.rootDir).toBe(fs.realpathSync(currentWhatsappDir));
+    expect(whatsapp.packageVersion).toBe("2026.7.1");
+    expect(result.snapshot.installRecords.whatsapp?.installPath).toBe(currentWhatsappDir);
+    expect(fs.existsSync(oldWhatsappDir)).toBe(true);
+  });
+
   it("keeps vanished recovered install records on the persisted fast path", () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");
@@ -688,8 +758,10 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     };
     writePackagePlugin(firstRoot, { pluginId: "duplicate" });
     writePackagePlugin(secondRoot, { pluginId: "duplicate" });
+    const firstRealRoot = fs.realpathSync(firstRoot);
+    const secondRealRoot = fs.realpathSync(secondRoot);
     const originalIndex = loadInstalledPluginIndex({ config: originalConfig, env });
-    expect(originalIndex.plugins.map((plugin) => plugin.rootDir)).toEqual([firstRoot]);
+    expect(originalIndex.plugins.map((plugin) => plugin.rootDir)).toEqual([firstRealRoot]);
     writePersistedInstalledPluginIndexSync(originalIndex, { stateDir });
 
     const unchanged = loadPluginRegistrySnapshotWithMetadata({
@@ -706,7 +778,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
     expect(reordered.source).toBe("derived");
     expectDiagnosticsContainCode(reordered.diagnostics, "persisted-registry-stale-source");
-    expect(reordered.snapshot.plugins.map((plugin) => plugin.rootDir)).toEqual([secondRoot]);
+    expect(reordered.snapshot.plugins.map((plugin) => plugin.rootDir)).toEqual([secondRealRoot]);
   });
 
   it("rebuilds legacy config-path persisted registries before startup scoping", () => {

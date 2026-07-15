@@ -413,6 +413,30 @@ function isAllowedPersistedBundledPluginRoot(
   return !fs.existsSync(path.join(bundledPluginsDir, relativePluginRoot));
 }
 
+function hasMismatchedPersistedNpmInstallRoot(
+  index: InstalledPluginIndex,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const installRecords = extractPluginInstallRecordsFromInstalledPluginIndex(index);
+  return index.plugins.some((plugin) => {
+    if (plugin.origin !== "global") {
+      return false;
+    }
+    const installRecord = installRecords[plugin.pluginId];
+    if (installRecord?.source !== "npm" || !installRecord.installPath?.trim()) {
+      return false;
+    }
+    const installPath = resolveUserPath(installRecord.installPath, env);
+    if (!fs.existsSync(installPath)) {
+      return false;
+    }
+    return (
+      !isPathInsideOrEqual(plugin.rootDir, installPath) &&
+      !isPathInsideOrEqual(installPath, plugin.rootDir)
+    );
+  });
+}
+
 function sourcePluginOptsOutOfBundledDist(pluginRootDir: string): boolean {
   const packageJson = tryReadJsonSync<PackageManifest>(path.join(pluginRootDir, "package.json"));
   return getPackageManifestMetadata(packageJson ?? undefined)?.build?.bundledDist === false;
@@ -591,6 +615,13 @@ export function loadPluginRegistrySnapshotWithMetadata(
           code: "persisted-registry-stale-source",
           message:
             "Persisted plugin registry points at a different bundled plugin tree; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        });
+      } else if (hasMismatchedPersistedNpmInstallRoot(persistedIndex, env)) {
+        diagnostics.push({
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message:
+            "Persisted plugin registry points at an older npm plugin generation; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else if (hasMismatchedPersistedConfigPathPlugins(persistedIndex, params, env)) {
         diagnostics.push({
