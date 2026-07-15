@@ -188,8 +188,9 @@ export class UrbitSSEClient {
 
     this.streamController = controller;
 
+    let stream: Awaited<ReturnType<typeof urbitFetch>>;
     try {
-      const { response, release } = await urbitFetch({
+      stream = await urbitFetch({
         baseUrl: this.url,
         path: `/~/channel/${this.channelId}`,
         init: {
@@ -205,26 +206,29 @@ export class UrbitSSEClient {
         signal: controller.signal,
         auditContext: "tlon-urbit-sse-stream",
       });
-
-      this.streamRelease = release;
-
-      if (!response.ok) {
-        await release();
-        this.streamRelease = null;
-        throw new Error(`Stream connection failed: ${response.status}`);
-      }
-
-      this.processStream(response.body).catch((error: unknown) => {
-        if (!this.aborted) {
-          this.logger.error?.(`Stream error: ${String(error)}`);
-          for (const { err } of this.eventHandlers.values()) {
-            err?.(error);
-          }
-        }
-      });
     } finally {
-      clearTimeout(timeoutId); // success+failure: avoid dangling reconnect timers
+      // The deadline only covers waiting for response headers. Always disarm it
+      // before response handling so failed connects cannot retain the process.
+      clearTimeout(timeoutId);
     }
+
+    const { response, release } = stream;
+    this.streamRelease = release;
+
+    if (!response.ok) {
+      this.streamRelease = null;
+      await release();
+      throw new Error(`Stream connection failed: ${response.status}`);
+    }
+
+    this.processStream(response.body).catch((error: unknown) => {
+      if (!this.aborted) {
+        this.logger.error?.(`Stream error: ${String(error)}`);
+        for (const { err } of this.eventHandlers.values()) {
+          err?.(error);
+        }
+      }
+    });
   }
 
   async processStream(body: unknown) {
