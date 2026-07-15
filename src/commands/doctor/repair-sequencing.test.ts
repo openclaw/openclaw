@@ -49,8 +49,7 @@ vi.mock("../doctor-auth-flat-profiles.js", () => ({
   maybeRepairOpenAICodexAuthProfileStores: mocks.maybeRepairOpenAICodexAuthProfileStores,
 }));
 
-vi.mock("./shared/missing-configured-plugin-install.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./shared/missing-configured-plugin-install.js")>()),
+vi.mock("./shared/missing-configured-plugin-install.js", () => ({
   repairMissingConfiguredPluginInstalls: mocks.repairMissingConfiguredPluginInstalls,
 }));
 

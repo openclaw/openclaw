@@ -9,17 +9,12 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/ins
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
 import { asObjectRecord } from "./object.js";
+import {
+  filterRepairableStalePluginHits,
+  type StalePluginSurface,
+} from "./stale-plugin-repair-preservation.js";
 
 const CHANNEL_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
-
-type StalePluginSurface =
-  | "allow"
-  | "deny"
-  | "entries"
-  | "slot"
-  | "channel"
-  | "heartbeat"
-  | "modelByChannel";
 
 type StalePluginConfigHit = {
   pluginId: string;
@@ -355,26 +350,10 @@ export function maybeRepairStalePluginConfig(
     return { config: cfg, changes: [] };
   }
 
-  const preservePluginIds = new Set(
-    [...(params?.preservePluginIds ?? [])]
-      .map((pluginId) => normalizePluginId(pluginId))
-      .filter((pluginId): pluginId is string => Boolean(pluginId)),
-  );
-  const surfacePreservePluginIds: Partial<Record<StalePluginSurface, Set<string>>> = {};
-  for (const [surface, ids] of Object.entries(params?.surfacePreservePluginIds ?? {})) {
-    const normalized = new Set(
-      [...ids].map((id) => normalizePluginId(id)).filter((id): id is string => Boolean(id)),
-    );
-    if (normalized.size > 0) {
-      surfacePreservePluginIds[surface as StalePluginSurface] = normalized;
-    }
-  }
-  const hits = scanStalePluginConfigWithState(cfg, registryState, environment).filter((hit) => {
-    const id = normalizePluginId(hit.pluginId);
-    if (preservePluginIds.has(id)) return false;
-    const surfaceIds = surfacePreservePluginIds[hit.surface];
-    if (surfaceIds?.has(id)) return false;
-    return true;
+  const hits = filterRepairableStalePluginHits({
+    hits: scanStalePluginConfigWithState(cfg, registryState, environment),
+    preservePluginIds: params?.preservePluginIds,
+    surfacePreservePluginIds: params?.surfacePreservePluginIds,
   });
   if (hits.length === 0) {
     return { config: cfg, changes: [] };

@@ -28,15 +28,13 @@ import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationState,
 } from "./shared/config-mutation-state.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "./shared/configured-runtime-plugin-installs.js";
 import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engine-host-compat.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
-import {
-  repairMissingConfiguredPluginInstalls,
-  VERSION_BOUND_RUNTIME_PLUGIN_IDS,
-} from "./shared/missing-configured-plugin-install.js";
+import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
 import { maybeRepairStaleConfiguredAuthOrders } from "./shared/stale-auth-order.js";
@@ -158,6 +156,8 @@ export async function runDoctorRepairSequence(params: {
     applyMutation(
       maybeRepairStalePluginConfig(state.candidate, env, {
         preservePluginIds: failedPluginIds,
+        // A host-version-bound runtime can be absent between core swap and package
+        // convergence. Preserve only allowlist intent; other stale surfaces still clean up.
         surfacePreservePluginIds: { allow: VERSION_BOUND_RUNTIME_PLUGIN_IDS },
       }),
     );
