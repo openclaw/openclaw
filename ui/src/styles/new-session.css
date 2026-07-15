@@ -361,9 +361,52 @@ wa-popover.new-session-page__select--folder::part(body) {
   border-top: 1px solid var(--border);
 }
 
-.new-session-page__error {
+.new-session-page__browser > .new-session-page__error {
+  padding: 8px 10px 0;
   font-size: 12px;
   color: var(--danger);
+}
+
+.new-session-page__alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: fit-content;
+  max-width: min(48rem, calc(100% - 36px));
+  margin: 4px auto 2px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  text-align: left;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.new-session-page__alert-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.new-session-page__alert-icon svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.new-session-page__alert-message {
+  min-width: 0;
+  padding-top: 3px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .new-session-page__browser-use {
