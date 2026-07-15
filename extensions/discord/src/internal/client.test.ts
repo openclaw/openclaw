@@ -539,7 +539,7 @@ describe("Client gateway event queue", () => {
     });
   });
 
-  it("holds a timed-out listener slot until its underlying promise settles", async () => {
+  it("holds a timed-out listener slot until its underlying promise resolves", async () => {
     vi.useFakeTimers();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const firstSettlement = createDeferred();
@@ -573,7 +573,7 @@ describe("Client gateway event queue", () => {
       timeouts: 1,
     });
 
-    firstSettlement.reject(new Error("late listener failure"));
+    firstSettlement.resolve();
     await vi.advanceTimersByTimeAsync(0);
 
     expect(started).toEqual(["first", "second"]);
@@ -585,6 +585,43 @@ describe("Client gateway event queue", () => {
       queueSize: 0,
       processing: 0,
       processed: 2,
+      timeouts: 1,
+    });
+  });
+
+  it("logs a listener failure that arrives after its dispatch timeout", async () => {
+    vi.useFakeTimers();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const settlement = createDeferred();
+    const lateError = new Error("late listener failure");
+    const listener = {
+      type: "READY",
+      handle: vi.fn(async () => await settlement.promise),
+    } satisfies AnyListener;
+    const client = createQueuedClient({
+      listeners: [listener],
+      eventQueue: { listenerTimeout: 10, maxConcurrency: 1 },
+    });
+
+    const dispatch = client.dispatchGatewayEvent("READY", {});
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(dispatch).resolves.toBeUndefined();
+
+    settlement.reject(lateError);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(errorSpy).toHaveBeenNthCalledWith(
+      1,
+      "[EventQueue] Listener Object timed out after 10ms for event READY",
+    );
+    expect(errorSpy).toHaveBeenNthCalledWith(
+      2,
+      "[EventQueue] Listener Object failed after timeout for event READY:",
+      lateError,
+    );
+    expect(client.getRuntimeMetrics().eventQueue).toMatchObject({
+      processing: 0,
+      processed: 1,
       timeouts: 1,
     });
   });
