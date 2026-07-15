@@ -133,6 +133,33 @@ describe("mime detection", () => {
     });
   });
 
+  it.each([
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ])("uses %s metadata to refine extensionless generic ZIP bytes", async (headerMime) => {
+    const zip = new JSZip();
+    zip.file("hello.txt", "hi");
+
+    await expectDetectedMime({
+      input: { buffer: await zip.generateAsync({ type: "nodebuffer" }), headerMime },
+      expected: headerMime,
+    });
+  });
+
+  it("does not let unrelated document metadata override generic ZIP bytes", async () => {
+    const zip = new JSZip();
+    zip.file("hello.txt", "hi");
+
+    await expectDetectedMime({
+      input: {
+        buffer: await zip.generateAsync({ type: "nodebuffer" }),
+        headerMime: "application/pdf",
+      },
+      expected: "application/zip",
+    });
+  });
+
   it("preserves audio metadata for ambiguous WebM container bytes", async () => {
     // Minimal EBML header declaring WebM; file-type correctly recognizes the container
     // but defaults it to video/webm because no track metadata is present.

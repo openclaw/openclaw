@@ -91,6 +91,12 @@ const AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME: Readonly<Record<string, string>> = {
   "audio/webm": "video/webm",
 };
 
+const GENERIC_ZIP_REFINEMENT_MIMES = new Set([
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+
 /** Normalizes MIME strings by dropping parameters, lowercasing, and folding APNG to PNG. */
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
@@ -184,11 +190,18 @@ export async function detectMime(opts: {
     sniffed === "application/octet-stream" || sniffed === "application/zip";
 
   // Prefer sniffed types, but don't let generic container types override a more
-  // specific extension mapping (e.g. XLSX vs ZIP).
-  const inferred =
-    sniffedGenericContainer && extMime && !extMime.startsWith("image/")
-      ? extMime
-      : (sniffed ?? extMime);
+  // specific extension or known container metadata (e.g. XLSX vs ZIP).
+  const specificExtMime =
+    extMime && extMime !== sniffed && !extMime.startsWith("image/") ? extMime : undefined;
+  const genericContainerHint =
+    sniffed === "application/zip"
+      ? mimeHints.find((mime) => GENERIC_ZIP_REFINEMENT_MIMES.has(mime))
+      : sniffed === "application/octet-stream"
+        ? mimeHints.find((mime) => mime !== "application/octet-stream")
+        : undefined;
+  const inferred = sniffedGenericContainer
+    ? (specificExtMime ?? genericContainerHint ?? sniffed)
+    : (sniffed ?? extMime);
   // file-type defaults these containers to video without parsing their tracks.
   // Preserve a concrete audio hint only for those documented ambiguous results.
   const audioContainerHint = mimeHints.find(
