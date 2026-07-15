@@ -17,6 +17,7 @@ import {
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, isSharedTextCommand, parseCommand } from "./commands.js";
@@ -28,7 +29,6 @@ import {
 } from "./components/selectors.js";
 import type { TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
@@ -420,7 +420,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             setActivityStatus("error");
           }
         } catch (err) {
-          chatLog.addSystem(`auth flow failed: ${sanitizeRenderableText(String(err))}`);
+          chatLog.addSystem(`auth flow failed: ${sanitizeRenderableText(formatErrorMessage(err))}`);
           setActivityStatus("error");
         }
         break;
@@ -478,7 +478,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
               await sendMessage(continuation);
             }
           } catch (err) {
-            chatLog.addSystem(`goal failed: ${sanitizeRenderableText(String(err))}`);
+            chatLog.addSystem(`goal failed: ${sanitizeRenderableText(formatErrorMessage(err))}`);
           }
         } else {
           await sendMessage(raw);
@@ -753,7 +753,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await setSession(result.key);
           chatLog.addSystem(`new session: ${result.key}`);
         } catch (err) {
-          chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
+          chatLog.addSystem(
+            `new session failed: ${sanitizeRenderableText(formatErrorMessage(err))}`,
+          );
         } finally {
           sessionCreationInFlight = false;
         }
@@ -778,7 +780,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           }
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
         } catch (err) {
-          chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
+          chatLog.addSystem(`reset failed: ${sanitizeRenderableText(formatErrorMessage(err))}`);
         }
         break;
       case "abort":

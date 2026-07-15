@@ -4,13 +4,13 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
@@ -379,6 +379,9 @@ export function createSessionActions(context: SessionActionContext) {
         defaults: result.defaults,
       });
     } catch (err) {
+      if (!isCurrentRefresh()) {
+        return;
+      }
       chatLog.addSystem(`sessions list failed: ${formatErrorMessage(err)}`);
     }
   };
@@ -605,6 +608,9 @@ export function createSessionActions(context: SessionActionContext) {
       tui.requestRender(true);
       return { loaded: true, inFlightRunId: inFlightRunId || null };
     } catch (err) {
+      if (!isCurrentLoad()) {
+        return { loaded: false };
+      }
       chatLog.addSystem(`history failed: ${formatErrorMessage(err)}`);
       tui.requestRender(true);
       return { loaded: false };
