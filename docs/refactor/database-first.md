@@ -1184,10 +1184,12 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   files. Install, doctor, update, and release smoke paths use generated
   completion output or profile sourcing instead of durable completion cache
   files.
-- Gateway skill-upload staging now uses shared `skill_uploads` rows. Upload
-  metadata, idempotency keys, and archive bytes live in SQLite; the installer
-  only receives a temporary materialized archive path while an install is
-  running.
+- Gateway skill-upload staging now uses shared `skill_uploads` and
+  `skill_upload_chunks` rows. Chunks stay individually transactional during
+  upload, then commit assembles one verified archive BLOB and removes the chunk
+  rows. The installer only receives a temporary materialized archive path while
+  an install is running. Doctor discards the retired one-hour filesystem
+  staging tree instead of importing transient uploads.
 - Subagent inline attachments no longer materialize under workspace
   `.openclaw/attachments/*`. The spawn path prepares SQLite VFS seed entries,
   inline runs seed those entries into the per-agent runtime scratch namespace,
@@ -1462,6 +1464,7 @@ plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, ex
 plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
 media_blobs(subdir, id, content_type, size_bytes, blob, created_at, updated_at)
 skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, received_bytes, archive_blob, created_at, expires_at, committed, committed_at, idempotency_key_hash)
+skill_upload_chunks(upload_id, byte_offset, size_bytes, chunk_blob)
 web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, created_at_ms, updated_at_ms)
 web_push_vapid_keys(key_id, public_key, private_key, subject, updated_at_ms)
 apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, topic, environment, distribution, token_debug_suffix, updated_at_ms)

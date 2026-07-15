@@ -1005,6 +1005,16 @@ CREATE INDEX IF NOT EXISTS idx_skill_uploads_idempotency
   ON skill_uploads(idempotency_key_hash)
   WHERE idempotency_key_hash IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS skill_upload_chunks (
+  upload_id TEXT NOT NULL,
+  byte_offset INTEGER NOT NULL CHECK (byte_offset >= 0),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+  chunk_blob BLOB NOT NULL,
+  PRIMARY KEY (upload_id, byte_offset),
+  FOREIGN KEY (upload_id) REFERENCES skill_uploads(upload_id) ON DELETE CASCADE,
+  CHECK (length(chunk_blob) = size_bytes)
+);
+
 CREATE TABLE IF NOT EXISTS capture_sessions (
   id TEXT NOT NULL PRIMARY KEY,
   started_at INTEGER NOT NULL,
