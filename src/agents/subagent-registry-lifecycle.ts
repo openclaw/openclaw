@@ -75,6 +75,7 @@ import {
   resolveSubagentRunEffectiveEndedAt,
 } from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
+import { selectDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
 
 type CaptureSubagentCompletionReply =
   (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
@@ -787,11 +788,26 @@ export function createSubagentRegistryLifecycleController(params: {
     params.persist();
   };
 
-  const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
-    entry.expectsCompletionMessage === true &&
-    entry.cleanup === "keep" &&
-    entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
-    entry.outcome?.status === "ok";
+  const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) => {
+    if (
+      entry.expectsCompletionMessage !== true ||
+      entry.endedReason !== SUBAGENT_ENDED_REASON_COMPLETE ||
+      entry.outcome?.status !== "ok"
+    ) {
+      return false;
+    }
+    if (entry.cleanup === "keep") {
+      return true;
+    }
+    const payload = entry.delivery?.payload;
+    const completion = entry.completion;
+    return Boolean(
+      selectDeliverableSessionsReply(
+        payload?.frozenResultText ?? completion?.resultText,
+        payload?.fallbackFrozenResultText ?? completion?.fallbackResultText,
+      ),
+    );
+  };
 
   const finalizeResumedAnnounceGiveUp = async (giveUpParams: {
     runId: string;
