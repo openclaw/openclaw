@@ -497,6 +497,7 @@ export const uk: TranslationMap = {
     cloudSecureContextRequired:
       "Хмарним виконавцям потрібен захищений контекст браузера, щоб відновлення могло захистити ваше завдання.",
     cloudStartFailed: "Сеанс створено локально, але запуск у хмарі завершився помилкою: {error}",
+    cloudSyncsFolder: "Синхронізує {folder} із хмарним робочим процесом",
     folder: "Папка",
     folderPlaceholder: "Робоча область агента",
     browse: "Переглянути папки",
@@ -3394,6 +3395,9 @@ export const uk: TranslationMap = {
     sendShortcut: "Комбінація для надсилання",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "Подальші запити під час роботи агента",
+    followUpModeQueue: "Додати в чергу до завершення виконання",
+    followUpModeSteer: "Спрямувати до активного виконання",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",

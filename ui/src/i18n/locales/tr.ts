@@ -500,6 +500,7 @@ export const tr: TranslationMap = {
       "Kurtarma işleminin görevinizi koruyabilmesi için bulut çalışanlarının güvenli bir tarayıcı bağlamına ihtiyacı vardır.",
     cloudStartFailed:
       "Oturum yerel olarak oluşturuldu ancak bulutta başlatma başarısız oldu: {error}",
+    cloudSyncsFolder: "{folder} klasörünü bulut worker'ıyla senkronize eder",
     folder: "Klasör",
     folderPlaceholder: "Agent workspace",
     browse: "Klasörlere göz at",
@@ -3408,6 +3409,9 @@ export const tr: TranslationMap = {
     sendShortcut: "Gönderme kısayolu",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "Agent çalışırken gönderilen takip mesajları",
+    followUpModeQueue: "Çalışma sona erene kadar sıraya al",
+    followUpModeSteer: "Etkin çalışmaya yönlendir",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
