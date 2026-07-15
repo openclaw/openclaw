@@ -60,9 +60,11 @@ vi.mock("../infra/retry.js", async () => {
 });
 
 let summarizeWithFallback: typeof import("./compaction.test-support.js").summarizeWithFallback;
+let summarizeInStages: typeof import("./compaction.js").summarizeInStages;
 
 beforeAll(async () => {
   vi.resetModules();
+  ({ summarizeInStages } = await import("./compaction.js"));
   ({ summarizeWithFallback } = await import("./compaction.test-support.js"));
 });
 
@@ -318,5 +320,43 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
       "chunk summarization failed after retries; partial summary available",
       expect.objectContaining({ completedChunks: 2, totalChunks: 3 }),
     );
+  });
+
+  it("preserves completed stages when the next stage times out before its first chunk", async () => {
+    const controller = new AbortController();
+    const timeoutError = new CompactionSafetyTimeoutError();
+    const onPartialSummary = vi.fn();
+    const stagedMessages: AgentMessage[] = Array.from({ length: 4 }, (_, index) => ({
+      role: "user",
+      content: `${index + 1}-${"x".repeat(1200)}`,
+      timestamp: index + 1,
+    }));
+
+    compactionMocks.generateSummary
+      .mockResolvedValueOnce("Completed stage 1")
+      .mockImplementationOnce(async () => {
+        controller.abort(timeoutError);
+        throw timeoutError;
+      });
+
+    await expect(
+      summarizeInStages({
+        messages: stagedMessages,
+        model: testModel,
+        apiKey: "test-key", // pragma: allowlist secret
+        signal: controller.signal,
+        reserveTokens: 1000,
+        maxChunkTokens: 1000,
+        contextWindow: 200_000,
+        parts: 2,
+        minMessagesForSplit: 4,
+        onPartialSummary,
+      }),
+    ).resolves.toMatch(/Completed stage 1[\s\S]*Partial staged summary: 1 of 2/);
+    expect(onPartialSummary).toHaveBeenCalledWith({
+      kind: "safety-timeout",
+      completedChunks: 1,
+      totalChunks: 2,
+    });
   });
 });

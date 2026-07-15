@@ -377,6 +377,10 @@ function extractChunkTimeRange(chunk: AgentMessage[]): string {
   return ` [${range} UTC]`;
 }
 
+function formatPartialStagedSummary(partialSummaries: string[], totalStages: number): string {
+  return `${partialSummaries.join("\n\n---\n\n")}\n\n[Partial staged summary: ${partialSummaries.length} of ${totalStages} stages produced output before timeout.]`;
+}
+
 /** Summarizes history in multiple stages when a single pass would be too large. */
 export async function summarizeInStages(params: {
   messages: AgentMessage[];
@@ -414,21 +418,44 @@ export async function summarizeInStages(params: {
   const partialSummaries: string[] = [];
   for (const chunk of plan.chunks) {
     let timedOutWithPartialProgress = false;
-    const chunkSummary = await summarizeWithFallback({
-      ...params,
-      messages: chunk,
-      previousSummary: undefined,
-      onPartialSummary: (progress) => {
-        timedOutWithPartialProgress = true;
+    let chunkSummary: string;
+    try {
+      chunkSummary = await summarizeWithFallback({
+        ...params,
+        messages: chunk,
+        previousSummary: undefined,
+        onPartialSummary: (progress) => {
+          timedOutWithPartialProgress = true;
+          params.onPartialSummary?.(progress);
+        },
+      });
+    } catch (err) {
+      if (
+        partialSummaries.length > 0 &&
+        params.signal.aborted &&
+        isCompactionSafetyTimeoutError(params.signal.reason)
+      ) {
+        const progress = {
+          kind: "safety-timeout" as const,
+          completedChunks: partialSummaries.length,
+          totalChunks: plan.chunks.length,
+        };
+        log.warn("safety timeout interrupted staged summarization; partial summary available", {
+          err,
+          completedStages: progress.completedChunks,
+          totalStages: progress.totalChunks,
+        });
         params.onPartialSummary?.(progress);
-      },
-    });
+        return formatPartialStagedSummary(partialSummaries, plan.chunks.length);
+      }
+      throw err;
+    }
     partialSummaries.push(chunkSummary);
     if (timedOutWithPartialProgress) {
       if (partialSummaries.length === 1) {
         return chunkSummary;
       }
-      return `${partialSummaries.join("\n\n---\n\n")}\n\n[Partial staged summary: ${partialSummaries.length} of ${plan.chunks.length} stages produced output before timeout.]`;
+      return formatPartialStagedSummary(partialSummaries, plan.chunks.length);
     }
   }
 

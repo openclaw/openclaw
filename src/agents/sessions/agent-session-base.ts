@@ -74,7 +74,9 @@ export abstract class AgentSessionBase {
   protected pendingNextTurnMessages: CustomMessage[] = [];
 
   // Compaction state
-  protected compactionAbortController: AbortController | undefined = undefined;
+  // Manual requests register before the session write-lock wait so timeout cancellation also
+  // reaches queued compactions instead of allowing them to mutate state after wrapper rejection.
+  protected compactionAbortControllers = new Set<AbortController>();
   protected autoCompactionAbortController: AbortController | undefined = undefined;
   protected overflowRecoveryAttempted = false;
 
@@ -650,7 +652,7 @@ export abstract class AgentSessionBase {
   get isCompacting(): boolean {
     return (
       this.autoCompactionAbortController !== undefined ||
-      this.compactionAbortController !== undefined ||
+      this.compactionAbortControllers.size > 0 ||
       this.branchSummaryAbortController !== undefined
     );
   }

@@ -33,17 +33,26 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
    * @param customInstructions Optional instructions for the compaction summary
    */
   async compact(customInstructions?: string): Promise<CompactionResult> {
-    return await this.runWithSessionWriteLock(
-      async () => await this.compactWithSessionWriteLock(customInstructions),
-    );
+    const abortController = new AbortController();
+    this.compactionAbortControllers.add(abortController);
+    try {
+      return await this.runWithSessionWriteLock(async () => {
+        if (abortController.signal.aborted) {
+          throw new Error("Compaction cancelled");
+        }
+        return await this.compactWithSessionWriteLock(abortController.signal, customInstructions);
+      });
+    } finally {
+      this.compactionAbortControllers.delete(abortController);
+    }
   }
 
   private async compactWithSessionWriteLock(
+    signal: AbortSignal,
     customInstructions?: string,
   ): Promise<CompactionResult> {
     this.disconnectFromAgent();
     await this.abort();
-    this.compactionAbortController = new AbortController();
     this.emit({ type: "compaction_start", reason: "manual" });
 
     try {
@@ -52,7 +61,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         customInstructions,
         mode: "manual",
         settings,
-        signal: this.compactionAbortController.signal,
+        signal,
       });
       if (outcome.status !== "compacted") {
         throw new Error("Compaction cancelled");
@@ -81,7 +90,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       });
       throw error;
     } finally {
-      this.compactionAbortController = undefined;
       this.reconnectToAgent();
     }
   }
@@ -90,7 +98,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
    * Cancel in-progress compaction (manual or auto).
    */
   abortCompaction(reason?: unknown): void {
-    this.compactionAbortController?.abort(reason);
+    for (const controller of this.compactionAbortControllers) {
+      controller.abort(reason);
+    }
     this.autoCompactionAbortController?.abort(reason);
   }
 
@@ -126,6 +136,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     customInstructions?: string;
     mode: "manual" | "auto";
   }): Promise<CompactionWorkOutcome> {
+    if (options.signal.aborted) {
+      return { status: "aborted" };
+    }
     const isManual = options.mode === "manual";
     if (!this.model) {
       if (isManual) {

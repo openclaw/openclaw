@@ -348,6 +348,104 @@ describe("AgentSession compaction timeout partial results", () => {
       releasePostCommitHook();
     }
   });
+
+  it("does not start compaction after timing out while waiting for the session write lock", async () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({
+      role: "user",
+      content: "user context ".repeat(200),
+      timestamp: 1,
+    } as Parameters<SessionManager["appendMessage"]>[0]);
+    appendPersistedAssistantMessage({
+      sessionManager,
+      content: "assistant context ".repeat(200),
+    });
+
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
+    let beforeCompactCalled = false;
+    const resourceLoader = createResourceLoaderWithHandlers(
+      new Map([
+        [
+          "session_before_compact",
+          [
+            async (rawEvent: unknown) => {
+              beforeCompactCalled = true;
+              const event = rawEvent as {
+                preparation: { firstKeptEntryId: string; tokensBefore: number };
+              };
+              return {
+                compaction: {
+                  summary: "must not persist after lock-wait timeout",
+                  firstKeptEntryId: event.preparation.firstKeptEntryId,
+                  tokensBefore: event.preparation.tokensBefore,
+                },
+              };
+            },
+          ],
+        ],
+      ]),
+    );
+    let notifyLockWaiting = () => {};
+    const lockWaiting = new Promise<void>((resolve) => {
+      notifyLockWaiting = resolve;
+    });
+    let releaseLock = () => {};
+    const lockBlocked = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      authStorage,
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+      resourceLoader,
+      sessionManager,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+      }),
+      withSessionWriteLock: async (run) => {
+        notifyLockWaiting();
+        await lockBlocked;
+        return await run();
+      },
+    });
+
+    let pendingCompaction: Promise<unknown> | undefined;
+    const wrappedCompaction = compactWithSafetyTimeout(
+      () => {
+        pendingCompaction = session.compact();
+        return pendingCompaction;
+      },
+      25,
+      {
+        onCancel: (reason) => session.abortCompaction(reason),
+        acceptResultAfterTimeout: isCompactionTimeoutPartialResult,
+        timeoutResultGraceMs: 10,
+      },
+    );
+
+    try {
+      await lockWaiting;
+      expect(session.isCompacting).toBe(true);
+      await expect(wrappedCompaction).rejects.toThrow("Compaction timed out");
+    } finally {
+      releaseLock();
+    }
+
+    if (!pendingCompaction) {
+      throw new Error("expected compaction to be queued behind the write lock");
+    }
+    await expect(pendingCompaction).rejects.toThrow();
+    expect(session.isCompacting).toBe(false);
+    expect(beforeCompactCalled).toBe(false);
+    expect(sessionManager.getEntries()).not.toContainEqual(
+      expect.objectContaining({
+        type: "compaction",
+        summary: "must not persist after lock-wait timeout",
+      }),
+    );
+  });
 });
 
 describe("AgentSession getLastAssistantText", () => {
