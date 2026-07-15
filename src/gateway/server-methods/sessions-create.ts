@@ -316,7 +316,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       // A plain New Chat that resets an existing session must not inherit its prior worktree cwd.
       clearSpawnedCwd: p.worktree !== true,
       fork: p.fork,
-      succeedsParent: p.succeedsParent === true,
+      // Forward the tri-state verbatim: `true`/`false` are explicit dispositions
+      // and `undefined` (omitted) preserves the legacy rollover for an eligible
+      // successor — coercing omission to `false` would silently drop succession
+      // for existing callers (#106932).
+      succeedsParent: p.succeedsParent,
       emitCommandHooks: p.emitCommandHooks,
       resetMainWhenUnspecified: !hasInitialTurn,
       commandSource: "webchat",

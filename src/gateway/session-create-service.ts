@@ -202,11 +202,11 @@ export async function createGatewaySession(params: {
   clearSpawnedCwd?: boolean;
   fork?: boolean;
   /**
-   * Caller-declared succession: the new session replaces the parent as the
-   * current session (an explicit `/new` successor), so the parent rolls over
-   * with a terminal `session_end`. Detached dashboard children and forks run in
-   * parallel and leave this false. Declared by the caller, not inferred from the
-   * child's key shape (#106778/#106932).
+   * Caller-declared succession disposition. `true` rolls the parent over with a
+   * terminal `session_end`; `false` opts out (parallel). Only an explicit
+   * non-dashboard successor is eligible — forks and detached/dashboard children
+   * always run parallel. When omitted, an eligible successor preserves the legacy
+   * rollover (#106778/#106932).
    */
   succeedsParent?: boolean;
   emitCommandHooks?: boolean;
@@ -301,6 +301,28 @@ export async function createGatewaySession(params: {
         error: errorShape(
           ErrorCodes.INVALID_REQUEST,
           "succeedsParent requires an explicit non-dashboard successor key",
+        ),
+      };
+    }
+    // Succession rolls the parent over, so it must actually name a parent and
+    // opt into lifecycle hooks. An explicit `succeedsParent` that omits either
+    // would silently perform no rollover — reject the incomplete declaration at
+    // the boundary instead (#106932).
+    if (params.parentSessionKey === undefined) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "succeedsParent requires parentSessionKey",
+        ),
+      };
+    }
+    if (params.emitCommandHooks !== true) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "succeedsParent requires emitCommandHooks",
         ),
       };
     }
@@ -776,22 +798,26 @@ export async function createGatewaySession(params: {
     };
 
     // The parent only rolls over — receiving a terminal `session_end` while the
-    // new session receives `session_start` — when the new session *succeeds* it:
-    // an explicit `/new` successor the caller flagged with `succeedsParent`. A
-    // detached dashboard child and a fork run in *parallel*: the parent stays the
-    // channel's current session, and emitting `session_end` on it retires its
-    // still-active Codex binding — the Codex extension treats reason "new" as
-    // terminal (`ENDED_SESSION_REASONS`) — permanently breaking the parent with
-    // "Codex binding generation was retired" (#106778).
+    // new session receives `session_start` — when the new session *succeeds* it.
+    // A detached child runs in *parallel*: the parent stays the channel's current
+    // session, and emitting `session_end` on it retires its still-active Codex
+    // binding — the Codex extension treats reason "new" as terminal
+    // (`ENDED_SESSION_REASONS`) — permanently breaking the parent with "Codex
+    // binding generation was retired" (#106778).
     //
-    // The disposition is the caller's explicit declaration, not an inference from
-    // the child's key shape (#106932): the server keeps no current-session
-    // pointer, so a key namespace cannot prove succession. The declaration was
-    // validated up front (a fork, a keyless/minted child, or a dashboard-keyed
-    // child can never be a successor and is rejected there), so here it is
-    // honored directly. The child was created in every case and always receives
-    // its own `session_start`; main reset-in-place emits its own hooks earlier.
-    const childSucceedsParent = params.fork !== true && params.succeedsParent === true;
+    // Only an explicit, non-dashboard successor key is *eligible* to succeed; a
+    // fork, a keyless/minted child, and a dashboard-namespaced child are detached
+    // and never succeed (an explicit `succeedsParent` on one is rejected up
+    // front). For an eligible successor the caller declares the disposition:
+    // `succeedsParent: false` opts out (parallel), `true` opts in, and omission
+    // preserves the legacy rollover so an existing caller that passed an explicit
+    // non-dashboard key + emitCommandHooks keeps its parent `session_end`
+    // (#106932). The child is created in every case and always receives its own
+    // `session_start`; main reset-in-place emits its own hooks earlier.
+    const succeedsParentEligible =
+      params.fork !== true &&
+      parseAgentSessionKey(target.canonicalKey)?.rest.startsWith("dashboard:") !== true;
+    const childSucceedsParent = succeedsParentEligible && params.succeedsParent !== false;
 
     if (canonicalParentSessionKey && parentSessionTarget && params.emitCommandHooks === true) {
       const parentEntry = currentParentSessionEntry;
