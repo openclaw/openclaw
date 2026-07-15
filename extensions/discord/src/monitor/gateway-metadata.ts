@@ -3,6 +3,7 @@ import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Type } from "typebox";
@@ -16,16 +17,16 @@ const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
 const DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 30_000;
 const MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 120_000;
 const DISCORD_GATEWAY_INFO_TIMEOUT_ENV = "OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS";
+const DISCORD_GATEWAY_METADATA_MAX_BYTES = 4 * 1024 * 1024;
 const DISCORD_GATEWAY_METADATA_FALLBACK_LOG_INTERVAL_MS = 60_000;
 
-type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
 export type DiscordGatewayFetchInit = Record<string, unknown> & {
   headers?: Record<string, string>;
 };
 export type DiscordGatewayFetch = (
   input: string,
   init?: DiscordGatewayFetchInit,
-) => Promise<DiscordGatewayMetadataResponse>;
+) => Promise<Response>;
 export type DiscordGatewayMetadataFetchOptions = {
   capture?: false | { flowId: string; meta: Record<string, unknown> };
   proxyUrl?: string;
@@ -56,8 +57,20 @@ function resolveFetchInputUrl(input: RequestInfo | URL): string {
   return input.url;
 }
 
+function createGatewayMetadataOverflowError(size: number, maxBytes: number): Error {
+  return new Error(
+    `Discord gateway metadata response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+  );
+}
+
+async function readGatewayMetadataResponseBody(response: Response): Promise<Buffer> {
+  return await readResponseWithLimit(response, DISCORD_GATEWAY_METADATA_MAX_BYTES, {
+    onOverflow: ({ size, maxBytes }) => createGatewayMetadataOverflowError(size, maxBytes),
+  });
+}
+
 async function materializeGuardedResponse(response: Response): Promise<Response> {
-  const body = await response.arrayBuffer();
+  const body = new Uint8Array(await readGatewayMetadataResponseBody(response));
   return new Response(body, {
     status: response.status,
     statusText: response.statusText,
@@ -168,7 +181,7 @@ export async function fetchDiscordGatewayInfo(params: {
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
 }): Promise<APIGatewayBotInfo> {
-  let response: DiscordGatewayMetadataResponse;
+  let response: Response;
   try {
     response = await params.fetchImpl(DISCORD_GATEWAY_BOT_URL, {
       ...params.fetchInit,
@@ -187,7 +200,7 @@ export async function fetchDiscordGatewayInfo(params: {
 
   let body: string;
   try {
-    body = await response.text();
+    body = new TextDecoder().decode(await readGatewayMetadataResponseBody(response));
   } catch (error) {
     throw createGatewayMetadataError({
       detail: formatErrorMessage(error),

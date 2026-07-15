@@ -52,4 +52,35 @@ describe("Discord gateway metadata", () => {
       "discord: gateway metadata lookup failed transiently; using default gateway url (Failed to get gateway information from Discord: fetch failed | Discord API /gateway/bot failed (429): Error 1015 rate limited)",
     );
   });
+
+  it("bounds direct gateway metadata response bodies before parsing", async () => {
+    const error = await fetchDiscordGatewayInfoWithTimeout({
+      token: "test",
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new Uint8Array(DISCORD_GATEWAY_METADATA_MAX_BYTES + 1).fill(0x78),
+              );
+              controller.close();
+            },
+          }),
+          { status: 502, headers: { "content-type": "text/plain" } },
+        ),
+      timeoutMs: 1_000,
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      "Failed to get gateway information from Discord: fetch failed",
+    );
+    const cause = (error as { cause?: unknown }).cause;
+    expect(cause).toBeInstanceOf(Error);
+    expect((cause as Error).message).toMatch(
+      new RegExp(
+        `Discord gateway metadata response body too large: \\d+ bytes \\(limit: ${DISCORD_GATEWAY_METADATA_MAX_BYTES} bytes\\)`,
+      ),
+    );
+  });
 });

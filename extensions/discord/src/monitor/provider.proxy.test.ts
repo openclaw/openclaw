@@ -312,11 +312,7 @@ describe("createDiscordGatewayPlugin", () => {
     plugin: unknown;
     fetchMock: typeof globalFetchMock;
   }) {
-    params.fetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => createGatewayInfoBody(),
-    } as Response);
+    params.fetchMock.mockResolvedValue(new Response(createGatewayInfoBody()));
     await registerGatewayClient(params.plugin);
   }
 
