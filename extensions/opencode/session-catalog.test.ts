@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -577,9 +577,8 @@ describe("OpenCode session catalog", () => {
     const spawn = vi.fn(() => child);
     vi.resetModules();
     vi.doMock("node:child_process", () => ({ spawn }));
-    const { listLocalOpenCodeSessionPage: listWithMockedSpawn } = await import(
-      "./session-catalog.js"
-    );
+    const { listLocalOpenCodeSessionPage: listWithMockedSpawn } =
+      await import("./session-catalog.js");
 
     const listing = listWithMockedSpawn({ limit: 20 });
     await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
