@@ -88,6 +88,8 @@ runs:
         # exact warm hits trust the snapshotted stock layout without rescanning.
         key: ${{ github.repository }}-node-deps-bind-v2-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ inputs.node-version }}-frozen-${{ inputs.frozen-lockfile }}-${{ hashFiles('**/package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', '.pnpmfile.cjs', 'pnpmfile.cjs', '.github/actions/setup-node-env/sticky-importers.sh', 'scripts/postinstall-bundled-plugins.mjs', 'scripts/preinstall-package-manager-warning.mjs', 'scripts/prepare-git-hooks.mjs') }}
         path: /var/tmp/openclaw-node-deps
+        # v1.4.0 skips commit after failed/cancelled steps or ambiguous failure
+        # detection, so an incomplete first hydration cannot seed this key.
         commit: if-missing
 
     # Post actions run last-in-first-out. Register after stickydisk so this bind
