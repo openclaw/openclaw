@@ -523,24 +523,27 @@ struct DashboardWindowSmokeTests {
         controller.window?.setContentSize(DashboardWindowLayout.windowSize)
 
         controller._testOpenLinkBrowser(link)
+        let openedSplitWidth = controller._testLinkBrowserSplitWidth
+        let dividerThickness = controller._testLinkBrowserDividerThickness
+        let openedLinkBrowserWidth = controller._testLinkBrowserWidth
         let expectedWidth = DashboardWindowLayout.linkBrowserWidth(
-            splitWidth: controller._testLinkBrowserSplitWidth,
-            dividerThickness: controller._testLinkBrowserDividerThickness,
+            splitWidth: openedSplitWidth,
+            dividerThickness: dividerThickness,
             persistedWidth: nil)
-        #expect(abs(controller._testLinkBrowserWidth - expectedWidth) < 1)
+        #expect(abs(openedLinkBrowserWidth - expectedWidth) < 1)
         #expect(
-            controller._testLinkBrowserSplitWidth - controller._testLinkBrowserDividerThickness -
-                controller._testLinkBrowserWidth >= DashboardWindowLayout.mainBrowserMinWidth)
+            openedSplitWidth - dividerThickness - openedLinkBrowserWidth >=
+                DashboardWindowLayout.mainBrowserMinWidth)
 
         // Hosted macOS runners may constrain the window to their 1024px screen,
         // leaving exactly the two minimum pane widths. Exercise the largest
         // feasible drag there while the pure layout checks above cover 400px.
         let requestedWidth = DashboardWindowLayout.linkBrowserWidth(
-            splitWidth: controller._testLinkBrowserSplitWidth,
-            dividerThickness: controller._testLinkBrowserDividerThickness,
+            splitWidth: openedSplitWidth,
+            dividerThickness: dividerThickness,
             persistedWidth: 400)
         if DashboardWindowLayout.dividerMoved(
-            from: controller._testLinkBrowserWidth,
+            from: openedLinkBrowserWidth,
             to: requestedWidth)
         {
             controller._testSetLinkBrowserWidth(requestedWidth)
