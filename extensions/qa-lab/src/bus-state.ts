@@ -94,8 +94,12 @@ export function createQaBusState() {
     return finalized;
   };
 
-  const ensureConversation = (conversation: QaBusConversation): QaBusConversation => {
-    const existing = conversations.get(conversation.id);
+  const ensureConversation = (
+    accountId: string,
+    conversation: QaBusConversation,
+  ): QaBusConversation => {
+    const key = JSON.stringify([accountId, conversation.kind, conversation.id]);
+    const existing = conversations.get(key);
     if (existing) {
       if (!existing.title && conversation.title) {
         existing.title = conversation.title;
@@ -103,7 +107,7 @@ export function createQaBusState() {
       return existing;
     }
     const created = { ...conversation };
-    conversations.set(created.id, created);
+    conversations.set(key, created);
     return created;
   };
 
@@ -122,13 +126,13 @@ export function createQaBusState() {
     nativeCommand?: QaBusInboundMessageInput["nativeCommand"];
     toolCalls?: QaBusToolCall[];
   }): QaBusMessage => {
-    const conversation = ensureConversation(params.conversation);
+    const conversation = ensureConversation(params.accountId, params.conversation);
     const toolCalls = sanitizeQaBusToolCalls(params.toolCalls);
     const message: QaBusMessage = {
       id: randomUUID(),
       accountId: params.accountId,
       direction: params.direction,
-      conversation,
+      conversation: { ...conversation },
       senderId: params.senderId,
       senderName: params.senderName,
       text: params.text,
@@ -222,7 +226,7 @@ export function createQaBusState() {
         createdBy: input.createdBy?.trim() || DEFAULT_BOT_ID,
       };
       threads.set(thread.id, thread);
-      ensureConversation({
+      ensureConversation(accountId, {
         id: input.conversationId,
         kind: "channel",
       });

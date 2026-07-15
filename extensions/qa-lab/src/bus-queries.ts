@@ -142,7 +142,14 @@ export function searchQaBusMessages(params: {
       params.input.conversationId ? message.conversation.id === params.input.conversationId : true,
     )
     .filter((message) =>
-      params.input.threadId ? message.threadId === params.input.threadId : true,
+      params.input.conversationKind
+        ? message.conversation.kind === params.input.conversationKind
+        : true,
+    )
+    .filter((message) =>
+      params.input.threadId !== undefined
+        ? (message.threadId ?? null) === params.input.threadId
+        : true,
     )
     .filter((message) => {
       if (!query) {

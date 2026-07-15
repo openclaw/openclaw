@@ -298,14 +298,11 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
             accountId: account.accountId,
             query,
             conversationId: target?.conversationId,
-            threadId: target?.threadId ?? undefined,
+            conversationKind: target?.conversationKind,
+            threadId: target ? target.threadId : undefined,
           },
         });
-        return jsonResult({
-          messages: target
-            ? messages.filter((message) => qaMessageMatchesTarget(message, target))
-            : messages,
-        });
+        return jsonResult({ messages });
       }
       default:
         throw new Error(`qa-channel action not implemented: ${action}`);

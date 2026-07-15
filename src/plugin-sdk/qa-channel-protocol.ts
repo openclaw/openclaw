@@ -157,7 +157,9 @@ export type QaBusSearchMessagesInput = {
   accountId?: string;
   query?: string;
   conversationId?: string;
-  threadId?: string;
+  conversationKind?: QaBusConversationKind;
+  /** Omit for any thread scope; use null for root-only results. */
+  threadId?: string | null;
   limit?: number;
 };
 

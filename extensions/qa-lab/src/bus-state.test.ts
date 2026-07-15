@@ -101,6 +101,79 @@ describe("qa-bus state", () => {
     expect(unchanged.reactions).toEqual([]);
   });
 
+  it("keeps message conversation identity isolated by account and kind", () => {
+    const state = createQaBusState();
+    const directA = state.addInboundMessage({
+      accountId: "account-a",
+      conversation: { id: "shared", kind: "direct", title: "Direct A" },
+      senderId: "alice",
+      text: "direct a",
+    });
+    const channelA = state.addOutboundMessage({
+      accountId: "account-a",
+      to: "channel:shared",
+      text: "channel a",
+    });
+    const directB = state.addInboundMessage({
+      accountId: "account-b",
+      conversation: { id: "shared", kind: "direct", title: "Direct B" },
+      senderId: "bob",
+      text: "direct b",
+    });
+
+    expect(
+      state.readMessage({ accountId: "account-a", messageId: directA.id }).conversation,
+    ).toEqual({ id: "shared", kind: "direct", title: "Direct A" });
+    expect(
+      state.readMessage({ accountId: "account-a", messageId: channelA.id }).conversation,
+    ).toEqual({ id: "shared", kind: "channel" });
+    expect(
+      state.readMessage({ accountId: "account-b", messageId: directB.id }).conversation,
+    ).toEqual({ id: "shared", kind: "direct", title: "Direct B" });
+    expect(state.getSnapshot().conversations).toHaveLength(3);
+  });
+
+  it("applies kind and root-thread search scope before limiting results", () => {
+    const state = createQaBusState();
+    const root = state.addOutboundMessage({
+      to: "channel:shared",
+      text: "needle root",
+    });
+    const direct = state.addOutboundMessage({
+      to: "dm:shared",
+      text: "needle direct",
+    });
+    for (let index = 0; index < 25; index += 1) {
+      state.addOutboundMessage({
+        to: `thread:shared/thread-${String(index)}`,
+        text: `needle thread ${String(index)}`,
+      });
+    }
+
+    expect(
+      state
+        .searchMessages({
+          query: "needle",
+          conversationId: "shared",
+          conversationKind: "channel",
+          threadId: null,
+          limit: 2,
+        })
+        .map((message) => message.id),
+    ).toEqual([root.id]);
+    expect(
+      state
+        .searchMessages({
+          query: "needle",
+          conversationId: "shared",
+          conversationKind: "direct",
+          threadId: null,
+          limit: 2,
+        })
+        .map((message) => message.id),
+    ).toEqual([direct.id]);
+  });
+
   it("waits for a text match and rejects on timeout", async () => {
     const state = createQaBusState();
     const pending = state.waitFor({
