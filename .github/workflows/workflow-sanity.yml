@@ -199,26 +199,11 @@ jobs:
             find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z
           )
           lint_cpu="$(awk '/Cpus_allowed_list/ { print $2 }' /proc/self/status | cut -d, -f1 | cut -d- -f1)"
-          lint_workflow() {
-            local exit_code workflow_file="$1"
-            for attempt in 1 2; do
-              echo "actionlint ${workflow_file} (attempt ${attempt}/2)"
-              set +e
-              timeout --foreground 30s taskset --cpu-list "${lint_cpu}" actionlint "${workflow_file}"
-              exit_code=$?
-              set -e
-              if [[ "${exit_code}" -eq 0 ]]; then
-                return 0
-              fi
-              if [[ "${exit_code}" -ne 124 || "${attempt}" -eq 2 ]]; then
-                return "${exit_code}"
-              fi
-              echo "::warning title=actionlint timed out::Retrying ${workflow_file} once after a runner-level stall."
-            done
-          }
           for workflow_file in "${workflow_files[@]}"; do
-            # actionlint sizes subprocess fan-out from CPU affinity, so keep each file single-core.
-            lint_workflow "${workflow_file}"
+            echo "actionlint ${workflow_file}"
+            # Bound both actionlint and each ShellCheck child so stalls report a source line.
+            timeout --foreground 90s taskset --cpu-list "${lint_cpu}" \
+              actionlint -shellcheck='timeout --foreground 60s shellcheck' "${workflow_file}"
           done
 
       - name: Audit all workflows with zizmor
