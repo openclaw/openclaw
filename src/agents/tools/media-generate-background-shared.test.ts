@@ -23,9 +23,6 @@ const taskRegistryDeliveryRuntimeMocks = vi.hoisted(() => ({
 const cronContinuationCleanupMocks = vi.hoisted(() => ({
   removeCronRunContinuationSessionIfIdle: vi.fn(async () => {}),
 }));
-const generatedMediaWakeMocks = vi.hoisted(() => ({
-  wakeSessionForGeneratedMediaDirectDelivery: vi.fn(),
-}));
 const sessionMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn<() => SessionEntry | undefined>(() => undefined),
 }));
@@ -40,7 +37,6 @@ vi.mock("../../config/sessions/session-accessor.js", async () => ({
 vi.mock("../../tasks/detached-task-runtime.js", () => detachedTaskRuntimeMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliveryRuntimeMocks);
 vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => cronContinuationCleanupMocks);
-vi.mock("../generated-media-direct-delivery-wake.js", () => generatedMediaWakeMocks);
 
 import {
   createMediaGenerationTaskLifecycle,
@@ -60,7 +56,6 @@ beforeEach(() => {
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
   cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle.mockClear();
   sessionMocks.loadSessionEntry.mockReset().mockReturnValue(undefined);
-  generatedMediaWakeMocks.wakeSessionForGeneratedMediaDirectDelivery.mockReset();
 });
 
 function createImageMediaLifecycle() {
@@ -297,7 +292,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     ).toHaveBeenCalledWith(sessionKey);
   });
 
-  it("cleans a stale exact cron continuation after generated-media direct fallback", async () => {
+  it("records a blocked stale cron completion without raw media fallback", async () => {
     const sessionKey = "agent:main:cron:one-shot:run:run-123";
     const scheduled: Array<() => Promise<void>> = [];
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
@@ -306,7 +301,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       reason: "completion_handoff_unavailable",
       error: "cron run continuation owner was lost during gateway restart",
     });
-    taskRegistryDeliveryRuntimeMocks.sendMessage.mockResolvedValueOnce({});
     const lifecycle = createImageMediaLifecycle();
     const handle = lifecycle.createTaskRun({
       sessionKey,
@@ -335,8 +329,11 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
 
     await scheduled[0]?.();
 
-    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ mediaUrls: ["/tmp/proof.png"] }),
+    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
+    expect(detachedTaskRuntimeMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalOutcome: "blocked",
+      }),
     );
     expect(
       cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle,
@@ -631,7 +628,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(1);
   });
 
-  it("records normal success when direct recovery handles a completion wake throw", async () => {
+  it("records a blocked completion when the agent-loop wake throws", async () => {
     const scheduled: Array<() => Promise<void>> = [];
     const wakeError = new Error("requester wake failed");
     const lifecycle = {
@@ -641,7 +638,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       failTaskRun: vi.fn(),
       wakeTaskCompletion: vi.fn().mockRejectedValueOnce(wakeError),
     };
-    taskRegistryDeliveryRuntimeMocks.sendMessage.mockResolvedValueOnce({});
 
     scheduleMediaGenerationTaskCompletion({
       lifecycle,
@@ -673,24 +669,10 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
 
     await scheduled[0]?.();
 
-    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "Image generation completed.",
-        mediaUrls: ["/tmp/proof.png"],
-      }),
-    );
-    // Direct recovery bypasses the requester agent turn, so the session must
-    // be woken afterwards or the delivered media stays orphaned in the chat.
-    expect(generatedMediaWakeMocks.wakeSessionForGeneratedMediaDirectDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:discord:channel:123",
-        status: "ok",
-        deliveryContext: expect.objectContaining({ channel: "discord", to: "channel:123" }),
-      }),
-    );
+    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
     expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
-        terminalResult: undefined,
+        terminalResult: expect.objectContaining({ terminalOutcome: "blocked" }),
       }),
     );
     expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
@@ -1009,14 +991,13 @@ describe("createMediaGenerationTaskLifecycle", () => {
   });
 
   it.each(["completion_handoff_unavailable", "generated_media_missing"] as const)(
-    "direct-delivers generated media after %s",
+    "does not bypass the agent loop after %s",
     async (reason) => {
       subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
         delivered: false,
         reason,
         error: "completion agent did not deliver generated media",
       });
-      taskRegistryDeliveryRuntimeMocks.sendMessage.mockResolvedValueOnce({});
       const lifecycle = createImageMediaLifecycle();
 
       await expect(
@@ -1036,17 +1017,9 @@ describe("createMediaGenerationTaskLifecycle", () => {
           result: "generated",
           mediaUrls: ["/tmp/proof.png"],
         }),
-      ).resolves.toEqual({ status: "delivered" });
+      ).resolves.toEqual({ status: "permanent_failure" });
 
-      expect(taskRegistryDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "discord",
-          to: "channel:123",
-          content: "Image generation completed.",
-          mediaUrls: ["/tmp/proof.png"],
-          idempotencyKey: "image_generate:task-image-direct:ok:direct",
-        }),
-      );
+      expect(taskRegistryDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
     },
   );
 
@@ -1105,6 +1078,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
         },
         sourceTool: "music_generate",
         bestEffortDeliver: true,
+        durableGeneratedMediaHandoff: true,
       }),
     );
     const announceParams = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mock

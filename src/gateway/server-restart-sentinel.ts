@@ -42,11 +42,13 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import { deliverQueuedGeneratedMediaAgentTurn } from "./server-restart-sentinel-agent-delivery.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 
@@ -238,7 +240,7 @@ function resolveQueuedSessionDeliveryContext(entry: QueuedSessionDelivery):
   return entry.deliveryContext;
 }
 
-async function deliverQueuedSessionDelivery(params: {
+export async function deliverQueuedSessionDelivery(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
 }) {
@@ -266,6 +268,16 @@ async function deliverQueuedSessionDelivery(params: {
 
   if (!params.entry.route) {
     enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
+    return;
+  }
+
+  if (
+    await deliverQueuedGeneratedMediaAgentTurn({
+      entry: params.entry,
+      canonicalKey,
+      sessionEntry: entry,
+    })
+  ) {
     return;
   }
 
@@ -410,6 +422,7 @@ async function drainRestartContinuationQueue(params: {
       logLabel: "restart continuation",
       log: params.log,
       deliver: (entry) => deliverQueuedSessionDelivery({ deps: params.deps, entry }),
+      onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey),
       selectEntry: (entry) => ({
         match: entry.id === params.entryId,
         bypassBackoff: true,
@@ -439,6 +452,7 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
     deliver: (entry) => deliverQueuedSessionDelivery({ deps: params.deps, entry }),
     log: params.log ?? log,
     maxEnqueuedAt: params.maxEnqueuedAt,
+    onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey),
   });
 }
 

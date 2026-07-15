@@ -1,8 +1,11 @@
 // Persists queued session deliveries for retry and recovery.
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ChatType } from "../channels/chat-type.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
   deleteDeliveryQueueEntry,
+  getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
@@ -53,16 +56,32 @@ export type QueuedSessionDeliveryPayload =
       expectedSessionId?: string;
       route?: SessionDeliveryRoute;
       deliveryContext?: SessionDeliveryContext;
+      inputProvenance?: InputProvenance;
+      sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+      expectedMediaUrls?: string[];
+      suppressTextDelivery?: true;
       idempotencyKey?: string;
     } & SessionDeliveryRetryPolicy);
 
 export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   id: string;
   enqueuedAt: number;
+  agentRunAttempt?: number;
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
+  acknowledgedAt?: number;
+  availableAt?: number;
 };
+
+export class SessionDeliveryDeferredError extends Error {
+  override name = "SessionDeliveryDeferredError";
+}
+
+/** Signals that delivery was deliberately moved to failed and must not be retried or acknowledged. */
+export class SessionDeliveryDeadLetteredError extends Error {
+  override name = "SessionDeliveryDeadLetteredError";
+}
 
 function buildEntryId(idempotencyKey?: string): string {
   if (!idempotencyKey) {
@@ -108,9 +127,109 @@ export async function enqueueSessionDelivery(
   return id;
 }
 
+/** Enqueue and lease the first attempt to one caller before recovery can see it as eligible. */
+export async function enqueueClaimedSessionDelivery(
+  params: QueuedSessionDeliveryPayload,
+  initialAttemptLeaseMs: number,
+  stateDir?: string,
+): Promise<{
+  id: string;
+  claimed: boolean;
+  status: "pending" | "failed" | "completed" | "unknown";
+}> {
+  const id = buildEntryId(params.idempotencyKey);
+  const entry: QueuedSessionDelivery = {
+    ...params,
+    id,
+    enqueuedAt: Date.now(),
+    retryCount: 0,
+    availableAt: Date.now() + Math.max(0, initialAttemptLeaseMs),
+  };
+  const claimed = upsertDeliveryQueueEntry({
+    queueName: QUEUE_NAME,
+    entry,
+    metadata: queuedSessionDeliveryMetadata(entry),
+    stateDir,
+    insertOnly: true,
+  });
+  let status: "pending" | "failed" | undefined;
+  try {
+    status = claimed ? "pending" : getDeliveryQueueEntryStatus(QUEUE_NAME, id, stateDir);
+  } catch {
+    // The insert-only conflict already proved another durable owner existed.
+    // Preserve that ownership when diagnostics are temporarily unreadable.
+    return { id, claimed, status: "unknown" };
+  }
+  // A conflicting pending row can be acknowledged and deleted before this
+  // lookup. That means the competing owner completed the same idempotent work.
+  return { id, claimed, status: status ?? "completed" };
+}
+
+/** Release the initial-attempt lease so runtime recovery can retry immediately. */
+export async function releaseSessionDeliveryClaim(id: string, stateDir?: string): Promise<void> {
+  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => ({
+    ...entry,
+    availableAt: Date.now(),
+  }));
+}
+
+/** Defer a currently owned delivery without consuming its retry budget. */
+export async function deferSessionDelivery(
+  id: string,
+  delayMs: number,
+  stateDir?: string,
+): Promise<void> {
+  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => ({
+    ...entry,
+    availableAt: Date.now() + Math.max(0, delayMs),
+  }));
+}
+
+/** Advance only after a completed agent turn proves a fresh run is safe. */
+export async function advanceSessionDeliveryAgentRun(
+  id: string,
+  updates?: { expectedMediaUrls?: string[]; message?: string; suppressTextDelivery?: boolean },
+  stateDir?: string,
+): Promise<void> {
+  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => {
+    const queued = entry as QueuedSessionDelivery;
+    if (queued.kind !== "agentTurn") {
+      return queued;
+    }
+    return {
+      ...queued,
+      agentRunAttempt: (queued.agentRunAttempt ?? 0) + 1,
+      ...(updates?.message ? { message: updates.message } : {}),
+      ...(updates?.expectedMediaUrls ? { expectedMediaUrls: updates.expectedMediaUrls } : {}),
+      ...(updates?.suppressTextDelivery === true ? { suppressTextDelivery: true as const } : {}),
+    };
+  });
+}
+
 /** Acknowledge a successfully delivered session entry. */
+export class SessionDeliveryAcknowledgementCleanupError extends Error {
+  constructor(id: string, options?: ErrorOptions) {
+    super(`Acknowledged session delivery ${id} still needs queue cleanup`, options);
+    this.name = "SessionDeliveryAcknowledgementCleanupError";
+  }
+}
+
 export async function ackSessionDelivery(id: string, stateDir?: string): Promise<void> {
-  deleteDeliveryQueueEntry(QUEUE_NAME, id, stateDir);
+  const entry = loadDeliveryQueueEntry(QUEUE_NAME, id, stateDir) as QueuedSessionDelivery | null;
+  if (!entry) {
+    return;
+  }
+  if (!entry.acknowledgedAt) {
+    updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (current) => ({
+      ...current,
+      acknowledgedAt: Date.now(),
+    }));
+  }
+  try {
+    deleteDeliveryQueueEntry(QUEUE_NAME, id, stateDir);
+  } catch (error) {
+    throw new SessionDeliveryAcknowledgementCleanupError(id, { cause: error });
+  }
 }
 
 /** Record a failed delivery attempt and increment retry metadata. */

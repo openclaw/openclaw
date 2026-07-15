@@ -1,13 +1,8 @@
 /**
- * Wake for generated-media direct-delivery fallbacks.
+ * Last-resort wake after generated media bypasses the agent loop.
  *
- * When a background media generation completion cannot wake the requester's
- * agent turn (for example after an inbound message steered or aborted the
- * original run), delivery falls back to sending the media straight to the
- * channel. Without a follow-up wake the owning session never gets an agent
- * turn for the completion, so the attachment lands as an orphaned message.
- * Mirror the background-exec completion pattern: enqueue a system event and
- * request a heartbeat wake so the agent can continue in its own voice.
+ * Normal delivery uses the durable session queue. This path exists only when
+ * queue persistence failed and the immediate agent turn also missed delivery.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -28,42 +23,30 @@ type GeneratedMediaDirectDeliveryWakeDeps = {
   requestHeartbeat: typeof requestHeartbeat;
 };
 
-const defaultDeps: GeneratedMediaDirectDeliveryWakeDeps = {
-  enqueueSystemEvent,
-  requestHeartbeat,
-};
-
+const defaultDeps: GeneratedMediaDirectDeliveryWakeDeps = { enqueueSystemEvent, requestHeartbeat };
 let deps: GeneratedMediaDirectDeliveryWakeDeps = defaultDeps;
 
-function buildDirectDeliveryWakeText(params: {
-  mediaLabel: string;
-  status: "ok" | "error";
-}): string {
-  if (params.status === "ok") {
+function buildDirectDeliveryWakeText(mediaLabel: string, status: "ok" | "error"): string {
+  if (status === "error") {
     return [
-      `A background ${params.mediaLabel} generation task completed while no agent turn could be woken, so the generated ${params.mediaLabel} was already delivered directly to the chat.`,
-      "Do not resend the attachment. Continue the conversation and follow up in your own voice if a reply is still owed.",
+      `A background ${mediaLabel} generation task failed while durable agent-loop persistence was unavailable, so the failure notice was delivered directly to the chat.`,
+      "Do not resend the notice. Continue the conversation in your own voice if a reply is still owed.",
     ].join(" ");
   }
   return [
-    `A background ${params.mediaLabel} generation task failed while no agent turn could be woken, and the failure notice was already delivered directly to the chat.`,
-    "Do not resend the failure notice. Continue the conversation and follow up in your own voice if a reply is still owed.",
+    `A background ${mediaLabel} generation task completed while durable agent-loop persistence was unavailable, so the generated ${mediaLabel} was delivered directly to the chat.`,
+    "Do not resend the attachment. Continue the conversation in your own voice if a reply is still owed.",
   ].join(" ");
 }
 
-/**
- * Queues a system event and heartbeat wake for the session that owns a
- * generated-media completion after its media was delivered directly to the
- * channel. Best-effort: the direct delivery already guaranteed the media is
- * not lost, so wake failures only log.
- */
+/** Best-effort session continuation for the non-durable emergency fallback. */
 export function wakeSessionForGeneratedMediaDirectDelivery(params: {
   cfg?: OpenClawConfig;
   sessionKey: string;
-  mediaLabel?: string;
-  status?: "ok" | "error";
+  mediaLabel: string;
+  status: "ok" | "error";
   deliveryContext?: DeliveryContext;
-  contextKey?: string;
+  contextKey: string;
 }): void {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -76,19 +59,11 @@ export function wakeSessionForGeneratedMediaDirectDelivery(params: {
       channel: params.deliveryContext?.channel,
       accountId: params.deliveryContext?.accountId,
     });
-    deps.enqueueSystemEvent(
-      buildDirectDeliveryWakeText({
-        mediaLabel: params.mediaLabel?.trim() || "media",
-        status: params.status ?? "ok",
-      }),
-      {
-        sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
-        contextKey: params.contextKey,
-        deliveryContext: params.deliveryContext,
-      },
-    );
-    // Subagent sessions receive completion results via the announce flow; a
-    // heartbeat would fall back to the main session and cause spurious wakes.
+    deps.enqueueSystemEvent(buildDirectDeliveryWakeText(params.mediaLabel, params.status), {
+      sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
+      contextKey: params.contextKey,
+      deliveryContext: params.deliveryContext,
+    });
     if (isSubagentSessionKey(sessionKey)) {
       return;
     }
@@ -98,14 +73,14 @@ export function wakeSessionForGeneratedMediaDirectDelivery(params: {
         {
           source: "background-task",
           intent: "event",
-          reason: "generated-media:direct-delivery",
+          reason: "generated-media:direct-delivery-emergency",
           coalesceMs: 0,
         },
         eventRouting,
       ),
     );
   } catch (error) {
-    log.warn("Failed to wake session after generated media direct delivery", {
+    log.warn("Failed to wake session after emergency generated media delivery", {
       sessionKey,
       error,
     });
