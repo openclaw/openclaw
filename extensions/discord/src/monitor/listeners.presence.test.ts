@@ -675,6 +675,8 @@ describe("DiscordPresenceListener", () => {
 
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(2);
     expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(2);
+    expect(humanClient.fetchUser).toHaveBeenCalledTimes(2);
+    expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledTimes(2);
     expect(info).toHaveBeenCalledTimes(1);
     expect(info).toHaveBeenCalledWith(
       "Discord presence events suppressed",

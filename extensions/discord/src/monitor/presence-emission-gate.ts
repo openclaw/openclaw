@@ -38,6 +38,7 @@ type DiscordPresenceReconnectDecision =
 type DiscordPresenceBurstEntry = {
   id: number;
   atMs: number;
+  committed: boolean;
 };
 
 type DiscordPresenceBurstState = {
@@ -91,7 +92,7 @@ export class DiscordPresenceEmissionGate {
   ): DiscordPresenceBurstDecision {
     const state = this.burstByGuild.get(guildId) ?? { reservations: [], logged: false };
     state.reservations = state.reservations.filter(
-      (reservation) => nowMs - reservation.atMs < options.burstWindowMs,
+      (reservation) => !reservation.committed || nowMs - reservation.atMs < options.burstWindowMs,
     );
     this.burstByGuild.set(guildId, state);
     if (state.reservations.length >= options.burstLimit) {
@@ -100,9 +101,22 @@ export class DiscordPresenceEmissionGate {
       return { allowed: false, reason: "burst", shouldLog };
     }
     state.logged = false;
-    const reservation = { id: this.nextReservationId++, atMs: nowMs };
+    const reservation = { id: this.nextReservationId++, atMs: nowMs, committed: false };
     state.reservations.push(reservation);
     return { allowed: true, reservation: reservation.id };
+  }
+
+  commitBurst(guildId: string, reservation: DiscordPresenceBurstReservation, nowMs: number): void {
+    const entry = this.burstByGuild
+      .get(guildId)
+      ?.reservations.find((candidate) => candidate.id === reservation);
+    if (!entry) {
+      return;
+    }
+    // Admission reservations cap concurrent Discord lookups. Start the sliding window only when
+    // an event is actually queued so slow lookups do not shorten the configured emission window.
+    entry.atMs = nowMs;
+    entry.committed = true;
   }
 
   releaseBurst(guildId: string, reservation: DiscordPresenceBurstReservation): void {
