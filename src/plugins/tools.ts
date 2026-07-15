@@ -25,7 +25,7 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
-import { getPinnedPluginChannelRegistry } from "./runtime.js";
+import { getPluginRegistryState } from "./runtime-state.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import {
   buildPluginRuntimeLoadOptions,
@@ -1029,17 +1029,20 @@ function resolvePluginToolRegistry(params: {
       requestedPluginIds: requestedPluginIds ?? [],
     });
 
-  // The pinned channel registry is Gateway-owned; its tool factories receive
-  // the request workspace through context. Applying the separately scoped
-  // active registry's workspace metadata here forces a duplicate plugin load.
-  const channelRegistry = getPinnedPluginChannelRegistry() ?? undefined;
+  // Use the established pinned-Gateway owner; its factories receive request
+  // context directly. Reapplying active-scope metadata would duplicate the
+  // registration and split hook/tool closure state.
+  const runtimeState = getPluginRegistryState();
+  const gatewayRegistry = runtimeState?.channel.pinned
+    ? (runtimeState.channel.registry ?? undefined)
+    : undefined;
   if (
     requestedPluginIds === undefined &&
-    registryHasScopedPluginTools(channelRegistry, undefined)
+    registryHasScopedPluginTools(gatewayRegistry, undefined)
   ) {
-    return channelRegistry;
+    return gatewayRegistry;
   }
-  addRegistry(channelRegistry);
+  addRegistry(gatewayRegistry);
   let requiredPluginIds = missingPluginIds();
   if (requiredPluginIds?.length === 0) {
     return composeSelectedRegistries();
@@ -1078,7 +1081,7 @@ function resolvePluginToolRegistry(params: {
   // An incomplete active/retained registry must still force a fresh load;
   // otherwise the standalone loader accepts its loaded plugin records even
   // when the requested executable tool registrations are absent.
-  const forceStandaloneLoad = Boolean(channelRegistry || activeRegistry || params.retainedRegistry);
+  const forceStandaloneLoad = Boolean(gatewayRegistry || activeRegistry || params.retainedRegistry);
   const shouldRetainColdLoadedToolRegistry =
     forceStandaloneLoad &&
     params.loadOptions.activate === false &&
@@ -1099,7 +1102,7 @@ function resolvePluginToolRegistry(params: {
   }
   addRegistry(standaloneRegistry);
   if (requestedPluginIds === undefined) {
-    return standaloneRegistry ?? channelRegistry ?? activeRegistry;
+    return standaloneRegistry ?? gatewayRegistry ?? activeRegistry;
   }
   return composeSelectedRegistries();
 }

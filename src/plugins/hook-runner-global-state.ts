@@ -8,7 +8,8 @@ import type {
   PluginRegistry,
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
-import { collectLivePluginRegistries, getActivePluginChannelRegistry } from "./runtime.js";
+import { getPluginRegistryState } from "./runtime-state.js";
+import { collectLivePluginRegistries } from "./runtime.js";
 
 type TrustedPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
@@ -56,7 +57,8 @@ function collectHookRegistrySources(
   if (!initializedLiveRegistry) {
     add(lastInitialized);
   }
-  add(getActivePluginChannelRegistry());
+  const runtimeState = getPluginRegistryState();
+  add(runtimeState?.channel.pinned ? runtimeState.channel.registry : null);
   for (const registry of liveRegistries) {
     add(registry);
   }
