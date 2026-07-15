@@ -306,6 +306,8 @@ export async function runSystemAgentRescueMessage(
 
   // Any fresh command revokes the previous capability for this exact route.
   // Persistent commands below replace it with their newly rendered plan.
+  // Keep parse and registration below synchronous: invocation order must stay
+  // publication order. Async validation begins only after approval consumes the row.
   pendingStore.delete(pendingKey);
   const operation = parseSystemAgentOperation(rescueMessage);
   const unsupported = formatUnsupportedRemoteOperation(operation);

@@ -406,7 +406,7 @@ describe("OpenClaw rescue message", () => {
     });
   });
 
-  it("approves only the latest persistent plan in one route", async () => {
+  it("publishes concurrently invoked persistent plans in call order", async () => {
     await withRescueStateDir("latest-plan-", async () => {
       const cfg: OpenClawConfig = { systemAgent: { rescue: { enabled: true } } };
       const deps = {
@@ -414,8 +414,10 @@ describe("OpenClaw rescue message", () => {
         runGatewayStart: vi.fn(async () => {}),
       };
 
-      await runRescue("/openclaw restart gateway", cfg, commandContext(), deps);
-      await runRescue("/openclaw start gateway", cfg, commandContext(), deps);
+      const olderPlan = runRescue("/openclaw restart gateway", cfg, commandContext(), deps);
+      const newerPlan = runRescue("/openclaw start gateway", cfg, commandContext(), deps);
+      await expect(olderPlan).resolves.toContain("restart the Gateway");
+      await expect(newerPlan).resolves.toContain("start the Gateway");
       await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toContain(
         "[openclaw] done: gateway.start",
       );
