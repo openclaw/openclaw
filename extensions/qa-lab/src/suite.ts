@@ -7,11 +7,6 @@ import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harne
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import {
-  renderQaMarkdownReport,
-  type QaReportCheck,
-  type QaReportScenario,
-} from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
 import {
@@ -53,6 +48,7 @@ import {
   type QaTransportId,
 } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import {
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
