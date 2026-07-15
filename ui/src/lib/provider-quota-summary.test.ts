@@ -18,8 +18,9 @@ describe("formatQuotaReset", () => {
   it("returns <1m for sub-minute reset windows instead of 0m", () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00.000Z"));
 
-    expect(formatQuotaReset(Date.now() + 30_000)).toBe("<1m");
+    expect(formatQuotaReset(Date.now() + 1)).toBe("<1m");
     expect(formatQuotaReset(Date.now() + 59_999)).toBe("<1m");
+    expect(formatQuotaReset(Date.now() + 60_000)).toBe("1m");
   });
 
   it("ignores Date-invalid reset timestamps", () => {
