@@ -247,6 +247,7 @@ describe("plugin HTTP suspension admission", () => {
     };
     const context = {
       cron,
+      getRuntimeConfig: () => ({}),
       logGateway: { warn: vi.fn() },
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
