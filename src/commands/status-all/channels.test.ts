@@ -175,11 +175,13 @@ describe("buildChannelsTable", () => {
       },
     );
 
-    expect(table.rows.find((entry) => entry.id === "discord")).toMatchObject({
+    const row = table.rows.find((entry) => entry.id === "discord");
+    expect(row).toMatchObject({
       enabled: true,
       state: "ok",
       detail: "bot token config · accounts 1/1",
     });
+    expect(row?.detail).not.toContain("sha256:");
   });
 
   it("warns when a configured token is unavailable and there is no live account proof", async () => {

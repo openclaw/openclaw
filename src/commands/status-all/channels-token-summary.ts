@@ -2,7 +2,6 @@
 // The display path is intentionally secret-safe unless the caller explicitly requests disclosure.
 
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { sha256HexPrefix } from "../../logging/redact-identifier.js";
@@ -149,16 +148,15 @@ export function summarizeTokenConfig(params: {
     const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
     const ready = enabled.filter((a) => {
       const rec = asRecord(a.account);
-      const bot = normalizeOptionalString(rec.botToken) ?? "";
-      const app = normalizeOptionalString(rec.appToken) ?? "";
-      return Boolean(bot) && Boolean(app);
+      return (
+        hasCredentialAvailable(rec, "botToken", "botTokenStatus") &&
+        hasCredentialAvailable(rec, "appToken", "appTokenStatus")
+      );
     });
     const partial = enabled.filter((a) => {
       const rec = asRecord(a.account);
-      const bot = normalizeOptionalString(rec.botToken) ?? "";
-      const app = normalizeOptionalString(rec.appToken) ?? "";
-      const hasBot = Boolean(bot);
-      const hasApp = Boolean(app);
+      const hasBot = hasCredentialAvailable(rec, "botToken", "botTokenStatus");
+      const hasApp = hasCredentialAvailable(rec, "appToken", "appTokenStatus");
       return (hasBot && !hasApp) || (!hasBot && hasApp);
     });
 
@@ -204,8 +202,7 @@ export function summarizeTokenConfig(params: {
     const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
     const ready = enabled.filter((a) => {
       const rec = asRecord(a.account);
-      const bot = normalizeOptionalString(rec.botToken) ?? "";
-      return Boolean(bot);
+      return hasCredentialAvailable(rec, "botToken", "botTokenStatus");
     });
 
     if (unavailable.length > 0) {
@@ -235,7 +232,7 @@ export function summarizeTokenConfig(params: {
   const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
   const ready = enabled.filter((a) => {
     const rec = asRecord(a.account);
-    return Boolean(normalizeOptionalString(rec.token));
+    return hasCredentialAvailable(rec, "token", "tokenStatus");
   });
   if (unavailable.length > 0) {
     return {
