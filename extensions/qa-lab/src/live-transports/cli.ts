@@ -55,3 +55,9 @@ export function listLiveTransportQaCliRegistrations(): readonly LiveTransportQaC
 
   return liveRegistrations;
 }
+
+export function listLiveTransportQaAdapterFactories() {
+  return listLiveTransportQaCliRegistrations().flatMap((registration) =>
+    registration.adapterFactory ? [registration.adapterFactory] : [],
+  );
+}

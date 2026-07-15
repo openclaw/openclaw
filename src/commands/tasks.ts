@@ -3,6 +3,7 @@
 
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatLookupMiss } from "../cli/error-format.js";
@@ -18,6 +19,7 @@ import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-intern
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import {
+  assertTaskFlowRegistryMaintenanceReady,
   getInspectableTaskFlowAuditSummary,
   previewTaskFlowRegistryMaintenance,
   runTaskFlowRegistryMaintenance,
@@ -116,10 +118,7 @@ async function tryCancelGatewayOwnedTaskViaGateway(
 }
 
 function configureTaskMaintenanceFromConfig(): void {
-  const cfg = getRuntimeConfig();
-  configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
-  });
+  configureTaskRegistryMaintenance();
 }
 
 type SessionRegistryMaintenanceStoreSummary = {
@@ -205,10 +204,7 @@ function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
     return value;
   }
-  if (maxChars <= 1) {
-    return value.slice(0, maxChars);
-  }
-  return `${value.slice(0, maxChars - 1)}…`;
+  return maxChars <= 0 ? "" : `${truncateUtf16Safe(value, maxChars - 1)}…`;
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
@@ -351,8 +347,8 @@ export async function tasksListCommand(
   opts: { json?: boolean; runtime?: string; status?: string },
   runtime: RuntimeEnv,
 ) {
-  const runtimeFilter = opts.runtime?.trim();
-  const statusFilter = opts.status?.trim();
+  const runtimeFilter = normalizeOptionalString(opts.runtime);
+  const statusFilter = normalizeOptionalString(opts.status);
   const tasks = reconcileInspectableTasks().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
@@ -526,8 +522,10 @@ export async function tasksAuditCommand(
   runtime: RuntimeEnv,
 ) {
   configureTaskMaintenanceFromConfig();
-  const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
-  const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
+  const severityFilter = normalizeOptionalString(opts.severity) as
+    | TaskSystemAuditSeverity
+    | undefined;
+  const codeFilter = normalizeOptionalString(opts.code) as TaskSystemAuditCode | undefined;
   const auditResult = toSystemAuditFindings({
     severityFilter,
     codeFilter,
@@ -587,6 +585,7 @@ export async function tasksMaintenanceCommand(
   runtime: RuntimeEnv,
 ) {
   configureTaskMaintenanceFromConfig();
+  assertTaskFlowRegistryMaintenanceReady();
   const auditBefore = getInspectableTaskAuditSummary();
   const flowAuditBefore = getInspectableTaskFlowAuditSummary();
   const taskMaintenance = opts.apply

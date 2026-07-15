@@ -28,7 +28,7 @@ const SEAM_COLOR_CSS_VARIABLES = [
   "--focus-glow",
 ] as const;
 
-export type ApplicationConfig = {
+type ApplicationConfig = {
   assistantIdentity: {
     agentId: string | null;
     name: string;
@@ -38,6 +38,7 @@ export type ApplicationConfig = {
     avatarReason: string | null;
   };
   serverVersion: string | null;
+  devGitBranch: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
@@ -62,7 +63,7 @@ function readDocumentTerminalEnabled(): boolean | null {
   return value === "true" ? true : value === "false" ? false : null;
 }
 
-export const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
+const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   assistantIdentity: {
     agentId: null,
     name: "Assistant",
@@ -72,6 +73,7 @@ export const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
     avatarReason: null,
   },
   serverVersion: null,
+  devGitBranch: null,
   localMediaPreviewRoots: [],
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
@@ -118,7 +120,7 @@ function applyControlUiSeamColor(value: unknown): void {
   );
 }
 
-export function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): ApplicationConfig {
+function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): ApplicationConfig {
   const identity = normalizeAssistantIdentity({
     agentId: parsed.assistantAgentId ?? null,
     name: parsed.assistantName,
@@ -137,6 +139,10 @@ export function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Ap
       avatarReason: identity.avatarReason ?? null,
     },
     serverVersion: parsed.serverVersion ?? null,
+    devGitBranch:
+      typeof parsed.devGitBranch === "string" && parsed.devGitBranch.trim()
+        ? parsed.devGitBranch.trim()
+        : null,
     localMediaPreviewRoots: Array.isArray(parsed.localMediaPreviewRoots)
       ? parsed.localMediaPreviewRoots.filter((value): value is string => typeof value === "string")
       : [],
@@ -155,7 +161,7 @@ export function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Ap
   };
 }
 
-export async function loadApplicationConfig(params: {
+async function loadApplicationConfig(params: {
   basePath: string;
   auth?: ApplicationConfigAuthSource;
   skipWithoutAuthCandidate?: boolean;

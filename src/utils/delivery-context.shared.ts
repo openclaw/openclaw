@@ -14,7 +14,7 @@ import {
   isInternalNonDeliveryChannel,
 } from "./message-channel-constants.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "./message-channel-core.js";
-export type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
+export type { DeliveryContext } from "./delivery-context.types.js";
 
 /**
  * Delivery-context normalization and projection helpers.
@@ -84,9 +84,7 @@ export function deliveryContextFromChannelRoute(
 }
 
 /** Converts delivery context fields into the SDK channel route reference shape. */
-export function channelRouteFromDeliveryContext(
-  context?: DeliveryContext,
-): ChannelRouteRef | undefined {
+function channelRouteFromDeliveryContext(context?: DeliveryContext): ChannelRouteRef | undefined {
   return normalizeChannelRouteTarget(normalizeDeliveryContext(context));
 }
 

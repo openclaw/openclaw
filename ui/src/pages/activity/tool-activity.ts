@@ -1,8 +1,8 @@
 // Control UI module implements activity model behavior.
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 
-export const ACTIVITY_ENTRY_LIMIT = 100;
-export const ACTIVITY_OUTPUT_PREVIEW_LIMIT = 2_000;
+const ACTIVITY_ENTRY_LIMIT = 100;
+const ACTIVITY_OUTPUT_PREVIEW_LIMIT = 2_000;
 
 export type ActivityStatus = "running" | "done" | "error";
 
@@ -28,7 +28,7 @@ const ACTIVITY_STATUS_SUMMARY_LABELS: Record<ActivityStatus, string> = {
   error: "failed",
 };
 
-export type ToolActivityEvent = {
+type ToolActivityEvent = {
   runId: string;
   ts: number;
   receivedAt: number;

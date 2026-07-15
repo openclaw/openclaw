@@ -34,7 +34,7 @@ function inferCopilotInitiator(messages: Context["messages"]): "agent" | "user" 
   return last.role === "user" ? "user" : "agent";
 }
 
-export function hasCopilotVisionInput(messages: Context["messages"]): boolean {
+function hasCopilotVisionInput(messages: Context["messages"]): boolean {
   return messages.some((message) => {
     if (message.role === "user" && Array.isArray(message.content)) {
       return message.content.some((item) => containsCopilotContentType(item, "image"));

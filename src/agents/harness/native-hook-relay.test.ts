@@ -6,12 +6,13 @@ import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -1370,6 +1371,32 @@ describe("native hook relay registry", () => {
     expect(String(rawPayload.tool_response)).toContain("[truncated]");
   });
 
+  it("retains payload snapshots without splitting surrogate pairs", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload: {
+        tool_response: `${"a".repeat(3_999)}😀tail`,
+      },
+    });
+
+    const [recorded] = testing.getNativeHookRelayInvocationsForTests();
+    const rawPayload = readRecordField(
+      requireRecord(recorded, "native hook relay invocation"),
+      "rawPayload",
+      "invocation raw payload",
+    );
+    expect(rawPayload.tool_response).toBe(`${"a".repeat(3_999)}...[truncated]`);
+  });
+
   it("removes retained invocations when a relay is unregistered", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -1678,6 +1705,163 @@ describe("native hook relay registry", () => {
       toolName: "exec",
       toolCallId: "native-call-1",
     });
+  });
+
+  it("keeps a native pre-tool hook timeout distinct from a policy denial", async () => {
+    const onPreToolUseFailure = vi.fn();
+    const beforeToolCall = vi.fn(async () => {
+      throw Object.assign(new Error("timed out after 5000ms"), { name: "TimeoutError" });
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      onPreToolUseFailure,
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-timeout-1",
+        tool_input: { cmd: "pnpm test" },
+      },
+    });
+
+    expect(response.failureDisposition).toBe("timed_out");
+    expect(JSON.parse(response.stdout)).toMatchObject({
+      hookSpecificOutput: { permissionDecision: "deny" },
+    });
+    expect(onPreToolUseFailure).toHaveBeenCalledWith({
+      toolName: "exec",
+      toolCallId: "native-timeout-1",
+      disposition: "timed_out",
+      durationMs: expect.any(Number),
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "exec_command",
+        tool_use_id: "native-timeout-1",
+        tool_input: { cmd: "pnpm test" },
+      },
+    });
+    expect(onPreToolUseFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates an asynchronously rejected native failure projection", async () => {
+    const onPreToolUseFailure = vi.fn(async () => {
+      throw new Error("diagnostic sink unavailable");
+    });
+    const beforeToolCall = vi.fn(async () => {
+      throw new Error("hook crashed");
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      onPreToolUseFailure,
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "exec_command",
+          tool_use_id: "native-failed-projection",
+          tool_input: { cmd: "pnpm test" },
+        },
+      }),
+    ).resolves.toMatchObject({ failureDisposition: "failed" });
+    expect(onPreToolUseFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not delay a native hook response on a pending failure projection", async () => {
+    const onPreToolUseFailure = vi.fn(
+      () =>
+        new Promise<void>(() => {
+          // Deliberately remain pending to prove projection does not block the response.
+        }),
+    );
+    const beforeToolCall = vi.fn(async () => {
+      throw new Error("hook crashed");
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      onPreToolUseFailure,
+    });
+    const invoke = () =>
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "exec_command",
+          tool_use_id: "native-pending-projection",
+          tool_input: { cmd: "pnpm test" },
+        },
+      });
+
+    await expect(invoke()).resolves.toMatchObject({ failureDisposition: "failed" });
+    await expect(invoke()).resolves.toMatchObject({ failureDisposition: "failed" });
+    expect(onPreToolUseFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves report-mode pre-tool failure projection to the approval owner", async () => {
+    const onPreToolUseFailure = vi.fn();
+    const beforeToolCall = vi.fn(async () => {
+      throw Object.assign(new Error("timed out after 5000ms"), { name: "TimeoutError" });
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      onPreToolUseFailure,
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        openclaw_approval_mode: "report",
+        tool_name: "exec_command",
+        tool_use_id: "native-report-timeout",
+        tool_input: { cmd: "pnpm test" },
+      },
+    });
+
+    expect(response.failureDisposition).toBe("timed_out");
+    expect(onPreToolUseFailure).not.toHaveBeenCalled();
   });
 
   it("normalizes Codex exec_command cmd input before running OpenClaw policy", async () => {
@@ -2059,6 +2243,57 @@ describe("native hook relay registry", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("preserves deferred native approval cancellation as a terminal disposition", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      requireApproval: {
+        title: "Needs approval",
+        description: "native command needs approval",
+      },
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        openclaw_approval_mode: "report",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-approval-cancelled",
+        tool_input: { cmd: "pnpm test" },
+      },
+    });
+    testing.setNativeHookRelayDeferredToolApprovalRequesterForTests(async () => ({
+      blocked: true,
+      kind: "failure",
+      disposition: "cancelled",
+      deniedReason: "plugin-approval",
+      reason: "Approval cancelled because the run stopped",
+    }));
+
+    await expect(
+      resolveNativeHookRelayDeferredToolApproval({
+        relayId: relay.relayId,
+        toolUseId: "native-approval-cancelled",
+      }),
+    ).resolves.toEqual({
+      handled: true,
+      outcome: "denied",
+      reason: "Approval cancelled because the run stopped",
+      failureDisposition: "cancelled",
+    });
+  });
+
   it("passes config to trusted policies for native pre-tool session extension reads", async () => {
     const stateDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-native-relay-policy-"));
     const storePath = path.join(stateDir, "sessions.json");
@@ -2097,12 +2332,10 @@ describe("native hook relay registry", () => {
     ];
     setActivePluginRegistry(registry);
     try {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:session-1"] = {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        } as SessionEntry;
-      });
+      await replaceSessionEntry({ sessionKey: "agent:main:session-1", storePath }, {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+      } as SessionEntry);
       const patchResult = await patchPluginSessionExtension({
         cfg: config as never,
         sessionKey: "agent:main:session-1",
@@ -3199,6 +3432,54 @@ describe("native hook relay registry", () => {
       }),
     ).toContain("(1 omitted)");
   });
+
+  it("strips ESC and C1 CSI equivalently across PermissionRequest preview fields", () => {
+    const formatPreview = (csi: string) =>
+      testing.formatPermissionApprovalDescriptionForTests({
+        provider: "codex",
+        sessionId: "session-1",
+        runId: "run-1",
+        toolName: `ex${csi}ec`,
+        cwd: `/repo${csi}/red`,
+        model: `gpt-${csi}5.4`,
+        toolInput: {
+          command: `printf${csi} 'ok'`,
+        },
+      });
+    const formatKeyPreview = (csi: string) =>
+      testing.formatPermissionApprovalDescriptionForTests({
+        provider: "codex",
+        sessionId: "session-1",
+        runId: "run-1",
+        toolName: "exec",
+        toolInput: {
+          [`key${csi}-0`]: 0,
+        },
+      });
+    const escCsi = "\u001b[@";
+    const c1Csi = "\u009b@";
+
+    expect(formatPreview(c1Csi)).toBe(formatPreview(escCsi));
+    expect(formatPreview(c1Csi)).toBe(
+      "Tool: exec\nCwd: /repo/red\nModel: gpt-5.4\nCommand: printf 'ok'",
+    );
+    expect(formatKeyPreview(c1Csi)).toBe(formatKeyPreview(escCsi));
+    expect(formatKeyPreview(c1Csi)).toBe("Tool: exec\nInput keys: key-0");
+  });
+
+  it("truncates PermissionRequest approval previews without splitting surrogate pairs", () => {
+    expect(
+      testing.formatPermissionApprovalDescriptionForTests({
+        provider: "codex",
+        sessionId: "session-1",
+        runId: "run-1",
+        toolName: "exec",
+        toolInput: {
+          command: `${"a".repeat(236)}😀tail`,
+        },
+      }),
+    ).toBe(`Tool: exec\nCommand: ${"a".repeat(236)}...`);
+  });
 });
 
 describe("native hook relay command builder", () => {
@@ -3231,3 +3512,4 @@ describe("native hook relay command builder", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,7 +4,15 @@ import { parse } from "yaml";
 
 const workflowPath = ".github/workflows/openclaw-npm-release.yml";
 
-type Step = { env?: Record<string, string>; id?: string; if?: string; name?: string; run?: string };
+type Step = {
+  env?: Record<string, string>;
+  id?: string;
+  if?: string;
+  name?: string;
+  run?: string;
+  uses?: string;
+  with?: Record<string, string>;
+};
 type Job = { environment?: string; steps?: Step[] };
 type Workflow = {
   on?: {
@@ -64,6 +72,9 @@ describe("minimal npm extended-stable workflow", () => {
       "openclaw-npm-extended-stable-release.mjs validate-request",
     );
     expect(
+      step(parsed.jobs?.preflight_openclaw_npm, "Validate npm release request").env?.PREFLIGHT_ONLY,
+    ).toBe("${{ inputs.preflight_only }}");
+    expect(
       step(parsed.jobs?.validate_publish_request, "Validate npm release request").run,
     ).toContain("openclaw-npm-extended-stable-release.mjs validate-request");
     expect(step(parsed.jobs?.publish_openclaw_npm, "Recheck npm release request").run).toContain(
@@ -108,10 +119,74 @@ describe("minimal npm extended-stable workflow", () => {
     expect(summary.run).toContain("Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}");
   });
 
+  it("accepts arbitrary SHA preflight targets and exercises every publishable plugin package", () => {
+    const parsed = workflow();
+    const preflight = parsed.jobs?.preflight_openclaw_npm;
+    const metadata = step(preflight, "Validate release metadata");
+    expect(metadata.run).toContain('RELEASE_BRANCH_REF="${RELEASE_SHA}"');
+    expect(metadata.run).not.toContain("Validation-only SHA mode only supports");
+
+    const plugins = step(preflight, "Exercise all extended-stable plugin npm packages");
+    expect(step(preflight, "Verify release contents").env).toMatchObject({
+      OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR:
+        "${{ steps.ai_runtime_tarballs.outputs.dir }}",
+    });
+    expect(plugins.if).toBe("${{ inputs.npm_dist_tag == 'extended-stable' }}");
+    expect(plugins.env).toMatchObject({
+      OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: "extended-stable",
+    });
+    expect(plugins.run).toContain("--selection-mode all-publishable");
+    expect(plugins.run).toContain("--npm-dist-tag extended-stable");
+    expect(plugins.run).toContain("scripts/check-plugin-npm-runtime-builds.mjs");
+    expect(plugins.run).toContain("scripts/plugin-npm-publish.sh --pack");
+    expect(plugins.run).toContain("OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR");
+    expect(plugins.run).not.toContain("--publish");
+    expect(step(preflight, "Upload extended-stable plugin npm packages")).toBeDefined();
+  });
+
+  it("restores same-SHA preflight build outputs and keeps validation steps running", () => {
+    const parsed = workflow();
+    const preflight = parsed.jobs?.preflight_openclaw_npm;
+
+    const restore = step(preflight, "Restore preflight build outputs");
+    expect(restore.uses).toContain("actions/cache/restore@");
+    expect(restore.with?.key).toBe(
+      "${{ runner.os }}-npm-preflight-dist-v1-${{ steps.preflight_cache_key.outputs.sha }}-${{ hashFiles('pnpm-lock.yaml') }}",
+    );
+
+    // Only the build producers skip on a cache hit; every validation step
+    // still runs against the restored artifacts.
+    expect(step(preflight, "Build").if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
+    expect(step(preflight, "Build Control UI").if).toBe(
+      "steps.dist_build_cache.outputs.cache-hit != 'true'",
+    );
+    expect(step(preflight, "Check").if).toBeUndefined();
+    expect(step(preflight, "Verify release contents").if).toBeUndefined();
+    expect(step(preflight, "Verify prepared npm tarball install").if).toBeUndefined();
+
+    const save = step(preflight, "Save preflight build outputs");
+    expect(save.uses).toContain("actions/cache/save@");
+    expect(save.with?.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
+  });
+
   it("authenticates exact extended-stable run and Full Validation identities", () => {
+    const parsed = workflow();
     const raw = readFileSync(workflowPath, "utf8");
     expect(raw).toContain("--json workflowName,headBranch,headSha,event,conclusion,url");
-    expect(raw).toContain("--json workflowName,headBranch,headSha,event,status,conclusion,url");
+    const fullValidationRun = step(
+      parsed.jobs?.publish_openclaw_npm,
+      "Verify full release validation run metadata",
+    );
+    expect(fullValidationRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
+      "${{ inputs.full_release_validation_run_attempt }}",
+    );
+    expect(fullValidationRun.run).toContain(
+      "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
+    );
+    expect(fullValidationRun.run).toContain(
+      '"$run_attempt" != "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"',
+    );
+    expect(fullValidationRun.run).toContain('echo "attempt=$run_attempt" >> "$GITHUB_OUTPUT"');
     expect(raw.match(/openclaw-npm-extended-stable-release\.mjs verify-run/g)).toHaveLength(3);
     expect(raw).toContain("openclaw-npm-extended-stable-release.mjs verify-manifest");
   });

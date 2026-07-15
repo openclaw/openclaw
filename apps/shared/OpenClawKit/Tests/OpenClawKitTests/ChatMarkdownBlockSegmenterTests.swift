@@ -26,6 +26,81 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
+    // MARK: - Headings
+
+    @Test func `all ATX heading levels become native blocks`() {
+        for level in 1...6 {
+            let markdown = "\(String(repeating: "#", count: level)) Heading \(level)"
+            #expect(self.segments(markdown) == [
+                .heading(ChatMarkdownHeading(level: level, markdown: markdown)),
+            ])
+        }
+    }
+
+    @Test func `Setext headings preserve their complete source`() {
+        #expect(self.segments("Primary\n=======") == [
+            .heading(ChatMarkdownHeading(level: 1, markdown: "Primary\n=======")),
+        ])
+        #expect(self.segments("Secondary\n---------") == [
+            .heading(ChatMarkdownHeading(level: 2, markdown: "Secondary\n---------")),
+        ])
+    }
+
+    @Test func `streaming ATX heading keeps the current source`() {
+        let markdown = "### Streamed heading"
+        #expect(self.segments(markdown, isComplete: false) == [
+            .heading(ChatMarkdownHeading(level: 3, markdown: markdown)),
+        ])
+    }
+
+    @Test func `heading keeps inline markdown source and surrounding prose`() {
+        let heading = "## **Status** with `code` and [docs](https://example.com) ##"
+        #expect(self.segments("before\n\n\(heading)\n\nafter") == [
+            .prose("before"),
+            .heading(ChatMarkdownHeading(level: 2, markdown: heading)),
+            .prose("after"),
+        ])
+    }
+
+    @Test func `headings nested in containers stay on the prose path`() {
+        for markdown in ["> # Quoted", "- # Listed"] {
+            #expect(self.segments(markdown) == [.prose(markdown)])
+        }
+    }
+
+    @Test func `reference heading keeps document scoped definition`() {
+        let markdown = "# [Docs][docs]\n\n[docs]: https://example.com"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `heading composes with an unchanged native table`() {
+        let blocks = self.segments("# Results\n\n| Name | Count |\n| --- | ---: |\n| Claw | 2 |")
+        #expect(blocks == [
+            .heading(ChatMarkdownHeading(level: 1, markdown: "# Results")),
+            .table(ChatMarkdownTable(
+                header: ["Name", "Count"],
+                alignments: [.leading, .trailing],
+                rows: [["Claw", "2"]])),
+        ])
+    }
+
+    @Test @MainActor func `render snapshot preserves heading inline attributes`() throws {
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: "## **Status** and [docs](https://example.com)",
+            isComplete: true)
+        guard case let .heading(level, prose) = try #require(snapshot.blocks.first) else {
+            Issue.record("expected heading block")
+            return
+        }
+
+        #expect(level == 2)
+        #expect(String(prose.attributed.characters) == "Status and docs")
+        #expect(prose.attributed.runs.contains { $0.link != nil })
+        #expect(prose.attributed.runs.contains {
+            $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        })
+    }
+
     // MARK: - Fenced code
 
     @Test func `fence with language and surrounding prose`() {
@@ -113,6 +188,107 @@ struct ChatMarkdownBlockSegmenterTests {
         #expect(blocks == [
             .code(ChatCodeBlock(language: "swift", code: "let x = 1", isComplete: true)),
         ])
+    }
+
+    // MARK: - Display math
+
+    @Test func `same line dollar delimiters extract display math`() {
+        let blocks = self.segments("before\n$$ x^2 + y^2 $$\nafter")
+        #expect(blocks == [
+            .prose("before"),
+            .math(ChatMathBlock(latex: "x^2 + y^2", isComplete: true)),
+            .prose("after"),
+        ])
+    }
+
+    @Test func `own line dollar delimiters extract multiline display math`() {
+        let blocks = self.segments("""
+        $$
+        \\begin{aligned}
+        x &= 1 \\\\
+        y &= 2
+        \\end{aligned}
+        $$
+        """)
+        #expect(blocks == [
+            .math(ChatMathBlock(
+                latex: "\\begin{aligned}\nx &= 1 \\\\\ny &= 2\n\\end{aligned}",
+                isComplete: true)),
+        ])
+    }
+
+    @Test func `bracket delimiters extract display math`() {
+        let blocks = self.segments(#"\[\frac{a}{b}\]"#)
+        #expect(blocks == [
+            .math(ChatMathBlock(latex: #"\frac{a}{b}"#, isComplete: true)),
+        ])
+    }
+
+    @Test func `inline math delimiters stay prose`() {
+        let markdown = #"single $x$, parenthesized \(y\), and prose around $$z$$"#
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `unclosed math while streaming stays prose`() {
+        let markdown = "$$\nx + y"
+        #expect(self.segments(markdown, isComplete: false) == [.prose(markdown)])
+    }
+
+    @Test func `unclosed math in complete message renders as math`() {
+        let blocks = self.segments("$$\nx + y")
+        #expect(blocks == [
+            .math(ChatMathBlock(latex: "x + y", isComplete: true)),
+        ])
+    }
+
+    @Test func `math composes with prose and fenced code blocks`() {
+        let blocks = self.segments("before\n$$E = mc^2$$\n```swift\nlet value = 1\n```\nafter")
+        #expect(blocks == [
+            .prose("before"),
+            .math(ChatMathBlock(latex: "E = mc^2", isComplete: true)),
+            .code(ChatCodeBlock(language: "swift", code: "let value = 1", isComplete: true)),
+            .prose("after"),
+        ])
+    }
+
+    @Test func `oversized math stays raw prose`() {
+        let latex = String(repeating: "x", count: ChatMarkdownBlockSegmenter.maxMathBytes + 1)
+        let markdown = "$$\n\(latex)\n$$"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `oversized math keeps nested code fence in prose`() {
+        let latex = String(repeating: "x", count: ChatMarkdownBlockSegmenter.maxMathBytes + 1)
+        let markdown = "$$\n\(latex)\n```swift\nlet value = 1\n```\n$$"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `math delimiters inside code fences stay code`() {
+        let code = "$x$\n$$\nx + y\n$$\n\\[z\\]"
+        let blocks = self.segments("```tex\n\(code)\n```")
+        #expect(blocks == [
+            .code(ChatCodeBlock(language: "tex", code: code, isComplete: true)),
+        ])
+    }
+
+    @Test func `math delimiters inside multiline code span stay prose`() {
+        let markdown = "`literal\n$$ x + y $$\nend`"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `math delimiters inside list stay prose`() {
+        let markdown = "- item\n  $$x + y$$"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `unclosed streaming math leaves later opener lines as prose`() {
+        let markdown = "\\[\nfirst\n\\[\nsecond"
+        #expect(self.segments(markdown, isComplete: false) == [.prose(markdown)])
+    }
+
+    @Test func `unclosed streaming math keeps later code fence in prose`() {
+        let markdown = "before\n$$\nx + y\n```swift\nlet value = 1\n```"
+        #expect(self.segments(markdown, isComplete: false) == [.prose(markdown)])
     }
 
     // MARK: - Streaming fallbacks

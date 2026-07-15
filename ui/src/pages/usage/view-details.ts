@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render details screen content.
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
@@ -119,7 +121,7 @@ function renderSessionSummary(
   return html`
     ${badges.length > 0
       ? html`<div class="usage-badges">
-          ${badges.map((b) => html`<span class="usage-badge">${b}</span>`)}
+          ${badges.map((b) => html`<span class="settings-row__value">${b}</span>`)}
         </div>`
       : nothing}
     <div class="session-summary-grid">
@@ -200,6 +202,8 @@ function computeFilteredUsage(
       userMessages++;
     }
   }
+  const first = expectDefined(filtered[0], "filtered usage first point");
+  const last = expectDefined(filtered.at(-1), "filtered usage last point");
 
   return {
     ...baseUsage,
@@ -209,9 +213,9 @@ function computeFilteredUsage(
     output: totalOutput,
     cacheRead: totalCacheRead,
     cacheWrite: totalCacheWrite,
-    durationMs: filtered[filtered.length - 1].timestamp - filtered[0].timestamp,
-    firstActivity: filtered[0].timestamp,
-    lastActivity: filtered[filtered.length - 1].timestamp,
+    durationMs: last.timestamp - first.timestamp,
+    firstActivity: first.timestamp,
+    lastActivity: last.timestamp,
     messageCounts: {
       total: filtered.length,
       user: userMessages,
@@ -257,7 +261,7 @@ function renderSessionDetailPanel(
   onClose: () => void,
 ) {
   const label = session.label || session.key;
-  const displayLabel = label.length > 50 ? label.slice(0, 50) + "…" : label;
+  const displayLabel = label.length > 50 ? truncateUtf16Safe(label, 50) + "…" : label;
   const usage = session.usage;
 
   const hasRange = timeSeriesCursorStart !== null && timeSeriesCursorEnd !== null;
@@ -271,7 +275,7 @@ function renderSessionDetailPanel(
   const cursorIndicator = filteredUsage ? t("usage.details.filtered") : "";
 
   return html`
-    <div class="card session-detail-panel">
+    <div class="settings-group usage-panel session-detail-panel">
       <div class="session-detail-header">
         <div class="session-detail-header-left">
           <div class="session-detail-title">
@@ -581,13 +585,13 @@ function renderTimeSeriesCompact(
           <!-- X axis labels (first and last) -->
           ${points.length > 0
             ? svg`
-            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(points[0].timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
-            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(points[points.length - 1].timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
+            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(expectDefined(points[0], "time series first point").timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
+            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(expectDefined(points.at(-1), "time series last point").timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
           `
             : nothing}
           <!-- Bars -->
           ${points.map((p, i) => {
-            const val = barTotals[i];
+            const val = expectDefined(barTotals[i], "time series bar total");
             const x = padding.left + i * (barWidth + barGap);
             const bh = (val / maxValue) * chartHeight;
             const y = padding.top + chartHeight - bh;
@@ -706,11 +710,15 @@ function renderTimeSeriesCompact(
                 return;
               }
               if (side === "left") {
-                const endTs = cursorEnd ?? points[points.length - 1].timestamp;
+                const endTs =
+                  cursorEnd ??
+                  expectDefined(points.at(-1), "time series right cursor point").timestamp;
                 // Don't let left go past right
                 onCursorRangeChange(Math.min(pt.timestamp, endTs), endTs);
               } else {
-                const startTs = cursorStart ?? points[0].timestamp;
+                const startTs =
+                  cursorStart ??
+                  expectDefined(points[0], "time series left cursor point").timestamp;
                 // Don't let right go past left
                 onCursorRangeChange(startTs, Math.max(pt.timestamp, startTs));
               }
@@ -1124,7 +1132,7 @@ function renderSessionLogsCompact(
         <select
           multiple
           size="4"
-          aria-label="Filter by role"
+          aria-label=${t("usage.details.filterByRole")}
           @change=${(event: Event) =>
             onFilterRolesChange(
               Array.from((event.target as HTMLSelectElement).selectedOptions).map(
@@ -1148,7 +1156,7 @@ function renderSessionLogsCompact(
         <select
           multiple
           size="4"
-          aria-label="Filter by tool"
+          aria-label=${t("usage.details.filterByTool")}
           @change=${(event: Event) =>
             onFilterToolsChange(
               Array.from((event.target as HTMLSelectElement).selectedOptions).map(
@@ -1226,13 +1234,5 @@ function renderSessionLogsCompact(
   `;
 }
 
-export {
-  computeFilteredUsage,
-  renderContextPanel,
-  renderSessionDetailPanel,
-  renderSessionLogsCompact,
-  renderSessionSummary,
-  renderTimeSeriesCompact,
-  CHART_BAR_WIDTH_RATIO,
-  CHART_MAX_BAR_WIDTH,
-};
+export { renderSessionDetailPanel };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

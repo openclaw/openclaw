@@ -5,16 +5,20 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "../../../../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   buildPackageArtifacts,
   packOpenClawPackageForDocker,
   parseArgs,
   prepareBundledAiRuntimePackage,
   runCommandForTest,
+  writePackageInventoryForDocker,
 } from "../../../../scripts/package-openclaw-for-docker.mjs";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const skipBundledAiRuntime = async (): Promise<() => Promise<void>> => async () => {};
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function isProcessAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 0) {
@@ -86,13 +90,19 @@ describe("package-openclaw-for-docker", () => {
         "--output-dir",
         ".artifacts/docker",
         "--output-name=openclaw-current.tgz",
+        "--pack-json",
+        ".artifacts/docker/pack.json",
         "--source-dir",
         "/repo",
+        "--allow-unreleased-changelog",
         "--skip-build",
       ]),
     ).toEqual({
+      allowUnreleasedChangelog: true,
       outputDir: ".artifacts/docker",
       outputName: "openclaw-current.tgz",
+      packJson: ".artifacts/docker/pack.json",
+      pnpmPack: false,
       skipBuild: true,
       sourceDir: "/repo",
     });
@@ -112,6 +122,12 @@ describe("package-openclaw-for-docker", () => {
     const duplicateCases = [
       ["--output-dir", ["--output-dir", "one", "--output-dir=two"]],
       ["--output-name", ["--output-name", "one.tgz", "--output-name=two.tgz"]],
+      ["--pack-json", ["--pack-json", "one.json", "--pack-json=two.json"]],
+      [
+        "--allow-unreleased-changelog",
+        ["--allow-unreleased-changelog", "--allow-unreleased-changelog"],
+      ],
+      ["--pnpm-pack", ["--pnpm-pack", "--pnpm-pack"]],
       ["--source-dir", ["--source-dir", "/repo-a", "--source-dir=/repo-b"]],
       ["--skip-build", ["--skip-build", "--skip-build"]],
     ] satisfies Array<[string, string[]]>;
@@ -119,6 +135,78 @@ describe("package-openclaw-for-docker", () => {
     for (const [flag, args] of duplicateCases) {
       expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
     }
+  });
+
+  it("loads from a trusted harness checkout without installed dependencies", async () => {
+    const tempRoot = tempDirs.make("openclaw-package-harness-");
+    const copiedFiles = [
+      "scripts/package-openclaw-for-docker.mjs",
+      "scripts/package-changelog.mjs",
+      "scripts/lib/bundled-plugin-build-entries.mjs",
+      "scripts/lib/bundled-plugin-paths.mjs",
+      "scripts/lib/optional-bundled-clusters.mjs",
+    ];
+    try {
+      for (const relativePath of copiedFiles) {
+        const target = path.join(tempRoot, relativePath);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(relativePath, target);
+      }
+      const result = await new Promise<{ status: number | null; stderr: string }>(
+        (resolve, reject) => {
+          const child = spawn(
+            process.execPath,
+            [path.join(tempRoot, "scripts/package-openclaw-for-docker.mjs"), "--invalid"],
+            { cwd: tempRoot, stdio: ["ignore", "ignore", "pipe"] },
+          );
+          let stderr = "";
+          child.stderr.on("data", (chunk) => {
+            stderr += String(chunk);
+          });
+          child.on("error", reject);
+          child.on("close", (status) => resolve({ status, stderr }));
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("unknown argument: --invalid");
+      expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
+    } finally {
+      fs.rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("writes inventory for a frozen source checkout without the trusted helper", async () => {
+    const sourceDir = tempDirs.make("openclaw-package-frozen-source-");
+    fs.mkdirSync(path.join(sourceDir, "dist"), { recursive: true });
+    fs.mkdirSync(path.join(sourceDir, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "package.json"), '{"name":"openclaw"}\n');
+    fs.writeFileSync(path.join(sourceDir, "dist", "entry.js"), "export {};\n");
+    fs.writeFileSync(
+      path.join(sourceDir, "scripts", "write-package-dist-inventory.ts"),
+      [
+        'import fs from "node:fs";',
+        'fs.writeFileSync("dist/postinstall-inventory.json", JSON.stringify(["dist/entry.js"]));',
+      ].join("\n"),
+    );
+
+    await writePackageInventoryForDocker(sourceDir);
+
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(sourceDir, "dist", "postinstall-inventory.json"), "utf8"),
+      ),
+    ).toEqual(["dist/entry.js"]);
+    expect(fs.existsSync(path.join(sourceDir, "scripts", "lib", "package-dist-inventory.ts"))).toBe(
+      false,
+    );
+  });
+
+  it("rejects pnpm pack with npm metadata output", () => {
+    expect(parseArgs(["--pnpm-pack"]).pnpmPack).toBe(true);
+    expect(() => parseArgs(["--pnpm-pack", "--pack-json", "pack.json"])).toThrow(
+      "--pack-json cannot be combined with --pnpm-pack",
+    );
   });
 
   it("rejects package artifact output names that escape the output directory", () => {
@@ -144,13 +232,22 @@ describe("package-openclaw-for-docker", () => {
       args: string[];
       cwd: string;
       noPnpm: string | undefined;
+      packageExtensions: string | undefined;
+      dockerBuildExtensions: string | undefined;
+      internalDockerBuildPluginIds: string | undefined;
       skipDts: string | undefined;
       timeoutMs: number | undefined;
     }> = [];
     const previousTimeout = process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
     const previousSkipDts = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD;
+    const previousPackageExtensions = process.env.OPENCLAW_EXTENSIONS;
+    const previousDockerBuildExtensions = process.env.OPENCLAW_DOCKER_BUILD_EXTENSIONS;
+    const previousInternalPluginIds = process.env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
     process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = "1234";
     process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
+    process.env.OPENCLAW_EXTENSIONS = "clickclack";
+    process.env.OPENCLAW_DOCKER_BUILD_EXTENSIONS = "slack";
+    process.env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV] = "msteams";
 
     try {
       await buildPackageArtifacts("/repo", {
@@ -165,6 +262,9 @@ describe("package-openclaw-for-docker", () => {
             args,
             cwd,
             noPnpm: options.env?.OPENCLAW_BUILD_ALL_NO_PNPM,
+            packageExtensions: options.env?.OPENCLAW_EXTENSIONS,
+            dockerBuildExtensions: options.env?.OPENCLAW_DOCKER_BUILD_EXTENSIONS,
+            internalDockerBuildPluginIds: options.env?.[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV],
             skipDts: options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD,
             timeoutMs: options.timeoutMs,
           });
@@ -181,6 +281,17 @@ describe("package-openclaw-for-docker", () => {
       } else {
         process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = previousSkipDts;
       }
+      for (const [envName, previousValue] of [
+        ["OPENCLAW_EXTENSIONS", previousPackageExtensions],
+        ["OPENCLAW_DOCKER_BUILD_EXTENSIONS", previousDockerBuildExtensions],
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV, previousInternalPluginIds],
+      ] as const) {
+        if (previousValue === undefined) {
+          delete process.env[envName];
+        } else {
+          process.env[envName] = previousValue;
+        }
+      }
     }
 
     expect(calls).toEqual([
@@ -188,7 +299,10 @@ describe("package-openclaw-for-docker", () => {
         command: "node",
         args: ["scripts/build-all.mjs", "ciArtifacts"],
         cwd: "/repo",
+        dockerBuildExtensions: undefined,
+        internalDockerBuildPluginIds: undefined,
         noPnpm: "1",
+        packageExtensions: undefined,
         skipDts: "0",
         timeoutMs: 1234,
       },
@@ -381,6 +495,130 @@ describe("package-openclaw-for-docker", () => {
       "npm:pack --silent --ignore-scripts --pack-destination /out:/repo",
       "restore:/repo",
     ]);
+  });
+
+  it("packages Unreleased notes for explicitly non-publish stable artifacts", async () => {
+    const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-unreleased-package-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-unreleased-output-"));
+    const sourceChangelog = [
+      "# Changelog",
+      "",
+      "## Unreleased",
+      "### Fixes",
+      "- Pending release notes with enough detail.",
+      "",
+      "## 2026.5.28",
+      "- Previous release notes with enough detail.",
+      "",
+    ].join("\n");
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      '{"name":"openclaw","version":"2026.5.29"}\n',
+    );
+    fs.writeFileSync(path.join(sourceDir, "CHANGELOG.md"), sourceChangelog);
+
+    try {
+      const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+        allowUnreleasedChangelog: true,
+        prepareBundledAiRuntime: skipBundledAiRuntime,
+        runCaptureImpl: async () => {
+          const packagedChangelog = fs.readFileSync(path.join(sourceDir, "CHANGELOG.md"), "utf8");
+          expect(packagedChangelog).toContain("## Unreleased");
+          expect(packagedChangelog).not.toContain("## 2026.5.28");
+          const packedPath = path.join(outputDir, "openclaw-2026.5.29.tgz");
+          fs.writeFileSync(packedPath, "package");
+          return "openclaw-2026.5.29.tgz\n";
+        },
+      });
+
+      expect(tarball).toBe(path.join(outputDir, "openclaw-2026.5.29.tgz"));
+      expect(fs.readFileSync(path.join(sourceDir, "CHANGELOG.md"), "utf8")).toBe(sourceChangelog);
+    } finally {
+      fs.rmSync(sourceDir, { recursive: true, force: true });
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses pnpm pack when requested", async () => {
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-pack-"));
+    const calls: string[] = [];
+    const packedPath = path.join(outputDir, "openclaw-2026.5.28.tgz");
+
+    try {
+      const tarball = await packOpenClawPackageForDocker("/repo", outputDir, {
+        pnpmPack: true,
+        prepareBundledAiRuntime: skipBundledAiRuntime,
+        prepareChangelog: async () => {},
+        restoreChangelog: async () => {},
+        runCaptureImpl: async (command: string, args: string[], cwd: string) => {
+          calls.push(`${command}:${args.join(" ")}:${cwd}`);
+          fs.writeFileSync(packedPath, "package");
+          return `${packedPath}\n`;
+        },
+      });
+
+      expect(tarball).toBe(packedPath);
+      expect(calls).toEqual([
+        `pnpm:pack --silent --config.ignore-scripts=true --pack-destination ${outputDir}:/repo`,
+      ]);
+    } finally {
+      fs.rmSync(outputDir, { force: true, recursive: true });
+    }
+  });
+
+  it("writes npm pack metadata for renamed package artifacts", async () => {
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-pack-json-"));
+    const packJsonPath = path.join(outputDir, "pack.json");
+
+    try {
+      const tarball = await packOpenClawPackageForDocker("/repo", outputDir, {
+        outputName: "openclaw-current.tgz",
+        packJsonPath,
+        prepareBundledAiRuntime: skipBundledAiRuntime,
+        prepareChangelog: async () => {},
+        restoreChangelog: async () => {},
+        runCaptureImpl: async (
+          command: string,
+          args: string[],
+          _cwd: string,
+          options: { deferForwardedSignalExit?: boolean },
+        ) => {
+          expect(command).toBe("npm");
+          expect(args).toEqual([
+            "pack",
+            "--json",
+            "--silent",
+            "--ignore-scripts",
+            "--pack-destination",
+            outputDir,
+          ]);
+          expect(options.deferForwardedSignalExit).toBe(true);
+          fs.writeFileSync(path.join(outputDir, "openclaw-2026.5.28.tgz"), "package");
+          return JSON.stringify([
+            {
+              entryCount: 1,
+              filename: "openclaw-2026.5.28.tgz",
+              size: 7,
+              unpackedSize: 7,
+              version: "2026.5.28",
+            },
+          ]);
+        },
+      });
+
+      expect(tarball).toBe(path.join(outputDir, "openclaw-current.tgz"));
+      expect(JSON.parse(fs.readFileSync(packJsonPath, "utf8"))).toEqual([
+        {
+          entryCount: 1,
+          filename: "openclaw-current.tgz",
+          size: 7,
+          unpackedSize: 7,
+          version: "2026.5.28",
+        },
+      ]);
+    } finally {
+      fs.rmSync(outputDir, { force: true, recursive: true });
+    }
   });
 
   it("rejects path-like npm pack stdout before resolving Docker package tarballs", async () => {

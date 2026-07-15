@@ -23,7 +23,7 @@ import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } f
 import type { MediaUnderstandingCapability } from "./types.js";
 
 /** Default per-provider media-understanding runtime timeout in milliseconds. */
-export const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
+const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
 const MIN_MEDIA_TIMEOUT_MS = 1000;
 
 /** Converts configured timeout seconds into a timer-safe millisecond deadline. */

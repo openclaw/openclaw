@@ -9,6 +9,44 @@ import UIKit
 #endif
 
 extension OpenClawChatViewModel {
+    /// Stages a recorded m4a voice note and removes its temporary file.
+    public func addVoiceNoteAttachment(fileURL: URL, durationSeconds: Double) async {
+        self.beginAttachmentStaging()
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            self.endAttachmentStaging()
+        }
+
+        let data: Data
+        do {
+            data = try await Task.detached(priority: .userInitiated) {
+                try Data(contentsOf: fileURL)
+            }.value
+        } catch {
+            self.errorText = String(
+                format: String(localized: "Could not attach voice note: %@"),
+                error.localizedDescription)
+            return
+        }
+
+        guard data.count <= Self.maxAttachmentBytes else {
+            self.errorText = String(localized: "Voice note exceeds the 5 MB attachment limit")
+            return
+        }
+
+        let normalizedDuration = durationSeconds.isFinite
+            ? min(max(0, durationSeconds), OpenClawVoiceNoteRecorder.maximumDurationSeconds)
+            : 0
+        self.attachments.append(
+            OpenClawPendingAttachment(
+                url: nil,
+                data: data,
+                fileName: fileURL.lastPathComponent,
+                mimeType: "audio/mp4",
+                preview: nil,
+                durationSeconds: normalizedDuration))
+    }
+
     func loadAttachments(urls: [URL]) async {
         for url in urls {
             do {
@@ -38,7 +76,7 @@ extension OpenClawChatViewModel {
             return UTType(mimeType: mimeType) ?? .data
         }()
         guard uti.conforms(to: .image) else {
-            self.errorText = "Only image attachments are supported right now"
+            self.errorText = String(localized: "Only image attachments are supported right now")
             return
         }
 
@@ -48,12 +86,17 @@ extension OpenClawChatViewModel {
                 try ChatImageProcessor.processForUpload(data: data)
             }.value
         } catch {
-            self.errorText = "Could not process \(fileName): \(error.localizedDescription)"
+            self.errorText = String(
+                format: String(localized: "Could not process %1$@: %2$@"),
+                fileName,
+                error.localizedDescription)
             return
         }
 
         if processed.count > Self.maxAttachmentBytes {
-            self.errorText = "Attachment \(fileName) exceeds 5 MB limit after resizing"
+            self.errorText = String(
+                format: String(localized: "Attachment %@ exceeds 5 MB limit after resizing"),
+                fileName)
             return
         }
 

@@ -6,108 +6,145 @@ import Testing
 @testable import OpenClaw
 
 struct IOSGatewayChatTransportTests {
-    private func object(from json: String) throws -> [String: Any] {
-        let data = try #require(json.data(using: .utf8))
-        let value = try JSONSerialization.jsonObject(with: data)
-        return try #require(value as? [String: Any])
+    private actor RequestRecorder {
+        private var requests: [OpenClawChatGatewayRequest] = []
+
+        func record(_ request: OpenClawChatGatewayRequest) -> Data {
+            self.requests.append(request)
+            return Data(#"{"key":"forked","entry":{}}"#.utf8)
+        }
+
+        func all() -> [OpenClawChatGatewayRequest] {
+            self.requests
+        }
     }
 
-    @Test func `agent wait treats success as completion`() {
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("success"))
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus(" ok "))
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("completed"))
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("succeeded"))
-        #expect(!IOSGatewayChatTransport.isAgentWaitCompletionStatus("timeout"))
-        #expect(!IOSGatewayChatTransport.isAgentWaitCompletionStatus("failed"))
+    @Test func `model patch result decodes authoritative Luna thinking state`() throws {
+        let data = Data(
+            #"""
+            {
+              "entry":{"thinkingLevel":"ultra"},
+              "resolved":{
+                "modelProvider":"openai",
+                "model":"gpt-5.6-luna",
+                "thinkingLevel":"max",
+                "thinkingLevels":[{"id":"off","label":"off"},{"id":"max","label":"max"}]
+              }
+            }
+            """#.utf8)
+
+        let result = try IOSGatewayChatTransport.decodeModelPatchResult(data)
+
+        #expect(result.modelProvider == "openai")
+        #expect(result.model == "gpt-5.6-luna")
+        #expect(result.thinkingLevel == "max")
+        #expect(result.thinkingLevels?.map(\.id) == ["off", "max"])
     }
 
-    @Test func `agent wait timeout adds gateway margin`() {
-        #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 1) == 6)
-        #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 1000) == 6)
-        #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 30000) == 35)
+    @Test func `live routing guard permits an identity still loading`() {
+        #expect(OpenClawChatSessionRoutingContract.expectedValue(
+            nil,
+            serverSupportsGuard: true) == nil)
+        #expect(OpenClawChatSessionRoutingContract.expectedValue(
+            " per-sender|main|reviewer ",
+            serverSupportsGuard: true) == "per-sender|main|reviewer")
+        #expect(OpenClawChatSessionRoutingContract.expectedValue(
+            "per-sender|main|reviewer",
+            serverSupportsGuard: false) == nil)
     }
 
-    @Test func `compaction leaves terminal timeout to gateway`() {
-        #expect(IOSGatewayChatTransport.compactionRequestTimeoutSeconds == 0)
+    @Test func `routing contract round trips a delimited legacy main key`() throws {
+        let contract = try #require(OpenClawChatSessionRoutingContract.make(
+            scope: "per-sender",
+            mainKey: "team|primary",
+            defaultAgentID: "main"))
+        let components = try #require(OpenClawChatSessionRoutingContract.parse(contract))
+        #expect(components.scope == "per-sender")
+        #expect(components.mainKey == "team|primary")
+        #expect(components.defaultAgentID == "main")
     }
 
-    @Test func `agent wait completion decodes fallback run id`() throws {
-        let data = Data(#"{"status":"completed"}"#.utf8)
-        let completion = try IOSGatewayChatTransport.decodeAgentWaitCompletion(data, fallbackRunId: "run-local")
-        #expect(completion.runId == "run-local")
-        #expect(completion.status == "completed")
-        #expect(completion.completed)
+    @Test func `hello advertises guarded chat send capability`() throws {
+        let data = Data(
+            #"""
+            {
+              "type":"hello-ok",
+              "protocol":4,
+              "server":{"version":"test","connId":"test"},
+              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract"]},
+              "snapshot":{
+                "presence":[],
+                "health":{},
+                "stateVersion":{"presence":0,"health":0},
+                "uptimeMs":0
+              },
+              "auth":{},
+              "policy":{}
+            }
+            """#.utf8)
+        let hello = try JSONDecoder().decode(HelloOk.self, from: data)
+        #expect(hello.supportsServerCapability(.chatSendRoutingContract))
     }
 
-    @Test func `list sessions params include global sessions but not unknown`() throws {
-        let params = try self.object(from: IOSGatewayChatTransport.makeListSessionsParamsJSON(limit: 12))
-        #expect(params["includeGlobal"] as? Bool == true)
-        #expect(params["includeUnknown"] as? Bool == false)
-        #expect(params["limit"] as? Int == 12)
+    @Test func `session mutations dispatch normalized selected agent targets`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { request in
+                await recorder.record(request)
+            })
+
+        for key in ["Matrix:Channel:Room", "global", "agent:ops:main"] {
+            try await transport.patchSession(key: key, pinned: true)
+            try await transport.deleteSession(key: key)
+            _ = try await transport.forkSession(parentKey: key)
+        }
+
+        let requests = await recorder.all()
+        #expect(requests.map(\.method) == Array(
+            repeating: ["sessions.patch", "sessions.delete", "sessions.create"],
+            count: 3).flatMap(\.self))
+        #expect(requests.map(\.timeoutMs) == Array(repeating: 15000, count: 9))
+
+        for (offset, expectedKey, expectedMutationAgentID, expectedForkAgentID) in [
+            (0, "agent:reviewer:Matrix:Channel:Room", nil, "reviewer"),
+            (3, "global", "reviewer", "reviewer"),
+            (6, "agent:ops:main", nil, "ops"),
+        ] as [(Int, String, String?, String?)] {
+            let patch = requests[offset].params
+            #expect(patch["key"]?.value as? String == expectedKey)
+            #expect(patch["agentId"]?.value as? String == expectedMutationAgentID)
+            #expect(patch["pinned"]?.value as? Bool == true)
+
+            let delete = requests[offset + 1].params
+            #expect(delete["key"]?.value as? String == expectedKey)
+            #expect(delete["agentId"]?.value as? String == expectedMutationAgentID)
+            #expect(delete["deleteTranscript"]?.value as? Bool == true)
+
+            let fork = requests[offset + 2].params
+            #expect(fork["parentSessionKey"]?.value as? String == expectedKey)
+            #expect(fork["agentId"]?.value as? String == expectedForkAgentID)
+            #expect(fork["fork"]?.value as? Bool == true)
+        }
     }
 
-    @Test func `commands list params request text scope with args`() throws {
-        let params = try self.object(from: IOSGatewayChatTransport.makeCommandsListParamsJSON())
-        #expect(params["scope"] as? String == "text")
-        #expect(params["includeArgs"] as? Bool == true)
-        #expect(params["agentId"] == nil)
-    }
+    @Test func `thinking changes dispatch through selected agent session target`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { request in
+                await recorder.record(request)
+            })
 
-    @Test func `commands list params include agent for agent scoped session`() throws {
-        let params = try self.object(
-            from: IOSGatewayChatTransport.makeCommandsListParamsJSON(sessionKey: "agent:reviewer:ios-main"))
-        #expect(params["scope"] as? String == "text")
-        #expect(params["includeArgs"] as? Bool == true)
-        #expect(params["agentId"] as? String == "reviewer")
-    }
+        try await transport.setSessionThinking(sessionKey: "global", thinkingLevel: "high")
 
-    @Test func `commands list params use explicit agent for selected global session`() throws {
-        let params = try self.object(
-            from: IOSGatewayChatTransport.makeCommandsListParamsJSON(
-                sessionKey: "global",
-                agentId: "reviewer"))
-        #expect(params["agentId"] as? String == "reviewer")
-    }
-
-    @Test func `create session params include selected global agent`() throws {
-        let params = try self.object(
-            from: IOSGatewayChatTransport.makeCreateSessionParamsJSON(
-                key: "agent:reviewer:ios-new",
-                agentId: "reviewer",
-                label: nil,
-                parentSessionKey: "global"))
-        #expect(params["key"] as? String == "agent:reviewer:ios-new")
-        #expect(params["agentId"] as? String == "reviewer")
-        #expect(params["parentSessionKey"] as? String == "global")
-    }
-
-    @Test func `chat send params omit empty attachments and keep session fields`() throws {
-        let params = try self.object(
-            from: IOSGatewayChatTransport.makeChatSendParamsJSON(
-                sessionKey: "agent:main",
-                message: "hello",
-                thinking: "low",
-                idempotencyKey: "send-1",
-                attachments: []))
-        #expect(params["sessionKey"] as? String == "agent:main")
-        #expect(params["message"] as? String == "hello")
-        #expect(params["thinking"] as? String == "low")
-        #expect(params["idempotencyKey"] as? String == "send-1")
-        #expect(params["timeoutMs"] as? Int == IOSGatewayChatTransport.defaultChatSendTimeoutMs)
-        #expect(params["attachments"] == nil)
-    }
-
-    @Test func `chat send params include selected global agent`() throws {
-        let params = try self.object(
-            from: IOSGatewayChatTransport.makeChatSendParamsJSON(
-                sessionKey: "global",
-                agentId: "reviewer",
-                message: "hello",
-                thinking: "low",
-                idempotencyKey: "send-1",
-                attachments: []))
-        #expect(params["sessionKey"] as? String == "global")
-        #expect(params["agentId"] as? String == "reviewer")
+        let request = try #require(await recorder.all().first)
+        #expect(request.method == "sessions.patch")
+        #expect(request.params["key"]?.value as? String == "global")
+        #expect(request.params["agentId"]?.value as? String == "reviewer")
+        #expect(request.params["thinkingLevel"]?.value as? String == "high")
     }
 
     @Test func `requests fail fast when gateway not connected`() async {
@@ -128,6 +165,22 @@ struct IOSGatewayChatTransportTests {
                 attachments: [])
             Issue.record("Expected sendMessage to throw when gateway not connected")
         } catch {}
+
+        do {
+            _ = try await transport.sendMessage(
+                sessionKey: "node-test",
+                agentID: "main",
+                expectedSessionRoutingContract: "per-sender|main|main",
+                message: "hello",
+                thinking: "low",
+                idempotencyKey: "guarded-idempotency",
+                attachments: [])
+            Issue.record("Expected guarded sendMessage to fail before dispatch")
+        } catch is OpenClawChatTransportSendError {
+            // Expected: a missing route never reached chat.send.
+        } catch {
+            Issue.record("Expected a typed pre-dispatch failure, got \(error)")
+        }
 
         do {
             _ = try await transport.requestHealth(timeoutMs: 250)
@@ -168,7 +221,7 @@ struct IOSGatewayChatTransportTests {
             payload: payload,
             seq: 1,
             stateversion: nil)
-        let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
+        let mapped = OpenClawChatGatewayPayloadCodec.event(from: frame)
 
         switch mapped {
         case let .sessionMessage(message):
@@ -183,6 +236,30 @@ struct IOSGatewayChatTransportTests {
         }
     }
 
+    @Test func `maps sessions changed event to authoritative refresh signal`() {
+        let payload = AnyCodable([
+            "sessionKey": AnyCodable("agent:main:main"),
+            "agentId": AnyCodable("main"),
+            "reason": AnyCodable("command-metadata"),
+        ])
+        let frame = EventFrame(
+            type: "event",
+            event: "sessions.changed",
+            payload: payload,
+            seq: 1,
+            stateversion: nil)
+
+        let mapped = OpenClawChatGatewayPayloadCodec.event(from: frame)
+        guard case let .sessionsChanged(change) = mapped else {
+            Issue.record("expected .sessionsChanged, got \(String(describing: mapped))")
+            return
+        }
+        #expect(change == .init(
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            reason: "command-metadata"))
+    }
+
     @Test func `maps chat event to chat`() {
         let payload = AnyCodable([
             "runId": AnyCodable("run-1"),
@@ -190,7 +267,7 @@ struct IOSGatewayChatTransportTests {
             "state": AnyCodable("final"),
         ])
         let frame = EventFrame(type: "event", event: "chat", payload: payload, seq: 1, stateversion: nil)
-        let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
+        let mapped = OpenClawChatGatewayPayloadCodec.event(from: frame)
 
         switch mapped {
         case let .chat(chat):
@@ -209,7 +286,7 @@ struct IOSGatewayChatTransportTests {
             payload: AnyCodable(["a": AnyCodable(1)]),
             seq: 1,
             stateversion: nil)
-        let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
+        let mapped = OpenClawChatGatewayPayloadCodec.event(from: frame)
         #expect(mapped == nil)
     }
 }

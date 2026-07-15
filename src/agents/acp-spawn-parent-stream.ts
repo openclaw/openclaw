@@ -122,20 +122,10 @@ function mergeStreamingEntry(
   if (!override) {
     return base;
   }
-  const overrideStreaming = asObjectRecord(override.streaming);
-  const legacyOverrideMode =
-    override.streamMode !== undefined &&
-    (override.streaming === undefined || overrideStreaming) &&
-    overrideStreaming?.mode === undefined
-      ? { mode: override.streamMode }
-      : undefined;
   return {
     ...base,
     ...override,
-    streaming: mergeStreamingConfig(
-      mergeStreamingConfig(base.streaming, override.streaming),
-      legacyOverrideMode,
-    ),
+    streaming: mergeStreamingConfig(base.streaming, override.streaming),
   };
 }
 
@@ -143,8 +133,7 @@ function hasConfiguredPreviewStreamMode(entry: StreamingCompatEntry): boolean {
   return (
     asObjectRecord(entry.streaming)?.mode !== undefined ||
     typeof entry.streaming === "string" ||
-    typeof entry.streaming === "boolean" ||
-    entry.streamMode !== undefined
+    typeof entry.streaming === "boolean"
   );
 }
 
@@ -534,8 +523,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       pendingText = "";
     }
     itemProgressTextById.set(snapshot.itemId, snapshot.text);
-    const delta =
-      isPrefixUpdate && hasPendingSnapshot ? snapshot.text.slice(previous.length) : snapshot.text;
+    const delta = isPrefixUpdate ? snapshot.text.slice(previous.length) : snapshot.text;
     appendVisibleProgress(delta, kind);
   };
 
@@ -785,3 +773,4 @@ export type AcpSpawnParentRelayHandle = {
   dispose: () => void;
   notifyStarted: () => void;
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -18,21 +18,23 @@ const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
 const USAGE_FOOTER_LEVELS = ["off", "tokens", "full", "reset", "inherit", "clear", "default"];
 
-export type ParsedCommand = {
+type ParsedCommand = {
   name: string;
   args: string;
 };
 
-export type SlashCommandOptions = {
+type SlashCommandOptions = {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  agentRuntime?: string;
   thinkingLevels?: Array<{ id: string; label: string }>;
   local?: boolean;
   dynamicCommands?: CommandEntry[];
 };
 
 const COMMAND_ALIASES: Record<string, string> = {
+  crestodian: "openclaw", // hidden alias
   gwstatus: "gateway-status",
 };
 
@@ -99,7 +101,7 @@ export function isSharedTextCommand(input: string): boolean {
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
   const thinkLevels = options.thinkingLevels?.length
     ? options.thinkingLevels.map((level) => level.label)
-    : listThinkingLevelLabels(options.provider, options.model);
+    : listThinkingLevelLabels(options.provider, options.model, undefined, options.agentRuntime);
   const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
   const traceCompletions = createLevelCompletion(TRACE_LEVELS);
   const fastCompletions = createLevelCompletion(FAST_LEVELS);
@@ -114,7 +116,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     ...(options.local ? [{ name: "auth", description: "Run provider auth/login flow" }] : []),
     { name: "agent", description: "Switch agent (or open picker)" },
     { name: "agents", description: "Open agent picker" },
-    { name: "crestodian", description: "Return to Crestodian" },
+    { name: "openclaw", description: "Return to OpenClaw" },
     { name: "session", description: "Switch session (or open picker)" },
     { name: "sessions", description: "Open session picker" },
     {
@@ -205,7 +207,13 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
 }
 
 export function helpText(options: SlashCommandOptions = {}): string {
-  const thinkLevels = formatThinkingLevels(options.provider, options.model, "|");
+  const thinkLevels = formatThinkingLevels(
+    options.provider,
+    options.model,
+    "|",
+    undefined,
+    options.agentRuntime,
+  );
   return [
     "Slash commands:",
     "/help",
@@ -214,7 +222,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/gwstatus",
     ...(options.local ? ["/auth [provider]"] : []),
     "/agent <id> (or /agents)",
-    "/crestodian [request]",
+    "/openclaw [request]",
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,

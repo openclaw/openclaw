@@ -24,7 +24,7 @@ import {
 
 const ZALO_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
 
-export type ZaloWebhookTarget = {
+type ZaloWebhookTarget = {
   token: string;
   account: ResolvedZaloAccount;
   config: OpenClawConfig;
@@ -99,7 +99,7 @@ export class ZaloRetryableWebhookError extends Error {
   }
 }
 
-export async function processZaloReplayGuardedUpdate(params: {
+async function processZaloReplayGuardedUpdate(params: {
   target: ZaloWebhookTarget;
   update: ZaloUpdate;
   processUpdate: ZaloWebhookProcessUpdate;

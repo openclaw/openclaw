@@ -4,7 +4,9 @@ import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
-import { renderActivity, type ActivityProps } from "./view.ts";
+import { renderActivity } from "./view.ts";
+
+type ActivityProps = Parameters<typeof renderActivity>[0];
 
 function createEntry(overrides: Partial<ActivityEntry> = {}): ActivityEntry {
   return {
@@ -90,7 +92,7 @@ describe("renderActivity", () => {
 
     expect(container.querySelector(".activity-page__title")).toBeNull();
     expect(container.querySelector(".activity-page__subtitle")).toBeNull();
-    expect(container.querySelector(".activity-toolbar__count")?.textContent?.trim()).toBe("1 of 1");
+    expect(container.querySelector(".activity-count")?.textContent?.trim()).toBe("1 of 1");
   });
 
   it("normalizes rounded minute durations that would otherwise show 60 seconds", async () => {
@@ -103,6 +105,6 @@ describe("renderActivity", () => {
     const meta = Array.from(container.querySelectorAll(".activity-entry__meta span")).map(
       (element) => element.textContent?.trim(),
     );
-    expect(meta).toContain("2m 0s");
+    expect(meta).toContain("2m");
   });
 });

@@ -151,15 +151,6 @@ function startStubGatewayClient() {
 }
 
 vi.mock("./client.js", () => ({
-  describeGatewayCloseCode: (code: number) => {
-    if (code === 1000) {
-      return "normal closure";
-    }
-    if (code === 1006) {
-      return "abnormal closure (no close frame)";
-    }
-    return undefined;
-  },
   isGatewayConnectAssemblyError: (value: unknown) => connectAssemblyErrorState.has(value),
   GatewayClient: class {
     constructor(opts: {
@@ -1203,6 +1194,33 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
+  it("lets a bound remote call keep its config URL over the gateway env override", async () => {
+    const config = {
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://selected-gateway.example/ws" },
+      },
+    } satisfies OpenClawConfig;
+    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://unrelated-gateway.example/ws";
+
+      const details = await buildGatewayProbeConnectionDetails({
+        config,
+        ignoreEnvUrlOverride: true,
+      });
+
+      expect(details.url).toBe("wss://selected-gateway.example/ws");
+      expect(details.urlSource).toBe("config gateway.remote.url");
+    } finally {
+      if (prevUrl === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+      }
+    }
+  });
+
   it("redacts credential-bearing target URLs from connection messages", () => {
     setLocalLoopbackGatewayConfig(18800);
 
@@ -1639,6 +1657,25 @@ describe("callGateway error details", () => {
         bindDetail: "Bind: loopback",
       },
     });
+  });
+
+  it("does not over-claim a gateway crash on a 1006 abnormal close", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    const message = (err as { message: string }).message;
+    expect(message).toContain(
+      "Connection dropped without a close frame (retry; check network and gateway load)",
+    );
+    expect(message).not.toContain("crashed or was terminated unexpectedly");
+    expect(message).toContain("Run `openclaw doctor`");
   });
 
   it("formats typed request errors for CLI JSON output", () => {
@@ -2787,3 +2824,4 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.[testCase.authKey]).toBe(testCase.explicitValue);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

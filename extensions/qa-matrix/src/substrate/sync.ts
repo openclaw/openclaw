@@ -56,7 +56,7 @@ export type MatrixQaRoomObserver = {
 };
 
 type MatrixQaRoomObserverState = {
-  cursorIndex: number;
+  cursorIndexes: Map<string, number>;
   events: MatrixQaObservedEvent[];
   pollPromise?: Promise<void>;
   since?: string;
@@ -128,7 +128,7 @@ export function createMatrixQaRoomObserver(
   },
 ): MatrixQaRoomObserver {
   const roomObserver: MatrixQaRoomObserverState = {
-    cursorIndex: 0,
+    cursorIndexes: new Map(),
     events: [],
     since: params.since,
   };
@@ -144,7 +144,7 @@ export function createMatrixQaRoomObserver(
     async waitForOptionalRoomEvent(waitParams) {
       const startSince = await this.prime();
       const startedAt = Date.now();
-      let cursorIndex = roomObserver.cursorIndex;
+      let cursorIndex = roomObserver.cursorIndexes.get(waitParams.roomId) ?? 0;
       let didPoll = false;
       while (true) {
         const matched = findMatrixQaObservedEventMatch({
@@ -154,7 +154,13 @@ export function createMatrixQaRoomObserver(
           roomId: waitParams.roomId,
         });
         if (matched) {
-          roomObserver.cursorIndex = Math.max(roomObserver.cursorIndex, matched.nextCursorIndex);
+          roomObserver.cursorIndexes.set(
+            waitParams.roomId,
+            Math.max(
+              roomObserver.cursorIndexes.get(waitParams.roomId) ?? 0,
+              matched.nextCursorIndex,
+            ),
+          );
           return {
             event: matched.event,
             matched: true,
@@ -164,7 +170,10 @@ export function createMatrixQaRoomObserver(
 
         const elapsedMs = Date.now() - startedAt;
         if (elapsedMs >= waitParams.timeoutMs && (didPoll || waitParams.timeoutMs <= 0)) {
-          roomObserver.cursorIndex = Math.max(roomObserver.cursorIndex, cursorIndex);
+          roomObserver.cursorIndexes.set(
+            waitParams.roomId,
+            Math.max(roomObserver.cursorIndexes.get(waitParams.roomId) ?? 0, cursorIndex),
+          );
           return {
             matched: false,
             since: roomObserver.since ?? startSince,

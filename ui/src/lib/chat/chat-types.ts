@@ -26,7 +26,15 @@ export type ChatQueueItem = {
   sendAttempts?: number;
   sendError?: string;
   sendRunId?: string;
-  sendState?: "waiting-model" | "sending" | "waiting-reconnect" | "failed";
+  sendState?:
+    | "waiting-model"
+    | "waiting-idle"
+    | "executing-command"
+    | "steering"
+    | "sending"
+    | "waiting-reconnect"
+    | "unconfirmed"
+    | "failed";
   sendSubmittedAtMs?: number;
   sendRequestStartedAtMs?: number;
   sessionKey?: string;
@@ -41,15 +49,13 @@ export type ChatItem =
       kind: "divider";
       key: string;
       label: string;
+      metric?: string;
       description?: string;
       action?: { kind: "session-checkpoints"; label: string };
       timestamp: number;
     }
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
-  | { kind: "reading-indicator"; key: string };
-
-export const CHAT_HISTORY_RENDER_LIMIT = 100;
-export const CHAT_HISTORY_RENDER_CHAR_BUDGET = 240_000;
+  | { kind: "reading-indicator"; key: string; startedAt: number };
 
 export type ChatStreamSegment = {
   text: string;
@@ -136,7 +142,13 @@ export type ToolCard = {
   args?: unknown;
   inputText?: string;
   outputText?: string;
+  /** Structured tool result details (e.g. the edit tool's precomputed diff). */
+  details?: unknown;
   isError?: boolean;
+  /** True when the card comes from the live tool stream of the current run. */
+  live?: boolean;
+  /** True once a result landed, including historical results with empty output. */
+  completed?: boolean;
   messageId?: string;
   preview?: {
     kind: "canvas";
@@ -148,5 +160,15 @@ export type ToolCard = {
     viewId?: string;
     className?: string;
     style?: string;
+    sandbox?: "strict" | "scripts";
+    mcpApp?: {
+      viewId: string;
+      serverName?: string;
+      toolName?: string;
+      uiResourceUri?: string;
+      toolCallId?: string;
+    };
   };
 };
+
+export type ToolCardOutcome = "running" | "succeeded" | "failed" | "unknown";

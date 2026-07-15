@@ -8,25 +8,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isLikelyMutatingToolName } from "./tool-mutation-names.js";
 
-const MUTATING_TOOL_NAMES = new Set([
-  "write",
-  "edit",
-  "apply_patch",
-  "exec",
-  "bash",
-  "process",
-  "message",
-  "sessions_spawn",
-  "sessions_send",
-  "cron",
-  "gateway",
-  "canvas",
-  "nodes",
-  "session_status",
-  "create_goal",
-  "update_goal",
-]);
+export { isLikelyMutatingToolName };
 
 // File-mutation tools that operate on the same `path` target identity.
 // Recovery is allowed across these even when the tool name differs (e.g.
@@ -105,6 +89,7 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
   "search",
   "sessions_history",
   "sessions_list",
+  "sessions_search",
   "tool_describe",
   "tool_search",
   "update_plan",
@@ -114,6 +99,7 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
 ]);
 
 const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "status", "tabs"]);
+const COMPUTER_REPLAY_SAFE_ACTIONS = new Set(["screenshot", "wait"]);
 const GATEWAY_REPLAY_SAFE_ACTIONS = new Set(["config.get", "config.schema.lookup"]);
 const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
 
@@ -345,19 +331,6 @@ function appendFingerprintAlias(
   return false;
 }
 
-export function isLikelyMutatingToolName(toolName: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(toolName);
-  if (!normalized) {
-    return false;
-  }
-  return (
-    MUTATING_TOOL_NAMES.has(normalized) ||
-    normalized.endsWith("_actions") ||
-    normalized.startsWith("message_") ||
-    normalized.includes("send")
-  );
-}
-
 export function isMutatingToolCall(toolName: string, args: unknown): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(toolName);
   const record = asRecord(args);
@@ -381,8 +354,12 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
       // Message actions are an extensible plugin surface. Only known lookup
       // actions are replay-safe; missing and future actions fail closed.
       return action == null || !MESSAGE_READ_ONLY_ACTIONS.has(action);
+    case "sessions":
+      return action !== "group_list";
+    case "computer":
+      return action == null || !COMPUTER_REPLAY_SAFE_ACTIONS.has(action);
     case "subagents":
-      return action === "kill" || action === "steer";
+      return action === "cancel" || action === "kill" || action === "steer";
     case "session_status":
       return typeof record?.model === "string" && record.model.trim().length > 0;
     case "gateway":
@@ -422,10 +399,14 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
       return action != null && MESSAGE_READ_ONLY_ACTIONS.has(action);
     case "subagents":
       return action == null || action === "list";
+    case "sessions":
+      return action === "group_list";
     case "session_status":
       return !isMutatingToolCall(normalized, args);
     case "browser":
       return action != null && BROWSER_READ_ONLY_ACTIONS.has(action);
+    case "computer":
+      return action != null && COMPUTER_REPLAY_SAFE_ACTIONS.has(action);
     case "skill_workshop":
       return action === "list" || action === "inspect";
     case "transcripts":

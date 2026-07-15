@@ -41,7 +41,7 @@ import { stableStringify } from "./stable-stringify.js";
 
 export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 
-export type PreparedOpenClawModelsJsonSource = ModelsJsonReadyResult & {
+type PreparedOpenClawModelsJsonSource = ModelsJsonReadyResult & {
   fingerprint: string;
   workspaceDir?: string;
 };

@@ -3,8 +3,8 @@
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import {
   getActivePluginChannelRegistryVersion,
-  getActivePluginRegistry,
-  getActivePluginRegistryVersion,
+  getActivePluginHttpRouteRegistry,
+  getActivePluginHttpRouteRegistryVersion,
 } from "../plugins/runtime.js";
 import { isPlainObject } from "../utils.js";
 
@@ -110,6 +110,10 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   // auth failure decision, so cooldown tuning needs a snapshot refresh but not
   // a gateway restart.
   { prefix: "auth.cooldowns", kind: "hot" },
+  // Worktree cleanup limits are read from the runtime config at each gc pass
+  // (hourly sweep and worktrees.gc), so a Settings stepper edit needs only a
+  // snapshot refresh; a restart here would drop live sessions per click.
+  { prefix: "worktrees", kind: "hot" },
   {
     prefix: "agents.list",
     kind: "hot",
@@ -117,6 +121,9 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
+  // The dedicated Apps listener and origin are created once during Gateway
+  // startup; disposing MCP runtimes cannot move or create that HTTP server.
+  { prefix: "mcp.apps", kind: "restart" },
   { prefix: "mcp", kind: "hot", actions: ["dispose-mcp-runtimes"] },
   { prefix: "plugins.load", kind: "restart" },
   { prefix: "plugins.installs", kind: "restart" },
@@ -146,24 +153,26 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 ];
 
 let cachedReloadRules: ReloadRule[] | null = null;
-let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
-let cachedActiveRegistryVersion = -1;
+let cachedRegistry: ReturnType<typeof getActivePluginHttpRouteRegistry> | null = null;
+let cachedGatewayRegistryVersion = -1;
 let cachedChannelRegistryVersion = -1;
 
 function listReloadRules(): ReloadRule[] {
-  const registry = getActivePluginRegistry();
-  const activeRegistryVersion = getActivePluginRegistryVersion();
+  // Reload metadata is Gateway policy. Agent-scoped registry activation must
+  // not replace the pinned Gateway surface and silently change restart rules.
+  const registry = getActivePluginHttpRouteRegistry();
+  const gatewayRegistryVersion = getActivePluginHttpRouteRegistryVersion();
   const channelRegistryVersion = getActivePluginChannelRegistryVersion();
   // Plugin/channel reload rules are process-stable until the active registry
   // version changes; cache them to keep every config diff cheap.
   if (
     registry !== cachedRegistry ||
-    activeRegistryVersion !== cachedActiveRegistryVersion ||
+    gatewayRegistryVersion !== cachedGatewayRegistryVersion ||
     channelRegistryVersion !== cachedChannelRegistryVersion
   ) {
     cachedReloadRules = null;
     cachedRegistry = registry;
-    cachedActiveRegistryVersion = activeRegistryVersion;
+    cachedGatewayRegistryVersion = gatewayRegistryVersion;
     cachedChannelRegistryVersion = channelRegistryVersion;
   }
   if (cachedReloadRules) {
@@ -229,6 +238,9 @@ function listReloadRules(): ReloadRule[] {
     ...channelPluginStateRules,
     ...BASE_RELOAD_RULES_TAIL,
   ];
+  // Narrow config contracts must override broad owner fallbacks. Sort once per
+  // registry snapshot so the hot path can retain first-match semantics.
+  rules.sort((a, b) => b.prefix.length - a.prefix.length);
   cachedReloadRules = rules;
   return rules;
 }

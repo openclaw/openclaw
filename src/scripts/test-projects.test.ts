@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const {
@@ -16,98 +17,7 @@ const {
   resolveChangedTargetArgs,
   resolveChangedTestTargetPlan,
   resolveParallelFullSuiteConcurrency,
-} = (await import("../../scripts/test-projects.test-support.mjs")) as unknown as {
-  applyParallelVitestCachePaths: (
-    specs: Array<{
-      config: string;
-      env: NodeJS.ProcessEnv;
-    }>,
-    params?: {
-      cwd?: string;
-      env?: NodeJS.ProcessEnv;
-    },
-  ) => Array<{
-    config: string;
-    env: NodeJS.ProcessEnv;
-  }>;
-  buildFullSuiteVitestRunPlans: (
-    args: string[],
-    cwd?: string,
-  ) => Array<{
-    config: string;
-    forwardedArgs: string[];
-    includePatterns: string[] | null;
-    watchMode: boolean;
-  }>;
-  buildVitestArgs: (args: string[], cwd?: string) => string[];
-  buildVitestRunPlans: (
-    args: string[],
-    cwd?: string,
-    listChangedPaths?: (baseRef: string, cwd: string) => string[],
-  ) => Array<{
-    config: string;
-    forwardedArgs: string[];
-    includePatterns: string[] | null;
-    watchMode: boolean;
-  }>;
-  createVitestRunSpecs: (
-    args: string[],
-    params?: {
-      baseEnv?: NodeJS.ProcessEnv;
-      cwd?: string;
-      tempDir?: string;
-    },
-  ) => Array<{
-    config: string;
-    env: NodeJS.ProcessEnv;
-    includeFilePath: string | null;
-    includePatterns: string[] | null;
-    pnpmArgs: string[];
-    watchMode: boolean;
-  }>;
-  findUnmatchedExplicitTestTargets: (
-    args: string[],
-    cwd?: string,
-  ) => Array<{
-    target: string;
-    reason: "glob-matched-no-files" | "path-does-not-exist" | "target-matched-no-test-files";
-    includePattern?: string;
-  }>;
-  parseTestProjectsArgs: (
-    args: string[],
-    cwd?: string,
-  ) => {
-    forwardedArgs: string[];
-    targetArgs: string[];
-    watchMode: boolean;
-  };
-  resolveChangedTargetArgs: (
-    args: string[],
-    cwd?: string,
-    listChangedPaths?: (baseRef: string, cwd: string) => string[],
-    options?: {
-      cwd?: string;
-      env?: NodeJS.ProcessEnv;
-      broad?: boolean;
-    },
-  ) => string[] | null;
-  resolveChangedTestTargetPlan: (
-    changedPaths: string[],
-  ) =>
-    | { mode: "none"; targets: string[] }
-    | { mode: "targets"; targets: string[] }
-    | { mode: "broad"; targets: string[] };
-  resolveParallelFullSuiteConcurrency: (
-    specCount: number,
-    env?: NodeJS.ProcessEnv,
-    hostInfo?: {
-      cpuCount?: number;
-      loadAverage1m?: number;
-      totalMemoryBytes?: number;
-      freeMemoryBytes?: number;
-    },
-  ) => number;
-};
+} = await import("../../scripts/test-projects.test-support.mjs");
 
 const runVitestModulePath = "../../scripts/run-vitest.mjs";
 const { resolveVitestCliEntry, resolveVitestNodeArgs } = (await import(
@@ -179,6 +89,25 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.bundled.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/plugins/loader.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("keeps extracted test entries in their owner configs", () => {
+    expect(buildVitestRunPlans(["src/agents/openai-transport-stream.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/agents/openai-transport-stream.test.ts"],
+        watchMode: false,
+      },
+    ]);
+    expect(buildVitestRunPlans(["src/auto-reply/reply/dispatch-from-config.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/auto-reply/reply/dispatch-from-config.test.ts"],
         watchMode: false,
       },
     ]);
@@ -887,7 +816,9 @@ describe("test-projects args", () => {
         const source = fs.readFileSync(file, "utf8");
         return [...source.matchAll(/from\s+["'](\.[^"']+)["']/gu)].some((match) => {
           const importerDir = path.posix.dirname(file);
-          const resolved = path.posix.normalize(path.posix.join(importerDir, match[1]));
+          const resolved = path.posix.normalize(
+            path.posix.join(importerDir, expectDefined(match[1], "match[1] test invariant")),
+          );
           return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
         });
       });
@@ -1310,3 +1241,4 @@ describe("test-projects args", () => {
     ).toThrow("watch mode with mixed test suites is not supported");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

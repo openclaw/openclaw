@@ -13,7 +13,7 @@ type InboundMetadataParams = {
 };
 
 const mocks = vi.hoisted(() => ({
-  recordSessionMetaFromInbound: vi.fn(async (_params: InboundMetadataParams) => ({ ok: true })),
+  recordInboundSessionMeta: vi.fn(async (_params: InboundMetadataParams) => ({ ok: true })),
   resolveStorePath: vi.fn(
     (_store: unknown, params?: { agentId?: string }) => `/stores/${params?.agentId ?? "main"}.json`,
   ),
@@ -35,13 +35,13 @@ function firstMockArg(
 }
 
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
-  recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
+  recordInboundSessionMeta: mocks.recordInboundSessionMeta,
   resolveStorePath: mocks.resolveStorePath,
 }));
 
 describe("resolveOutboundSessionRoute", () => {
   beforeEach(() => {
-    mocks.recordSessionMetaFromInbound.mockClear();
+    mocks.recordInboundSessionMeta.mockClear();
     mocks.resolveStorePath.mockClear();
     setMinimalOutboundSessionPluginRegistryForTests();
   });
@@ -544,7 +544,7 @@ describe("resolveOutboundSessionRoute", () => {
 
 describe("ensureOutboundSessionEntry", () => {
   beforeEach(() => {
-    mocks.recordSessionMetaFromInbound.mockClear();
+    mocks.recordInboundSessionMeta.mockClear();
     mocks.resolveStorePath.mockClear();
   });
 
@@ -569,11 +569,8 @@ describe("ensureOutboundSessionEntry", () => {
     expect(mocks.resolveStorePath).toHaveBeenCalledWith("/stores/{agentId}.json", {
       agentId: "main",
     });
-    expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalledOnce();
-    const metadata = firstMockArg(
-      mocks.recordSessionMetaFromInbound,
-      "recordSessionMetaFromInbound",
-    );
+    expect(mocks.recordInboundSessionMeta).toHaveBeenCalledOnce();
+    const metadata = firstMockArg(mocks.recordInboundSessionMeta, "recordInboundSessionMeta");
     expect(metadata.storePath).toBe("/stores/main.json");
     expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
   });

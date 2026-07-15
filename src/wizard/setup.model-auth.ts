@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AuthChoice, OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { t } from "./i18n/index.js";
@@ -201,18 +202,33 @@ export async function runSetupModelAuthStep(params: {
       { applyPrimaryModel, promptDefaultModel },
     ] = await Promise.all([loadAuthChoiceModule(), loadModelPickerModule()]);
     prompter.disableBackNavigation?.();
-    const authResult = await applyAuthChoice({
-      authChoice,
-      config: nextConfig,
-      prompter,
-      runtime,
-      setDefaultModel: true,
-      preserveExistingDefaultModel: true,
-      opts: {
-        ...opts,
-        token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
-      },
-    });
+    let authResult: Awaited<ReturnType<typeof applyAuthChoice>>;
+    try {
+      authResult = await applyAuthChoice({
+        authChoice,
+        config: nextConfig,
+        prompter,
+        runtime,
+        setDefaultModel: true,
+        preserveExistingDefaultModel: true,
+        opts: {
+          ...opts,
+          token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
+        },
+      });
+    } catch (error) {
+      // Provider setup failures (missing CLI login, unreachable endpoint, ...)
+      // must not kill the whole wizard: earlier answers only persist later, so
+      // re-prompt instead. Explicit --auth-choice callers still fail loudly.
+      if (error instanceof WizardCancelledError || !authChoiceFromPrompt) {
+        throw error;
+      }
+      await prompter.note(
+        [formatErrorMessage(error), t("wizard.setup.authChoiceFailedRetry")].join("\n"),
+        t("wizard.setup.authChoiceFailedTitle"),
+      );
+      continue;
+    }
     nextConfig = authResult.config;
     if (authResult.retrySelection) {
       if (authChoiceFromPrompt) {

@@ -75,12 +75,12 @@ describe("cron tool", () => {
   it("tells models to keep cron expressions in local wall-clock time for tz", () => {
     const tool = createTestCronTool();
 
-    expect(tool.description).toContain("local wall-clock time");
-    expect(tool.description).toContain("do not convert the requested local time to UTC first");
-    expect(tool.description).toContain("Gateway host local timezone");
-    expect(tool.description).toContain('For "at", ISO timestamps without timezone are UTC.');
-    expect(tool.description).toContain('"expr": "0 18 * * *"');
-    expect(tool.description).toContain('"tz": "Asia/Shanghai"');
+    expect(tool.description).toContain("requested local wall time");
+    expect(tool.description).toContain("never pre-convert to UTC");
+    expect(tool.description).toContain("Missing tz = Gateway host local");
+    expect(tool.description).toContain("timezone-less = UTC");
+    expect(tool.description).toContain('expr:"0 18 * * *"');
+    expect(tool.description).toContain('tz:"Asia/Shanghai"');
   });
 
   function buildReminderAgentTurnJob(overrides: Record<string, unknown> = {}): {
@@ -677,12 +677,22 @@ describe("cron tool", () => {
 
   it("documents deferred follow-up guidance in the tool description", () => {
     const tool = createTestCronTool();
-    expect(tool.description).toContain(
-      "reminders, check-back-later, delayed follow-ups, recurring work",
-    );
-    expect(tool.description).toContain(
-      "Do not emulate scheduling with exec sleep/process polling.",
-    );
+    expect(tool.description).toContain("reminders, later checks/follow-ups, recurring work");
+    expect(tool.description).toContain("Never exec sleep/process-poll as timer.");
+  });
+
+  it("documents the event-trigger authoring contract", () => {
+    const tool = createTestCronTool();
+
+    expect(tool.description).toContain("Requires cron.triggers.enabled");
+    expect(tool.description).toContain("quiet check has no model");
+    expect(tool.description).toContain("trigger.state");
+    expect(tool.description).toContain("fire:false saves state only; no payload/history");
+    expect(tool.description).toContain("fired state saves only after payload success");
+    expect(tool.description).toContain('Silent watcher: top-level delivery.mode="none"');
+    expect(tool.description).toContain("missing route may fail");
+    expect(tool.description).toContain("once:true disables after first successful fire");
+    expect(tool.description).toContain('await tools.call("exec"');
   });
 
   it("documents due-by-default cron run mode", () => {
@@ -690,9 +700,7 @@ describe("cron tool", () => {
     const parameters = tool.parameters as SchemaLike;
     const runMode = parameters.properties?.runMode;
 
-    expect(tool.description).toContain(
-      'run: run only if due by default; needs jobId; pass runMode="force" to trigger now',
-    );
+    expect(tool.description).toContain('run jobId (due only; runMode="force" now)');
     expect(runMode?.description).toContain('omitted defaults to "due"');
     expect(runMode?.description).toContain('use "force" to trigger now');
   });
@@ -1046,7 +1054,10 @@ describe("cron tool", () => {
     expect(params?.failureAlert).toBe(false);
   });
 
-  it("rejects command payloads from the agent cron tool on add", async () => {
+  it.each([
+    ["canonical", "command"],
+    ["mixed-case", "Command"],
+  ])("rejects %s command payloads from the agent cron tool on add", async (_case, kind) => {
     const tool = createTestCronTool();
 
     await expect(
@@ -1056,7 +1067,7 @@ describe("cron tool", () => {
           name: "command",
           schedule: { at: new Date(123).toISOString() },
           sessionTarget: "isolated",
-          payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+          payload: { kind, argv: ["sh", "-lc", "echo ok"] },
         },
       }),
     ).rejects.toThrow("cron command payloads cannot be created or edited");
@@ -1081,16 +1092,22 @@ describe("cron tool", () => {
 
   it.each([
     ["delivery.channel", { channel: " ", to: "chat-1" }],
+    ["delivery.channel", { channel: 123, to: "chat-1" }],
     ["delivery.to", { mode: "announce", channel: "telegram", to: " \t" }],
+    ["delivery.to", { mode: "announce", channel: "telegram", to: {} }],
     [
       "delivery.failureDestination.to",
       { mode: "announce", failureDestination: { mode: "announce", to: " " } },
     ],
     [
+      "delivery.failureDestination.to",
+      { mode: "announce", failureDestination: { mode: "announce", to: false } },
+    ],
+    [
       "delivery.completionDestination.to",
       { mode: "announce", completionDestination: { mode: "webhook", to: "\n" } },
     ],
-  ])("rejects blank cron.add %s before gateway normalization", async (field, delivery) => {
+  ])("rejects invalid cron.add %s before gateway normalization", async (field, delivery) => {
     const tool = createTestCronTool();
 
     await expect(
@@ -1936,10 +1953,13 @@ describe("cron tool", () => {
 
   it.each([
     ["delivery.channel", { channel: " " }],
+    ["delivery.channel", { channel: 123 }],
     ["delivery.to", { to: " " }],
+    ["delivery.to", { to: {} }],
     ["delivery.failureDestination.to", { failureDestination: { to: " " } }],
+    ["delivery.failureDestination.to", { failureDestination: { to: false } }],
     ["delivery.completionDestination.to", { completionDestination: { mode: "webhook", to: " " } }],
-  ])("rejects blank cron.update %s before gateway normalization", async (field, delivery) => {
+  ])("rejects invalid cron.update %s before gateway normalization", async (field, delivery) => {
     const tool = createTestCronTool();
 
     await expect(
@@ -2073,7 +2093,10 @@ describe("cron tool", () => {
     expect(params?.patch?.failureAlert).toBe(false);
   });
 
-  it("rejects command payloads from the agent cron tool on update", async () => {
+  it.each([
+    ["canonical", "command"],
+    ["mixed-case", "Command"],
+  ])("rejects %s command payloads from the agent cron tool on update", async (_case, kind) => {
     const tool = createTestCronTool();
 
     await expect(
@@ -2081,7 +2104,7 @@ describe("cron tool", () => {
         action: "update",
         id: "job-4",
         patch: {
-          payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+          payload: { kind, argv: ["sh", "-lc", "echo ok"] },
         },
       }),
     ).rejects.toThrow("cron command payloads cannot be created or edited");
@@ -2676,3 +2699,4 @@ describe("cron tool", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

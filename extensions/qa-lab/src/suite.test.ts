@@ -7,7 +7,7 @@ import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "./evidence-summa
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
-import { qaSuiteProgressTesting, runQaFlowSuite, runQaScenarioWithFlakeRetry } from "./suite.js";
+import { qaSuiteProgressTesting, runQaFlowSuite } from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -37,6 +37,39 @@ function makeQaSuiteTestLabHandle(): QaLabServerHandle {
 }
 
 describe("qa suite", () => {
+  it("continues ordered cleanup after a resource reports failure", async () => {
+    const calls: string[] = [];
+    const failure = new Error("gateway pipe failed");
+
+    const errors = await qaSuiteProgressTesting.runQaSuiteCleanupSteps([
+      async () => {
+        calls.push("gateway");
+        throw failure;
+      },
+      async () => {
+        calls.push("transport");
+      },
+      async () => {
+        calls.push("lab");
+      },
+    ]);
+
+    expect(calls).toEqual(["gateway", "transport", "lab"]);
+    expect(errors).toEqual([failure]);
+  });
+
+  it("keeps the primary suite error as the cause of aggregated cleanup failures", () => {
+    const runError = new Error("gateway infrastructure failed");
+
+    expect(() =>
+      qaSuiteProgressTesting.throwQaSuiteCleanupErrors({
+        cleanupErrors: [new Error("transport cleanup failed")],
+        runFailed: true,
+        runError,
+      }),
+    ).toThrow(expect.objectContaining({ cause: runError }));
+  });
+
   it("rejects unsupported transport ids before starting the lab", async () => {
     const startLab = vi.fn();
 
@@ -48,6 +81,69 @@ describe("qa suite", () => {
     ).rejects.toThrow("unsupported QA transport: qa-nope");
 
     expect(startLab).not.toHaveBeenCalled();
+  });
+
+  it("keeps metadata-only live channel drivers on the canonical QA transport", async () => {
+    const create = vi.fn();
+
+    await expect(
+      qaSuiteProgressTesting.createQaSuiteTransportAdapter({
+        adapterFactories: [{ id: "telegram", matches: () => true, create }],
+        channelDriver: "live",
+        outputDir: "/tmp/qa-output",
+        state: {} as QaLabServerHandle["state"],
+        transportId: "qa-channel",
+      }),
+    ).resolves.toMatchObject({ adapter: { id: "qa-channel" } });
+
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("uses a contributed live adapter when its channel is selected", async () => {
+    const adapter = { id: "telegram" } as QaTransportAdapter;
+    const create = vi.fn(async () => adapter);
+
+    await expect(
+      qaSuiteProgressTesting.createQaSuiteTransportAdapter({
+        adapterFactories: [{ id: "telegram", matches: () => true, create }],
+        channelDriver: "live",
+        channelId: "telegram",
+        outputDir: "/tmp/qa-output",
+        transportPolicy: { requireGroupMention: true },
+        state: {} as QaLabServerHandle["state"],
+        transportId: "qa-channel",
+      }),
+    ).resolves.toMatchObject({ adapter });
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterOptions: expect.objectContaining({
+          transportPolicy: { requireGroupMention: true },
+        }),
+      }),
+    );
+  });
+
+  it("preserves caller-supplied transport policy without scenario metadata", async () => {
+    const adapter = { id: "telegram" } as QaTransportAdapter;
+    const create = vi.fn(async () => adapter);
+
+    await qaSuiteProgressTesting.createQaSuiteTransportAdapter({
+      adapterFactories: [{ id: "telegram", matches: () => true, create }],
+      adapterOptions: { transportPolicy: { topLevelReplies: true } },
+      channelDriver: "live",
+      channelId: "telegram",
+      outputDir: "/tmp/qa-output",
+      state: {} as QaLabServerHandle["state"],
+      transportId: "qa-channel",
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterOptions: { transportPolicy: { topLevelReplies: true } },
+      }),
+    );
   });
 
   it("parses progress env booleans", () => {
@@ -279,8 +375,8 @@ describe("qa suite", () => {
           createReportNotes: () => [],
         } as unknown as QaTransportAdapter,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         concurrency: 1,
       });
@@ -315,8 +411,8 @@ describe("qa suite", () => {
           createReportNotes: () => [],
         } as unknown as QaTransportAdapter,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         concurrency: 1,
         writeEvidenceFile: false,
@@ -368,8 +464,8 @@ describe("qa suite", () => {
           createReportNotes: () => [],
         } as unknown as QaTransportAdapter,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         concurrency: 1,
         channelDriverSelection: {
@@ -380,8 +476,25 @@ describe("qa suite", () => {
         },
       });
 
+      const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
+        run?: {
+          channelCapabilityMatrixPath?: string;
+          channelDriverSmokePath?: string;
+        };
+      };
+      const capabilityMatrixPath = summary.run?.channelCapabilityMatrixPath;
+      const smokeArtifactPath = summary.run?.channelDriverSmokePath;
+      if (typeof capabilityMatrixPath !== "string" || typeof smokeArtifactPath !== "string") {
+        throw new Error("Crabline generation artifact paths missing from QA summary.");
+      }
+      const artifactGenerationDirectory = path.dirname(capabilityMatrixPath);
+      expect(path.dirname(artifactGenerationDirectory)).toBe(".crabline-smoke-artifacts");
+      expect(path.basename(artifactGenerationDirectory)).toMatch(/^generation-[^/\\]+$/u);
+      expect(path.basename(capabilityMatrixPath)).toBe("crabline-fake-provider-capabilities.json");
+      expect(path.dirname(smokeArtifactPath)).toBe(artifactGenerationDirectory);
+      expect(path.basename(smokeArtifactPath)).toBe("crabline-fake-provider-smoke.json");
       const matrix = JSON.parse(
-        await fs.readFile(path.join(outputDir, "crabline-fake-provider-capabilities.json"), "utf8"),
+        await fs.readFile(path.resolve(outputDir, capabilityMatrixPath), "utf8"),
       ) as {
         report?: { result?: { selectedChannel?: string; supportedChannels?: string[] } };
       };
@@ -390,7 +503,7 @@ describe("qa suite", () => {
         [...CRABLINE_SERVER_CHANNELS].toSorted(),
       );
       const smoke = JSON.parse(
-        await fs.readFile(path.join(outputDir, "crabline-fake-provider-smoke.json"), "utf8"),
+        await fs.readFile(path.resolve(outputDir, smokeArtifactPath), "utf8"),
       ) as { smoke?: { result?: { ok?: boolean; provider?: string } } };
       expect(smoke.smoke?.result).toMatchObject({ ok: true, provider: "telegram" });
       const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
@@ -403,6 +516,119 @@ describe("qa suite", () => {
     } finally {
       await fs.rm(outputDir, { recursive: true, force: true });
     }
+  });
+
+  it("uses Crabline generation artifact paths without rewriting them", async () => {
+    const outputDir = await tempDirs.makeTempDir("qa-suite-crabline-generation-");
+    const capabilityMatrixPath = path.join(
+      outputDir,
+      ".crabline-smoke-artifacts",
+      "generation-11111111-1111-4111-8111-111111111111",
+      "capabilities.json",
+    );
+    const smokeArtifactPath = path.join(
+      outputDir,
+      ".crabline-smoke-artifacts",
+      "generation-11111111-1111-4111-8111-111111111111",
+      "smoke.json",
+    );
+    const providerReadinessArtifactPath = path.join(
+      path.dirname(smokeArtifactPath),
+      "provider-readiness.json",
+    );
+    await fs.mkdir(path.dirname(capabilityMatrixPath), { recursive: true });
+    await fs.writeFile(capabilityMatrixPath, "authoritative capabilities\n", "utf8");
+    await fs.writeFile(smokeArtifactPath, "authoritative smoke\n", "utf8");
+    await fs.writeFile(providerReadinessArtifactPath, "authoritative provider readiness\n", "utf8");
+
+    const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
+      outputDir,
+      startedAt: new Date("2026-07-12T00:00:00.000Z"),
+      finishedAt: new Date("2026-07-12T00:01:00.000Z"),
+      scenarios: [{ name: "Telegram DM", status: "pass", steps: [] }],
+      scenarioDefinitions: [
+        {
+          ...makeQaSuiteTestScenario("telegram-dm", {
+            surface: "channel",
+          }),
+          coverage: {
+            primary: ["channels.dm"],
+          },
+        },
+      ],
+      transport: {
+        id: "qa-channel",
+        createReportNotes: () => [],
+      } as unknown as QaTransportAdapter,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      fastMode: true,
+      concurrency: 1,
+      channelDriverSelection: {
+        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        providerReadinessArtifactPath: "crabline-fake-provider-smoke.json",
+        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+      },
+      runCrablineChannelDriverSmoke: vi.fn(async () => ({
+        artifactPointerPath: path.join(outputDir, ".crabline-smoke-artifacts", "current.json"),
+        capabilityMatrixPath,
+        capabilityReport: {},
+        generation: "generation-11111111-1111-4111-8111-111111111111",
+        manifestPath: path.join(
+          outputDir,
+          ".crabline-smoke-artifacts",
+          "generation-11111111-1111-4111-8111-111111111111",
+          "manifest.json",
+        ),
+        providerReadiness: {},
+        providerReadinessArtifactPath,
+        smoke: {},
+        smokeArtifactPath,
+      })),
+    });
+
+    await expect(fs.readFile(capabilityMatrixPath, "utf8")).resolves.toBe(
+      "authoritative capabilities\n",
+    );
+    await expect(fs.readFile(smokeArtifactPath, "utf8")).resolves.toBe("authoritative smoke\n");
+    await expect(fs.readFile(providerReadinessArtifactPath, "utf8")).resolves.toBe(
+      "authoritative provider readiness\n",
+    );
+    await expect(
+      fs.access(path.join(outputDir, "crabline-fake-provider-capabilities.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.access(path.join(outputDir, "crabline-fake-provider-smoke.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
+      entries?: Array<{ execution?: { artifacts?: Array<{ kind?: string; path?: string }> } }>;
+    };
+    expect(evidence.entries?.[0]?.execution?.artifacts).toEqual(
+      expect.arrayContaining([
+        { kind: "channel-capability-matrix", path: capabilityMatrixPath, source: "qa-suite" },
+        { kind: "channel-driver-smoke", path: smokeArtifactPath, source: "qa-suite" },
+      ]),
+    );
+    const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
+      run?: {
+        channelCapabilityMatrixPath?: string;
+        channelDriverSmokePath?: string;
+      };
+    };
+    expect(summary.run).toMatchObject({
+      channelCapabilityMatrixPath: capabilityMatrixPath,
+      channelDriverSmokePath: smokeArtifactPath,
+    });
+    expect(artifacts.report).toContain(`Generation capability filename: ${capabilityMatrixPath}.`);
+    expect(artifacts.report).toContain(
+      `Generation provider-readiness filename: ${providerReadinessArtifactPath}.`,
+    );
+    expect(artifacts.report).not.toContain("crabline-fake-provider-capabilities.json");
+    expect(artifacts.report).not.toContain("crabline-fake-provider-smoke.json");
   });
 
   it("arms gateway heap checkpoint env only when requested", () => {
@@ -462,6 +688,11 @@ describe("qa suite", () => {
 
   it("forwards run options into isolated scenario worker params", () => {
     const startLab = vi.fn();
+    const adapterFactory = {
+      id: "telegram",
+      matches: vi.fn(() => true),
+      create: vi.fn(),
+    };
     const scenario = makeQaSuiteTestScenario("patched-control-ui", {
       surface: "control-ui",
       gatewayConfigPatch: {
@@ -472,6 +703,10 @@ describe("qa suite", () => {
         },
       },
     });
+    const sutOpenClawCommand = {
+      executablePath: "/usr/local/bin/openclaw-telegram-sut-launcher",
+      usePackagedPlugins: true,
+    };
 
     expect(
       qaSuiteProgressTesting.buildQaIsolatedScenarioWorkerParams({
@@ -479,12 +714,16 @@ describe("qa suite", () => {
         outputDir: "/repo/.artifacts/qa-e2e/scenarios/patched-control-ui",
         providerMode: "mock-openai",
         transportId: "qa-channel",
-        primaryModel: "mock-openai/gpt-5.5",
-        alternateModel: "mock-openai/gpt-5.5-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         scenario,
         startLab,
         input: {
+          adapterFactories: [adapterFactory],
+          channelId: "telegram",
+          adapterOptions: { repoRoot: "/repo" },
+          sutOpenClawCommand,
           thinkingDefault: "minimal",
           claudeCliAuthMode: "subscription",
           enabledPluginIds: ["acpx"],
@@ -495,6 +734,10 @@ describe("qa suite", () => {
       }),
     ).toMatchObject({
       scenarioIds: ["patched-control-ui"],
+      adapterFactories: [adapterFactory],
+      channelId: "telegram",
+      adapterOptions: { repoRoot: "/repo" },
+      sutOpenClawCommand,
       concurrency: 1,
       startLab,
       controlUiEnabled: true,
@@ -567,53 +810,17 @@ describe("qa suite", () => {
   it("remaps mock-openai model refs onto the app-server OpenAI provider for codex cells only", () => {
     expect(
       qaSuiteProgressTesting.remapModelRefForForcedRuntime({
-        modelRef: "mock-openai/gpt-5.5",
+        modelRef: "mock-openai/gpt-5.6-luna",
         providerMode: "mock-openai",
         forcedRuntime: "codex",
       }),
-    ).toBe("openai/gpt-5.5");
+    ).toBe("openai/gpt-5.6-luna");
     expect(
       qaSuiteProgressTesting.remapModelRefForForcedRuntime({
-        modelRef: "mock-openai/gpt-5.5",
+        modelRef: "mock-openai/gpt-5.6-luna",
         providerMode: "mock-openai",
         forcedRuntime: "openclaw",
       }),
-    ).toBe("mock-openai/gpt-5.5");
-  });
-});
-
-describe("runQaScenarioWithFlakeRetry", () => {
-  const failResult = {
-    name: "s",
-    status: "fail" as const,
-    steps: [],
-    details: "timed out after 20000ms",
-  };
-  const passResult = { name: "s", status: "pass" as const, steps: [], details: "ok" };
-
-  it("returns a first-attempt pass without retrying", async () => {
-    const run = vi.fn(async () => passResult);
-    const onRetry = vi.fn();
-    await expect(runQaScenarioWithFlakeRetry(run, onRetry)).resolves.toEqual(passResult);
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(onRetry).not.toHaveBeenCalled();
-  });
-
-  it("retries one failure and annotates the retried pass", async () => {
-    const run = vi.fn(async () => (run.mock.calls.length === 1 ? failResult : passResult));
-    const onRetry = vi.fn();
-    const result = await runQaScenarioWithFlakeRetry(run, onRetry);
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(onRetry).toHaveBeenCalledTimes(1);
-    expect(result.status).toBe("pass");
-    expect(result.details).toContain("passed on retry");
-    expect(result.details).toContain("timed out after 20000ms");
-  });
-
-  it("keeps the first failure diagnostics when the retry also fails", async () => {
-    const run = vi.fn(async () => failResult);
-    const result = await runQaScenarioWithFlakeRetry(run);
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(result).toEqual(failResult);
+    ).toBe("mock-openai/gpt-5.6-luna");
   });
 });

@@ -1,6 +1,7 @@
 // Control UI view renders agents screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import "../../components/agent-select-registration.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -13,39 +14,41 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
+import { renderSettingsEmpty, renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import {
-  agentBadgeText,
-  buildAgentContext,
-  normalizeAgentLabel,
-} from "../../lib/agents/display.ts";
+import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
+import "../../styles/agents.css";
+import "../../styles/sidebar-markdown.css";
+import "./memory/memory-panel.ts";
+import type { AgentIdentityDraft } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
 import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
 
-export type ConfigState = {
+type ConfigState = {
   form: Record<string, unknown> | null;
   loading: boolean;
   saving: boolean;
   dirty: boolean;
 };
 
-export type ChannelsState = {
+type ChannelsState = {
   snapshot: ChannelsStatusSnapshot | null;
   loading: boolean;
   error: string | null;
   lastSuccess: number | null;
 };
 
-export type CronState = {
+type CronState = {
   status: CronStatus | null;
   jobs: CronJob[];
   loading: boolean;
   error: string | null;
 };
 
-export type AgentFilesState = {
+type AgentFilesState = {
   list: AgentsFilesListResult | null;
   loading: boolean;
   error: string | null;
@@ -55,7 +58,7 @@ export type AgentFilesState = {
   saving: boolean;
 };
 
-export type AgentSkillsState = {
+type AgentSkillsState = {
   report: SkillStatusReport | null;
   loading: boolean;
   error: string | null;
@@ -63,20 +66,21 @@ export type AgentSkillsState = {
   filter: string;
 };
 
-export type ToolsCatalogState = {
+type ToolsCatalogState = {
   loading: boolean;
   error: string | null;
   result: ToolsCatalogResult | null;
 };
 
-export type ToolsEffectiveState = {
+type ToolsEffectiveState = {
   loading: boolean;
   error: string | null;
   result: ToolsEffectiveResult | null;
 };
 
-export type AgentsProps = {
+type AgentsProps = {
   basePath: string;
+  authToken: string | null;
   loading: boolean;
   error: string | null;
   agentsList: AgentsListResult | null;
@@ -89,12 +93,17 @@ export type AgentsProps = {
   agentIdentityLoading: boolean;
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;
+  identityDraft: AgentIdentityDraft;
+  identitySaving: boolean;
+  identityError: string | null;
   agentSkills: AgentSkillsState;
   toolsCatalog: ToolsCatalogState;
   toolsEffective: ToolsEffectiveState;
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
   modelCatalog: ModelCatalogEntry[];
+  pinnedAgentIds: readonly string[];
+  onTogglePinnedAgent: (agentId: string) => void;
   onRefresh: () => void;
   onSelectAgent: (agentId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
@@ -107,6 +116,9 @@ export type AgentsProps = {
   onToolsOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
   onConfigSave: () => void;
+  onIdentityFieldChange: (field: "name" | "emoji", value: string) => void;
+  onIdentityAvatarSelect: (file: File) => void;
+  onIdentitySave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
   onChannelsRefresh: () => void;
@@ -150,24 +162,15 @@ export function renderAgents(props: AgentsProps) {
       <section class="agents-toolbar">
         <div class="agents-toolbar-row">
           <div class="agents-control-select">
-            <select
-              class="agents-select"
-              .value=${selectedId ?? ""}
-              ?disabled=${props.loading || agents.length === 0}
-              @change=${(e: Event) => props.onSelectAgent((e.target as HTMLSelectElement).value)}
-            >
-              ${agents.length === 0
-                ? html` <option value="">${t("agents.noAgents")}</option> `
-                : agents.map(
-                    (agent) => html`
-                      <option value=${agent.id} ?selected=${agent.id === selectedId}>
-                        ${normalizeAgentLabel(agent)}${agentBadgeText(agent.id, defaultId)
-                          ? ` (${agentBadgeText(agent.id, defaultId)})`
-                          : ""}
-                      </option>
-                    `,
-                  )}
-            </select>
+            <openclaw-agent-select
+              .agents=${agents}
+              .selectedId=${selectedId}
+              .defaultId=${defaultId}
+              .identityById=${props.agentIdentityById}
+              .authToken=${props.authToken}
+              .disabled=${props.loading}
+              .onSelect=${props.onSelectAgent}
+            ></openclaw-agent-select>
           </div>
           <div class="agents-toolbar-actions">
             ${selectedAgent
@@ -175,7 +178,7 @@ export function renderAgents(props: AgentsProps) {
                   <button
                     type="button"
                     class="btn btn--sm btn--ghost"
-                    @click=${() => void navigator.clipboard.writeText(selectedAgent.id)}
+                    @click=${() => void copyToClipboard(selectedAgent.id)}
                   >
                     ${t("agents.copyId")}
                   </button>
@@ -188,6 +191,15 @@ export function renderAgents(props: AgentsProps) {
                     ${defaultId && selectedAgent.id === defaultId
                       ? t("agents.default")
                       : t("agents.setDefault")}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn--sm btn--ghost"
+                    @click=${() => props.onTogglePinnedAgent(selectedAgent.id)}
+                  >
+                    ${props.pinnedAgentIds.includes(selectedAgent.id)
+                      ? t("agents.unpinFromSwitcher")
+                      : t("agents.pinToSwitcher")}
                   </button>
                 `
               : nothing}
@@ -206,12 +218,10 @@ export function renderAgents(props: AgentsProps) {
       </section>
       <section class="agents-main">
         ${!selectedAgent
-          ? html`
-              <div class="card">
-                <div class="card-title">${t("agents.selectTitle")}</div>
-                <div class="card-sub">${t("agents.selectSubtitle")}</div>
-              </div>
-            `
+          ? renderSettingsSection(
+              { title: t("agents.selectTitle") },
+              renderSettingsEmpty(t("agents.selectSubtitle")),
+            )
           : html`
               ${renderAgentTabs(
                 props.activePanel,
@@ -230,12 +240,18 @@ export function renderAgents(props: AgentsProps) {
                       agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
                       agentIdentityError: props.agentIdentityError,
                       agentIdentityLoading: props.agentIdentityLoading,
+                      identityDraft: props.identityDraft,
+                      identitySaving: props.identitySaving,
+                      identityError: props.identityError,
                       configLoading: props.config.loading,
                       configSaving: props.config.saving,
                       configDirty: props.config.dirty,
                       modelCatalog: props.modelCatalog,
                       onConfigReload: props.onConfigReload,
                       onConfigSave: props.onConfigSave,
+                      onIdentityFieldChange: props.onIdentityFieldChange,
+                      onIdentityAvatarSelect: props.onIdentityAvatarSelect,
+                      onIdentitySave: props.onIdentitySave,
                       onModelChange: props.onModelChange,
                       onModelFallbacksChange: props.onModelFallbacksChange,
                       onSelectPanel: props.onSelectPanel,
@@ -338,6 +354,11 @@ export function renderAgents(props: AgentsProps) {
                     onSelectPanel: props.onSelectPanel,
                   })
                 : nothing}
+              ${props.activePanel === "memory"
+                ? html`<openclaw-agent-memory-panel
+                    .agentId=${selectedAgent.id}
+                  ></openclaw-agent-memory-panel>`
+                : nothing}
             `}
       </section>
     </div>
@@ -356,6 +377,7 @@ function renderAgentTabs(
     { id: "skills", label: t("agents.tabs.skills") },
     { id: "channels", label: t("agents.tabs.channels") },
     { id: "cron", label: t("agents.tabs.cronJobs") },
+    { id: "memory", label: t("agents.tabs.memory") },
   ];
   return html`
     <div class="agent-tabs">

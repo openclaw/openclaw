@@ -73,6 +73,35 @@ function normalizeMainSystemEventCreateJob(params: {
 }
 
 describe("normalizeCronJobCreate", () => {
+  it("trims cron timezones and drops blank values", () => {
+    const trimmed = normalizeMainSystemEventCreateJob({
+      name: "trimmed-timezone",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "  Europe/Vienna  " },
+    });
+    const blank = normalizeMainSystemEventCreateJob({
+      name: "blank-timezone",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "   " },
+    });
+
+    expect(trimmed.schedule).toMatchObject({ tz: "Europe/Vienna" });
+    expect(blank.schedule).not.toHaveProperty("tz");
+  });
+
+  it("normalizes trigger scripts and preserves patch clears", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "watcher",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "changed" },
+      trigger: { script: "  json({ fire: true })  ", once: "true", ignored: true },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.trigger).toEqual({ script: "json({ fire: true })", once: true });
+    expect(normalizeCronJobPatch({ trigger: null })).toEqual({ trigger: null });
+  });
+
   it("trims agentId and drops null", () => {
     const normalized = normalizeCronJobCreate({
       name: "agent-set",
@@ -127,6 +156,23 @@ describe("normalizeCronJobCreate", () => {
       payload: { kind: "systemEvent", text: "hi" },
     }) as unknown as Record<string, unknown>;
     expect("sessionKey" in cleared).toBe(false);
+  });
+
+  it("stores the source session key for case-insensitive current targets", () => {
+    const normalized = normalizeCronJobCreate(
+      {
+        name: "current target",
+        enabled: true,
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: " Current ",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "hi" },
+      },
+      { sessionContext: { sessionKey: " agent:main:telegram:direct:42 " } },
+    ) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("current");
+    expect(normalized.sessionKey).toBe("agent:main:telegram:direct:42");
   });
 
   it("canonicalizes delivery.channel casing", () => {
@@ -714,7 +760,7 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.to).toBe("123");
   });
 
-  it("resolves current sessionTarget to a persistent session when context is available", () => {
+  it("stores current sessionTarget source context when context is available", () => {
     const normalized = normalizeCronJobCreate(
       {
         name: "current-session",
@@ -725,7 +771,8 @@ describe("normalizeCronJobCreate", () => {
       { sessionContext: { sessionKey: "agent:main:discord:group:ops" } },
     ) as unknown as Record<string, unknown>;
 
-    expect(normalized.sessionTarget).toBe("session:agent:main:discord:group:ops");
+    expect(normalized.sessionTarget).toBe("current");
+    expect(normalized.sessionKey).toBe("agent:main:discord:group:ops");
   });
 
   it("falls back current sessionTarget to isolated without context", () => {

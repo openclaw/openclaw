@@ -8,29 +8,41 @@ extension OpenClawChatViewModel {
     struct SessionSnapshot {
         var key: String
         var generation: UInt64
+        var agentID: String?
+        var deliveryAgentID: String?
+        var sessionRoutingContract: String?
     }
 
     func replaceMessages(_ messages: [OpenClawChatMessage]) {
         guard self.messages != messages else { return }
         self.messages = messages
-        self.markTimelineChanged()
+        markTimelineChanged()
     }
 
-    func persistTranscriptToCache(sessionKey: String, messages: [OpenClawChatMessage]) {
+    func persistTranscriptToCache(
+        sessionKey: String,
+        agentID: String?,
+        messages: [OpenClawChatMessage],
+        canonicalMessageIdempotencyKeys: Set<String>)
+    {
         guard let transcriptCache else { return }
         // Chain writes so an older snapshot can never land after a newer one;
         // detached tasks alone give no ordering guarantee across awaits.
-        let previous = self.pendingCacheWriteTask
-        self.pendingCacheWriteTask = Task.detached {
+        let previous = pendingCacheWriteTask
+        pendingCacheWriteTask = Task.detached {
             await previous?.value
-            await transcriptCache.storeTranscript(sessionKey: sessionKey, messages: messages)
+            await transcriptCache.storeCanonicalTranscript(
+                sessionKey: sessionKey,
+                agentID: Self.transcriptCacheAgentID(sessionKey: sessionKey, agentID: agentID),
+                messages: messages,
+                canonicalMessageIdempotencyKeys: canonicalMessageIdempotencyKeys)
         }
     }
 
     func persistSessionsToCache(_ sessions: [OpenClawChatSessionEntry]) {
         guard let transcriptCache else { return }
-        let previous = self.pendingCacheWriteTask
-        self.pendingCacheWriteTask = Task.detached {
+        let previous = pendingCacheWriteTask
+        pendingCacheWriteTask = Task.detached {
             await previous?.value
             await transcriptCache.storeSessions(sessions)
         }
@@ -42,19 +54,21 @@ extension OpenClawChatViewModel {
     /// applyHistoryPayload reconciliation path.
     func paintFromCacheIfNeeded(session: SessionSnapshot) {
         guard let transcriptCache else { return }
-        if self.sessions.isEmpty, !self.hasAppliedLiveSessions {
+        if sessions.isEmpty, !hasAppliedLiveSessions {
             Task { [weak self] in
                 let cached = await transcriptCache.loadSessions()
                 guard let self, !cached.isEmpty else { return }
                 // A live sessions response (even an empty one) is authoritative;
                 // a slow cache read must never repaint over it.
                 guard self.sessions.isEmpty, !self.hasAppliedLiveSessions else { return }
-                self.sessions = cached
+                self.sessions = OpenClawChatSessionListOrganizer.organize(cached)
             }
         }
-        guard self.messages.isEmpty, !self.hasAppliedLiveHistory else { return }
+        guard messages.isEmpty, !hasAppliedLiveHistory else { return }
         Task { [weak self] in
-            let cached = await transcriptCache.loadTranscript(sessionKey: session.key)
+            let cached = await transcriptCache.loadTranscript(
+                sessionKey: session.key,
+                agentID: Self.transcriptCacheAgentID(sessionKey: session.key, agentID: session.agentID))
             guard let self, !cached.isEmpty else { return }
             guard self.isCurrentSession(session), !self.hasAppliedLiveHistory, self.messages.isEmpty else {
                 return
@@ -62,5 +76,11 @@ extension OpenClawChatViewModel {
             self.replaceMessages(cached)
             self.isShowingCachedTranscript = true
         }
+    }
+
+    static func transcriptCacheAgentID(sessionKey: String, agentID: String?) -> String? {
+        guard OpenClawChatSessionKey.agentID(from: sessionKey) == nil else { return nil }
+        let normalized = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized?.isEmpty == false ? normalized : nil
     }
 }

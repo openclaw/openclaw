@@ -126,10 +126,7 @@ function isTelegramActiveRunControlLaneText(params: {
   return command ? TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(command.key) : false;
 }
 
-export function isTelegramControlLaneText(params: {
-  rawText?: string;
-  botUsername?: string;
-}): boolean {
+function isTelegramControlLaneText(params: { rawText?: string; botUsername?: string }): boolean {
   if (
     isAbortRequestText(
       params.rawText,

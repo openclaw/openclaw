@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { pt_BR } from "../../i18n/locales/pt-BR.ts";
 import type { LogLevel } from "./log-lines.ts";
-import { renderLogs, type LogsProps } from "./view.ts";
+import { renderLogs } from "./view.ts";
+
+type LogsProps = Parameters<typeof renderLogs>[0];
 
 function createLevelFilters(overrides: Partial<Record<LogLevel, boolean>> = {}) {
   return {
@@ -84,6 +86,16 @@ afterEach(async () => {
 });
 
 describe("renderLogs", () => {
+  it("renders the subtitle under the section header", () => {
+    const container = document.createElement("div");
+
+    render(renderLogs(createProps()), container);
+
+    expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
+      "Gateway file logs (JSONL).",
+    );
+  });
+
   it.each([
     { buttonText: "Exportar visivel", expectedLabel: "visible", filterText: "" },
     { buttonText: "Exportar filtrado", expectedLabel: "filtered", filterText: "matched" },

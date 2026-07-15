@@ -56,6 +56,9 @@ dump_logs_on_error() {
       /tmp/cron-cli-device-seed.json \
       /tmp/cron-cli-status.json \
       /tmp/cron-cli-add.json \
+      /tmp/cron-cli-edit-exact.json \
+      /tmp/cron-cli-edit-timeout.json \
+      /tmp/cron-cli-get-after-edit.json \
       /tmp/cron-cli-list.json \
       /tmp/cron-cli-show.json \
       /tmp/cron-cli-disable.json \
@@ -171,7 +174,7 @@ openclaw_e2e_wait_gateway_ready "$gateway_pid" /tmp/cron-cli-gateway.log 300 187
 cron_cli status --json > /tmp/cron-cli-status.json
 cron_add_args=(
   "cli cron smoke"
-  --every 1m
+  --cron "*/5 * * * *"
   --command "printf openclaw-cli-cron-ok"
   --no-deliver
   --timeout-seconds 15
@@ -180,6 +183,20 @@ cron_add_args=(
 cron_cli add "${cron_add_args[@]}" > /tmp/cron-cli-add.json
 
 job_id="$(read_json_field /tmp/cron-cli-add.json id)"
+
+cron_cli edit "$job_id" --exact > /tmp/cron-cli-edit-exact.json
+cron_cli edit "$job_id" --timeout-seconds 30 > /tmp/cron-cli-edit-timeout.json
+cron_cli get "$job_id" > /tmp/cron-cli-get-after-edit.json
+node --input-type=module -e '
+  const fs = await import("node:fs/promises");
+  const value = JSON.parse(await fs.readFile("/tmp/cron-cli-get-after-edit.json", "utf8"));
+  if (value.schedule?.kind !== "cron" || value.schedule.staggerMs !== 0) {
+    throw new Error(`cron edit --exact did not persist: ${JSON.stringify(value.schedule)}`);
+  }
+  if (value.payload?.kind !== "command" || value.payload.timeoutSeconds !== 30) {
+    throw new Error(`cron timeout-only edit changed command payload kind: ${JSON.stringify(value.payload)}`);
+  }
+'
 
 cron_cli list --all --json > /tmp/cron-cli-list.json
 node --input-type=module -e '

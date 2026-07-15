@@ -162,6 +162,52 @@ describe("flows commands", () => {
     });
   });
 
+  it("reports blank status filters as absent in JSON output", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Inspect a PR cluster",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+
+      const runtime = createRuntime();
+      await flowsListCommand({ json: true, status: "   " }, runtime);
+
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(jsonRoundTrip(vi.mocked(runtime.writeJson).mock.calls[0]?.[0])).toMatchObject({
+        count: 1,
+        status: null,
+        flows: [expect.objectContaining(jsonRoundTrip(flow))],
+      });
+    });
+  });
+
+  it("keeps truncated text rows UTF-16 well-formed", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: `${"x".repeat(18)}🚀tail`,
+        goal: "Inspect a PR cluster",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      const runtime = createRuntime();
+
+      await flowsListCommand({}, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain(`${"x".repeat(18)}…`);
+      expect(output).not.toContain("\uD83D");
+    });
+  });
+
   it("shows one TaskFlow as JSON through the runtime JSON writer", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const flow = createManagedTaskFlow({

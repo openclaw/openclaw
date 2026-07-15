@@ -84,6 +84,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/qa-channel/api.js": ["../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
   "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
   "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
+  "@openclaw/telegram/api.js": ["../dist/plugin-sdk/extensions/telegram/api.d.ts"],
   "@openclaw/whatsapp/api.js": ["../dist/plugin-sdk/extensions/whatsapp/api.d.ts"],
   "@openclaw/ai": ["../dist/plugin-sdk/packages/ai/src/index.d.ts"],
   "@openclaw/ai/diagnostics": ["../dist/plugin-sdk/packages/ai/src/utils/diagnostics.d.ts"],
@@ -187,6 +188,8 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
     "../dist/plugin-sdk/packages/normalization-core/src/string-coerce.d.ts",
   ],
   "@openclaw/normalization-core/*": ["../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"],
+  "@openclaw/retry": ["../dist/plugin-sdk/packages/retry/src/index.d.ts"],
+  "@openclaw/workboard-contract": ["../packages/workboard-contract/src/index.ts"],
   ...buildPackageBoundaryDtsPaths({
     packageName: "@openclaw/acp-core",
     packageDir: "acp-core",
@@ -260,6 +263,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
       "openclaw/plugin-sdk/channel-secret-tts-runtime": _omitTts,
       "@openclaw/discord/api.js": _omitDiscord,
       "@openclaw/slack/api.js": _omitSlack,
+      "@openclaw/telegram/api.js": _omitTelegram,
       "@openclaw/whatsapp/api.js": _omitWhatsApp,
       ...rest
     }) => rest)(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS),

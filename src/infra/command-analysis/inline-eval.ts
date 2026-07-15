@@ -21,7 +21,16 @@ type InterpreterFlagSpec = {
   rawExactFlags?: ReadonlyMap<string, string>;
   rawPrefixFlags?: readonly PrefixFlagSpec[];
   prefixFlags?: readonly PrefixFlagSpec[];
+  shortClusterFlags?: readonly ShortClusterFlagSpec[];
   scanPastDoubleDash?: boolean;
+};
+
+type ShortClusterFlagSpec = {
+  label: string;
+  flag: string;
+  prefixChars: ReadonlySet<string>;
+  allowNumericRecordSeparator?: boolean;
+  numericValuePrefixChars?: ReadonlySet<string>;
 };
 
 type PositionalInterpreterSpec = {
@@ -37,7 +46,33 @@ type PositionalInterpreterSpec = {
 const VERSION_SUFFIX_PATTERN = /-?\d+(?:\.\d+)*$/;
 
 const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
-  { names: ["python", "python2", "python3", "pypy", "pypy3"], exactFlags: new Set(["-c"]) },
+  {
+    names: ["python", "python2", "python3", "pypy", "pypy3"],
+    exactFlags: new Set(["-c"]),
+    shortClusterFlags: [
+      {
+        label: "-c",
+        flag: "c",
+        prefixChars: new Set([
+          "B",
+          "E",
+          "I",
+          "O",
+          "P",
+          "R",
+          "S",
+          "b",
+          "d",
+          "i",
+          "q",
+          "s",
+          "u",
+          "v",
+          "x",
+        ]),
+      },
+    ],
+  },
   {
     names: ["node", "nodejs", "bun", "deno"],
     exactFlags: new Set(["-e", "--eval", "-p", "--print"]),
@@ -47,8 +82,75 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     exactFlags: new Set(["-e", "--source"]),
     prefixFlags: [{ label: "--source", prefix: "--source=" }],
   },
-  { names: ["ruby"], exactFlags: new Set(["-e"]) },
-  { names: ["perl"], exactFlags: new Set(["-e", "-E"]) },
+  {
+    names: ["ruby"],
+    exactFlags: new Set(["-e"]),
+    shortClusterFlags: [
+      {
+        label: "-e",
+        flag: "e",
+        prefixChars: new Set(["S", "U", "W", "a", "c", "d", "l", "n", "p", "s", "v", "w"]),
+        allowNumericRecordSeparator: true,
+        numericValuePrefixChars: new Set(["W"]),
+      },
+    ],
+  },
+  {
+    names: ["perl"],
+    exactFlags: new Set(["-e", "-E"]),
+    shortClusterFlags: [
+      {
+        label: "-e",
+        flag: "e",
+        prefixChars: new Set([
+          "S",
+          "T",
+          "W",
+          "X",
+          "U",
+          "V",
+          "a",
+          "c",
+          "d",
+          "f",
+          "l",
+          "n",
+          "p",
+          "s",
+          "t",
+          "u",
+          "w",
+        ]),
+        allowNumericRecordSeparator: true,
+        numericValuePrefixChars: new Set(["l"]),
+      },
+      {
+        label: "-e",
+        flag: "E",
+        prefixChars: new Set([
+          "S",
+          "T",
+          "W",
+          "X",
+          "U",
+          "V",
+          "a",
+          "c",
+          "d",
+          "f",
+          "l",
+          "n",
+          "p",
+          "s",
+          "t",
+          "u",
+          "w",
+        ]),
+        allowNumericRecordSeparator: true,
+        numericValuePrefixChars: new Set(["l"]),
+      },
+    ],
+  },
   {
     names: ["php"],
     exactFlags: new Set(["-r"]),
@@ -216,6 +318,74 @@ function createInlineEvalHit(
   };
 }
 
+function matchJoinedExactFlag(
+  spec: InterpreterFlagSpec,
+  token: string,
+  lower: string,
+): string | null {
+  for (const flag of spec.exactFlags) {
+    if (flag.startsWith("--")) {
+      const prefix = `${flag}=`;
+      if (lower.startsWith(prefix) && lower.length > prefix.length) {
+        return flag;
+      }
+      continue;
+    }
+    if (/^-[A-Za-z]$/.test(flag) && token.startsWith(flag) && token.length > flag.length) {
+      return normalizeLowercaseStringOrEmpty(flag);
+    }
+  }
+  return null;
+}
+
+function matchJoinedRawExactFlag(spec: InterpreterFlagSpec, token: string): string | null {
+  for (const [flag, label] of spec.rawExactFlags ?? []) {
+    if (/^-[A-Za-z]$/.test(flag) && token.startsWith(flag) && token.length > flag.length) {
+      return label;
+    }
+  }
+  return null;
+}
+
+function matchShortClusterFlag(spec: InterpreterFlagSpec, token: string): string | null {
+  if (!token.startsWith("-") || token.startsWith("--")) {
+    return null;
+  }
+  for (const clusterFlag of spec.shortClusterFlags ?? []) {
+    const index = token.indexOf(clusterFlag.flag, 2);
+    if (index < 2) {
+      continue;
+    }
+    const prefix = token.slice(1, index);
+    if (isShortClusterPrefixAllowed(clusterFlag, prefix)) {
+      return clusterFlag.label;
+    }
+  }
+  return null;
+}
+
+function isShortClusterPrefixAllowed(clusterFlag: ShortClusterFlagSpec, prefix: string): boolean {
+  for (let index = 0; index < prefix.length; index += 1) {
+    const char = prefix[index] ?? "";
+    if (clusterFlag.prefixChars.has(char)) {
+      if (clusterFlag.numericValuePrefixChars?.has(char) === true) {
+        while (/^[0-9]$/.test(prefix[index + 1] ?? "")) {
+          index += 1;
+        }
+      }
+      continue;
+    }
+    if (clusterFlag.allowNumericRecordSeparator === true && char === "0") {
+      while (/^[0-9]$/.test(prefix[index + 1] ?? "")) {
+        index += 1;
+      }
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 export function detectInterpreterInlineEvalArgv(
   argv: string[] | undefined | null,
 ): InterpreterInlineEvalHit | null {
@@ -243,6 +413,10 @@ export function detectInterpreterInlineEvalArgv(
       if (rawExactFlag) {
         return createInlineEvalHit(executable, argv, rawExactFlag);
       }
+      const joinedRawExactFlag = matchJoinedRawExactFlag(spec, token);
+      if (joinedRawExactFlag) {
+        return createInlineEvalHit(executable, argv, joinedRawExactFlag);
+      }
       const rawPrefixFlag = spec.rawPrefixFlags?.find(
         ({ prefix }) => token.startsWith(prefix) && token.length > prefix.length,
       );
@@ -252,6 +426,14 @@ export function detectInterpreterInlineEvalArgv(
       const lower = normalizeLowercaseStringOrEmpty(token);
       if (spec.exactFlags.has(lower)) {
         return createInlineEvalHit(executable, argv, lower);
+      }
+      const joinedExactFlag = matchJoinedExactFlag(spec, token, lower);
+      if (joinedExactFlag) {
+        return createInlineEvalHit(executable, argv, joinedExactFlag);
+      }
+      const shortClusterFlag = matchShortClusterFlag(spec, token);
+      if (shortClusterFlag) {
+        return createInlineEvalHit(executable, argv, shortClusterFlag);
       }
       const prefixFlag = spec.prefixFlags?.find(
         ({ prefix }) => lower.startsWith(prefix) && lower.length > prefix.length,

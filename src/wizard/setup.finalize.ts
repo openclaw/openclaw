@@ -339,6 +339,15 @@ export async function ensureGatewayServiceForOnboarding(params: {
     ) {
       const progress = prompter.progress(t("wizard.finalize.gatewayService"));
       let installError: string | null = null;
+      const installWarnings: Array<{ message: string; title?: string }> = [];
+      const flushInstallWarnings = async () => {
+        let warning: (typeof installWarnings)[number] | undefined;
+        // Remove before awaiting so a rejected note is not replayed when the
+        // outer catch drains warnings that remain in the planner's queue.
+        while ((warning = installWarnings.shift()) !== undefined) {
+          await prompter.note(warning.message, warning.title);
+        }
+      };
       try {
         progress.update(t("wizard.finalize.gatewayServicePreparing"));
         const tokenResolution = await resolveGatewayInstallToken({
@@ -361,10 +370,11 @@ export async function ensureGatewayServiceForOnboarding(params: {
               port: settings.port,
               runtime: daemonRuntime,
               warn: (message, title) => {
-                void prompter.note(message, title);
+                installWarnings.push({ message, title });
               },
               config: nextConfig,
             });
+          await flushInstallWarnings();
 
           progress.update(t("wizard.finalize.gatewayServiceInstalling"));
           await service.install({
@@ -377,6 +387,7 @@ export async function ensureGatewayServiceForOnboarding(params: {
           });
         }
       } catch (err) {
+        await flushInstallWarnings();
         installError = formatErrorMessage(err);
       } finally {
         progress.stop(
@@ -596,7 +607,28 @@ export async function finalizeSetupWizard(
       .access(bootstrapPath)
       .then(() => true)
       .catch(() => false);
-    const shouldSeedBootstrapHatch = hasBootstrap && options.hadExistingConfig !== true;
+    const agentDir = resolveDefaultAgentDir(nextConfig);
+    // Seed only when the selected route is proven ready. Unknown or incompatible
+    // route facts must not turn the onboarding greeting into a guaranteed failure.
+    const [
+      { resolveDefaultModelAuthStatus, resolveDefaultModelCatalogFacts },
+      { loadModelCatalogSnapshot },
+    ] = await Promise.all([
+      import("../commands/auth-choice.js"),
+      import("../agents/model-catalog.js"),
+    ]);
+    const modelCatalog = await loadModelCatalogSnapshot({ config: nextConfig, readOnly: true });
+    const modelCatalogFacts = resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
+      routeVariants: modelCatalog.routeVariants,
+    });
+    const modelAuthStatus = resolveDefaultModelAuthStatus(nextConfig, {
+      agentDir,
+      ...(modelCatalogFacts.observedRoutes
+        ? { observedRoutes: modelCatalogFacts.observedRoutes }
+        : {}),
+    });
+    const shouldSeedBootstrapHatch =
+      hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus.status === "ready";
 
     await prompter.note(
       [
@@ -624,10 +656,21 @@ export async function finalizeSetupWizard(
         await prompter.note(
           [
             t("wizard.finalize.workspaceReady"),
-            t("wizard.finalize.firstTerminalChat"),
+            ...(shouldSeedBootstrapHatch ? [t("wizard.finalize.firstTerminalChat")] : []),
             t("wizard.finalize.editBootstrap"),
           ].join("\n"),
           t("wizard.finalize.hatchYourAgent"),
+        );
+      }
+      if (modelAuthStatus.status === "missing") {
+        await prompter.note(
+          [
+            t("wizard.finalize.noModelAuth", { provider: modelAuthStatus.provider }),
+            t("wizard.finalize.noModelAuthNext", {
+              command: formatCliCommand("openclaw configure --section model"),
+            }),
+          ].join("\n"),
+          t("wizard.finalize.noModelAuthTitle"),
         );
       }
 
@@ -692,7 +735,6 @@ export async function finalizeSetupWizard(
       const keyConfigured = entry ? hasExistingKey(nextConfig, webSearchProvider) : false;
       const envAvailable = entry ? hasKeyInEnv(entry) : false;
       const hasKey = keyConfigured || envAvailable;
-      const agentDir = resolveDefaultAgentDir(nextConfig);
       const authProviderId = entry?.authProviderId?.trim();
       const authProviderLabel = authProviderId === "xai" ? "xAI" : authProviderId;
       const providerAuthProfileAvailable = authProviderId
@@ -879,3 +921,4 @@ export async function finalizeSetupWizard(
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

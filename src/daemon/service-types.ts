@@ -14,6 +14,9 @@ export type GatewayServiceInstallArgs = {
   environment?: GatewayServiceEnv;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
   description?: string;
+  // Verified before a config rewrite; Windows uses this to bridge a transient
+  // listener gap while replacing a Startup-folder fallback.
+  startupFallbackTakeoverRuntime?: GatewayServiceRuntime;
 };
 
 export type GatewayServiceStageArgs = GatewayServiceInstallArgs;
@@ -66,7 +69,7 @@ export type GatewayServiceState = {
 };
 
 export type GatewayServiceStartRepairIssue = {
-  code: "missing-program" | "temporary-program" | "version-mismatch";
+  code: "missing-program" | "port-mismatch" | "temporary-program" | "version-mismatch";
   message: string;
 };
 

@@ -166,20 +166,31 @@ describe("sendMessageDiscord", () => {
     });
   }
 
-  async function sendChunkedReplyAndCollectBodies(params: { text: string; mediaUrl?: string }) {
+  function expectNoReplyReference(body: { message_reference?: unknown } | undefined) {
+    expect(body?.message_reference).toBeUndefined();
+  }
+
+  async function sendChunkedReplyAndCollectBodies(params: {
+    text: string;
+    mediaUrl?: string;
+    replyScope?: "all" | "first";
+  }) {
     const { rest, postMock } = makeDiscordRest();
-    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
-    await sendMessageDiscord("channel:789", params.text, {
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "789" });
+    const result = await sendMessageDiscord("channel:789", params.text, {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
-      replyTo: "orig-123",
+      reply: { messageId: "orig-123", scope: params.replyScope ?? "all" },
       ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     });
     expect(postMock).toHaveBeenCalledTimes(2);
     return {
       firstBody: requireRestBody(postMock, 0) as { message_reference?: unknown },
       secondBody: requireRestBody(postMock, 1) as { message_reference?: unknown },
+      result,
     };
   }
 
@@ -258,7 +269,13 @@ describe("sendMessageDiscord", () => {
       } as never,
     });
 
-    expect(requireRestBody(postMock)).toEqual({ content: "https://example.com" });
+    const body = requireRestBody(postMock);
+    expect(body).toMatchObject({
+      content: "https://example.com",
+      enforce_nonce: true,
+    });
+    expect(body.nonce).toMatch(/^[0-9a-f]{24}$/);
+    expect(body.flags).toBeUndefined();
   });
 
   it("uses account-level suppressEmbeds overrides", async () => {
@@ -303,6 +320,21 @@ describe("sendMessageDiscord", () => {
     expect(requireRestBody(postMock).flags).toBe(
       MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications,
     );
+  });
+
+  it("applies explicit allowed mentions to fresh messages", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+
+    await sendMessageDiscord("channel:789", "heads up @everyone <@123>", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      allowedMentions: { parse: [] },
+    });
+
+    expect(requireRestBody(postMock).allowed_mentions).toEqual({ parse: [] });
   });
 
   it("does not suppress explicit Discord embeds by default", async () => {
@@ -406,7 +438,10 @@ describe("sendMessageDiscord", () => {
   it("auto-creates a forum thread when target is a Forum channel", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     // Channel type lookup returns a Forum channel.
-    getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildForum,
+      default_auto_archive_duration: 1440,
+    });
     postMock.mockResolvedValue({
       id: "thread1",
       message: { id: "starter1", channel_id: "thread1" },
@@ -427,6 +462,7 @@ describe("sendMessageDiscord", () => {
     expectRestRoute(postMock, 0, Routes.threads("forum1"));
     expect(requireRestBody(postMock)).toEqual({
       name: "Discussion topic",
+      auto_archive_duration: 1440,
       message: {
         content: "Discussion topic\nBody of the post",
         flags: MessageFlags.SuppressEmbeds,
@@ -611,7 +647,7 @@ describe("sendMessageDiscord", () => {
       token: "t",
       cfg: DISCORD_TEST_CFG,
       mediaUrl: "file:///tmp/report.pdf",
-      replyTo: "orig-123",
+      reply: { messageId: "orig-123", scope: "all" },
       components: [new Container([new TextDisplay("Attachment controls")])],
       embeds: [{ title: "Attachment preview" }],
     });
@@ -627,6 +663,40 @@ describe("sendMessageDiscord", () => {
     expect(fallbackBody).not.toHaveProperty("components");
     expect(fallbackBody).not.toHaveProperty("embeds");
     expectReplyReference(fallbackBody, "orig-123");
+  });
+
+  it("preserves implicit reply scope and delivery progress in upload fallback chunks", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Bad Request"), {
+          status: 400,
+          rawError: { code: 40005 },
+        }),
+      )
+      .mockResolvedValueOnce({ id: "fallback-1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "fallback-2", channel_id: "789" });
+    const onDeliveryResult = vi.fn();
+
+    await sendMessageDiscord("channel:789", "a".repeat(2500), {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrl: "file:///tmp/report.pdf",
+      reply: { messageId: "orig-123", scope: "first" },
+      onDeliveryResult,
+    });
+
+    expect(postMock).toHaveBeenCalledTimes(3);
+    expectReplyReference(requireRestBody(postMock, 1), "orig-123");
+    expectNoReplyReference(requireRestBody(postMock, 2));
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual([
+      "fallback-1",
+      "fallback-2",
+    ]);
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.receipt.parts[0]?.replyToId)).toEqual(
+      ["orig-123", undefined],
+    );
   });
 
   it("reports a media-only upload rejected with HTTP 413", async () => {
@@ -760,7 +830,7 @@ describe("sendMessageDiscord", () => {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
-      replyTo: "orig-123",
+      reply: { messageId: "orig-123", scope: "all" },
     });
     const body = requireRestBody(postMock);
     expect(body?.message_reference).toEqual({
@@ -769,7 +839,7 @@ describe("sendMessageDiscord", () => {
     });
   });
 
-  it("preserves reply reference across all text chunks", async () => {
+  it("preserves reply reference across all text chunks by default", async () => {
     const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
       text: "a".repeat(2001),
     });
@@ -777,13 +847,35 @@ describe("sendMessageDiscord", () => {
     expectReplyReference(secondBody, "orig-123");
   });
 
-  it("preserves reply reference for follow-up text chunks after media caption split", async () => {
+  it("limits reply reference to the first text chunk when requested", async () => {
+    const { firstBody, secondBody, result } = await sendChunkedReplyAndCollectBodies({
+      text: "a".repeat(2001),
+      replyScope: "first",
+    });
+    expectReplyReference(firstBody, "orig-123");
+    expectNoReplyReference(secondBody);
+    expect(result.receipt.replyToId).toBe("orig-123");
+    expect(result.receipt.parts.map((part) => part.replyToId)).toEqual(["orig-123", undefined]);
+    expect(() => JSON.stringify(result.receipt)).not.toThrow();
+  });
+
+  it("preserves reply reference for follow-up text chunks after media caption split by default", async () => {
     const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
       text: "a".repeat(2500),
       mediaUrl: "file:///tmp/photo.jpg",
     });
     expectReplyReference(firstBody, "orig-123");
     expectReplyReference(secondBody, "orig-123");
+  });
+
+  it("limits media caption reply reference to the first physical message when requested", async () => {
+    const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
+      text: "a".repeat(2500),
+      mediaUrl: "file:///tmp/photo.jpg",
+      replyScope: "first",
+    });
+    expectReplyReference(firstBody, "orig-123");
+    expectNoReplyReference(secondBody);
   });
 });
 
@@ -860,6 +952,24 @@ describe("removeOwnReactionsDiscord", () => {
     expect(deleteMock).toHaveBeenCalledWith(
       Routes.channelMessageOwnReaction("chan1", "msg1", "party_blob%3A123"),
     );
+  });
+
+  it("surfaces a failed deletion instead of reporting false success", async () => {
+    const { rest, getMock, deleteMock } = makeDiscordRest();
+    getMock.mockResolvedValue({
+      reactions: [
+        { emoji: { name: "✅", id: null } },
+        { emoji: { name: "party_blob", id: "123" } },
+      ],
+    });
+    const apiError = new Error("Discord API 500");
+    deleteMock.mockResolvedValueOnce(undefined);
+    deleteMock.mockRejectedValueOnce(apiError);
+    await expect(
+      removeOwnReactionsDiscord("chan1", "msg1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
+    ).rejects.toThrow("Discord API 500");
+    // Both deletions are still attempted; the rejection just propagates.
+    expect(deleteMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -1176,3 +1286,4 @@ describe("searchMessagesDiscord", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

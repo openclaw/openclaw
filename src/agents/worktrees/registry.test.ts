@@ -6,7 +6,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import {
   deleteRegistryWorktree,
   findRegistryWorktreeByPath,
-  findLiveRegistryWorktree,
+  findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
   insertRegistryWorktree,
   listRegistryWorktrees,
@@ -54,7 +54,7 @@ describe("managed worktree registry", () => {
     });
 
     expect(listRegistryWorktrees(env).map((entry) => entry.id)).toEqual(["second", "first"]);
-    expect(findLiveRegistryWorktree(env, record.repoFingerprint, record.path)).toMatchObject({
+    expect(findLiveRegistryWorktreeByPath(env, record.path)).toMatchObject({
       id: "first",
       ownerKind: "workboard",
       ownerId: "card-1",
@@ -70,6 +70,7 @@ describe("managed worktree registry", () => {
       removedAt: 40,
       snapshotRef: "refs/openclaw/snapshots/first",
     });
+    expect(findLiveRegistryWorktreeByPath(env, record.path)).toBeUndefined();
     expect(findRegistryWorktreeByPath(env, record.path)?.id).toBe("first");
 
     deleteRegistryWorktree(env, "first");

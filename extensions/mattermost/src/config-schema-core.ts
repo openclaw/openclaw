@@ -5,7 +5,7 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk/channel-config-primitives";
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
@@ -100,19 +100,24 @@ const MattermostStreamingBlockSchema = z
     coalesce: BlockStreamingCoalesceSchema.optional(),
   })
   .strict();
-const MattermostStreamingSchema = z.union([
-  MattermostStreamingModeSchema,
-  z.boolean(),
-  z
-    .object({
-      mode: MattermostStreamingModeSchema.optional(),
-      chunkMode: z.enum(["length", "newline"]).optional(),
-      preview: MattermostStreamingPreviewSchema.optional(),
-      progress: MattermostStreamingProgressSchema.optional(),
-      block: MattermostStreamingBlockSchema.optional(),
-    })
-    .strict(),
-]);
+const MattermostStreamingSchema = z
+  .object({
+    mode: MattermostStreamingModeSchema.optional(),
+    chunkMode: z.enum(["length", "newline"]).optional(),
+    preview: MattermostStreamingPreviewSchema.optional(),
+    progress: MattermostStreamingProgressSchema.optional(),
+    block: MattermostStreamingBlockSchema.optional(),
+  })
+  .strict();
+
+const MattermostReplyToModeSchema = z.enum(["off", "first", "all", "batched"]);
+const MattermostReplyToModeByChatTypeSchema = z
+  .object({
+    direct: MattermostReplyToModeSchema.optional(),
+    group: MattermostReplyToModeSchema.optional(),
+    channel: MattermostReplyToModeSchema.optional(),
+  })
+  .strict();
 
 const MattermostAccountSchemaBase = z
   .object({
@@ -132,11 +137,9 @@ const MattermostAccountSchemaBase = z
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
     streaming: MattermostStreamingSchema.optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
+    replyToMode: MattermostReplyToModeSchema.optional(),
+    replyToModeByChatType: MattermostReplyToModeByChatTypeSchema.optional(),
     responsePrefix: z.string().optional(),
     actions: z
       .object({

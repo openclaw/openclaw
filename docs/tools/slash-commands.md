@@ -178,8 +178,11 @@ plugins.
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
     | `/session max-age <duration\|off>` | Manage thread-binding max-age expiry |
-    | `/export-session [path]` | Export the current session to HTML. Alias: `/export` |
+    | `/export-session [path]` | Owner-only. Export the current session to HTML inside the workspace. Alias: `/export` |
     | `/export-trajectory [path]` | Export a JSONL trajectory bundle for the current session. Alias: `/trajectory` |
+
+    Explicit `/export-session` paths replace existing files inside the
+    workspace. Omit the path to generate a collision-safe filename.
 
     <Note>
       Control UI intercepts typed `/new` to create and switch to a fresh
@@ -237,7 +240,7 @@ plugins.
     | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices. Requires `commands.plugins: true` |
     | `/goal [status\|start\|edit\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
-    | `/crestodian <request>` | Run the Crestodian setup and repair helper from an owner DM |
+    | `/openclaw <request>` | Run the OpenClaw setup and repair helper from an owner DM |
     | `/tasks` | List active/recent background tasks for the current session |
     | `/context [list\|detail\|map\|json]` | Explain how context is assembled |
     | `/whoami` | Show your sender id. Alias: `/id` |
@@ -307,7 +310,7 @@ must be in the same identity group.
 | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/dreaming [on\|off\|status\|help]`                     | Toggle memory dreaming (owner or Gateway admin). See [Dreaming](/concepts/dreaming)                                                                                                            |
 | `/pair [qr\|status\|pending\|approve\|cleanup\|notify]` | Manage device pairing. See [Pairing](/channels/pairing)                                                                                                                                        |
-| `/phone status\|arm ...\|disarm`                        | Temporarily arm high-risk phone node commands                                                                                                                                                  |
+| `/phone status\|arm ...\|disarm`                        | Temporarily arm high-risk node commands (camera/screen/computer/writes). See [Computer use](/nodes/computer-use)                                                                               |
 | `/voice status\|list\|set <voiceId>`                    | Manage Talk voice config. Discord native name: `/talkvoice`                                                                                                                                    |
 | `/card ...`                                             | Send LINE rich card presets. See [LINE](/channels/line)                                                                                                                                        |
 | `/codex <action> ...`                                   | Bind, steer, and inspect the Codex app-server harness (status, threads, resume, model, fast, permissions, compact, review, mcp, skills, and more). See [Codex harness](/plugins/codex-harness) |
@@ -402,6 +405,11 @@ updates persist across restarts.
 ```
 
 `/mcp` stores config in OpenClaw config, not embedded-agent project settings.
+`/mcp show` redacts credential-bearing fields, recognized credential flag
+values, and known secret-shaped arguments. When run from a group, the
+configuration is sent to the owner privately; if no private owner route is
+available, the command fails closed and asks the owner to retry from a direct
+chat.
 
 ## `/debug`: runtime-only overrides
 
@@ -430,12 +438,23 @@ updates persist across restarts.
 /plugin show context7
 /plugins enable context7
 /plugins disable context7
-/plugins install ./path/to/plugin
+/plugins install clawhub:<package>
+/plugins install npm:@openclaw/<official-package>
+/plugins install npm:<package> --force
+/plugins install git:<repository>@<ref> --force
 ```
 
 `/plugins enable|disable` updates plugin config and hot-reloads the Gateway
 plugin runtime for new agent turns. `/plugins install` restarts managed
-Gateways automatically because plugin source modules changed.
+Gateways automatically because plugin source modules changed. Trusted ClawHub
+and official-catalog installs do not need extra acknowledgement. Arbitrary npm,
+git, archive, `npm-pack:`, and local path sources show a provenance warning and
+require a trailing `--force` after you review the source. This flag acknowledges
+the source and permits replacement of an existing install; it does not bypass
+`security.installPolicy` or installer security checks. ClawHub releases with
+risk warnings still require the separate shell-only
+`--acknowledge-clawhub-risk` flag. Marketplace, linked, and pinned installs also
+remain shell-only.
 
 ## `/trace`: plugin trace output
 

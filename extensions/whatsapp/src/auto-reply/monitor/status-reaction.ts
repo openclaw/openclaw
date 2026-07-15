@@ -16,7 +16,7 @@ import { resolveGroupActivationFor } from "./group-activation.js";
 
 export type { StatusReactionController };
 
-export type WhatsAppStatusReactionParams = {
+type WhatsAppStatusReactionParams = {
   cfg: OpenClawConfig;
   msg: AdmittedWebInboundMessage;
   agentId: string;

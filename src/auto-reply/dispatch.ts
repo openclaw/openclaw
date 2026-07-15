@@ -20,7 +20,7 @@ import {
   resolveCommandTurnTargetSessionKey,
 } from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
-import { copyReplyPayloadMetadata } from "./reply-payload.js";
+import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
@@ -30,8 +30,10 @@ import type {
 } from "./reply/get-reply.types.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
+  composeReplyDispatchBeforeDeliver,
   createReplyDispatcher,
   createReplyDispatcherWithTyping,
+  markReplyDispatchBeforeDeliverDeadlineOwned,
   type ReplyDispatchBeforeDeliver,
   type ReplyDispatcherOptions,
   type ReplyDispatcherWithTypingOptions,
@@ -362,24 +364,26 @@ function buildMessageSendingBeforeDeliver(
   const hookCtx = deriveInboundMessageHookContext(finalized);
   const replyTarget = resolveInboundReplyHookTarget(finalized, hookCtx);
 
-  return async (payload: ReplyPayload): Promise<ReplyPayload | null> => {
-    if (!payload.text) {
+  return markReplyDispatchBeforeDeliverDeadlineOwned(
+    async (payload: ReplyPayload): Promise<ReplyPayload | null> => {
+      if (!payload.text) {
+        return payload;
+      }
+
+      const result = await hookRunner.runMessageSending(
+        { content: payload.text, to: replyTarget },
+        toPluginMessageContext(hookCtx),
+      );
+
+      if (result?.cancel) {
+        return null;
+      }
+      if (result?.content != null) {
+        return copyReplyPayloadMetadata(payload, { ...payload, text: result.content });
+      }
       return payload;
-    }
-
-    const result = await hookRunner.runMessageSending(
-      { content: payload.text, to: replyTarget },
-      toPluginMessageContext(hookCtx),
-    );
-
-    if (result?.cancel) {
-      return null;
-    }
-    if (result?.content != null) {
-      return copyReplyPayloadMetadata(payload, { ...payload, text: result.content });
-    }
-    return payload;
-  };
+    },
+  );
 }
 
 function buildReplyPayloadSendingBeforeDeliver(
@@ -389,22 +393,24 @@ function buildReplyPayloadSendingBeforeDeliver(
   const finalized = finalizeInboundContext(ctx);
   const hookCtx = deriveInboundMessageHookContext(finalized);
 
-  return async (payload: ReplyPayload, info): Promise<ReplyPayload | null> => {
-    const runId = runState.runId;
-    const hookedPayload = await runReplyPayloadSendingHook({
-      payload,
-      kind: info.kind,
-      channel: finalized.Surface ?? finalized.Provider,
-      sessionKey: finalized.SessionKey,
-      runId,
-      usageState: consumeReplyUsageState(runId),
-      context: {
-        ...toPluginMessageContext(hookCtx),
+  return markReplyDispatchBeforeDeliverDeadlineOwned(
+    async (payload: ReplyPayload, info): Promise<ReplyPayload | null> => {
+      const runId = runState.runId;
+      const hookedPayload = await runReplyPayloadSendingHook({
+        payload,
+        kind: info.kind,
+        channel: finalized.Surface ?? finalized.Provider,
+        sessionKey: finalized.SessionKey,
         runId,
-      },
-    });
-    return hookedPayload && hasOutboundReplyContent(hookedPayload) ? hookedPayload : null;
-  };
+        usageState: consumeReplyUsageState(runId),
+        context: {
+          ...toPluginMessageContext(hookCtx),
+          runId,
+        },
+      });
+      return hookedPayload && hasOutboundReplyContent(hookedPayload) ? hookedPayload : null;
+    },
+  );
 }
 
 function bindReplyPayloadRunState(
@@ -446,27 +452,6 @@ function markReplyPayloadSendingBeforeDeliverInstalled(
   }
 }
 
-function combineBeforeDeliverHooks(
-  ...hooks: Array<ReplyDispatchBeforeDeliver | undefined>
-): ReplyDispatchBeforeDeliver | undefined {
-  const activeHooks = hooks.filter((hook): hook is ReplyDispatchBeforeDeliver => Boolean(hook));
-  if (activeHooks.length === 0) {
-    return undefined;
-  }
-
-  return async (payload, info) => {
-    let current: ReplyPayload | null = payload;
-    for (const hook of activeHooks) {
-      if (!current) {
-        return null;
-      }
-      const next = await hook(current, info);
-      current = next ? copyReplyPayloadMetadata(current, next) : null;
-    }
-    return current;
-  };
-}
-
 function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) {
   const commandTurn = resolveCommandTurnContext(ctx);
   return {
@@ -482,7 +467,7 @@ function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) 
   };
 }
 
-export type DispatchInboundResult = DispatchFromConfigResult;
+type DispatchInboundResult = DispatchFromConfigResult;
 export { settleReplyDispatcher, withReplyDispatcher } from "./dispatch-dispatcher.js";
 
 function finalizeDispatchResult(
@@ -603,31 +588,45 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     finalized,
     replyPayloadRunState,
   );
-  const globalBeforeDeliver = combineBeforeDeliverHooks(
+  const globalBeforeDeliver = composeReplyDispatchBeforeDeliver(
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(finalized),
   );
   const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    ? composeReplyDispatchBeforeDeliver(
+        {
+          hook: params.dispatcherOptions.beforeDeliver,
+          options: params.dispatcherOptions.beforeDeliverOptions,
+        },
+        replyPayloadBeforeDeliver,
+      )
     : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
-      ? async (payload, info) => {
+      ? markReplyDispatchBeforeDeliverDeadlineOwned(async (payload, info) => {
           // Check both before and after hooks because hooks can await while newer replies finish.
           if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
+            // Only the foreground fence proves "not shown because stale"; hook
+            // cancellations may be intentional policy and must stay untagged.
+            setReplyPayloadMetadata(payload, {
+              foregroundDeliverySuppression: { reason: "stale-foreground" },
+            });
             return null;
           }
           const deliverPayload = configuredBeforeDeliver
             ? await configuredBeforeDeliver(payload, info)
             : payload;
-          if (
-            !deliverPayload ||
-            (await shouldCancelForegroundReplyDelivery(foregroundReplyFence))
-          ) {
+          if (!deliverPayload) {
+            return null;
+          }
+          if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
+            setReplyPayloadMetadata(payload, {
+              foregroundDeliverySuppression: { reason: "stale-foreground" },
+            });
             return null;
           }
           return deliverPayload;
-        }
+        })
       : undefined;
   const deliver: ReplyDispatcherWithTypingOptions["deliver"] = async (payload, info) => {
     try {
@@ -661,9 +660,9 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       replyOptions: {
         ...params.replyOptions,
         ...replyOptions,
-        onFollowupAdmissionWaitChange: (waiting) => {
-          // An admission wait depends on the older owner finishing delivery.
-          // Suspending only that generation breaks the cycle without weakening newer-turn fencing.
+        onReplyAdmissionWaitChange: (waiting) => {
+          // A turn waiting to own the lane cannot make the current owner's reply stale.
+          // Suspend only that generation so independent newer turns still fence old replies.
           setForegroundReplyFenceAdmissionWaiting(foregroundReplyFence, waiting);
         },
       },
@@ -707,12 +706,18 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     params.ctx,
     replyPayloadRunState,
   );
-  const globalBeforeDeliver = combineBeforeDeliverHooks(
+  const globalBeforeDeliver = composeReplyDispatchBeforeDeliver(
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(params.ctx),
   );
   const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    ? composeReplyDispatchBeforeDeliver(
+        {
+          hook: params.dispatcherOptions.beforeDeliver,
+          options: params.dispatcherOptions.beforeDeliverOptions,
+        },
+        replyPayloadBeforeDeliver,
+      )
     : globalBeforeDeliver;
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,

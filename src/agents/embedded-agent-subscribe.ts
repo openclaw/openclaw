@@ -2,6 +2,7 @@
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
   buildCodeSpanIndex,
@@ -31,6 +32,7 @@ import {
 } from "./embedded-agent-runner/replay-state.js";
 import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
@@ -157,8 +159,6 @@ function collectPendingMediaFromInternalEvents(
   return pending;
 }
 
-export type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
   const reasoningMode = params.reasoningMode ?? "off";
@@ -203,6 +203,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
+    lastAssistantStreamContentIndex: undefined,
     lastAssistantStreamItemId: undefined,
     lastAssistantTextMessageIndex: -1,
     lastAssistantTextNormalized: undefined,
@@ -278,12 +279,23 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       stream: "assistant",
       data,
     });
-    void params.onAgentEvent?.({
-      stream: "assistant",
-      data,
-    });
+    if (params.onAgentEvent) {
+      runBestEffortCallback({
+        label: "assistant agent event",
+        log,
+        callback: () =>
+          params.onAgentEvent?.({
+            stream: "assistant",
+            data,
+          }),
+      });
+    }
     if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
-      void params.onPartialReply(data);
+      runBestEffortCallback({
+        label: "assistant partial reply",
+        log,
+        callback: () => params.onPartialReply?.(data),
+      });
     }
   };
   const emitAssistantStreamData = (
@@ -437,6 +449,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingAssistantUsage = undefined;
     state.assistantUsageCommitted = false;
     state.assistantMessageIndex += 1;
+    state.lastAssistantStreamContentIndex = undefined;
     state.lastAssistantStreamItemId = undefined;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
@@ -728,15 +741,16 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (!parsed.text && filteredMediaUrls.length === 0) {
       return;
     }
-    try {
-      void params.onToolResult({
-        text: parsed.text,
-        mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
-        ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
-      });
-    } catch {
-      // ignore tool result delivery failures
-    }
+    runBestEffortCallback({
+      label: "tool result",
+      log,
+      callback: () =>
+        params.onToolResult?.({
+          text: parsed.text,
+          mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+          ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
+        }),
+    });
   };
   const emitToolSummary = (toolName?: string, meta?: string) => {
     const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
@@ -1057,7 +1071,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           messagingToolSentTextsNormalized,
         ));
     if (isMessagingDuplicate) {
-      log.debug(`Skipping block reply - already sent via messaging tool: ${chunk.slice(0, 50)}...`);
+      log.debug(
+        `Skipping block reply - already sent via messaging tool: ${truncateUtf16Safe(chunk, 50)}...`,
+      );
       if (prefixReplayCandidate) {
         markBlockReplyTextHandled();
       }
@@ -1207,9 +1223,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // render hook — uniformly, whether the thinking block rode in on a tool call
     // or arrived on its own. It still reaches the bus/archive above.
     if (state.streamReasoning && !hasMessageToolOnlySourceDelivery() && params.onReasoningStream) {
-      void params.onReasoningStream({
-        text: trimmed,
-        ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
+      runBestEffortCallback({
+        label: "reasoning stream",
+        log,
+        callback: () =>
+          params.onReasoningStream?.({
+            text: trimmed,
+            ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
+          }),
       });
     }
   };
@@ -1487,3 +1508,4 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

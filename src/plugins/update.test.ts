@@ -2,13 +2,24 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import type { PluginNpmIntegrityDriftParams } from "./install.js";
 
 const APP_ROOT = "/app";
+
+type NpmInstallIntegrityDrift = {
+  spec: string;
+  expectedIntegrity: string;
+  actualIntegrity: string;
+  resolution: {
+    integrity?: string;
+    resolvedSpec?: string;
+    version?: string;
+  };
+};
 
 function appBundledPluginRoot(pluginId: string): string {
   return bundledPluginRootAt(APP_ROOT, pluginId);
@@ -346,7 +357,11 @@ function createOpenClawPeerLinkFixtures(plugins: Array<{ pluginId: string; packa
     ]),
   );
   const peerLinkPath = (pluginId: string) =>
-    path.join(installPaths[pluginId], "node_modules", "openclaw");
+    path.join(
+      expectDefined(installPaths[pluginId], "installPaths[pluginId] test invariant"),
+      "node_modules",
+      "openclaw",
+    );
   const linkPeer = (pluginId: string) => {
     fs.mkdirSync(path.dirname(peerLinkPath(pluginId)), { recursive: true });
     fs.symlinkSync(peerTarget, peerLinkPath(pluginId), "junction");
@@ -553,6 +568,26 @@ describe("updateNpmInstalledPlugins", () => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("does not treat inherited prototype names as install records", async () => {
+    const config: OpenClawConfig = { plugins: { installs: {} } };
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["constructor"],
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "constructor",
+        status: "skipped",
+        message: 'No install record for "constructor".',
+      },
+    ]);
   });
 
   it.each([
@@ -2965,7 +3000,7 @@ describe("updateNpmInstalledPlugins", () => {
     installPluginFromNpmSpecMock.mockImplementation(
       async (params: {
         spec: string;
-        onIntegrityDrift?: (drift: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+        onIntegrityDrift?: (drift: NpmInstallIntegrityDrift) => boolean | Promise<boolean>;
       }) => {
         const proceed = await params.onIntegrityDrift?.({
           spec: params.spec,
@@ -5377,6 +5412,56 @@ describe("syncPluginsForUpdateChannel", () => {
     });
   });
 
+  it.each(["constructor", "__proto__"])(
+    "migrates already-externalized records to prototype-named plugin id %s",
+    async (targetPluginId) => {
+      const legacyPluginId = `legacy-${targetPluginId}`;
+      const npmPackageName = `openclaw-plugin-${targetPluginId}`;
+      resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+
+      const result = await syncPluginsForUpdateChannel({
+        channel: "stable",
+        externalizedBundledPluginBridges: [
+          {
+            bundledPluginId: legacyPluginId,
+            pluginId: targetPluginId,
+            npmSpec: npmPackageName,
+            channelIds: [],
+          },
+        ],
+        config: {
+          plugins: {
+            entries: {
+              [legacyPluginId]: { enabled: true },
+            },
+            installs: {
+              [legacyPluginId]: {
+                source: "npm",
+                spec: npmPackageName,
+                installPath: `/tmp/${targetPluginId}`,
+              },
+            },
+          },
+        },
+      });
+
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(result.changed).toBe(true);
+      expect(Object.hasOwn(result.config.plugins?.entries ?? {}, targetPluginId)).toBe(true);
+      expect(Object.getPrototypeOf(result.config.plugins?.entries ?? {})).toBe(Object.prototype);
+      expect(result.config.plugins?.entries?.[targetPluginId]).toEqual({ enabled: true });
+      expect(Object.hasOwn(result.config.plugins?.installs ?? {}, targetPluginId)).toBe(true);
+      expect(Object.getPrototypeOf(result.config.plugins?.installs ?? {})).toBe(Object.prototype);
+      expectRecordFields(result.config.plugins?.installs?.[targetPluginId], {
+        source: "npm",
+        spec: npmPackageName,
+        installPath: `/tmp/${targetPluginId}`,
+      });
+      expect(result.config.plugins?.entries?.[legacyPluginId]).toBeUndefined();
+      expect(result.config.plugins?.installs?.[legacyPluginId]).toBeUndefined();
+    },
+  );
+
   it("removes stale bundled load paths for already-externalized npm installs", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
 
@@ -5550,3 +5635,4 @@ describe("syncPluginsForUpdateChannel", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

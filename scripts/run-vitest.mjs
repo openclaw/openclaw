@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
@@ -34,8 +35,9 @@ const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
+const GATEWAY_SERVER_VITEST_CONFIG = "test/vitest/vitest.gateway-server.config.ts";
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
-const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
+export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
   ["test/vitest/vitest.e2e.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   [GATEWAY_VITEST_CONFIG, DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   ["test/vitest/vitest.ui-e2e.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
@@ -50,11 +52,12 @@ const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
   ],
   ["test/vitest/vitest.infra.config.ts", DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   [GATEWAY_CORE_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+  [GATEWAY_SERVER_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
 ]);
-const TOOLING_EXCLUDED_TESTS = new Set([
+export const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/docker-build-helper.test.ts",
-  "test/scripts/openclaw-e2e-instance.test.ts",
+  ...toolingIsolatedTestFiles,
 ]);
 const EXPLICIT_FILE_TARGET_RE = /\.(?:[cm]?[jt]sx?)$/u;
 const EXPLICIT_TEST_FILE_RE = /\.(?:test|e2e|live)\.(?:[cm]?[jt]sx?)$/u;
@@ -423,7 +426,7 @@ export function resolveVitestSpawnParams(env = process.env, platform = process.p
 /**
  * Applies local Vitest scheduling and native worker budget env.
  */
-export function resolveVitestSpawnEnv(env = process.env) {
+function resolveVitestSpawnEnv(env = process.env) {
   const baseEnv = resolveLocalVitestEnv(env);
   if (!shouldApplyNativeWorkerBudget(baseEnv)) {
     return baseEnv;
@@ -550,6 +553,24 @@ function collectExplicitFileTargetArgs(argv, predicate = isExplicitFileTargetArg
 function collectExplicitProjectRouterTargetArgs(argv, cwd = process.cwd(), fsImpl = fs) {
   return collectExplicitFileTargetArgs(argv, (arg) =>
     isExplicitProjectRouterTargetArg(arg, cwd, fsImpl),
+  );
+}
+
+function isExplicitDirectoryTargetArg(arg, cwd = process.cwd(), fsImpl = fs) {
+  if (!isPathLikeExplicitFileArg(arg) || GLOB_PATTERN_CHARS_RE.test(arg)) {
+    return false;
+  }
+  const targetPath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
+  try {
+    return fsImpl.statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function collectExplicitDirectoryTargetArgs(argv, cwd = process.cwd(), fsImpl = fs) {
+  return collectExplicitFileTargetArgs(argv, (arg) =>
+    isExplicitDirectoryTargetArg(arg, cwd, fsImpl),
   );
 }
 
@@ -734,6 +755,18 @@ export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
   if (hasExplicitVitestConfigArg(argv)) {
     return argv;
   }
+  const separatorIndex = argv.indexOf("--");
+  const optionArgs = separatorIndex < 0 ? argv : argv.slice(0, separatorIndex);
+  const hasExplicitIsolation = optionArgs.some(
+    (arg) => arg === "--isolate" || arg === "--no-isolate" || arg.startsWith("--isolate="),
+  );
+  if (!hasExplicitIsolation && collectExplicitDirectoryTargetArgs(argv, cwd).length > 1) {
+    // Mixed directory selectors can activate overlapping Vitest projects.
+    // Isolate their module caches so one project's mocks cannot poison another.
+    const resolved = [...argv];
+    resolved.splice(separatorIndex < 0 ? resolved.length : separatorIndex, 0, "--isolate");
+    return resolved;
+  }
   const testTargets = argv
     .filter((arg) => !arg.startsWith("-") && arg.endsWith(".test.ts"))
     .map((arg) => toRepoRelativeArg(arg, cwd));
@@ -892,7 +925,7 @@ export function installVitestNoOutputWatchdog(params) {
 /**
  * Forwards child output while optionally suppressing complete stderr lines.
  */
-export function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
+function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
   if (!stream) {
     return;
   }

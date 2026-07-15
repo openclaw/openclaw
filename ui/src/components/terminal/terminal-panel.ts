@@ -5,47 +5,54 @@ import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 // tabs. Each tab hosts one libterminal Ghostty controller wired to a gateway PTY
 // session. The browser runtime is dynamically imported on first open so it
 // never weighs down the initial Control UI bundle.
-import { LitElement, css, html, nothing, svg } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
-import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
+import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
+import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import {
+  isTerminalPanelShortcut,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+  type TerminalPanelToggleDetail,
+} from "../panel-toggle-contract.ts";
+import {
+  TerminalConnection,
+  type TerminalGatewayClient,
+  type TerminalSessionInfo,
+} from "./terminal-connection.ts";
+import { terminalPanelStyles } from "./terminal-panel-styles.ts";
+import { renderTerminalPanelTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
+import { terminalPanelUploadStyles } from "./terminal-panel-upload-styles.ts";
+import {
+  renderTerminalPanelActions,
+  renderTerminalUploadLayer,
+  TerminalPanelUploadController,
+} from "./terminal-panel-upload.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
+import { renderTerminalSessionPicker } from "./terminal-session-picker.ts";
+import {
+  loadPersistedTerminalSessionIds,
+  persistTerminalSessionIds,
+} from "./terminal-session-storage.ts";
+import { createTerminalStartupInput, type StartupInputBuffer } from "./terminal-startup-input.ts";
+import { TerminalTaskQueue } from "./terminal-task-queue.ts";
 import { terminalTheme } from "./terminal-theme.ts";
 
-// Inline icon set (self-contained; the Control UI blocks external asset loads).
-const TERMINAL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3-3 3M8 11h5" /></svg>`;
-const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const PLUS_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>`;
-const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
-const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
-
-type TerminalDock = "bottom" | "right";
-
-type PanelLayout = {
-  open: boolean;
-  dock: TerminalDock;
-  height: number;
-  width: number;
+type TerminalDock = DockPanelSide;
+type TerminalTabState = TerminalPanelTab & {
+  gatewaySessionId: string;
+  pendingInput: StartupInputBuffer;
+  controller: GhosttyTerminalController;
+  shell: string;
+  host: HTMLDivElement;
+  /** Why an in-flight open/attach must not adopt this disposed terminal. */
+  cancelled?: "close" | "lifecycle";
 };
 
-type TerminalTabState = {
-  id: string;
-  gatewaySessionId: string;
-  /** Shell basename shown on the tab, e.g. "zsh". */
-  shellName: string;
-  /** Agent + cwd shown on hover. */
-  hint: string;
-  controller: GhosttyTerminalController;
-  host: HTMLDivElement;
-  status: "live" | "exited";
-  statusLabel?: string;
-  /**
-   * Set when the tab is closed while its terminal.open RPC is still in flight
-   * (gatewaySessionId is empty in that window, so closeTab cannot close the
-   * server session). The open continuation checks this and closes the freshly
-   * created session instead of wiring it to the disposed terminal.
-   */
-  cancelled?: boolean;
+type TerminalOperation = {
+  generation: number;
+  client: TerminalGatewayClient;
+  signal: AbortSignal;
 };
 
 /** Reduces a shell path to a tab label, e.g. "/bin/zsh" -> "zsh". */
@@ -54,74 +61,20 @@ function shellBasename(shell: string): string {
   return base && base.length > 0 ? base : "shell";
 }
 
-const LAYOUT_KEY = "openclaw.terminal.panel.v1";
-// Session ids for reattach after a reload/reconnect. Deliberately
-// sessionStorage, not localStorage: attach is take-over, and a shared
-// per-origin key would make multiple Control UI windows clobber each other's
-// ids and steal each other's live shells. Per-tab storage survives exactly the
-// cases reattach is for (reload, laptop sleep, transient disconnect).
-const SESSIONS_KEY = "openclaw.terminal.sessions.v1";
-const DEFAULT_LAYOUT: PanelLayout = { open: false, dock: "bottom", height: 320, width: 520 };
-const MIN_HEIGHT = 140;
-const MIN_WIDTH = 320;
-const TOGGLE_EVENT = "openclaw:terminal-toggle";
+const panelLayout = createDockPanelLayout({
+  storageKey: "openclaw.terminal.panel.v1",
+  minHeight: 140,
+  minWidth: 320,
+  defaultDock: "bottom",
+  defaultHeight: 320,
+  defaultWidth: 520,
+});
 const TERMINAL_FONT_FAMILY =
   'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
-const TERMINAL_INPUT_DECODER = new TextDecoder();
 const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
 
-function loadLayout(): PanelLayout {
-  try {
-    const raw = globalThis.localStorage?.getItem(LAYOUT_KEY);
-    if (!raw) {
-      return { ...DEFAULT_LAYOUT };
-    }
-    const parsed = JSON.parse(raw) as Partial<PanelLayout>;
-    return {
-      open: Boolean(parsed.open),
-      dock: parsed.dock === "right" ? "right" : "bottom",
-      height: clampSize(parsed.height, MIN_HEIGHT, maxPanelHeight(), DEFAULT_LAYOUT.height),
-      width: clampSize(parsed.width, MIN_WIDTH, maxPanelWidth(), DEFAULT_LAYOUT.width),
-    };
-  } catch {
-    return { ...DEFAULT_LAYOUT };
-  }
-}
-
-// A size persisted on a large desktop must not swallow a smaller window: cap
-// the dock at 80% of the viewport so the header/resizer stay reachable and the
-// shell content keeps a usable slice.
-function maxPanelHeight(): number {
-  return Math.max(MIN_HEIGHT, Math.floor((globalThis.innerHeight || 800) * 0.8));
-}
-
-function maxPanelWidth(): number {
-  return Math.max(MIN_WIDTH, Math.floor((globalThis.innerWidth || 1280) * 0.8));
-}
-
-function clampSize(value: unknown, min: number, max: number, fallback: number): number {
-  const size =
-    typeof value === "number" && Number.isFinite(value) && value >= min ? value : fallback;
-  return Math.min(size, max);
-}
-
-function loadPersistedSessionIds(): string[] {
-  try {
-    const raw = globalThis.sessionStorage?.getItem(SESSIONS_KEY);
-    if (!raw) {
-      return [];
-    }
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((id): id is string => typeof id === "string" && id.length > 0)
-      : [];
-  } catch {
-    return [];
-  }
-}
-
 /** `<openclaw-terminal-panel>` — the dockable Control UI shell surface. */
-export class OpenClawTerminalPanel extends LitElement {
+export class OpenClawTerminalPanel extends OpenClawLitElement {
   /** Gateway client used for terminal.* RPCs; null until connected. */
   @property({ attribute: false }) client: TerminalGatewayClient | null = null;
   /** Agent whose workspace and sandbox policy own newly opened sessions. */
@@ -138,22 +91,45 @@ export class OpenClawTerminalPanel extends LitElement {
 
   @state() private open = false;
   @state() private dock: TerminalDock = "bottom";
-  @state() private height = DEFAULT_LAYOUT.height;
-  @state() private width = DEFAULT_LAYOUT.width;
+  @state() private height = panelLayout.defaults.height;
+  @state() private width = panelLayout.defaults.width;
   @state() private tabs: TerminalTabState[] = [];
   @state() private activeId: string | null = null;
   @state() private booting = false;
   @state() private errorText: string | null = null;
+  @state() private sessionPickerOpen = false;
+  @state() private sessionPickerLoading = false;
+  @state() private pickerSessions: TerminalSessionInfo[] = [];
 
   private connection: TerminalConnection | null = null;
+  private activeClient: TerminalGatewayClient | null = null;
+  private activeAvailable = false;
+  private lifecycleGeneration = 0;
+  private sessionPickerRefreshGeneration = 0;
+  private lifecycleAbortController = new AbortController();
+  private lifecycleSyncToken = 0;
+  private resizeCleanup: (() => void) | null = null;
   private tabSeq = 0;
+  private readonly upload = new TerminalPanelUploadController({
+    activeTab: () =>
+      this.tabs.find(
+        (tab) => tab.id === this.activeId && tab.status === "live" && tab.gatewaySessionId,
+      ),
+    client: () => this.client,
+    isCurrent: (tab) => this.tabs.includes(tab as TerminalTabState) && tab.status === "live",
+    fileInput: () => this.renderRoot.querySelector<HTMLInputElement>(".tp-file-input"),
+    setError: (message) => (this.errorText = message),
+    requestUpdate: () => this.requestUpdate(),
+  });
+  private readonly bootQueue = new TerminalTaskQueue();
+  protected createTerminal = createIsolatedGhosttyTerminal;
   private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
-  private readonly onToggleRequest = () => this.toggle();
+  private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   // Re-clamp a dock sized on a larger window so the header/resizer never end
   // up off-screen after the viewport shrinks (e.g. rotate, window resize).
   private readonly onViewportResize = () => {
-    const height = Math.min(this.height, maxPanelHeight());
-    const width = Math.min(this.width, maxPanelWidth());
+    const height = Math.min(this.height, panelLayout.maxHeight());
+    const width = Math.min(this.width, panelLayout.maxWidth());
     if (height === this.height && width === this.width) {
       return;
     }
@@ -165,15 +141,17 @@ export class OpenClawTerminalPanel extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    this.activeClient = this.client;
+    this.activeAvailable = this.available;
     if (!this.fullscreen) {
-      const layout = loadLayout();
+      const layout = panelLayout.load();
       this.dock = layout.dock;
       this.height = layout.height;
       this.width = layout.width;
       // Only restore the open state when the surface is actually available.
       this.open = layout.open && this.available;
       window.addEventListener("keydown", this.onGlobalKeyDown);
-      window.addEventListener(TOGGLE_EVENT, this.onToggleRequest);
+      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
       window.addEventListener("resize", this.onViewportResize);
     } else {
       // Fullscreen documents have no toggle/dock chrome; the panel is simply
@@ -188,33 +166,19 @@ export class OpenClawTerminalPanel extends LitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener("keydown", this.onGlobalKeyDown);
-    window.removeEventListener(TOGGLE_EVENT, this.onToggleRequest);
+    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.removeEventListener("resize", this.onViewportResize);
     // Release the content-area reservation so the shell reflows to full size.
     document.documentElement.style.setProperty("--oc-terminal-reserve-bottom", "0px");
     document.documentElement.style.setProperty("--oc-terminal-reserve-right", "0px");
     this.disposeAllTabs();
+    this.activeClient = null;
+    this.activeAvailable = false;
   }
 
   override updated(changed: Map<string, unknown>): void {
-    if (changed.has("available")) {
-      if (!this.available) {
-        // The surface disappeared (gateway disconnect/disable). Tear down local
-        // tabs and the connection (disposeAllTabs drops the gateway
-        // subscription too). Server sessions survive a disconnect for the
-        // detach grace period, and their ids stay persisted, so the restore on
-        // reconnect reattaches them instead of opening fresh shells. Hide the
-        // panel WITHOUT persisting: a disconnect must not overwrite the user's
-        // open preference, or the reconnect path would never auto-reopen.
-        this.open = false;
-        this.disposeAllTabs();
-      } else if (!this.open && (this.fullscreen || loadLayout().open)) {
-        // Hello arrived after mount (or a reconnect); restore the persisted
-        // open state (fullscreen documents are always open while available)
-        // and reattach persisted sessions where possible.
-        this.open = true;
-        void this.restoreSessions();
-      }
+    if (changed.has("client") || changed.has("available")) {
+      this.scheduleLifecycleSync();
     }
     if (changed.has("themeMode")) {
       const theme = terminalTheme(this.themeMode);
@@ -247,6 +211,61 @@ export class OpenClawTerminalPanel extends LitElement {
     this.syncLayoutReservation();
   }
 
+  private scheduleLifecycleSync(): void {
+    const token = ++this.lifecycleSyncToken;
+    const generation = this.lifecycleGeneration;
+    // State teardown inside Lit's updated hook schedules a nested update.
+    // Defer it; token + generation reject superseded connection epochs.
+    queueMicrotask(() => {
+      if (
+        token !== this.lifecycleSyncToken ||
+        generation !== this.lifecycleGeneration ||
+        !this.isConnected
+      ) {
+        return;
+      }
+      this.synchronizeLifecycle();
+    });
+  }
+
+  private synchronizeLifecycle(): void {
+    const clientChanged = this.client !== this.activeClient;
+    const availabilityChanged = this.available !== this.activeAvailable;
+    if (!clientChanged && !availabilityChanged) {
+      return;
+    }
+    if (clientChanged) {
+      this.activeClient = this.client;
+    }
+    this.activeAvailable = this.available;
+    const becameUnavailable = availabilityChanged && !this.available;
+    if (clientChanged || becameUnavailable) {
+      this.disposeAllTabs();
+    }
+    let shouldRestore = clientChanged && this.available && this.open;
+    if (availabilityChanged) {
+      if (!this.available) {
+        // The surface disappeared (gateway disconnect/disable). Tear down local
+        // tabs and the connection (disposeAllTabs drops the gateway
+        // subscription too). Server sessions survive a disconnect for the
+        // detach grace period, and their ids stay persisted, so the restore on
+        // reconnect reattaches them instead of opening fresh shells. Hide the
+        // panel WITHOUT persisting: a disconnect must not overwrite the user's
+        // open preference, or the reconnect path would never auto-reopen.
+        this.open = false;
+      } else if (!this.open && (this.fullscreen || panelLayout.load().open)) {
+        // Hello arrived after mount (or a reconnect); restore the persisted
+        // open state (fullscreen documents are always open while available)
+        // and reattach persisted sessions where possible.
+        this.open = true;
+        shouldRestore = true;
+      }
+    }
+    if (shouldRestore) {
+      void this.restoreSessions();
+    }
+  }
+
   /**
    * Publishes the dock's footprint as CSS variables on the document root so the
    * Control UI shell reserves space for it (via `.content` margins) instead of
@@ -275,19 +294,43 @@ export class OpenClawTerminalPanel extends LitElement {
       this.closePanel();
     } else {
       this.open = true;
+      this.syncLayoutReservation();
       this.persistLayout();
       void this.restoreSessions();
     }
   }
 
+  handleToggleRequest(event: Event): void {
+    const detail =
+      event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
+        ? (event.detail as TerminalPanelToggleDetail)
+        : null;
+    const dock = detail?.dock === "right" || detail?.dock === "bottom" ? detail.dock : null;
+    if (dock) {
+      this.dock = dock;
+    }
+    if (detail?.catalog || detail?.open === true) {
+      if (!this.available) {
+        return;
+      }
+      this.open = true;
+      this.syncLayoutReservation();
+      this.persistLayout();
+      void (detail.catalog ? this.openCatalogSession(detail.catalog) : this.restoreSessions());
+      return;
+    }
+    this.toggle();
+  }
+
   private closePanel(): void {
     this.open = false;
+    this.syncLayoutReservation();
     this.persistLayout();
   }
 
   private handleGlobalKey(event: KeyboardEvent): void {
     // Ctrl+` toggles the terminal, matching common IDE shells.
-    if (event.ctrlKey && !event.metaKey && !event.altKey && event.code === "Backquote") {
+    if (isTerminalPanelShortcut(event)) {
       event.preventDefault();
       this.toggle();
     }
@@ -298,71 +341,156 @@ export class OpenClawTerminalPanel extends LitElement {
    * the gateway still has them, otherwise fall back to one fresh session.
    */
   private async restoreSessions(): Promise<void> {
-    if (!this.client || !this.available || this.booting || this.tabs.length > 0) {
-      await this.ensureInitialSession();
+    await this.bootQueue.enqueueSteps(
+      () => this.reattachPersistedSessions(),
+      () => this.ensureInitialSession(),
+    );
+  }
+
+  private async openCatalogSession(catalog: NonNullable<TerminalPanelToggleDetail["catalog"]>) {
+    await this.bootQueue.enqueueSteps(
+      () => this.reattachPersistedSessions(),
+      () => this.openSessionNow(catalog),
+    );
+  }
+
+  private async reattachPersistedSessions(): Promise<void> {
+    const operation = this.captureTerminalOperation();
+    if (!operation || this.tabs.length > 0) {
       return;
     }
-    const persisted = loadPersistedSessionIds();
+    const persisted = loadPersistedTerminalSessionIds();
     if (persisted.length > 0) {
       this.booting = true;
       try {
-        if (!this.connection) {
-          this.connection = new TerminalConnection(this.client);
+        const connection = this.connectionFor(operation);
+        const listed = await connection.list();
+        if (!this.isTerminalOperationCurrent(operation)) {
+          return;
         }
-        const listed = await this.connection.list();
         const known = new Set(listed.map((session) => session.sessionId));
         for (const sessionId of persisted.filter((id) => known.has(id))) {
-          await this.attachSession(sessionId);
+          await this.attachSession(sessionId, operation);
+          if (!this.isTerminalOperationCurrent(operation)) {
+            return;
+          }
         }
       } catch {
+        if (!this.isTerminalOperationCurrent(operation)) {
+          return;
+        }
         // terminal.list failed (older gateway, surface flapping): fall through
         // to a fresh session below.
       } finally {
-        this.booting = false;
+        if (this.isTerminalOperationCurrent(operation)) {
+          this.booting = false;
+        }
+      }
+      if (!this.isTerminalOperationCurrent(operation)) {
+        return;
       }
       // Prune ids the gateway no longer knows (reaped or externally closed).
       this.persistLiveSessions();
     }
-    await this.ensureInitialSession();
   }
 
   private async ensureInitialSession(): Promise<void> {
     if (this.tabs.length === 0 && !this.booting) {
-      await this.openSession();
+      await this.openSessionNow();
     }
   }
 
+  private toggleSessionPicker(): void {
+    this.sessionPickerOpen = !this.sessionPickerOpen;
+    if (this.sessionPickerOpen) {
+      void this.refreshSessionPicker();
+    }
+  }
+
+  private async refreshSessionPicker(): Promise<void> {
+    const operation = this.captureTerminalOperation();
+    if (!operation) {
+      return;
+    }
+    const refreshGeneration = ++this.sessionPickerRefreshGeneration;
+    const isCurrentRefresh = () =>
+      refreshGeneration === this.sessionPickerRefreshGeneration &&
+      this.isTerminalOperationCurrent(operation);
+    this.sessionPickerLoading = true;
+    try {
+      const sessions = await this.connectionFor(operation).list();
+      if (isCurrentRefresh()) {
+        this.pickerSessions = sessions;
+      }
+    } catch {
+      if (isCurrentRefresh()) {
+        this.pickerSessions = [];
+      }
+    } finally {
+      if (isCurrentRefresh()) {
+        this.sessionPickerLoading = false;
+      }
+    }
+  }
+
+  private async attachPickedSession(sessionId: string): Promise<void> {
+    this.sessionPickerOpen = false;
+    await this.bootQueue.enqueue(async () => {
+      const existing = this.tabs.find((tab) => tab.gatewaySessionId === sessionId);
+      if (existing) {
+        this.switchTo(existing.id);
+        return;
+      }
+      const operation = this.captureTerminalOperation();
+      if (!operation) {
+        return;
+      }
+      this.booting = true;
+      this.errorText = null;
+      try {
+        const attached = await this.attachSession(sessionId, operation);
+        if (!attached && this.isTerminalOperationCurrent(operation)) {
+          this.errorText = t("terminal.attachFailed");
+        }
+      } finally {
+        if (this.isTerminalOperationCurrent(operation)) {
+          this.booting = false;
+        }
+      }
+    });
+  }
+
   /** Boots a tab with a libterminal controller, ready for an open or attach RPC. */
-  private async bootTab(): Promise<{
+  private async bootTab(operation: TerminalOperation): Promise<{
     tab: TerminalTabState;
     connection: TerminalConnection;
     cols: number;
     rows: number;
   }> {
-    if (!this.client) {
-      throw new Error("terminal client unavailable");
-    }
-    if (!this.connection) {
-      this.connection = new TerminalConnection(this.client);
-    }
-    // Captured so the cancelled-open cleanup can close the session even if a
-    // teardown swaps this.connection while the open/attach RPC is in flight.
-    const connection = this.connection;
+    const connection = this.connectionFor(operation);
+    // Preserve the connection so cancelled-open cleanup still closes the in-flight session.
     const host = document.createElement("div");
     host.className = "tp-host";
     const id = `tab-${++this.tabSeq}`;
     // Wait for the panel (and its .tp-viewport) to render before attaching the
     // ghostty host, so the terminal opens into a laid-out, measurable node.
     await this.updateComplete;
+    if (!this.isTerminalOperationCurrent(operation)) {
+      throw new Error("terminal operation cancelled");
+    }
     const viewport = this.renderRoot.querySelector(".tp-viewport");
     if (!viewport) {
       throw new Error("terminal viewport unavailable");
     }
     viewport.append(host);
     const tabRef = { current: undefined as TerminalTabState | undefined };
+    const startupInput = createTerminalStartupInput(
+      connection,
+      () => tabRef.current?.gatewaySessionId,
+    );
     let controller: GhosttyTerminalController;
     try {
-      controller = await createIsolatedGhosttyTerminal({
+      controller = await this.createTerminal({
         parent: host,
         readOnly: false,
         terminalOptions: {
@@ -372,30 +500,32 @@ export class OpenClawTerminalPanel extends LitElement {
           theme: terminalTheme(this.themeMode),
           scrollback: 5000,
         },
+        signal: operation.signal,
         // The browser controller owns these subscriptions and their teardown.
-        // Ignore startup callbacks until the Gateway session is adopted.
-        onData: (bytes) => {
-          const sessionId = tabRef.current?.gatewaySessionId;
-          if (sessionId) {
-            void connection.input(sessionId, TERMINAL_INPUT_DECODER.decode(bytes));
-          }
-        },
-        onResize: ({ columns, rows }) => {
-          const sessionId = tabRef.current?.gatewaySessionId;
-          if (sessionId) {
-            void connection.resize(sessionId, columns, rows);
-          }
-        },
+        onData: startupInput.onData,
+        onResize: startupInput.onResize,
       });
     } catch (error) {
       host.remove();
       throw error;
     }
+    if (!this.isTerminalOperationCurrent(operation)) {
+      try {
+        controller.dispose();
+      } finally {
+        host.remove();
+      }
+      throw new Error("terminal operation cancelled");
+    }
     const tab: TerminalTabState = {
       id,
+      sequence: this.tabSeq,
       gatewaySessionId: "",
-      shellName: t("terminal.tabLabel", { n: String(this.tabSeq) }),
-      hint: "",
+      pendingInput: startupInput.buffer,
+      shellName: null,
+      shell: "",
+      agentId: null,
+      cwd: null,
       controller,
       host,
       status: "live",
@@ -417,6 +547,16 @@ export class OpenClawTerminalPanel extends LitElement {
           tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(data));
         }
       },
+      // A replay is authoritative. Reset parser, screen, and scrollback so a
+      // gap cannot leave stale cells or a partial escape sequence behind.
+      onReplay: (data: string) => {
+        if (!tab.cancelled) {
+          tab.controller.terminal.reset();
+          if (data) {
+            tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(data));
+          }
+        }
+      },
       onExit: (info: { reason?: string; exitCode: number | null }) => this.handleExit(tab.id, info),
     };
   }
@@ -424,15 +564,20 @@ export class OpenClawTerminalPanel extends LitElement {
   /** Binds a freshly opened or attached gateway session to its tab. */
   private adoptSession(
     tab: TerminalTabState,
-    result: { sessionId: string; shell: string; agentId: string; cwd: string },
+    result: { sessionId: string; shell: string; agentId: string; cwd: string; title?: string },
   ): void {
     tab.gatewaySessionId = result.sessionId;
-    tab.shellName = shellBasename(result.shell);
-    tab.hint = t("terminal.tabHint", { agent: result.agentId, cwd: result.cwd });
+    tab.shellName = result.title ?? shellBasename(result.shell);
+    tab.shell = result.shell;
+    tab.agentId = result.agentId;
+    tab.cwd = result.cwd;
     // Libterminal observes layout before the Gateway session exists. Resync the
     // current grid now so a resize during the open/attach RPC is not lost.
     const { cols, rows } = tab.controller.terminal;
     void this.connection?.resize(result.sessionId, cols || 80, rows || 24);
+    for (const data of tab.pendingInput.drain()) {
+      void this.connection?.input(result.sessionId, data);
+    }
 
     this.tabs = [...this.tabs];
     this.persistLiveSessions();
@@ -447,8 +592,13 @@ export class OpenClawTerminalPanel extends LitElement {
     }
   }
 
-  private async openSession(): Promise<void> {
-    if (!this.client || !this.available || this.booting) {
+  private async openSession(catalog?: TerminalPanelToggleDetail["catalog"]): Promise<void> {
+    await this.bootQueue.enqueue(() => this.openSessionNow(catalog));
+  }
+
+  private async openSessionNow(catalog?: TerminalPanelToggleDetail["catalog"]): Promise<void> {
+    const operation = this.captureTerminalOperation();
+    if (!operation) {
       return;
     }
     this.booting = true;
@@ -458,43 +608,60 @@ export class OpenClawTerminalPanel extends LitElement {
     // Tracked outside the try so the catch can dispose a tab whose open failed.
     let createdTab: TerminalTabState | undefined;
     try {
-      const boot = await this.bootTab();
+      const boot = await this.bootTab(operation);
       createdTab = boot.tab;
       const result = await boot.connection.open(
-        { agentId, cols: boot.cols, rows: boot.rows },
+        { agentId, cols: boot.cols, rows: boot.rows, ...(catalog ? { catalog } : {}) },
         this.tabSink(boot.tab),
       );
-      if (boot.tab.cancelled) {
+      if (!this.isTerminalOperationCurrent(operation) || boot.tab.cancelled) {
         // The tab's close button was clicked while the open RPC was in flight.
         // The server session is live and its sink registered; close it now or
         // it survives invisibly (eating the session cap) until disconnect.
         void boot.connection.close(result.sessionId);
+        if (this.tabs.includes(boot.tab)) {
+          boot.tab.cancelled = "lifecycle";
+          this.dropFailedTab(boot.tab);
+        }
         return;
       }
       this.adoptSession(boot.tab, result);
       boot.tab.controller.terminal.focus();
     } catch (err) {
-      this.errorText = err instanceof Error ? err.message : String(err);
       // A failed open (e.g. terminal disabled or a sandboxed agent is refused)
       // must not leave a phantom "live" tab with no server session. Drop it but
       // keep the panel open so the error stays visible.
-      if (createdTab && !createdTab.gatewaySessionId) {
+      if (createdTab && !createdTab.gatewaySessionId && this.tabs.includes(createdTab)) {
         this.dropFailedTab(createdTab);
       }
+      if (!this.isTerminalOperationCurrent(operation)) {
+        return;
+      }
+      this.errorText = err instanceof Error ? err.message : String(err);
     } finally {
-      this.booting = false;
+      if (this.isTerminalOperationCurrent(operation)) {
+        this.booting = false;
+      }
     }
   }
 
   /** Reattaches one persisted session; returns false when it is gone. */
-  private async attachSession(sessionId: string): Promise<boolean> {
+  private async attachSession(sessionId: string, operation: TerminalOperation): Promise<boolean> {
     let createdTab: TerminalTabState | undefined;
     try {
-      const boot = await this.bootTab();
+      const boot = await this.bootTab(operation);
       createdTab = boot.tab;
       const result = await boot.connection.attach(sessionId, this.tabSink(boot.tab));
-      if (boot.tab.cancelled) {
-        void boot.connection.close(result.sessionId);
+      if (!this.isTerminalOperationCurrent(operation) || boot.tab.cancelled) {
+        // A user close is deliberate; lifecycle cancellation leaves the existing
+        // server session available for the next reconnect to reattach.
+        if (boot.tab.cancelled === "close") {
+          void boot.connection.close(result.sessionId);
+        }
+        if (this.tabs.includes(boot.tab)) {
+          boot.tab.cancelled = "lifecycle";
+          this.dropFailedTab(boot.tab);
+        }
         return false;
       }
       this.adoptSession(boot.tab, result);
@@ -503,7 +670,7 @@ export class OpenClawTerminalPanel extends LitElement {
       // Session expired between list and attach (reaper race) or an older
       // gateway: quietly drop the placeholder tab; restore falls back to a
       // fresh session when nothing could be reattached.
-      if (createdTab && !createdTab.gatewaySessionId) {
+      if (createdTab && !createdTab.gatewaySessionId && this.tabs.includes(createdTab)) {
         this.dropFailedTab(createdTab);
       }
       return false;
@@ -516,15 +683,8 @@ export class OpenClawTerminalPanel extends LitElement {
       return;
     }
     tab.status = "exited";
-    if (info.reason === "detached") {
-      // Another connection attached this session away; it is alive elsewhere.
-      tab.statusLabel = t("terminal.detached");
-    } else {
-      tab.statusLabel =
-        info.reason === "process_exit" && info.exitCode !== null
-          ? t("terminal.exitedCode", { code: String(info.exitCode) })
-          : t("terminal.exited");
-    }
+    tab.exitReason = info.reason;
+    tab.exitCode = info.exitCode;
     // The connection drops its own sink on exit delivery, so no release() here —
     // the session id may not be recorded yet when an early exit is replayed.
     this.tabs = [...this.tabs];
@@ -536,12 +696,13 @@ export class OpenClawTerminalPanel extends LitElement {
     if (!tab) {
       return;
     }
+    this.upload.cancelForTab(tab);
     if (tab.gatewaySessionId && tab.status === "live") {
       void this.connection?.close(tab.gatewaySessionId);
     } else if (!tab.gatewaySessionId && tab.status === "live") {
       // Open still in flight: no session id to close yet. Flag it so the open
       // continuation closes the server session as soon as the RPC resolves.
-      tab.cancelled = true;
+      tab.cancelled = "close";
     }
     this.disposeTab(tab);
     this.tabs = this.tabs.filter((entry) => entry.id !== tabId);
@@ -567,16 +728,57 @@ export class OpenClawTerminalPanel extends LitElement {
     });
   }
 
+  private captureTerminalOperation(): TerminalOperation | null {
+    const client = this.client;
+    if (!client || client !== this.activeClient || !this.available || !this.isConnected) {
+      return null;
+    }
+    return {
+      generation: this.lifecycleGeneration,
+      client,
+      signal: this.lifecycleAbortController.signal,
+    };
+  }
+
+  private isTerminalOperationCurrent(operation: TerminalOperation): boolean {
+    return (
+      this.isConnected &&
+      this.available &&
+      this.client === operation.client &&
+      this.activeClient === operation.client &&
+      this.lifecycleGeneration === operation.generation &&
+      !operation.signal.aborted
+    );
+  }
+
+  private connectionFor(operation: TerminalOperation): TerminalConnection {
+    if (!this.isTerminalOperationCurrent(operation)) {
+      throw new Error("terminal operation cancelled");
+    }
+    this.connection ??= new TerminalConnection(operation.client);
+    return this.connection;
+  }
+
   private disposeTab(tab: TerminalTabState): void {
     try {
       tab.controller.dispose();
-      tab.host.remove();
     } catch {
       // Best-effort teardown; a partially-initialized tab may throw.
+    } finally {
+      // DOM ownership is independent of controller cleanup; never strand a
+      // Ghostty canvas when dependency disposal fails partway through.
+      tab.host.remove();
     }
   }
 
   private disposeAllTabs(): void {
+    this.lifecycleGeneration += 1;
+    this.lifecycleAbortController.abort();
+    this.lifecycleAbortController = new AbortController();
+    this.bootQueue.reset();
+    this.booting = false;
+    this.upload.dispose();
+    this.clearResizeListeners();
     for (const tab of this.tabs) {
       // No terminal.close here: this teardown runs for disconnects,
       // availability loss, and element removal — exactly the sessions the
@@ -586,11 +788,15 @@ export class OpenClawTerminalPanel extends LitElement {
       // The cancelled flag covers a tab whose open RPC is still in flight; its
       // continuation closes the fresh session instead of adopting the
       // disposed terminal.
-      tab.cancelled = true;
+      tab.cancelled = "lifecycle";
       this.disposeTab(tab);
     }
     this.tabs = [];
     this.activeId = null;
+    this.sessionPickerOpen = false;
+    this.sessionPickerLoading = false;
+    this.sessionPickerRefreshGeneration += 1;
+    this.pickerSessions = [];
     // Drop the gateway subscription with the tabs so the listener never outlives
     // the connection (disconnect/disable/element-removal all route through here).
     this.connection?.dispose();
@@ -599,6 +805,7 @@ export class OpenClawTerminalPanel extends LitElement {
 
   private setDock(dock: TerminalDock): void {
     this.dock = dock;
+    this.syncLayoutReservation();
     this.persistLayout();
     void this.updateComplete.then(() => {
       for (const tab of this.tabs) {
@@ -616,53 +823,64 @@ export class OpenClawTerminalPanel extends LitElement {
     const ids = this.tabs
       .filter((tab) => tab.status === "live" && tab.gatewaySessionId)
       .map((tab) => tab.gatewaySessionId);
-    try {
-      globalThis.sessionStorage?.setItem(SESSIONS_KEY, JSON.stringify(ids));
-    } catch {
-      // Storage may be unavailable (private mode); reattach just won't work.
-    }
+    persistTerminalSessionIds(ids);
   }
 
   private persistLayout(): void {
-    try {
-      const layout: PanelLayout = {
-        open: this.open,
-        dock: this.dock,
-        height: this.height,
-        width: this.width,
-      };
-      globalThis.localStorage?.setItem(LAYOUT_KEY, JSON.stringify(layout));
-    } catch {
-      // Storage may be unavailable (private mode); layout just won't persist.
-    }
+    panelLayout.save({
+      open: this.open,
+      dock: this.dock,
+      height: this.height,
+      width: this.width,
+    });
   }
 
   private startResize(event: PointerEvent): void {
     event.preventDefault();
+    this.clearResizeListeners();
     const startX = event.clientX;
     const startY = event.clientY;
     const startHeight = this.height;
     const startWidth = this.width;
     const onMove = (move: PointerEvent) => {
       if (this.dock === "bottom") {
-        const next = Math.max(MIN_HEIGHT, startHeight + (startY - move.clientY));
-        this.height = Math.min(next, maxPanelHeight());
+        const next = Math.max(panelLayout.minHeight, startHeight + (startY - move.clientY));
+        this.height = Math.min(next, panelLayout.maxHeight());
       } else {
-        const next = Math.max(MIN_WIDTH, startWidth + (startX - move.clientX));
-        this.width = Math.min(next, maxPanelWidth());
+        const next = Math.max(panelLayout.minWidth, startWidth + (startX - move.clientX));
+        this.width = Math.min(next, panelLayout.maxWidth());
       }
       // Reflow the content reservation live so the shell tracks the drag.
       this.syncLayoutReservation();
       const active = this.tabs.find((tab) => tab.id === this.activeId);
       active?.controller.fit();
     };
-    const onUp = () => {
+    const cleanup = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("blur", onUp);
+      if (this.resizeCleanup === cleanup) {
+        this.resizeCleanup = null;
+      }
+    };
+    const onUp = () => {
+      cleanup();
+      if (!this.isConnected) {
+        return;
+      }
       this.persistLayout();
     };
+    this.resizeCleanup = cleanup;
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    window.addEventListener("blur", onUp);
+  }
+
+  private clearResizeListeners(): void {
+    this.resizeCleanup?.();
+    this.resizeCleanup = null;
   }
 
   override render() {
@@ -673,7 +891,7 @@ export class OpenClawTerminalPanel extends LitElement {
     const style = this.fullscreen
       ? nothing
       : this.dock === "bottom"
-        ? `height:${this.height}px`
+        ? `height:${this.height}px;--tp-panel-height:${this.height}px`
         : `width:${this.width}px`;
     return html`
       <section class="tp tp--${mode}" style=${style} aria-label=${t("terminal.title")}>
@@ -686,90 +904,57 @@ export class OpenClawTerminalPanel extends LitElement {
               aria-label=${t("terminal.resize")}
             ></div>`}
         <header class="tp-header">
-          <div class="tp-tabs" role="tablist">
-            ${this.tabs.map(
-              (tab) => html`
-                <div
-                  class="tp-tab ${tab.id === this.activeId ? "is-active" : ""} ${tab.status ===
-                  "exited"
-                    ? "is-exited"
-                    : ""}"
-                  role="tab"
-                  title=${tab.hint || nothing}
-                  aria-selected=${tab.id === this.activeId ? "true" : "false"}
-                  @click=${() => this.switchTo(tab.id)}
-                >
-                  <span class="tp-tab__icon" aria-hidden="true">${TERMINAL_GLYPH}</span>
-                  <span class="tp-tab__label">${tab.shellName}</span>
-                  ${tab.statusLabel
-                    ? html`<span class="tp-tab__status">${tab.statusLabel}</span>`
-                    : nothing}
-                  <button
-                    class="tp-tab__close"
-                    type="button"
-                    title=${t("terminal.closeSession")}
-                    aria-label=${t("terminal.closeSession")}
-                    @click=${(e: Event) => {
-                      e.stopPropagation();
-                      this.closeTab(tab.id);
-                    }}
-                  >
-                    ${CLOSE_GLYPH}
-                  </button>
-                </div>
-              `,
-            )}
-            <button
-              class="tp-new"
-              type="button"
-              ?disabled=${this.booting}
-              title=${t("terminal.newSession")}
-              aria-label=${t("terminal.newSession")}
-              @click=${() => void this.openSession()}
-            >
-              ${PLUS_GLYPH}
-            </button>
-          </div>
-          ${this.fullscreen
-            ? nothing
-            : html`<div class="tp-actions">
-                <button
-                  class="tp-icon ${this.dock === "bottom" ? "is-active" : ""}"
-                  type="button"
-                  title=${t("terminal.dockBottom")}
-                  aria-label=${t("terminal.dockBottom")}
-                  @click=${() => this.setDock("bottom")}
-                >
-                  ${DOCK_BOTTOM_GLYPH}
-                </button>
-                <button
-                  class="tp-icon ${this.dock === "right" ? "is-active" : ""}"
-                  type="button"
-                  title=${t("terminal.dockRight")}
-                  aria-label=${t("terminal.dockRight")}
-                  @click=${() => this.setDock("right")}
-                >
-                  ${DOCK_RIGHT_GLYPH}
-                </button>
-                <button
-                  class="tp-icon"
-                  type="button"
-                  title=${t("terminal.hide")}
-                  aria-label=${t("terminal.hide")}
-                  @click=${() => this.closePanel()}
-                >
-                  ${CLOSE_GLYPH}
-                </button>
-              </div>`}
+          ${renderTerminalPanelTabs({
+            tabs: this.tabs,
+            activeId: this.activeId,
+            booting: this.booting,
+            onSelect: (id) => this.switchTo(id),
+            onClose: (id) => this.closeTab(id),
+            onNew: () => void this.openSession(),
+          })}
+          ${renderTerminalPanelActions({
+            fullscreen: this.fullscreen,
+            dock: this.dock,
+            upload: this.upload,
+            sessionPicker: renderTerminalSessionPicker({
+              open: this.sessionPickerOpen,
+              loading: this.sessionPickerLoading,
+              sessions: this.pickerSessions,
+              currentSessionIds: new Set(
+                this.tabs
+                  .map((tab) => tab.gatewaySessionId)
+                  .filter(
+                    (sessionId): sessionId is string =>
+                      typeof sessionId === "string" && sessionId.length > 0,
+                  ),
+              ),
+              onToggle: () => this.toggleSessionPicker(),
+              onRefresh: () => void this.refreshSessionPicker(),
+              onAttach: (sessionId) => void this.attachPickedSession(sessionId),
+            }),
+            onDock: (dock) => this.setDock(dock),
+            onHide: () => this.closePanel(),
+          })}
         </header>
         ${this.errorText
           ? html`<div class="tp-error" role="alert">${this.errorText}</div>`
           : nothing}
-        <div class="tp-viewport">
+        <wa-tab-panel
+          id="terminal-tab-panel"
+          class="tp-viewport"
+          name=${this.activeId ?? "terminal"}
+          active
+          aria-labelledby=${this.activeId ? `terminal-tab-${this.activeId}` : nothing}
+          @dragenter=${this.upload.handleDragEnter}
+          @dragover=${this.upload.handleDragOver}
+          @dragleave=${this.upload.handleDragLeave}
+          @drop=${this.upload.handleDrop}
+        >
           ${this.booting && this.tabs.length === 0
             ? html`<div class="tp-empty">${t("terminal.starting")}</div>`
             : nothing}
-        </div>
+          ${renderTerminalUploadLayer(this.upload)}
+        </wa-tab-panel>
       </section>
     `;
   }
@@ -782,203 +967,7 @@ export class OpenClawTerminalPanel extends LitElement {
     }
   }
 
-  static override styles = css`
-    :host {
-      position: fixed;
-      z-index: 60;
-      color: var(--text, #d7dae0);
-      font-family: var(--font-sans, system-ui, sans-serif);
-    }
-    .tp {
-      position: fixed;
-      display: flex;
-      flex-direction: column;
-      background: var(--bg, #0e1015);
-      overflow: hidden;
-    }
-    /* A docked panel needs only a single hairline separator on its inner edge —
-       no shadow, so it reads as part of the layout rather than a floating card. */
-    .tp--bottom {
-      left: var(--shell-nav-width, 0);
-      right: 0;
-      bottom: 0;
-      border-top: 1px solid var(--border, #262b34);
-    }
-    .tp--right {
-      top: var(--shell-topbar-height, 0);
-      right: 0;
-      bottom: 0;
-      border-left: 1px solid var(--border, #262b34);
-    }
-    /* Terminal-only document (mobile WebViews): fill the viewport, no seams. */
-    .tp--fullscreen {
-      inset: 0;
-    }
-    .tp-resizer {
-      position: absolute;
-      z-index: 2;
-      background: transparent;
-    }
-    .tp-resizer:hover {
-      background: var(--accent, #ff5c5c);
-      opacity: 0.5;
-    }
-    .tp-resizer--bottom {
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 5px;
-      cursor: ns-resize;
-    }
-    .tp-resizer--right {
-      top: 0;
-      bottom: 0;
-      left: 0;
-      width: 5px;
-      cursor: ew-resize;
-    }
-    .tp-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 0 6px 0 4px;
-      border-bottom: 1px solid var(--border, #262b34);
-      background: var(--bg, #0e1015);
-      min-height: 36px;
-    }
-    .tp-tabs {
-      display: flex;
-      align-items: stretch;
-      gap: 1px;
-      overflow-x: auto;
-      scrollbar-width: none;
-    }
-    .tp-tabs::-webkit-scrollbar {
-      display: none;
-    }
-    .tp-tab {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      padding: 0 10px;
-      height: 36px;
-      cursor: pointer;
-      color: var(--muted, #8a919e);
-      white-space: nowrap;
-      font-size: 12.5px;
-      /* Reserve the active underline height so tabs don't shift on selection. */
-      border-bottom: 2px solid transparent;
-      transition:
-        color 0.12s ease,
-        background 0.12s ease;
-    }
-    .tp-tab:hover {
-      color: var(--text, #d7dae0);
-      background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
-    }
-    .tp-tab.is-active {
-      color: var(--text, #d7dae0);
-      border-bottom-color: var(--accent, #ff5c5c);
-    }
-    .tp-tab.is-exited {
-      opacity: 0.55;
-    }
-    .tp-tab__icon {
-      display: inline-flex;
-      color: var(--accent, #4ec9a8);
-    }
-    .tp-tab.is-exited .tp-tab__icon {
-      color: var(--muted, #8a919e);
-    }
-    .tp-tab__label {
-      font-variant-numeric: tabular-nums;
-    }
-    .tp-tab__status {
-      font-size: 11px;
-      color: var(--muted, #8a919e);
-    }
-    .tp-tab__close {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 16px;
-      height: 16px;
-      opacity: 0;
-      border: none;
-      background: transparent;
-      color: inherit;
-      cursor: pointer;
-      border-radius: 4px;
-      padding: 0;
-    }
-    .tp-tab:hover .tp-tab__close,
-    .tp-tab.is-active .tp-tab__close {
-      opacity: 0.7;
-    }
-    .tp-new,
-    .tp-icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 26px;
-      height: 26px;
-      border: none;
-      background: transparent;
-      color: var(--muted, #8a919e);
-      cursor: pointer;
-      border-radius: 6px;
-      padding: 0;
-    }
-    .tp-new {
-      align-self: center;
-    }
-    .tp-tab__close:hover,
-    .tp-new:hover,
-    .tp-icon:hover {
-      background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);
-      color: var(--text, #d7dae0);
-    }
-    .tp-icon.is-active {
-      color: var(--text, #d7dae0);
-      background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
-    }
-    .tp-actions {
-      display: flex;
-      align-items: center;
-      gap: 2px;
-      padding-left: 6px;
-    }
-    .tp-viewport {
-      position: relative;
-      flex: 1;
-      min-height: 0;
-      background: var(--bg, #0e1015);
-    }
-    .tp-host {
-      position: absolute;
-      inset: 0;
-      padding: 6px 8px;
-      /* ghostty-web focuses this contenteditable host while drawing its own
-         cursor on canvas; hide the otherwise duplicated browser caret. */
-      caret-color: transparent;
-    }
-    .tp-empty,
-    .tp-error {
-      padding: 10px 12px;
-      font-size: 12px;
-      color: var(--muted, #8a919e);
-    }
-    .tp-error {
-      color: var(--danger, #ff6b6b);
-    }
-  `;
-}
-
-// Guarded define (not @customElement) so re-imports under a shared registry —
-// e.g. vitest with isolate=false — don't throw "already registered".
-if (!customElements.get("openclaw-terminal-panel")) {
-  customElements.define("openclaw-terminal-panel", OpenClawTerminalPanel);
+  static override styles = [terminalPanelStyles, terminalPanelUploadStyles];
 }
 
 declare global {
@@ -986,3 +975,4 @@ declare global {
     "openclaw-terminal-panel": OpenClawTerminalPanel;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

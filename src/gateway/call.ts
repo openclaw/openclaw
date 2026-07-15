@@ -105,6 +105,8 @@ type CallGatewayBaseOptions = {
    * Bypasses OPENCLAW_GATEWAY_URL and OPENCLAW_GATEWAY_PORT for this call only.
    */
   localPortOverride?: number;
+  /** Keep a caller-supplied config target authoritative over OPENCLAW_GATEWAY_URL. */
+  ignoreEnvUrlOverride?: boolean;
 };
 
 export type CallGatewayCliOptions = CallGatewayBaseOptions & {
@@ -695,7 +697,7 @@ async function resolveGatewayCallContext(
   const cliUrlOverride = trimToUndefined(opts.url);
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
   const envUrlOverride =
-    cliUrlOverride || opts.localPortOverride !== undefined
+    cliUrlOverride || opts.localPortOverride !== undefined || opts.ignoreEnvUrlOverride === true
       ? undefined
       : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
@@ -819,9 +821,10 @@ function formatGatewayCloseError(
   if (code === 1006) {
     message +=
       "\n\nPossible causes:" +
+      "\n- Connection dropped without a close frame (retry; check network and gateway load)" +
       "\n- Gateway not yet ready to accept connections (retry after a moment)" +
       "\n- TLS mismatch (connecting with ws:// to a wss:// gateway, or vice versa)" +
-      "\n- Gateway crashed or was terminated unexpectedly" +
+      "\n- Gateway process stopped or became unreachable (confirm it is still running)" +
       "\nRun `openclaw doctor` for diagnostics.";
   }
   return message;
@@ -1164,7 +1167,8 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     config: context.config,
     url: context.urlOverride,
     urlSource: context.urlOverrideSource,
-    ignoreEnvUrlOverride: opts.localPortOverride !== undefined,
+    ignoreEnvUrlOverride:
+      opts.localPortOverride !== undefined || opts.ignoreEnvUrlOverride === true,
     localPortOverride: opts.localPortOverride,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
@@ -1244,7 +1248,14 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
 export async function buildGatewayProbeConnectionDetails(
   opts: Pick<
     CallGatewayBaseOptions,
-    "config" | "configPath" | "localPortOverride" | "password" | "tlsFingerprint" | "token" | "url"
+    | "config"
+    | "configPath"
+    | "ignoreEnvUrlOverride"
+    | "localPortOverride"
+    | "password"
+    | "tlsFingerprint"
+    | "token"
+    | "url"
   > = {},
 ): Promise<GatewayProbeConnectionDetails> {
   const callOpts = {
@@ -1257,7 +1268,8 @@ export async function buildGatewayProbeConnectionDetails(
     config: context.config,
     url: context.urlOverride,
     urlSource: context.urlOverrideSource,
-    ignoreEnvUrlOverride: opts.localPortOverride !== undefined,
+    ignoreEnvUrlOverride:
+      opts.localPortOverride !== undefined || opts.ignoreEnvUrlOverride === true,
     localPortOverride: opts.localPortOverride,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
@@ -1322,3 +1334,4 @@ export function randomIdempotencyKey() {
   return randomUUID();
 }
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

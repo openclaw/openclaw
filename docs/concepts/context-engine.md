@@ -122,6 +122,7 @@ A plugin can register a context engine using the plugin API:
 
 ```ts
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 
 export default function register(api) {
   api.registerContextEngine("my-engine", (ctx) => ({
@@ -136,7 +137,14 @@ export default function register(api) {
       return { ingested: true };
     },
 
-    async assemble({ sessionId, messages, tokenBudget, availableTools, citationsMode }) {
+    async assemble({
+      sessionId,
+      sessionKey,
+      messages,
+      tokenBudget,
+      availableTools,
+      citationsMode,
+    }) {
       // Return messages that fit the budget
       return {
         messages: buildContext(messages, tokenBudget),
@@ -144,6 +152,8 @@ export default function register(api) {
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
+          agentId: resolveSessionAgentId({ config: ctx.config, sessionKey }),
+          agentSessionKey: sessionKey,
         }),
       };
     },
@@ -216,9 +226,10 @@ Required members:
   Optional projection lifecycle for hosts with persistent backend threads (for example Codex app-server). `mode: "thread_bootstrap"` with a stable `epoch` asks the host to inject the assembled context once per epoch and reuse the backend thread until the epoch changes, instead of re-projecting every turn. Omit this field for normal per-turn projection.
 </ParamField>
 
-`compact` returns a `CompactResult`. When compaction rotates the active
-transcript, `result.sessionId` and `result.sessionFile` identify the successor
-session that the next retry or turn must use.
+`compact` returns a `CompactResult`. When compaction changes the active session
+identity, `result.sessionTarget` (a typed `ContextEngineSessionTarget` carrying
+the session identity and store scope) identifies the successor session that the
+next retry or turn must use; `result.sessionId` mirrors the successor id.
 
 Optional members:
 

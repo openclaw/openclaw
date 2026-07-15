@@ -65,7 +65,7 @@ const defaultDiagnosticsCommandDeps: DiagnosticsCommandDeps = {
 };
 
 /** Creates a diagnostics command handler with injectable private-route dependencies. */
-export function createDiagnosticsCommandHandler(
+function createDiagnosticsCommandHandler(
   deps: Partial<DiagnosticsCommandDeps> = {},
 ): CommandHandler {
   const resolvedDeps: DiagnosticsCommandDeps = {
@@ -116,14 +116,7 @@ async function handleDiagnosticsCommandWithDeps(
   }
 
   if (params.isGroup) {
-    const targets = await deps.resolvePrivateDiagnosticsTargets(params);
-    if (targets.length === 0) {
-      return {
-        shouldContinue: false,
-        reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
-      };
-    }
-    const privateTarget = targets[0];
+    const privateTarget = (await deps.resolvePrivateDiagnosticsTargets(params))[0];
     if (!privateTarget) {
       return {
         shouldContinue: false,
@@ -140,17 +133,7 @@ async function handleDiagnosticsCommandWithDeps(
         reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_ACK },
       };
     }
-    const delivered = await deps.deliverPrivateDiagnosticsReply({
-      commandParams: params,
-      targets: [privateTarget],
-      reply: privateReply,
-    });
-    return {
-      shouldContinue: false,
-      reply: {
-        text: delivered ? DIAGNOSTICS_PRIVATE_ROUTE_ACK : DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE,
-      },
-    };
+    return await deliverGroupDiagnosticsReplyPrivately(deps, params, privateReply, privateTarget);
   }
 
   const reply = await buildDiagnosticsReply(deps, params, args);
@@ -183,16 +166,10 @@ async function deliverGroupDiagnosticsReplyPrivately(
   deps: DiagnosticsCommandDeps,
   params: HandleCommandsParams,
   reply: ReplyPayload,
+  privateTarget?: PrivateCommandRouteTarget,
 ) {
-  const targets = await deps.resolvePrivateDiagnosticsTargets(params);
-  if (targets.length === 0) {
-    return {
-      shouldContinue: false,
-      reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
-    };
-  }
-  const privateTarget = targets[0];
-  if (!privateTarget) {
+  const target = privateTarget ?? (await deps.resolvePrivateDiagnosticsTargets(params))[0];
+  if (!target) {
     return {
       shouldContinue: false,
       reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
@@ -200,7 +177,7 @@ async function deliverGroupDiagnosticsReplyPrivately(
   }
   const delivered = await deps.deliverPrivateDiagnosticsReply({
     commandParams: params,
-    targets: [privateTarget],
+    targets: [target],
     reply,
   });
   return {
@@ -620,7 +597,7 @@ function rewriteInteractive(interactive: InteractiveReply): InteractiveReply {
           ...block,
           options: block.options.map((option) => ({
             ...option,
-            ...(option.action ? { action: rewritePresentationAction(option.action) } : {}),
+            ...(option.action ? { action: rewriteSelectPresentationAction(option.action) } : {}),
             ...(option.value ? { value: rewriteCodexDiagnosticsCommandPrefix(option.value) } : {}),
           })),
         };
@@ -637,10 +614,27 @@ function rewritePresentationAction(action: MessagePresentationAction): MessagePr
       command: rewriteCodexDiagnosticsCommandPrefix(action.command),
     };
   }
-  return {
-    type: "callback",
-    value: rewriteCodexDiagnosticsCommandPrefix(action.value),
-  };
+  if (action.type === "callback") {
+    return {
+      type: "callback",
+      value: rewriteCodexDiagnosticsCommandPrefix(action.value),
+    };
+  }
+  return action;
+}
+
+function rewriteSelectPresentationAction(
+  action: Extract<MessagePresentationAction, { type: "command" | "callback" }>,
+): Extract<MessagePresentationAction, { type: "command" | "callback" }> {
+  return action.type === "command"
+    ? {
+        type: "command",
+        command: rewriteCodexDiagnosticsCommandPrefix(action.command),
+      }
+    : {
+        type: "callback",
+        value: rewriteCodexDiagnosticsCommandPrefix(action.value),
+      };
 }
 
 function rewriteCodexDiagnosticsCommandPrefix(value: string): string {

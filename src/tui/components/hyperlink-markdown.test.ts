@@ -34,4 +34,13 @@ describe("HyperlinkMarkdown", () => {
     expect(normalized.some((line) => line.includes("is_palindrome"))).toBe(true);
     expect(normalized.some((line) => line.includes("__init__"))).toBe(true);
   });
+
+  it("links the complete parenthetical URL rendered by pi-tui", () => {
+    const url = "https://en.wikipedia.org/wiki/URL_(disambiguation)";
+    const markdown = new HyperlinkMarkdown(`[Wikipedia](${url})`, 0, 0, markdownTheme);
+
+    const rendered = markdown.render(120).join("\n");
+
+    expect(rendered).toContain(`\x1b]8;;${url}\x07${url}\x1b]8;;\x07`);
+  });
 });

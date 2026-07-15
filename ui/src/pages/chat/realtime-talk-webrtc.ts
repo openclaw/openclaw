@@ -1,4 +1,6 @@
 // Control UI chat module implements realtime talk webrtc behavior.
+import { RealtimeTalkMediaStreamMeter } from "./realtime-talk-audio.ts";
+import { openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -35,17 +37,25 @@ type ToolBuffer = {
 };
 
 const cancelledSetup = Symbol("cancelledSetup");
+const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
+
+type PendingOfferRequest = {
+  controller: AbortController;
+  timeout: ReturnType<typeof globalThis.setTimeout>;
+};
 
 export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
   private media: MediaStream | null = null;
   private audio: HTMLAudioElement | null = null;
+  private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private closed = false;
   private responseActive = false;
   private responseCreateInFlight = false;
   private responseCreatePending = false;
   private toolBuffers = new Map<string, ToolBuffer>();
+  private pendingOfferRequest: PendingOfferRequest | null = null;
   private readonly consultAbortControllers = new Set<AbortController>();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
 
@@ -68,14 +78,12 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.audio.style.display = "none";
     document.body.append(this.audio);
     peer.addEventListener("track", (event) => {
-      if (this.audio) {
-        this.audio.srcObject = event.streams[0];
+      const stream = event.streams[0];
+      if (this.audio && stream) {
+        this.audio.srcObject = stream;
       }
     });
-    const media = await this.awaitSetupStep(
-      peer,
-      navigator.mediaDevices.getUserMedia({ audio: true }),
-    );
+    const media = await this.awaitSetupStep(peer, openRealtimeTalkInput(this.ctx.inputDeviceId));
     if (media === cancelledSetup) {
       return;
     }
@@ -84,6 +92,10 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       return;
     }
     this.media = media;
+    if (this.ctx.callbacks.onInputLevel) {
+      this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
+      this.inputMeter.start(media);
+    }
     for (const track of media.getAudioTracks()) {
       peer.addTrack(track, media);
     }
@@ -121,28 +133,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     if (!this.isCurrentPeer(peer)) {
       return;
     }
-    const sdp = await this.awaitSetupStep(
-      peer,
-      fetch(this.session.offerUrl ?? "https://api.openai.com/v1/realtime/calls", {
-        method: "POST",
-        body: offer.sdp,
-        headers: {
-          ...this.session.offerHeaders,
-          Authorization: `Bearer ${this.session.clientSecret}`,
-          "Content-Type": "application/sdp",
-        },
-      }),
-    );
-    if (sdp === cancelledSetup) {
-      return;
-    }
-    if (!this.isCurrentPeer(peer)) {
-      return;
-    }
-    if (!sdp.ok) {
-      throw new Error(`Realtime WebRTC setup failed (${sdp.status})`);
-    }
-    const answerSdp = await this.awaitSetupStep(peer, sdp.text());
+    const answerSdp = await this.readOfferAnswer(peer, offer);
     if (answerSdp === cancelledSetup) {
       return;
     }
@@ -156,6 +147,83 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         sdp: answerSdp,
       }),
     );
+  }
+
+  private async readOfferAnswer(
+    peer: RTCPeerConnection,
+    offer: RTCSessionDescriptionInit,
+  ): Promise<string | typeof cancelledSetup> {
+    const request = this.beginOfferRequest();
+    try {
+      const sdp = await this.awaitSetupStep(
+        peer,
+        fetch(this.session.offerUrl ?? "https://api.openai.com/v1/realtime/calls", {
+          method: "POST",
+          body: offer.sdp,
+          headers: {
+            ...this.session.offerHeaders,
+            Authorization: `Bearer ${this.session.clientSecret}`,
+            "Content-Type": "application/sdp",
+          },
+          signal: request.controller.signal,
+        }),
+      );
+      if (sdp === cancelledSetup) {
+        return cancelledSetup;
+      }
+      if (!this.isCurrentPeer(peer)) {
+        return cancelledSetup;
+      }
+      if (!sdp.ok) {
+        throw new Error(`Realtime WebRTC setup failed (${sdp.status})`);
+      }
+      const answerSdp = await this.awaitSetupStep(peer, sdp.text());
+      if (answerSdp === cancelledSetup) {
+        return cancelledSetup;
+      }
+      if (!this.isCurrentPeer(peer)) {
+        return cancelledSetup;
+      }
+      return answerSdp;
+    } finally {
+      this.finishOfferRequest(request);
+    }
+  }
+
+  private beginOfferRequest(): PendingOfferRequest {
+    this.abortOfferRequest();
+    const controller = new AbortController();
+    const request = {
+      controller,
+      timeout: globalThis.setTimeout(() => {
+        controller.abort(
+          new Error(
+            `Realtime WebRTC offer request timed out after ${REALTIME_WEBRTC_OFFER_TIMEOUT_MS}ms`,
+          ),
+        );
+      }, REALTIME_WEBRTC_OFFER_TIMEOUT_MS),
+    };
+    this.pendingOfferRequest = request;
+    return request;
+  }
+
+  private finishOfferRequest(request: PendingOfferRequest): void {
+    globalThis.clearTimeout(request.timeout);
+    // A stopped transport may already have started a replacement request.
+    // Never let the old request's finally block detach the new lifecycle owner.
+    if (this.pendingOfferRequest === request) {
+      this.pendingOfferRequest = null;
+    }
+  }
+
+  private abortOfferRequest(): void {
+    const request = this.pendingOfferRequest;
+    if (!request) {
+      return;
+    }
+    this.pendingOfferRequest = null;
+    globalThis.clearTimeout(request.timeout);
+    request.controller.abort();
   }
 
   private isCurrentPeer(peer: RTCPeerConnection): boolean {
@@ -181,12 +249,15 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       this.emitTalkEvent({ type: "session.closed", final: true });
     }
     this.closed = true;
+    this.abortOfferRequest();
     this.channel?.close();
     this.channel = null;
     this.peer?.close();
     this.peer = null;
     this.media?.getTracks().forEach((track) => track.stop());
     this.media = null;
+    this.inputMeter?.stop();
+    this.inputMeter = null;
     this.audio?.remove();
     this.audio = null;
     for (const controller of this.consultAbortControllers) {
@@ -255,7 +326,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         this.bufferToolDelta(event);
         return;
       case "response.function_call_arguments.done":
-        void this.handleToolCall(event);
+        void this.handleToolCall(event).catch((error: unknown) => {
+          this.reportToolResultSubmissionError(error);
+        });
         return;
       case "input_audio_buffer.speech_started":
         this.ctx.callbacks.onStatus?.("listening", "Speech detected");
@@ -401,6 +474,14 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       },
     });
     this.requestResponseCreate();
+  }
+
+  private reportToolResultSubmissionError(error: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    this.ctx.callbacks.onStatus?.("error", message);
   }
 
   private sendControlSpeechMessage(message: string): void {

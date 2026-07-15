@@ -42,7 +42,7 @@ interface InitResponse {
   supported_auth_methods: string[];
 }
 
-export interface BeginResult {
+interface BeginResult {
   deviceCode: string;
   qrUrl: string;
   userCode: string;
@@ -52,7 +52,7 @@ export interface BeginResult {
 
 export type FeishuAppRegistrationFetch = typeof fetch;
 
-export type FeishuAppRegistrationFetchOptions = {
+type FeishuAppRegistrationFetchOptions = {
   /** Override fetch for tests while preserving the real SSRF guard path. */
   fetchImpl?: FeishuAppRegistrationFetch;
   /** Override hostname lookup for hermetic SSRF-guard tests. */
@@ -79,7 +79,7 @@ interface PollResponse {
   error_description?: string;
 }
 
-export type PollOutcome =
+type PollOutcome =
   | { status: "success"; result: AppRegistrationResult }
   | { status: "access_denied" }
   | { status: "expired" }

@@ -1,9 +1,16 @@
 // Covers device pairing, token, and role lifecycle behavior.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import {
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
+import {
+  loadDevicePairingStoreState,
+  persistDevicePairingStoreState,
+} from "./device-pairing-store.js";
 import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
@@ -19,10 +26,11 @@ import {
   rotateDeviceToken,
   updatePairedDeviceMetadata,
   verifyDeviceToken,
+  withPairedDeviceRecords,
   type PairedDevice,
-  type RotateDeviceTokenResult,
 } from "./device-pairing.js";
-import { resolvePairingPaths } from "./pairing-files.js";
+
+type RotateDeviceTokenResult = Awaited<ReturnType<typeof rotateDeviceToken>>;
 
 async function setupPairedOperatorDevice(baseDir: string, scopes: string[]) {
   const request = await requestDevicePairing(
@@ -143,15 +151,10 @@ function requireRotatedEntry(result: RotateDeviceTokenResult) {
 }
 
 async function overwritePairedOperatorTokenScopes(baseDir: string, scopes: string[]) {
-  const { pairedPath } = resolvePairingPaths(baseDir, "devices");
-  const pairedByDeviceId = JSON.parse(await readFile(pairedPath, "utf8")) as Record<
-    string,
-    PairedDevice
-  >;
-  const device = requireValue(pairedByDeviceId["device-1"], "expected paired device device-1");
-  const operatorToken = requireValue(device.tokens?.operator, "expected paired operator token");
-  operatorToken.scopes = scopes;
-  await writeFile(pairedPath, JSON.stringify(pairedByDeviceId, null, 2));
+  await mutatePairedDevice(baseDir, "device-1", (device) => {
+    const operatorToken = requireValue(device.tokens?.operator, "expected paired operator token");
+    operatorToken.scopes = scopes;
+  });
 }
 
 async function mutatePairedDevice(
@@ -159,14 +162,24 @@ async function mutatePairedDevice(
   deviceId: string,
   mutate: (device: PairedDevice) => void,
 ) {
-  const { pairedPath } = resolvePairingPaths(baseDir, "devices");
-  const pairedByDeviceId = JSON.parse(await readFile(pairedPath, "utf8")) as Record<
-    string,
-    PairedDevice
-  >;
-  const device = requireValue(pairedByDeviceId[deviceId], `expected paired device ${deviceId}`);
-  mutate(device);
-  await writeFile(pairedPath, JSON.stringify(pairedByDeviceId, null, 2));
+  await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
+    const device = requireValue(pairedByDeviceId[deviceId], `expected paired device ${deviceId}`);
+    mutate(device);
+    return { value: undefined, persist: true };
+  });
+}
+
+// Tampers with a persisted pending request through the store layer; the domain
+// module has no API for rewriting pending timestamps.
+function mutatePendingRequest(
+  baseDir: string,
+  requestId: string,
+  mutate: (pending: { ts: number; refreshedAtMs?: number; scopes?: string[] }) => void,
+) {
+  const state = loadDevicePairingStoreState(baseDir);
+  const pending = requireValue(state.pendingById[requestId], "expected pending pairing request");
+  mutate(pending);
+  persistDevicePairingStoreState(state, baseDir, "pending");
 }
 
 async function clearPairedOperatorApprovalBaseline(baseDir: string) {
@@ -188,6 +201,7 @@ describe("device pairing tokens", () => {
   });
 
   afterAll(async () => {
+    closeOpenClawStateDatabaseForTest();
     await suiteRootTracker.cleanup();
   });
 
@@ -213,44 +227,6 @@ describe("device pairing tokens", () => {
     expect(second.request.requestId).toBe(first.request.requestId);
   });
 
-  test("recovers when pairing state files were written as arrays", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const paths = resolvePairingPaths(baseDir, "devices");
-    await mkdir(paths.dir, { recursive: true });
-    await writeFile(paths.pendingPath, "[]", "utf8");
-    await writeFile(paths.pairedPath, "[]", "utf8");
-
-    const pending = await requestDevicePairing(
-      {
-        deviceId: "device-array-state",
-        publicKey: "public-key-array-state",
-        role: "operator",
-        scopes: ["operator.read"],
-      },
-      baseDir,
-    );
-    const approved = await approveDevicePairing(
-      pending.request.requestId,
-      { callerScopes: ["operator.read"] },
-      baseDir,
-    );
-
-    const approvedRecord = expectRecordFields(approved, "approved result", {
-      status: "approved",
-    });
-    expectRecordFields(approvedRecord.device, "approved device", {
-      deviceId: "device-array-state",
-    });
-    expect(Array.isArray(JSON.parse(await readFile(paths.pendingPath, "utf8")))).toBe(false);
-    const pairedByDeviceId = requireRecord(
-      JSON.parse(await readFile(paths.pairedPath, "utf8")),
-      "paired devices",
-    );
-    expectRecordFields(pairedByDeviceId["device-array-state"], "paired device", {
-      deviceId: "device-array-state",
-    });
-  });
-
   test("re-requesting with identical params preserves the original ts to prevent queue-jumping", async () => {
     // Regression: refreshPendingDevicePairingRequest must not bump ts to Date.now().
     // An attacker who reconnects with the same key/role/scopes could otherwise
@@ -266,17 +242,9 @@ describe("device pairing tokens", () => {
       baseDir,
     );
     const originalTs = first.request.ts - 1_000;
-    const paths = resolvePairingPaths(baseDir, "devices");
-    const pendingById = JSON.parse(await readFile(paths.pendingPath, "utf8")) as Record<
-      string,
-      { ts: number }
-    >;
-    const pending = requireValue(
-      pendingById[first.request.requestId],
-      "expected pending pairing request",
-    );
-    pending.ts = originalTs;
-    await writeFile(paths.pendingPath, JSON.stringify(pendingById, null, 2));
+    mutatePendingRequest(baseDir, first.request.requestId, (pending) => {
+      pending.ts = originalTs;
+    });
 
     const second = await requestDevicePairing(
       {
@@ -291,6 +259,42 @@ describe("device pairing tokens", () => {
     expect(second.created).toBe(false);
     expect(second.request.requestId).toBe(first.request.requestId);
     expect(second.request.ts).toBe(originalTs);
+  });
+
+  test("re-requests keep one pending request alive past the pending TTL without churning requestIds", async () => {
+    // Regression: a device retrying all night must not mint a new requestId (and a
+    // new approval prompt broadcast) every TTL window. Refreshes stamp refreshedAtMs
+    // as a TTL keepalive while ts stays the creation time for approval ordering.
+    const baseDir = await makeDevicePairingDir();
+    const req = {
+      deviceId: "device-1",
+      publicKey: "public-key-1",
+      role: "operator" as const,
+      scopes: ["operator.read"],
+    };
+    const first = await requestDevicePairing(req, baseDir);
+    const refreshed = await requestDevicePairing(req, baseDir);
+    expect(refreshed.created).toBe(false);
+
+    // Simulate hours of aging since creation while retries kept the keepalive fresh.
+    const createdTs = Date.now() - 60 * 60 * 1000;
+    mutatePendingRequest(baseDir, first.request.requestId, (pending) => {
+      expect(pending.refreshedAtMs).toBeGreaterThanOrEqual(pending.ts);
+      pending.ts = createdTs;
+    });
+
+    const third = await requestDevicePairing(req, baseDir);
+    expect(third.created).toBe(false);
+    expect(third.request.requestId).toBe(first.request.requestId);
+    expect(third.request.ts).toBe(createdTs);
+    // The keepalive is store-internal; it must not leak into protocol payloads.
+    expect("refreshedAtMs" in third.request).toBe(false);
+
+    // A stale keepalive still expires the request.
+    mutatePendingRequest(baseDir, first.request.requestId, (pending) => {
+      pending.refreshedAtMs = createdTs;
+    });
+    expect((await listDevicePairing(baseDir)).pending).toHaveLength(0);
   });
 
   test("supersedes pending requests when requested roles/scopes change", async () => {
@@ -316,6 +320,9 @@ describe("device pairing tokens", () => {
 
     expect(second.created).toBe(true);
     expect(second.request.requestId).not.toBe(first.request.requestId);
+    expect(second.superseded).toEqual([
+      { requestId: first.request.requestId, deviceId: "device-1" },
+    ]);
     expect(second.request.role).toBe("operator");
     expectArrayIncludesAll(second.request.roles, ["node", "operator"], "request roles");
     expectArrayIncludesAll(
@@ -741,6 +748,7 @@ describe("device pairing tokens", () => {
       "node-1",
       {
         displayName: "renamed-node",
+        operatorLabel: "Kitchen Mac",
         platform: "iOS 26.5.0",
         role: "operator",
         roles: ["operator"],
@@ -754,6 +762,7 @@ describe("device pairing tokens", () => {
 
     const paired = await getPairedDevice("node-1", baseDir);
     expect(paired?.displayName).toBe("renamed-node");
+    expect(paired?.operatorLabel).toBe("Kitchen Mac");
     expect(paired?.platform).toBe("iOS 26.5.0");
     expect(paired?.publicKey).toBe("public-key-node-1");
     expect(paired?.role).toBe("node");
@@ -855,6 +864,30 @@ describe("device pairing tokens", () => {
     expectRecordFields(paired, "paired device", {
       lastSeenAtMs: 1234,
       lastSeenReason: "bg_app_refresh",
+    });
+  });
+
+  test("repair approvals preserve operator labels", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedNodeDevice(baseDir);
+    await updatePairedDeviceMetadata("node-1", { operatorLabel: "Kitchen Mac" }, baseDir);
+
+    const repair = await requestDevicePairing(
+      {
+        deviceId: "node-1",
+        publicKey: "public-key-node-1",
+        role: "node",
+        scopes: [],
+        displayName: "fresh-client-name",
+      },
+      baseDir,
+    );
+    await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
+
+    const paired = await getPairedDevice("node-1", baseDir);
+    expectRecordFields(paired, "paired device", {
+      operatorLabel: "Kitchen Mac",
+      displayName: "fresh-client-name",
     });
   });
 
@@ -1338,6 +1371,35 @@ describe("device pairing tokens", () => {
     expect(paired?.tokens?.operator).toBeUndefined();
   });
 
+  test("bootstrap pairing treats missing persisted scopes as an empty grant", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "bootstrap-device-missing-scopes",
+        publicKey: "bootstrap-public-key-missing-scopes",
+        role: "operator",
+        roles: ["operator"],
+        scopes: [],
+        silent: true,
+      },
+      baseDir,
+    );
+    mutatePendingRequest(baseDir, request.request.requestId, (pending) => {
+      delete pending.scopes;
+    });
+
+    const approved = await approveBootstrapDevicePairing(
+      request.request.requestId,
+      PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("bootstrap-device-missing-scopes", baseDir);
+    expect(paired?.approvedScopes).toStrictEqual([]);
+    expect(paired?.tokens?.operator?.scopes).toStrictEqual([]);
+  });
+
   test("bootstrap approval access metadata initializes paired device last-seen fields", async () => {
     const baseDir = await makeDevicePairingDir();
     const request = await requestDevicePairing(
@@ -1376,7 +1438,7 @@ describe("device pairing tokens", () => {
     });
   });
 
-  test("baseline bootstrap pairing issues bounded operator token when requested by QR handoff", async () => {
+  test("baseline bootstrap pairing issues full operator token when requested by QR handoff", async () => {
     const baseDir = await makeDevicePairingDir();
     const request = await requestDevicePairing(
       {
@@ -1384,7 +1446,13 @@ describe("device pairing tokens", () => {
         publicKey: "bootstrap-public-key-operator-default",
         role: "node",
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
         silent: true,
       },
       baseDir,
@@ -1392,7 +1460,7 @@ describe("device pairing tokens", () => {
 
     const approved = await approveBootstrapDevicePairing(
       request.request.requestId,
-      PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
       baseDir,
     );
     expectRecordFields(approved, "approved result", { status: "approved" });
@@ -1401,6 +1469,7 @@ describe("device pairing tokens", () => {
     const operatorToken = requireToken(paired?.tokens?.operator?.token);
     expect(paired?.tokens?.node?.scopes).toStrictEqual([]);
     expect(paired?.tokens?.operator?.scopes).toStrictEqual([
+      "operator.admin",
       "operator.approvals",
       "operator.read",
       "operator.talk.secrets",
@@ -1411,7 +1480,13 @@ describe("device pairing tokens", () => {
         deviceId: "bootstrap-device-operator-default",
         token: operatorToken,
         role: "operator",
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
         baseDir,
       }),
     ).resolves.toEqual({ ok: true });
@@ -1423,7 +1498,7 @@ describe("device pairing tokens", () => {
         scopes: ["operator.admin"],
         baseDir,
       }),
-    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+    ).resolves.toEqual({ ok: true });
     await expect(
       verifyDeviceToken({
         deviceId: "bootstrap-device-operator-default",
@@ -1432,7 +1507,7 @@ describe("device pairing tokens", () => {
         scopes: ["operator.pairing"],
         baseDir,
       }),
-    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+    ).resolves.toEqual({ ok: true });
   });
 
   test("bootstrap node approval preserves existing operator token scopes", async () => {
@@ -1914,25 +1989,5 @@ describe("device pairing tokens", () => {
     ).resolves.toBeNull();
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
   });
-
-  test("refuses to overwrite corrupt paired device state", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const request = await requestDevicePairing(
-      {
-        deviceId: "device-1",
-        publicKey: "public-key-1",
-        role: "node",
-        scopes: [],
-      },
-      baseDir,
-    );
-    const { pairedPath } = resolvePairingPaths(baseDir, "devices");
-    await writeFile(pairedPath, "{not-json}", "utf8");
-
-    await expect(
-      approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir),
-    ).rejects.toThrow(/paired\.json/);
-    await expect(readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
-  });
-
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

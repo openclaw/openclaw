@@ -32,8 +32,9 @@ export type ApplicationTheme = {
 
 export type ApplicationNavigationPreferencesSnapshot = {
   navCollapsed: boolean;
+  navWidth: number;
   sidebarPinnedRoutes: readonly SidebarNavRoute[];
-  sidebarMoreExpanded: boolean;
+  pinnedAgentIds: readonly string[];
 };
 
 export type ApplicationNavigationPreferences = {
@@ -44,7 +45,7 @@ export type ApplicationNavigationPreferences = {
 
 export type ApplicationNavigationOptions = Partial<Pick<RouteLocation, "search" | "hash">>;
 
-export type SkillWorkshopRevisionHandoff = {
+type SkillWorkshopRevisionHandoff = {
   sessionKey: string;
   instructions: string;
   proposalId: string;
@@ -76,6 +77,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly skillWorkshopRevision: ApplicationSkillWorkshopRevisionHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
+  readonly revalidate: (routeId?: TRouteId) => Promise<void>;
   readonly preload: (routeId: TRouteId) => Promise<void>;
 };
 

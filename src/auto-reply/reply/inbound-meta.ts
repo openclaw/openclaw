@@ -13,8 +13,12 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
 import type { TemplateContext } from "../templating.js";
+import {
+  formatUntrustedJsonBlock,
+  MAX_UNTRUSTED_JSON_STRING_CHARS,
+  neutralizeMarkdownFences,
+} from "./untrusted-context.js";
 
-const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
@@ -36,9 +40,7 @@ export function formatActiveGoalContext(sessionEntry?: SessionEntry): string | u
   return `${ACTIVE_GOAL_CONTEXT_PREFIX}${boundedObjective}${ACTIVE_GOAL_CONTEXT_SUFFIX}`;
 }
 
-export function formatPendingSkillSuggestionContext(
-  sessionEntry?: SessionEntry,
-): string | undefined {
+function formatPendingSkillSuggestionContext(sessionEntry?: SessionEntry): string | undefined {
   const rawSkillName = normalizeOptionalString(sessionEntry?.pendingSkillSuggestion?.skillName);
   if (!rawSkillName) {
     return undefined;
@@ -203,17 +205,6 @@ function sanitizePromptBody(value: unknown): string | undefined {
   return sanitized || undefined;
 }
 
-function neutralizeMarkdownFences(value: string): string {
-  return value.replaceAll("```", "`\u200b``");
-}
-
-function truncateUntrustedJsonString(value: string): string {
-  if (value.length <= MAX_UNTRUSTED_JSON_STRING_CHARS) {
-    return value;
-  }
-  return `${truncateUtf16Safe(value, Math.max(0, MAX_UNTRUSTED_JSON_STRING_CHARS - 14)).trimEnd()}…[truncated]`;
-}
-
 const HEAD_TAIL_OMISSION_MARKER = "…[omitted]…";
 const HEAD_TAIL_MARKER_LENGTH = HEAD_TAIL_OMISSION_MARKER.length;
 const MIN_HEAD_TAIL_CHARS = 20;
@@ -240,21 +231,6 @@ function truncateBodyHeadTail(body: string, maxChars = MAX_UNTRUSTED_JSON_STRING
   const head = truncateUtf16Safe(body, headChars);
   const tail = sliceUtf16Safe(body, -tailChars);
   return `${head}${HEAD_TAIL_OMISSION_MARKER}${tail}`;
-}
-
-function sanitizeUntrustedJsonValue(value: unknown): unknown {
-  if (typeof value === "string") {
-    return neutralizeMarkdownFences(truncateUntrustedJsonString(value));
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeUntrustedJsonValue(entry));
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, sanitizeUntrustedJsonValue(entry)]),
-  );
 }
 
 function truncateUntrustedTranscriptField(value: string): string {
@@ -293,15 +269,6 @@ function formatUntrustedStructuredContextLabel(label: unknown): string {
   return normalized
     ? `${normalized} (untrusted metadata):`
     : "Structured object (untrusted metadata):";
-}
-
-function formatUntrustedJsonBlock(label: string, payload: unknown): string {
-  return [
-    label,
-    "```json",
-    JSON.stringify(sanitizeUntrustedJsonValue(payload), null, 2),
-    "```",
-  ].join("\n");
 }
 
 function buildConversationMentionMetadataPayload(
@@ -845,3 +812,4 @@ export function buildInboundUserContextPrefix(
 
   return blocks.filter(Boolean).join("\n\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

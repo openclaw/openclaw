@@ -30,6 +30,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "promos",
+    description: "Discover and claim promotional model offers from ClawHub",
+    hasSubcommands: true,
+  },
+  {
     name: "infer",
     description: "Run provider-backed inference commands through a stable CLI surface",
     hasSubcommands: true,
@@ -72,8 +77,18 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "worker",
+    description: "Run the restricted cloud worker runtime",
+    hasSubcommands: false,
+  },
+  {
     name: "sandbox",
     description: "Manage sandbox containers (Docker-based agent isolation)",
+    hasSubcommands: true,
+  },
+  {
+    name: "fleet",
+    description: "Provision and manage isolated tenant cells (experimental)",
     hasSubcommands: true,
   },
   {

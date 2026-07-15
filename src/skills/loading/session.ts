@@ -1,6 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import ignore from "ignore";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
@@ -9,6 +8,7 @@ import { canonicalizePath } from "../../agents/utils/paths.js";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
+import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
@@ -141,8 +141,7 @@ function loadSkillsFromDirInternal(
   }
 
   const root = rootDir ?? dir;
-  const ig = ignoreMatcher ?? ignore();
-  addIgnoreRules(ig, dir, root);
+  const ig = addIgnoreRules(dir, root, ignoreMatcher);
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -320,6 +319,8 @@ function resolveSkillPath(p: string, cwd: string): string {
  */
 export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
   const { cwd, agentDir, skillPaths, includeDefaults } = options;
+  // One snapshot-level query enforces archival without polling tool hot paths or touching files.
+  const archivedSkillFiles = getArchivedSkillFiles();
 
   // Resolve agentDir - if not provided, use default from config
   const resolvedAgentDir = agentDir ?? getAgentDir();
@@ -332,6 +333,9 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
   function addSkills(result: LoadSkillsResult) {
     allDiagnostics.push(...result.diagnostics);
     for (const skill of result.skills) {
+      if (archivedSkillFiles.has(canonicalizePath(skill.filePath))) {
+        continue;
+      }
       // Resolve symlinks to detect duplicate files
       const realPath = canonicalizePath(skill.filePath);
 

@@ -18,6 +18,8 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { ChatHistoryResult } from "./chat-history.ts";
+import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
+export { getPendingChatPickerPatch };
 
 const CHAT_SESSION_LIST_ACTIVE_MINUTES = 0;
 const CHAT_SESSION_LIST_LIMIT = 50;
@@ -53,7 +55,7 @@ type ChatIdleSessionReconciliationHost = SessionScopeHost & {
   sessionsResult?: SessionsListResult | null;
 };
 
-export function buildChatSessionListOptions(
+function buildChatSessionListOptions(
   _state: ChatSessionListHost,
   options: { offset?: number; append?: boolean; search?: string | null } = {},
 ): SessionListOptions {
@@ -227,6 +229,37 @@ function setChatError(host: ChatModelSettingsHost, error: string | null, request
   }
 }
 
+// Immediate-apply pickers can overlap patches for the same session. Mirror the
+// pendingModelPatches token guard in sessions/index.ts: only the latest patch
+// may re-assert or roll back the optimistic row, so a slow earlier request
+// cannot clobber a newer selection.
+const chatFastModePatchTokens = new WeakMap<object, Map<string, symbol>>();
+const chatThinkingPatchTokens = new WeakMap<object, Map<string, symbol>>();
+
+function claimChatSettingsPatch(
+  store: WeakMap<object, Map<string, symbol>>,
+  host: object,
+  sessionKey: string,
+): symbol {
+  let tokens = store.get(host);
+  if (!tokens) {
+    tokens = new Map();
+    store.set(host, tokens);
+  }
+  const token = Symbol(sessionKey);
+  tokens.set(sessionKey, token);
+  return token;
+}
+
+function isCurrentChatSettingsPatch(
+  store: WeakMap<object, Map<string, symbol>>,
+  host: object,
+  sessionKey: string,
+  token: symbol,
+): boolean {
+  return store.get(host)?.get(sessionKey) === token;
+}
+
 function patchSessionRow(
   host: ChatModelSettingsHost,
   sessionKey: string,
@@ -244,56 +277,88 @@ function patchSessionRow(
   };
 }
 
-export async function switchChatFastMode(
+export function switchChatFastMode(
   host: ChatModelSettingsHost,
   nextFastMode: "" | "on" | "off" | "auto",
-) {
+  targetSessionKey = host.sessionKey,
+): Promise<boolean> {
   if (!host.client || !host.connected) {
-    return;
+    return Promise.resolve(false);
   }
-  const targetSessionKey = host.sessionKey;
   const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
   const previousFastMode = activeRow?.fastMode;
+  const previousEffectiveFastMode = activeRow?.effectiveFastMode;
   const next: FastMode | undefined =
     nextFastMode === "" ? undefined : nextFastMode === "auto" ? "auto" : nextFastMode === "on";
   if (previousFastMode === next) {
-    return;
+    return Promise.resolve(true);
   }
+  const token = claimChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey);
   setChatError(host, null, true);
-  patchSessionRow(host, targetSessionKey, { fastMode: next });
-  try {
-    await host.sessions.patch(
-      targetSessionKey,
-      {
-        fastMode: next ?? null,
-      },
-      scopedAgentParamsForSession(host, targetSessionKey),
-    );
-    await refreshCurrentChatSessionList(host);
-    patchSessionRow(host, targetSessionKey, { fastMode: next });
-  } catch (err) {
-    patchSessionRow(host, targetSessionKey, { fastMode: previousFastMode });
-    setChatError(host, `Failed to set speed: ${String(err)}`, true);
-  }
+  // Patch effectiveFastMode too: the toggle displays the effective value, and
+  // the server-resolved one stays stale until the session list refreshes.
+  patchSessionRow(host, targetSessionKey, { fastMode: next, effectiveFastMode: next });
+  const rollback = () => {
+    if (isCurrentChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey, token)) {
+      patchSessionRow(host, targetSessionKey, {
+        fastMode: previousFastMode,
+        effectiveFastMode: previousEffectiveFastMode,
+      });
+    }
+  };
+  const patchPromise = (async () => {
+    try {
+      const patched = await patchChatSessionSettings(
+        host,
+        targetSessionKey,
+        {
+          fastMode: next ?? null,
+        },
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          reconcile: async () => refreshCurrentChatSessionList(host),
+        },
+      );
+      if (!patched) {
+        rollback();
+        return false;
+      }
+      if (isCurrentChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey, token)) {
+        patchSessionRow(host, targetSessionKey, { fastMode: next });
+      }
+      return true;
+    } catch (err) {
+      rollback();
+      setChatError(host, `Failed to set speed: ${String(err)}`, true);
+      return false;
+    }
+  })();
+  return patchPromise;
 }
 
 export async function switchChatModel(
   host: ChatModelSettingsHost,
   nextModel: string,
+  targetSessionKey = host.sessionKey,
 ): Promise<boolean> {
   if (!host.client || !host.connected) {
+    return false;
+  }
+  const activeRow = host.sessionsResult?.sessions.find((row) =>
+    areUiSessionKeysEquivalent(row.key, targetSessionKey),
+  );
+  if (activeRow?.modelSelectionLocked === true) {
     return false;
   }
   const currentOverride = resolveChatModelOverrideValue({
     chatModelCatalog: host.chatModelCatalog,
     modelOverrides: host.sessions.state.modelOverrides,
-    sessionKey: host.sessionKey,
+    sessionKey: targetSessionKey,
     sessionsResult: host.sessionsResult ?? null,
   });
   if (currentOverride === nextModel) {
     return true;
   }
-  const targetSessionKey = host.sessionKey;
   const previousModelOverride = host.sessions.state.modelOverrides[targetSessionKey];
   setChatError(host, null, true);
   const switchPromiseRef: { current?: Promise<boolean> } = {};
@@ -306,15 +371,23 @@ export async function switchChatModel(
   };
   const switchPromise: Promise<boolean> = (async () => {
     try {
-      await host.sessions.patch(
+      const patched = await patchChatSessionSettings(
+        host,
         targetSessionKey,
         {
           model: nextModel || null,
         },
-        scopedAgentParamsForSession(host, targetSessionKey),
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          reconcile: async () => {
+            await host.onModelChanged?.();
+            await refreshCurrentChatSessionList(host);
+          },
+        },
       );
-      await host.onModelChanged?.();
-      await refreshCurrentChatSessionList(host);
+      if (!patched) {
+        return false;
+      }
       return true;
     } catch (err) {
       host.sessions.setModelOverride(targetSessionKey, previousModelOverride);
@@ -334,14 +407,14 @@ export async function switchChatModel(
   return switchPromise;
 }
 
-export async function switchChatThinkingLevel(
+export function switchChatThinkingLevel(
   host: ChatModelSettingsHost,
   nextThinkingLevel: string,
-) {
+  targetSessionKey = host.sessionKey,
+): Promise<boolean> {
   if (!host.client || !host.connected) {
-    return;
+    return Promise.resolve(false);
   }
-  const targetSessionKey = host.sessionKey;
   const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
   const previousThinkingLevel = activeRow?.thinkingLevel;
   const normalizedNext =
@@ -351,25 +424,51 @@ export async function switchChatThinkingLevel(
       ? (normalizeThinkLevel(previousThinkingLevel) ?? previousThinkingLevel.trim())
       : undefined;
   if ((normalizedPrev ?? "") === (normalizedNext ?? "")) {
-    return;
+    return Promise.resolve(true);
   }
+  const token = claimChatSettingsPatch(chatThinkingPatchTokens, host, targetSessionKey);
   setChatError(host, null, true);
   patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
-  host.chatThinkingLevel = normalizedNext ?? null;
-  try {
-    await host.sessions.patch(
-      targetSessionKey,
-      {
-        thinkingLevel: normalizedNext ?? null,
-      },
-      scopedAgentParamsForSession(host, targetSessionKey),
-    );
-    await refreshCurrentChatSessionList(host);
-    patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
+  if (host.sessionKey === targetSessionKey) {
     host.chatThinkingLevel = normalizedNext ?? null;
-  } catch (err) {
-    patchSessionRow(host, targetSessionKey, { thinkingLevel: previousThinkingLevel });
-    host.chatThinkingLevel = normalizedPrev ?? null;
-    setChatError(host, `Failed to set thinking level: ${String(err)}`, true);
   }
+  const rollback = () => {
+    if (isCurrentChatSettingsPatch(chatThinkingPatchTokens, host, targetSessionKey, token)) {
+      patchSessionRow(host, targetSessionKey, { thinkingLevel: previousThinkingLevel });
+      if (host.sessionKey === targetSessionKey) {
+        host.chatThinkingLevel = normalizedPrev ?? null;
+      }
+    }
+  };
+  const patchPromise = (async () => {
+    try {
+      const patched = await patchChatSessionSettings(
+        host,
+        targetSessionKey,
+        {
+          thinkingLevel: normalizedNext ?? null,
+        },
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          reconcile: async () => refreshCurrentChatSessionList(host),
+        },
+      );
+      if (!patched) {
+        rollback();
+        return false;
+      }
+      if (isCurrentChatSettingsPatch(chatThinkingPatchTokens, host, targetSessionKey, token)) {
+        patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
+        if (host.sessionKey === targetSessionKey) {
+          host.chatThinkingLevel = normalizedNext ?? null;
+        }
+      }
+      return true;
+    } catch (err) {
+      rollback();
+      setChatError(host, `Failed to set thinking level: ${String(err)}`, true);
+      return false;
+    }
+  })();
+  return patchPromise;
 }

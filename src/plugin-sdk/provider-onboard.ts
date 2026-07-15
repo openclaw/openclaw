@@ -329,10 +329,15 @@ function mergeOnboardProviderConfigs(
       }
     }
     if (!("request" in providerConfig) || providerConfig.request) {
-      nextProvider.request = mergeOnboardProviderRequest(
+      const mergedRequest = mergeOnboardProviderRequest(
         existingProvider.request,
         providerConfig.request,
       );
+      if (mergedRequest) {
+        nextProvider.request = mergedRequest;
+      } else {
+        delete nextProvider.request;
+      }
     }
     merged[providerId] = nextProvider;
   }

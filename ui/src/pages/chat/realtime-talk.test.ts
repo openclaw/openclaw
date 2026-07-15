@@ -157,6 +157,48 @@ describe("RealtimeTalkSession", () => {
     expect(webRtcCtor).not.toHaveBeenCalled();
   });
 
+  it("falls back to talk.session.create when gateway-relay is rejected by talk.client.create", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error("talk.client.create is client-owned; use talk.session.create"),
+      )
+      .mockResolvedValueOnce({
+        provider: "example",
+        transport: "gateway-relay",
+        relaySessionId: "relay-1",
+        audio: {
+          inputEncoding: "pcm16",
+          inputSampleRateHz: 24000,
+          outputEncoding: "pcm16",
+          outputSampleRateHz: 24000,
+        },
+      });
+    const session = new RealtimeTalkSession(
+      { request } as never,
+      "main",
+      {},
+      { provider: "xai", transport: "gateway-relay" },
+    );
+
+    await session.start();
+
+    expect(request).toHaveBeenNthCalledWith(1, "talk.client.create", {
+      sessionKey: "main",
+      provider: "xai",
+      transport: "gateway-relay",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "talk.session.create", {
+      sessionKey: "main",
+      provider: "xai",
+      transport: "gateway-relay",
+      mode: "realtime",
+      brain: "agent-consult",
+    });
+    expect(relayCtor).toHaveBeenCalledTimes(1);
+    expect(relayStart).toHaveBeenCalledTimes(1);
+  });
+
   it("starts the WebRTC transport for canonical WebRTC sessions", async () => {
     const request = vi.fn(async () => ({
       provider: "openai",
@@ -195,6 +237,7 @@ describe("RealtimeTalkSession", () => {
         prefixPaddingMs: 250,
         reasoningEffort: "low",
       },
+      { inputDeviceId: "usb-mic" },
     );
 
     await session.start();
@@ -210,6 +253,10 @@ describe("RealtimeTalkSession", () => {
       prefixPaddingMs: 250,
       reasoningEffort: "low",
     });
+    expect(webRtcCtor).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ inputDeviceId: "usb-mic" }),
+    );
   });
 
   it("does not fall back to Gateway relay when config selects a client transport", async () => {

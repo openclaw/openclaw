@@ -48,6 +48,12 @@ export function setupGoogleMeetPlugin(
   config: Record<string, unknown> = {},
   options: {
     fullConfig?: Record<string, unknown>;
+    gatewayAvailable?: boolean;
+    gatewayRequestHandler?: (
+      method: string,
+      params?: Record<string, unknown>,
+      options?: Record<string, unknown>,
+    ) => Promise<unknown>;
     nodesListResult?: GoogleMeetTestNodeListResult;
     nodesInvokeResult?: unknown;
     browserActResult?: Record<string, unknown>;
@@ -137,6 +143,16 @@ export function setupGoogleMeetPlugin(
       return { code: 0, stdout: "", stderr: "" };
     },
   );
+  const gatewayRequest = vi.fn(
+    async (
+      method: string,
+      params?: Record<string, unknown>,
+      requestOptions?: Record<string, unknown>,
+    ) =>
+      options.gatewayRequestHandler
+        ? await options.gatewayRequestHandler(method, params, requestOptions)
+        : await invokeGoogleMeetGatewayMethodForTest(methods, method, params, "google-meet"),
+  );
   const api = createTestPluginApi({
     id: "google-meet",
     name: "Google Meet",
@@ -146,6 +162,10 @@ export function setupGoogleMeetPlugin(
     config: options.fullConfig ?? {},
     pluginConfig: config,
     runtime: {
+      gateway: {
+        isAvailable: vi.fn(async () => options.gatewayAvailable === true),
+        request: gatewayRequest,
+      },
       system: {
         runCommandWithTimeout,
         formatNativeDependencyHint: vi.fn(() => "Install with brew install blackhole-2ch."),
@@ -187,6 +207,7 @@ export function setupGoogleMeetPlugin(
     nodesInvoke,
     nodeHostCommands,
     nodeInvokePolicies,
+    gatewayRequest,
   };
 }
 
@@ -194,10 +215,12 @@ export async function invokeGoogleMeetGatewayMethodForTest(
   methods: Map<string, unknown>,
   method: string,
   params?: unknown,
+  pluginRuntimeOwnerId?: string,
 ): Promise<unknown> {
   const handler = methods.get(method) as
     | ((opts: {
         params: Record<string, unknown>;
+        client?: { internal?: { pluginRuntimeOwnerId?: string } };
         respond: (
           ok: boolean,
           payload?: unknown,
@@ -229,6 +252,7 @@ export async function invokeGoogleMeetGatewayMethodForTest(
         params: (params && typeof params === "object" && !Array.isArray(params)
           ? params
           : {}) as Record<string, unknown>,
+        ...(pluginRuntimeOwnerId ? { client: { internal: { pluginRuntimeOwnerId } } } : {}),
         respond,
       }),
     ).catch(reject);

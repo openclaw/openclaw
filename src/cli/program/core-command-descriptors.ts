@@ -3,18 +3,19 @@ import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
 /** Descriptor shape for root commands owned by the core CLI. */
-export type CoreCliCommandDescriptor = NamedCommandDescriptor;
+type CoreCliCommandDescriptor = NamedCommandDescriptor;
 
 const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
-    name: "crestodian",
-    description: "Open the ring-zero setup and repair helper",
+    name: "setup",
+    description: "Chat with OpenClaw; onboard when setup is incomplete",
     hasSubcommands: false,
   },
   {
-    name: "setup",
-    description: "Alias for openclaw onboard",
+    name: "crestodian", // hidden alias
+    description: "Deprecated: use openclaw setup",
     hasSubcommands: false,
+    hidden: true,
   },
   {
     name: "onboard",
@@ -34,7 +35,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "backup",
-    description: "Create and verify local backup archives for OpenClaw state",
+    description: "Create and verify backup archives and SQLite snapshots",
     hasSubcommands: true,
   },
   {
@@ -96,6 +97,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "health",
     description: "Fetch health from the running gateway",
+    hasSubcommands: false,
+  },
+  {
+    name: "audit",
+    description: "Inspect metadata-only run, tool, and message lifecycle records",
     hasSubcommands: false,
   },
   {

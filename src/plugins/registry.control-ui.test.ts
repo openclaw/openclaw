@@ -4,7 +4,7 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
-import { createPluginRecord } from "./status.test-helpers.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 describe("plugin registry Control UI descriptors", () => {
   it("keeps legacy flat descriptors loadable for shipped JavaScript plugins", () => {
@@ -88,7 +88,7 @@ describe("plugin registry Control UI descriptors", () => {
           });
         },
       });
-      expect(registry.registry.controlUiDescriptors ?? []).toEqual([]);
+      expect(registry.registry.controlUiDescriptors).toEqual([]);
       expect(registry.registry.diagnostics).toContainEqual(
         expect.objectContaining({ level: "error", pluginId: "external-tab" }),
       );
@@ -111,7 +111,7 @@ describe("plugin registry Control UI descriptors", () => {
       },
     });
 
-    expect(registry.registry.controlUiDescriptors ?? []).toEqual([]);
+    expect(registry.registry.controlUiDescriptors).toEqual([]);
     expect(registry.registry.diagnostics).toContainEqual(
       expect.objectContaining({
         level: "error",

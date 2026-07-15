@@ -1,7 +1,10 @@
 // Codex tests cover plugin thread config plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
-import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
+import {
+  CODEX_PLUGINS_MARKETPLACE_NAME,
+  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+} from "./config.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildCodexPluginThreadConfig,
@@ -79,6 +82,87 @@ describe("Codex plugin thread config", () => {
       allowDestructiveActions: true,
       destructiveApprovalMode: "allow",
       mcpServerNames: ["google-calendar"],
+    });
+    expect(config.diagnostics).toStrictEqual([]);
+  });
+
+  it("reuses the existing app policy path for an active workspace plugin", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("workspace-data-app", true)],
+        nextCursor: null,
+      }),
+    });
+    const methods: string[] = [];
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            workspaceData: {
+              marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+              pluginName: "workspace-data@workspace-directory",
+              allow_destructive_actions: false,
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method, params) => {
+        methods.push(method);
+        if (method === "plugin/list") {
+          return (params as v2.PluginListParams).marketplaceKinds
+            ? pluginList(
+                [
+                  pluginSummary("workspace-data@workspace-directory", {
+                    remotePluginId: "plugin_workspace_data",
+                    installed: true,
+                    enabled: true,
+                  }),
+                ],
+                { name: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME, path: null },
+              )
+            : pluginList([]);
+        }
+        if (method === "plugin/read") {
+          expect(params).toEqual({
+            remoteMarketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+            pluginName: "plugin_workspace_data",
+          });
+          return pluginDetail("workspace-data", [appSummary("workspace-data-app")], [], {
+            marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+            marketplacePath: null,
+          });
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(methods).toStrictEqual(["plugin/list", "plugin/list", "plugin/read"]);
+    expect(config.configPatch?.apps).toEqual({
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
+      "workspace-data-app": {
+        enabled: true,
+        destructive_enabled: false,
+        open_world_enabled: true,
+        default_tools_approval_mode: "auto",
+      },
+    });
+    expect(config.policyContext.apps["workspace-data-app"]).toMatchObject({
+      configKey: "workspaceData",
+      marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+      pluginName: "workspace-data@workspace-directory",
+      destructiveApprovalMode: "deny",
     });
     expect(config.diagnostics).toStrictEqual([]);
   });
@@ -662,6 +746,229 @@ describe("Codex plugin thread config", () => {
     });
     expect(config.diagnostics).toStrictEqual([]);
     expect(config.policyContext.apps).toStrictEqual({});
+  });
+
+  it("exposes every accessible account app from a complete app inventory", async () => {
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        allow_all_plugins: true,
+        allow_destructive_actions: false,
+      },
+    };
+    expect(shouldBuildCodexPluginThreadConfig(pluginConfig)).toBe(true);
+    const appListParams: v2.AppsListParams[] = [];
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig,
+      appCacheKey: "runtime",
+      request: async (method, rawParams) => {
+        if (method !== "app/list") {
+          throw new Error(`unexpected request ${method}`);
+        }
+        const params = rawParams as v2.AppsListParams;
+        appListParams.push(params);
+        if (!params.cursor) {
+          return {
+            data: [
+              { ...appInfo("chatgpt-meetings", true, false), name: "ChatGPT Meetings" },
+              appInfo("inaccessible-app", false),
+            ],
+            nextCursor: "page-2",
+          };
+        }
+        return {
+          data: [{ ...appInfo("slack", true), name: "Slack" }],
+          nextCursor: null,
+        };
+      },
+    });
+
+    expect(appListParams).toEqual([
+      { cursor: undefined, limit: 100, forceRefetch: false },
+      { cursor: "page-2", limit: 100, forceRefetch: false },
+    ]);
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+        "chatgpt-meetings": {
+          enabled: true,
+          destructive_enabled: false,
+          open_world_enabled: true,
+          default_tools_approval_mode: "auto",
+        },
+        slack: {
+          enabled: true,
+          destructive_enabled: false,
+          open_world_enabled: true,
+          default_tools_approval_mode: "auto",
+        },
+      },
+    });
+    expect(config.policyContext.apps).toEqual({
+      "chatgpt-meetings": {
+        source: "account",
+        appName: "ChatGPT Meetings",
+        allowDestructiveActions: false,
+        destructiveApprovalMode: "deny",
+        mcpServerNames: [],
+      },
+      slack: {
+        source: "account",
+        appName: "Slack",
+        allowDestructiveActions: false,
+        destructiveApprovalMode: "deny",
+        mcpServerNames: [],
+      },
+    });
+    expect(config.diagnostics).toStrictEqual([]);
+  });
+
+  it("fails closed when the account app inventory cannot be read", async () => {
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: true,
+          allow_destructive_actions: false,
+        },
+      },
+      appCacheKey: "runtime",
+      request: async (method) => {
+        if (method === "app/list") {
+          throw new Error("inventory unavailable");
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.diagnostics).toContainEqual({
+      code: "account_app_inventory_unavailable",
+      message: "Codex account app inventory was unavailable; account apps were not exposed.",
+    });
+  });
+
+  it("clears durable approval overrides for account apps in ask mode", async () => {
+    let configReadCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "app/list") {
+        return {
+          data: [{ ...appInfo("chatgpt-meetings", true), name: "ChatGPT Meetings" }],
+          nextCursor: null,
+        };
+      }
+      if (method === "config/read") {
+        configReadCount += 1;
+        return {
+          config: {
+            apps: {
+              "chatgpt-meetings": {
+                tools:
+                  configReadCount === 1 ? { import_meeting: { approval_mode: "approve" } } : {},
+              },
+            },
+          },
+        };
+      }
+      if (method === "config/value/write") {
+        return { status: "ok" };
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: true,
+          allow_destructive_actions: "ask",
+        },
+      },
+      appCacheKey: "runtime",
+      request,
+    });
+
+    expect((config.configPatch?.apps as Record<string, unknown>)?.["chatgpt-meetings"]).toEqual({
+      enabled: true,
+      approvals_reviewer: "user",
+      destructive_enabled: true,
+      open_world_enabled: true,
+      default_tools_approval_mode: "auto",
+    });
+    expect(request).toHaveBeenCalledWith("config/value/write", {
+      keyPath: 'apps."chatgpt-meetings".tools."import_meeting".approval_mode',
+      value: null,
+      mergeStrategy: "replace",
+    });
+  });
+
+  it("does not re-admit an excluded plugin-owned app through account-wide policy", async () => {
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: true,
+          allow_destructive_actions: "auto",
+          plugins: {
+            meetings: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "meetings",
+              allow_destructive_actions: "ask",
+            },
+          },
+        },
+      },
+      appCacheKey: "runtime",
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("meetings", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("meetings", [appSummary("chatgpt-meetings")]);
+        }
+        if (method === "app/list") {
+          return {
+            data: [{ ...appInfo("chatgpt-meetings", true), name: "ChatGPT Meetings" }],
+            nextCursor: null,
+          };
+        }
+        if (method === "config/read") {
+          throw new Error("approval policy unavailable");
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "approval_overrides_clear_failed",
+        message:
+          "Could not clear durable Codex app approval overrides for chatgpt-meetings: approval policy unavailable",
+      }),
+    );
   });
 
   it("does not let per-plugin enablement override disabled native plugin support", async () => {
@@ -1545,12 +1852,15 @@ describe("Codex plugin thread config", () => {
   });
 });
 
-function pluginList(plugins: v2.PluginSummary[]): v2.PluginListResponse {
+function pluginList(
+  plugins: v2.PluginSummary[],
+  marketplace: { name?: string; path?: string | null } = {},
+): v2.PluginListResponse {
   return {
     marketplaces: [
       {
-        name: CODEX_PLUGINS_MARKETPLACE_NAME,
-        path: "/marketplaces/openai-curated",
+        name: marketplace.name ?? CODEX_PLUGINS_MARKETPLACE_NAME,
+        path: marketplace.path === undefined ? "/marketplaces/openai-curated" : marketplace.path,
         interface: null,
         plugins,
       },
@@ -1579,11 +1889,15 @@ function pluginDetail(
   pluginName: string,
   apps: v2.AppSummary[],
   mcpServers: string[] = [],
+  marketplace: { marketplaceName?: string; marketplacePath?: string | null } = {},
 ): v2.PluginReadResponse {
   return {
     plugin: {
-      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-      marketplacePath: "/marketplaces/openai-curated",
+      marketplaceName: marketplace.marketplaceName ?? CODEX_PLUGINS_MARKETPLACE_NAME,
+      marketplacePath:
+        marketplace.marketplacePath === undefined
+          ? "/marketplaces/openai-curated"
+          : marketplace.marketplacePath,
       summary: pluginSummary(pluginName, { installed: true, enabled: true }),
       description: null,
       skills: [],
@@ -1653,3 +1967,4 @@ async function buildReadyGoogleCalendarThreadConfig(
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

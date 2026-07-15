@@ -37,8 +37,7 @@ private val BodyPath =
     .parsePathString(
       "M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 " +
         "C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z",
-    )
-    .toPath()
+    ).toPath()
 private val LeftClawPath =
   PathParser().parsePathString("M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z").toPath()
 private val RightClawPath =
@@ -50,6 +49,7 @@ private val CoralBright = Color(0xFFFF4D4D)
 private val CoralDark = Color(0xFF991B1B)
 private val EyeDark = Color(0xFF050810)
 private val EyeGlow = Color(0xFF00E5CC)
+
 // Claws hinge on their body-facing edge, antennae rotate around their own center.
 private val LeftClawPivot = Offset(26f, 53f)
 private val RightClawPivot = Offset(94f, 53f)
@@ -183,15 +183,19 @@ private fun rememberMascotPose(): MascotPose {
   }
 }
 
-private fun clawSnapKeyframes() = keyframes {
-  durationMillis = 4000
-  0f at 0 using EaseInOut
-  0f at 3400 using EaseInOut
-  -8f at 3600 using EaseInOut
-  0f at 3800 using EaseInOut
-}
+private fun clawSnapKeyframes() =
+  keyframes {
+    durationMillis = 4000
+    0f at 0 using EaseInOut
+    0f at 3400 using EaseInOut
+    -8f at 3600 using EaseInOut
+    0f at 3800 using EaseInOut
+  }
 
-private fun DrawScope.drawMascot(pose: MascotPose, tint: Color?) {
+private fun DrawScope.drawMascot(
+  pose: MascotPose,
+  tint: Color?,
+) {
   val bodyBrush =
     if (tint == null) {
       Brush.linearGradient(

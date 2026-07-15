@@ -6,16 +6,10 @@ import { z } from "zod";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
-export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
-export const QA_MATURITY_SCORES_PATH = "qa/maturity-scores.yaml";
-export const QA_MATURITY_SCORE_KEYS = ["quality", "completeness"] as const;
-export const QA_MATURITY_SCORE_LABELS = [
-  "Clawesome",
-  "Stable",
-  "Beta",
-  "Alpha",
-  "Experimental",
-] as const;
+const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
+const QA_MATURITY_SCORES_PATH = "qa/maturity-scores.yaml";
+const QA_MATURITY_SCORE_KEYS = ["quality", "completeness"] as const;
+const QA_MATURITY_SCORE_LABELS = ["Clawesome", "Stable", "Beta", "Alpha", "Experimental"] as const;
 export const QA_MATURITY_SCORE_LABEL_BANDS = [
   [QA_MATURITY_SCORE_LABELS[0], 95, 100],
   [QA_MATURITY_SCORE_LABELS[1], 80, 95],
@@ -65,11 +59,10 @@ function maturityScoreLabelForScore(score: number) {
 }
 
 const qaMaturityScoreObjectSchema = z
-  .object({
+  .strictObject({
     score: z.number().int().min(0).max(100),
     label: z.enum(QA_MATURITY_SCORE_LABELS),
   })
-  .strict()
   .superRefine((value, ctx) => {
     const expectedLabel = maturityScoreLabelForScore(value.score);
     if (value.label !== expectedLabel) {
@@ -97,89 +90,69 @@ const qaMaturityLegacyCoverageShape = {
   coverage: qaMaturityScoreObjectSchema.optional(),
 } satisfies z.ZodRawShape;
 
-const qaMaturityScoreBundleSchema = z
-  .object({
-    ...qaMaturityLegacyCoverageShape,
-    ...qaMaturityScoreBundleShape,
-  })
-  .strict();
+const qaMaturityScoreBundleSchema = z.strictObject({
+  ...qaMaturityLegacyCoverageShape,
+  ...qaMaturityScoreBundleShape,
+});
 
-const qaMaturityScoreLastRunSchema = z
-  .object({
-    status: z.string().trim().min(1).optional(),
-    completed_at: z.string().trim().min(1).optional(),
-    by: z.string().trim().min(1).optional(),
-    source_ref: z.string().trim().min(1).nullable().optional(),
-    process_version: z.number().int().positive().optional(),
-  })
-  .strict();
+const qaMaturityScoreLastRunSchema = z.strictObject({
+  status: z.string().trim().min(1).optional(),
+  completed_at: z.string().trim().min(1).optional(),
+  by: z.string().trim().min(1).optional(),
+  source_ref: z.string().trim().min(1).nullable().optional(),
+  process_version: z.number().int().positive().optional(),
+});
 
-const qaMaturityScoreCategoryLtsSchema = z
-  .object({
-    supported: z.boolean(),
-    reason: z.string().trim().min(1).optional(),
-    human_override: z.boolean(),
-  })
-  .strict();
+const qaMaturityScoreCategoryLtsSchema = z.strictObject({
+  supported: z.boolean(),
+  reason: z.string().trim().min(1).optional(),
+  human_override: z.boolean(),
+});
 
-const qaMaturityScoreSurfaceLtsSchema = z
-  .object({
-    supported_categories: z.number().int().nonnegative(),
-    total_categories: z.number().int().nonnegative(),
-    status: z.string().trim().min(1),
-  })
-  .strict();
+const qaMaturityScoreSurfaceLtsSchema = z.strictObject({
+  supported_categories: z.number().int().nonnegative(),
+  total_categories: z.number().int().nonnegative(),
+  status: z.string().trim().min(1),
+});
 
-const qaMaturityScoreCategorySchema = z
-  .object({
-    name: z.string().trim().min(1),
-    ...qaMaturityLegacyCoverageShape,
-    ...qaMaturityScoreBundleShape,
-    lts: qaMaturityScoreCategoryLtsSchema,
-  })
-  .strict();
+const qaMaturityScoreCategorySchema = z.strictObject({
+  name: z.string().trim().min(1),
+  ...qaMaturityLegacyCoverageShape,
+  ...qaMaturityScoreBundleShape,
+  lts: qaMaturityScoreCategoryLtsSchema,
+});
 
-const qaMaturityScoreSurfaceSchema = z
-  .object({
-    id: qaScorecardIdSchema,
-    name: z.string().trim().min(1),
-    family: z.string().trim().min(1).optional(),
-    level: z.union([
-      z.string().trim().min(1),
-      z
-        .object({
-          id: z.string().trim().min(1).optional(),
-          code: z.string().trim().min(1).optional(),
-          label: z.string().trim().min(1).optional(),
-        })
-        .strict(),
-    ]),
-    scores: qaMaturityScoreBundleSchema,
-    categories: z.array(qaMaturityScoreCategorySchema),
-    lts: qaMaturityScoreSurfaceLtsSchema,
-    last_score_run: qaMaturityScoreLastRunSchema.optional(),
-  })
-  .strict();
+const qaMaturityScoreSurfaceSchema = z.strictObject({
+  id: qaScorecardIdSchema,
+  name: z.string().trim().min(1),
+  family: z.string().trim().min(1).optional(),
+  level: z.union([
+    z.string().trim().min(1),
+    z.strictObject({
+      id: z.string().trim().min(1).optional(),
+      code: z.string().trim().min(1).optional(),
+      label: z.string().trim().min(1).optional(),
+    }),
+  ]),
+  scores: qaMaturityScoreBundleSchema,
+  categories: z.array(qaMaturityScoreCategorySchema),
+  lts: qaMaturityScoreSurfaceLtsSchema,
+  last_score_run: qaMaturityScoreLastRunSchema.optional(),
+});
 
-export const qaMaturityScoresSchema = z
-  .object({
-    version: z.literal(1),
-    process_version: z.number().int().positive(),
-    counts: z
-      .object({
-        active_surfaces: z.number().int().nonnegative(),
-        category_scores: z.number().int().nonnegative(),
-      })
-      .strict(),
-    rollups: z
-      .object({
-        surface_average: qaMaturityScoreBundleSchema,
-        category_average: qaMaturityScoreBundleSchema,
-      })
-      .strict(),
-    surfaces: z.array(qaMaturityScoreSurfaceSchema),
-  })
-  .strict();
+const qaMaturityScoresSchema = z.strictObject({
+  version: z.literal(1),
+  process_version: z.number().int().positive(),
+  counts: z.strictObject({
+    active_surfaces: z.number().int().nonnegative(),
+    category_scores: z.number().int().nonnegative(),
+  }),
+  rollups: z.strictObject({
+    surface_average: qaMaturityScoreBundleSchema,
+    category_average: qaMaturityScoreBundleSchema,
+  }),
+  surfaces: z.array(qaMaturityScoreSurfaceSchema),
+});
 
 const qaMaturityFeatureSchema = z.object({
   name: z.string().trim().min(1),
@@ -218,18 +191,17 @@ const qaMaturityLevelSchema = z.object({
   promotion_bar: z.string().trim().min(1).optional(),
 });
 
-export const qaMaturityTaxonomySchema = z
+const qaMaturityTaxonomySchema = z
   .object({
     version: z.literal(1),
     process_version: z.number().int().positive().optional(),
     title: z.string().trim().min(1),
     summary: z.string().trim().min(1).optional(),
     snapshot: z
-      .object({
+      .strictObject({
         date: z.string().trim().min(1).optional(),
         source_ref: z.string().trim().min(1).optional(),
       })
-      .strict()
       .optional(),
     profiles: z.array(qaScorecardProfileSchema).default([]),
     levels: z.array(qaMaturityLevelSchema).default([]),
@@ -321,23 +293,19 @@ export const qaMaturityTaxonomySchema = z
     }
   });
 
-export type QaNativeCoverageEvidenceKind = "script" | "vitest" | "playwright";
-export type QaScorecardEvidenceKind = QaNativeCoverageEvidenceKind | "qa-scenario";
+type QaNativeCoverageEvidenceKind = "script" | "vitest" | "playwright";
+type QaScorecardEvidenceKind = QaNativeCoverageEvidenceKind | "qa-scenario";
 export type QaScorecardEvidenceMode = z.infer<typeof qaScorecardEvidenceModeSchema>;
 export type QaScorecardChannelDriver = z.infer<typeof qaScorecardChannelDriverSchema>;
-export type QaMaturityScoreKey = (typeof QA_MATURITY_SCORE_KEYS)[number];
+type QaMaturityScoreKey = (typeof QA_MATURITY_SCORE_KEYS)[number];
 export type QaMaturityScoreObject = z.infer<typeof qaMaturityScoreObjectSchema>;
-export type QaMaturityScoreBundle = z.infer<typeof qaMaturityScoreBundleSchema>;
-export type QaMaturityScoreLastRun = z.infer<typeof qaMaturityScoreLastRunSchema>;
 export type QaMaturityScoreSurfaceLts = z.infer<typeof qaMaturityScoreSurfaceLtsSchema>;
-export type QaMaturityScoreCategory = z.infer<typeof qaMaturityScoreCategorySchema>;
+type QaMaturityScoreCategory = z.infer<typeof qaMaturityScoreCategorySchema>;
 export type QaMaturityScoreSurface = z.infer<typeof qaMaturityScoreSurfaceSchema>;
 export type QaMaturityScores = z.infer<typeof qaMaturityScoresSchema>;
 export type QaMaturityTaxonomyLevel = z.infer<typeof qaMaturityLevelSchema>;
-export type QaMaturityTaxonomyFeature = z.infer<typeof qaMaturityFeatureSchema>;
-export type QaMaturityTaxonomyCategory = z.infer<typeof qaMaturityCategorySchema>;
+type QaMaturityTaxonomyCategory = z.infer<typeof qaMaturityCategorySchema>;
 export type QaMaturityTaxonomySurface = z.infer<typeof qaMaturitySurfaceSchema>;
-export type QaMaturityTaxonomyProfile = z.infer<typeof qaScorecardProfileSchema>;
 export type QaMaturityTaxonomy = z.infer<typeof qaMaturityTaxonomySchema>;
 type QaCoverageEvidenceRole = z.infer<typeof qaCoverageEvidenceRoleSchema>;
 
@@ -345,7 +313,7 @@ export type QaMaturityCoverageScores = {
   categories: Map<string, QaMaturityScoreObject>;
 };
 
-export type QaScorecardValidationIssueCode =
+type QaScorecardValidationIssueCode =
   | "coverage-id-missing-primary-evidence"
   | "coverage-id-not-found"
   | "evidence-ref-not-found"
@@ -354,7 +322,7 @@ export type QaScorecardValidationIssueCode =
   | "profile-category-ref-not-found"
   | "profile-category-missing-evidence";
 
-export type QaScorecardValidationIssue = {
+type QaScorecardValidationIssue = {
   code: QaScorecardValidationIssueCode;
   severity: "warning";
   categoryId?: string;
@@ -362,7 +330,7 @@ export type QaScorecardValidationIssue = {
   message: string;
 };
 
-export type QaScorecardEvidenceReport = {
+type QaScorecardEvidenceReport = {
   coverageId: string;
   kind: QaScorecardEvidenceKind;
   path: string | null;
@@ -385,12 +353,12 @@ export type QaScorecardCategoryCoverageReport = {
   missingEvidenceRefs: string[];
 };
 
-export type QaScorecardCategoryFeatureCoverageReport = {
+type QaScorecardCategoryFeatureCoverageReport = {
   name: string;
   coverageIds: string[];
 };
 
-export type QaScorecardProfileReport = {
+type QaScorecardProfileReport = {
   id: string;
   evidenceMode: QaScorecardEvidenceMode;
   channelDriver: QaScorecardChannelDriver;
@@ -421,7 +389,7 @@ export type QaScorecardTaxonomyReport = {
   categories: QaScorecardCategoryCoverageReport[];
 };
 
-export type QaMaturityTaxonomyCategoryIndex = {
+type QaMaturityTaxonomyCategoryIndex = {
   active: QaMaturityTaxonomySurface[];
   surfaces: Map<
     string,
@@ -460,7 +428,7 @@ function formatZodIssuePath(pathLocal: PropertyKey[]) {
   return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
 }
 
-export function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
+function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
   const parsed = qaMaturityTaxonomySchema.safeParse(value);
   if (parsed.success) {
     return parsed.data;
@@ -471,7 +439,7 @@ export function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXO
   throw new Error(`${label}: ${issues}`);
 }
 
-export function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES_PATH) {
+function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES_PATH) {
   const parsed = qaMaturityScoresSchema.safeParse(value);
   if (parsed.success) {
     return parsed.data;
@@ -578,7 +546,7 @@ export function activeQaMaturityTaxonomySurfaces(taxonomy: QaMaturityTaxonomy) {
   return taxonomy.surfaces.filter((surface) => !surface.archived);
 }
 
-export function buildQaMaturityTaxonomyCategoryIndex(
+function buildQaMaturityTaxonomyCategoryIndex(
   taxonomy: QaMaturityTaxonomy,
 ): QaMaturityTaxonomyCategoryIndex {
   const active = activeQaMaturityTaxonomySurfaces(taxonomy);
@@ -601,23 +569,6 @@ export function buildQaMaturityTaxonomyCategoryIndex(
 
 export function qaMaturityTaxonomyLevelMap(taxonomy: QaMaturityTaxonomy) {
   return new Map(taxonomy.levels.map((level) => [level.id, level]));
-}
-
-export function qaMaturityCategoryProfiles(taxonomy: QaMaturityTaxonomy): Map<string, string[]> {
-  const profilesByCategory = new Map<string, string[]>();
-  for (const profile of taxonomy.profiles) {
-    const categoryIds = profile.includeAllCategories
-      ? activeQaMaturityTaxonomySurfaces(taxonomy).flatMap((surface) =>
-          surface.categories.map((category) => `${surface.id}.${category.id}`),
-        )
-      : profile.categoryIds;
-    for (const categoryId of categoryIds) {
-      const profiles = profilesByCategory.get(categoryId) ?? [];
-      profiles.push(profile.id);
-      profilesByCategory.set(categoryId, profiles);
-    }
-  }
-  return profilesByCategory;
 }
 
 export function qaMaturityFamilyOrder(surfaces: readonly QaMaturityTaxonomySurface[]): string[] {
@@ -660,7 +611,7 @@ function expectedMaturitySurfaceLtsStatus(supportedCategories: number, totalCate
   return supportedCategories === totalCategories ? "full" : "partial";
 }
 
-export function validateQaMaturityScoresAgainstTaxonomy(params: {
+function validateQaMaturityScoresAgainstTaxonomy(params: {
   coverageScores?: QaMaturityCoverageScores;
   scores: QaMaturityScores;
   taxonomy: QaMaturityTaxonomy;
@@ -922,7 +873,7 @@ function collectEvidenceReportsForCoverageId(params: {
   });
 }
 
-export function buildQaScorecardTaxonomyReport(params: {
+function buildQaScorecardTaxonomyReport(params: {
   taxonomy: QaMaturityTaxonomy | null;
   taxonomyPath?: string | null;
   repoRoot?: string;
@@ -1181,3 +1132,4 @@ export function readQaScorecardTaxonomyReport(scenarios: readonly QaSeedScenario
     scenarios,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

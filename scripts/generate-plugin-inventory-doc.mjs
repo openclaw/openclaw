@@ -34,6 +34,26 @@ const PLUGIN_DOC_ALIASES = new Map([
 const SKIPPED_REFERENCE_PAGE_IDS = new Set(["parallel"]);
 const MANUAL_SECTION_START = "<!-- openclaw-plugin-reference:manual-start -->";
 const MANUAL_SECTION_END = "<!-- openclaw-plugin-reference:manual-end -->";
+// Generated link labels are user-visible product names and translation source.
+const RELATED_DOC_PRODUCT_IDS = new Set([
+  "chutes",
+  "discord",
+  "fireworks",
+  "googlechat",
+  "imessage",
+  "line",
+  "matrix",
+  "meta",
+  "msteams",
+  "raft",
+  "runway",
+  "signal",
+  "slack",
+  "synthetic",
+  "telegram",
+  "tokenjuice",
+  "whatsapp",
+]);
 
 function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(ROOT, relativePath), "utf8"));
@@ -70,6 +90,10 @@ function normalizeDocPath(value) {
 
 function docLink({ label, href }) {
   return `[${label}](${href})`;
+}
+
+function relatedDocLabel(value) {
+  return RELATED_DOC_PRODUCT_IDS.has(value) ? humanizeId(value) : value;
 }
 
 function pluginReferencePath(id) {
@@ -131,6 +155,7 @@ function humanizeId(value) {
     ["litellm", "LiteLLM"],
     ["llm", "LLM"],
     ["lmstudio", "LM Studio"],
+    ["longcat", "LongCat"],
     ["mdns", "mDNS"],
     ["minimax", "MiniMax"],
     ["modelstudio", "Model Studio"],
@@ -217,6 +242,7 @@ function resolveDescription({ manifest, packageJson }) {
     webContentExtractors: "Adds readable web content extraction.",
     webFetchProviders: "Adds web fetch provider support.",
     webSearchProviders: "Adds web search provider support.",
+    workerProviders: "Adds cloud worker provider support.",
   };
   const describedContracts = contracts
     .map((contract) => contractDescriptions[contract])
@@ -242,7 +268,7 @@ function resolveDocs({ dirName, manifest, packageJson }) {
   const links = [];
   const pluginAlias = PLUGIN_DOC_ALIASES.get(manifest.id) ?? PLUGIN_DOC_ALIASES.get(dirName);
   if (pluginAlias) {
-    const pluginAliasLabel = manifest.id ?? dirName;
+    const pluginAliasLabel = relatedDocLabel(manifest.id ?? dirName);
     pushUniqueDocLink(links, { href: pluginAlias, label: pluginAliasLabel });
   }
 
@@ -250,7 +276,7 @@ function resolveDocs({ dirName, manifest, packageJson }) {
   if (channelDoc) {
     pushUniqueDocLink(links, {
       href: channelDoc,
-      label: channelDoc.replace(/^\/channels\//u, ""),
+      label: relatedDocLabel(channelDoc.replace(/^\/channels\//u, "")),
     });
   }
 
@@ -260,7 +286,7 @@ function resolveDocs({ dirName, manifest, packageJson }) {
     }
     const relativePath = `docs/channels/${channel}.md`;
     if (fileExists(relativePath)) {
-      pushUniqueDocLink(links, { href: `/channels/${channel}`, label: channel });
+      pushUniqueDocLink(links, { href: `/channels/${channel}`, label: relatedDocLabel(channel) });
     }
   }
 
@@ -270,12 +296,15 @@ function resolveDocs({ dirName, manifest, packageJson }) {
     }
     const alias = PROVIDER_DOC_ALIASES.get(provider);
     if (alias) {
-      pushUniqueDocLink(links, { href: alias, label: provider });
+      pushUniqueDocLink(links, { href: alias, label: relatedDocLabel(provider) });
       continue;
     }
     const relativePath = `docs/providers/${provider}.md`;
     if (fileExists(relativePath)) {
-      pushUniqueDocLink(links, { href: `/providers/${provider}`, label: provider });
+      pushUniqueDocLink(links, {
+        href: `/providers/${provider}`,
+        label: relatedDocLabel(provider),
+      });
     }
   }
 
@@ -284,13 +313,22 @@ function resolveDocs({ dirName, manifest, packageJson }) {
       continue;
     }
     if (fileExists(`docs/channels/${candidate}.md`)) {
-      pushUniqueDocLink(links, { href: `/channels/${candidate}`, label: candidate });
+      pushUniqueDocLink(links, {
+        href: `/channels/${candidate}`,
+        label: relatedDocLabel(candidate),
+      });
     }
     if (fileExists(`docs/providers/${candidate}.md`)) {
-      pushUniqueDocLink(links, { href: `/providers/${candidate}`, label: candidate });
+      pushUniqueDocLink(links, {
+        href: `/providers/${candidate}`,
+        label: relatedDocLabel(candidate),
+      });
     }
     if (fileExists(`docs/plugins/${candidate}.md`)) {
-      pushUniqueDocLink(links, { href: `/plugins/${candidate}`, label: candidate });
+      pushUniqueDocLink(links, {
+        href: `/plugins/${candidate}`,
+        label: relatedDocLabel(candidate),
+      });
     }
   }
 

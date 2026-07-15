@@ -19,9 +19,10 @@ import {
 import type { CronJobInsert, CronJobRow } from "./schema.js";
 import { getCronStoreKysely } from "./schema.js";
 import { bindStateColumns, stateFromRow } from "./state-codec.js";
+import { bindTriggerColumns, triggerFromRow } from "./trigger-codec.js";
 import type { LoadedCronStore } from "./types.js";
 
-export function bindScheduleColumns(
+function bindScheduleColumns(
   schedule: CronSchedule,
 ): Pick<
   CronJobInsert,
@@ -154,6 +155,7 @@ function bindCronJobRow(storeKey: string, job: CronJob, sortOrder: number): Cron
     session_key: job.sessionKey ?? null,
     session_target: job.sessionTarget,
     wake_mode: job.wakeMode,
+    ...bindTriggerColumns(job.trigger),
     ...bindScheduleColumns(job.schedule),
     ...bindPayloadColumns(job.payload),
     ...bindDeliveryColumns(job.delivery),
@@ -208,7 +210,7 @@ export function assertCronStoreCanPersist(store: CronStoreFile): void {
   }
 }
 
-export function scheduleFromRow(row: CronJobRow): CronSchedule | null {
+function scheduleFromRow(row: CronJobRow): CronSchedule | null {
   if (row.schedule_kind === "at" && row.at) {
     return { kind: "at", at: row.at };
   }
@@ -242,6 +244,7 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
   const payload = payloadFromRow(row);
   const delivery = deliveryFromRow(row);
   const failureAlert = failureAlertFromRow(row);
+  const trigger = triggerFromRow(row);
   if (!schedule || !payload) {
     return null;
   }
@@ -272,11 +275,26 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     schedule,
     sessionTarget: row.session_target as CronJob["sessionTarget"],
     wakeMode: row.wake_mode as CronJob["wakeMode"],
+    ...(trigger ? { trigger } : {}),
     payload,
     ...(delivery ? { delivery } : {}),
     ...(failureAlert !== undefined ? { failureAlert } : {}),
     state: stateFromRow(row),
   };
+}
+
+/** Projects a live job through the same normalization/codecs used by SQLite persistence. */
+export function projectCronJobThroughStorageCodec(job: CronJob): CronJob {
+  const normalized = normalizeCronJobForSqlite(job);
+  if (!normalized) {
+    throw new Error(`cannot project invalid cron job ${job.id}`);
+  }
+  const row = bindCronJobRow("config-revision", normalized, 0) as CronJobRow;
+  const projected = rowToCronJob(row);
+  if (!projected) {
+    throw new Error(`cannot project cron job ${job.id} through storage codecs`);
+  }
+  return projected;
 }
 
 /** Loads cron rows in config order with deterministic fallbacks for old rows. */

@@ -3,12 +3,7 @@ import { readStringAlias } from "../../utils/string-readers.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
 /** Message context fields that can carry user-visible command text. */
-export type ContextTextKey =
-  | "BodyForAgent"
-  | "BodyForCommands"
-  | "CommandBody"
-  | "RawBody"
-  | "Body";
+type ContextTextKey = "BodyForAgent" | "BodyForCommands" | "CommandBody" | "RawBody" | "Body";
 
 /** Returns the first string field from a finalized message context. */
 export function resolveFirstContextText(

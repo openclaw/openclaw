@@ -1,20 +1,51 @@
 // Chat-owned message thread presentation and thread-local interaction state.
-import { html, nothing, type TemplateResult } from "lit";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { VirtualizerController } from "@tanstack/lit-virtual";
+import { defaultRangeExtractor, observeElementRect } from "@tanstack/virtual-core";
+import {
+  html,
+  nothing,
+  type ReactiveController,
+  type ReactiveControllerHost,
+  type TemplateResult,
+} from "lit";
 import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { styleMap } from "lit/directives/style-map.js";
+import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
+import { beginNativeWindowDragFromTopInset } from "../../../app/native-window-drag.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
-import { handleMarkdownCodeBlockCopy } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
-import { CHAT_HISTORY_RENDER_LIMIT } from "../../../lib/chat/chat-types.ts";
-import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
+import {
+  handleMarkdownCodeBlockCopy,
+  markdownFileLinkFromEvent,
+} from "../../../components/markdown.ts";
+import { i18n, t } from "../../../i18n/index.ts";
+import type {
+  ChatQueueItem,
+  ChatStreamSegment,
+  MessageGroup,
+} from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
+import {
+  buildMoreDetailsSideCommand,
+  combineSideChatComposerDraft,
+} from "../../../lib/chat/side-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalScopeConfigured,
+  parseAgentSessionKey,
+  resolveUiGlobalAliasAgentId,
+  type UiSessionDefaultsHost,
+} from "../../../lib/sessions/session-key.ts";
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
+  collapseCompletedTurnWork,
   deletedChatItemsSignature,
   getExpandedToolCards,
   resetChatThreadState,
@@ -25,20 +56,23 @@ import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
+import { getToolTitlesVersion } from "../tool-titles.ts";
+import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
+import { renderChatDivider } from "./chat-divider.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
   renderStreamGroup,
+  renderWorkGroupSummary,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
+import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
-const INITIAL_CHAT_HISTORY_RENDER_WINDOW = 30;
-const CHAT_HISTORY_RENDER_WINDOW_BATCH = 30;
-const CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX = 48;
 
 type ReplyTarget = {
   messageId: string;
@@ -50,22 +84,18 @@ type ChatThreadState = {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
-  historyRenderSessionKey: string | null;
-  historyRenderMessagesRef: unknown[] | null;
-  historyRenderMessageCount: number;
-  historyRenderLimit: number;
-  historyRenderLastScrollTop: number | null;
-  historyRenderExpansionFrame: number | null;
-  historyRenderAnchorAdjustment: {
-    scrollHeight: number;
-    scrollTop: number;
-  } | null;
-  historyRenderAnchorFrame: number | null;
+  transcriptRenderDependencies: readonly unknown[];
+  transcriptRenderContext: object;
 };
 
-export type ChatThreadProps = {
+type ChatThreadProps = {
+  paneId: string;
   sessionKey: string;
+  announceTranscript?: boolean;
   loading: boolean;
+  historyPagination?: {
+    loading: boolean;
+  };
   messages: unknown[];
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
@@ -74,7 +104,14 @@ export type ChatThreadProps = {
   queue: ChatQueueItem[];
   showThinking: boolean;
   showToolCalls: boolean;
+  /** True while the session has an abortable live run (marks running tool rows). */
+  runActive?: boolean;
+  /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
+  runWorking?: boolean;
   sessions: SessionsListResult | null;
+  /** Host context resolving global-alias session keys (scope=global fleets). */
+  /** Includes assistantAgentId so bare-global welcome recents scope to the selected agent. */
+  sessionHost?: UiSessionDefaultsHost | null;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
@@ -90,39 +127,357 @@ export type ChatThreadProps = {
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   onOpenSidebar?: (content: SidebarContent) => void;
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onAssistantAttachmentLoaded?: () => void;
   onRequestUpdate?: () => void;
-  onScrollToBottom?: () => void;
   onChatScroll?: (event: Event) => void;
+  onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
+  /** Current composer draft; the selection popup preserves it when prefilling. */
+  getDraft?: () => string;
   onSend: () => void;
   onSetReply?: (target: ReplyTarget) => void;
   onFocusComposer?: () => void;
+  /** Sends a detached /btw side question built from the selection popup. */
+  onSideQuestion?: (command: string) => void;
+  onOpenSession?: (sessionKey: string) => void;
+  /** Tasks-rail snapshot backing the post-turn running-tasks status row. */
+  backgroundTasks?: BackgroundTasksProps;
 };
 
-export type ChatPinnedMessagesProps = Pick<
+type ChatPinnedMessagesProps = Pick<
   ChatThreadProps,
-  "sessionKey" | "messages" | "userName" | "userAvatar"
+  "paneId" | "sessionKey" | "messages" | "userName" | "userAvatar"
 >;
+
+type ChatRenderItem = ReturnType<typeof collapseCompletedTurnWork>[number];
+
+type ChatTranscriptRow =
+  | { kind: "item"; key: string; item: ChatRenderItem }
+  | { kind: "content"; key: string; content: unknown };
+
+type ChatTranscriptAnnouncement = {
+  key: string;
+  text: string;
+};
+
+const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
+const CHAT_TRANSCRIPT_OVERSCAN = 6;
+const CHAT_TRANSCRIPT_END_THRESHOLD_PX = 8;
+const CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS = 500;
+
+function initialTranscriptRect(host: ReactiveControllerHost) {
+  const width = host instanceof HTMLElement ? host.clientWidth : 0;
+  const height = host instanceof HTMLElement ? host.clientHeight : 0;
+  return {
+    width: width || (typeof window === "undefined" ? 0 : window.innerWidth),
+    height: height || (typeof window === "undefined" ? 0 : window.innerHeight),
+  };
+}
+
+function transcriptScrollMargin(element: Element | null): number {
+  if (!(element instanceof HTMLElement) || typeof getComputedStyle !== "function") {
+    return 0;
+  }
+  const margin = Number.parseFloat(getComputedStyle(element).paddingTop);
+  return Number.isFinite(margin) ? margin : 0;
+}
+
+function initialTranscriptScrollMargin(host: ReactiveControllerHost): number {
+  return host instanceof HTMLElement
+    ? transcriptScrollMargin(host.querySelector(".chat-thread"))
+    : 0;
+}
+
+class ChatSessionVirtualizerHost implements ReactiveControllerHost {
+  private readonly controllers = new Set<ReactiveController>();
+  private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
+  private scrollElement: HTMLDivElement | null = null;
+  private rowKeys: readonly string[] = [];
+  private rowIndexesByKey = new Map<string, number>();
+  private focusedRowKey: string | null = null;
+  private announcementInitialized = false;
+  private announcementKey: string | null = null;
+  private currentAnnouncementText = "";
+
+  constructor(private readonly host: ReactiveControllerHost) {
+    this.virtualizerController = new VirtualizerController(this, {
+      count: 0,
+      getScrollElement: () => this.scrollElement,
+      estimateSize: () => CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
+      getItemKey: () => "",
+      initialRect: initialTranscriptRect(host),
+      initialOffset: Number.MAX_SAFE_INTEGER,
+      scrollMargin: initialTranscriptScrollMargin(host),
+      anchorTo: "end",
+      followOnAppend: false,
+      observeElementRect: (instance, callback) =>
+        observeElementRect(instance, (rect) => {
+          this.syncScrollMargin(instance.scrollElement);
+          callback(rect);
+        }),
+      rangeExtractor: (range) => {
+        const indexes = defaultRangeExtractor(range);
+        const focused =
+          this.focusedRowKey === null ? undefined : this.rowIndexesByKey.get(this.focusedRowKey);
+        if (
+          focused === undefined ||
+          focused < 0 ||
+          focused >= range.count ||
+          indexes.includes(focused)
+        ) {
+          return indexes;
+        }
+        return [...indexes, focused].toSorted((left, right) => left - right);
+      },
+      scrollEndThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
+      overscan: CHAT_TRANSCRIPT_OVERSCAN,
+    });
+  }
+
+  get updateComplete() {
+    return this.host.updateComplete;
+  }
+
+  get liveAnnouncementText() {
+    return this.currentAnnouncementText;
+  }
+
+  requestUpdate = () => {
+    this.host.requestUpdate();
+  };
+
+  addController(controller: ReactiveController): void {
+    this.controllers.add(controller);
+  }
+
+  removeController(controller: ReactiveController): void {
+    this.controllers.delete(controller);
+  }
+
+  connect(): void {
+    for (const controller of this.controllers) {
+      controller.hostConnected?.();
+    }
+  }
+
+  update(): void {
+    for (const controller of this.controllers) {
+      controller.hostUpdated?.();
+    }
+  }
+
+  disconnect(): void {
+    for (const controller of this.controllers) {
+      controller.hostDisconnected?.();
+    }
+    this.scrollElement = null;
+  }
+
+  render(
+    rows: readonly ChatTranscriptRow[],
+    renderRow: (row: ChatTranscriptRow) => unknown,
+    announcement: ChatTranscriptAnnouncement | null,
+    announce: boolean,
+    overlay: unknown = nothing,
+  ): TemplateResult {
+    this.syncRows(rows);
+    this.syncAnnouncement(announcement, announce);
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    const virtualRows = virtualizer.getVirtualItems();
+    return html`
+      <div
+        class="chat-thread-inner chat-thread-inner--virtual"
+        ${ref((element) => {
+          this.scrollElement =
+            element?.parentElement instanceof HTMLDivElement ? element.parentElement : null;
+        })}
+      >
+        <div
+          class="chat-virtual-sizer"
+          style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
+        >
+          ${overlay}
+          ${repeat(
+            virtualRows,
+            (virtualRow) => virtualRow.key,
+            (virtualRow) => {
+              const row = rows[virtualRow.index];
+              if (!row) {
+                return nothing;
+              }
+              return html`
+                <div
+                  class="chat-virtual-row ${virtualRow.index === 0
+                    ? "chat-virtual-row--first"
+                    : ""}"
+                  style=${styleMap({
+                    transform: `translateY(${
+                      virtualRow.start - virtualizer.options.scrollMargin
+                    }px)`,
+                  })}
+                  data-index=${String(virtualRow.index)}
+                  data-virtual-row-key=${row.key}
+                  ${ref((element) =>
+                    virtualizer.measureElement(element instanceof HTMLElement ? element : null),
+                  )}
+                >
+                  ${renderRow(row)}
+                </div>
+              `;
+            },
+          )}
+        </div>
+      </div>
+    `;
+  }
+
+  scrollToEnd(options: { behavior?: ScrollBehavior } = {}): void {
+    this.virtualizerController.getVirtualizer().scrollToEnd(options);
+  }
+
+  handleFocusIn(event: FocusEvent): void {
+    this.focusedRowKey = this.rowKeyFromEvent(event);
+  }
+
+  handleFocusOut(event: FocusEvent): void {
+    this.focusedRowKey = this.rowKeyFromEvent(event, event.relatedTarget);
+  }
+
+  private rowKeyFromEvent(event: FocusEvent, target: EventTarget | null = event.target) {
+    if (!(target instanceof Element) || !this.scrollElement?.contains(target)) {
+      return null;
+    }
+    const row = target.closest<HTMLElement>(".chat-virtual-row[data-virtual-row-key]");
+    if (!row || !this.scrollElement.contains(row)) {
+      return null;
+    }
+    return row.dataset.virtualRowKey || null;
+  }
+
+  private syncAnnouncement(
+    announcement: ChatTranscriptAnnouncement | null,
+    announce: boolean,
+  ): void {
+    if (!this.announcementInitialized || !announce) {
+      this.announcementInitialized = true;
+      this.announcementKey = announcement?.key ?? null;
+      this.currentAnnouncementText = "";
+      return;
+    }
+    if (!announcement || announcement.key === this.announcementKey) {
+      return;
+    }
+    this.announcementKey = announcement.key;
+    this.currentAnnouncementText = announcement.text;
+  }
+
+  private syncRows(rows: readonly ChatTranscriptRow[]): void {
+    const nextKeys = rows.map((row) => row.key);
+    if (
+      nextKeys.length === this.rowKeys.length &&
+      nextKeys.every((key, index) => key === this.rowKeys[index])
+    ) {
+      return;
+    }
+    this.rowKeys = Object.freeze(nextKeys);
+    this.rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
+    const keys = this.rowKeys;
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    virtualizer.setOptions({
+      ...virtualizer.options,
+      count: keys.length,
+      getItemKey: (index) => keys[index] ?? `missing:${index}`,
+    });
+  }
+
+  private syncScrollMargin(scrollElement: HTMLDivElement | null): void {
+    const scrollMargin = transcriptScrollMargin(scrollElement);
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    if (scrollMargin === virtualizer.options.scrollMargin) {
+      return;
+    }
+    virtualizer.setOptions({
+      ...virtualizer.options,
+      scrollMargin,
+    });
+  }
+}
+
+export class ChatTranscriptController implements ReactiveController {
+  private sessionKey: string | null = null;
+  private sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
+  private connected = false;
+
+  constructor(private readonly host: ReactiveControllerHost) {
+    host.addController(this);
+  }
+
+  render(props: ChatThreadProps): TemplateResult {
+    if (
+      !this.sessionVirtualizer ||
+      this.sessionKey === null ||
+      !areUiSessionKeysEquivalent(this.sessionKey, props.sessionKey)
+    ) {
+      this.sessionVirtualizer?.disconnect();
+      this.sessionKey = props.sessionKey;
+      this.sessionVirtualizer = new ChatSessionVirtualizerHost(this.host);
+      if (this.connected) {
+        this.sessionVirtualizer.connect();
+      }
+    }
+    return renderChatThreadContents(props, this.sessionVirtualizer);
+  }
+
+  scrollToEnd(options: { behavior?: ScrollBehavior } = {}): void {
+    this.sessionVirtualizer?.scrollToEnd(options);
+  }
+
+  handleFocusIn(event: FocusEvent): void {
+    this.sessionVirtualizer?.handleFocusIn(event);
+  }
+
+  handleFocusOut(event: FocusEvent): void {
+    this.sessionVirtualizer?.handleFocusOut(event);
+  }
+
+  hostConnected(): void {
+    this.connected = true;
+    this.sessionVirtualizer?.connect();
+  }
+
+  hostUpdated(): void {
+    this.sessionVirtualizer?.update();
+  }
+
+  hostDisconnected(): void {
+    this.connected = false;
+    this.sessionVirtualizer?.disconnect();
+  }
+}
 
 function createChatThreadState(): ChatThreadState {
   return {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
-    historyRenderSessionKey: null,
-    historyRenderMessagesRef: null,
-    historyRenderMessageCount: 0,
-    historyRenderLimit: 0,
-    historyRenderLastScrollTop: null,
-    historyRenderExpansionFrame: null,
-    historyRenderAnchorAdjustment: null,
-    historyRenderAnchorFrame: null,
+    transcriptRenderDependencies: [],
+    transcriptRenderContext: {},
   };
 }
 
-const threadState = createChatThreadState();
+const threadStates = new Map<string, ChatThreadState>();
+
+function getChatThreadState(paneId: string): ChatThreadState {
+  const existing = threadStates.get(paneId);
+  if (existing) {
+    return existing;
+  }
+  const state = createChatThreadState();
+  threadStates.set(paneId, state);
+  return state;
+}
 
 function getPinnedMessages(sessionKey: string): PinnedMessages {
   return getOrCreateSessionCacheValue(
@@ -144,163 +499,26 @@ function getPinnedMessageSummary(message: unknown): string {
   return extractTextCached(message) ?? "";
 }
 
-export function resetChatThreadPresentationState() {
-  removeReplyContextMenu();
-  if (threadState.historyRenderExpansionFrame != null) {
-    cancelAnimationFrame(threadState.historyRenderExpansionFrame);
+export function resetChatThreadPresentationState(paneId?: string) {
+  removeReplyContextMenu(paneId);
+  // The selection popup is body-portaled; pane teardown/route changes must
+  // drop it so it cannot outlive the render that owns its callbacks.
+  removeChatSelectionPopup();
+  if (paneId) {
+    threadStates.delete(paneId);
+    resetChatThreadState(paneId);
+  } else {
+    threadStates.clear();
+    resetChatThreadState();
   }
-  if (threadState.historyRenderAnchorFrame != null) {
-    cancelAnimationFrame(threadState.historyRenderAnchorFrame);
-  }
-  Object.assign(threadState, createChatThreadState());
-  resetChatThreadState();
 }
 
-function resolveChatHistoryRenderCap(messageCount: number): number {
-  return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_LIMIT);
-}
-
-function shouldRenderFullChatHistoryWindow(messageCount: number): boolean {
-  return (
-    messageCount <= INITIAL_CHAT_HISTORY_RENDER_WINDOW ||
-    (threadState.searchOpen && threadState.searchQuery.trim().length > 0)
-  );
-}
-
-function resolveChatHistoryRenderWindow(props: Pick<ChatThreadProps, "sessionKey" | "messages">) {
-  const messages = Array.isArray(props.messages) ? props.messages : [];
-  const cap = resolveChatHistoryRenderCap(messages.length);
-  const sessionChanged = threadState.historyRenderSessionKey !== props.sessionKey;
-  const refChanged = threadState.historyRenderMessagesRef !== messages;
-  const previousCount = threadState.historyRenderMessageCount;
-  if (sessionChanged || (refChanged && previousCount === 0)) {
-    threadState.historyRenderLastScrollTop = null;
-  }
-
-  if (cap === 0) {
-    threadState.historyRenderSessionKey = props.sessionKey;
-    threadState.historyRenderMessagesRef = messages;
-    threadState.historyRenderMessageCount = messages.length;
-    threadState.historyRenderLimit = 0;
-    threadState.historyRenderLastScrollTop = null;
-    return 0;
-  }
-
-  if (shouldRenderFullChatHistoryWindow(messages.length)) {
-    threadState.historyRenderSessionKey = props.sessionKey;
-    threadState.historyRenderMessagesRef = messages;
-    threadState.historyRenderMessageCount = messages.length;
-    threadState.historyRenderLimit = cap;
-    return cap;
-  }
-
-  if (sessionChanged || (refChanged && previousCount === 0)) {
-    threadState.historyRenderLimit = Math.min(INITIAL_CHAT_HISTORY_RENDER_WINDOW, cap);
-  } else if (refChanged) {
-    const grewBy = messages.length - previousCount;
-    if (threadState.historyRenderLimit >= previousCount) {
-      threadState.historyRenderLimit = cap;
-    } else if (grewBy > 0 && grewBy <= CHAT_HISTORY_RENDER_WINDOW_BATCH) {
-      threadState.historyRenderLimit = Math.min(cap, threadState.historyRenderLimit + grewBy);
-    } else {
-      threadState.historyRenderLimit = Math.min(
-        Math.max(threadState.historyRenderLimit, INITIAL_CHAT_HISTORY_RENDER_WINDOW),
-        cap,
-      );
-    }
-  }
-
-  threadState.historyRenderSessionKey = props.sessionKey;
-  threadState.historyRenderMessagesRef = messages;
-  threadState.historyRenderMessageCount = messages.length;
-  threadState.historyRenderLimit = Math.min(Math.max(1, threadState.historyRenderLimit), cap);
-  return threadState.historyRenderLimit;
-}
-
-function maybeExpandChatHistoryRenderWindow(event: Event, requestUpdate: () => void) {
-  const target = event.currentTarget;
-  if (!(target instanceof HTMLElement)) {
-    return;
-  }
-  const scrollTop = Math.max(0, target.scrollTop);
-  const previousScrollTop = threadState.historyRenderLastScrollTop;
-  threadState.historyRenderLastScrollTop = scrollTop;
-  const distanceFromBottom = Math.max(0, target.scrollHeight - scrollTop - target.clientHeight);
-  const isTop = scrollTop <= CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX;
-  const isBottomAutoScroll =
-    scrollTop > 0 && distanceFromBottom <= CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX;
-  const isTopScrollUp =
-    isTop &&
-    (scrollTop === 0 ||
-      (!isBottomAutoScroll && (previousScrollTop == null || scrollTop < previousScrollTop)));
-  if (!isTopScrollUp) {
-    return;
-  }
-  const cap = resolveChatHistoryRenderCap(threadState.historyRenderMessageCount);
-  if (threadState.historyRenderLimit >= cap) {
-    return;
-  }
-  threadState.historyRenderAnchorAdjustment = {
-    scrollHeight: target.scrollHeight,
-    scrollTop,
-  };
-  scheduleChatHistoryRenderAnchorPreservation(target);
-  threadState.historyRenderLimit = Math.min(
-    cap,
-    threadState.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH,
-  );
-  requestUpdate();
-}
-
-function scheduleChatHistoryRenderAnchorPreservation(thread: HTMLElement) {
-  const adjustment = threadState.historyRenderAnchorAdjustment;
-  if (!adjustment || threadState.historyRenderAnchorFrame != null) {
-    return;
-  }
-  threadState.historyRenderAnchorFrame = requestAnimationFrame(() => {
-    threadState.historyRenderAnchorFrame = null;
-    threadState.historyRenderAnchorAdjustment = null;
-    const heightDelta = thread.scrollHeight - adjustment.scrollHeight;
-    if (heightDelta <= 0) {
-      return;
-    }
-    thread.scrollTop = adjustment.scrollTop + heightDelta;
-  });
-}
-
-function scheduleChatHistoryRenderWindowFill(
-  thread: HTMLElement | null,
+export function renderChatSearchBar(
+  paneId: string,
   requestUpdate: () => void,
-  scrollToBottom: () => void,
-) {
-  if (!thread || threadState.historyRenderExpansionFrame != null) {
-    return;
-  }
-  const cap = resolveChatHistoryRenderCap(threadState.historyRenderMessageCount);
-  if (threadState.historyRenderLimit >= cap) {
-    return;
-  }
-  threadState.historyRenderExpansionFrame = requestAnimationFrame(() => {
-    threadState.historyRenderExpansionFrame = null;
-    const nextCap = resolveChatHistoryRenderCap(threadState.historyRenderMessageCount);
-    if (threadState.historyRenderLimit >= nextCap) {
-      return;
-    }
-    const canScroll = thread.scrollHeight - thread.clientHeight > 1;
-    if (canScroll) {
-      return;
-    }
-    threadState.historyRenderLimit = Math.min(
-      nextCap,
-      threadState.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH,
-    );
-    requestUpdate();
-    scrollToBottom();
-  });
-}
-
-export function renderChatSearchBar(requestUpdate: () => void): TemplateResult | typeof nothing {
-  if (!threadState.searchOpen) {
+): TemplateResult | typeof nothing {
+  const state = getChatThreadState(paneId);
+  if (!state.searchOpen) {
     return nothing;
   }
   return html`
@@ -308,21 +526,21 @@ export function renderChatSearchBar(requestUpdate: () => void): TemplateResult |
       ${icons.search}
       <input
         type="text"
-        placeholder="Search messages..."
-        aria-label="Search messages"
-        .value=${threadState.searchQuery}
+        placeholder=${t("chat.thread.searchPlaceholder")}
+        aria-label=${t("chat.thread.search")}
+        .value=${state.searchQuery}
         @input=${(event: Event) => {
-          threadState.searchQuery = (event.target as HTMLInputElement).value;
+          state.searchQuery = (event.target as HTMLInputElement).value;
           requestUpdate();
         }}
       />
-      <openclaw-tooltip content="Close search">
+      <openclaw-tooltip .content=${t("chat.thread.closeSearch")}>
         <button
           class="btn btn--ghost"
-          aria-label="Close search"
+          aria-label=${t("chat.thread.closeSearch")}
           @click=${() => {
-            threadState.searchOpen = false;
-            threadState.searchQuery = "";
+            state.searchOpen = false;
+            state.searchQuery = "";
             requestUpdate();
           }}
         >
@@ -333,14 +551,15 @@ export function renderChatSearchBar(requestUpdate: () => void): TemplateResult |
   `;
 }
 
-export function isChatThreadSearchOpen(): boolean {
-  return threadState.searchOpen;
+export function isChatThreadSearchOpen(paneId: string): boolean {
+  return getChatThreadState(paneId).searchOpen;
 }
 
-export function toggleChatThreadSearch(requestUpdate: () => void): void {
-  threadState.searchOpen = !threadState.searchOpen;
-  if (!threadState.searchOpen) {
-    threadState.searchQuery = "";
+export function toggleChatThreadSearch(paneId: string, requestUpdate: () => void): void {
+  const state = getChatThreadState(paneId);
+  state.searchOpen = !state.searchOpen;
+  if (!state.searchOpen) {
+    state.searchQuery = "";
   }
   requestUpdate();
 }
@@ -349,6 +568,7 @@ export function renderChatPinnedMessages(
   props: ChatPinnedMessagesProps,
   requestUpdate: () => void,
 ): TemplateResult | typeof nothing {
+  const state = getChatThreadState(props.paneId);
   const pinned = getPinnedMessages(props.sessionKey);
   const userRoleLabel = resolveLocalUserName({
     name: props.userName ?? null,
@@ -372,21 +592,18 @@ export function renderChatPinnedMessages(
     <div class="agent-chat__pinned">
       <button
         class="agent-chat__pinned-toggle"
-        aria-expanded=${threadState.pinnedExpanded}
+        aria-expanded=${state.pinnedExpanded}
         @click=${() => {
-          threadState.pinnedExpanded = !threadState.pinnedExpanded;
+          state.pinnedExpanded = !state.pinnedExpanded;
           requestUpdate();
         }}
       >
         ${icons.bookmark} ${entries.length} pinned
-        <span
-          class="collapse-chevron ${threadState.pinnedExpanded
-            ? ""
-            : "collapse-chevron--collapsed"}"
+        <span class="collapse-chevron ${state.pinnedExpanded ? "" : "collapse-chevron--collapsed"}"
           >${icons.chevronDown}</span
         >
       </button>
-      ${threadState.pinnedExpanded
+      ${state.pinnedExpanded
         ? html`
             <div class="agent-chat__pinned-list">
               ${entries.map(
@@ -396,12 +613,12 @@ export function renderChatPinnedMessages(
                       >${role === "user" ? userRoleLabel : "Assistant"}</span
                     >
                     <span class="agent-chat__pinned-text"
-                      >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
+                      >${truncateUtf16Safe(text, 100)}${text.length > 100 ? "..." : ""}</span
                     >
-                    <openclaw-tooltip content="Unpin">
+                    <openclaw-tooltip .content=${t("chat.thread.unpin")}>
                       <button
                         class="btn btn--ghost"
-                        aria-label="Unpin"
+                        aria-label=${t("chat.thread.unpin")}
                         @click=${() => {
                           pinned.unpin(index);
                           requestUpdate();
@@ -421,16 +638,26 @@ export function renderChatPinnedMessages(
 }
 
 let activeReplyContextMenu: HTMLElement | null = null;
+let activeReplyContextMenuPaneId: string | null = null;
 let contextMenuDocumentClickHandler: ((event: MouseEvent) => void) | null = null;
+let contextMenuDocumentContextMenuHandler: ((event: MouseEvent) => void) | null = null;
 let contextMenuKeydownHandler: ((event: KeyboardEvent) => void) | null = null;
 
-function removeReplyContextMenu() {
+function removeReplyContextMenu(paneId?: string) {
+  if (paneId && paneId !== activeReplyContextMenuPaneId) {
+    return;
+  }
   activeReplyContextMenu?.remove();
   activeReplyContextMenu = null;
+  activeReplyContextMenuPaneId = null;
   document.querySelector(".chat-reply-context-menu")?.remove();
   if (contextMenuDocumentClickHandler) {
     document.removeEventListener("click", contextMenuDocumentClickHandler);
     contextMenuDocumentClickHandler = null;
+  }
+  if (contextMenuDocumentContextMenuHandler) {
+    document.removeEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
+    contextMenuDocumentContextMenuHandler = null;
   }
   if (contextMenuKeydownHandler) {
     document.removeEventListener("keydown", contextMenuKeydownHandler);
@@ -474,6 +701,28 @@ function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
   return button;
 }
 
+function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThreadProps) {
+  if (typeof props.onSideQuestion !== "function") {
+    return;
+  }
+  handleChatSelectionPointerUp(event, {
+    onMoreDetails: (selection) => {
+      const command = buildMoreDetailsSideCommand(selection);
+      if (command) {
+        props.onSideQuestion?.(command);
+      }
+    },
+    onAskSideChat: (selection) => {
+      const draft = combineSideChatComposerDraft(selection, props.getDraft?.());
+      if (draft) {
+        props.onDraftChange(draft);
+        props.onRequestUpdate?.();
+        props.onFocusComposer?.();
+      }
+    },
+  });
+}
+
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const bubble = (event.target as HTMLElement).closest(".chat-bubble");
   if (!bubble || typeof props.onSetReply !== "function") {
@@ -491,7 +740,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   }
   const senderEl = group.querySelector(".chat-sender-name");
   const senderLabel = senderEl?.textContent?.trim() ?? undefined;
-  const text = (bubble as HTMLElement).dataset.messageText?.trim().slice(0, 500) ?? "";
+  const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
   if (!text) {
     return;
   }
@@ -514,6 +763,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   menu.append(button);
   document.body.appendChild(menu);
   activeReplyContextMenu = menu;
+  activeReplyContextMenuPaneId = props.paneId;
 
   const menuRect = menu.getBoundingClientRect();
   let left = event.clientX;
@@ -536,6 +786,11 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
         removeReplyContextMenu();
       }
     };
+    contextMenuDocumentContextMenuHandler = (nextEvent: MouseEvent) => {
+      if (!menu.contains(nextEvent.target as Node | null)) {
+        removeReplyContextMenu();
+      }
+    };
     const handleKeydown = (nextEvent: KeyboardEvent) => {
       if (nextEvent.key === "Escape") {
         nextEvent.preventDefault();
@@ -546,13 +801,15 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
     };
     contextMenuKeydownHandler = handleKeydown;
     document.addEventListener("click", contextMenuDocumentClickHandler);
+    // Capture closes this owner even when the next menu stops event propagation.
+    document.addEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
     document.addEventListener("keydown", handleKeydown);
   });
 }
 
 function renderLoadingSkeleton() {
   return html`
-    <div class="chat-loading-skeleton" aria-label="Loading chat">
+    <div class="chat-loading-skeleton" aria-label=${t("chat.thread.loading")}>
       <div class="chat-line assistant">
         <div class="chat-msg">
           <div class="chat-bubble">
@@ -590,20 +847,123 @@ function renderLoadingSkeleton() {
   `;
 }
 
-export function renderChatThread(props: ChatThreadProps) {
+function renderHistorySentinel(loading: boolean) {
+  return html`
+    <div class="chat-history-sentinel">
+      ${loading
+        ? html`
+            <div class="chat-history-loading" role="status">
+              <span class="session-run-spinner" aria-hidden="true"></span>
+              <span>${t("common.loading")}</span>
+            </div>
+          `
+        : nothing}
+    </div>
+  `;
+}
+
+function latestTranscriptAnnouncement(
+  items: readonly ChatRenderItem[],
+): ChatTranscriptAnnouncement | null {
+  for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+    const item = items[itemIndex];
+    if (!item || item.kind !== "group" || item.role.toLowerCase() !== "assistant") {
+      continue;
+    }
+    for (let messageIndex = item.messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+      const message = item.messages[messageIndex]?.message;
+      const text = extractTextCached(message)?.trim();
+      if (text) {
+        return {
+          key: item.key,
+          text: truncateUtf16Safe(text, CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS),
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown[] {
+  if (item.kind === "stream-run") {
+    return [item.key, ...item.parts];
+  }
+  if (item.kind === "work-group") {
+    return [item.key, item.durationMs, item.hasError, ...item.groups];
+  }
+  return [item];
+}
+
+function trackTranscriptRenderDependencies(
+  state: ChatThreadState,
+  dependencies: unknown[],
+): unknown[] {
+  const previous = state.transcriptRenderDependencies;
+  const nextLength = dependencies.length - 1;
+  let changed = previous.length !== nextLength;
+  for (let index = 0; !changed && index < nextLength; index += 1) {
+    changed = !Object.is(previous[index], dependencies[index + 1]);
+  }
+  if (changed) {
+    // The first dependency is chatItems. Keep the shared context stable when
+    // only the live row changes, but invalidate every row for presentation changes.
+    state.transcriptRenderDependencies = dependencies.slice(1);
+    state.transcriptRenderContext = {};
+  }
+  return dependencies;
+}
+
+function guardChatRenderItems(state: ChatThreadState, render: (item: ChatRenderItem) => unknown) {
+  return (item: ChatRenderItem) =>
+    guard([...chatRenderItemGuardDependencies(item), state.transcriptRenderContext], () =>
+      render(item),
+    );
+}
+
+export function renderChatThread(
+  props: ChatThreadProps,
+  transcript: ChatTranscriptController,
+): TemplateResult {
+  return transcript.render(props);
+}
+
+function renderChatThreadContents(
+  props: ChatThreadProps,
+  transcript: ChatSessionVirtualizerHost,
+): TemplateResult {
+  const state = getChatThreadState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const displayStream = props.stream ?? null;
-  const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
+  const sessionHost = props.sessionHost ?? null;
+  // Equivalence, not exact match: the default session travels under alias
+  // keys ("main" vs "agent:main:main") depending on the caller.
+  const activeSession = props.sessions?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, props.sessionKey),
+  );
+  // Global-alias detection needs no session row: under configured global
+  // scope, agent:<id>:global and configured-main aliases route to the global
+  // stream even when the capped sessions list omits the canonical row (or it
+  // does not exist yet). The scope gate keeps per-sender main threads direct.
+  const isGlobalAliasKey =
+    parseAgentSessionKey(props.sessionKey)?.rest === "global" ||
+    (sessionHost !== null &&
+      isUiGlobalScopeConfigured(sessionHost) &&
+      resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
     name: props.assistantName,
     avatar: resolveAssistantDisplayAvatar(props),
   };
-  const historyRenderLimit = resolveChatHistoryRenderWindow(props);
   const deleted = getDeletedMessages(props.sessionKey);
+  const locale = i18n.getLocale();
   const chatItems = buildCachedChatItems({
+    paneId: props.paneId,
     sessionKey: props.sessionKey,
+    runId:
+      props.sessions?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, props.sessionKey))
+        ?.activeRunIds?.[0] ?? null,
+    locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
     streamSegments: props.streamSegments,
@@ -611,9 +971,10 @@ export function renderChatThread(props: ChatThreadProps) {
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     showToolCalls: props.showToolCalls,
-    searchOpen: threadState.searchOpen,
-    searchQuery: threadState.searchQuery,
-    historyRenderLimit,
+    runWorking: Boolean(props.runWorking),
+    loading: props.loading,
+    searchOpen: state.searchOpen,
+    searchQuery: state.searchQuery,
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
@@ -623,154 +984,215 @@ export function renderChatThread(props: ChatThreadProps) {
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
+  // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
+  // as the always-visible identity marker. The canonical session kind decides;
+  // the sessions list is capped, so absent/unknown rows classify by key:
+  // global aliases first, then the same core key-shape helper the gateway
+  // uses. Message senderLabels are not a signal here: gateway sanitization
+  // labels 1:1 channel DM rows too.
+  const rowKind = activeSession?.kind;
+  const sessionKind =
+    rowKind && rowKind !== "unknown"
+      ? rowKind
+      : isGlobalAliasKey
+        ? "global"
+        : classifySessionKind(props.sessionKey);
+  // Only agent-solo kinds qualify: "global" aggregates every inbound context
+  // under session.scope="global" (including group/channel senders), so it
+  // keeps avatars like "group" and "unknown" do.
+  const isDirectThread =
+    sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child";
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
-  const handleChatThreadScroll = (event: Event) => {
-    maybeExpandChatHistoryRenderWindow(event, requestUpdate);
-    props.onChatScroll?.(event);
+  const renderGroupItem = (item: MessageGroup) => {
+    if (deleted.has(item.key)) {
+      return nothing;
+    }
+    return renderMessageGroup(item, {
+      onOpenSidebar: props.onOpenSidebar,
+      onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+      sessionKey: props.sessionKey,
+      agentId: props.fullMessageAgentId,
+      showReasoning,
+      showToolCalls: props.showToolCalls,
+      runActive: props.runActive,
+      autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
+      isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
+      onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
+        expandedToolCards.set(messageId, !(expanded ?? expandedToolCards.get(messageId) ?? false));
+        requestUpdate();
+      },
+      isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
+      onToggleToolExpanded: toggleToolCardExpanded,
+      onRequestUpdate: requestUpdate,
+      onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+      assistantName: props.assistantName,
+      assistantAvatar: assistantIdentity.avatar,
+      userName: props.userName ?? null,
+      userAvatar: props.userAvatar ?? null,
+      basePath: props.basePath,
+      localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+      assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
+      canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+      embedSandboxMode: props.embedSandboxMode ?? "scripts",
+      allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+      contextWindow: threadContextWindow,
+      onDelete: () => {
+        deleted.delete(item.key);
+        requestUpdate();
+      },
+    });
   };
-
+  const renderItem = guardChatRenderItems(state, (item) => {
+    if (item.kind === "divider") {
+      return renderChatDivider(item, props.onOpenSessionCheckpoints);
+    }
+    if (item.kind === "stream-run") {
+      return renderStreamGroup(item.parts, {
+        onOpenSidebar: props.onOpenSidebar,
+        assistant: assistantIdentity,
+        basePath: props.basePath,
+        authToken: props.assistantAttachmentAuthToken ?? null,
+      });
+    }
+    if (item.kind === "work-group") {
+      const workExpanded = expandedToolCards.get(item.key) ?? item.hasError;
+      return html`
+        ${renderWorkGroupSummary(item, {
+          expanded: workExpanded,
+          onToggle: () => {
+            expandedToolCards.set(item.key, !workExpanded);
+            requestUpdate();
+          },
+        })}
+        ${workExpanded ? item.groups.map((group) => renderGroupItem(group)) : nothing}
+      `;
+    }
+    if (item.kind === "group") {
+      return renderGroupItem(item);
+    }
+    return nothing;
+  });
+  const collapsedItems = collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
+    runWorking: Boolean(props.runWorking),
+    searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
+  });
+  const transcriptRows: ChatTranscriptRow[] = collapsedItems.map((item) => ({
+    kind: "item",
+    key: item.key,
+    item,
+  }));
+  const realtimeConversation = renderRealtimeTalkConversation(props);
+  if (realtimeConversation !== nothing) {
+    transcriptRows.push({
+      kind: "content",
+      key: "realtime-talk",
+      content: realtimeConversation,
+    });
+  }
+  const backgroundTasks =
+    !props.runWorking && !isEmpty && !showLoadingSkeleton
+      ? renderBackgroundTasksStatusRow(props.backgroundTasks)
+      : nothing;
+  if (backgroundTasks !== nothing) {
+    transcriptRows.push({
+      kind: "content",
+      key: "background-tasks",
+      content: backgroundTasks,
+    });
+  }
+  trackTranscriptRenderDependencies(state, [
+    chatItems,
+    locale,
+    deletedChatItemsSignature(deleted, chatItems),
+    stableBooleanMapSignature(expandedToolCards),
+    getAssistantAttachmentAvailabilityRenderVersion(),
+    // The host minute poll requests an update; this key crosses row guard() memoization.
+    Math.floor(Date.now() / 60_000),
+    getToolTitlesVersion(),
+    props.sessionKey,
+    props.fullMessageAgentId,
+    showReasoning,
+    props.showToolCalls,
+    Boolean(props.runActive),
+    Boolean(props.runWorking),
+    Boolean(props.autoExpandToolCalls),
+    props.assistantName,
+    assistantIdentity.avatar,
+    props.userName,
+    props.userAvatar,
+    props.basePath,
+    (props.localMediaPreviewRoots ?? []).join("\u0000"),
+    props.assistantAttachmentAuthToken,
+    props.canvasPluginSurfaceUrl,
+    props.embedSandboxMode ?? "scripts",
+    props.allowExternalEmbedUrls ?? false,
+    threadContextWindow,
+  ]);
+  const transcriptContents =
+    showLoadingSkeleton || isEmpty
+      ? html`
+          <div class="chat-thread-inner">
+            ${props.historyPagination
+              ? renderHistorySentinel(props.historyPagination.loading)
+              : nothing}
+            ${showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
+            ${isEmpty && !state.searchOpen ? renderWelcomeState(props) : nothing}
+            ${isEmpty && state.searchOpen
+              ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
+              : nothing}
+          </div>
+        `
+      : transcript.render(
+          transcriptRows,
+          (row) => (row.kind === "item" ? renderItem(row.item) : row.content),
+          latestTranscriptAnnouncement(collapsedItems),
+          props.announceTranscript !== false && !state.searchOpen && !props.loading,
+          props.historyPagination
+            ? renderHistorySentinel(props.historyPagination.loading)
+            : nothing,
+        );
   return html`
     <div
-      class="chat-thread"
+      class="chat-thread ${isDirectThread ? "chat-thread--direct" : ""}"
       role="log"
-      aria-live="polite"
-      ${ref((element) => {
-        const threadElement = element instanceof HTMLElement ? element : null;
-        scheduleChatHistoryRenderWindowFill(
-          threadElement,
-          requestUpdate,
-          props.onScrollToBottom ?? (() => {}),
-        );
-      })}
-      @scroll=${handleChatThreadScroll}
-      @click=${handleMarkdownCodeBlockCopy}
+      aria-live="off"
+      aria-relevant="additions"
+      tabindex="0"
+      @focusin=${(event: FocusEvent) => transcript.handleFocusIn(event)}
+      @focusout=${(event: FocusEvent) => transcript.handleFocusOut(event)}
+      @scroll=${props.onChatScroll}
+      @wheel=${props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null}
+      @keydown=${props.onHistoryIntent}
+      @touchstart=${props.onHistoryIntent
+        ? { handleEvent: props.onHistoryIntent, passive: true }
+        : null}
+      @touchmove=${props.onHistoryIntent
+        ? { handleEvent: props.onHistoryIntent, passive: true }
+        : null}
+      @touchend=${props.onHistoryIntent}
+      @touchcancel=${props.onHistoryIntent}
+      @mousedown=${beginNativeWindowDragFromTopInset}
+      @click=${(event: Event) => {
+        handleMarkdownCodeBlockCopy(event);
+        const target = markdownFileLinkFromEvent(event);
+        if (target) {
+          props.onOpenWorkspaceFile?.(target);
+        }
+      }}
       @contextmenu=${(event: MouseEvent) => handleChatContextMenu(event, props)}
+      @pointerup=${(event: PointerEvent) => handleChatThreadSelectionPointerUp(event, props)}
     >
-      <div class="chat-thread-inner">
-        ${showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
-        ${isEmpty && !threadState.searchOpen ? renderWelcomeState(props) : nothing}
-        ${isEmpty && threadState.searchOpen
-          ? html` <div class="agent-chat__empty">No matching messages</div> `
-          : nothing}
-        ${guard(
-          [
-            chatItems,
-            deletedChatItemsSignature(deleted, chatItems),
-            stableBooleanMapSignature(expandedToolCards),
-            getAssistantAttachmentAvailabilityRenderVersion(),
-            props.sessionKey,
-            props.fullMessageAgentId,
-            showReasoning,
-            props.showToolCalls,
-            Boolean(props.autoExpandToolCalls),
-            props.assistantName,
-            assistantIdentity.avatar,
-            props.userName,
-            props.userAvatar,
-            props.basePath,
-            (props.localMediaPreviewRoots ?? []).join("\u0000"),
-            props.assistantAttachmentAuthToken,
-            props.canvasPluginSurfaceUrl,
-            props.embedSandboxMode ?? "scripts",
-            props.allowExternalEmbedUrls ?? false,
-            threadContextWindow,
-          ],
-          () =>
-            repeat(
-              coalesceStreamRuns(chatItems),
-              (item) => item.key,
-              (item) => {
-                if (item.kind === "divider") {
-                  return html`
-                    <div class="chat-divider" data-ts=${String(item.timestamp)}>
-                      <div class="chat-divider__rule" role="separator" aria-label=${item.label}>
-                        <span class="chat-divider__line"></span>
-                        <span class="chat-divider__label">${item.label}</span>
-                        <span class="chat-divider__line"></span>
-                      </div>
-                      ${item.description || item.action
-                        ? html`
-                            <div class="chat-divider__details">
-                              ${item.description
-                                ? html`<span class="chat-divider__description">
-                                    ${item.description}
-                                  </span>`
-                                : nothing}
-                              ${item.action?.kind === "session-checkpoints" &&
-                              props.onOpenSessionCheckpoints
-                                ? html`
-                                    <button
-                                      type="button"
-                                      class="btn btn--subtle btn--sm chat-divider__action"
-                                      @click=${() => props.onOpenSessionCheckpoints?.()}
-                                    >
-                                      ${item.action.label}
-                                    </button>
-                                  `
-                                : nothing}
-                            </div>
-                          `
-                        : nothing}
-                    </div>
-                  `;
-                }
-                if (item.kind === "stream-run") {
-                  return renderStreamGroup(item.parts, {
-                    onOpenSidebar: props.onOpenSidebar,
-                    assistant: assistantIdentity,
-                    basePath: props.basePath,
-                    authToken: props.assistantAttachmentAuthToken ?? null,
-                  });
-                }
-                if (item.kind === "group") {
-                  if (deleted.has(item.key)) {
-                    return nothing;
-                  }
-                  return renderMessageGroup(item, {
-                    onOpenSidebar: props.onOpenSidebar,
-                    sessionKey: props.sessionKey,
-                    agentId: props.fullMessageAgentId,
-                    showReasoning,
-                    showToolCalls: props.showToolCalls,
-                    autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
-                    isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
-                    onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
-                      expandedToolCards.set(
-                        messageId,
-                        !(expanded ?? expandedToolCards.get(messageId) ?? false),
-                      );
-                      requestUpdate();
-                    },
-                    isToolExpanded: (toolCardId: string) =>
-                      expandedToolCards.get(toolCardId) ?? false,
-                    onToggleToolExpanded: toggleToolCardExpanded,
-                    onRequestUpdate: requestUpdate,
-                    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
-                    assistantName: props.assistantName,
-                    assistantAvatar: assistantIdentity.avatar,
-                    userName: props.userName ?? null,
-                    userAvatar: props.userAvatar ?? null,
-                    basePath: props.basePath,
-                    localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
-                    assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
-                    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-                    embedSandboxMode: props.embedSandboxMode ?? "scripts",
-                    allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
-                    contextWindow: threadContextWindow,
-                    onDelete: () => {
-                      deleted.delete(item.key);
-                      requestUpdate();
-                    },
-                  });
-                }
-                return nothing;
-              },
-            ),
-        )}
-        ${renderRealtimeTalkConversation(props)}
-      </div>
+      <span
+        class="chat-transcript-announcement agent-chat__sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        >${transcript.liveAnnouncementText}</span
+      >
+      ${transcriptContents}
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

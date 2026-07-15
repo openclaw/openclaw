@@ -95,7 +95,7 @@ const HTTP_ERROR_HINTS = [
   "permission",
 ];
 const RATE_LIMIT_SPECIFIC_HINT_RE =
-  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\breset\b|\bplan\b|\bquota\b/i;
+  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b/i;
 const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
@@ -127,14 +127,23 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
 }
 
 export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
-  if (isRateLimitErrorMessage(raw)) {
-    return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
-  }
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
+  const isRateLimit = isRateLimitErrorMessage(raw);
+  if (isRateLimit) {
+    const providerMessage = extractProviderRateLimitMessage(raw);
+    if (providerMessage) {
+      return providerMessage;
+    }
+  }
+  // Retry classification still owns 429 backoff; user copy can preserve the provider's
+  // overload wording when there is no more actionable retry/reset detail.
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  if (isRateLimit) {
+    return RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   return undefined;
 }

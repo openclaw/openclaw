@@ -372,6 +372,26 @@ describe("applySubagentWaitOutcome", () => {
     });
   });
 
+  it("treats abandoned ok wait snapshots as incomplete failures", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "ok",
+        startedAt: 100,
+        endedAt: 150,
+        livenessState: "abandoned",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "error",
+      error: "Agent run ended before producing a complete result.",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
   it("keeps provider hard timeouts stronger than blocked wait metadata", () => {
     const applied = applySubagentWaitOutcome({
       wait: {
@@ -394,7 +414,7 @@ describe("applySubagentWaitOutcome", () => {
     });
   });
 
-  it("keeps rpc timeout wait snapshots as timeout outcomes", () => {
+  it("keeps explicit cancellation distinct from timeout outcomes", () => {
     const applied = applySubagentWaitOutcome({
       wait: {
         status: "timeout",
@@ -406,7 +426,8 @@ describe("applySubagentWaitOutcome", () => {
     });
 
     expect(applied.outcome).toEqual({
-      status: "timeout",
+      status: "error",
+      error: "subagent run terminated",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,

@@ -45,7 +45,10 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
-import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import {
+  hasSessionActiveAutoModelFallback,
+  hasSessionAutoModelFallbackProvenance,
+} from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
@@ -83,7 +86,7 @@ type QueueStatus = {
   showDetails?: boolean;
 };
 
-export type StatusArgs = {
+type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
   agentId?: string;
@@ -419,8 +422,19 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
         const chosen = decision.attachments.find((entry) => entry.chosen)?.chosen;
         const provider = chosen?.provider?.trim();
         const model = chosen?.model?.trim();
-        const modelLabel = provider ? (model ? `${provider}/${model}` : provider) : null;
-        return `${decision.capability}${countLabel} ok${modelLabel ? ` (${modelLabel})` : ""}`;
+        const modelLabel = provider
+          ? model && model !== provider
+            ? `${provider}/${model}`
+            : provider
+          : null;
+        const backendLabel = chosen?.observedBackend
+          ? ` observed=${chosen.observedBackend}`
+          : chosen?.requestedBackend
+            ? ` requested=${chosen.requestedBackend}`
+            : "";
+        return `${decision.capability}${countLabel} ok${
+          modelLabel ? ` (${modelLabel}${backendLabel})` : ""
+        }`;
       }
       if (decision.outcome === "no-attachment") {
         return `${decision.capability} none`;
@@ -1074,15 +1088,18 @@ export function buildStatusMessage(args: StatusArgs): string {
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const configuredDefaultModelLabel = normalizeOptionalString(args.configuredDefaultModelLabel);
   const sessionHasPersistedModelSelection = hasUserPinnedModelSelection(entry);
+  const sessionHasAutoFallback = hasSessionActiveAutoModelFallback(entry);
   const configDefaultDiffersFromSession =
-    sessionHasPersistedModelSelection &&
+    (sessionHasPersistedModelSelection || sessionHasAutoFallback) &&
     configuredDefaultModelLabel &&
     selectedModelLabel !== configuredDefaultModelLabel &&
     !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredDefaultModelLabel, {
       config: args.config,
     });
   const overrideLabel = configDefaultDiffersFromSession
-    ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
+    ? sessionHasPersistedModelSelection
+      ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
+      : ` · auto fallback; config primary ${configuredDefaultModelLabel} · check provider`
     : "";
   const modelLines = [
     `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}`,
@@ -1141,3 +1158,4 @@ export function buildStatusMessage(args: StatusArgs): string {
     .filter((line): line is string => Boolean(line))
     .join("\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

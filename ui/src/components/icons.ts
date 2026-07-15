@@ -18,6 +18,14 @@ export const icons = {
       <line x1="6" x2="6" y1="20" y2="16" />
     </svg>
   `,
+  coins: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M18.09 10.37A6 6 0 1 1 10.34 18" />
+      <path d="M7 6h1v4" />
+      <path d="m16.71 13.88.7.71-2.82 2.82" />
+    </svg>
+  `,
   activity: html`
     <svg viewBox="0 0 24 24">
       <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
@@ -60,6 +68,22 @@ export const icons = {
       <rect width="20" height="14" x="2" y="3" rx="2" />
       <line x1="8" x2="16" y1="21" y2="21" />
       <line x1="12" x2="12" y1="17" y2="21" />
+    </svg>
+  `,
+  monitorSmartphone: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8" />
+      <path d="M10 19v-3.96 3.15" />
+      <path d="M7 19h5" />
+      <rect width="6" height="10" x="16" y="12" rx="2" />
+    </svg>
+  `,
+  server: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="20" height="8" x="2" y="2" rx="2" ry="2" />
+      <rect width="20" height="8" x="2" y="14" rx="2" ry="2" />
+      <line x1="6" x2="6.01" y1="6" y2="6" />
+      <line x1="6" x2="6.01" y1="18" y2="18" />
     </svg>
   `,
   sun: html`
@@ -116,6 +140,32 @@ export const icons = {
       <path
         d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
       />
+    </svg>
+  `,
+  kanban: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M8 7v7" />
+      <path d="M12 7v4" />
+      <path d="M16 7v9" />
+    </svg>
+  `,
+  bot: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M12 8V4H8" />
+      <rect width="16" height="12" x="4" y="8" rx="2" />
+      <path d="M2 14h2" />
+      <path d="M20 14h2" />
+      <path d="M15 13v2" />
+      <path d="M9 13v2" />
+    </svg>
+  `,
+  users: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
     </svg>
   `,
 
@@ -186,10 +236,25 @@ export const icons = {
       <rect width="16" height="3" x="4" y="19" rx="1" />
     </svg>
   `,
-  arrowDown: html`
+  listFilter: html`
     <svg viewBox="0 0 24 24">
-      <path d="M12 5v14" />
-      <path d="m19 12-7 7-7-7" />
+      <path d="M3 6h18" />
+      <path d="M7 12h10" />
+      <path d="M10 18h4" />
+    </svg>
+  `,
+  arrowDown: html` <svg viewBox="0 0 24 24"><path d="M12 5v14m7-7-7 7-7-7" /></svg> `,
+  arrowUp: html` <svg viewBox="0 0 24 24"><path d="M12 19V5m-7 7 7-7 7 7" /></svg> `,
+  arrowLeft: html`
+    <svg viewBox="0 0 24 24">
+      <path d="m12 19-7-7 7-7" />
+      <path d="M19 12H5" />
+    </svg>
+  `,
+  cornerDownLeft: html`
+    <svg viewBox="0 0 24 24">
+      <polyline points="9 10 4 15 9 20" />
+      <path d="M20 4v7a4 4 0 0 1-4 4H4" />
     </svg>
   `,
   cornerDownRight: html`
@@ -244,6 +309,25 @@ export const icons = {
       <path d="m4.9 4.9 2.9 2.9" />
     </svg>
   `,
+  calendarClock: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5" />
+      <path d="M16 2v4" />
+      <path d="M8 2v4" />
+      <path d="M3 10h5" />
+      <path d="M17.5 17.5 16 16.3V14" />
+      <circle cx="16" cy="16" r="6" />
+    </svg>
+  `,
+  listChecks: html`
+    <svg viewBox="0 0 24 24">
+      <path d="m3 17 2 2 4-4" />
+      <path d="m3 7 2 2 4-4" />
+      <path d="M13 6h8" />
+      <path d="M13 12h8" />
+      <path d="M13 18h8" />
+    </svg>
+  `,
 
   // Tool icons
   wrench: html`
@@ -294,10 +378,25 @@ export const icons = {
       <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
     </svg>
   `,
+  camera: html`
+    <svg viewBox="0 0 24 24">
+      <path
+        d="M14.5 4 16 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3z"
+      />
+      <circle cx="12" cy="13" r="3" />
+    </svg>
+  `,
   smartphone: html`
     <svg viewBox="0 0 24 24">
       <rect width="14" height="20" x="5" y="2" rx="2" ry="2" />
       <path d="M12 18h.01" />
+    </svg>
+  `,
+  circleQuestionMark: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <path d="M12 17h.01" />
     </svg>
   `,
   plug: html`
@@ -314,6 +413,12 @@ export const icons = {
       <path
         d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.076.874.54 1.02 1.02a2.5 2.5 0 1 0 3.237-3.237c-.48-.146-.944-.505-1.02-1.02a.98.98 0 0 1 .303-.917l1.526-1.526A2.402 2.402 0 0 1 11.998 2c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.236 3.236c-.464.18-.894.527-.967 1.02Z"
       />
+    </svg>
+  `,
+  panelLeft: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M9 3v18" stroke-linecap="round" />
     </svg>
   `,
   panelLeftClose: html`
@@ -338,6 +443,11 @@ export const icons = {
   chevronRight: html`
     <svg viewBox="0 0 24 24">
       <path d="M9 18l6-6-6-6" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
+  chevronLeft: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M15 18l-6-6 6-6" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
   externalLink: html`
@@ -388,28 +498,11 @@ export const icons = {
       <line x1="12" x2="12" y1="19" y2="22" />
     </svg>
   `,
-  micOff: html`
-    <svg viewBox="0 0 24 24">
-      <line x1="2" x2="22" y1="2" y2="22" />
-      <path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2" />
-      <path d="M5 10v2a7 7 0 0 0 12 5" />
-      <path d="M15 9.34V5a3 3 0 0 0-5.68-1.33" />
-      <path d="M9 9v3a3 3 0 0 0 5.12 2.12" />
-      <line x1="12" x2="12" y1="19" y2="22" />
-    </svg>
-  `,
   volume2: html`
     <svg viewBox="0 0 24 24">
       <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
       <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
       <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-    </svg>
-  `,
-  volumeOff: html`
-    <svg viewBox="0 0 24 24">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-      <line x1="22" x2="16" y1="9" y2="15" />
-      <line x1="16" x2="22" y1="9" y2="15" />
     </svg>
   `,
   bookmark: html`
@@ -421,10 +514,45 @@ export const icons = {
       <path d="M12 5v14" />
     </svg>
   `,
+  gitBranch: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="6" cy="5" r="2" />
+      <circle cx="18" cy="6" r="2" />
+      <circle cx="6" cy="19" r="2" />
+      <path d="M6 7v10" />
+      <path d="M8 9h5a5 5 0 0 0 5-5" />
+    </svg>
+  `,
+  gitPullRequest: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="18" r="3" />
+      <path d="M13 6h3a2 2 0 0 1 2 2v7" />
+      <path d="M6 9v12" />
+    </svg>
+  `,
+  gitMerge: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="18" r="3" />
+      <path d="M6 21V9a9 9 0 0 0 9 9" />
+    </svg>
+  `,
   terminal: html`
     <svg viewBox="0 0 24 24">
       <polyline points="4 17 10 11 4 5" />
       <line x1="12" x2="20" y1="19" y2="19" />
+    </svg>
+  `,
+  claw: html`
+    <svg viewBox="0 0 24 24">
+      <path
+        d="M9.6 9.2 A5.6 5.6 0 1 0 9.6 20.4 A5.6 5.6 0 0 0 9.6 9.2 Z M10 20 C14 20.9 17.9 19.5 20.1 16.1 C20.6 15.4 20.05 14.5 19.25 14.65 C17.1 15 14.9 14.4 13.2 13 L10.6 16 Z"
+      />
+      <path
+        class="claw-icon__jaw"
+        d="M6 10.6 C6.6 4.4 12.4 0.8 17.6 2.8 C20.8 4 22.8 6.8 23 9.8 C23.07 10.9 21.9 11.4 21.1 10.7 C19.4 9.2 16.9 8.7 14.7 9.5 C13.4 10 12.3 10.9 11.6 12.1 L7.2 12.4 Z"
+      />
     </svg>
   `,
   spark: html`
@@ -521,6 +649,26 @@ export const icons = {
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <path d="M15 3v18" stroke-linecap="round" />
       <path d="M8 10l3 2-3 2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
+  columns2: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M12 3v18" stroke-linecap="round" />
+    </svg>
+  `,
+  panelBottomOpen: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 15h18" stroke-linecap="round" />
+      <path d="m10 8 2 3 2-3" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
+  panelBottomClose: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 15h18" stroke-linecap="round" />
+      <path d="m10 11 2-3 2 3" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
   maximize: html`

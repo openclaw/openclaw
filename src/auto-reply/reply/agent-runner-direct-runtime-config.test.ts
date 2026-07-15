@@ -119,8 +119,14 @@ function createReplyOperation(): ReplyOperation {
     resetTriggered: false,
     phase: "queued",
     result: null,
+    startedAtMs: Date.now(),
+    lastActivityAtMs: Date.now(),
+    recordActivity: vi.fn(),
     setPhase: vi.fn(),
+    markWaitingForDeferredMaintenance: vi.fn(),
+    markDeferredMaintenanceWaitEnded: vi.fn(),
     updateSessionId: vi.fn(),
+    updateSessionKey: vi.fn(),
     hasOwnedSessionId: vi.fn(() => false),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
@@ -135,7 +141,9 @@ function createReplyOperation(): ReplyOperation {
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
     terminalRecovery: false,
+    acceptedSteeredInboundAudio: false,
     markTerminalRecovery: vi.fn(),
+    markAcceptedSteeredInboundAudio: vi.fn(),
   };
 }
 

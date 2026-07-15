@@ -7,7 +7,7 @@ const LEGACY_CONFIG_MIGRATE_TEST_PATH = [
   "migrate.test.ts",
 ].join("-");
 
-export const PLUGIN_COMPAT_RECORDS = [
+const PLUGIN_COMPAT_RECORDS = [
   {
     code: "legacy-before-agent-start",
     status: "deprecated",
@@ -97,6 +97,52 @@ export const PLUGIN_COMPAT_RECORDS = [
     ],
     releaseNote:
       "Memory-specific embedding provider registration remains wired as a deprecated compatibility path while providers migrate to the generic embedding provider contract.",
+  },
+  {
+    code: "deprecated-session-store-beta5-api",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-21",
+    deprecated: "2026-07-12",
+    warningStarts: "2026-07-12",
+    removeAfter: "2026-10-12",
+    replacement:
+      "`getSessionEntry(...)`, `listSessionEntries(...)`, and row-level session mutations",
+    docsPath: "/plugins/sdk-migration#removed-session-and-transcript-file-apis",
+    surfaces: [
+      "openclaw/plugin-sdk/session-store-runtime loadSessionStore",
+      "openclaw/plugin-sdk/session-store-runtime updateSessionStore",
+      "openclaw/plugin-sdk/session-store-runtime resolveSessionFilePath",
+      "openclaw/plugin-sdk/session-store-runtime resolveSessionStoreEntry",
+    ],
+    diagnostics: ["plugin SDK deprecation"],
+    tests: ["src/plugin-sdk/session-store-runtime.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The beta.5 session-store import set remains available for official plugins released with v2026.7.1-beta.5 while they migrate to row-level session access.",
+  },
+  {
+    code: "removed-session-transcript-file-api",
+    status: "removed",
+    owner: "sdk",
+    introduced: "2026-07-01",
+    replacement:
+      "session identity (`sessionKey`/`sessionId`), `SessionTranscriptUpdate.target`, and Gateway/runtime session helpers",
+    docsPath: "/plugins/sdk-migration#removed-session-and-transcript-file-apis",
+    surfaces: [
+      "saveSessionStore",
+      "resolveSessionTranscriptPathInDir",
+      "resolveAndPersistSessionFile",
+      "readLatestAssistantTextFromSessionTranscript",
+      "SessionTranscriptUpdate.sessionFile",
+      "sessionFiles",
+      "transcriptPath",
+      "sessionFile",
+      "plugins inspect compatibility notices",
+    ],
+    diagnostics: ["plugin compatibility notice"],
+    tests: ["src/plugins/status.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "Session/transcript file APIs were removed with the SQLite session storage flip; plugins now use session identity and Gateway/runtime session helpers.",
   },
   {
     code: "legacy-root-sdk-import",
@@ -1084,7 +1130,7 @@ export const PLUGIN_COMPAT_RECORDS = [
 ] as const satisfies readonly PluginCompatRecord[];
 
 export type PluginCompatCode = (typeof PLUGIN_COMPAT_RECORDS)[number]["code"];
-export type KnownPluginCompatRecord = PluginCompatRecord<PluginCompatCode>;
+type KnownPluginCompatRecord = PluginCompatRecord<PluginCompatCode>;
 
 const pluginCompatRecordByCode = new Map<PluginCompatCode, KnownPluginCompatRecord>(
   PLUGIN_COMPAT_RECORDS.map((record) => [record.code, record]),
@@ -1101,13 +1147,4 @@ export function getPluginCompatRecord(code: PluginCompatCode): KnownPluginCompat
   }
   return record;
 }
-
-export function isPluginCompatCode(code: string): code is PluginCompatCode {
-  return pluginCompatRecordByCode.has(code as PluginCompatCode);
-}
-
-export function listDeprecatedPluginCompatRecords(): readonly KnownPluginCompatRecord[] {
-  return PLUGIN_COMPAT_RECORDS.filter((record) =>
-    (["deprecated", "removal-pending"] as readonly string[]).includes(record.status),
-  );
-}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -6,7 +6,6 @@ import {
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
-  requiresInspectableBrowserNavigationRedirects,
 } from "./navigation-guard.js";
 
 function createLookupFn(address: string): LookupFn {
@@ -82,8 +81,8 @@ describe("browser navigation guard", () => {
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
   });
 
-  it("allows blocked hostnames when explicitly allowed", async () => {
-    const lookupFn = createLookupFn("127.0.0.1");
+  it("allows explicitly trusted hostnames that resolve to private addresses", async () => {
+    const lookupFn = createLookupFn("10.0.0.1");
     await expect(
       assertBrowserNavigationAllowed({
         url: "http://agent.internal:3000",
@@ -252,6 +251,26 @@ describe("browser navigation guard", () => {
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
   });
 
+  it("blocks network URLs with embedded credentials before lookup", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    const result = assertBrowserNavigationAllowed({
+      url: "https://user:secret@example.com/private",
+      lookupFn,
+    });
+    await expect(result).rejects.toThrow("URL-embedded credentials are not supported");
+    await expect(result).rejects.toThrow("openclaw browser set credentials");
+    await expect(result).rejects.not.toThrow("secret");
+    expect(lookupFn).not.toHaveBeenCalled();
+  });
+
+  it("redacts malformed credential-bearing URLs from diagnostics", async () => {
+    const result = assertBrowserNavigationAllowed({
+      url: "https://user:secret@",
+    });
+    await expect(result).rejects.toThrow("Invalid URL: [redacted credential-bearing URL]");
+    await expect(result).rejects.not.toThrow("secret");
+  });
+
   it("validates final network URLs after navigation", async () => {
     const lookupFn = createLookupFn("127.0.0.1");
     await expect(
@@ -324,15 +343,5 @@ describe("browser navigation guard", () => {
         lookupFn,
       }),
     ).resolves.toBeUndefined();
-  });
-
-  it("requires redirect-hop inspection only in explicit strict mode", () => {
-    expect(requiresInspectableBrowserNavigationRedirects()).toBe(false);
-    expect(
-      requiresInspectableBrowserNavigationRedirects({ dangerouslyAllowPrivateNetwork: false }),
-    ).toBe(true);
-    expect(requiresInspectableBrowserNavigationRedirects({ allowPrivateNetwork: true })).toBe(
-      false,
-    );
   });
 });

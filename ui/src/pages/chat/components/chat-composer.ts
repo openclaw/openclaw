@@ -1,24 +1,35 @@
 // Chat-owned composer, queue, status, context, and run controls.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
+import { normalizeBasePath } from "../../../app-route-paths.ts";
+import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
-import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
+import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import {
-  CATEGORY_LABELS,
   SLASH_COMMANDS,
   getHiddenCommandCount,
+  getSlashCommandCategoryLabel,
   getSlashCommandCompletions,
+  getSlashCommandDescription,
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import type { ChatSideResult } from "../../../lib/chat/side-result.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
+import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
+import {
+  collectProviderQuotaGroups,
+  formatQuotaReset,
+  type ProviderQuotaGroup,
+  type ProviderUsageDisplayProps,
+  type QuotaBudgetSummary,
+  type QuotaLimitSummary,
+} from "../../../lib/provider-quota-summary.ts";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -27,18 +38,25 @@ import {
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import {
-  getChatAttachmentPreviewUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayload,
-} from "../attachment-payload-store.ts";
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
-import { renderRealtimeTalkOptions, type RealtimeTalkOptions } from "./chat-realtime-controls.ts";
+import {
+  handleChatAttachmentPaste,
+  isLargePastedTextAttachment,
+  renderAttachmentPreview,
+  renderChatAttachmentInputs,
+  renderChatAttachmentMenu,
+} from "./chat-attachments.ts";
+import {
+  renderChatVoiceError,
+  renderMicrophoneActivity,
+  voiceStatusLabel,
+} from "./chat-voice-activity.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -51,18 +69,15 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "select",
   "textarea",
   "summary",
+  "wa-dropdown",
   "[contenteditable='true']",
   "[role='button']",
   "[role='listbox']",
   "[role='option']",
 ].join(",");
-const SLASH_MENU_LISTBOX_ID = "chat-slash-menu-listbox";
-const SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID = "chat-slash-active-announcement";
-export const CHAT_ATTACHMENT_ACCEPT =
-  "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
-  ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 
-export type ChatComposerProps = {
+type ChatComposerProps = {
+  paneId: string;
   sessionKey: string;
   currentAgentId: string;
   connected: boolean;
@@ -75,22 +90,20 @@ export type ChatComposerProps = {
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
   stream: string | null;
-  sideResult?: ChatSideResult | null;
   queue: ChatQueueItem[];
   draft: string;
   sessions: SessionsListResult | null;
+  providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
+  sendShortcut?: ChatSendShortcut;
   attachments?: ChatAttachment[];
-  showNewMessages?: boolean;
+  getAttachments?: () => ChatAttachment[];
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
-  realtimeTalkTranscript?: string | null;
+  realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  realtimeTalkOptionsOpen?: boolean;
-  realtimeTalkOptions?: RealtimeTalkOptions;
-  canOpenRealtimeTalkSettings?: boolean;
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
@@ -100,23 +113,23 @@ export type ChatComposerProps = {
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
-  onToggleRealtimeTalkOptions?: () => void;
-  onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
-  onOpenRealtimeTalkSettings?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
-  onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearReply?: () => void;
-  onScrollToBottom?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onGoalCommand?: (command: string) => void;
 };
 
 type PendingClearedSubmittedDraft = {
+  key: string;
+  value: string;
+};
+
+type ComposingDraft = {
   key: string;
   value: string;
 };
@@ -131,6 +144,7 @@ type ChatComposerState = {
   slashMenuExpanded: boolean;
   slashCommandRefreshPending: boolean;
   composerComposing: boolean;
+  composingDraft: ComposingDraft | null;
   composerInputIntentKey: string | null;
   pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
   goalExpandedId: string | null;
@@ -147,13 +161,24 @@ function createChatComposerState(): ChatComposerState {
     slashMenuExpanded: false,
     slashCommandRefreshPending: false,
     composerComposing: false,
+    composingDraft: null,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
     goalExpandedId: null,
   };
 }
 
-const composerState = createChatComposerState();
+const composerStates = new Map<string, ChatComposerState>();
+
+function getChatComposerState(paneId: string): ChatComposerState {
+  const existing = composerStates.get(paneId);
+  if (existing) {
+    return existing;
+  }
+  const state = createChatComposerState();
+  composerStates.set(paneId, state);
+  return state;
+}
 
 function hasTerminalRunStatus(status: ChatRunUiStatus | null | undefined): boolean {
   return status?.phase === "done" || status?.phase === "interrupted";
@@ -172,6 +197,21 @@ function isCurrentSessionSubmittedProgress(
   );
 }
 
+// Single source for "the agent is visibly working": drives both the thread's
+// working spark and the composer's sr-only announcement. A fresh terminal
+// toast masks stale abortable rows so neither surface flashes back to working.
+export function isChatRunWorking(
+  props: Pick<ChatComposerProps, "canAbort" | "onAbort" | "runStatus" | "queue" | "sessionKey">,
+): boolean {
+  const canAbort = Boolean(props.canAbort && props.onAbort);
+  return (
+    (canAbort && !hasTerminalRunStatus(props.runStatus)) ||
+    props.queue.some((item) =>
+      isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
+    )
+  );
+}
+
 function composerDraftKey(props: Pick<ChatComposerProps, "currentAgentId" | "sessionKey">): string {
   return `${props.currentAgentId}\u0000${props.sessionKey}`;
 }
@@ -183,21 +223,21 @@ function commitComposerDraft(props: ChatComposerProps, value: string): void {
   props.onDraftChange(value);
 }
 
-function markComposerInputIntent(key: string): void {
-  composerState.composerInputIntentKey = key;
+function markComposerInputIntent(state: ChatComposerState, key: string): void {
+  state.composerInputIntentKey = key;
 }
 
-function consumeComposerInputIntent(key: string): boolean {
-  if (composerState.composerInputIntentKey !== key) {
+function consumeComposerInputIntent(state: ChatComposerState, key: string): boolean {
+  if (state.composerInputIntentKey !== key) {
     return false;
   }
-  composerState.composerInputIntentKey = null;
+  state.composerInputIntentKey = null;
   return true;
 }
 
-function clearPendingClearedSubmittedDraft(key: string): void {
-  if (composerState.pendingClearedSubmittedDraft?.key === key) {
-    composerState.pendingClearedSubmittedDraft = null;
+function clearPendingClearedSubmittedDraft(state: ChatComposerState, key: string): void {
+  if (state.pendingClearedSubmittedDraft?.key === key) {
+    state.pendingClearedSubmittedDraft = null;
   }
 }
 
@@ -210,8 +250,9 @@ function suppressStaleSubmittedDraftReplay(
   event: InputEvent,
   currentDraft: string,
   hasInputIntent: boolean,
+  state: ChatComposerState,
 ): boolean {
-  const pending = composerState.pendingClearedSubmittedDraft;
+  const pending = state.pendingClearedSubmittedDraft;
   if (!pending) {
     return false;
   }
@@ -224,8 +265,14 @@ function suppressStaleSubmittedDraftReplay(
   return true;
 }
 
-export function resetChatComposerState() {
-  Object.assign(composerState, createChatComposerState());
+export function resetChatComposerState(paneId?: string) {
+  if (paneId) {
+    // Goal elapsed timers are keyed by element and cleaned up when their
+    // element leaves the DOM, so a per-pane reset does not need to touch them.
+    composerStates.delete(paneId);
+    return;
+  }
+  composerStates.clear();
   for (const timer of goalElapsedTimers.values()) {
     clearInterval(timer);
   }
@@ -363,6 +410,7 @@ function renderChatGoalActionButton(options: {
 }
 
 function renderChatGoal(
+  state: ChatComposerState,
   goal: SessionGoal | undefined,
   actions: ChatGoalActions,
 ): TemplateResult | typeof nothing {
@@ -371,7 +419,7 @@ function renderChatGoal(
   }
   const elapsed = formatGoalElapsed(goalElapsedMs(goal, Date.now()));
   const usage = formatGoalUsage(goal);
-  const expanded = composerState.goalExpandedId === goal.id;
+  const expanded = state.goalExpandedId === goal.id;
   const showActions = actions.canAct && Boolean(actions.onGoalCommand);
   const canResume =
     goal.status === "paused" ||
@@ -379,7 +427,7 @@ function renderChatGoal(
     goal.status === "usage_limited" ||
     goal.status === "budget_limited";
   const toggleExpanded = () => {
-    composerState.goalExpandedId = expanded ? null : goal.id;
+    state.goalExpandedId = expanded ? null : goal.id;
     actions.requestUpdate();
   };
   return html`
@@ -397,7 +445,7 @@ function renderChatGoal(
           ${showActions && actions.onGoalEdit && goal.status !== "complete"
             ? renderChatGoalActionButton({
                 className: "agent-chat__goal-edit",
-                label: "Edit goal",
+                label: t("chat.goals.edit"),
                 icon: icons.penLine,
                 onClick: () => actions.onGoalEdit?.(goal),
               })
@@ -405,7 +453,7 @@ function renderChatGoal(
           ${showActions && goal.status === "active"
             ? renderChatGoalActionButton({
                 className: "agent-chat__goal-pause",
-                label: "Pause goal",
+                label: t("chat.goals.pause"),
                 icon: icons.pause,
                 onClick: () => actions.onGoalCommand?.("/goal pause"),
               })
@@ -413,7 +461,7 @@ function renderChatGoal(
           ${showActions && canResume
             ? renderChatGoalActionButton({
                 className: "agent-chat__goal-resume",
-                label: "Resume goal",
+                label: t("chat.goals.resume"),
                 icon: icons.play,
                 onClick: () => actions.onGoalCommand?.("/goal resume"),
               })
@@ -421,7 +469,7 @@ function renderChatGoal(
           ${showActions
             ? renderChatGoalActionButton({
                 className: "agent-chat__goal-clear",
-                label: "Clear goal",
+                label: t("chat.goals.clear"),
                 icon: icons.trash,
                 onClick: () => actions.onGoalCommand?.("/goal clear"),
               })
@@ -454,31 +502,31 @@ function renderChatGoal(
   `;
 }
 
-function resetSlashMenuState(): void {
-  composerState.slashMenuMode = "command";
-  composerState.slashMenuCommand = null;
-  composerState.slashMenuArgItems = [];
-  composerState.slashMenuItems = [];
-  composerState.slashMenuExpanded = false;
+function resetSlashMenuState(state: ChatComposerState): void {
+  state.slashMenuMode = "command";
+  state.slashMenuCommand = null;
+  state.slashMenuArgItems = [];
+  state.slashMenuItems = [];
+  state.slashMenuExpanded = false;
 }
 
-function hasVisibleSlashMenuState(): boolean {
+function hasVisibleSlashMenuState(state: ChatComposerState): boolean {
   return (
-    composerState.slashMenuOpen ||
-    composerState.slashMenuMode !== "command" ||
-    composerState.slashMenuCommand !== null ||
-    composerState.slashMenuArgItems.length > 0 ||
-    composerState.slashMenuItems.length > 0 ||
-    composerState.slashMenuExpanded
+    state.slashMenuOpen ||
+    state.slashMenuMode !== "command" ||
+    state.slashMenuCommand !== null ||
+    state.slashMenuArgItems.length > 0 ||
+    state.slashMenuItems.length > 0 ||
+    state.slashMenuExpanded
   );
 }
 
-function closeSlashMenuIfNeeded(requestUpdate: () => void): void {
-  if (!hasVisibleSlashMenuState()) {
+function closeSlashMenuIfNeeded(state: ChatComposerState, requestUpdate: () => void): void {
+  if (!hasVisibleSlashMenuState(state)) {
     return;
   }
-  composerState.slashMenuOpen = false;
-  resetSlashMenuState();
+  state.slashMenuOpen = false;
+  resetSlashMenuState(state);
   requestUpdate();
 }
 
@@ -488,19 +536,20 @@ function requestSlashCommandRefresh(
   requestUpdate: () => void,
   getCurrentValue?: () => string,
 ): void {
-  if (!props.onSlashIntent || composerState.slashCommandRefreshPending) {
+  const state = getChatComposerState(props.paneId);
+  if (!props.onSlashIntent || state.slashCommandRefreshPending) {
     return;
   }
   const refresh = props.onSlashIntent();
   if (!refresh || typeof refresh.then !== "function") {
     return;
   }
-  composerState.slashCommandRefreshPending = true;
+  state.slashCommandRefreshPending = true;
   void Promise.resolve(refresh).finally(() => {
-    composerState.slashCommandRefreshPending = false;
+    state.slashCommandRefreshPending = false;
     const nextValue = getCurrentValue?.() ?? props.getDraft?.() ?? value;
     if (!nextValue.startsWith("/")) {
-      closeSlashMenuIfNeeded(requestUpdate);
+      closeSlashMenuIfNeeded(state, requestUpdate);
       return;
     }
     updateSlashMenu(nextValue, requestUpdate, props, { skipSlashIntent: true });
@@ -514,30 +563,35 @@ function updateSlashMenu(
   opts: { skipSlashIntent?: boolean } = {},
   getCurrentValue?: () => string,
 ): void {
+  const state = getChatComposerState(props.paneId);
   const argMatch = value.match(/^\/(\S+)\s(.*)$/);
   if (argMatch) {
     if (!opts.skipSlashIntent) {
       requestSlashCommandRefresh(value, props, requestUpdate, getCurrentValue);
     }
-    const cmdName = argMatch[1].toLowerCase();
-    const argFilter = argMatch[2].toLowerCase();
+    const cmdName = argMatch[1]?.toLowerCase();
+    const argFilter = argMatch[2]?.toLowerCase();
+    if (cmdName === undefined || argFilter === undefined) {
+      closeSlashMenuIfNeeded(state, requestUpdate);
+      return;
+    }
     const cmd = SLASH_COMMANDS.find((entry) => entry.name === cmdName);
     if (cmd?.argOptions?.length) {
       const filtered = argFilter
         ? cmd.argOptions.filter((arg) => arg.toLowerCase().startsWith(argFilter))
         : cmd.argOptions;
       if (filtered.length > 0) {
-        composerState.slashMenuMode = "args";
-        composerState.slashMenuCommand = cmd;
-        composerState.slashMenuArgItems = filtered;
-        composerState.slashMenuOpen = true;
-        composerState.slashMenuIndex = 0;
-        composerState.slashMenuItems = [];
+        state.slashMenuMode = "args";
+        state.slashMenuCommand = cmd;
+        state.slashMenuArgItems = filtered;
+        state.slashMenuOpen = true;
+        state.slashMenuIndex = 0;
+        state.slashMenuItems = [];
         requestUpdate();
         return;
       }
     }
-    closeSlashMenuIfNeeded(requestUpdate);
+    closeSlashMenuIfNeeded(state, requestUpdate);
     return;
   }
 
@@ -546,17 +600,17 @@ function updateSlashMenu(
     if (!opts.skipSlashIntent) {
       requestSlashCommandRefresh(value, props, requestUpdate, getCurrentValue);
     }
-    const items = getSlashCommandCompletions(match[1], {
-      showAll: composerState.slashMenuExpanded,
+    const items = getSlashCommandCompletions(match[1] ?? "", {
+      showAll: state.slashMenuExpanded,
     });
-    composerState.slashMenuItems = items;
-    composerState.slashMenuOpen = items.length > 0;
-    composerState.slashMenuIndex = 0;
-    composerState.slashMenuMode = "command";
-    composerState.slashMenuCommand = null;
-    composerState.slashMenuArgItems = [];
+    state.slashMenuItems = items;
+    state.slashMenuOpen = items.length > 0;
+    state.slashMenuIndex = 0;
+    state.slashMenuMode = "command";
+    state.slashMenuCommand = null;
+    state.slashMenuArgItems = [];
   } else {
-    closeSlashMenuIfNeeded(requestUpdate);
+    closeSlashMenuIfNeeded(state, requestUpdate);
     return;
   }
   requestUpdate();
@@ -567,26 +621,27 @@ function selectSlashCommand(
   props: ChatComposerProps,
   requestUpdate: () => void,
 ) {
+  const state = getChatComposerState(props.paneId);
   if (cmd.argOptions?.length) {
     commitComposerDraft(props, `/${cmd.name} `);
-    composerState.slashMenuMode = "args";
-    composerState.slashMenuCommand = cmd;
-    composerState.slashMenuArgItems = cmd.argOptions;
-    composerState.slashMenuOpen = true;
-    composerState.slashMenuIndex = 0;
-    composerState.slashMenuItems = [];
+    state.slashMenuMode = "args";
+    state.slashMenuCommand = cmd;
+    state.slashMenuArgItems = cmd.argOptions;
+    state.slashMenuOpen = true;
+    state.slashMenuIndex = 0;
+    state.slashMenuItems = [];
     requestUpdate();
     return;
   }
 
   if (cmd.executeLocal && !cmd.args) {
-    composerState.slashMenuOpen = false;
-    resetSlashMenuState();
+    state.slashMenuOpen = false;
+    resetSlashMenuState(state);
     commitComposerDraft(props, `/${cmd.name}`);
     props.onSend();
   } else {
     commitComposerDraft(props, `/${cmd.name} `);
-    closeSlashMenuIfNeeded(requestUpdate);
+    closeSlashMenuIfNeeded(state, requestUpdate);
   }
 }
 
@@ -595,20 +650,21 @@ function tabCompleteSlashCommand(
   props: ChatComposerProps,
   requestUpdate: () => void,
 ) {
+  const state = getChatComposerState(props.paneId);
   if (cmd.argOptions?.length) {
     commitComposerDraft(props, `/${cmd.name} `);
-    composerState.slashMenuMode = "args";
-    composerState.slashMenuCommand = cmd;
-    composerState.slashMenuArgItems = cmd.argOptions;
-    composerState.slashMenuOpen = true;
-    composerState.slashMenuIndex = 0;
-    composerState.slashMenuItems = [];
+    state.slashMenuMode = "args";
+    state.slashMenuCommand = cmd;
+    state.slashMenuArgItems = cmd.argOptions;
+    state.slashMenuOpen = true;
+    state.slashMenuIndex = 0;
+    state.slashMenuItems = [];
     requestUpdate();
     return;
   }
   commitComposerDraft(props, cmd.args ? `/${cmd.name} ` : `/${cmd.name}`);
-  composerState.slashMenuOpen = false;
-  resetSlashMenuState();
+  state.slashMenuOpen = false;
+  resetSlashMenuState(state);
   requestUpdate();
 }
 
@@ -618,9 +674,10 @@ function selectSlashArg(
   requestUpdate: () => void,
   run: boolean,
 ) {
-  const cmdName = composerState.slashMenuCommand?.name ?? "";
-  composerState.slashMenuOpen = false;
-  resetSlashMenuState();
+  const state = getChatComposerState(props.paneId);
+  const cmdName = state.slashMenuCommand?.name ?? "";
+  state.slashMenuOpen = false;
+  resetSlashMenuState(state);
   commitComposerDraft(props, `/${cmdName} ${arg}`);
   if (run) {
     props.onSend();
@@ -637,56 +694,63 @@ function slashOptionIdSegment(value: string): string {
   );
 }
 
-function getSlashCommandOptionId(cmd: SlashCommandDef): string {
-  return `chat-slash-option-command-${slashOptionIdSegment(cmd.name)}`;
+function paneDomId(paneId: string, suffix: string): string {
+  return `chat-${encodeURIComponent(paneId)}-${suffix}`;
 }
 
-function getSlashArgOptionId(commandName: string, arg: string): string {
-  return `chat-slash-option-arg-${slashOptionIdSegment(commandName)}-${slashOptionIdSegment(arg)}`;
+function getSlashCommandOptionId(paneId: string, cmd: SlashCommandDef): string {
+  return paneDomId(paneId, `slash-option-command-${slashOptionIdSegment(cmd.name)}`);
 }
 
-function isSlashMenuVisible(): boolean {
-  if (!composerState.slashMenuOpen) {
+function getSlashArgOptionId(paneId: string, commandName: string, arg: string): string {
+  return paneDomId(
+    paneId,
+    `slash-option-arg-${slashOptionIdSegment(commandName)}-${slashOptionIdSegment(arg)}`,
+  );
+}
+
+function isSlashMenuVisible(state: ChatComposerState): boolean {
+  if (!state.slashMenuOpen) {
     return false;
   }
-  if (composerState.slashMenuMode === "args") {
-    return Boolean(composerState.slashMenuCommand && composerState.slashMenuArgItems.length > 0);
+  if (state.slashMenuMode === "args") {
+    return Boolean(state.slashMenuCommand && state.slashMenuArgItems.length > 0);
   }
-  return composerState.slashMenuItems.length > 0;
+  return state.slashMenuItems.length > 0;
 }
 
-function getActiveSlashMenuOptionId(): string | null {
-  if (!isSlashMenuVisible()) {
+function getActiveSlashMenuOptionId(state: ChatComposerState, paneId: string): string | null {
+  if (!isSlashMenuVisible(state)) {
     return null;
   }
-  if (composerState.slashMenuMode === "args") {
-    const commandName = composerState.slashMenuCommand?.name;
-    const arg = composerState.slashMenuArgItems[composerState.slashMenuIndex];
-    return commandName && arg ? getSlashArgOptionId(commandName, arg) : null;
+  if (state.slashMenuMode === "args") {
+    const commandName = state.slashMenuCommand?.name;
+    const arg = state.slashMenuArgItems[state.slashMenuIndex];
+    return commandName && arg ? getSlashArgOptionId(paneId, commandName, arg) : null;
   }
-  const cmd = composerState.slashMenuItems[composerState.slashMenuIndex];
-  return cmd ? getSlashCommandOptionId(cmd) : null;
+  const cmd = state.slashMenuItems[state.slashMenuIndex];
+  return cmd ? getSlashCommandOptionId(paneId, cmd) : null;
 }
 
-function getActiveSlashMenuOptionLabel(): string {
-  if (!isSlashMenuVisible()) {
+function getActiveSlashMenuOptionLabel(state: ChatComposerState): string {
+  if (!isSlashMenuVisible(state)) {
     return "";
   }
-  if (composerState.slashMenuMode === "args") {
-    const commandName = composerState.slashMenuCommand?.name;
-    const arg = composerState.slashMenuArgItems[composerState.slashMenuIndex];
+  if (state.slashMenuMode === "args") {
+    const commandName = state.slashMenuCommand?.name;
+    const arg = state.slashMenuArgItems[state.slashMenuIndex];
     return commandName && arg ? `/${commandName} ${arg}` : "";
   }
-  const cmd = composerState.slashMenuItems[composerState.slashMenuIndex];
+  const cmd = state.slashMenuItems[state.slashMenuIndex];
   if (!cmd) {
     return "";
   }
   const command = `/${cmd.name}${cmd.args ? ` ${cmd.args}` : ""}`;
-  return `${command} ${cmd.description}`;
+  return `${command} ${getSlashCommandDescription(cmd)}`;
 }
 
-function scrollActiveSlashMenuOptionIntoView(): void {
-  const activeId = getActiveSlashMenuOptionId();
+function scrollActiveSlashMenuOptionIntoView(state: ChatComposerState, paneId: string): void {
+  const activeId = getActiveSlashMenuOptionId(state, paneId);
   if (!activeId) {
     return;
   }
@@ -728,60 +792,64 @@ function renderSlashMenu(
   props: ChatComposerProps,
   draft: string,
 ): TemplateResult | typeof nothing {
-  if (!composerState.slashMenuOpen) {
+  const state = getChatComposerState(props.paneId);
+  const listboxId = paneDomId(props.paneId, "slash-menu-listbox");
+  if (!state.slashMenuOpen) {
     return nothing;
   }
 
   if (
-    composerState.slashMenuMode === "args" &&
-    composerState.slashMenuCommand &&
-    composerState.slashMenuArgItems.length > 0
+    state.slashMenuMode === "args" &&
+    state.slashMenuCommand &&
+    state.slashMenuArgItems.length > 0
   ) {
     return html`
       <div
-        id=${SLASH_MENU_LISTBOX_ID}
+        id=${listboxId}
         class="slash-menu"
         role="listbox"
-        aria-label="Command arguments"
+        aria-label=${t("chat.commands.arguments")}
       >
         <div class="slash-menu-group">
           <div class="slash-menu-group__label">
-            /${composerState.slashMenuCommand.name} ${composerState.slashMenuCommand.description}
+            /${state.slashMenuCommand.name} ${getSlashCommandDescription(state.slashMenuCommand)}
           </div>
-          ${composerState.slashMenuArgItems.map(
+          ${state.slashMenuArgItems.map(
             (arg, i) => html`
               <div
-                id=${getSlashArgOptionId(composerState.slashMenuCommand?.name ?? "", arg)}
-                class="slash-menu-item ${i === composerState.slashMenuIndex
+                id=${getSlashArgOptionId(props.paneId, state.slashMenuCommand?.name ?? "", arg)}
+                class="slash-menu-item ${i === state.slashMenuIndex
                   ? "slash-menu-item--active"
                   : ""}"
                 role="option"
-                aria-selected=${i === composerState.slashMenuIndex}
+                aria-selected=${i === state.slashMenuIndex}
                 @click=${() => selectSlashArg(arg, props, requestUpdate, true)}
                 @mouseenter=${() => {
-                  composerState.slashMenuIndex = i;
+                  state.slashMenuIndex = i;
                   requestUpdate();
                 }}
               >
-                ${composerState.slashMenuCommand?.icon
+                ${state.slashMenuCommand?.icon
                   ? html`<span class="slash-menu-icon"
-                      >${renderSlashIcon(composerState.slashMenuCommand.icon)}</span
+                      >${renderSlashIcon(state.slashMenuCommand.icon)}</span
                     >`
                   : nothing}
                 <span class="slash-menu-name">${arg}</span>
-                <span class="slash-menu-desc">/${composerState.slashMenuCommand?.name} ${arg}</span>
+                <span class="slash-menu-desc">/${state.slashMenuCommand?.name} ${arg}</span>
               </div>
             `,
           )}
         </div>
         <div class="slash-menu-footer">
-          <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> run <kbd>Esc</kbd> close
+          <kbd>↑↓</kbd> ${t("chat.commands.navigate")} <kbd>Tab</kbd> ${t("chat.commands.fill")}
+          <kbd>Enter</kbd> ${t("chat.commands.run")} <kbd>Esc</kbd>
+          ${t("chat.commands.close")}
         </div>
       </div>
     `;
   }
 
-  if (composerState.slashMenuItems.length === 0) {
+  if (state.slashMenuItems.length === 0) {
     return nothing;
   }
 
@@ -789,8 +857,7 @@ function renderSlashMenu(
     SlashCommandCategory,
     Array<{ cmd: SlashCommandDef; globalIdx: number }>
   >();
-  for (let i = 0; i < composerState.slashMenuItems.length; i++) {
-    const cmd = composerState.slashMenuItems[i];
+  for (const [i, cmd] of state.slashMenuItems.entries()) {
     const cat = cmd.category ?? "session";
     let list = grouped.get(cat);
     if (!list) {
@@ -804,19 +871,19 @@ function renderSlashMenu(
   for (const [cat, entries] of grouped) {
     sections.push(html`
       <div class="slash-menu-group">
-        <div class="slash-menu-group__label">${CATEGORY_LABELS[cat]}</div>
+        <div class="slash-menu-group__label">${getSlashCommandCategoryLabel(cat)}</div>
         ${entries.map(
           ({ cmd, globalIdx }) => html`
             <div
-              id=${getSlashCommandOptionId(cmd)}
-              class="slash-menu-item ${globalIdx === composerState.slashMenuIndex
+              id=${getSlashCommandOptionId(props.paneId, cmd)}
+              class="slash-menu-item ${globalIdx === state.slashMenuIndex
                 ? "slash-menu-item--active"
                 : ""}"
               role="option"
-              aria-selected=${globalIdx === composerState.slashMenuIndex}
+              aria-selected=${globalIdx === state.slashMenuIndex}
               @click=${() => selectSlashCommand(cmd, props, requestUpdate)}
               @mouseenter=${() => {
-                composerState.slashMenuIndex = globalIdx;
+                state.slashMenuIndex = globalIdx;
                 requestUpdate();
               }}
             >
@@ -825,11 +892,15 @@ function renderSlashMenu(
                 : nothing}
               <span class="slash-menu-name">/${cmd.name}</span>
               ${cmd.args ? html`<span class="slash-menu-args">${cmd.args}</span>` : nothing}
-              <span class="slash-menu-desc">${cmd.description}</span>
+              <span class="slash-menu-desc">${getSlashCommandDescription(cmd)}</span>
               ${cmd.argOptions?.length
-                ? html`<span class="slash-menu-badge">${cmd.argOptions.length} options</span>`
+                ? html`<span class="slash-menu-badge"
+                    >${t("chat.commands.optionCount", {
+                      count: String(cmd.argOptions.length),
+                    })}</span
+                  >`
                 : cmd.executeLocal && !cmd.args
-                  ? html` <span class="slash-menu-badge">instant</span> `
+                  ? html` <span class="slash-menu-badge">${t("chat.commands.instant")}</span> `
                   : nothing}
             </div>
           `,
@@ -838,10 +909,10 @@ function renderSlashMenu(
     `);
   }
 
-  const hiddenCount = composerState.slashMenuExpanded ? 0 : getHiddenCommandCount();
+  const hiddenCount = state.slashMenuExpanded ? 0 : getHiddenCommandCount();
 
   return html`
-    <div id=${SLASH_MENU_LISTBOX_ID} class="slash-menu" role="listbox" aria-label="Slash commands">
+    <div id=${listboxId} class="slash-menu" role="listbox" aria-label=${t("chat.commands.menu")}>
       ${sections}
       ${hiddenCount > 0
         ? html`<button
@@ -849,26 +920,25 @@ function renderSlashMenu(
             @click=${(event: Event) => {
               event.preventDefault();
               event.stopPropagation();
-              composerState.slashMenuExpanded = true;
+              state.slashMenuExpanded = true;
               updateSlashMenu(draft, requestUpdate, props);
             }}
           >
-            Show ${hiddenCount} more command${hiddenCount !== 1 ? "s" : ""}
+            ${hiddenCount === 1
+              ? t("chat.commands.showMoreOne")
+              : t("chat.commands.showMoreMany", { count: String(hiddenCount) })}
           </button>`
         : nothing}
       <div class="slash-menu-footer">
-        <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> select <kbd>Esc</kbd> close
+        <kbd>↑↓</kbd> ${t("chat.commands.navigate")} <kbd>Tab</kbd> ${t("chat.commands.fill")}
+        <kbd>Enter</kbd> ${t("chat.commands.select")} <kbd>Esc</kbd>
+        ${t("chat.commands.close")}
       </div>
     </div>
   `;
 }
 
-export type ChatAttachmentControlsProps = {
-  attachments?: ChatAttachment[];
-  onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
-};
-
-export type ChatQueueProps = {
+type ChatQueueProps = {
   queue: ChatQueueItem[];
   canAbort?: boolean;
   onQueueRetry?: (id: string) => void;
@@ -879,9 +949,18 @@ export type ChatQueueProps = {
 function sendStateLabel(item: ChatQueueItem): string | null {
   switch (item.sendState) {
     case "waiting-model":
-      return "Waiting for model";
+      // Persisted state name predates reasoning and speed picker gating.
+      return "Applying chat settings";
+    case "waiting-idle":
+      return "Waiting for current run";
+    case "executing-command":
+      return "Running command";
+    case "steering":
+      return "Steering";
     case "waiting-reconnect":
       return "Waiting for reconnect";
+    case "unconfirmed":
+      return "Needs review";
     case "failed":
       return "Failed";
     default:
@@ -889,369 +968,125 @@ function sendStateLabel(item: ChatQueueItem): string | null {
   }
 }
 
-export function renderChatQueue(props: ChatQueueProps) {
+function renderChatQueue(props: ChatQueueProps) {
   const visibleQueue = props.queue.filter((item) => item.sendState !== "sending");
   if (!visibleQueue.length) {
     return nothing;
   }
   return html`
     <div class="chat-queue" role="status" aria-live="polite">
-      <div class="chat-queue__title">Queued (${visibleQueue.length})</div>
-      <div class="chat-queue__list">
-        ${visibleQueue.map((item) => {
-          const stateLabel = sendStateLabel(item);
-          return html`
-            <div
-              class="chat-queue__item ${item.kind === "steered" ? "chat-queue__item--steered" : ""}"
-            >
-              <div class="chat-queue__main">
-                ${item.kind === "steered"
-                  ? html`<span class="chat-queue__badge">Steered</span>`
-                  : nothing}
-                ${stateLabel ? html`<span class="chat-queue__badge">${stateLabel}</span>` : nothing}
-                <div class="chat-queue__text">
-                  ${item.text ||
-                  (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
-                </div>
-                ${item.sendError
-                  ? html`<div class="chat-queue__error">${item.sendError}</div>`
-                  : nothing}
-              </div>
-              <div class="chat-queue__actions">
-                ${item.sendState === "failed" && props.onQueueRetry
-                  ? html`
-                      <button
-                        class="btn chat-queue__retry"
-                        type="button"
-                        aria-label=${t("chat.queue.retryQueuedMessage")}
-                        @click=${() => props.onQueueRetry?.(item.id)}
-                      >
-                        ${icons.refresh}
-                        <span>${t("chat.queue.retry")}</span>
-                      </button>
-                    `
-                  : nothing}
-                ${props.canAbort &&
-                props.onQueueSteer &&
-                item.kind !== "steered" &&
-                !item.sendState &&
-                !item.localCommandName
-                  ? html`
-                      <button
-                        class="btn chat-queue__steer"
-                        type="button"
-                        aria-label="Steer queued message"
-                        @click=${() => props.onQueueSteer?.(item.id)}
-                      >
-                        ${icons.cornerDownRight}
-                        <span>Steer</span>
-                      </button>
-                    `
-                  : nothing}
-                <openclaw-tooltip content="Remove queued message">
-                  <button
-                    class="btn chat-queue__remove"
-                    type="button"
-                    aria-label="Remove queued message"
-                    @click=${() => props.onQueueRemove(item.id)}
-                  >
-                    ${icons.x}
-                  </button>
-                </openclaw-tooltip>
-              </div>
-            </div>
-          `;
-        })}
-      </div>
+      ${visibleQueue.map((item) => renderChatQueueItem(item, props))}
     </div>
   `;
 }
 
-export function renderSideResult(
-  sideResult: ChatSideResult | null | undefined,
-  onDismiss?: () => void,
-): TemplateResult | typeof nothing {
-  if (!sideResult) {
-    return nothing;
-  }
+function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
+  const stateLabel = sendStateLabel(item);
+  const steered = item.kind === "steered";
+  const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
+  const busy = item.sendState === "executing-command" || item.sendState === "steering";
+  const canSteer =
+    Boolean(props.canAbort && props.onQueueSteer) &&
+    !steered &&
+    (item.sendState === undefined || item.sendState === "waiting-idle") &&
+    !item.localCommandName;
+  const text = item.text || (item.attachments?.length ? `Image (${item.attachments.length})` : "");
+  const itemClass = `chat-queue__item${steered ? " chat-queue__item--steered" : ""}${
+    failed ? " chat-queue__item--failed" : ""
+  }`;
+  // Row order keeps the actions on the first flex line; the error wraps below
+  // them via flex-basis so failed rows grow by one line instead of a card.
   return html`
-    <section
-      class=${`chat-side-result ${sideResult.isError ? "chat-side-result--error" : ""}`}
-      role="status"
-      aria-live="polite"
-      aria-label="BTW side result"
-    >
-      <div class="chat-side-result__header">
-        <div class="chat-side-result__label-row">
-          <span class="chat-side-result__label">BTW</span>
-          <span class="chat-side-result__meta">Not saved to chat history</span>
-        </div>
-        <openclaw-tooltip content="Dismiss">
-          <button
-            class="btn chat-side-result__dismiss"
-            type="button"
-            aria-label="Dismiss BTW result"
-            @click=${() => onDismiss?.()}
-          >
-            ${icons.x}
-          </button>
-        </openclaw-tooltip>
-      </div>
-      <div class="chat-side-result__question">${sideResult.question}</div>
-      <div class="chat-side-result__body" dir=${detectTextDirection(sideResult.text)}>
-        ${unsafeHTML(toSanitizedMarkdownHtml(sideResult.text))}
-      </div>
-    </section>
-  `;
-}
-
-function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">): boolean {
-  if (file.type.startsWith("video/")) {
-    return false;
-  }
-  return !/\.(?:avi|m4v|mov|mp4|mpeg|mpg|webm)$/i.test(file.name);
-}
-
-export function clickComposerFileInput(event: MouseEvent) {
-  const target = event.currentTarget;
-  if (!(target instanceof HTMLElement)) {
-    return;
-  }
-  target
-    .closest(".agent-chat__input")
-    ?.querySelector<HTMLInputElement>(".agent-chat__file-input")
-    ?.click();
-}
-
-function generateAttachmentId(): string {
-  return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
-  const attachment = {
-    id: generateAttachmentId(),
-    mimeType: file.type || "application/octet-stream",
-    fileName: file.name || undefined,
-    sizeBytes: file.size,
-  };
-  return registerChatAttachmentPayload({ attachment, dataUrl, file });
-}
-
-function dataImageClipboardFile(dataUrl: string): { file: File; dataUrl: string } | null {
-  const match = /^\s*data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)\s*$/i.exec(dataUrl);
-  if (!match) {
-    return null;
-  }
-  const mimeType = match[1].toLowerCase();
-  if (!isSupportedChatAttachmentFile({ name: "pasted-image", type: mimeType })) {
-    return null;
-  }
-  const base64 = match[2].replace(/\s+/g, "");
-  try {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    const extension = mimeType.split("/")[1]?.replace(/[^a-z0-9.+-]/gi, "") || "png";
-    return {
-      file: new File([bytes], `pasted-image.${extension}`, { type: mimeType }),
-      dataUrl: `data:${mimeType};base64,${base64}`,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function isImageAttachment(att: ChatAttachment): boolean {
-  return att.mimeType.startsWith("image/");
-}
-
-export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
-  const items = e.clipboardData?.items;
-  if (!items || !props.onAttachmentsChange) {
-    return;
-  }
-  const imageItems: DataTransferItem[] = [];
-  for (const item of Array.from(items)) {
-    if (item.type.startsWith("image/")) {
-      imageItems.push(item);
-    }
-  }
-  if (imageItems.length === 0) {
-    const text = e.clipboardData?.getData("text/plain");
-    const pasted = text ? dataImageClipboardFile(text) : null;
-    if (!pasted) {
-      return;
-    }
-    e.preventDefault();
-    props.onAttachmentsChange([
-      ...(props.attachments ?? []),
-      chatAttachmentFromFile(pasted.file, pasted.dataUrl),
-    ]);
-    return;
-  }
-  e.preventDefault();
-  for (const item of imageItems) {
-    const file = item.getAsFile();
-    if (!file) {
-      continue;
-    }
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment = chatAttachmentFromFile(file, dataUrl);
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
-    });
-    reader.readAsDataURL(file);
-  }
-}
-
-export function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
-  const input = e.target as HTMLInputElement;
-  if (!input.files || !props.onAttachmentsChange) {
-    return;
-  }
-  const current = props.attachments ?? [];
-  const additions: ChatAttachment[] = [];
-  let pending = 0;
-  for (const file of input.files) {
-    if (!isSupportedChatAttachmentFile(file)) {
-      continue;
-    }
-    pending++;
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      additions.push(chatAttachmentFromFile(file, reader.result as string));
-      pending--;
-      if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
-      }
-    });
-    reader.readAsDataURL(file);
-  }
-  input.value = "";
-}
-
-export function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentControlsProps) {
-  e.preventDefault();
-  const files = e.dataTransfer?.files;
-  if (!files || !props.onAttachmentsChange) {
-    return;
-  }
-  const current = props.attachments ?? [];
-  const additions: ChatAttachment[] = [];
-  let pending = 0;
-  for (const file of files) {
-    if (!isSupportedChatAttachmentFile(file)) {
-      continue;
-    }
-    pending++;
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      additions.push(chatAttachmentFromFile(file, reader.result as string));
-      pending--;
-      if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
-      }
-    });
-    reader.readAsDataURL(file);
-  }
-}
-
-export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
-  const attachments = props.attachments ?? [];
-  if (attachments.length === 0) {
-    return nothing;
-  }
-  return html`
-    <div class="chat-attachments-preview">
-      ${attachments.map(
-        (att) => html`
-          <div
-            class=${[
-              "chat-attachment-thumb",
-              isImageAttachment(att) ? "" : "chat-attachment-thumb--file",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-          >
-            ${isImageAttachment(att) && getChatAttachmentPreviewUrl(att)
-              ? html`<img src=${getChatAttachmentPreviewUrl(att)!} alt="Attachment preview" />`
-              : html`
-                  <openclaw-tooltip .content=${att.fileName ?? "Attached file"}>
-                    <div class="chat-attachment-file">
-                      <span class="chat-attachment-file__icon">${icons.paperclip}</span>
-                      <span class="chat-attachment-file__name"
-                        >${att.fileName ?? "Attached file"}</span
-                      >
-                    </div>
-                  </openclaw-tooltip>
-                `}
-            <openclaw-tooltip content="Remove attachment">
+    <div class=${itemClass}>
+      <span class="chat-queue__icon" aria-hidden="true">
+        ${failed ? icons.alertTriangle : icons.clock}
+      </span>
+      ${steered
+        ? html`<span class="chat-queue__badge chat-queue__badge--steered"
+            >${t("chat.queue.steered")}</span
+          >`
+        : nothing}
+      ${stateLabel ? html`<span class="chat-queue__badge">${stateLabel}</span>` : nothing}
+      <span class="chat-queue__text" title=${text}>${text}</span>
+      <span class="chat-queue__actions">
+        ${failed && props.onQueueRetry
+          ? html`
               <button
-                class="chat-attachment-remove"
+                class="chat-queue__retry"
                 type="button"
-                aria-label="Remove attachment"
-                @click=${() => {
-                  const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
-                  releaseChatAttachmentPayload(att.id);
-                  props.onAttachmentsChange?.(next);
-                }}
+                aria-label=${t("chat.queue.retryQueuedMessage")}
+                @click=${() => props.onQueueRetry?.(item.id)}
               >
-                &times;
+                ${icons.refresh}
+                <span>${t("chat.queue.retry")}</span>
               </button>
-            </openclaw-tooltip>
-          </div>
-        `,
-      )}
+            `
+          : nothing}
+        ${canSteer
+          ? html`
+              <button
+                class="chat-queue__steer"
+                type="button"
+                aria-label=${t("chat.queue.steerQueuedMessage")}
+                @click=${() => props.onQueueSteer?.(item.id)}
+              >
+                ${icons.cornerDownRight}
+                <span>${t("chat.queue.steer")}</span>
+              </button>
+            `
+          : nothing}
+        ${busy
+          ? nothing
+          : html`
+              <openclaw-tooltip .content=${t("chat.queue.removeQueuedMessage")}>
+                <button
+                  class="chat-queue__remove"
+                  type="button"
+                  aria-label=${t("chat.queue.removeQueuedMessage")}
+                  @click=${() => props.onQueueRemove(item.id)}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
+            `}
+      </span>
+      ${item.sendError ? html`<span class="chat-queue__error">${item.sendError}</span>` : nothing}
     </div>
   `;
 }
 
-export type ComposerRunStatus =
+type ComposerRunStatus =
   | ChatRunUiStatus
   | {
       phase: "in-progress";
       occurredAt?: number | null;
     };
 
-export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | undefined) {
-  if (!status) {
+// Working and Done need no composer chrome: the thread's working spark,
+// content arriving, and Stop reverting to Send already show them (screen
+// readers get the composer's persistent sr-only run-status region).
+// Interrupted keeps a visible toast: the transcript shows nothing when a run
+// is killed, so silence would read as "finished".
+function renderChatRunStatusIndicator(status: ComposerRunStatus | null | undefined) {
+  if (status?.phase !== "interrupted") {
     return nothing;
   }
-  if (status.phase !== "in-progress") {
-    const elapsed = Date.now() - status.occurredAt;
-    if (elapsed >= CHAT_RUN_STATUS_TOAST_DURATION_MS) {
-      return nothing;
-    }
+  const elapsed = Date.now() - status.occurredAt;
+  if (elapsed >= CHAT_RUN_STATUS_TOAST_DURATION_MS) {
+    return nothing;
   }
-  const label =
-    status.phase === "in-progress"
-      ? "In progress"
-      : status.phase === "done"
-        ? "Done"
-        : "Interrupted";
-  const icon =
-    status.phase === "in-progress"
-      ? icons.loader
-      : status.phase === "done"
-        ? icons.check
-        : icons.stop;
+  const interrupted = t("chat.composer.runInterrupted");
   return html`
     <span
-      class="agent-chat__run-status agent-chat__run-status--${status.phase}"
-      role="status"
-      aria-live="polite"
-      aria-label=${`Run status: ${label}`}
+      class="agent-chat__run-status agent-chat__run-status--interrupted"
+      aria-label=${t("chat.composer.runStatus", { status: interrupted })}
     >
-      ${icon}<span class="agent-chat__run-status-label">${label}</span>
+      ${icons.stop}<span class="agent-chat__run-status-label">${interrupted}</span>
     </span>
   `;
 }
 
-export function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
+function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
   if (!status) {
     return nothing;
   }
@@ -1283,7 +1118,7 @@ export function renderCompactionIndicator(status: CompactionStatus | null | unde
   return nothing;
 }
 
-export function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
+function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
   if (!status) {
     return nothing;
   }
@@ -1319,11 +1154,12 @@ export function renderFallbackIndicator(status: FallbackStatus | null | undefine
   `;
 }
 
-export type ContextNoticeOptions = {
+type ContextNoticeOptions = {
   compactBusy?: boolean;
   compactDisabled?: boolean;
   messages?: unknown[];
   onCompact?: () => void | Promise<void>;
+  providerUsage?: ProviderUsageDisplayProps;
 };
 
 type ProviderCostStats = {
@@ -1418,11 +1254,7 @@ function getThemeNoticeColors() {
   return cachedThemeNoticeColors;
 }
 
-export function resetContextNoticeThemeCacheForTest(): void {
-  cachedThemeNoticeColors = null;
-}
-
-export function getContextNoticeViewModel(
+function getContextNoticeViewModel(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ): {
@@ -1507,27 +1339,178 @@ export function getContextNoticeViewModel(
 const RING_RADIUS = 6.5;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
-export function renderContextNotice(
+// Provider window labels arrive as compact data strings ("5h", "Week"); model
+// scoped labels (e.g. "Opus") pass through untranslated.
+function formatUsageWindowLabel(label: string): string {
+  if (label === "5h") {
+    return t("chat.composer.contextUsage.limitFiveHour");
+  }
+  if (label === "Week") {
+    return t("chat.composer.contextUsage.limitWeekly");
+  }
+  if (label === "Day") {
+    return t("chat.composer.contextUsage.limitDaily");
+  }
+  const hours = /^(\d+)h$/.exec(label);
+  if (hours) {
+    return t("chat.composer.contextUsage.limitHours", { hours: hours[1] ?? "" });
+  }
+  return label;
+}
+
+function formatBudgetAmount(amount: number, unit: string): string {
+  if (/^[A-Za-z]{3}$/.test(unit)) {
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: unit.toUpperCase(),
+        maximumFractionDigits: 2,
+      }).format(amount);
+    } catch {
+      // Non-ISO currency codes fall through to plain unit suffix formatting.
+    }
+  }
+  return `${amount.toFixed(2)} ${unit}`;
+}
+
+function renderLimitBar(usedPercent: number, ariaLabel: string) {
+  const severity = usedPercent >= 90 ? "danger" : usedPercent >= 75 ? "warn" : null;
+  return html`
+    <div
+      class="context-usage__limit-bar"
+      role="progressbar"
+      aria-label=${ariaLabel}
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow=${usedPercent}
+    >
+      <span
+        class=${severity ? `context-usage__limit-fill--${severity}` : ""}
+        style="width: ${usedPercent}%"
+      ></span>
+    </div>
+  `;
+}
+
+function renderQuotaLimitRow(limit: QuotaLimitSummary) {
+  const label = formatUsageWindowLabel(limit.label);
+  const reset = formatQuotaReset(limit.resetAt);
+  return html`
+    <div class="context-usage__limit">
+      <div class="context-usage__limit-head">
+        <span class="context-usage__limit-label">${label}</span>
+        <span class="context-usage__limit-meta">
+          ${reset
+            ? html`<span class="context-usage__limit-reset"
+                >${t("chat.composer.contextUsage.resets", { time: reset })}</span
+              >`
+            : nothing}
+          <strong>${limit.usedPercent}%</strong>
+        </span>
+      </div>
+      ${renderLimitBar(limit.usedPercent, label)}
+    </div>
+  `;
+}
+
+function renderQuotaBudgetRow(budget: QuotaBudgetSummary) {
+  const label = budget.label || t("chat.composer.contextUsage.usageCredits");
+  const usedPercent = Math.max(0, Math.min(100, Math.round((budget.used / budget.limit) * 100)));
+  const value = t("chat.composer.contextUsage.budgetValue", {
+    used: formatBudgetAmount(budget.used, budget.unit),
+    limit: formatBudgetAmount(budget.limit, budget.unit),
+  });
+  return html`
+    <div class="context-usage__limit">
+      <div class="context-usage__limit-head">
+        <span class="context-usage__limit-label">${label}</span>
+        <span class="context-usage__limit-meta"><strong>${value}</strong></span>
+      </div>
+      ${renderLimitBar(usedPercent, label)}
+    </div>
+  `;
+}
+
+function renderQuotaGroup(
+  group: ProviderQuotaGroup,
+  options: { usageHref: string; showProvider: boolean },
+) {
+  const heading = options.showProvider
+    ? `${t("chat.composer.contextUsage.planUsage")} · ${group.displayName}`
+    : t("chat.composer.contextUsage.planUsage");
+  return html`
+    <div class="context-usage__section-label context-usage__plan-header">
+      <span>${heading}</span>
+      <a
+        class="context-usage__plan-link"
+        href=${options.usageHref}
+        data-chat-provider-usage="true"
+        aria-label=${t("chat.composer.contextUsage.openUsage")}
+      >
+        ${group.plan ? html`<span class="context-usage__plan-badge">${group.plan}</span>` : nothing}
+        ${icons.externalLink}
+      </a>
+    </div>
+    ${group.accountEmail
+      ? html`<div class="context-usage__account" data-chat-usage-account="true">
+          ${group.accountEmail}
+        </div>`
+      : nothing}
+    <div class="context-usage__limits">
+      ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
+      ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}
+    </div>
+  `;
+}
+
+function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
   options: ContextNoticeOptions = {},
 ) {
   const model = getContextNoticeViewModel(session, defaultContextTokens);
-  if (!model) {
+  const quotaGroups = options.providerUsage
+    ? collectProviderQuotaGroups(
+        options.providerUsage.modelAuthStatusResult ?? null,
+        isMonitoredAuthProvider,
+      )
+    : [];
+  if (!model && quotaGroups.length === 0) {
     return nothing;
   }
-  const canRenderCompact = model.compactRecommended && options.onCompact;
+  const canRenderCompact = Boolean(model?.compactRecommended && options.onCompact);
   const compactDisabled = options.compactDisabled === true || options.compactBusy === true;
-  const summary = t("chat.composer.contextUsage.summary", {
-    used: `${model.approximate ? "~" : ""}${formatCompactTokenCount(model.used)}`,
-    limit: formatCompactTokenCount(model.limit),
-    pct: `${model.approximate ? "~" : ""}${model.pct}`,
-  });
-  const percentage = `${model.approximate ? "~" : ""}${model.pct}%`;
-  const dashOffset = RING_CIRCUMFERENCE * (1 - model.pct / 100);
-  const providerCosts = latestProviderCostStats(options.messages);
-  const provider = providerCosts?.provider ?? model.provider;
-  const responseModel = providerCosts?.model ?? model.model;
+  const summary = model
+    ? t("chat.composer.contextUsage.summary", {
+        used: `${model.approximate ? "~" : ""}${formatCompactTokenCount(model.used)}`,
+        limit: formatCompactTokenCount(model.limit),
+        pct: `${model.approximate ? "~" : ""}${model.pct}`,
+      })
+    : t("chat.usageRemaining");
+  const percentage = model ? `${model.approximate ? "~" : ""}${model.pct}%` : null;
+  const dashOffset = model ? RING_CIRCUMFERENCE * (1 - model.pct / 100) : RING_CIRCUMFERENCE;
+  const providerCosts = model ? latestProviderCostStats(options.messages) : null;
+  const provider = providerCosts?.provider ?? model?.provider;
+  const responseModel = providerCosts?.model ?? model?.model;
+  const sessionProviderKeys = new Set(
+    [model?.provider, providerCosts?.provider]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.trim().toLowerCase()),
+  );
+  const currentGroup = quotaGroups.find((group) =>
+    group.providers.some((id) => sessionProviderKeys.has(id.trim().toLowerCase())),
+  );
+  const planGroups = currentGroup
+    ? [currentGroup, ...quotaGroups.filter((group) => group !== currentGroup)]
+    : quotaGroups;
+  // Plan-billed sessions hide dollar estimates: subscription usage is bounded
+  // by the plan windows below, and per-token math would misread as real spend.
+  // Billing mode is provider-level: session rows do not record which auth
+  // profile served the run, so a provider with both an API key and a
+  // subscription resolves to subscription display (per-run credential
+  // attribution is #102807).
+  const showCosts = !currentGroup;
+  const usageHref = `${normalizeBasePath(options.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
   const renderCostStat = (label: string, value: number | undefined) =>
@@ -1540,10 +1523,13 @@ export function renderContextNotice(
           </div>
         `;
   return html`
-    <div class="context-usage" style="--ctx-color:${model.color};--ctx-bg:${model.bg}">
+    <div
+      class="context-usage"
+      style=${model ? `--ctx-color:${model.color};--ctx-bg:${model.bg}` : ""}
+    >
       <details>
         <summary
-          class="context-ring ${model.warning ? "context-ring--warning" : ""}"
+          class="context-ring ${model?.warning ? "context-ring--warning" : ""}"
           aria-label=${summary}
           title=${t("chat.composer.contextUsage.open")}
         >
@@ -1564,47 +1550,57 @@ export function renderContextNotice(
               stroke-dashoffset=${dashOffset.toFixed(2)}
             />
           </svg>
-          <span class="context-ring__pct">${percentage}</span>
+          ${percentage ? html`<span class="context-ring__pct">${percentage}</span>` : nothing}
         </summary>
         <section class="context-usage__popover" aria-label=${t("chat.composer.contextUsage.title")}>
-          <div class="context-usage__header">
-            <span class="context-usage__title"
-              >${t("chat.composer.contextUsage.contextWindow")}</span
-            >
-            <strong class="context-usage__context-value">${model.detail} · ${percentage}</strong>
-          </div>
-          <div
-            class="context-usage__bar"
-            role="progressbar"
-            aria-label=${summary}
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow=${model.pct}
-          >
-            <span style="width: ${model.pct}%"></span>
-          </div>
-          <div class="context-usage__section-label">
-            ${t("chat.composer.contextUsage.latestRunTokens")}
-          </div>
-          <dl class="context-usage__stats">
-            <div>
-              <dt>${t("usage.breakdown.input")}</dt>
-              <dd>${formatStat(model.input)}</dd>
-            </div>
-            <div>
-              <dt>${t("usage.breakdown.output")}</dt>
-              <dd>${formatStat(model.output)}</dd>
-            </div>
-            ${model.cost === null
-              ? nothing
-              : html`
+          ${model
+            ? html`
+                <div class="context-usage__header">
+                  <span class="context-usage__title"
+                    >${t("chat.composer.contextUsage.contextWindow")}</span
+                  >
+                  <strong class="context-usage__context-value"
+                    >${model.detail} · ${percentage}</strong
+                  >
+                </div>
+                <div
+                  class="context-usage__bar"
+                  role="progressbar"
+                  aria-label=${summary}
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow=${model.pct}
+                >
+                  <span style="width: ${model.pct}%"></span>
+                </div>
+              `
+            : nothing}
+          ${model
+            ? html`
+                <div class="context-usage__section-label">
+                  ${t("chat.composer.contextUsage.latestRunTokens")}
+                </div>
+                <dl class="context-usage__stats">
                   <div>
-                    <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
-                    <dd>${formatCost(model.cost)}</dd>
+                    <dt>${t("usage.breakdown.input")}</dt>
+                    <dd>${formatStat(model.input)}</dd>
                   </div>
-                `}
-          </dl>
-          ${providerCosts
+                  <div>
+                    <dt>${t("usage.breakdown.output")}</dt>
+                    <dd>${formatStat(model.output)}</dd>
+                  </div>
+                  ${!showCosts || model.cost === null
+                    ? nothing
+                    : html`
+                        <div>
+                          <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
+                          <dd>${formatCost(model.cost)}</dd>
+                        </div>
+                      `}
+                </dl>
+              `
+            : nothing}
+          ${showCosts && providerCosts
             ? html`
                 <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
                 <dl class="context-usage__stats context-usage__stats--cost">
@@ -1615,10 +1611,16 @@ export function renderContextNotice(
                 </dl>
               `
             : nothing}
+          ${planGroups.map((group) =>
+            renderQuotaGroup(group, {
+              usageHref,
+              showProvider: planGroups.length > 1,
+            }),
+          )}
           ${provider
             ? html`
                 <div class="context-usage__model">
-                  <span>${t("sessionsView.provider")}</span>
+                  <span>${t("sessionsView.provider")}:</span>
                   <strong>${provider}</strong>
                 </div>
               `
@@ -1626,7 +1628,7 @@ export function renderContextNotice(
           ${responseModel
             ? html`
                 <div class="context-usage__model">
-                  <span>${t("sessionsView.model")}</span>
+                  <span>${t("sessionsView.model")}:</span>
                   <strong>${responseModel}</strong>
                 </div>
               `
@@ -1640,7 +1642,7 @@ export function renderContextNotice(
                 ? "context-ring__action--busy"
                 : ""}"
               type="button"
-              aria-label="Compact recommended session context"
+              aria-label=${t("chat.composer.compactRecommendedContext")}
               ?disabled=${compactDisabled}
               @click=${(event: Event) => {
                 event.preventDefault();
@@ -1660,74 +1662,107 @@ export function renderContextNotice(
   `;
 }
 
-export type ChatRunControlsProps = {
+type ChatRunControlsProps = {
   canAbort: boolean;
+  canSend: boolean;
   connected: boolean;
   draft: string;
+  hasAttachments?: boolean;
   hasMessages: boolean;
   isBusy: boolean;
   sending: boolean;
+  voiceActive?: boolean;
+  voiceStatus?: RealtimeTalkStatus;
+  voiceDetail?: string | null;
+  voiceInputLevel?: RealtimeTalkLevelSignal;
   onAbort?: () => void;
   onExport: () => void;
   onNewSession: () => void;
   onSend: () => void;
   onStoreDraft: (draft: string) => void;
+  onToggleVoice?: () => void;
+  showPrimary?: boolean;
   showSecondary?: boolean;
 };
 
-export function renderChatRunControls(props: ChatRunControlsProps) {
-  const showSecondary = props.showSecondary ?? true;
+function renderChatPrimaryActions(props: ChatRunControlsProps) {
+  const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
   const storeDraftAndSend = () => {
     if (props.draft.trim()) {
       props.onStoreDraft(props.draft);
     }
     props.onSend();
   };
+  const abortAction = props.canAbort
+    ? html`
+        <openclaw-tooltip .content=${t("chat.runControls.stop")}>
+          <button
+            class="chat-send-btn chat-send-btn--stop"
+            @click=${props.onAbort}
+            aria-label=${t("chat.runControls.stopGenerating")}
+          >
+            ${icons.stop}
+            <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
 
+  // Transports keep the session active while reporting status "error"; the
+  // alert row above the composer owns the error message, so the control keeps
+  // only its stop affordance instead of a fake listening meter plus a
+  // duplicate announcement.
+  const voiceErrored = props.voiceStatus === "error";
   return html`
-    <div class="agent-chat__toolbar-right">
-      ${showSecondary && !props.canAbort
+    ${props.voiceActive && props.onToggleVoice
+      ? html`
+          <openclaw-tooltip .content=${t("chat.composer.stopVoiceInput")}>
+            <button
+              class="chat-send-btn chat-send-btn--voice-live${voiceErrored
+                ? " chat-send-btn--voice-error"
+                : ""}"
+              @click=${props.onToggleVoice}
+              aria-label=${t("chat.composer.stopVoiceInput")}
+            >
+              ${voiceErrored
+                ? nothing
+                : renderMicrophoneActivity({
+                    status: props.voiceStatus,
+                    inputLevel: props.voiceInputLevel,
+                  })}
+              <span class="chat-send-btn__voice-stop-glyph">${icons.stop}</span>
+            </button>
+          </openclaw-tooltip>
+          ${voiceErrored
+            ? nothing
+            : html`
+                <span
+                  class="agent-chat__sr-only agent-chat__voice-status"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  >${voiceStatusLabel(props.voiceStatus, props.voiceDetail)}</span
+                >
+              `}
+          ${abortAction}
+        `
+      : props.canAbort
         ? html`
-            <openclaw-tooltip .content=${t("chat.runControls.newSession")}>
-              <button
-                class="btn btn--ghost"
-                @click=${props.onNewSession}
-                aria-label=${t("chat.runControls.newSession")}
-              >
-                ${icons.plus}
-                <span class="agent-chat__control-label">${t("chat.runControls.newSession")}</span>
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
-      ${showSecondary
-        ? html`
-            <openclaw-tooltip .content=${t("chat.runControls.export")}>
-              <button
-                class="btn btn--ghost"
-                @click=${props.onExport}
-                aria-label=${t("chat.runControls.exportChat")}
-                ?disabled=${!props.hasMessages}
-              >
-                ${icons.download}
-                <span class="agent-chat__control-label">${t("chat.runControls.export")}</span>
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
-      ${props.canAbort
-        ? html`
-            <openclaw-tooltip .content=${t("chat.runControls.queue")}>
-              <button
-                class="chat-send-btn"
-                @click=${storeDraftAndSend}
-                ?disabled=${!props.connected || props.sending}
-                aria-label=${t("chat.runControls.queueMessage")}
-              >
-                ${icons.send}
-                <span class="agent-chat__control-label">${t("chat.runControls.queue")}</span>
-              </button>
-            </openclaw-tooltip>
+            ${hasComposedContent
+              ? html`
+                  <openclaw-tooltip .content=${t("chat.runControls.queue")}>
+                    <button
+                      class="chat-send-btn"
+                      @click=${storeDraftAndSend}
+                      ?disabled=${!props.canSend || props.sending}
+                      aria-label=${t("chat.runControls.queueMessage")}
+                    >
+                      ${icons.arrowUp}
+                      <span class="agent-chat__control-label">${t("chat.runControls.queue")}</span>
+                    </button>
+                  </openclaw-tooltip>
+                `
+              : nothing}
             <openclaw-tooltip .content=${t("chat.runControls.stop")}>
               <button
                 class="chat-send-btn chat-send-btn--stop"
@@ -1739,38 +1774,57 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
               </button>
             </openclaw-tooltip>
           `
-        : html`
-            <openclaw-tooltip
-              .content=${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}
-            >
-              <button
-                class="chat-send-btn"
-                @click=${storeDraftAndSend}
-                ?disabled=${!props.connected || props.sending}
-                aria-label=${props.isBusy
-                  ? t("chat.runControls.queueMessage")
-                  : t("chat.runControls.sendMessage")}
+        : hasComposedContent || !props.onToggleVoice
+          ? html`
+              <openclaw-tooltip
+                .content=${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}
               >
-                ${icons.send}
-                <span class="agent-chat__control-label"
-                  >${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}</span
+                <button
+                  class="chat-send-btn"
+                  @click=${storeDraftAndSend}
+                  ?disabled=${!props.canSend || props.sending}
+                  aria-label=${props.isBusy
+                    ? t("chat.runControls.queueMessage")
+                    : t("chat.runControls.sendMessage")}
                 >
-              </button>
-            </openclaw-tooltip>
-          `}
-    </div>
+                  ${icons.arrowUp}
+                  <span class="agent-chat__control-label"
+                    >${props.isBusy
+                      ? t("chat.runControls.queue")
+                      : t("chat.runControls.send")}</span
+                  >
+                </button>
+              </openclaw-tooltip>
+            `
+          : html`
+              <openclaw-tooltip .content=${t("chat.composer.startVoiceInput")}>
+                <button
+                  class="chat-send-btn chat-send-btn--voice"
+                  @click=${props.onToggleVoice}
+                  ?disabled=${!props.connected || props.sending || props.isBusy}
+                  aria-label=${t("chat.composer.startVoiceInput")}
+                >
+                  ${icons.mic}
+                  <span class="agent-chat__control-label"
+                    >${t("chat.composer.startVoiceInput")}</span
+                  >
+                </button>
+              </openclaw-tooltip>
+            `}
   `;
 }
 
 export function renderChatComposer(props: ChatComposerProps) {
-  const canCompose = props.connected && props.canSend;
+  const state = getChatComposerState(props.paneId);
+  const canCompose = props.canSend;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const hasTerminalStatus = hasTerminalRunStatus(props.runStatus);
   const showAbortableUi = canAbort && !hasTerminalStatus;
-  const showSubmittedProgressUi = props.queue.some((item) =>
+  const submittedProgress = props.queue.find((item) =>
     isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
   );
+  const showSubmittedProgressUi = Boolean(submittedProgress);
   const composerRunStatus =
     showAbortableUi || showSubmittedProgressUi
       ? { phase: "in-progress" as const }
@@ -1779,33 +1833,72 @@ export function renderChatComposer(props: ChatComposerProps) {
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const visibleDraft = props.draft;
+  const draftKey = composerDraftKey(props);
+  const actionDraft =
+    state.composingDraft?.key === draftKey ? state.composingDraft.value : visibleDraft;
   let composerTextarea: HTMLTextAreaElement | null = null;
-  const hasAttachments = (props.attachments?.length ?? 0) > 0;
+  const hasVisualAttachments = (props.attachments ?? []).some(
+    (attachment) => !isLargePastedTextAttachment(attachment),
+  );
   const tokens = tokenEstimate(visibleDraft);
-  const composerControls = props.composerControls;
+  const contextNotice = renderContextNotice(
+    activeSession,
+    props.sessions?.defaults?.contextTokens ?? null,
+    {
+      compactBusy,
+      compactDisabled: !props.connected || !canCompose || isBusy || showAbortableUi,
+      messages: props.messages,
+      onCompact: props.onCompact,
+      providerUsage: props.providerUsage,
+    },
+  );
+  const composerControls = props.composerControls ?? nothing;
+  const assistantName = props.assistantName || "OpenClaw";
+  const inProgressLabel =
+    submittedProgress?.sendState === "waiting-model"
+      ? t("chat.composer.preparingModel")
+      : props.stream !== null
+        ? t("chat.composer.responding", { name: assistantName })
+        : props.sending || submittedProgress
+          ? t("chat.composer.sendingMessage")
+          : t("chat.composer.working", { name: assistantName });
+  // Persistent sr-only live region: run phases are otherwise conveyed only
+  // visually (thread spark, content arriving, interrupted toast).
+  const runStatusAnnouncement =
+    composerRunStatus == null
+      ? ""
+      : composerRunStatus.phase === "in-progress"
+        ? inProgressLabel
+        : composerRunStatus.phase === "done"
+          ? t("chat.composer.runDone")
+          : t("chat.composer.runInterrupted");
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
 
-  const placeholder = !props.connected
-    ? t("chat.composer.placeholderDisconnected")
-    : !canCompose && props.disabledReason
+  const placeholder =
+    !canCompose && props.disabledReason
       ? props.disabledReason
-      : hasAttachments
+      : hasVisualAttachments
         ? t("chat.composer.placeholderWithAttachments")
         : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
+
+  // Offline text and attachments may enter the persisted reconnect queue, but
+  // slash commands are live controls and must not execute against stale state.
+  const canSubmitDraft = (draft: string) =>
+    canCompose && (props.connected || !draft.trimStart().startsWith("/"));
 
   const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
     const submittedDraft = target?.value ?? props.getDraft?.() ?? props.draft;
     const hostDraft = props.getDraft?.() ?? props.draft;
-    const draftKey = composerDraftKey(props);
     const clearedSubmittedDraft =
       hostDraft === "" && submittedDraft !== "" && target?.value === submittedDraft;
     if (clearedSubmittedDraft) {
-      composerState.pendingClearedSubmittedDraft = {
+      state.pendingClearedSubmittedDraft = {
         key: draftKey,
         value: submittedDraft,
       };
     } else {
-      clearPendingClearedSubmittedDraft(draftKey);
+      clearPendingClearedSubmittedDraft(state, draftKey);
     }
     if (target && target.value !== hostDraft) {
       target.value = hostDraft;
@@ -1814,91 +1907,94 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
 
   const handleKeyDown = (event: KeyboardEvent) => {
-    if (composerState.composerComposing || event.isComposing || event.keyCode === 229) {
+    if (state.composerComposing || event.isComposing || event.keyCode === 229) {
       return;
     }
 
     if (
-      composerState.slashMenuOpen &&
-      composerState.slashMenuMode === "args" &&
-      composerState.slashMenuArgItems.length > 0
+      props.connected &&
+      state.slashMenuOpen &&
+      state.slashMenuMode === "args" &&
+      state.slashMenuArgItems.length > 0
     ) {
-      const len = composerState.slashMenuArgItems.length;
+      const len = state.slashMenuArgItems.length;
       switch (event.key) {
         case "ArrowDown":
           event.preventDefault();
-          composerState.slashMenuIndex = (composerState.slashMenuIndex + 1) % len;
+          state.slashMenuIndex = (state.slashMenuIndex + 1) % len;
           requestUpdate();
-          scrollActiveSlashMenuOptionIntoView();
+          scrollActiveSlashMenuOptionIntoView(state, props.paneId);
           return;
         case "ArrowUp":
           event.preventDefault();
-          composerState.slashMenuIndex = (composerState.slashMenuIndex - 1 + len) % len;
+          state.slashMenuIndex = (state.slashMenuIndex - 1 + len) % len;
           requestUpdate();
-          scrollActiveSlashMenuOptionIntoView();
+          scrollActiveSlashMenuOptionIntoView(state, props.paneId);
           return;
         case "Tab":
           event.preventDefault();
-          selectSlashArg(
-            composerState.slashMenuArgItems[composerState.slashMenuIndex],
-            props,
-            requestUpdate,
-            false,
-          );
+          {
+            const arg = state.slashMenuArgItems[state.slashMenuIndex];
+            if (arg !== undefined) {
+              selectSlashArg(arg, props, requestUpdate, false);
+            }
+          }
           return;
         case "Enter":
           event.preventDefault();
-          selectSlashArg(
-            composerState.slashMenuArgItems[composerState.slashMenuIndex],
-            props,
-            requestUpdate,
-            true,
-          );
+          {
+            const arg = state.slashMenuArgItems[state.slashMenuIndex];
+            if (arg !== undefined) {
+              selectSlashArg(arg, props, requestUpdate, true);
+            }
+          }
           return;
         case "Escape":
           event.preventDefault();
-          composerState.slashMenuOpen = false;
-          resetSlashMenuState();
+          state.slashMenuOpen = false;
+          resetSlashMenuState(state);
           requestUpdate();
           return;
       }
     }
 
-    if (composerState.slashMenuOpen && composerState.slashMenuItems.length > 0) {
-      const len = composerState.slashMenuItems.length;
+    if (props.connected && state.slashMenuOpen && state.slashMenuItems.length > 0) {
+      const len = state.slashMenuItems.length;
       switch (event.key) {
         case "ArrowDown":
           event.preventDefault();
-          composerState.slashMenuIndex = (composerState.slashMenuIndex + 1) % len;
+          state.slashMenuIndex = (state.slashMenuIndex + 1) % len;
           requestUpdate();
-          scrollActiveSlashMenuOptionIntoView();
+          scrollActiveSlashMenuOptionIntoView(state, props.paneId);
           return;
         case "ArrowUp":
           event.preventDefault();
-          composerState.slashMenuIndex = (composerState.slashMenuIndex - 1 + len) % len;
+          state.slashMenuIndex = (state.slashMenuIndex - 1 + len) % len;
           requestUpdate();
-          scrollActiveSlashMenuOptionIntoView();
+          scrollActiveSlashMenuOptionIntoView(state, props.paneId);
           return;
         case "Tab":
           event.preventDefault();
-          tabCompleteSlashCommand(
-            composerState.slashMenuItems[composerState.slashMenuIndex],
-            props,
-            requestUpdate,
-          );
+          {
+            const command = state.slashMenuItems[state.slashMenuIndex];
+            if (command) {
+              tabCompleteSlashCommand(command, props, requestUpdate);
+            }
+          }
           return;
         case "Enter":
           event.preventDefault();
-          selectSlashCommand(
-            composerState.slashMenuItems[composerState.slashMenuIndex],
-            props,
-            requestUpdate,
-          );
+          {
+            const command = state.slashMenuItems[state.slashMenuIndex];
+            if (command) {
+              selectSlashCommand(command, props, requestUpdate);
+            }
+          }
           return;
         case "Escape":
           event.preventDefault();
-          composerState.slashMenuOpen = false;
-          resetSlashMenuState();
+          state.slashMenuOpen = false;
+          resetSlashMenuState(state);
           requestUpdate();
           return;
       }
@@ -1923,6 +2019,9 @@ export function renderChatComposer(props: ChatComposerProps) {
         if (result.preventDefault) {
           event.preventDefault();
         }
+        // History navigation updates the renderer-owned draft outside a
+        // reactive property; commit it before placing the caret in the DOM.
+        requestUpdate();
         if (result.restoreCaret) {
           restoreHistoryCaret(target, result.restoreCaret);
         }
@@ -1930,8 +2029,9 @@ export function renderChatComposer(props: ChatComposerProps) {
       }
     }
 
-    if (event.key === "Enter" && !event.shiftKey) {
-      if (!canCompose) {
+    const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
+    if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
+      if (!canSubmitDraft((event.target as HTMLTextAreaElement).value)) {
         return;
       }
       event.preventDefault();
@@ -1946,18 +2046,23 @@ export function renderChatComposer(props: ChatComposerProps) {
     adjustTextareaHeight(target);
     commitComposerDraft(props, target.value);
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
+    requestUpdate();
   };
   const handleBeforeInput = (event: InputEvent) => {
-    if (!composerState.composerComposing && !event.isComposing) {
-      markComposerInputIntent(composerDraftKey(props));
+    if (!state.composerComposing && !event.isComposing) {
+      markComposerInputIntent(state, composerDraftKey(props));
     }
   };
   const handleInput = (event: InputEvent) => {
     const target = event.target as HTMLTextAreaElement;
-    const draftKey = composerDraftKey(props);
-    const hasInputIntent = consumeComposerInputIntent(draftKey);
-    if (composerState.composerComposing || event.isComposing) {
+    const hasInputIntent = consumeComposerInputIntent(state, draftKey);
+    if (state.composerComposing || event.isComposing) {
+      state.composingDraft = { key: draftKey, value: target.value };
+      requestUpdate();
       return;
+    }
+    if (state.composingDraft?.key === draftKey) {
+      state.composingDraft = null;
     }
     if (
       suppressStaleSubmittedDraftReplay(
@@ -1965,6 +2070,7 @@ export function renderChatComposer(props: ChatComposerProps) {
         event,
         props.getDraft?.() ?? props.draft,
         hasInputIntent,
+        state,
       )
     ) {
       return;
@@ -1972,276 +2078,218 @@ export function renderChatComposer(props: ChatComposerProps) {
     syncComposerValue(target);
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
-    composerState.composerComposing = false;
+    state.composerComposing = false;
+    if (state.composingDraft?.key === draftKey) {
+      state.composingDraft = null;
+    }
     syncComposerValue(event.target as HTMLTextAreaElement);
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
+    if (state.composingDraft?.key === draftKey) {
+      state.composingDraft = null;
+    }
     commitComposerDraft(props, target.value);
   };
   const handleSend = () => {
-    if (!canCompose) {
+    const draft = composerTextarea?.value ?? props.draft;
+    if (!canSubmitDraft(draft)) {
       return;
     }
-    commitComposerDraft(props, composerTextarea?.value ?? props.draft);
+    commitComposerDraft(props, draft);
     props.onSend();
     syncComposerDraftAfterSend(composerTextarea);
   };
-  const slashMenuVisible = canCompose && isSlashMenuVisible();
-  const activeSlashMenuOptionId = getActiveSlashMenuOptionId();
-  const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel();
+  const handleVoicePrimaryAction = () => {
+    if (props.realtimeTalkActive) {
+      props.onToggleRealtimeTalk?.();
+      return;
+    }
+    const liveDraft = composerTextarea?.value ?? visibleDraft;
+    if (liveDraft.trim() || props.attachments?.length) {
+      handleSend();
+      return;
+    }
+    props.onToggleRealtimeTalk?.();
+  };
+  const runControlsProps: ChatRunControlsProps = {
+    canAbort: showAbortableUi,
+    canSend: canSubmitDraft(actionDraft),
+    connected: props.connected,
+    draft: actionDraft,
+    hasAttachments: Boolean(props.attachments?.length),
+    hasMessages: props.messages.length > 0,
+    isBusy,
+    sending: props.sending,
+    voiceActive: props.realtimeTalkActive,
+    voiceStatus: props.realtimeTalkStatus,
+    voiceDetail: props.realtimeTalkDetail,
+    voiceInputLevel: props.realtimeTalkInputLevel,
+    onAbort: props.onAbort,
+    onExport: () => exportMarkdown(props),
+    onNewSession: props.onNewSession,
+    onSend: handleSend,
+    onStoreDraft: () => {},
+    onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
+  };
+  const slashMenuVisible = props.connected && canCompose && isSlashMenuVisible(state);
+  const activeSlashMenuOptionId = getActiveSlashMenuOptionId(state, props.paneId);
+  const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel(state);
+  const slashMenuListboxId = paneDomId(props.paneId, "slash-menu-listbox");
+  const slashMenuAnnouncementId = paneDomId(props.paneId, "slash-active-announcement");
 
   return html`
     ${renderChatQueue({
       queue: props.queue,
       canAbort: showAbortableUi,
-      onQueueRetry: canCompose ? props.onQueueRetry : undefined,
-      onQueueSteer: canCompose ? props.onQueueSteer : undefined,
+      onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
+      onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
       onQueueRemove: props.onQueueRemove,
     })}
-    ${renderSideResult(props.sideResult, props.onDismissSideResult)}
-    ${props.showNewMessages
-      ? html`
-          <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
-            ${icons.arrowDown} New messages
-          </button>
-        `
-      : nothing}
-
-    <div
-      class="agent-chat__input"
-      @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
-    >
-      ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
-      ${renderAttachmentPreview(props)}
-      ${props.replyTarget
-        ? html`
-            <div class="chat-reply-preview">
-              <span class="chat-reply-preview__icon">${icons.messageSquare}</span>
-              <span class="chat-reply-preview__label"
-                >Replying to ${props.replyTarget.senderLabel ?? "message"}</span
-              >
-              <span class="chat-reply-preview__text"
-                >${props.replyTarget.text.slice(0, 120)}${props.replyTarget.text.length > 120
-                  ? "..."
-                  : ""}</span
-              >
-              <button
-                type="button"
-                class="chat-reply-preview__dismiss"
-                @click=${() => props.onClearReply?.()}
-                aria-label="Cancel reply"
-                title="Cancel reply"
-              >
-                ${icons.x}
-              </button>
-            </div>
-          `
-        : nothing}
-      <div class="agent-chat__composer-status-stack">
-        ${renderFallbackIndicator(props.fallbackStatus)}
-        ${renderCompactionIndicator(props.compactionStatus)}
-        ${renderChatGoal(activeSession?.goal, {
-          canAct: canCompose,
-          onGoalCommand: props.onGoalCommand,
-          onGoalEdit: (goal) => {
-            commitComposerDraft(props, `/goal edit ${goal.objective}`);
-            requestUpdate();
-            queueMicrotask(() => composerTextarea?.focus({ preventScroll: true }));
-          },
-          requestUpdate,
-        })}
-      </div>
-
-      <input
-        type="file"
-        accept=${CHAT_ATTACHMENT_ACCEPT}
-        multiple
-        class="agent-chat__file-input"
-        ?disabled=${!canCompose}
-        @change=${(event: Event) => {
-          if (canCompose) {
-            handleChatAttachmentFileSelect(event, props);
-          }
-        }}
-      />
-
-      ${renderRealtimeTalkOptions(props)}
-      ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
-        ? html`
-            <div
-              class="agent-chat__stt-interim agent-chat__talk-status"
-              role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
-            >
-              <span class="agent-chat__talk-status-text">
-                ${props.realtimeTalkDetail ??
-                ((props.realtimeTalkConversation?.length ?? 0) === 0
-                  ? props.realtimeTalkTranscript
-                  : null) ??
-                (props.realtimeTalkStatus === "thinking"
-                  ? "Asking OpenClaw..."
-                  : props.realtimeTalkStatus === "connecting"
-                    ? "Connecting Talk..."
-                    : "Talk live")}
-              </span>
-              ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
-                ? html`
-                    <openclaw-tooltip .content=${t("chat.composer.dismissTalkError")}>
-                      <button
-                        class="callout__dismiss"
-                        type="button"
-                        @click=${props.onDismissRealtimeTalkError}
-                        aria-label=${t("chat.composer.dismissTalkError")}
-                      >
-                        ${icons.x}
-                      </button>
-                    </openclaw-tooltip>
-                  `
-                : nothing}
-            </div>
-          `
-        : nothing}
-
-      <div class="agent-chat__composer-combobox">
-        <textarea
-          ${ref((element) => {
-            const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
-            if (composerTextarea && composerTextarea !== nextTextarea) {
-              disconnectTextareaOverflowObserver(composerTextarea);
-            }
-            composerTextarea = nextTextarea;
-            if (composerTextarea) {
-              observeTextareaOverflow(composerTextarea);
-              scheduleTextareaHeightAdjustment(composerTextarea);
-            }
+    <div class="agent-chat__composer-shell">
+      <div
+        class="agent-chat__input"
+        @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
+      >
+        ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
+        ${renderAttachmentPreview(props)}
+        ${props.replyTarget
+          ? html`
+              <div class="chat-reply-preview">
+                <span class="chat-reply-preview__icon">${icons.messageSquare}</span>
+                <span class="chat-reply-preview__label"
+                  >Replying to ${props.replyTarget.senderLabel ?? "message"}</span
+                >
+                <span class="chat-reply-preview__text"
+                  >${truncateUtf16Safe(props.replyTarget.text, 120)}${props.replyTarget.text
+                    .length > 120
+                    ? "..."
+                    : ""}</span
+                >
+                <button
+                  type="button"
+                  class="chat-reply-preview__dismiss"
+                  @click=${() => props.onClearReply?.()}
+                  aria-label=${t("chat.composer.cancelReply")}
+                  title=${t("chat.composer.cancelReply")}
+                >
+                  ${icons.x}
+                </button>
+              </div>
+            `
+          : nothing}
+        <div class="agent-chat__composer-status-stack">
+          ${renderFallbackIndicator(props.fallbackStatus)}
+          ${renderCompactionIndicator(props.compactionStatus)}
+          ${renderChatGoal(state, activeSession?.goal, {
+            canAct: props.connected && canCompose,
+            onGoalCommand: props.onGoalCommand,
+            onGoalEdit: (goal) => {
+              commitComposerDraft(props, `/goal edit ${goal.objective}`);
+              requestUpdate();
+              queueMicrotask(() => composerTextarea?.focus({ preventScroll: true }));
+            },
+            requestUpdate,
           })}
-          .value=${visibleDraft}
-          dir=${detectTextDirection(visibleDraft)}
-          ?disabled=${!canCompose}
-          aria-autocomplete="list"
-          aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
-          aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
-          aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
-          @keydown=${handleKeyDown}
-          @beforeinput=${handleBeforeInput}
-          @input=${handleInput}
-          @compositionstart=${() => {
-            composerState.composerComposing = true;
-          }}
-          @compositionend=${handleCompositionEnd}
-          @blur=${handleBlur}
-          @paste=${(event: ClipboardEvent) => {
-            if (canCompose) {
-              handleChatAttachmentPaste(event, props);
-            }
-          }}
-          placeholder=${placeholder}
-          rows="1"
-        ></textarea>
-        <span
-          id=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
-          class="agent-chat__sr-only"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          >${activeSlashMenuOptionLabel}</span
-        >
-      </div>
+        </div>
 
-      <div class="agent-chat__toolbar">
-        <div class="agent-chat__toolbar-left">
-          <openclaw-tooltip .content=${t("chat.composer.attachFile")}>
-            <button
-              type="button"
-              class="agent-chat__input-btn"
-              @click=${clickComposerFileInput}
-              aria-label=${t("chat.composer.attachFile")}
+        ${renderChatAttachmentInputs({ ...props, disabled: !canCompose })}
+        ${renderChatVoiceError({
+          status: props.realtimeTalkStatus,
+          detail: props.realtimeTalkDetail,
+          onDismissError: props.onDismissRealtimeTalkError,
+        })}
+
+        <div class="agent-chat__composer-input-row">
+          ${renderChatAttachmentMenu({ ...props, disabled: !canCompose })}
+          <div class="agent-chat__composer-combobox">
+            <textarea
+              ${ref((element) => {
+                const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
+                if (composerTextarea && composerTextarea !== nextTextarea) {
+                  disconnectTextareaOverflowObserver(composerTextarea);
+                }
+                composerTextarea = nextTextarea;
+                if (composerTextarea) {
+                  observeTextareaOverflow(composerTextarea);
+                  scheduleTextareaHeightAdjustment(composerTextarea);
+                }
+              })}
+              .value=${visibleDraft}
+              dir=${detectTextDirection(visibleDraft)}
               ?disabled=${!canCompose}
+              aria-autocomplete="list"
+              aria-controls=${ifDefined(slashMenuVisible ? slashMenuListboxId : undefined)}
+              aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
+              aria-describedby=${slashMenuAnnouncementId}
+              aria-keyshortcuts=${sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"}
+              @keydown=${handleKeyDown}
+              @beforeinput=${handleBeforeInput}
+              @input=${handleInput}
+              @compositionstart=${(event: CompositionEvent) => {
+                state.composerComposing = true;
+                state.composingDraft = {
+                  key: draftKey,
+                  value: (event.target as HTMLTextAreaElement).value,
+                };
+              }}
+              @compositionend=${handleCompositionEnd}
+              @blur=${handleBlur}
+              @paste=${(event: ClipboardEvent) => {
+                if (canCompose) {
+                  handleChatAttachmentPaste(event, props);
+                }
+              }}
+              placeholder=${placeholder}
+              rows="1"
+            ></textarea>
+            ${tokens
+              ? html`
+                  <div class="agent-chat__token-row">
+                    <span class="agent-chat__token-count">${tokens}</span>
+                  </div>
+                `
+              : nothing}
+            <span
+              id=${slashMenuAnnouncementId}
+              class="agent-chat__sr-only"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              >${activeSlashMenuOptionLabel}</span
             >
-              ${icons.paperclip}
-              <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
-            </button>
-          </openclaw-tooltip>
+            <span
+              class="agent-chat__run-status-announcement agent-chat__sr-only"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              >${runStatusAnnouncement}</span
+            >
+          </div>
+          <div class="agent-chat__composer-actions">
+            ${renderChatPrimaryActions(runControlsProps)}
+          </div>
+        </div>
 
-          ${props.onToggleRealtimeTalk || props.onToggleRealtimeTalkOptions
+        <div class="agent-chat__composer-footer">
+          ${composerControls !== nothing
             ? html`
-                <div class="agent-chat__talk-group">
-                  ${props.onToggleRealtimeTalk
+                <div class="agent-chat__composer-controls">
+                  ${composerRunStatus?.phase === "interrupted"
                     ? html`
-                        <openclaw-tooltip
-                          .content=${props.realtimeTalkActive
-                            ? t("chat.composer.stopTalk")
-                            : t("chat.composer.startTalk")}
-                        >
-                          <button
-                            class="agent-chat__input-btn agent-chat__talk-toggle ${props.realtimeTalkActive
-                              ? "agent-chat__input-btn--talk"
-                              : ""}"
-                            @click=${props.onToggleRealtimeTalk}
-                            aria-label=${props.realtimeTalkActive
-                              ? t("chat.composer.stopTalk")
-                              : t("chat.composer.startTalk")}
-                            ?disabled=${!canCompose && !props.realtimeTalkActive}
-                          >
-                            ${props.realtimeTalkActive ? icons.volume2 : icons.mic}
-                            <span class="agent-chat__control-label"
-                              >${props.realtimeTalkActive
-                                ? t("chat.composer.stopTalk")
-                                : t("chat.composer.startTalk")}</span
-                            >
-                          </button>
-                        </openclaw-tooltip>
+                        <div class="agent-chat__composer-run-status">
+                          ${renderChatRunStatusIndicator(composerRunStatus)}
+                        </div>
                       `
                     : nothing}
-                  ${props.onToggleRealtimeTalkOptions
-                    ? html`
-                        <openclaw-tooltip content="Talk settings">
-                          <button
-                            class="agent-chat__input-btn agent-chat__talk-caret ${props.realtimeTalkOptionsOpen
-                              ? "agent-chat__input-btn--open"
-                              : ""}"
-                            @click=${props.onToggleRealtimeTalkOptions}
-                            aria-label="Talk settings"
-                            aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
-                            ?disabled=${!canCompose || props.realtimeTalkActive}
-                          >
-                            ${icons.chevronDown}
-                            <span class="agent-chat__control-label">Talk settings</span>
-                          </button>
-                        </openclaw-tooltip>
-                      `
-                    : nothing}
+                  ${composerControls}
                 </div>
               `
             : nothing}
-          ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
-          ${renderChatRunStatusIndicator(composerRunStatus)}
+          <div class="agent-chat__composer-meta">${contextNotice}</div>
         </div>
-
-        ${composerControls && composerControls !== nothing
-          ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
-          : nothing}
-        ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
-          compactBusy,
-          compactDisabled: !canCompose || isBusy || showAbortableUi,
-          messages: props.messages,
-          onCompact: props.onCompact,
-        })}
-        ${renderChatRunControls({
-          canAbort: showAbortableUi,
-          connected: canCompose,
-          draft: visibleDraft,
-          hasMessages: props.messages.length > 0,
-          isBusy,
-          sending: props.sending,
-          onAbort: props.onAbort,
-          onExport: () => exportMarkdown(props),
-          onNewSession: props.onNewSession,
-          onSend: handleSend,
-          onStoreDraft: () => {},
-          showSecondary: false,
-        })}
       </div>
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

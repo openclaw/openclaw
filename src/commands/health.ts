@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Collects and renders gateway health for channels, agents, plugins, and sessions. */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -5,6 +6,7 @@ import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { inspectChannelAccount } from "../channels/account-inspection.js";
+import { redactChannelStatusSummaryBaseUrl } from "../channels/account-snapshot-fields.js";
 import {
   resolveChannelAccountConfigured,
   resolveChannelAccountEnabled,
@@ -666,14 +668,12 @@ export async function getHealthSnapshot(params?: {
             snapshot,
           })
         : undefined;
-      const record =
+      // Summary hooks overlay the safe snapshot, so reapply URL redaction after the final merge.
+      const record = redactChannelStatusSummaryBaseUrl(
         summary && typeof summary === "object"
           ? ({ ...snapshot, ...summary } as ChannelAccountHealthSummary)
-          : ({
-              ...snapshot,
-              accountId,
-              configured,
-            } satisfies ChannelAccountHealthSummary);
+          : ({ ...snapshot, accountId, configured } satisfies ChannelAccountHealthSummary),
+      );
       if (record.configured === undefined) {
         record.configured = configured;
       }
@@ -700,7 +700,11 @@ export async function getHealthSnapshot(params?: {
       accountSummaries[preferredAccountId] ??
       accountSummaries[defaultAccountId] ??
       accountSummaries[accountIdsToProbe[0] ?? preferredAccountId];
-    const fallbackSummary = defaultSummary ?? accountSummaries[Object.keys(accountSummaries)[0]];
+    const fallbackSummary =
+      defaultSummary ??
+      accountSummaries[
+        expectDefined(Object.keys(accountSummaries)[0], "object.keys(account summaries) entry at 0")
+      ];
     if (fallbackSummary) {
       channels[plugin.id] = {
         ...fallbackSummary,
@@ -1072,3 +1076,4 @@ async function readRuntimeHealthConfig(): Promise<OpenClawConfig> {
   const { getRuntimeConfig } = await loadConfigRuntime();
   return getRuntimeConfig();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

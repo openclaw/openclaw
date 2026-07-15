@@ -29,7 +29,7 @@ type SharedToolDisplayConfig = {
   tools?: Record<string, SharedToolDisplaySpec>;
 };
 
-export type ToolDisplay = {
+type ToolDisplay = {
   name: string;
   icon: ChatToolIconName;
   title: string;
@@ -39,7 +39,7 @@ export type ToolDisplay = {
 };
 
 export type EmbedSandboxMode = ControlUiEmbedSandboxMode;
-export type ChatToolIconName = string;
+type ChatToolIconName = string;
 
 const EMOJI_ICON_MAP: Record<string, ChatToolIconName> = {
   "🧩": "puzzle",
@@ -219,7 +219,16 @@ export function resolveCanvasIframeUrl(
   }
 }
 
-export function resolveEmbedSandbox(mode: EmbedSandboxMode | null | undefined): string {
+export function resolveEmbedSandbox(
+  mode: EmbedSandboxMode | null | undefined,
+  ceiling?: "strict" | "scripts",
+): string {
+  if (ceiling === "strict" || (ceiling === "scripts" && mode === "strict")) {
+    return "";
+  }
+  if (ceiling === "scripts") {
+    return "allow-scripts";
+  }
   switch (mode) {
     case "strict":
       return "";

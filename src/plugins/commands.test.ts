@@ -16,7 +16,7 @@ import {
 import { createPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { createBundledPluginRecord } from "./status.test-helpers.js";
+import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
 const completionMocks = vi.hoisted(() => ({
   prepareSimpleCompletionModelForAgent: vi.fn(),
@@ -737,6 +737,29 @@ describe("registerPluginCommand", () => {
     });
 
     expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("sanitizes oversized arguments before passing them to plugin handlers", async () => {
+    let observedArgs: string | undefined;
+    registerVoiceCommandForTest({
+      acceptsArgs: true,
+      handler: async (ctx) => {
+        observedArgs = ctx.args;
+        return { text: "ok" };
+      },
+    });
+    const match = requirePluginCommandMatch(`/voice \0${"a".repeat(4094)}😀tail`);
+
+    await executePluginCommand({
+      command: match.command,
+      args: match.args,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      commandBody: "/voice",
+      config: {},
+    });
+
+    expect(observedArgs).toBe("a".repeat(4094));
   });
 
   it("ignores owner status opt-in from direct plugin command registration", async () => {
@@ -1484,3 +1507,4 @@ describe("registerPluginCommand", () => {
     expect(receivedCtx?.accountId).toBe("work");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

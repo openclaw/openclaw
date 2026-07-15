@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import { BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES } from "openclaw/plugin-sdk/chat-channel-ids";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
@@ -955,7 +956,7 @@ function stripEnvelopeBodySenderPrefix(body: string, headerInside: string): stri
   if (!match) {
     return body;
   }
-  const label = match[1];
+  const label = expectDefined(match[1], "envelope body sender capture");
   if (label === ENVELOPE_BODY_SELF_PREFIX || label === ENVELOPE_BODY_DIRECT_PREFIX) {
     return body.slice(match[0].length);
   }
@@ -1168,7 +1169,8 @@ export function sanitizeForMemoryCapture(text: string): string {
 
   // Pre-truncate to cap regex work on very large inputs (ReDoS mitigation)
   const MAX_SANITIZE_CHARS = 10_000;
-  let cleaned = text.length > MAX_SANITIZE_CHARS ? text.slice(0, MAX_SANITIZE_CHARS) : text;
+  let cleaned =
+    text.length > MAX_SANITIZE_CHARS ? truncateUtf16Safe(text, MAX_SANITIZE_CHARS) : text;
   let strippedInjectedContext = false;
 
   // Strip leading timestamp prefix
@@ -1598,12 +1600,7 @@ export default definePluginEntry({
             minimum: 0,
             maximum: 1,
           }),
-          category: Type.Optional(
-            Type.Unsafe<MemoryCategory>({
-              type: "string",
-              enum: [...MEMORY_CATEGORIES],
-            }),
-          ),
+          category: Type.Optional(Type.Enum(MEMORY_CATEGORIES, { type: "string" })),
         }),
         async execute(_toolCallId, params) {
           const { text, category = "other" } = params as {
@@ -1658,7 +1655,7 @@ export default definePluginEntry({
           });
 
           return {
-            content: [{ type: "text", text: `Stored: "${text.slice(0, 100)}..."` }],
+            content: [{ type: "text", text: `Stored: "${truncateUtf16Safe(text, 100)}..."` }],
             details: { action: "created", id: entry.id },
           };
         },
@@ -1700,16 +1697,17 @@ export default definePluginEntry({
               };
             }
 
-            if (results.length === 1 && results[0].score > 0.9) {
-              await db.delete(results[0].entry.id);
+            const singleResult = results.length === 1 ? results[0] : undefined;
+            if (singleResult && singleResult.score > 0.9) {
+              await db.delete(singleResult.entry.id);
               return {
-                content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}"` }],
-                details: { action: "deleted", id: results[0].entry.id },
+                content: [{ type: "text", text: `Forgotten: "${singleResult.entry.text}"` }],
+                details: { action: "deleted", id: singleResult.entry.id },
               };
             }
 
             const list = results
-              .map((r) => `- [${r.entry.id}] ${r.entry.text.slice(0, 60)}...`)
+              .map((r) => `- [${r.entry.id}] ${truncateUtf16Safe(r.entry.text, 60)}...`)
               .join("\n");
 
             // Strip vector data for serialization
@@ -2021,3 +2019,4 @@ export default definePluginEntry({
     });
   },
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

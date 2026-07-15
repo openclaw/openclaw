@@ -18,12 +18,13 @@ class ChatControllerTranscriptCacheTest {
   private class FakeTranscriptCache : ChatTranscriptCache {
     val transcripts = mutableMapOf<Pair<String, String>, List<ChatMessage>>()
     var sessions: List<ChatSessionEntry> = emptyList()
+    val sessionsByGateway = mutableMapOf<String, List<ChatSessionEntry>>()
     val savedTranscripts = mutableListOf<Triple<String, String, List<ChatMessage>>>()
     val savedSessions = mutableListOf<Pair<String, List<ChatSessionEntry>>>()
     val retainedSessionKeys = mutableListOf<String?>()
     val deletedSessions = mutableListOf<Pair<String, String>>()
 
-    override suspend fun loadSessions(gatewayId: String): List<ChatSessionEntry> = sessions
+    override suspend fun loadSessions(gatewayId: String): List<ChatSessionEntry> = sessionsByGateway[gatewayId] ?: sessions
 
     override suspend fun loadTranscript(
       gatewayId: String,
@@ -54,9 +55,10 @@ class ChatControllerTranscriptCacheTest {
       deletedSessions += gatewayId to sessionKey
     }
 
-    override suspend fun clearAll() {
-      transcripts.clear()
-      sessions = emptyList()
+    override suspend fun clearGateway(gatewayId: String) {
+      transcripts.keys.removeAll { it.first == gatewayId }
+      savedTranscripts.removeAll { it.first == gatewayId }
+      savedSessions.removeAll { it.first == gatewayId }
     }
   }
 
@@ -267,6 +269,81 @@ class ChatControllerTranscriptCacheTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun sessionListParsesGroupingAndUnreadMetadata() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "sessions.list" ->
+                """
+                {
+                  "sessions": [{
+                    "key": "main",
+                    "label": "Daily",
+                    "category": "Work",
+                    "pinned": true,
+                    "archived": false,
+                    "unread": true,
+                    "lastReadAt": 10,
+                    "lastActivityAt": 20
+                  }]
+                }
+                """.trimIndent()
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      val session = controller.sessions.value.single()
+      assertEquals("Daily", session.label)
+      assertEquals("Work", session.category)
+      assertEquals(true, session.pinned)
+      assertEquals(false, session.archived)
+      assertEquals(true, session.unread)
+      assertEquals(10L, session.lastReadAt)
+      assertEquals(20L, session.lastActivityAt)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun partialSessionChangedEventPreservesExistingMetadata() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "sessions.list" ->
+                """{"sessions":[{"key":"main","label":"Daily","category":"Work","pinned":true,"unread":true}]}"""
+              else -> "{}"
+            }
+          },
+        )
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"session":{"key":"main","lastActivityAt":30}}""",
+      )
+
+      val session = controller.sessions.value.single()
+      assertEquals("Daily", session.label)
+      assertEquals("Work", session.category)
+      assertEquals(true, session.pinned)
+      assertEquals(true, session.unread)
+      assertEquals(30L, session.lastActivityAt)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun truncatedSessionListRetainsActiveDeepTranscript() =
     runTest {
       val cache = FakeTranscriptCache()
@@ -390,5 +467,43 @@ class ChatControllerTranscriptCacheTest {
 
       assertTrue(controller.sessions.value.isEmpty())
       assertTrue(cache.savedSessions.isEmpty())
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun switchingGatewayScopeIsolatesCachedTranscriptAndSessionsThenRestoresThem() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.transcripts["gateway-a" to "main"] = listOf(cachedMessage("gateway A transcript"))
+      cache.sessionsByGateway["gateway-a"] = listOf(ChatSessionEntry(key = "main", updatedAtMs = 1L, displayName = "Gateway A"))
+      cache.sessionsByGateway["gateway-b"] = emptyList()
+      var currentScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { _, _ -> throw IllegalStateException("offline") },
+          transcriptCache = cache,
+          cacheScope = { currentScope },
+        )
+
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(listOf("gateway A transcript"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("Gateway A"), controller.sessions.value.mapNotNull { it.displayName })
+
+      currentScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      controller.onGatewayScopeChanging()
+      controller.load("main")
+      advanceUntilIdle()
+      assertTrue(controller.messages.value.isEmpty())
+      assertTrue(controller.sessions.value.isEmpty())
+
+      currentScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 3)
+      controller.onGatewayScopeChanging()
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(listOf("gateway A transcript"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("Gateway A"), controller.sessions.value.mapNotNull { it.displayName })
     }
 }

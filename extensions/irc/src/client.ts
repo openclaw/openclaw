@@ -69,6 +69,7 @@ export type IrcClientOptions = {
   onPrivmsg?: (event: IrcPrivmsgEvent) => void | Promise<void>;
   onNotice?: (text: string, target?: string) => void;
   onError?: (error: Error) => void;
+  onDisconnect?: () => void;
   onLine?: (line: string) => void;
 };
 
@@ -99,7 +100,7 @@ function toError(err: unknown): Error {
 
 let nickCollisionFallbackSeq = 0;
 
-export function buildFallbackNick(nick: string): string {
+function buildFallbackNick(nick: string): string {
   const normalized = nick.replace(/\s+/g, "");
   const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
@@ -116,7 +117,7 @@ function normalizeIrcNick(value: string): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
-export function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
+function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
   if (!options || options.enabled === false) {
     return [];
   }
@@ -430,8 +431,12 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   socket.once("close", () => {
     if (!closed) {
       closed = true;
+      removeAbortListener?.();
+      removeAbortListener = null;
       if (!ready) {
         fail(new Error("IRC connection closed before ready"));
+      } else {
+        options.onDisconnect?.();
       }
     }
   });
@@ -452,7 +457,12 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     }
   }
 
-  await withTimeout(readyPromise, timeoutMs, "IRC connect");
+  try {
+    await withTimeout(readyPromise, timeoutMs, "IRC connect");
+  } catch (error) {
+    close();
+    throw error;
+  }
 
   return {
     get nick() {

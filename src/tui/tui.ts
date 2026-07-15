@@ -17,7 +17,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
-import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
@@ -62,11 +61,18 @@ import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
+  disconnectedTuiChatSubmitMessage,
+  resolveTuiChatSubmitAdmission,
+  type TuiChatSubmitAdmission,
+  type TuiPendingSubmit,
+} from "./tui-submit-state.js";
+import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
   shouldEnableWindowsGitBashPasteFallback,
   type TuiSubmitAction,
 } from "./tui-submit.js";
+import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
 import type {
   AgentSummary,
   SessionInfo,
@@ -98,6 +104,13 @@ const OPENAI_CODEX_PROVIDER = "openai";
 
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;
+  /** Exact pre-probed remote target for an in-process setup handoff. */
+  boundGateway?: {
+    url: string;
+    token?: string;
+    password?: string;
+    tlsFingerprint?: string;
+  };
   config?: OpenClawConfig;
   title?: string;
 };
@@ -406,19 +419,6 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   stopTuiSafely(() => tui.stop());
 }
 
-export function canSubmitTuiChatMessage(params: {
-  activeChatRunId?: string | null;
-  pendingChatRunId?: string | null;
-  pendingOptimisticUserMessage?: boolean;
-  message?: string;
-}): boolean {
-  const stopText = params.message ? isChatStopCommandText(params.message) : false;
-  if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
-    return true;
-  }
-  return !params.pendingChatRunId && params.pendingOptimisticUserMessage !== true;
-}
-
 const TUI_BUSY_ACTIVITY_STATUSES = new Set([
   "sending",
   "waiting",
@@ -550,9 +550,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let rememberedSessionApplied = false;
   let currentSessionId: string | null = null;
   let activeChatRunId: string | null = null;
-  let pendingOptimisticUserMessage = false;
-  let pendingChatRunId: string | null = null;
-  let pendingSubmitDraft: { runId: string; text: string } | null = null;
+  let pendingSubmit: TuiPendingSubmit | null = null;
   let historyLoaded = false;
   let isConnected = false;
   let wasDisconnected = false;
@@ -613,6 +611,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     set currentAgentId(value) {
       currentAgentId = value;
       pluginApprovals?.sessionChanged();
+      taskSuggestions?.sessionChanged();
     },
     get currentSessionKey() {
       return currentSessionKey;
@@ -620,6 +619,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     set currentSessionKey(value) {
       currentSessionKey = value;
       pluginApprovals?.sessionChanged();
+      taskSuggestions?.sessionChanged();
     },
     get currentSessionId() {
       return currentSessionId;
@@ -633,23 +633,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     set activeChatRunId(value) {
       activeChatRunId = value;
     },
-    get pendingOptimisticUserMessage() {
-      return pendingOptimisticUserMessage;
+    get pendingSubmit() {
+      return pendingSubmit;
     },
-    set pendingOptimisticUserMessage(value) {
-      pendingOptimisticUserMessage = value;
-    },
-    get pendingChatRunId() {
-      return pendingChatRunId;
-    },
-    set pendingChatRunId(value) {
-      pendingChatRunId = value ?? null;
-    },
-    get pendingSubmitDraft() {
-      return pendingSubmitDraft;
-    },
-    set pendingSubmitDraft(value) {
-      pendingSubmitDraft = value ?? null;
+    set pendingSubmit(value) {
+      pendingSubmit = value;
     },
     get historyLoaded() {
       return historyLoaded;
@@ -773,11 +761,14 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     client = new EmbeddedTuiBackend();
   } else {
     const { GatewayChatClient } = await import("./gateway-chat.js");
-    client = await GatewayChatClient.connect({
-      url: opts.url,
-      token: opts.token,
-      password: opts.password,
-    });
+    client = opts.boundGateway
+      ? GatewayChatClient.connectBound({ config, ...opts.boundGateway })
+      : await GatewayChatClient.connect({
+          url: opts.url,
+          token: opts.token,
+          password: opts.password,
+          tlsFingerprint: opts.tlsFingerprint,
+        });
   }
   const previousConsoleSubsystemFilter = isLocalMode
     ? loggingState.consoleSubsystemFilter
@@ -820,6 +811,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
           local: isLocalMode,
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
+          agentRuntime: sessionInfo.agentRuntime?.id,
           thinkingLevels: sessionInfo.thinkingLevels,
           dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
         }),
@@ -1320,6 +1312,16 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     setSession,
     abortActive,
   } = sessionActions;
+  const taskSuggestions = createTuiTaskSuggestionController({
+    client,
+    chatLog,
+    getAgentId: () => currentAgentId,
+    getSessionKey: () => currentSessionKey,
+    openOverlay,
+    closeOverlay,
+    requestRender: () => tui.requestRender(),
+    onAccepted: setSession,
+  });
 
   const {
     handleChatEvent,
@@ -1366,9 +1368,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     exitRequested = true;
     exitResult = {
       exitReason: result?.exitReason ?? "exit",
-      ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
+      ...(result?.systemAgentMessage ? { systemAgentMessage: result.systemAgentMessage } : {}),
     };
     pluginApprovals?.dispose();
+    taskSuggestions?.dispose();
     const hardExitTimer = setTimeout(
       forceExit,
       resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
@@ -1436,15 +1439,23 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     closeOverlay,
   });
   updateAutocompleteProvider();
-  const canSubmitChatMessage = (message: string) =>
-    canSubmitTuiChatMessage({
+  const admitChatMessage = (message: string) =>
+    resolveTuiChatSubmitAdmission({
+      isConnected: state.isConnected,
       activeChatRunId: state.activeChatRunId,
-      pendingChatRunId: state.pendingChatRunId,
-      pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
+      pendingSubmit: state.pendingSubmit,
       message,
     });
-  const notifyBlockedChatSubmit = () => {
-    addBlockedChatSubmitNotice(chatLog);
+  const notifyBlockedChatSubmit = (
+    _message: string,
+    reason: Exclude<TuiChatSubmitAdmission, "allowed">,
+  ) => {
+    if (reason === "pending") {
+      addBlockedChatSubmitNotice(chatLog);
+    } else {
+      chatLog.addSystem(disconnectedTuiChatSubmitMessage(isLocalMode));
+      setActivityStatus("disconnected");
+    }
     tui.requestRender();
   };
   const notifySubmitError = (action: TuiSubmitAction, error: unknown) => {
@@ -1458,7 +1469,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     sendMessage,
     handleBangLine: runLocalShellLine,
     onSubmitError: notifySubmitError,
-    canSubmitMessage: canSubmitChatMessage,
+    admitMessage: admitChatMessage,
     onBlockedMessageSubmit: notifyBlockedChatSubmit,
   });
   editor.onSubmit = createSubmitBurstCoalescer({
@@ -1551,6 +1562,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   client.onEvent = (evt) => {
     pluginApprovals?.handleEvent(evt.event, evt.payload);
+    taskSuggestions?.handleEvent(evt.event, evt.payload);
     if (evt.event === "chat") {
       handleChatEvent(evt.payload);
     }
@@ -1593,6 +1605,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         await pluginApprovals?.refresh();
       } catch (err) {
         chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+      }
+      try {
+        await taskSuggestions?.refresh();
+      } catch (err) {
+        chatLog.addSystem(`task suggestion refresh failed: ${String(err)}`);
       }
       await loadHistory();
       if (activityStatus === "starting up") {
@@ -1658,6 +1675,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       } catch (err) {
         chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
       }
+      try {
+        await taskSuggestions?.refresh();
+      } catch (err) {
+        chatLog.addSystem(`task suggestion refresh failed: ${String(err)}`);
+      }
     })();
     tui.requestRender();
   };
@@ -1685,6 +1707,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   await new Promise<void>((resolve) => {
     const finish = () => {
       pluginApprovals?.dispose();
+      taskSuggestions?.dispose();
       if (isLocalMode) {
         setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
       }
@@ -1705,3 +1728,4 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   }
   return exitResult;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

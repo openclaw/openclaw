@@ -1,4 +1,6 @@
 // Legacy config migration tests cover generic doctor repair of old config layouts.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfig } from "../../../config/types.js";
@@ -1086,7 +1088,7 @@ describe("legacy agent model timeout migrate", () => {
     const defaults = agents.defaults as Record<string, unknown>;
     const defaultSubagents = defaults.subagents as Record<string, unknown>;
     const list = agents.list as Array<Record<string, unknown>>;
-    const firstAgent = list[0];
+    const firstAgent = expectDefined(list[0], "list[0] test invariant");
     const firstSubagents = firstAgent.subagents as Record<string, unknown>;
 
     expect(defaults.model).toEqual({
@@ -1289,6 +1291,25 @@ describe("legacy WebChat channel config migrate", () => {
       "Removed retired channels.webchat config.",
       "Removed retired gateway.webchat config.",
     ]);
+  });
+});
+
+describe("retired cron run-log config migrate", () => {
+  it("removes cron.runLog while preserving current cron config", () => {
+    const raw = {
+      cron: {
+        enabled: true,
+        runLog: { maxBytes: "2mb", keepLines: 100 },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("cron.runLog");
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.cron).toEqual({ enabled: true });
+    expect(res.changes).toContain(
+      "Removed retired cron.runLog config; cron history now keeps 2000 runs per job.",
+    );
   });
 });
 
@@ -1941,6 +1962,276 @@ describe("legacy migrate x_search auth", () => {
       "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
     ]);
   });
+
+  it("detects and repairs retired xAI model-only tool config without plugin discovery", () => {
+    const raw = {
+      tools: {
+        web: {
+          search: { grok: { model: "grok-4-1-fast" } },
+          x_search: { model: "grok-4-1-fast-non-reasoning" },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(
+      expect.arrayContaining(["tools.web.search", "tools.web.x_search.model"]),
+    );
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.plugins?.entries?.xai).toEqual({
+      enabled: true,
+      config: { webSearch: { model: "grok-4.3" } },
+    });
+    expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      model: "grok-4.3",
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        'Updated tools.web.search.grok.model from "grok-4-1-fast" to "grok-4.3".',
+        'Updated tools.web.x_search.model from "grok-4-1-fast-non-reasoning" to "grok-4.3".',
+      ]),
+    );
+  });
+});
+
+describe("legacy Codex Supervisor config migrate", () => {
+  it("normalizes padded legacy plugin ids during migration", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: [" CODEX-SUPERVISOR ", "codex"],
+        deny: [" codex-supervisor "],
+        entries: {
+          " CODEX ": {
+            config: { appServer: { transport: "stdio" } },
+          },
+          " CODEX-SUPERVISOR ": {
+            enabled: true,
+            config: { allowWriteControls: true },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.allow).toEqual(["codex"]);
+    expect(res.config?.plugins?.deny).toEqual([]);
+    expect(res.config?.plugins?.entries).not.toHaveProperty(" CODEX-SUPERVISOR ");
+    expect(res.config?.plugins?.entries).not.toHaveProperty("codex");
+    expect(res.config?.plugins?.entries?.[" CODEX "]).toEqual({
+      config: {
+        appServer: { transport: "stdio" },
+        supervision: {
+          enabled: false,
+          allowWriteControls: true,
+        },
+      },
+    });
+  });
+
+  it("moves active Supervisor config into Codex supervision and rewrites the allowlist", () => {
+    const raw = {
+      plugins: {
+        allow: ["telegram", "codex-supervisor", "codex"],
+        entries: {
+          "codex-supervisor": {
+            enabled: true,
+            config: {
+              endpoints: [
+                {
+                  id: "local",
+                  transport: "stdio-proxy",
+                  command: "codex",
+                },
+              ],
+              allowRawTranscripts: true,
+              allowWriteControls: true,
+            },
+            hooks: { enabled: true },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("plugins");
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.plugins?.allow).toEqual(["telegram", "codex"]);
+    expect(res.config?.plugins?.entries?.codex).toEqual({
+      enabled: true,
+      config: {
+        supervision: {
+          enabled: true,
+          endpoints: [
+            {
+              id: "local",
+              transport: "stdio-proxy",
+              command: "codex",
+            },
+          ],
+          allowRawTranscripts: true,
+          allowWriteControls: true,
+        },
+      },
+    });
+    expect(res.config?.plugins?.entries?.["codex-supervisor"]).toBeUndefined();
+    expect(res.changes).toContain(
+      "Moved plugins.entries.codex-supervisor to plugins.entries.codex.config.supervision.",
+    );
+    expect(res.changes).toContain("Rewrote plugins.allow codex-supervisor references to codex.");
+
+    const rerun = migrateLegacyConfigForTest(res.config);
+    expect(rerun).toEqual({ config: null, changes: [] });
+  });
+
+  it.each([
+    { canonicalEnabled: undefined, legacyEnabled: true, expected: true },
+    { canonicalEnabled: undefined, legacyEnabled: false, expected: undefined },
+    { canonicalEnabled: true, legacyEnabled: false, expected: true },
+    { canonicalEnabled: false, legacyEnabled: true, expected: false },
+  ])(
+    "only activates missing canonical Codex state for enabled supervision ($canonicalEnabled, $legacyEnabled)",
+    ({ canonicalEnabled, legacyEnabled, expected }) => {
+      const codexEntry: Record<string, unknown> = { config: {} };
+      if (canonicalEnabled !== undefined) {
+        codexEntry.enabled = canonicalEnabled;
+      }
+      const res = migrateLegacyConfigForTest({
+        plugins: {
+          entries: {
+            codex: codexEntry,
+            "codex-supervisor": { enabled: legacyEnabled },
+          },
+        },
+      });
+
+      expect(res.config?.plugins?.entries?.codex?.enabled).toBe(expected);
+    },
+  );
+
+  it("does not disable an existing implicit Codex harness when old supervision was disabled", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+      plugins: {
+        entries: {
+          codex: {
+            config: {
+              appServer: { transport: "stdio" },
+            },
+          },
+          "codex-supervisor": {
+            enabled: false,
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(res.config?.plugins?.entries?.codex).toEqual({
+      config: {
+        appServer: { transport: "stdio" },
+        supervision: { enabled: false },
+      },
+    });
+  });
+
+  it("preserves canonical Codex values while filling missing supervision fields", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        deny: ["codex-supervisor", "telegram"],
+        entries: {
+          codex: {
+            enabled: false,
+            config: {
+              appServer: { transport: "stdio" },
+              supervision: {
+                enabled: true,
+                endpoints: [{ id: "canonical", transport: "stdio-proxy" }],
+                allowWriteControls: false,
+              },
+            },
+          },
+          "codex-supervisor": {
+            enabled: true,
+            config: {
+              endpoints: [{ id: "legacy", transport: "stdio-proxy" }],
+              allowRawTranscripts: true,
+              allowWriteControls: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.deny).toEqual(["telegram"]);
+    expect(res.config?.plugins?.entries?.codex).toEqual({
+      enabled: false,
+      config: {
+        appServer: { transport: "stdio" },
+        supervision: {
+          enabled: true,
+          endpoints: [{ id: "canonical", transport: "stdio-proxy" }],
+          allowRawTranscripts: true,
+          allowWriteControls: false,
+        },
+      },
+    });
+    expect(res.changes).toContain("Removed plugins.deny codex-supervisor references.");
+  });
+
+  it("keeps migrated supervision dormant when the old plugin was denied", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        deny: ["codex-supervisor"],
+        entries: {
+          "codex-supervisor": {
+            enabled: true,
+            config: { allowWriteControls: true },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.deny).toEqual([]);
+    expect(res.config?.plugins?.entries?.codex).toEqual({
+      config: {
+        supervision: {
+          enabled: false,
+          allowWriteControls: true,
+        },
+      },
+    });
+  });
+
+  it("removes malformed legacy entries without creating Codex config", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        entries: {
+          "codex-supervisor": "invalid",
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.entries).toEqual({});
+    expect(res.changes).toContain("Removed invalid plugins.entries.codex-supervisor config.");
+  });
+
+  it("repairs policy-only references without creating a Codex entry", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: ["codex-supervisor", "codex"],
+        deny: ["codex-supervisor"],
+      },
+    });
+
+    expect(res.config?.plugins?.allow).toEqual(["codex"]);
+    expect(res.config?.plugins?.deny).toEqual([]);
+    expect(res.config?.plugins?.entries).toBeUndefined();
+  });
 });
 
 describe("legacy bundled provider discovery migrate", () => {
@@ -2295,6 +2586,43 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
 });
 
 describe("legacy model compat migrate", () => {
+  it("upgrades the retired xAI quality image slug without pinning active aliases", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          imageGenerationModel: {
+            primary: "xai/grok-imagine-image-pro",
+            fallbacks: ["xai/grok-imagine-image"],
+          },
+          model: {
+            primary: "xai/grok-4.20-beta-latest-reasoning",
+          },
+          models: {
+            "xai/grok-imagine-image-pro": { alias: "quality" },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents");
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "xai/grok-imagine-image-quality",
+      fallbacks: ["xai/grok-imagine-image"],
+    });
+    expect(res.config?.agents?.defaults?.model).toEqual({
+      primary: "xai/grok-4.20-beta-latest-reasoning",
+    });
+    expect(res.config?.agents?.defaults?.models).toEqual({
+      "xai/grok-imagine-image-quality": { alias: "quality" },
+    });
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      'config.agents.defaults.imageGenerationModel.primary from "xai/grok-imagine-image-pro" to "xai/grok-imagine-image-quality"',
+      'config.agents.defaults.models key from "xai/grok-imagine-image-pro" to "xai/grok-imagine-image-quality"',
+    ]);
+  });
+
   it("upgrades retired model refs", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
@@ -3403,3 +3731,4 @@ describe("legacy model compat migrate", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

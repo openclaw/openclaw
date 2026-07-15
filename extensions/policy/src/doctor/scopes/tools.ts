@@ -1,7 +1,7 @@
 // Policy doctor health-check factories for one policy scope.
 import type { HealthCheck } from "openclaw/plugin-sdk/health";
 import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
-import { CHECK_IDS } from "../metadata.js";
+import { CHECK_IDS } from "../check-ids.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 
 export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readonly HealthCheck[] {
@@ -26,6 +26,9 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAgentsToolNotDenied);
+    },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyAgentsToolNotDenied);
     },
   };
   const policyToolsProfileUnapprovedCheck: HealthCheck = {
@@ -116,6 +119,9 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsRequiredDenyMissing);
+    },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyToolsRequiredDenyMissing);
     },
   };
 

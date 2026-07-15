@@ -28,7 +28,7 @@ import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 import type { ExecFn } from "./windows-acl.js";
 
-export type SecurityAuditFinding = {
+type SecurityAuditFinding = {
   checkId: string;
   severity: "info" | "warn" | "critical";
   title: string;
@@ -36,9 +36,6 @@ export type SecurityAuditFinding = {
   remediation?: string;
 };
 
-type CollectPluginsTrustFindingsParams = Parameters<
-  typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings
->[0];
 type SkillScanSummary = Awaited<
   ReturnType<typeof import("../skills/security/scanner.js").scanDirectoryWithSummary>
 >;
@@ -77,17 +74,6 @@ const loadSandboxBrowserSecurityHashEpoch = createLazyRuntimeNamedExport(
   () => import("../agents/sandbox/constants.js"),
   "SANDBOX_BROWSER_SECURITY_HASH_EPOCH",
 );
-
-const loadAuditPluginsTrustModule = createLazyRuntimeModule(
-  () => import("./audit-plugins-trust.js"),
-);
-
-export async function collectPluginsTrustFindings(
-  params: CollectPluginsTrustFindingsParams,
-): Promise<SecurityAuditFinding[]> {
-  const { collectPluginsTrustFindings: collect } = await loadAuditPluginsTrustModule();
-  return await collect(params);
-}
 
 // --------------------------------------------------------------------------
 // Helpers
@@ -496,6 +482,7 @@ export async function collectIncludeFilePermFindings(params: {
   const includePaths = await collectIncludePathsRecursive({
     configPath,
     parsed: params.configSnapshot.parsed,
+    env: params.env,
   });
   if (includePaths.length === 0) {
     return findings;
@@ -877,7 +864,10 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const { loadWorkspaceSkillEntries } = await loadSkillsModule();
 
   for (const workspaceDir of workspaceDirs) {
-    const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: params.cfg,
+      includeArchived: true,
+    });
     for (const entry of entries) {
       if (resolveSkillSource(entry.skill) === "openclaw-bundled") {
         continue;
@@ -940,3 +930,4 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
 
   return findings;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

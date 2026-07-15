@@ -16,6 +16,19 @@ function expectSlackConfigIssue(config: unknown, path: string) {
 }
 
 describe("slack config schema", () => {
+  it("accepts explicit Enterprise Grid org-install mode", () => {
+    expectSlackConfigValid({ enterpriseOrgInstall: true });
+    expectSlackConfigValid({ accounts: { org: { enterpriseOrgInstall: true } } });
+    expectSlackConfigIssue({ enterpriseOrgInstall: "true" }, "enterpriseOrgInstall");
+  });
+
+  it("keeps workspace-scoped mention pattern policies valid for workspace installs", () => {
+    expectSlackConfigValid({ mentionPatterns: { denyIn: ["C123"] } });
+    expectSlackConfigValid({
+      accounts: { workspace: { mentionPatterns: { mode: "deny", allowIn: ["C456"] } } },
+    });
+  });
+
   it("defaults groupPolicy to allowlist", () => {
     const res = SlackConfigSchema.safeParse({});
 

@@ -2,16 +2,22 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  testing as sessionMcpTesting,
-  getOrCreateSessionMcpRuntime,
-} from "../../agents/agent-bundle-mcp-tools.js";
+import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runtime.js";
+import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  appendTranscriptEvent,
+  listSessionEntries,
+  loadSessionEntry,
+  replaceSessionEntry,
+  upsertSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
-import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   testing as sessionBindingTesting,
@@ -24,6 +30,7 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../../sessions/model-overrides.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
@@ -36,9 +43,9 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
-import { drainFormattedSystemEvents } from "./session-updates.js";
+import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
-import { initSessionState } from "./session.js";
+import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -54,7 +61,7 @@ const browserMaintenanceMocks = vi.hoisted(() => ({
 
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
-  sessionsDir: string;
+  storePath: string;
 };
 
 vi.mock("./session-fork.js", () => ({
@@ -79,13 +86,13 @@ vi.mock("./session-fork.js", () => ({
       entry: SessionEntry;
       parentEntry: SessionEntry;
     }) => Partial<SessionEntry>;
-    sessionsDir: string;
+    sessionKey?: string;
   }) => {
-    const store = JSON.parse(await fs.readFile(params.storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
-    const parentEntry = store[params.parentSessionKey];
+    const parentEntry = loadSessionEntry({
+      sessionKey: params.parentSessionKey,
+      storePath: params.storePath,
+      readConsistency: "latest",
+    });
     if (!parentEntry?.sessionId) {
       return { status: "missing-parent" };
     }
@@ -116,7 +123,7 @@ vi.mock("./session-fork.js", () => ({
     }
     const fork = await sessionForkMocks.forkSessionFromParent({
       parentEntry,
-      sessionsDir: params.sessionsDir,
+      storePath: params.storePath,
     });
     if (!fork) {
       return { status: "failed" };
@@ -278,8 +285,97 @@ async function writeSessionStoreFast(
   store: Record<string, SessionEntry | Record<string, unknown>>,
 ): Promise<void> {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    const patch = entry as Partial<SessionEntry>;
+    if (typeof patch.sessionId === "string" && patch.sessionId.trim()) {
+      await replaceSessionEntry({ storePath, sessionKey }, patch as SessionEntry);
+    } else {
+      await upsertSessionEntry({ storePath, sessionKey }, patch);
+    }
+  }
 }
+
+function readSessionStoreFast(storePath: string): Record<string, SessionEntry> {
+  const entries = Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  ) as Record<string, SessionEntry>;
+  return new Proxy(entries, {
+    get(target, prop, receiver) {
+      if (typeof prop !== "string" || prop in target) {
+        return Reflect.get(target, prop, receiver);
+      }
+      const entry = loadSessionEntry({ storePath, sessionKey: prop, readConsistency: "latest" });
+      if (entry) {
+        target[prop] = entry;
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+}
+
+describe("resolveReplySessionPreprocessingState", () => {
+  const sessionKey = "agent:main:harness:codex:supervision:media-preflight";
+
+  function resolvePreprocessingState(storePath: string) {
+    return resolveReplySessionPreprocessingState({
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      ctx: {
+        Body: "<media:audio>",
+        RawBody: "<media:audio>",
+        CommandBody: "<media:audio>",
+        From: "media-preflight",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+  }
+
+  it("returns the valid durable harness owner lock before preprocessing", async () => {
+    const storePath = await createStorePath("openclaw-media-preflight-valid-");
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "native-media-session",
+        updatedAt: Date.now(),
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    });
+
+    expect(resolvePreprocessingState(storePath)).toMatchObject({
+      sessionKey,
+      storePath,
+      sessionEntry: {
+        sessionId: "native-media-session",
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    });
+  });
+
+  // A "missing session id" case is unrepresentable post-flip: sessions rows
+  // are NOT NULL on session_id and upsert repairs id-less patches at write
+  // time, so the store can never hand preprocessing such an entry.
+  it.each([
+    ["missing row", undefined],
+    [
+      "wrong owner",
+      {
+        sessionId: "native-media-session",
+        updatedAt: 1,
+        agentHarnessId: "other",
+        modelSelectionLocked: true,
+      },
+    ],
+  ] as const)("rejects a reserved %s before preprocessing", async (_label, entry) => {
+    const storePath = await createStorePath(`openclaw-media-preflight-invalid-${_label}-`);
+    await writeSessionStoreFast(storePath, entry ? { [sessionKey]: entry } : {});
+
+    expect(() => resolvePreprocessingState(storePath)).toThrow();
+  });
+});
 
 async function writeTerminalTranscriptSessionStore(params: {
   storePath: string;
@@ -289,17 +385,23 @@ async function writeTerminalTranscriptSessionStore(params: {
   omitStatus?: boolean;
   updatedAt: number;
   endedAt: number;
-  transcriptMtimeMs: number;
+  transcriptMutationOrder: "after-registry" | "before-registry";
 }): Promise<void> {
   const sessionFile = `${params.sessionId}.jsonl`;
-  const transcriptPath = path.join(path.dirname(params.storePath), sessionFile);
-  await fs.writeFile(
-    transcriptPath,
-    `${JSON.stringify({ type: "session", id: params.sessionId })}\n`,
-    "utf-8",
-  );
-  await fs.utimes(transcriptPath, params.transcriptMtimeMs / 1000, params.transcriptMtimeMs / 1000);
   const status = params.status ?? (params.omitStatus ? undefined : "done");
+  const appendTranscript = () =>
+    appendTranscriptEvent(
+      {
+        agentId: "main",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
+      { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
+    );
+  if (params.transcriptMutationOrder === "before-registry") {
+    await appendTranscript();
+  }
   await writeSessionStoreFast(params.storePath, {
     [params.sessionKey]: {
       sessionId: params.sessionId,
@@ -311,6 +413,9 @@ async function writeTerminalTranscriptSessionStore(params: {
       ...(status ? { status } : {}),
     },
   });
+  if (params.transcriptMutationOrder === "after-registry") {
+    await appendTranscript();
+  }
 }
 
 function setMinimalCurrentConversationBindingRegistryForTests(): void {
@@ -450,10 +555,11 @@ beforeEach(() => {
   });
   sessionForkMocks.forkSessionFromParent
     .mockReset()
-    .mockImplementation(async ({ parentEntry, sessionsDir }: ForkSessionParamsForTest) => {
+    .mockImplementation(async ({ parentEntry, storePath }: ForkSessionParamsForTest) => {
       if (!parentEntry.sessionFile) {
         return null;
       }
+      const sessionsDir = path.dirname(storePath);
       await fs.mkdir(sessionsDir, { recursive: true });
       const sessionId = `forked-session-${++sessionForkMocks.nextSessionId}`;
       const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
@@ -545,7 +651,7 @@ describe("initSessionState guarded initialization", () => {
 });
 
 describe("initSessionState thread forking", () => {
-  it("forks a new session from the parent session file", async () => {
+  it("forks a new SQLite session from the parent session", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-");
     const sessionsDir = path.join(root, "sessions");
@@ -613,24 +719,19 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.totalTokens).toBeUndefined();
     expect(result.sessionEntry.totalTokensFresh).toBe(false);
 
-    const newSessionFile = requireString(
-      result.sessionEntry.sessionFile,
-      "forked thread session file",
+    expect(result.sessionEntry.forkedFromParent).toBe(true);
+    expect(result.sessionEntry.sessionFile).toBe(
+      formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: result.sessionEntry.sessionId,
+        storePath,
+      }),
     );
-    const headerLine = (await fs.readFile(newSessionFile, "utf-8"))
-      .split(/\r?\n/)
-      .find((line) => line.trim().length > 0);
-    if (!headerLine) {
-      throw new Error("Missing session header");
-    }
-    const parsedHeader = JSON.parse(headerLine) as {
-      parentSession?: string;
-    };
-    const expectedParentSession = await fs.realpath(parentSessionFile);
-    const actualParentSession = parsedHeader.parentSession
-      ? await fs.realpath(parsedHeader.parentSession)
-      : undefined;
-    expect(actualParentSession).toBe(expectedParentSession);
+    const forkCall = requireMockCallArg(sessionForkMocks.forkSessionFromParent, "fork session");
+    expect(forkCall.parentEntry).toMatchObject({
+      sessionId: parentSessionId,
+      sessionFile: parentSessionFile,
+    });
     warn.mockRestore();
   });
 
@@ -854,7 +955,7 @@ describe("initSessionState thread forking", () => {
     expect(sessionForkMocks.forkSessionFromParent).not.toHaveBeenCalled();
   });
 
-  it("records topic-specific session files when MessageThreadId is present", async () => {
+  it("records topic-specific SQLite session identity when MessageThreadId is present", async () => {
     const root = await makeCaseDir("openclaw-topic-session-");
     const storePath = path.join(root, "sessions.json");
 
@@ -872,11 +973,17 @@ describe("initSessionState thread forking", () => {
       commandAuthorized: true,
     });
 
-    const sessionFile = requireString(result.sessionEntry.sessionFile, "topic session file");
-    expect(path.basename(sessionFile)).toBe(`${result.sessionEntry.sessionId}-topic-456.jsonl`);
+    expect(result.sessionEntry.lastThreadId).toBe(456);
+    expect(result.sessionEntry.sessionFile).toBe(
+      formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: result.sessionEntry.sessionId,
+        storePath,
+      }),
+    );
   });
 
-  it("records topic-specific session files from SessionKey when MessageThreadId is absent", async () => {
+  it("records topic-specific SQLite session identity from SessionKey", async () => {
     const root = await makeCaseDir("openclaw-topic-session-key-");
     const storePath = path.join(root, "sessions.json");
 
@@ -895,8 +1002,14 @@ describe("initSessionState thread forking", () => {
         commandAuthorized: true,
       });
 
-      const sessionFile = requireString(result.sessionEntry.sessionFile, "topic session file");
-      expect(path.basename(sessionFile)).toBe(`${result.sessionEntry.sessionId}-topic-456.jsonl`);
+      expect(result.sessionKey).toBe("agent:main:telegram:group:123:topic:456");
+      expect(result.sessionEntry.sessionFile).toBe(
+        formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: result.sessionEntry.sessionId,
+          storePath,
+        }),
+      );
     } finally {
       resetPluginRuntimeStateForTest();
     }
@@ -1044,7 +1157,7 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.memoryFlushLastFailedAt).toBeUndefined();
     expect(result.sessionEntry.memoryFlushLastFailureError).toBeUndefined();
 
-    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    const store = readSessionStoreFast(storePath) as Record<
       string,
       {
         skillsSnapshot?: unknown;
@@ -1174,7 +1287,7 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.modelOverride).toBe("m2.7");
     expect(result.sessionEntry.modelOverrideSource).toBe("user");
 
-    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    const store = readSessionStoreFast(storePath) as Record<
       string,
       { providerOverride?: string; modelOverride?: string; modelOverrideSource?: string }
     >;
@@ -1240,7 +1353,7 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.ttsAuto).toBe("always");
     expect(result.sessionEntry.pinnedAt).toBe(123);
 
-    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    const store = readSessionStoreFast(storePath) as Record<
       string,
       {
         thinkingLevel?: string;
@@ -1289,6 +1402,48 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
     expect(result.sessionEntry.responseUsage).toBe("full");
+  });
+
+  it("preserves user labels across dashboard session stale rollover (#101451)", async () => {
+    const root = await makeCaseDir("openclaw-dashboard-rollover-label-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:dashboard:8c0b2b68-05e1-4b25-a8c2-ef6f43a01f77";
+    const existingSessionId = "dashboard-session-before-rollover";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        label: "Other",
+        displayName: "Dashboard Chat",
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "continue",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.label).toBe("Other");
+    expect(result.sessionEntry.displayName).toBe("Dashboard Chat");
+
+    const store = readSessionStoreFast(storePath) as Record<
+      string,
+      { label?: string; displayName?: string }
+    >;
+    expect(store[sessionKey]?.label).toBe("Other");
+    expect(store[sessionKey]?.displayName).toBe("Dashboard Chat");
   });
 
   it("clears an auto-fallback model override on an implicit daily stale rollover (#90119)", async () => {
@@ -1815,7 +1970,13 @@ describe("initSessionState RawBody", () => {
       });
 
       expect(result.sessionEntry.sessionId).toBe(sessionId);
-      expect(result.sessionEntry.sessionFile).toBe(sessionFile);
+      expect(result.sessionEntry.sessionFile).toBe(
+        formatSqliteSessionFileMarker({
+          agentId: "worker1",
+          sessionId,
+          storePath,
+        }),
+      );
       expect(result.storePath).toBe(storePath);
     });
   });
@@ -2047,6 +2208,37 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
+  it("pins a durably admitted session across an idle reset boundary", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-idle-pinned-admission-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "durably-admitted-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
+      cfg: {
+        session: {
+          store: storePath,
+          reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+      expectedExistingSessionId: existingSessionId,
+      pinExpectedExistingSession: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+  });
+
   it("reuses an idle-expired session when a reconnecting client requests current session resume", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-idle-requested-session-");
@@ -2182,10 +2374,7 @@ describe("initSessionState reset policy", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
+    const persisted = readSessionStoreFast(storePath);
     expect(persisted[sessionKey]?.sessionId).toBe(existingSessionId);
     expect(persisted[sessionKey]?.status).toBe("done");
     expect(persisted[sessionKey]?.startedAt).toBe(Date.now() - 10_000);
@@ -2195,27 +2384,36 @@ describe("initSessionState reset policy", () => {
 
   it.each([
     {
-      name: "non-main terminal rows ignore transcript mtime",
+      name: "non-main terminal rows ignore later transcript mutations",
       sessionKey: "agent:main:whatsapp:dm:terminal-entry",
       updatedAtOffsetMs: -5_000,
       endedAtOffsetMs: -6_000,
-      transcriptMtimeOffsetMs: -3_000,
+      transcriptMutationOrder: "after-registry" as const,
       expectNewSession: false,
     },
     {
-      name: "main terminal rows rotate when transcript is newer than updatedAt",
+      name: "main status-done terminal rows reuse after a later transcript mutation",
       sessionKey: "agent:main:main",
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: 0,
+      transcriptMutationOrder: "after-registry" as const,
+      expectNewSession: false,
+    },
+    {
+      name: "main killed terminal rows rotate after a later transcript mutation",
+      sessionKey: "agent:main:main",
+      status: "killed" as const,
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMutationOrder: "after-registry" as const,
       expectNewSession: true,
     },
     {
-      name: "main endedAt-only rows rotate when transcript is newer than updatedAt",
+      name: "main endedAt-only rows rotate after a later transcript mutation",
       sessionKey: "agent:main:main",
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: 0,
+      transcriptMutationOrder: "after-registry" as const,
       omitStatus: true,
       expectNewSession: true,
     },
@@ -2225,32 +2423,16 @@ describe("initSessionState reset policy", () => {
       status: "failed" as const,
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: 0,
+      transcriptMutationOrder: "after-registry" as const,
       expectNewSession: false,
       expectRecovered: true,
     },
     {
-      name: "main terminal rows reuse when updatedAt already reflects the transcript",
+      name: "main terminal rows reuse when the registry observes the transcript mutation",
       sessionKey: "agent:main:main",
       updatedAtOffsetMs: -1_000,
       endedAtOffsetMs: -6_000,
-      transcriptMtimeOffsetMs: -4_000,
-      expectNewSession: false,
-    },
-    {
-      name: "main terminal rows reuse when transcript mtime differs only by sub-millisecond precision",
-      sessionKey: "agent:main:main",
-      updatedAtOffsetMs: -4_000,
-      endedAtOffsetMs: -6_000,
-      transcriptMtimeOffsetMs: -3_999.5,
-      expectNewSession: false,
-    },
-    {
-      name: "main terminal rows reuse when transcript is not newer than updatedAt",
-      sessionKey: "agent:main:main",
-      updatedAtOffsetMs: -10_000,
-      endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: -15_000,
+      transcriptMutationOrder: "before-registry" as const,
       expectNewSession: false,
     },
   ])("$name", async (scenario) => {
@@ -2269,7 +2451,7 @@ describe("initSessionState reset policy", () => {
       omitStatus: scenario.omitStatus,
       updatedAt: terminalUpdatedAt,
       endedAt: terminalEndedAt,
-      transcriptMtimeMs: now + scenario.transcriptMtimeOffsetMs,
+      transcriptMutationOrder: scenario.transcriptMutationOrder,
     });
 
     const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -2280,10 +2462,7 @@ describe("initSessionState reset policy", () => {
     });
 
     expect(result.isNewSession).toBe(scenario.expectNewSession);
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
+    const persisted = readSessionStoreFast(storePath);
     const entry = persisted[scenario.sessionKey];
     if (scenario.expectNewSession) {
       expect(result.sessionId).not.toBe(existingSessionId);
@@ -2346,7 +2525,7 @@ describe("initSessionState reset policy", () => {
     expect(result.abortedLastRun).toBe(false);
     expect(result.sessionEntry.abortedLastRun).toBeUndefined();
 
-    const persisted = readSessionStoreForTest(storePath);
+    const persisted = readSessionStoreFast(storePath);
     expect(persisted[sessionKey]?.sessionId).toBe(existingSessionId);
     expect(persisted[sessionKey]?.status).toBeUndefined();
     expect(persisted[sessionKey]?.startedAt).toBeUndefined();
@@ -2821,6 +3000,43 @@ describe("initSessionState browser tab cleanup", () => {
     expect(result.isNewSession).toBe(true);
     expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
   });
+
+  it("includes the peer-scoped runtime key for direct-message cleanup", async () => {
+    const storePath = await createStorePath("openclaw-tab-cleanup-peer-key-");
+    const canonicalKey = "agent:main:main";
+    const existingSessionId = "tab-peer-key-session-id";
+    await writeSessionStoreFast(storePath, {
+      [canonicalKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "12345",
+        Provider: "telegram",
+        ChatType: "direct",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    const cleanupParams = requireMockCallArg(
+      browserMaintenanceMocks.closeTrackedBrowserTabsForSessions,
+      "closeTrackedBrowserTabsForSessions",
+    );
+    expect(cleanupParams.sessionKeys).toEqual([
+      existingSessionId,
+      canonicalKey,
+      "agent:main:telegram:default:direct:12345",
+    ]);
+  });
 });
 
 describe("initSessionState channel reset overrides", () => {
@@ -2954,12 +3170,14 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
     }
   });
 
-  it("starts a fresh session when a scoped WhatsApp group entry only contains activation state", async () => {
+  it("preserves scoped WhatsApp group activation state across stale rollover", async () => {
     const sessionKey =
       "agent:main:whatsapp:group:120363406150318674@g.us:thread:whatsapp-account-work";
     const storePath = await createStorePath("openclaw-group-activation-backfill-");
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
+        sessionId: "old-group-activation-session",
+        updatedAt: 0,
         groupActivation: "always",
       },
     });
@@ -3068,6 +3286,101 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       },
     });
   }
+
+  it("rejects explicit resets without replacing a model-locked session", async () => {
+    const storePath = await createStorePath("openclaw-reset-model-locked-");
+    const sessionKey = "agent:main:telegram:dm:model-locked";
+    const existingSessionId = "existing-model-locked-session";
+
+    for (const body of ["/new", "/reset openai/gpt-5.5 continue"] as const) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: {
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+          pluginExtensions: {
+            codex: { threadId: "codex-thread-1" },
+          },
+        },
+      });
+
+      await expect(
+        initSessionState({
+          ctx: {
+            Body: body,
+            RawBody: body,
+            CommandBody: body,
+            From: "model-locked",
+            To: "bot",
+            ChatType: "direct",
+            SessionKey: sessionKey,
+            Provider: "telegram",
+            Surface: "telegram",
+          },
+          cfg: {
+            session: { store: storePath, idleMinutes: 999 },
+          } as OpenClawConfig,
+          commandAuthorized: true,
+        }),
+      ).rejects.toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+
+      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+        sessionId: existingSessionId,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        pluginExtensions: {
+          codex: { threadId: "codex-thread-1" },
+        },
+      });
+    }
+  });
+
+  it("does not implicitly expire a model-locked session", async () => {
+    const storePath = await createStorePath("openclaw-expiry-model-locked-");
+    const sessionKey = "agent:main:telegram:dm:model-locked-expiry";
+    const existingSessionId = "existing-model-locked-expiry-session";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now() - 60 * 60 * 1000,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        pluginExtensions: {
+          codex: { threadId: "codex-thread-expiry" },
+        },
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "continue",
+        RawBody: "continue",
+        CommandBody: "continue",
+        From: "model-locked-expiry",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg: {
+        session: { store: storePath, idleMinutes: 1 },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.sessionEntry).toMatchObject({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: { threadId: "codex-thread-expiry" },
+      },
+    });
+  });
 
   it("preserves behavior overrides across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-overrides-");
@@ -3178,13 +3491,16 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         result.sessionId,
       ]);
 
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(stored[sessionKey].usageFamilyKey, testCase.name).toBe("family:user-usage-family");
-      expect(stored[sessionKey].usageFamilySessionIds, testCase.name).toEqual([
-        "ancestor-session",
-        existingSessionId,
-        result.sessionId,
-      ]);
+      const stored = readSessionStoreFast(storePath);
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").usageFamilyKey,
+        testCase.name,
+      ).toBe("family:user-usage-family");
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant")
+          .usageFamilySessionIds,
+        testCase.name,
+      ).toEqual(["ancestor-session", existingSessionId, result.sessionId]);
     }
   });
 
@@ -3264,10 +3580,16 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
       expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
 
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(stored[sessionKey].cliSessionIds).toBeUndefined();
-      expect(stored[sessionKey].cliSessionBindings).toBeUndefined();
-      expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
+      const stored = readSessionStoreFast(storePath);
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
+      ).toBeUndefined();
     }
   });
 
@@ -3490,10 +3812,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         sessionId: existingSessionId,
         overrides: { ...runtimeModelCache, ...explicitUserOverride },
       });
-      const seeded = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        SessionEntry
-      >;
+      const seeded = readSessionStoreFast(storePath);
       expect(seeded[sessionKey]?.modelProvider, testCase.name).toBe(
         runtimeModelCache.modelProvider,
       );
@@ -3542,29 +3861,61 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       // Unrelated behavior overrides still carry across the reset.
       expect(result.sessionEntry.verboseLevel, testCase.name).toBe(runtimeModelCache.verboseLevel);
 
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        SessionEntry
-      >;
-      expect(stored[sessionKey].modelProvider, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].model, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].cacheRead, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].cacheWrite, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].fallbackNoticeSelectedModel, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].fallbackNoticeActiveModel, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].fallbackNoticeReason, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].systemPromptReport, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].providerOverride, testCase.name).toBe(
-        explicitUserOverride.providerOverride,
-      );
-      expect(stored[sessionKey].modelOverride, testCase.name).toBe(
-        explicitUserOverride.modelOverride,
-      );
-      expect(stored[sessionKey].modelOverrideSource, testCase.name).toBe(
-        explicitUserOverride.modelOverrideSource,
-      );
-      expect(stored[sessionKey].contextTokens, testCase.name).toBeUndefined();
-      expect(stored[sessionKey].verboseLevel, testCase.name).toBe(runtimeModelCache.verboseLevel);
+      const stored = readSessionStoreFast(storePath);
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant")
+          .fallbackNoticeSelectedModel,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant")
+          .fallbackNoticeActiveModel,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").fallbackNoticeReason,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").systemPromptReport,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").providerOverride,
+        testCase.name,
+      ).toBe(explicitUserOverride.providerOverride);
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelOverride,
+        testCase.name,
+      ).toBe(explicitUserOverride.modelOverride);
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelOverrideSource,
+        testCase.name,
+      ).toBe(explicitUserOverride.modelOverrideSource);
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").contextTokens,
+        testCase.name,
+      ).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").verboseLevel,
+        testCase.name,
+      ).toBe(runtimeModelCache.verboseLevel);
     }
   });
 
@@ -3820,7 +4171,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       // Foreign owners may need the writer lane to finalize before releasing.
       // The rollover must not hold that lane while it drains them.
       await runExclusiveSessionStoreWrite(storePath, async () => {});
-      expect(readSessionStoreForTest(storePath)[sessionKey]?.sessionId).toBe(existingSessionId);
+      expect(readSessionStoreFast(storePath)[sessionKey]?.sessionId).toBe(existingSessionId);
       expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
 
       admission.release();
@@ -3894,8 +4245,8 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       ),
     );
     const runRollover = async (index: number) => {
-      const admission = admissions[index];
-      const controller = controllers[index];
+      const admission = expectDefined(admissions[index], "admissions[index] test invariant");
+      const controller = expectDefined(controllers[index], "controllers[index] test invariant");
       try {
         return await admission.run(
           async () =>
@@ -3924,7 +4275,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const outcomes = await Promise.allSettled([runRollover(0), runRollover(1)]);
     expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
     expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
-    expect(readSessionStoreForTest(storePath)[sessionKey]?.sessionId).not.toBe(existingSessionId);
+    expect(readSessionStoreFast(storePath)[sessionKey]?.sessionId).not.toBe(existingSessionId);
   });
 
   it.each([
@@ -4610,10 +4961,9 @@ describe("persistSessionUsageUpdate", () => {
     entry: Record<string, unknown>;
   }) {
     await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-    await fs.writeFile(
-      params.storePath,
-      JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
-      "utf-8",
+    await replaceSessionEntry(
+      { storePath: params.storePath, sessionKey: params.sessionKey },
+      params.entry as SessionEntry,
     );
   }
 
@@ -4637,11 +4987,19 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(12_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].inputTokens).toBe(180_000);
-    expect(stored[sessionKey].outputTokens).toBe(10_000);
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      12_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      180_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(10_000);
   });
 
   it("keeps the prior total stale when last-call context is unavailable", async () => {
@@ -4673,11 +5031,19 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(148_874);
-    expect(stored[sessionKey].totalTokensFresh).toBe(false);
-    expect(stored[sessionKey].inputTokens).toBe(12);
-    expect(stored[sessionKey].cacheRead).toBe(819_661);
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      148_874,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(false);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      12,
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
+      819_661,
+    );
   });
 
   it("marks a fresh zero stale when a completed run has no context snapshot", async () => {
@@ -4701,9 +5067,13 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(0);
-    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      0,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(false);
   });
 
   it("preserves fresh post-compaction totalTokens across model-only updates", async () => {
@@ -4728,9 +5098,13 @@ describe("persistSessionUsageUpdate", () => {
       preserveFreshTotalTokensOnStaleUsage: true,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(42_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      42_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
   });
 
   it("accounts exhausted-run usage without committing its model and persists CLI binding", async () => {
@@ -4767,7 +5141,7 @@ describe("persistSessionUsageUpdate", () => {
       preserveRuntimeModel: true,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = readSessionStoreFast(storePath);
     expect(stored[sessionKey]).toMatchObject({
       modelProvider: "google",
       model: "gemini-3-pro",
@@ -4819,11 +5193,12 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored1 = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored1[sessionKey].goal.tokenStart).toBe(100);
-    expect(stored1[sessionKey].goal.tokenStartFresh).toBe(true);
-    expect(stored1[sessionKey].goal.tokensUsed).toBe(0);
-    expect(stored1[sessionKey].goal.status).toBe("active");
+    const stored1 = readSessionStoreFast(storePath);
+    const storedEntry1 = stored1[sessionKey];
+    expect(storedEntry1?.goal?.tokenStart).toBe(100);
+    expect(storedEntry1?.goal?.tokenStartFresh).toBe(true);
+    expect(storedEntry1?.goal?.tokensUsed).toBe(0);
+    expect(storedEntry1?.goal?.status).toBe("active");
 
     await persistSessionUsageUpdate({
       storePath,
@@ -4833,10 +5208,11 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored2 = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored2[sessionKey].goal.tokenStart).toBe(100);
-    expect(stored2[sessionKey].goal.tokensUsed).toBe(25);
-    expect(stored2[sessionKey].goal.status).toBe("budget_limited");
+    const stored2 = readSessionStoreFast(storePath);
+    const storedEntry2 = stored2[sessionKey];
+    expect(storedEntry2?.goal?.tokenStart).toBe(100);
+    expect(storedEntry2?.goal?.tokensUsed).toBe(25);
+    expect(storedEntry2?.goal?.status).toBe("budget_limited");
   });
 
   it("uses lastCallUsage cache counters when available", async () => {
@@ -4866,11 +5242,19 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].inputTokens).toBe(100_000);
-    expect(stored[sessionKey].outputTokens).toBe(8_000);
-    expect(stored[sessionKey].cacheRead).toBe(18_000);
-    expect(stored[sessionKey].cacheWrite).toBe(4_000);
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      100_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(8_000);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
+      18_000,
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite).toBe(
+      4_000,
+    );
   });
 
   it("marks totalTokens as unknown when no fresh context snapshot is available", async () => {
@@ -4889,9 +5273,13 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBeUndefined();
-    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+    const stored = readSessionStoreFast(storePath);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens,
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(false);
   });
 
   it("preserves fresh post-compaction totalTokens across stale usage updates", async () => {
@@ -4916,9 +5304,13 @@ describe("persistSessionUsageUpdate", () => {
       preserveFreshTotalTokensOnStaleUsage: true,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(42_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      42_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
   });
 
   it("marks older fresh totalTokens stale when no compaction preservation is requested", async () => {
@@ -4942,9 +5334,13 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(42_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      42_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(false);
   });
 
   it("uses promptTokens when available without lastCallUsage", async () => {
@@ -4964,9 +5360,13 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(42_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      42_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
   });
 
   it("treats CLI usage as a fresh context snapshot when requested", async () => {
@@ -4993,11 +5393,23 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(32_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
-    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toEqual({
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      32_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "claude-cli"
+      ],
+    ).toBe("cli-session-1");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "claude-cli"
+      ],
+    ).toEqual({
       sessionId: "cli-session-1",
       authProfileId: "anthropic:default",
       extraSystemPromptHash: "prompt-hash",
@@ -5041,14 +5453,32 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(stored[sessionKey].cliSessionIds?.["codex-cli"]).toBe("codex-session");
-    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(stored[sessionKey].cliSessionBindings?.["codex-cli"]).toEqual({
+    const stored = readSessionStoreFast(storePath);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "claude-cli"
+      ],
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "codex-cli"
+      ],
+    ).toBe("codex-session");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "claude-cli"
+      ],
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "codex-cli"
+      ],
+    ).toEqual({
       sessionId: "codex-session",
     });
-    expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
+    ).toBeUndefined();
   });
 
   it("prefers fresh final usage over zero compactionTokensAfter", async () => {
@@ -5080,13 +5510,25 @@ describe("persistSessionUsageUpdate", () => {
       compactionTokensAfter: 0,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(1_794_391);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].inputTokens).toBe(20);
-    expect(stored[sessionKey].outputTokens).toBe(10_855);
-    expect(stored[sessionKey].cacheRead).toBe(1_761_324);
-    expect(stored[sessionKey].cacheWrite).toBe(33_047);
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      1_794_391,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      20,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(10_855);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
+      1_761_324,
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite).toBe(
+      33_047,
+    );
   });
 
   it("prefers fresh lastCallUsage over positive compactionTokensAfter", async () => {
@@ -5113,12 +5555,22 @@ describe("persistSessionUsageUpdate", () => {
       compactionTokensAfter: 80_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(95_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].inputTokens).toBe(100_000);
-    expect(stored[sessionKey].outputTokens).toBe(3_000);
-    expect(stored[sessionKey].cacheRead).toBe(4_000);
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      95_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      100_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(3_000);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
+      4_000,
+    );
   });
 
   it("uses positive compactionTokensAfter when final usage has no prompt total", async () => {
@@ -5166,13 +5618,25 @@ describe("persistSessionUsageUpdate", () => {
       compactionTokensAfter: 80_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(80_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].inputTokens).toBeUndefined();
-    expect(stored[sessionKey].outputTokens).toBeUndefined();
-    expect(stored[sessionKey].cacheRead).toBeUndefined();
-    expect(stored[sessionKey].contextBudgetStatus).toBeUndefined();
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      80_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens,
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead,
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").contextBudgetStatus,
+    ).toBeUndefined();
   });
 
   it("persists totalTokens from promptTokens when usage is unavailable", async () => {
@@ -5197,11 +5661,19 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(39_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].inputTokens).toBe(1_234);
-    expect(stored[sessionKey].outputTokens).toBe(456);
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      39_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      1_234,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(456);
   });
 
   it("keeps non-clamped lastCallUsage totalTokens when exceeding context window", async () => {
@@ -5221,9 +5693,13 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(250_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    const stored = readSessionStoreFast(storePath);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      250_000,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
   });
 
   it("snapshots estimatedCostUsd instead of accumulating (fixes #69347)", async () => {
@@ -5272,8 +5748,10 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored1 = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored1[sessionKey].estimatedCostUsd).toBeCloseTo(0.007725, 8);
+    const stored1 = readSessionStoreFast(storePath);
+    expect(
+      expectDefined(stored1[sessionKey], "stored1[sessionKey] test invariant").estimatedCostUsd,
+    ).toBeCloseTo(0.007725, 8);
 
     // Second persist with SAME cumulative usage (e.g., heartbeat or redundant persist)
     // Before fix: cost would accumulate to $0.0155 (2x)
@@ -5289,9 +5767,11 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored2 = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored2 = readSessionStoreFast(storePath);
     // Cost should still be $0.007725, NOT $0.01545
-    expect(stored2[sessionKey].estimatedCostUsd).toBeCloseTo(0.007725, 8);
+    expect(
+      expectDefined(stored2[sessionKey], "stored2[sessionKey] test invariant").estimatedCostUsd,
+    ).toBeCloseTo(0.007725, 8);
   });
 
   it("preserves the displayed session model when heartbeat usage uses a heartbeat model", async () => {
@@ -5319,13 +5799,25 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 128_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].modelProvider).toBe("openai");
-    expect(stored[sessionKey].model).toBe("gpt-5.4");
-    expect(stored[sessionKey].inputTokens).toBe(1_200);
-    expect(stored[sessionKey].outputTokens).toBe(100);
-    expect(stored[sessionKey].cacheRead).toBe(200);
-    expect(stored[sessionKey].totalTokens).toBe(1_105);
+    const stored = readSessionStoreFast(storePath);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
+    ).toBe("openai");
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
+      "gpt-5.4",
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      1_200,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(100);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
+      200,
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      1_105,
+    );
   });
 
   it("persists heartbeat CLI binding while preserving displayed session model", async () => {
@@ -5364,15 +5856,29 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 128_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].modelProvider).toBe("openai");
-    expect(stored[sessionKey].model).toBe("gpt-5.4");
-    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("new-heartbeat-cli-session");
-    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toEqual({
+    const stored = readSessionStoreFast(storePath);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
+    ).toBe("openai");
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
+      "gpt-5.4",
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "claude-cli"
+      ],
+    ).toBe("new-heartbeat-cli-session");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "claude-cli"
+      ],
+    ).toEqual({
       sessionId: "new-heartbeat-cli-session",
       authProfileId: "anthropic:heartbeat",
     });
-    expect(stored[sessionKey].claudeCliSessionId).toBe("new-heartbeat-cli-session");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
+    ).toBe("new-heartbeat-cli-session");
   });
 
   it("honors heartbeat CLI binding clears while preserving displayed session model", async () => {
@@ -5410,16 +5916,38 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 128_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].modelProvider).toBe("openai");
-    expect(stored[sessionKey].model).toBe("gpt-5.4");
-    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(stored[sessionKey].cliSessionIds?.["codex-cli"]).toBe("codex-cli-session");
-    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(stored[sessionKey].cliSessionBindings?.["codex-cli"]).toEqual({
+    const stored = readSessionStoreFast(storePath);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
+    ).toBe("openai");
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
+      "gpt-5.4",
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "claude-cli"
+      ],
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "codex-cli"
+      ],
+    ).toBe("codex-cli-session");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "claude-cli"
+      ],
+    ).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "codex-cli"
+      ],
+    ).toEqual({
       sessionId: "codex-cli-session",
     });
-    expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
+    ).toBeUndefined();
   });
 
   it("preserves the displayed session model when an internal announce uses fallback", async () => {
@@ -5477,23 +6005,53 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 900_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].modelProvider).toBe("openai");
-    expect(stored[sessionKey].model).toBe("gpt-5.5");
-    expect(stored[sessionKey].contextTokens).toBe(200_000);
-    expect(stored[sessionKey].inputTokens).toBe(1_234);
-    expect(stored[sessionKey].outputTokens).toBe(56);
-    expect(stored[sessionKey].cacheRead).toBe(7);
-    expect(stored[sessionKey].cacheWrite).toBe(8);
-    expect(stored[sessionKey].totalTokens).toBe(1_305);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].estimatedCostUsd).toBe(0.123);
-    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("visible-cli-session");
-    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toEqual({
+    const stored = readSessionStoreFast(storePath);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
+    ).toBe("openai");
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
+      "gpt-5.5",
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").contextTokens,
+    ).toBe(200_000);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
+      1_234,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
+    ).toBe(56);
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
+      7,
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite).toBe(
+      8,
+    );
+    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
+      1_305,
+    );
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
+    ).toBe(true);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").estimatedCostUsd,
+    ).toBe(0.123);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
+        "claude-cli"
+      ],
+    ).toBe("visible-cli-session");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
+        "claude-cli"
+      ],
+    ).toEqual({
       sessionId: "visible-cli-session",
       authProfileId: "anthropic:visible",
     });
-    expect(stored[sessionKey].claudeCliSessionId).toBe("visible-cli-session");
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
+    ).toBe("visible-cli-session");
   });
 
   it("persists zero estimatedCostUsd for free priced models", async () => {
@@ -5538,8 +6096,10 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].estimatedCostUsd).toBe(0);
+    const stored = readSessionStoreFast(storePath);
+    expect(
+      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").estimatedCostUsd,
+    ).toBe(0);
   });
 });
 
@@ -5658,10 +6218,7 @@ describe("initSessionState dmScope delivery migration", () => {
     });
 
     expect(result.sessionKey).toBe("agent:main:telegram:direct:6101296751");
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
+    const persisted = readSessionStoreFast(storePath);
     expect(persisted["agent:main:main"]?.sessionId).toBe("legacy-main");
     expect(persisted["agent:main:main"]?.route).toBeUndefined();
     expect(persisted["agent:main:main"]?.deliveryContext).toBeUndefined();
@@ -5704,10 +6261,7 @@ describe("initSessionState dmScope delivery migration", () => {
       commandAuthorized: true,
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
+    const persisted = readSessionStoreFast(storePath);
     expect(persisted["agent:main:main"]?.deliveryContext).toEqual({
       channel: "telegram",
       to: "1111",
@@ -5782,10 +6336,7 @@ describe("initSessionState internal channel routing preservation", () => {
       accountId: "default",
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
+    const persisted = readSessionStoreFast(storePath);
     expect(persisted[sessionKey]?.lastThreadId).toBeUndefined();
     expect(persisted[sessionKey]?.deliveryContext).toEqual({
       channel: "mattermost",
@@ -6179,3 +6730,4 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.accountId).toBe("work");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

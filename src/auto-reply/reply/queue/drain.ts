@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
@@ -9,12 +10,14 @@ import {
   channelRouteCompactKey,
   channelRouteDedupeKey,
 } from "../../../plugin-sdk/channel-route.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.js";
-import { resolveGlobalMap } from "../../../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
+import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
@@ -28,6 +31,7 @@ import {
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
 import {
+  admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
   isFollowupRunAborted,
   isFollowupRunDeferredError,
@@ -42,6 +46,39 @@ const FOLLOWUP_DRAIN_CALLBACKS_KEY = Symbol.for("openclaw.followupDrainCallbacks
 const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Promise<void>>(
   FOLLOWUP_DRAIN_CALLBACKS_KEY,
 );
+
+const QUEUED_ADMISSION_OWNER_STATE_KEY = Symbol.for("openclaw.queuedAdmissionOwnerState");
+const queuedAdmissionOwnerState = resolveGlobalSingleton(QUEUED_ADMISSION_OWNER_STATE_KEY, () => ({
+  keys: new WeakMap<NonNullable<FollowupRun["queuedLifecycle"]>, string>(),
+  nextId: 1,
+}));
+
+function resolveQueuedLifecycleDeliveryKey(lifecycle: FollowupRun["queuedLifecycle"]): string {
+  if (!lifecycle) {
+    return "";
+  }
+  const explicitOwnerKey = lifecycle.ownerKey ?? "";
+  if (!lifecycle.onAdmitted) {
+    return explicitOwnerKey;
+  }
+  let admissionOwnerKey = queuedAdmissionOwnerState.keys.get(lifecycle);
+  if (!admissionOwnerKey) {
+    admissionOwnerKey = `admission:${queuedAdmissionOwnerState.nextId++}`;
+    queuedAdmissionOwnerState.keys.set(lifecycle, admissionOwnerKey);
+  }
+  // Durable admission callbacks own separate ingress identities. Combining
+  // them would let one source commit before a sibling rejects the aggregate.
+  return JSON.stringify([explicitOwnerKey, admissionOwnerKey]);
+}
+
+function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
+  const owners = new Set(
+    items.flatMap((item) => (item.queuedLifecycle?.onAdmitted ? [item.queuedLifecycle] : [])),
+  );
+  if (owners.size > 1) {
+    throw new Error("followup queue cannot aggregate distinct admission lifecycles");
+  }
+}
 
 export function rememberFollowupDrainCallback(
   key: string,
@@ -110,7 +147,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 // Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
 // intentionally excluded because they are session-level or not consulted in
 // per-message authorization checks.
-export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
+function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
   return JSON.stringify([
     run.senderId ?? "",
     JSON.stringify(run.channelContext ?? null),
@@ -120,6 +157,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string
     run.execOverrides?.security ?? "",
     run.execOverrides?.ask ?? "",
     run.execOverrides?.node ?? "",
+    run.execOverrides?.nodeCwd ?? "",
     run.bashElevated?.enabled === true,
     run.bashElevated?.allowed === true,
     run.bashElevated?.defaultLevel ?? "",
@@ -145,11 +183,13 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     run.queuedLifecycle?.ownerKey ?? "",
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
     execution.messageProvider ?? "",
+    JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
     execution.chatType ?? "",
     execution.agentAccountId ?? "",
     execution.groupId ?? "",
     execution.groupChannel ?? "",
     execution.groupSpace ?? "",
+    execution.spawnedBy ?? "",
     execution.traceAuthorized === true,
     execution.elevatedLevel ?? "",
     provenance?.kind ?? "",
@@ -160,6 +200,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
+    execution.taskSuggestionDeliveryMode ?? "",
     execution.silentReplyPromptMode ?? "",
     execution.enforceFinalTag === true,
     execution.skipProviderRuntimeHints === true,
@@ -168,13 +209,27 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.suppressNextUserMessagePersistence === true,
     execution.suppressTranscriptOnlyAssistantPersistence === true,
     execution.blockReplyBreak,
+    resolveQueuedLifecycleDeliveryKey(run.queuedLifecycle),
   ]);
 }
 
 export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
-  return run.originatingReplyToMode === "off"
-    ? undefined
-    : normalizeOptionalString(run.originatingReplyToId);
+  if (run.originatingReplyToMode === "off") {
+    return undefined;
+  }
+  const replyToId = normalizeOptionalString(run.originatingReplyToId);
+  if (replyToId || normalizeMessageChannel(run.originatingChannel) !== "slack") {
+    return replyToId;
+  }
+  const threadId = run.originatingThreadId;
+  const hasRoutedThread =
+    typeof threadId === "number"
+      ? Number.isFinite(threadId)
+      : normalizeOptionalString(threadId) !== undefined;
+  // Slack standalone turns have no parent reply id, but enabled reply policies
+  // still need the message id so collect groups cannot cross independent roots.
+  // A routed thread already owns that boundary and remains collectable across turns.
+  return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
 }
 
 function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[][] {
@@ -243,7 +298,7 @@ type FollowupRuntimeMetadata = Pick<
   | "queueAbortSignal"
   | "deliveryCorrelations"
   | "queuedLifecycle"
-  | "onFollowupAdmissionWaitChange"
+  | "onReplyAdmissionWaitChange"
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
@@ -268,22 +323,10 @@ function buildCollectTranscriptPrompt(items: FollowupRun[]): string {
 }
 
 function resolveFollowupTranscriptTarget(source: FollowupRun) {
-  const sessionKey = normalizeOptionalString(source.run.sessionKey);
-  const storePath = sessionKey
-    ? resolveStorePath(source.run.config.session?.store, {
-        agentId: source.run.agentId,
-      })
-    : undefined;
-  if (!sessionKey || !storePath) {
-    return {
-      transcriptPath: source.run.sessionFile,
-      sessionId: source.run.sessionId,
-      agentId: source.run.agentId,
-      sessionKey: source.run.sessionId,
-      cwd: source.run.cwd ?? source.run.workspaceDir,
-      config: source.run.config,
-    };
-  }
+  const sessionKey = normalizeOptionalString(source.run.sessionKey) ?? source.run.sessionId;
+  const storePath = resolveStorePath(source.run.config.session?.store, {
+    agentId: source.run.agentId,
+  });
   const sessionEntry = loadSessionEntry({
     storePath,
     sessionKey,
@@ -369,6 +412,10 @@ function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | und
     items.findLast((item) => item.queuedLifecycle) ??
     items.at(-1)
   );
+}
+
+function requiresIndividualCollectDrain(item: FollowupRun): boolean {
+  return item.disableCollectBatching === true || hasRuntimeOnlyFollowupMetadata(item);
 }
 
 type AggregateCancellation = {
@@ -485,7 +532,7 @@ function collectRuntimeMetadata(
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const admissionWaitCallbacks = new Set(
     items.flatMap((item) =>
-      item.onFollowupAdmissionWaitChange ? [item.onFollowupAdmissionWaitChange] : [],
+      item.onReplyAdmissionWaitChange ? [item.onReplyAdmissionWaitChange] : [],
     ),
   );
   return {
@@ -496,7 +543,7 @@ function collectRuntimeMetadata(
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     queuedLifecycle: items.length === 1 ? items[0]?.queuedLifecycle : undefined,
-    onFollowupAdmissionWaitChange:
+    onReplyAdmissionWaitChange:
       admissionWaitCallbacks.size > 0
         ? (waiting) => {
             for (const callback of admissionWaitCallbacks) {
@@ -579,7 +626,10 @@ function consumeQueueSummaryDelivery(
         (entry) => entry.sources.includes(source) || entry.sourceRefs.has(source),
       );
       if (elisionIndex >= 0) {
-        const entry = queue.summaryElisions[elisionIndex];
+        const entry = expectDefined(
+          queue.summaryElisions[elisionIndex],
+          "summary elisions entry at elision index",
+        );
         const elidedSourceIndex = entry.sources.indexOf(entry.sourceRefs.get(source) ?? source);
         entry.sources.splice(elidedSourceIndex, 1);
         entry.count = entry.sources.length;
@@ -614,7 +664,7 @@ function releaseQueueSummaryDeliveryForRetry(
 function dropAbortedQueueSummarySources(queue: FollowupQueueSummaryState): number {
   let dropped = 0;
   for (let index = queue.summarySources.length - 1; index >= 0; index -= 1) {
-    const source = queue.summarySources[index];
+    const source = expectDefined(queue.summarySources[index], "summary sources entry at index");
     if (!isFollowupRunAborted(source)) {
       continue;
     }
@@ -630,9 +680,13 @@ function dropAbortedQueueSummarySources(queue: FollowupQueueSummaryState): numbe
 async function runQueueSummaryDelivery(
   queue: FollowupQueueSummaryState,
   delivery: QueueSummaryDelivery,
-  run: (params: { abortSignal?: AbortSignal; onAdmitted?: () => void }) => Promise<void>,
+  run: (params: {
+    abortSignal?: AbortSignal;
+    onAdmitted?: () => void | Promise<void>;
+  }) => Promise<void>,
   protectedSources: FollowupRun[] = delivery.sources,
 ): Promise<boolean> {
+  assertSingleAdmissionOwner(protectedSources);
   const inheritedActiveSources = new Set(
     protectedSources.filter((source) => queue.activeSummarySources.has(source)),
   );
@@ -642,25 +696,28 @@ async function runQueueSummaryDelivery(
   let admitted = false;
   let deferredBeforeAdmission = false;
   const cancellation = createAggregateCancellation(protectedSources);
-  const onAdmitted =
-    protectedSources.length > 1
-      ? () => {
-          if (admitted) {
-            return;
-          }
-          cancellation.admit();
-          admitted = true;
-          // A multi-source summary is atomic once it owns the reply lane.
-          // Retire sibling ids while the latest source owns aggregate cancel.
-          consumeQueueSummaryDelivery(queue, { ...delivery, sources: protectedSources }, false);
-          const aggregateOwner = resolveAggregateOwner(protectedSources);
-          for (const source of protectedSources) {
-            if (source !== aggregateOwner) {
-              retireFollowupRunCancellation(source);
-            }
+  const needsAdmission =
+    protectedSources.length > 1 ||
+    protectedSources.some((source) => source.queuedLifecycle?.onAdmitted);
+  const onAdmitted = needsAdmission
+    ? async () => {
+        if (admitted) {
+          return;
+        }
+        await Promise.all(protectedSources.map((source) => admitFollowupRunLifecycle(source)));
+        cancellation.admit();
+        admitted = true;
+        // A multi-source summary is atomic once it owns the reply lane.
+        // Retire sibling ids while the latest source owns aggregate cancel.
+        consumeQueueSummaryDelivery(queue, { ...delivery, sources: protectedSources }, false);
+        const aggregateOwner = resolveAggregateOwner(protectedSources);
+        for (const source of protectedSources) {
+          if (source !== aggregateOwner) {
+            retireFollowupRunCancellation(source);
           }
         }
-      : undefined;
+      }
+    : undefined;
   try {
     try {
       await run({ abortSignal: cancellation.signal, onAdmitted });
@@ -723,7 +780,7 @@ async function dropAbortedFollowups(
 ): Promise<number> {
   let dropped = 0;
   for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
+    const item = expectDefined(items[index], "items entry at index");
     if (isFollowupRunAborted(item)) {
       await runFollowup(item);
       completeFollowupRunLifecycle(item);
@@ -797,6 +854,19 @@ function resolveOverflowSummarySourceGroup(queue: {
   return sources;
 }
 
+async function drainProtectedPriorityFollowup(
+  items: FollowupRun[],
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): Promise<boolean> {
+  const priority = items.find((item) => item.protectFromQueueOverflow === true);
+  if (!priority) {
+    return false;
+  }
+  await runFollowup(priority);
+  removeQueuedItemsByRef(items, [priority]);
+  return true;
+}
+
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
   return {
     prompt: source.prompt,
@@ -815,7 +885,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingChatType: source.originatingChatType,
     abortSignal: source.abortSignal,
     queuedLifecycle: source.queuedLifecycle,
-    onFollowupAdmissionWaitChange: source.onFollowupAdmissionWaitChange,
+    onReplyAdmissionWaitChange: source.onReplyAdmissionWaitChange,
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
@@ -835,7 +905,7 @@ async function runSyntheticOverflowSummary(params: {
   sources: FollowupRun[];
   prompt: string;
   abortSignal?: AbortSignal;
-  onAdmitted?: () => void;
+  onAdmitted?: () => void | Promise<void>;
   runFollowup: (run: FollowupRun) => Promise<void>;
 }): Promise<void> {
   const promptHash = createHash("sha256").update(params.prompt).digest("hex");
@@ -875,14 +945,13 @@ async function runSyntheticOverflowSummary(params: {
     run: params.source.run,
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
-    onFollowupAdmissionWaitChange: collectRuntimeMetadata(params.sources)
-      .onFollowupAdmissionWaitChange,
+    onReplyAdmissionWaitChange: collectRuntimeMetadata(params.sources).onReplyAdmissionWaitChange,
     ...(params.onAdmitted
       ? {
           queuedLifecycle: {
-            onAdmitted: () => {
+            onAdmitted: async () => {
+              await params.onAdmitted?.();
               admitted = true;
-              params.onAdmitted?.();
             },
             onComplete: () => {
               if (admitted) {
@@ -914,7 +983,7 @@ async function drainElidedOverflowSummary(params: {
         )
       : [];
   for (let index = entry.sources.length - 1; index >= 0; index -= 1) {
-    const source = entry.sources[index];
+    const source = expectDefined(entry.sources[index], "sources entry at index");
     if (!isFollowupRunAborted(source)) {
       continue;
     }
@@ -1045,10 +1114,18 @@ export function scheduleFollowupDrain(
     return;
   }
   const effectiveRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
+  const reserveOptions = {
+    inFlight: queue.inFlight,
+    shouldRestoreOnError: () =>
+      FOLLOWUP_QUEUES.get(key) === queue && !queue.abortController.signal.aborted,
+    onDiscard: (item: FollowupRun) => completeFollowupRunLifecycle(item),
+  };
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
-  void (async () => {
+  // Queue drains outlive their enqueue request across debounce and retries.
+  // Give the detached chain its own root so inherited request admission cannot go stale.
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
     let retryDeferred = false;
     try {
       const collectState = { forceIndividualCollect: false };
@@ -1057,10 +1134,13 @@ export function scheduleFollowupDrain(
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
         }
-        await waitForQueueDebounce(queue);
+        await waitForQueueDebounce(queue, queue.abortController.signal);
         await dropAbortedFollowups(queue.items, effectiveRunFollowup);
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
+        }
+        if (await drainProtectedPriorityFollowup(queue.items, effectiveRunFollowup)) {
+          continue;
         }
         if (
           queue.droppedCount > 0 &&
@@ -1080,7 +1160,7 @@ export function scheduleFollowupDrain(
           // If so, process individually to preserve per-message routing.
           const isCrossChannel =
             hasCrossChannelItems(queue.items, resolveCrossChannelKey) ||
-            queue.items.some(hasRuntimeOnlyFollowupMetadata);
+            queue.items.some(requiresIndividualCollectDrain);
           if (collectState.forceIndividualCollect && !isCrossChannel && queue.items.length > 1) {
             collectState.forceIndividualCollect = false;
           }
@@ -1090,6 +1170,7 @@ export function scheduleFollowupDrain(
             isCrossChannel,
             items: queue.items,
             run: effectiveRunFollowup,
+            reserveOptions,
           });
           if (collectDrainResult === "empty") {
             break;
@@ -1105,17 +1186,23 @@ export function scheduleFollowupDrain(
           }
 
           for (const groupItems of contextGroups) {
-            const abortedGroupItems = groupItems.filter(isFollowupRunAborted);
+            // Earlier groups await model work. Recheck membership so overflow
+            // eviction cannot leave a stale snapshot eligible for delivery.
+            const currentGroupItems = groupItems.filter((item) => queue.items.includes(item));
+            const abortedGroupItems = currentGroupItems.filter(isFollowupRunAborted);
             if (abortedGroupItems.length > 0) {
               removeQueuedItemsByRef(queue.items, abortedGroupItems);
               for (const item of abortedGroupItems) {
                 completeFollowupRunLifecycle(item);
               }
             }
-            const activeGroupItems = groupItems.filter((item) => !isFollowupRunAborted(item));
+            const activeGroupItems = currentGroupItems.filter(
+              (item) => !isFollowupRunAborted(item),
+            );
             if (activeGroupItems.length === 0) {
               continue;
             }
+            assertSingleAdmissionOwner(activeGroupItems);
             const groupSource = activeGroupItems.at(-1);
             const run = groupSource?.run ?? queue.lastRun;
             if (!run) {
@@ -1134,6 +1221,15 @@ export function scheduleFollowupDrain(
             const aggregateOwner = resolveAggregateOwner(activeGroupItems);
             const cancellation = createAggregateCancellation(activeGroupItems);
             let admitted = false;
+            const restoreGroupItems = (groupItemsToRestore: FollowupRun[]) => {
+              const missingItems = groupItemsToRestore.filter(
+                (item) => !queue.items.includes(item),
+              );
+              queue.items.unshift(...missingItems);
+            };
+            const needsGroupAdmission =
+              activeGroupItems.length > 1 ||
+              activeGroupItems.some((item) => item.queuedLifecycle?.onAdmitted);
             const consumeAdmittedGroup = () => {
               cancellation.admit();
               admitted = true;
@@ -1143,6 +1239,10 @@ export function scheduleFollowupDrain(
                   retireFollowupRunCancellation(item);
                 }
               }
+            };
+            const admitGroupSources = async () => {
+              await Promise.all(activeGroupItems.map((item) => admitFollowupRunLifecycle(item)));
+              consumeAdmittedGroup();
             };
             const completeGroup = () => {
               removeQueuedItemsByRef(queue.items, activeGroupItems);
@@ -1162,10 +1262,10 @@ export function scheduleFollowupDrain(
                 enqueuedAt: Date.now(),
                 ...routing,
                 ...collectRuntimeMetadata(activeGroupItems, cancellation.signal),
-                ...(activeGroupItems.length > 1
+                ...(needsGroupAdmission
                   ? {
                       queuedLifecycle: {
-                        onAdmitted: consumeAdmittedGroup,
+                        onAdmitted: admitGroupSources,
                         onComplete: () => {
                           if (admitted) {
                             completeGroup();
@@ -1178,13 +1278,30 @@ export function scheduleFollowupDrain(
               });
             };
             try {
+              // Mark active group items as in-flight so the drop policy does not
+              // select them as overflow victims while the group drain is awaited.
+              for (const item of activeGroupItems) {
+                queue.inFlight.add(item);
+              }
               await drainGroup();
             } catch (err) {
               if (admitted) {
                 completeGroup();
+              } else if (
+                FOLLOWUP_QUEUES.get(key) === queue &&
+                !queue.abortController.signal.aborted
+              ) {
+                restoreGroupItems(activeGroupItems);
+              } else {
+                for (const item of activeGroupItems) {
+                  completeFollowupRunLifecycle(item);
+                }
               }
               throw err;
             } finally {
+              for (const item of activeGroupItems) {
+                queue.inFlight.delete(item);
+              }
               cancellation.dispose();
             }
             if (!admitted) {
@@ -1194,6 +1311,19 @@ export function scheduleFollowupDrain(
                 for (const item of canceledSources) {
                   completeFollowupRunLifecycle(item);
                 }
+                const survivors = activeGroupItems.filter(
+                  (item) => !canceledSources.includes(item),
+                );
+                if (FOLLOWUP_QUEUES.get(key) === queue && !queue.abortController.signal.aborted) {
+                  restoreGroupItems(survivors);
+                  if (survivors.length > 0) {
+                    break;
+                  }
+                } else {
+                  for (const item of survivors) {
+                    completeFollowupRunLifecycle(item);
+                  }
+                }
                 continue;
               }
             }
@@ -1202,7 +1332,7 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup))) {
+        if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup, reserveOptions))) {
           break;
         }
       }
@@ -1230,5 +1360,9 @@ export function scheduleFollowupDrain(
         scheduleFollowupDrain(key, effectiveRunFollowup);
       }
     }
-  })();
+  }).catch((err: unknown) => {
+    queue.draining = false;
+    defaultRuntime.error?.(`followup queue drain admission failed for ${key}: ${String(err)}`);
+  });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

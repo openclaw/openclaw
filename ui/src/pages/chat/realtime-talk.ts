@@ -5,7 +5,6 @@ import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
 import type {
   RealtimeTalkCallbacks,
-  RealtimeTalkEvent,
   RealtimeTalkGatewayRelaySessionResult,
   RealtimeTalkJsonPcmWebSocketSessionResult,
   RealtimeTalkSessionResult,
@@ -16,14 +15,9 @@ import type {
 } from "./realtime-talk-shared.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
 
-export type {
-  RealtimeTalkCallbacks,
-  RealtimeTalkEvent,
-  RealtimeTalkSessionResult,
-  RealtimeTalkStatus,
-};
+export type { RealtimeTalkStatus };
 
-export type RealtimeTalkLaunchOptions = {
+type RealtimeTalkLaunchOptions = {
   provider?: string;
   model?: string;
   voice?: string;
@@ -32,6 +26,10 @@ export type RealtimeTalkLaunchOptions = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   reasoningEffort?: string;
+};
+
+type RealtimeTalkLocalOptions = {
+  inputDeviceId?: string;
 };
 
 type RealtimeTalkLaunchTransport = NonNullable<RealtimeTalkLaunchOptions["transport"]>;
@@ -108,6 +106,7 @@ export class RealtimeTalkSession {
     private readonly sessionKey: string,
     private readonly callbacks: RealtimeTalkCallbacks = {},
     private readonly options: RealtimeTalkLaunchOptions = {},
+    private readonly localOptions: RealtimeTalkLocalOptions = {},
   ) {}
 
   async start(): Promise<void> {
@@ -121,6 +120,7 @@ export class RealtimeTalkSession {
       client: this.client,
       sessionKey: this.sessionKey,
       callbacks: this.callbacks,
+      inputDeviceId: this.localOptions.inputDeviceId,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,
     });

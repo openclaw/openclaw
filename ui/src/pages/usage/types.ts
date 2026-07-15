@@ -23,9 +23,20 @@ export type UsageColumnId =
   | "errors"
   | "duration";
 
+export const DEFAULT_VISIBLE_COLUMNS: UsageColumnId[] = [
+  "channel",
+  "agent",
+  "provider",
+  "model",
+  "messages",
+  "tools",
+  "errors",
+  "duration",
+];
+
 export type TimeSeriesPoint = SessionUsageTimePoint;
 
-export type UsageDataState = {
+type UsageDataState = {
   loading: boolean;
   error: string | null;
   sessions: UsageSessionEntry[];
@@ -51,7 +62,7 @@ export type UsageFilterState = {
   timeZone: "local" | "utc";
 };
 
-export type UsageDisplayState = {
+type UsageDisplayState = {
   chartMode: "tokens" | "cost";
   dailyChartMode: "total" | "by-type";
   sessionSort: "tokens" | "cost" | "recent" | "messages" | "errors";
@@ -63,7 +74,7 @@ export type UsageDisplayState = {
   headerPinned: boolean;
 };
 
-export type UsageDetailState = {
+type UsageDetailState = {
   timeSeriesMode: "cumulative" | "per-turn";
   timeSeriesBreakdownMode: "total" | "by-type";
   timeSeries: { points: TimeSeriesPoint[] } | null;
@@ -81,7 +92,7 @@ export type UsageDetailState = {
   };
 };
 
-export type UsageCallbacks = {
+type UsageCallbacks = {
   filters: {
     onStartDateChange: (date: string) => void;
     onEndDateChange: (date: string) => void;

@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements suite runtime gateway behavior.
+import fs from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
@@ -82,6 +83,14 @@ async function waitForConfigRestartSettle(
   const deadline = startedAt + timeoutMs;
   const readyAfterMs = restartDelayMs + settleBufferMs;
   let lastHealthError: unknown = null;
+
+  // A delay beyond this mutation's observation window intentionally keeps the
+  // current process alive so scenarios can prove config reads without restart.
+  if (restartDelayMs >= timeoutMs) {
+    await waitForGatewayHealthy(env, timeoutMs);
+    await waitForTransportReady(env, timeoutMs);
+    return;
+  }
 
   while (Date.now() < deadline) {
     try {
@@ -373,15 +382,28 @@ async function applyConfig(params: {
   });
 }
 
+async function restartGatewayWithConfigPatch(params: {
+  env: Pick<QaSuiteRuntimeEnv, "gateway">;
+  patch: Record<string, unknown>;
+}) {
+  const restart = params.env.gateway.restartAfterStateMutation;
+  if (!restart) {
+    throw new Error("qa gateway child cannot restart after state mutation");
+  }
+  await restart(async ({ configPath }) => {
+    const raw = await fs.readFile(configPath, "utf8");
+    const config = JSON.parse(raw || "{}") as Record<string, unknown>;
+    const nextConfig = applyQaMergePatch(config, params.patch);
+    await fs.writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+  });
+}
+
 export {
   applyConfig,
   fetchJson,
-  getGatewayRetryAfterMs,
-  isConfigApplyNoopForSnapshot,
-  isConfigPatchNoopForSnapshot,
-  isConfigHashConflict,
   patchConfig,
   readConfigSnapshot,
+  restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
   waitForGatewayHealthy,
   waitForQaChannelReady,

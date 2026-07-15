@@ -9,6 +9,7 @@ import { formatErrorMessage } from "./error-runtime.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 import { runExec } from "./process-runtime.js";
+import type { QaRunnerCliRegistration } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
@@ -90,10 +91,7 @@ type LiveTransportQaCommanderOptions = {
 };
 
 /** Commander registration hook for one live-transport QA subcommand. */
-export type LiveTransportQaCliRegistration = {
-  commandName: string;
-  register(qa: Command): void;
-};
+export type LiveTransportQaCliRegistration = QaRunnerCliRegistration;
 
 /** Help text customizations for live credential source and role flags. */
 export type LiveTransportQaCredentialCliOptions = {
@@ -115,6 +113,7 @@ export type LiveTransportQaCliRegistrationOptions = {
   allowFailuresHelp?: string;
   scenarioHelp: string;
   sutAccountHelp: string;
+  adapterFactory?: QaRunnerCliRegistration["adapterFactory"];
   run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
 };
 
@@ -156,6 +155,7 @@ function mapLiveTransportQaCommanderOptions(
 function registerLiveTransportQaCli(
   params: LiveTransportQaCliRegistrationOptions & {
     qa: Command;
+    run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
   },
 ) {
   const command = params.qa
@@ -209,6 +209,7 @@ export function createLiveTransportQaCliRegistration(
 ): LiveTransportQaCliRegistration {
   return {
     commandName: params.commandName,
+    adapterFactory: params.adapterFactory,
     register(qa: Command) {
       registerLiveTransportQaCli({
         ...params,

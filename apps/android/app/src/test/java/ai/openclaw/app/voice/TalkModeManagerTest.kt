@@ -4,18 +4,24 @@ import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthTokenStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.verbatimText
 import android.Manifest
 import android.content.ComponentName
-import android.content.Intent
 import android.content.IntentFilter
 import android.os.SystemClock
 import android.speech.RecognitionService
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -125,12 +131,17 @@ class TalkModeManagerTest {
   @Test
   fun stopAllCaptureClearsPttWhenContinuousModeIsDisabled() {
     val manager = createManager()
+    val finishingJob = Job()
     setPrivateField(manager, "activePttCaptureId", "capture-1")
+    setPrivateField(manager, "finishingPttCaptureId", "capture-finishing")
+    setPrivateField(manager, "finishingPttJob", finishingJob)
     setMutableStateFlow(manager, "_isListening", true)
 
     manager.stopAllCapture()
 
     assertNull(readPrivateField(manager, "activePttCaptureId"))
+    assertEquals("capture-finishing", manager.finishingPushToTalkCaptureId)
+    assertTrue(finishingJob.isCancelled)
     assertFalse(manager.isEnabled.value)
     assertFalse(manager.isListening.value)
     assertEquals("Off", manager.statusText.value)
@@ -311,20 +322,69 @@ class TalkModeManagerTest {
   }
 
   @Test
-  fun realtimeClosePreservesDetailedProviderFailure() {
+  fun realtimeClosePreservesTypedFailureWithoutEnglishPrefix() {
     val manager = createManager()
 
     setPrivateField(manager, "realtimeSessionId", "relay-1")
     setMutableStateFlow(manager, "_isEnabled", true)
-    setMutableStateFlow(manager, "_statusText", "Talk failed: Provider rejected the session.")
+    setTalkFailure(manager, verbatimText("Échec de Talk : session refusée."))
 
     manager.handleGatewayEvent(
       "talk.event",
       """{"relaySessionId":"relay-1","type":"close","reason":"error"}""",
     )
 
-    assertEquals("Talk failed: Provider rejected the session.", manager.statusText.value)
+    assertEquals("Échec de Talk : session refusée.", manager.statusText.value)
   }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun localizedOffStatusDoesNotBecomeRealtimeStartFailure() =
+    runTest {
+      val manager = createManager(scope = this)
+      val turn =
+        async(start = CoroutineStart.UNDISPATCHED) {
+          runCatching {
+            manager.runE2eRealtimeTurn(
+              userText = "ignored",
+              assistantText = "ignored",
+              timeoutMs = 250L,
+            )
+          }.exceptionOrNull()
+        }
+
+      manager.stopAllCapture()
+      setMutableStateFlow(manager, "_statusText", verbatimText("Désactivé"))
+      assertEquals("Désactivé", manager.statusText.value)
+      advanceUntilIdle()
+
+      assertTrue(turn.await() is TimeoutCancellationException)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun realtimePlaybackMarkAcknowledgesAfterQueuedAudioBarrier() =
+    runTest {
+      val acknowledgements = mutableListOf<Pair<String, String>>()
+      val dispatcher = StandardTestDispatcher(testScheduler)
+      val manager =
+        createManager(
+          scope = this,
+          realtimePlaybackDispatcher = dispatcher,
+          realtimeMarkAcknowledger = { sessionId, markName ->
+            acknowledgements += sessionId to markName
+          },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+      manager.handleGatewayEvent(
+        "talk.event",
+        """{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""",
+      )
+      runCurrent()
+
+      assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
+    }
 
   @Test
   fun realtimeTranscriptsPopulateVoiceConversation() {
@@ -352,6 +412,35 @@ class TalkModeManagerTest {
       ),
       manager.conversation.value,
     )
+  }
+
+  @Test
+  fun realtimeUserTranscriptsDriveSpeechActive() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    assertFalse(manager.speechActive.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello"))
+    assertTrue(manager.speechActive.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello world", final = true))
+    assertFalse(manager.speechActive.value)
+  }
+
+  @Test
+  fun finalUserTranscriptMarksAwaitingAgentUntilStatusMovesOn() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    assertFalse(manager.awaitingAgent.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello", final = true))
+    assertTrue(manager.awaitingAgent.value)
+    // Any later status transition clears the typed flag; forgetting it at a
+    // new setStatus site fails safe instead of showing a stale Thinking wave.
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "hi there", final = true))
+    manager.stopAllCapture()
+    assertFalse(manager.awaitingAgent.value)
   }
 
   @Test
@@ -658,7 +747,6 @@ class TalkModeManagerTest {
       val manager = createManager()
       val captureJob = Job()
       val appendJob = Job()
-      setPrivateField(manager, "realtimeSessionId", "relay-1")
       setPrivateField(manager, "realtimeCaptureJob", captureJob)
       setPrivateField(manager, "realtimeAppendJob", appendJob)
       setMutableStateFlow(manager, "_isEnabled", true)
@@ -673,10 +761,31 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun unconfirmedOutputCancellationClosesRealtimeRelay() =
+    runTest {
+      var stoppedByRelay = false
+      val manager =
+        createManager(
+          scope = this,
+          onStoppedByRelay = { stoppedByRelay = true },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setMutableStateFlow(manager, "_isEnabled", true)
+
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+
+      assertNull(readPrivateField(manager, "realtimeSessionId"))
+      val pause = readPrivateField(manager, "realtimeCapturePause")!!
+      assertEquals("capture-1", readPrivateField(pause, "pttCaptureId"))
+      assertTrue(readPrivateField(pause, "restartRelay") as Boolean)
+      assertTrue(manager.isEnabled.value)
+      assertFalse(stoppedByRelay)
+    }
+
+  @Test
   fun stalePushToTalkCompletionCannotResumeNewerPause() =
     runTest {
       val manager = createManager()
-      setPrivateField(manager, "realtimeSessionId", "relay-1")
       setMutableStateFlow(manager, "_isEnabled", true)
       manager.pauseRealtimeCaptureForPushToTalk("capture-new")
       setPrivateField(manager, "activePttCaptureId", "capture-new")
@@ -708,18 +817,127 @@ class TalkModeManagerTest {
   @Test
   fun resumingRealtimeCaptureRestoresListeningState() =
     runTest {
-      val manager = createManager(scope = this)
-      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      val manager =
+        createManager(
+          scope = this,
+          realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler),
+        )
       setMutableStateFlow(manager, "_isEnabled", true)
       manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      val pause = readPrivateField(manager, "realtimeCapturePause")!!
+      setPrivateField(pause, "sessionId", "relay-1")
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
       setMutableStateFlow(manager, "_isListening", false)
-      setMutableStateFlow(manager, "_statusText", "Thinking…")
+      setMutableStateFlow(manager, "_statusText", nativeText("Thinking…"))
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 
       assertTrue(manager.isListening.value)
       assertEquals("Listening", manager.statusText.value)
+      assertTrue(readPrivateField(manager, "realtimeOutputSuppressed") as Boolean)
+
+      manager.handleGatewayEvent(
+        "talk.event",
+        """{"relaySessionId":"relay-1","type":"transcript","role":"user","text":"stale","final":true}""",
+      )
+
+      assertTrue(readPrivateField(manager, "realtimeOutputSuppressed") as Boolean)
+
+      manager.handleGatewayEvent(
+        "talk.event",
+        """{"relaySessionId":"relay-1","type":"inputAudio","byteLength":4800}""",
+      )
+
+      assertFalse(readPrivateField(manager, "realtimeOutputSuppressed") as Boolean)
       manager.stopAllCapture()
+    }
+
+  @Test
+  fun replacementRelayPublishedDuringPushToTalkResumesCapture() =
+    runTest {
+      val manager =
+        createManager(
+          scope = this,
+          realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler),
+        )
+      setMutableStateFlow(manager, "_isEnabled", true)
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      val pause = readPrivateField(manager, "realtimeCapturePause")!!
+      setPrivateField(pause, "sessionId", "relay-replacement")
+      setPrivateField(pause, "restartRelay", true)
+      setPrivateField(manager, "realtimeSessionId", "relay-replacement")
+
+      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
+
+      assertNull(readPrivateField(manager, "realtimeCapturePause"))
+      assertTrue(manager.isListening.value)
+      assertTrue((readPrivateField(manager, "realtimeCaptureJob") as Job).isActive)
+      assertTrue((readPrivateField(manager, "realtimeAppendJob") as Job).isActive)
+      manager.stopAllCapture()
+    }
+
+  @Test
+  fun stoppedTalkModeDoesNotRestartRelayAfterPushToTalk() =
+    runTest {
+      val manager = createManager(scope = this)
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      val pause = readPrivateField(manager, "realtimeCapturePause")!!
+      setPrivateField(pause, "restartRelay", true)
+      setPrivateField(manager, "stopRequested", true)
+      setMutableStateFlow(manager, "_statusText", nativeText("Off"))
+
+      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
+
+      assertNull(readPrivateField(manager, "realtimeCapturePause"))
+      assertNull(readPrivateField(manager, "realtimeSessionId"))
+      assertFalse(manager.isEnabled.value)
+      assertEquals("Off", manager.statusText.value)
+    }
+
+  @Test
+  fun pausedPushToTalkTurnSuppressesSpeechInterruptListener() =
+    runTest {
+      val manager = createManager(scope = this)
+      assertTrue(manager.shouldAllowSpeechInterrupt())
+
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+
+      assertFalse(manager.shouldAllowSpeechInterrupt())
+      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
+      assertTrue(manager.shouldAllowSpeechInterrupt())
+    }
+
+  @Test
+  fun finishingPushToTalkTurnRejectsReplacementCapture() =
+    runTest {
+      val manager = createManager(scope = this)
+      setPrivateField(manager, "finishingPttCaptureId", "capture-1")
+
+      val error =
+        runCatching { manager.beginPushToTalk(allowNewCapture = true) }
+          .exceptionOrNull()
+      val oneShot = manager.beginPushToTalkOnce()
+
+      assertEquals("PTT_BUSY: previous push-to-talk turn is still finishing", error?.message)
+      assertTrue(oneShot is TalkPttOnceStart.Busy)
+      assertEquals("capture-1", (oneShot as TalkPttOnceStart.Busy).payload.captureId)
+    }
+
+  @Test
+  fun relayClosePreservesFinishingPushToTalkOwnership() =
+    runTest {
+      val manager = createManager(scope = this)
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "finishingPttCaptureId", "capture-1")
+
+      manager.handleGatewayEvent(
+        "talk.event",
+        """{"relaySessionId":"relay-1","type":"close","reason":"completed"}""",
+      )
+
+      assertNull(readPrivateField(manager, "realtimeCapturePause"))
+      assertEquals("capture-1", manager.finishingPushToTalkCaptureId)
     }
 
   @Test
@@ -732,11 +950,13 @@ class TalkModeManagerTest {
           isConnected = { false },
           onStoppedByRelay = { stoppedByRelay = true },
         )
-      setPrivateField(manager, "realtimeSessionId", "relay-1")
       setMutableStateFlow(manager, "_isEnabled", true)
       manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      val pause = readPrivateField(manager, "realtimeCapturePause")!!
+      setPrivateField(pause, "sessionId", "relay-1")
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
       setMutableStateFlow(manager, "_isListening", false)
-      setMutableStateFlow(manager, "_statusText", "Gateway not connected")
+      setMutableStateFlow(manager, "_statusText", nativeText("Gateway not connected"))
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 
@@ -768,6 +988,9 @@ class TalkModeManagerTest {
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     isConnected: () -> Boolean = { true },
     onStoppedByRelay: () -> Unit = {},
+    realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    realtimeMarkAcknowledger: (suspend (String, String) -> Unit)? = null,
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
@@ -788,6 +1011,9 @@ class TalkModeManagerTest {
       onStoppedByRelay = onStoppedByRelay,
       talkSpeakClient = talkSpeakClient,
       talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),
+      realtimeCaptureDispatcher = realtimeCaptureDispatcher,
+      realtimePlaybackDispatcher = realtimePlaybackDispatcher,
+      realtimeMarkAcknowledger = realtimeMarkAcknowledger,
     )
   }
 
@@ -820,6 +1046,15 @@ class TalkModeManagerTest {
     val field = target.javaClass.getDeclaredField(name)
     field.isAccessible = true
     return field.get(target)
+  }
+
+  private fun setTalkFailure(
+    manager: TalkModeManager,
+    text: NativeText,
+  ) {
+    val method = manager.javaClass.getDeclaredMethod("setTalkFailure", NativeText::class.java)
+    method.isAccessible = true
+    method.invoke(manager, text)
   }
 
   @Suppress("UNCHECKED_CAST")
@@ -909,11 +1144,13 @@ private class FakeTalkAudioPlayer : TalkAudioPlaying {
 
 private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   override fun loadEntry(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ): DeviceAuthEntry? = null
 
   override fun saveToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
     token: String,
@@ -921,6 +1158,7 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   ) = Unit
 
   override fun clearToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ) = Unit

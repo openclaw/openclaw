@@ -1,4 +1,10 @@
+import SwiftMath
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 @MainActor
 struct ChatCodeBlockView: View {
@@ -40,6 +46,92 @@ struct ChatCodeBlockView: View {
 }
 
 @MainActor
+struct ChatMathBlockView: View {
+    let block: ChatMathBlock
+    let textColor: Color
+
+    @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = OpenClawChatTypography.bodySize
+
+    var body: some View {
+        if self.block.isComplete,
+           ChatMathParseCache.mathList(latex: self.block.latex) != nil
+        {
+            ScrollView(.horizontal, showsIndicators: false) {
+                ChatMathPlatformView(
+                    latex: self.block.latex,
+                    fontSize: self.fontSize,
+                    textColor: self.textColor)
+                    .fixedSize()
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(self.block.latex)
+            }
+            .defaultScrollAnchor(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+        } else {
+            ChatCodeBlockView(block: ChatCodeBlock(
+                language: nil,
+                code: self.block.latex,
+                isComplete: false))
+        }
+    }
+}
+
+#if os(macOS)
+@MainActor
+private struct ChatMathPlatformView: NSViewRepresentable {
+    let latex: String
+    let fontSize: CGFloat
+    let textColor: Color
+
+    func makeNSView(context: Context) -> MTMathUILabel {
+        MTMathUILabel()
+    }
+
+    func updateNSView(_ view: MTMathUILabel, context: Context) {
+        self.configure(view)
+    }
+
+    private func configure(_ view: MTMathUILabel) {
+        view.displayErrorInline = false
+        view.labelMode = .display
+        view.textAlignment = .center
+        view.fontSize = self.fontSize
+        view.textColor = NSColor(self.textColor)
+        if view.latex != self.latex {
+            view.latex = self.latex
+        }
+    }
+}
+#else
+@MainActor
+private struct ChatMathPlatformView: UIViewRepresentable {
+    let latex: String
+    let fontSize: CGFloat
+    let textColor: Color
+
+    func makeUIView(context: Context) -> MTMathUILabel {
+        MTMathUILabel()
+    }
+
+    func updateUIView(_ view: MTMathUILabel, context: Context) {
+        self.configure(view)
+    }
+
+    private func configure(_ view: MTMathUILabel) {
+        view.displayErrorInline = false
+        view.labelMode = .display
+        view.textAlignment = .center
+        view.fontSize = self.fontSize
+        view.textColor = UIColor(self.textColor)
+        if view.latex != self.latex {
+            view.latex = self.latex
+        }
+    }
+}
+#endif
+
+@MainActor
 struct ChatMarkdownTableView: View {
     let table: ChatMarkdownTable
 
@@ -49,7 +141,7 @@ struct ChatMarkdownTableView: View {
                 GridRow {
                     ForEach(self.table.header.indices, id: \.self) { column in
                         // One cell per column carries the GFM alignment.
-                        self.cell(self.table.header[column], column: column, isHeader: true)
+                        self.cell(self.table.header[column], isHeader: true)
                             .gridColumnAlignment(self.columnAlignment(column))
                     }
                 }
@@ -57,7 +149,7 @@ struct ChatMarkdownTableView: View {
                 ForEach(self.table.rows.indices, id: \.self) { rowIndex in
                     GridRow {
                         ForEach(self.table.rows[rowIndex].indices, id: \.self) { column in
-                            self.cell(self.table.rows[rowIndex][column], column: column, isHeader: false)
+                            self.cell(self.table.rows[rowIndex][column], isHeader: false)
                         }
                     }
                 }
@@ -73,7 +165,7 @@ struct ChatMarkdownTableView: View {
                         .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
     }
 
-    private func cell(_ text: String, column: Int, isHeader: Bool) -> some View {
+    private func cell(_ text: String, isHeader: Bool) -> some View {
         Text(self.inlineMarkdown(text))
             .font(isHeader ? OpenClawChatTypography.footnoteSemiBold : OpenClawChatTypography.footnote)
             .foregroundStyle(OpenClawChatTheme.assistantText)

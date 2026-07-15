@@ -12,14 +12,15 @@ import {
   applyCommonResponsesParams,
   createResponsesAssistantOutput,
   convertResponsesMessages,
-  type OpenAIResponsesStreamEvent,
   processResponsesStream,
   resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
-import { convertResponsesTools } from "./openai-responses-tools.js";
+import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 
 type ResponsesFunctionTool = Extract<OpenAIResponsesTool, { type: "function" }>;
+type OpenAIResponsesStreamEvent =
+  Parameters<typeof processResponsesStream>[0] extends AsyncIterable<infer Event> ? Event : never;
 
 async function* streamResponsesEvents(
   events: readonly OpenAIResponsesStreamEvent[],
@@ -117,7 +118,7 @@ async function* responseEvents(events: Array<Record<string, unknown>>) {
   }
 }
 
-describe("convertResponsesTools", () => {
+describe("convertResponsesToolPayload", () => {
   beforeEach(() => {
     // Mimic the OpenClaw host strict-tool policy: native OpenAI routes force
     // strict=true, proxy-like routes leave the flag unset.
@@ -144,7 +145,7 @@ describe("convertResponsesTools", () => {
       },
     ] satisfies Tool[];
 
-    const converted = convertResponsesTools(tools, { model: nativeOpenAIModel });
+    const converted = convertResponsesToolPayload(tools, { model: nativeOpenAIModel }).tools;
 
     expect(converted).toEqual([
       {
@@ -163,7 +164,7 @@ describe("convertResponsesTools", () => {
   });
 
   it("downgrades incompatible native Responses schemas to strict false", () => {
-    const converted = convertResponsesTools(
+    const converted = convertResponsesToolPayload(
       [
         {
           name: "read_file",
@@ -177,7 +178,7 @@ describe("convertResponsesTools", () => {
         },
       ],
       { model: nativeOpenAIModel },
-    );
+    ).tools;
 
     const tool = expectResponsesFunctionTool(converted[0]);
     expect(tool.strict).toBe(false);
@@ -190,7 +191,7 @@ describe("convertResponsesTools", () => {
   });
 
   it("omits strict on proxy-like Responses routes but keeps schema normalization", () => {
-    const converted = convertResponsesTools(
+    const converted = convertResponsesToolPayload(
       [
         {
           name: "lookup_weather",
@@ -199,7 +200,7 @@ describe("convertResponsesTools", () => {
         },
       ],
       { model: proxyOpenAIModel },
-    );
+    ).tools;
 
     const tool = expectResponsesFunctionTool(converted[0]);
     expect(tool).not.toHaveProperty("strict");
@@ -222,12 +223,14 @@ describe("convertResponsesTools", () => {
     } satisfies Tool;
 
     expect(
-      convertResponsesTools([zeta, alpha]).map((tool) => expectResponsesFunctionTool(tool).name),
+      convertResponsesToolPayload([zeta, alpha]).tools.map(
+        (tool) => expectResponsesFunctionTool(tool).name,
+      ),
     ).toEqual(["alpha", "zeta"]);
   });
 
   it("skips unreadable schemas and preserves healthy native strict tools", () => {
-    const converted = convertResponsesTools(
+    const converted = convertResponsesToolPayload(
       [
         {
           name: "broken",
@@ -246,7 +249,7 @@ describe("convertResponsesTools", () => {
         },
       ],
       { model: nativeOpenAIModel },
-    );
+    ).tools;
 
     expect(converted).toEqual([
       {
@@ -281,6 +284,22 @@ describe("convertResponsesTools", () => {
     } as never);
 
     expect(params).not.toHaveProperty("tools");
+  });
+});
+
+describe("Responses temperature support", () => {
+  it("drops temperature for the GPT-5.6 family that rejects it", () => {
+    const params = {} as never;
+    applyCommonResponsesParams(params, gpt56SolModel, { messages: [] }, { temperature: 0.3 });
+
+    expect(params).not.toHaveProperty("temperature");
+  });
+
+  it("keeps temperature for models that accept it", () => {
+    const params = {} as never;
+    applyCommonResponsesParams(params, nativeOpenAIModel, { messages: [] }, { temperature: 0.3 });
+
+    expect(params).toMatchObject({ temperature: 0.3 });
   });
 });
 
@@ -931,6 +950,938 @@ describe("processResponsesStream", () => {
     ]);
   });
 
+  it("keeps idless tool-call ids stable within a response and unique across responses", async () => {
+    const runOnce = async () => {
+      const output = createAssistantOutput();
+      const { stream, events } = createCapturedAssistantMessageEventStream();
+      await processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            item: { type: "function_call", name: "computer", arguments: "" },
+          },
+          {
+            type: "response.output_item.done",
+            item: { type: "function_call", name: "computer", arguments: "{}" },
+          },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      );
+      const block = output.content.find((entry) => entry.type === "toolCall");
+      const end = events.find((event) => event.type === "toolcall_end");
+      if (!block || block.type !== "toolCall" || !end || end.type !== "toolcall_end") {
+        throw new Error("missing tool-call lifecycle");
+      }
+      return { blockId: block.id, endId: end.toolCall.id };
+    };
+
+    const first = await runOnce();
+    const second = await runOnce();
+    expect(first.blockId).toMatch(/^call_[0-9a-f]{24}$/);
+    expect(first.endId).toBe(first.blockId);
+    expect(second.endId).toBe(second.blockId);
+    expect(second.blockId).not.toBe(first.blockId);
+  });
+
+  it("uses the SDK call id directly when the optional item id stays absent", async () => {
+    const events: ResponseStreamEvent[] = [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        sequence_number: 1,
+        item: {
+          type: "function_call",
+          call_id: "call_without_item_id",
+          name: "computer",
+          arguments: "",
+          status: "in_progress",
+        },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        sequence_number: 2,
+        item: {
+          type: "function_call",
+          call_id: "call_without_item_id",
+          name: "computer",
+          arguments: "{}",
+          status: "completed",
+        },
+      },
+    ];
+    const output = createAssistantOutput();
+
+    await processResponsesStream(
+      streamResponsesEvents(events),
+      output,
+      new AssistantMessageEventStream(),
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_without_item_id",
+        name: "computer",
+        arguments: {},
+      },
+    ]);
+  });
+
+  it("adopts the completed SDK item id while preserving lifecycle and result linkage", async () => {
+    const responseStream: ResponseStreamEvent[] = [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        sequence_number: 1,
+        item: {
+          type: "function_call",
+          call_id: "call_weather",
+          name: "weather",
+          arguments: "",
+          status: "in_progress",
+        },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        sequence_number: 2,
+        item: {
+          type: "function_call",
+          id: "fc_weather",
+          call_id: "call_weather",
+          name: "weather",
+          arguments: '{"city":"Seattle"}',
+          status: "completed",
+        },
+      },
+    ];
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+    let startedId: string | undefined;
+    const capturePush = stream.push.bind(stream);
+    stream.push = (event) => {
+      if (event.type === "toolcall_start") {
+        const block = event.partial.content[event.contentIndex];
+        startedId = block?.type === "toolCall" ? block.id : undefined;
+      }
+      capturePush(event);
+    };
+
+    await processResponsesStream(
+      streamResponsesEvents(responseStream),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(startedId).toBe("call_weather");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_weather|fc_weather",
+        name: "weather",
+        arguments: { city: "Seattle" },
+      },
+    ]);
+    expect(
+      events.map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
+    ).toEqual([
+      ["toolcall_start", 0],
+      ["toolcall_end", 0],
+    ]);
+
+    const replay = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "",
+        messages: [
+          output,
+          {
+            role: "toolResult",
+            toolCallId: "call_weather|fc_weather",
+            toolName: "weather",
+            content: [{ type: "text", text: "Rain" }],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } satisfies Context,
+      testAllowedToolCallProviders,
+      { includeSystemPrompt: false },
+    ) as unknown as Array<Record<string, unknown>>;
+    expect(replay).toContainEqual({
+      type: "function_call",
+      id: "fc_weather",
+      call_id: "call_weather",
+      name: "weather",
+      arguments: '{"city":"Seattle"}',
+    });
+    expect(replay).toContainEqual({
+      type: "function_call_output",
+      call_id: "call_weather",
+      output: "Rain",
+    });
+  });
+
+  it("keeps interleaved Responses function calls bound to their output indices", async () => {
+    const responseStream: ResponseStreamEvent[] = [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        sequence_number: 1,
+        item: {
+          type: "function_call",
+          id: "fc_click",
+          call_id: "call_click",
+          name: "computer",
+          arguments: "",
+          status: "in_progress",
+        },
+      },
+      {
+        type: "response.output_item.added",
+        output_index: 1,
+        sequence_number: 2,
+        item: {
+          type: "function_call",
+          id: "fc_type",
+          call_id: "call_type",
+          name: "computer",
+          arguments: "",
+          status: "in_progress",
+        },
+      },
+      {
+        type: "response.function_call_arguments.delta",
+        output_index: 1,
+        item_id: "fc_type",
+        sequence_number: 3,
+        delta: '{"action":"type","text":"hello"}',
+      },
+      {
+        type: "response.function_call_arguments.delta",
+        output_index: 0,
+        item_id: "fc_click",
+        sequence_number: 4,
+        delta: '{"action":"left_click","coordinate":[10,20]}',
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        sequence_number: 5,
+        item: {
+          type: "function_call",
+          id: "fc_click",
+          call_id: "call_click",
+          name: "computer",
+          arguments: '{"action":"left_click","coordinate":[10,20]}',
+          status: "completed",
+        },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 1,
+        sequence_number: 6,
+        item: {
+          type: "function_call",
+          id: "fc_type",
+          call_id: "call_type",
+          name: "computer",
+          arguments: '{"action":"type","text":"hello"}',
+          status: "completed",
+        },
+      },
+    ];
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      streamResponsesEvents(responseStream),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_click|fc_click",
+        name: "computer",
+        arguments: { action: "left_click", coordinate: [10, 20] },
+      },
+      {
+        type: "toolCall",
+        id: "call_type|fc_type",
+        name: "computer",
+        arguments: { action: "type", text: "hello" },
+      },
+    ]);
+    expect(
+      events
+        .filter((event) => event.type.startsWith("toolcall_"))
+        .map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
+    ).toEqual([
+      ["toolcall_start", 0],
+      ["toolcall_start", 1],
+      ["toolcall_delta", 1],
+      ["toolcall_delta", 0],
+      ["toolcall_end", 0],
+      ["toolcall_end", 1],
+    ]);
+  });
+
+  it("rejects reuse of an active Responses tool-call output index", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_first_index_owner",
+              call_id: "call_first_index_owner",
+              name: "computer",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_second_index_owner",
+              call_id: "call_second_index_owner",
+              name: "computer",
+              arguments: "",
+            },
+          },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow("Responses stream reused active tool-call output index 0");
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
+  });
+
+  it("keeps parallel unindexed Responses calls bound by identity without orphans", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+    const firstItem = {
+      type: "function_call",
+      id: "fc_first_unindexed",
+      call_id: "call_first_unindexed",
+      name: "computer",
+      arguments: '{"slot":1}',
+      status: "completed",
+    };
+    const secondItem = {
+      type: "function_call",
+      id: "fc_second_unindexed",
+      call_id: "call_second_unindexed",
+      name: "computer",
+      arguments: '{"slot":2}',
+      status: "completed",
+    };
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          item: { ...firstItem, arguments: "", status: "in_progress" },
+        },
+        {
+          type: "response.output_item.added",
+          item: { ...secondItem, arguments: "", status: "in_progress" },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: secondItem.id,
+          delta: secondItem.arguments,
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: firstItem.id,
+          delta: firstItem.arguments,
+        },
+        {
+          type: "response.function_call_arguments.done",
+          item_id: firstItem.id,
+          arguments: firstItem.arguments,
+        },
+        {
+          type: "response.function_call_arguments.done",
+          item_id: secondItem.id,
+          arguments: secondItem.arguments,
+        },
+        { type: "response.output_item.done", item: firstItem },
+        { type: "response.output_item.done", item: secondItem },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_parallel_unindexed",
+            status: "completed",
+            output: [firstItem, secondItem],
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_first_unindexed|fc_first_unindexed",
+        name: "computer",
+        arguments: { slot: 1 },
+      },
+      {
+        type: "toolCall",
+        id: "call_second_unindexed|fc_second_unindexed",
+        name: "computer",
+        arguments: { slot: 2 },
+      },
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "toolcall_end")
+        .map((event) =>
+          event.type === "toolcall_end"
+            ? [event.contentIndex, event.toolCall.id, event.toolCall.arguments]
+            : undefined,
+        ),
+    ).toEqual([
+      [0, "call_first_unindexed|fc_first_unindexed", { slot: 1 }],
+      [1, "call_second_unindexed|fc_second_unindexed", { slot: 2 }],
+    ]);
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
+  });
+
+  it("fails closed on ambiguous unindexed parallel argument events", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+    const firstItem = {
+      type: "function_call",
+      id: "fc_ambiguous_first",
+      call_id: "call_ambiguous_first",
+      name: "computer",
+    };
+    const secondItem = {
+      type: "function_call",
+      id: "fc_ambiguous_second",
+      call_id: "call_ambiguous_second",
+      name: "computer",
+    };
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          { type: "response.output_item.added", item: { ...firstItem, arguments: "" } },
+          { type: "response.output_item.added", item: { ...secondItem, arguments: "" } },
+          { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
+          { type: "response.output_item.done", item: firstItem },
+          { type: "response.output_item.done", item: secondItem },
+          {
+            type: "response.completed",
+            response: { id: "resp_ambiguous_unindexed", status: "completed" },
+          },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
+  });
+
+  it("recovers parallel arguments from authoritative done events and preserves opening names", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+    const firstItem = {
+      type: "function_call",
+      id: "fc_recovered_first",
+      call_id: "call_recovered_first",
+      name: "read",
+    };
+    const secondItem = {
+      type: "function_call",
+      id: "fc_recovered_second",
+      call_id: "call_recovered_second",
+      name: "write",
+    };
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { ...firstItem, arguments: "" },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: { ...secondItem, arguments: "" },
+        },
+        { type: "response.function_call_arguments.delta", delta: '{"ambiguous":true}' },
+        {
+          type: "response.function_call_arguments.done",
+          output_index: 0,
+          item_id: firstItem.id,
+          arguments: '{"path":"README.md"}',
+        },
+        {
+          type: "response.function_call_arguments.done",
+          output_index: 1,
+          item_id: secondItem.id,
+          arguments: '{"path":"README.md","text":"ok"}',
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: firstItem.id,
+            call_id: firstItem.call_id,
+          },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 1,
+          item: {
+            type: "function_call",
+            id: secondItem.id,
+            call_id: secondItem.call_id,
+          },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_recovered_parallel", status: "completed" },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_recovered_first|fc_recovered_first",
+        name: "read",
+        arguments: { path: "README.md" },
+      },
+      {
+        type: "toolCall",
+        id: "call_recovered_second|fc_recovered_second",
+        name: "write",
+        arguments: { path: "README.md", text: "ok" },
+      },
+    ]);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
+  });
+
+  it("rejects a completed Responses tool call whose function name changed", async () => {
+    const output = createAssistantOutput();
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_name_conflict",
+              call_id: "call_name_conflict",
+              name: "read",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_name_conflict",
+              call_id: "call_name_conflict",
+              name: "write",
+              arguments: "{}",
+            },
+          },
+        ]),
+        output,
+        new AssistantMessageEventStream(),
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow("Responses stream changed tool-call function name from read to write");
+  });
+
+  it("routes an omitted-index suffix by item id across parallel Responses calls", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "fc_first",
+          delta: '{"slot":',
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: "fc_first",
+          delta: "0}",
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 1,
+          delta: '{"slot":1}',
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: '{"slot":0}',
+          },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 1,
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: '{"slot":1}',
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "toolcall_delta")
+        .map((event) => ("contentIndex" in event ? event.contentIndex : undefined)),
+    ).toEqual([0, 0, 1]);
+  });
+
+  it("matches omitted-index parallel completions without duplicating indexed calls", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "fc_first",
+          delta: '{"incomplete":',
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: '{"slot":1}',
+          },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: '{"slot":0}',
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
+    ]);
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
+  });
+
+  it("rejects omitted-index events whose identity mismatches the sole indexed call", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: "fc_other",
+          delta: '{"wrong":true}',
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_other",
+            call_id: "call_other",
+            name: "computer",
+            arguments: '{"wrong":true}',
+          },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: '{"slot":0}',
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+    ]);
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "toolcall_delta")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
+  });
+
+  it("keeps sequential omitted-index Responses calls unambiguous", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 7,
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        { type: "response.function_call_arguments.delta", delta: '{"slot":0}' },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: '{"slot":0}',
+          },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 8,
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: '{"slot":1}',
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toMatchObject([
+      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "toolcall_delta")
+        .map((event) => ("contentIndex" in event ? event.contentIndex : undefined)),
+    ).toEqual([0, 1]);
+  });
+
+  it("materializes a done-only SDK tool call with a balanced terminal lifecycle", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          sequence_number: 1,
+          item: {
+            type: "function_call",
+            id: "fc_done_only",
+            call_id: "call_done_only",
+            name: "weather",
+            arguments: '{"city":"Paris"}',
+            status: "completed",
+          },
+        },
+        {
+          type: "response.completed",
+          sequence_number: 2,
+          response: { id: "resp_done_only", status: "completed" },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_done_only|fc_done_only",
+        name: "weather",
+        arguments: { city: "Paris" },
+      },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+    expect(
+      events.map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
+    ).toEqual([
+      ["toolcall_start", 0],
+      ["toolcall_end", 0],
+    ]);
+  });
+
+  it("pairs an item-only tool call with one generated call id", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          sequence_number: 1,
+          item: {
+            type: "function_call",
+            id: "fc_item_only",
+            name: "computer",
+            arguments: "{}",
+            status: "completed",
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    const block = output.content[0];
+    const end = events.find((event) => event.type === "toolcall_end");
+    if (!block || block.type !== "toolCall" || !end || end.type !== "toolcall_end") {
+      throw new Error("missing item-only tool-call lifecycle");
+    }
+    expect(block.id).toMatch(/^call_[0-9a-f]{24}\|fc_item_only$/);
+    expect(end.toolCall.id).toBe(block.id);
+  });
+
   it("prices cache-write tokens separately from ordinary Responses input", async () => {
     const model = {
       ...gpt56SolModel,
@@ -979,9 +1930,16 @@ describe("processResponsesStream", () => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
     const events: Array<Record<string, unknown>> = [];
+    const textBlockSignatures: Array<[string, number, string | undefined]> = [];
     const collect = (async () => {
       for await (const event of stream) {
         events.push(event as unknown as Record<string, unknown>);
+        if (event.type === "text_start" || event.type === "text_end") {
+          const block = Array.isArray(event.partial.content)
+            ? (event.partial.content[event.contentIndex] as { textSignature?: string } | undefined)
+            : undefined;
+          textBlockSignatures.push([event.type, event.contentIndex, block?.textSignature]);
+        }
       }
     })();
 
@@ -1042,6 +2000,12 @@ describe("processResponsesStream", () => {
     expect(
       events.filter((event) => event.type === "text_end").map((event) => event.content),
     ).toEqual([snapshot1, snapshot2, snapshot3]);
+    expect(textBlockSignatures).toEqual([
+      ["text_start", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
+      ["text_end", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
+      ["text_end", 0, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
+      ["text_end", 0, JSON.stringify({ v: 1, id: "msg_3", phase: "final_answer" })],
+    ]);
   });
 
   it.each([
@@ -1120,9 +2084,19 @@ describe("processResponsesStream", () => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
     const events: Array<Record<string, unknown>> = [];
+    const liveTextBlockSignatures: Array<[string, number, string | undefined]> = [];
     const collect = (async () => {
       for await (const event of stream) {
         events.push(event as unknown as Record<string, unknown>);
+        if (event.type === "text_start" || event.type === "text_delta") {
+          const block =
+            event.partial && Array.isArray(event.partial.content)
+              ? (event.partial.content[event.contentIndex] as
+                  | { textSignature?: string }
+                  | undefined)
+              : undefined;
+          liveTextBlockSignatures.push([event.type, event.contentIndex, block?.textSignature]);
+        }
       }
     })();
 
@@ -1187,6 +2161,12 @@ describe("processResponsesStream", () => {
       ["text_delta", 1, "Good"],
       ["text_delta", 1, "bye"],
       ["text_end", 1, null],
+    ]);
+    expect(liveTextBlockSignatures).toEqual([
+      ["text_start", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
+      ["text_start", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
+      ["text_delta", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
+      ["text_delta", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
     ]);
   });
 
@@ -1569,6 +2549,15 @@ describe("Azure OpenAI Responses content type support", () => {
 
     const { stream, events } = createCapturedAssistantMessageEventStream();
     const output = createResponsesAssistantOutput(azureModel, "azure-openai-responses");
+    const liveTextSignatures: Array<string | undefined> = [];
+    const push = stream.push.bind(stream);
+    stream.push = (event) => {
+      if (event.type === "text_start" || event.type === "text_delta") {
+        const block = event.partial?.content[event.contentIndex];
+        liveTextSignatures.push(block?.type === "text" ? block.textSignature : undefined);
+      }
+      push(event);
+    };
 
     await processResponsesStream(streamResponsesEvents(azureEvents), output, stream, azureModel);
 
@@ -1586,5 +2575,9 @@ describe("Azure OpenAI Responses content type support", () => {
       type: "text",
       text: "No explicit part",
     });
+    // Unphased Responses items keep streaming live; replay identity is stamped
+    // only once completion supplies the final block.
+    expect(liveTextSignatures).toEqual([undefined, undefined, undefined]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

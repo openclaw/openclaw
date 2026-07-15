@@ -17,10 +17,7 @@ import {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 export {
-  extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
-  isCloudflareOrHtmlErrorPage,
-  isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
@@ -61,16 +58,13 @@ export {
   formatRateLimitOrOverloadedErrorCopy,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
-  sanitizeUserFacingText,
 } from "./sanitize-user-facing-text.js";
 
 export {
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
-  isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
@@ -308,7 +302,7 @@ function normalizeFailoverDetailString(value: string | undefined): string | unde
     return undefined;
   }
   return trimmed.length > MAX_FAILOVER_DETAIL_CHARS
-    ? trimmed.slice(0, MAX_FAILOVER_DETAIL_CHARS)
+    ? truncateUtf16Safe(trimmed, MAX_FAILOVER_DETAIL_CHARS)
     : trimmed;
 }
 
@@ -749,39 +743,6 @@ export function isTransientHttpError(raw: string): boolean {
     return false;
   }
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
-}
-
-export function classifyFailoverReasonFromHttpStatus(
-  status: number | undefined,
-  message?: string,
-  opts?: { provider?: string },
-): FailoverReason | null {
-  const hasProviderStatusSignal = Boolean(opts?.provider && typeof status === "number");
-  const messageClassification = message
-    ? classifyFailoverClassificationFromMessage(message, opts?.provider, {
-        includeProviderPluginHooks: !hasProviderStatusSignal,
-      })
-    : null;
-  const providerPluginReason = hasProviderStatusSignal
-    ? classifyProviderPluginError({
-        errorMessage: message ?? "",
-        provider: opts?.provider,
-        status,
-      })
-    : null;
-  const effectiveMessageClassification = providerPluginReason
-    ? toReasonClassification(providerPluginReason)
-    : messageClassification;
-  return failoverReasonFromClassification(
-    classifyFailoverClassificationFromHttpStatus(
-      status,
-      message,
-      effectiveMessageClassification,
-      status,
-      opts?.provider,
-      { preserveProviderSignalClassification: providerPluginReason !== null },
-    ),
-  );
 }
 
 function classifyFailoverClassificationFromHttpStatus(
@@ -1582,12 +1543,12 @@ export function formatAssistantErrorText(
 
   // Never return raw unhandled errors - log for debugging but return safe message
   if (raw.length > 600) {
-    log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
+    log.warn(`Long error truncated: ${truncateUtf16Safe(raw, 200)}`);
   }
   return raw.length > 600 ? `${truncateUtf16Safe(raw, 600)}…` : raw;
 }
 
-export function isRawAssistantErrorPassthrough(params: {
+function isRawAssistantErrorPassthrough(params: {
   friendlyError?: string;
   rawError?: string;
 }): boolean {
@@ -1653,7 +1614,7 @@ const IMAGE_DIMENSION_ERROR_RE =
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
 
-export function isMissingToolCallInputError(raw: string): boolean {
+function isMissingToolCallInputError(raw: string): boolean {
   if (!raw) {
     return false;
   }
@@ -1737,7 +1698,7 @@ export function parseImageDimensionError(raw: string): {
   };
 }
 
-export function isImageDimensionErrorMessage(raw: string): boolean {
+function isImageDimensionErrorMessage(raw: string): boolean {
   return Boolean(parseImageDimensionError(raw));
 }
 
@@ -1759,7 +1720,7 @@ export function parseImageSizeError(raw: string): {
   };
 }
 
-export function isImageSizeError(errorMessage?: string): boolean {
+function isImageSizeError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
@@ -1818,3 +1779,4 @@ export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   return classifyAssistantFailoverReason(msg) !== null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

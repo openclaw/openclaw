@@ -52,8 +52,19 @@ actor PortGuardian {
             return
         }
         let port = GatewayEnvironment.gatewayPort()
-        for listener in await self.listeners(on: port) {
-            if Self.isExpected(listener, port: port, mode: mode) {
+        // Capture the listener before launchd status. If its process exits and the
+        // PID is reused, the newer status snapshot cannot bless the replacement.
+        let listeners = await self.listeners(on: port)
+        let managedGatewayPID = mode == .local
+            ? await GatewayLaunchAgentManager.runningGatewayPID()
+            : nil
+        for listener in listeners {
+            if Self.isExpected(
+                listener,
+                port: port,
+                mode: mode,
+                managedGatewayPID: managedGatewayPID)
+            {
                 let message = """
                 port \(port) already served by expected \(listener.command)
                 (pid \(listener.pid)) — keeping
@@ -520,7 +531,12 @@ actor PortGuardian {
         #endif
     }
 
-    private static func isExpected(_ listener: Listener, port: Int, mode: AppState.ConnectionMode) -> Bool {
+    private static func isExpected(
+        _ listener: Listener,
+        port: Int,
+        mode: AppState.ConnectionMode,
+        managedGatewayPID: Int32? = nil) -> Bool
+    {
         let cmd = listener.command.lowercased()
         let full = listener.fullCommand.lowercased()
         switch mode {
@@ -528,18 +544,46 @@ actor PortGuardian {
             if port == GatewayEnvironment.gatewayPort() { return true }
             return false
         case .local:
+            // Daemon status owns this process identity; the listener snapshot proves
+            // that the same launchd PID currently holds the configured Gateway port.
+            if let managedGatewayPID, listener.pid == managedGatewayPID { return true }
             // Preserve both the legacy hidden alias and the current service process title.
             if full.contains("gateway-daemon") || full.contains("openclaw-gateway")
                 || cmd.contains("openclaw-gateway")
             {
                 return true
             }
+            if self.isNodeOpenClawGatewayCommand(full) { return true }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
             return false
         case .unconfigured:
             return false
         }
+    }
+
+    private static func isNodeOpenClawGatewayCommand(_ fullCommand: String) -> Bool {
+        let tokens = fullCommand
+            .split(whereSeparator: \.isWhitespace)
+            .map { self.unquoteCommandToken(String($0)) }
+        guard tokens.count >= 3 else { return false }
+        guard URL(fileURLWithPath: tokens[0]).lastPathComponent.lowercased() == "node" else {
+            return false
+        }
+        return self.isOpenClawDistEntrypointToken(tokens[1])
+            && tokens[2].lowercased() == "gateway"
+    }
+
+    private static func isOpenClawDistEntrypointToken(_ token: String) -> Bool {
+        let normalized = token.replacingOccurrences(of: "\\", with: "/").lowercased()
+        guard normalized.hasSuffix("/dist/index.js") else { return false }
+        return normalized
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .contains("openclaw")
+    }
+
+    private static func unquoteCommandToken(_ token: String) -> String {
+        token.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
     }
 
     private func probeGatewayHealthIfNeeded(
@@ -625,10 +669,16 @@ extension PortGuardian {
         command: String,
         fullCommand: String,
         port: Int,
-        mode: AppState.ConnectionMode) -> Bool
+        mode: AppState.ConnectionMode,
+        pid: Int32 = 0,
+        managedGatewayPID: Int32? = nil) -> Bool
     {
-        let listener = Listener(pid: 0, command: command, fullCommand: fullCommand, user: nil)
-        return Self.isExpected(listener, port: port, mode: mode)
+        let listener = Listener(pid: pid, command: command, fullCommand: fullCommand, user: nil)
+        return Self.isExpected(
+            listener,
+            port: port,
+            mode: mode,
+            managedGatewayPID: managedGatewayPID)
     }
 
     static func _testBuildReport(

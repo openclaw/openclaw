@@ -58,6 +58,7 @@ export type ProviderEndpointClass =
   | "deepseek-native"
   | "github-copilot-native"
   | "groq-native"
+  | "meta-native"
   | "mistral-public"
   | "moonshot-native"
   | "modelstudio-native"
@@ -160,6 +161,7 @@ const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "deepseek-native",
   "github-copilot-native",
   "groq-native",
+  "meta-native",
   "mistral-public",
   "moonshot-native",
   "modelstudio-native",
@@ -473,7 +475,7 @@ function isCanonicalOrLegacyOpenAIProvider(provider: string | undefined): boolea
   return provider === "openai";
 }
 
-export function resolveProviderAttributionIdentity(
+function resolveProviderAttributionIdentity(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionIdentity {
   return {
@@ -515,6 +517,25 @@ function buildNvidiaAttributionPolicy(
     ...resolveProviderAttributionIdentity(env),
     headers: {
       "X-BILLING-INVOKE-ORIGIN": OPENCLAW_ATTRIBUTION_PRODUCT,
+    },
+  };
+}
+
+function buildGoogleAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "google",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    docsUrl: "https://ai.google.dev/gemini-api/docs/partner-integration",
+    reviewNote:
+      "Gemini API partner integration guidance requires x-goog-api-client on partner and library traffic.",
+    ...identity,
+    headers: {
+      "x-goog-api-client": `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${identity.version}`,
     },
   };
 }
@@ -575,24 +596,19 @@ function buildSdkHookOnlyPolicy(
   };
 }
 
-export function listProviderAttributionPolicies(
+function listProviderAttributionPolicies(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy[] {
   return [
     buildOpenRouterAttributionPolicy(env),
     buildNvidiaAttributionPolicy(env),
+    buildGoogleAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
     buildXaiAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
       "anthropic",
       "default-headers",
       "Anthropic JS SDK exposes defaultHeaders, but app attribution is not yet verified.",
-      env,
-    ),
-    buildSdkHookOnlyPolicy(
-      "google",
-      "user-agent-extra",
-      "Google GenAI JS SDK exposes userAgentExtra/httpOptions, but provider-side attribution is not yet verified.",
       env,
     ),
     buildSdkHookOnlyPolicy(
@@ -616,7 +632,7 @@ export function listProviderAttributionPolicies(
   ];
 }
 
-export function resolveProviderAttributionPolicy(
+function resolveProviderAttributionPolicy(
   provider?: string | null,
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy | undefined {
@@ -663,6 +679,9 @@ export function resolveProviderRequestPolicy(
   if (!attributionProvider && endpointClass === "nvidia-native") {
     attributionProvider = "nvidia";
   }
+  if (!attributionProvider && endpointClass === "google-generative-ai") {
+    attributionProvider = "google";
+  }
 
   const attributionPolicy = attributionProvider
     ? resolveProviderAttributionPolicy(attributionProvider, env)
@@ -707,6 +726,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "deepseek-native" ||
     endpointClass === "github-copilot-native" ||
     endpointClass === "groq-native" ||
+    endpointClass === "meta-native" ||
     endpointClass === "mistral-public" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native" ||
@@ -842,3 +862,4 @@ export function describeProviderRequestRoutingSummary(
     `policy=${routingPolicy}`,
   ].join(" ");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

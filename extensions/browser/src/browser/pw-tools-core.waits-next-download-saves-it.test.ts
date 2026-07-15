@@ -503,11 +503,12 @@ describe("pw-tools-core", () => {
     const off = vi.fn();
     setPwToolsCoreCurrentPage({ on, off });
 
+    const bodyBytes = Buffer.from('{"ok":true,"value":123}');
     const resp = {
       url: () => "https://example.com/api/data",
       status: () => 200,
       headers: () => ({ "content-type": "application/json" }),
-      text: async () => '{"ok":true,"value":123}',
+      body: async () => bodyBytes,
     };
 
     const p = mod.responseBodyViaPlaywright({
@@ -529,5 +530,72 @@ describe("pw-tools-core", () => {
     expect(res.status).toBe(200);
     expect(res.body).toBe('{"ok":true');
     expect(res.truncated).toBe(true);
+  });
+
+  it("does not split a surrogate pair when truncating response body text", async () => {
+    let responseHandler: ((resp: unknown) => void) | undefined;
+    const on = vi.fn((event: string, handler: (resp: unknown) => void) => {
+      if (event === "response") {
+        responseHandler = handler;
+      }
+    });
+    const off = vi.fn();
+    setPwToolsCoreCurrentPage({ on, off });
+
+    const p = mod.responseBodyViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      url: "**/emoji",
+      timeoutMs: 1000,
+      maxChars: 1,
+    });
+
+    await Promise.resolve();
+    if (!responseHandler) {
+      throw new Error("expected Playwright response handler");
+    }
+    responseHandler({
+      url: () => "https://example.com/emoji",
+      status: () => 200,
+      headers: () => ({ "content-type": "text/plain" }),
+      body: async () => Buffer.from("🙂B"),
+    });
+
+    await expect(p).resolves.toMatchObject({ body: "", truncated: true });
+  });
+
+  it("preserves the prefix while bounding decode for a large response", async () => {
+    let responseHandler: ((resp: unknown) => void) | undefined;
+    const on = vi.fn((event: string, handler: (resp: unknown) => void) => {
+      if (event === "response") {
+        responseHandler = handler;
+      }
+    });
+    const off = vi.fn();
+    setPwToolsCoreCurrentPage({ on, off });
+
+    const bodyBytes = Buffer.from("x".repeat(500_000));
+    const subarray = vi.spyOn(bodyBytes, "subarray");
+    const p = mod.responseBodyViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      url: "**/large",
+      timeoutMs: 1000,
+      maxChars: 10,
+    });
+
+    await Promise.resolve();
+    if (!responseHandler) {
+      throw new Error("expected Playwright response handler");
+    }
+    responseHandler({
+      url: () => "https://example.com/large",
+      status: () => 200,
+      headers: () => ({ "content-type": "text/plain", "content-length": "500000" }),
+      body: async () => bodyBytes,
+    });
+
+    await expect(p).resolves.toMatchObject({ body: "x".repeat(10), truncated: true });
+    expect(subarray).toHaveBeenCalledWith(0, 40);
   });
 });

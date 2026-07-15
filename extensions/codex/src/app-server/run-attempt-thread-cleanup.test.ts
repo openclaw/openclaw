@@ -7,14 +7,59 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt } from "./run-attempt.js";
-import { createCodexTestModel } from "./test-support.js";
+import {
+  registerCodexTestSessionIdentity,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
+import type { CodexAppServerClientFactory } from "./shared-client.js";
+import {
+  adaptCodexTestClientFactory,
+  createCodexTestModel,
+  type CodexTestAppServerClientFactory,
+} from "./test-support.js";
+
+// The keyed router, client runtime, and subagent monitor each add handlers on
+// the physical client; single-slot mocks would keep only the last one.
+function multiplexedClientFactory(
+  factory: CodexTestAppServerClientFactory,
+): CodexAppServerClientFactory {
+  return adaptCodexTestClientFactory(async (...args) => {
+    const client = await factory(...args);
+    const notificationHandlers = new Set<Parameters<typeof client.addNotificationHandler>[0]>();
+    const requestHandlers = new Set<Parameters<typeof client.addRequestHandler>[0]>();
+    client.addNotificationHandler((notification) =>
+      Promise.all(
+        [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
+      ).then(() => undefined),
+    );
+    client.addRequestHandler(async (request) => {
+      for (const handler of requestHandlers) {
+        const result = await handler(request);
+        if (result !== undefined) {
+          return result;
+        }
+      }
+      return undefined;
+    });
+    client.addNotificationHandler = (handler) => {
+      notificationHandlers.add(handler);
+      return () => notificationHandlers.delete(handler);
+    };
+    client.addRequestHandler = (handler) => {
+      requestHandlers.add(handler);
+      return () => requestHandlers.delete(handler);
+    };
+    return client;
+  });
+}
 
 let tempDir: string;
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
+  registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -100,6 +145,7 @@ function mockClientRuntimeMethods() {
 
 describe("Codex app-server main thread cleanup", () => {
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     vi.useRealTimers();
     resetAgentEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
@@ -132,7 +178,7 @@ describe("Codex app-server main thread cleanup", () => {
       return {};
     });
 
-    const clientFactory: CodexAppServerClientFactory = async () => {
+    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
       return {
         ...mockClientRuntimeMethods(),
         request,
@@ -141,10 +187,12 @@ describe("Codex app-server main thread cleanup", () => {
           return () => undefined;
         },
         addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
       } as never;
-    };
+    });
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      bindingStore: testCodexAppServerBindingStore,
       clientFactory,
     });
     await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/start"), {
@@ -189,17 +237,19 @@ describe("Codex app-server main thread cleanup", () => {
       return {};
     });
 
-    const clientFactory: CodexAppServerClientFactory = async () => {
+    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
       return {
         ...mockClientRuntimeMethods(),
         request,
         addNotificationHandler: () => () => undefined,
         addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
       } as never;
-    };
+    });
 
     await expect(
       runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+        bindingStore: testCodexAppServerBindingStore,
         clientFactory,
       }),
     ).rejects.toThrow("turn start exploded");

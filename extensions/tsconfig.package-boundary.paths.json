@@ -113,6 +113,9 @@
       "@openclaw/slack/api.js": [
         "../dist/plugin-sdk/extensions/slack/api.d.ts"
       ],
+      "@openclaw/telegram/api.js": [
+        "../dist/plugin-sdk/extensions/telegram/api.d.ts"
+      ],
       "@openclaw/whatsapp/api.js": [
         "../dist/plugin-sdk/extensions/whatsapp/api.d.ts"
       ],
@@ -271,6 +274,12 @@
       ],
       "@openclaw/normalization-core/*": [
         "../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"
+      ],
+      "@openclaw/retry": [
+        "../dist/plugin-sdk/packages/retry/src/index.d.ts"
+      ],
+      "@openclaw/workboard-contract": [
+        "../packages/workboard-contract/src/index.ts"
       ],
       "@openclaw/acp-core": [
         "../dist/plugin-sdk/packages/acp-core/src/index.d.ts"

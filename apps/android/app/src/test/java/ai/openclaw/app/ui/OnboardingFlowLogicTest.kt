@@ -4,7 +4,10 @@ import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
 import android.Manifest
+import androidx.compose.runtime.saveable.SaverScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -31,83 +34,57 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun permissionsBackCanReturnToRecoveryWhenNodeApprovalWasSkipped() {
+  fun directPermissionsBackReturnsToRecovery() {
     assertEquals(
       OnboardingBackDestination(OnboardingStep.Recovery),
       onboardingBackDestination(
         step = OnboardingStep.Permissions,
-        permissionsBackStep = OnboardingStep.Recovery,
+        accessStage = OnboardingAccessStage.DirectPermissions,
       ),
     )
     assertEquals(
       OnboardingBackState(step = OnboardingStep.Recovery),
       onboardingBackStateAfterBack(
         step = OnboardingStep.Permissions,
-        permissionsBackStep = OnboardingStep.Recovery,
+        accessStage = OnboardingAccessStage.DirectPermissions,
       ),
     )
   }
 
   @Test
-  fun nodeApprovalBackCanReturnToPermissionsDuringPermissionReapproval() {
+  fun permissionReapprovalBackReturnsThroughPermissionsToRecovery() {
     assertEquals(
       OnboardingBackDestination(OnboardingStep.Permissions),
       onboardingBackDestination(
         step = OnboardingStep.NodeApproval,
-        nodeApprovalBackStep = OnboardingStep.Permissions,
+        accessStage = OnboardingAccessStage.PermissionReapproval,
       ),
     )
     assertEquals(
       OnboardingBackState(step = OnboardingStep.Permissions),
       onboardingBackStateAfterBack(
         step = OnboardingStep.NodeApproval,
-        nodeApprovalBackStep = OnboardingStep.Permissions,
+        accessStage = OnboardingAccessStage.PermissionReapproval,
+      ),
+    )
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.Recovery),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.Permissions,
+        accessStage = OnboardingAccessStage.PermissionReapproval,
       ),
     )
   }
 
   @Test
-  fun permissionReapprovalBackStepsReturnThroughPermissionsWithoutLooping() {
-    val reapprovalBackSteps =
-      permissionReapprovalBackSteps(
-        currentNodeApprovalBackStep = OnboardingStep.Recovery,
-        currentPermissionsBackStep = OnboardingStep.NodeApproval,
-      )
-
-    assertEquals(OnboardingStep.Permissions, reapprovalBackSteps.nodeApprovalBackStep)
-    assertEquals(OnboardingStep.Recovery, reapprovalBackSteps.permissionsBackStep)
+  fun nodeApprovalSuccessUsesTheAccessStage() {
     assertEquals(
-      OnboardingBackState(step = OnboardingStep.Permissions),
-      onboardingBackStateAfterBack(
-        step = OnboardingStep.NodeApproval,
-        nodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep,
-        permissionsBackStep = reapprovalBackSteps.permissionsBackStep,
-      ),
+      OnboardingNodeApprovalSuccess.ShowPermissions,
+      OnboardingAccessStage.InitialApproval.nodeApprovalSuccess,
     )
     assertEquals(
-      OnboardingBackState(step = OnboardingStep.Recovery),
-      onboardingBackStateAfterBack(
-        step = OnboardingStep.Permissions,
-        nodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep,
-        permissionsBackStep = reapprovalBackSteps.permissionsBackStep,
-      ),
-    )
-
-    val repeatedReapprovalBackSteps =
-      permissionReapprovalBackSteps(
-        currentNodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep,
-        currentPermissionsBackStep = reapprovalBackSteps.permissionsBackStep,
-      )
-
-    assertEquals(OnboardingStep.Permissions, repeatedReapprovalBackSteps.nodeApprovalBackStep)
-    assertEquals(OnboardingStep.Recovery, repeatedReapprovalBackSteps.permissionsBackStep)
-    assertEquals(
-      OnboardingBackState(step = OnboardingStep.Recovery),
-      onboardingBackStateAfterBack(
-        step = OnboardingStep.Permissions,
-        nodeApprovalBackStep = repeatedReapprovalBackSteps.nodeApprovalBackStep,
-        permissionsBackStep = repeatedReapprovalBackSteps.permissionsBackStep,
-      ),
+      OnboardingNodeApprovalSuccess.CompleteOnboarding,
+      OnboardingAccessStage.PermissionReapproval.nodeApprovalSuccess,
     )
   }
 
@@ -174,9 +151,17 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun cameraPermissionRowDistinguishesAndroidPermissionFromCapabilityOptIn() {
-    assertEquals("Not allowed", cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = false))
-    assertEquals("Off", cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = true))
-    assertEquals("Enabled", cameraPermissionRowStatusText(capabilityEnabled = true, androidCameraPermissionGranted = true))
+    assertEquals("Not allowed", cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = false).resolveNativeText())
+    assertEquals("Off", cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = true).resolveNativeText())
+    assertEquals("Enabled", cameraPermissionRowStatusText(capabilityEnabled = true, androidCameraPermissionGranted = true).resolveNativeText())
+  }
+
+  @Test
+  fun onboardingErrorCodeSaverRoundTripsTypedState() {
+    val saved = with(OnboardingErrorCodeSaver) { SaverScope { true }.save(OnboardingErrorCode.ManualInvalidUrl) }
+
+    assertEquals("ManualInvalidUrl", saved)
+    assertEquals(OnboardingErrorCode.ManualInvalidUrl, OnboardingErrorCodeSaver.restore(requireNotNull(saved)))
   }
 
   @Test
@@ -971,6 +956,23 @@ class OnboardingFlowLogicTest {
         ),
       ),
     )
+    assertEquals(
+      "openclaw update",
+      recoveryGatewayProtocolMismatchCommand(
+        GatewayConnectionProblem(
+          code = "PROTOCOL_MISMATCH",
+          message = "protocol mismatch",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = null,
+          pauseReconnect = true,
+          retryable = false,
+          clientMinProtocol = 6,
+          clientMaxProtocol = 6,
+          expectedProtocol = 5,
+        ),
+      ),
+    )
   }
 
   @Test
@@ -1083,27 +1085,45 @@ class OnboardingFlowLogicTest {
             pauseReconnect = true,
             retryable = false,
           ),
+        localizeLabel = { label -> "[$label]" },
       )
 
-    assertTrue(diagnostic.contains("OpenClaw Android gateway diagnostic"))
-    assertTrue(diagnostic.contains("Gateway: Home Gateway"))
-    assertTrue(diagnostic.contains("Status: Gateway closed: token mismatch"))
-    assertTrue(diagnostic.contains("Gateway paired: false"))
-    assertTrue(diagnostic.contains("Ready to continue: false"))
-    assertTrue(diagnostic.contains("Error code: AUTH_TOKEN_MISMATCH"))
-    assertTrue(diagnostic.contains("Reason: bad-token"))
-    assertTrue(diagnostic.contains("Request ID: request-1"))
-    assertTrue(diagnostic.contains("Next step: update_auth_credentials"))
+    assertTrue(diagnostic.contains("[OpenClaw Android gateway diagnostic]"))
+    assertTrue(diagnostic.contains("[Gateway]: Home Gateway"))
+    assertTrue(diagnostic.contains("[Status]: Gateway closed: token mismatch"))
+    assertTrue(diagnostic.contains("[Gateway paired]: false"))
+    assertTrue(diagnostic.contains("[Ready to continue]: false"))
+    assertTrue(diagnostic.contains("[Error code]: AUTH_TOKEN_MISMATCH"))
+    assertTrue(diagnostic.contains("[Reason]: bad-token"))
+    assertTrue(diagnostic.contains("[Request ID]: request-1"))
+    assertTrue(diagnostic.contains("[Next step]: update_auth_credentials"))
     assertFalse(diagnostic.contains("secret"))
+  }
+
+  @Test
+  fun recoveryDiagnosticDoesNotInventOrTranslateStatusValues() {
+    val status = "  gateway status\n"
+    val diagnostic =
+      gatewayRecoveryDiagnosticText(
+        statusText = status,
+        gatewayName = "Gateway A",
+        gatewayPaired = false,
+        gatewayPairingCanContinue = false,
+        gatewayConnectionProblem = null,
+        localizeLabel = { label -> "[$label]" },
+      )
+
+    assertTrue(diagnostic.contains("[Status]: $status"))
+    assertFalse(diagnostic.contains("Offline"))
   }
 
   @Test
   fun recoveryProgressStartsAtGatewayEndpointWhileConnecting() {
     assertEquals(
       listOf(
-        GatewayRecoveryProgressItem("Opening Gateway connection", GatewayRecoveryProgressStatus.Current),
-        GatewayRecoveryProgressItem("Checking pairing access", GatewayRecoveryProgressStatus.Pending),
-        GatewayRecoveryProgressItem("Checking node access", GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem(nativeText("Opening Gateway connection"), GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem(nativeText("Checking pairing access"), GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem(nativeText("Checking node access"), GatewayRecoveryProgressStatus.Pending),
       ),
       gatewayRecoveryProgressItems(
         state = GatewayRecoveryUiState.Finishing,
@@ -1117,9 +1137,9 @@ class OnboardingFlowLogicTest {
   fun recoveryProgressDoesNotAdvanceToGatewayAccessJustBecauseSettlingEnds() {
     assertEquals(
       listOf(
-        GatewayRecoveryProgressItem("Opening Gateway connection", GatewayRecoveryProgressStatus.Current),
-        GatewayRecoveryProgressItem("Checking pairing access", GatewayRecoveryProgressStatus.Pending),
-        GatewayRecoveryProgressItem("Checking node access", GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem(nativeText("Opening Gateway connection"), GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem(nativeText("Checking pairing access"), GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem(nativeText("Checking node access"), GatewayRecoveryProgressStatus.Pending),
       ),
       gatewayRecoveryProgressItems(
         state = GatewayRecoveryUiState.Finishing,
@@ -1133,9 +1153,9 @@ class OnboardingFlowLogicTest {
   fun recoveryProgressMovesDownToNodeAccessAfterGatewayConnects() {
     assertEquals(
       listOf(
-        GatewayRecoveryProgressItem("Opening Gateway connection", GatewayRecoveryProgressStatus.Complete),
-        GatewayRecoveryProgressItem("Checking pairing access", GatewayRecoveryProgressStatus.Complete),
-        GatewayRecoveryProgressItem("Checking node access", GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem(nativeText("Opening Gateway connection"), GatewayRecoveryProgressStatus.Complete),
+        GatewayRecoveryProgressItem(nativeText("Checking pairing access"), GatewayRecoveryProgressStatus.Complete),
+        GatewayRecoveryProgressItem(nativeText("Checking node access"), GatewayRecoveryProgressStatus.Current),
       ),
       gatewayRecoveryProgressItems(
         state = GatewayRecoveryUiState.Finishing,
