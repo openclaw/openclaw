@@ -140,6 +140,7 @@ export type * from "./plugin-api.types.js";
 export { AGENT_PROMPT_SURFACE_KINDS } from "./plugin-command.types.js";
 export type * from "./plugin-command.types.js";
 export type * from "./plugin-config-schema.types.js";
+export type * from "./plugin-definition.types.js";
 export type * from "./plugin-registration.types.js";
 export type * from "./provider-authentication.types.js";
 export type * from "./provider-catalog.types.js";

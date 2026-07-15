@@ -11,10 +11,6 @@ import type {
 } from "../infra/diagnostic-events.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { PluginLogger } from "./logger-types.js";
-import type { OpenClawPluginApi } from "./plugin-api.types.js";
-import type { OpenClawPluginConfigSchema } from "./plugin-config-schema.types.js";
-import type { PluginKind } from "./plugin-kind.types.js";
-import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 
@@ -285,29 +281,6 @@ export type OpenClawPluginService = {
 export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
 };
-
-/** Module-level plugin definition loaded from a native plugin entry file. */
-export type OpenClawPluginDefinition = {
-  id?: string;
-  name?: string;
-  description?: string;
-  version?: string;
-  /**
-   * @deprecated Declare exclusive plugin kind in `openclaw.plugin.json` via
-   * manifest `kind`. Runtime-exported `kind` is kept as a compatibility
-   * fallback for older plugins and may require loading plugin runtime on
-   * metadata-only command paths.
-   */
-  kind?: PluginKind | PluginKind[];
-  configSchema?: OpenClawPluginConfigSchema;
-  reload?: OpenClawPluginReloadRegistration;
-  nodeHostCommands?: OpenClawPluginNodeHostCommand[];
-  securityAuditCollectors?: OpenClawPluginSecurityAuditCollector[];
-  register?: (api: OpenClawPluginApi) => void;
-  activate?: (api: OpenClawPluginApi) => void;
-};
-
-export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPluginApi) => void);
 
 /**
  * Public label exposed to plugin `register(api)` calls.
