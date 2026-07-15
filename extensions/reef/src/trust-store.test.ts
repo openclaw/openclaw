@@ -6,14 +6,11 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
-import {
-  createReefTrustStore,
-  isReefPairingApprovalToken,
-  type OpenReefTrustStore,
-} from "./trust-store.js";
+import { isReefPairingApprovalToken, openReefTrustStore } from "./trust-store.js";
 import type { RelayFriend } from "./types.js";
 
 let stateDir: string;
@@ -22,12 +19,14 @@ function config(handle = "molty", relayUrl = "https://reefwire.ai") {
   return ReefChannelConfigSchema.parse({ handle, relayUrl });
 }
 
-function openStore(): OpenReefTrustStore {
-  return <T>(options: OpenKeyedStoreOptions) =>
+function runtime() {
+  const mockRuntime = createPluginRuntimeMock();
+  mockRuntime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
     createPluginStateSyncKeyedStoreForTests<T>("reef", {
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
+  return mockRuntime;
 }
 
 function peerTrust() {
@@ -67,11 +66,11 @@ describe("ReefTrustStore", () => {
   });
 
   it("persists peer pins and autonomy in shared plugin-state SQLite", () => {
-    const first = createReefTrustStore(openStore(), config());
+    const first = openReefTrustStore(runtime(), config());
     first.set("clawd", peerTrust());
     first.setAutonomy("clawd", "extended");
 
-    const reopened = createReefTrustStore(openStore(), config());
+    const reopened = openReefTrustStore(runtime(), config());
     expect(reopened.get("@clawd")).toMatchObject({
       autonomy: "extended",
       keyEpoch: 1,
@@ -82,23 +81,23 @@ describe("ReefTrustStore", () => {
   });
 
   it("isolates trust by relay identity instead of machine-specific key paths", () => {
-    const molty = createReefTrustStore(openStore(), config("molty"));
+    const molty = openReefTrustStore(runtime(), config("molty"));
     molty.set("clawd", peerTrust());
 
-    expect(createReefTrustStore(openStore(), config("molty")).get("clawd")).toBeDefined();
-    expect(createReefTrustStore(openStore(), config("other")).get("clawd")).toBeUndefined();
+    expect(openReefTrustStore(runtime(), config("molty")).get("clawd")).toBeDefined();
+    expect(openReefTrustStore(runtime(), config("other")).get("clawd")).toBeUndefined();
     expect(
-      createReefTrustStore(openStore(), config("molty", "https://relay.example")).get("clawd"),
+      openReefTrustStore(runtime(), config("molty", "https://relay.example")).get("clawd"),
     ).toBeUndefined();
   });
 
   it("persists and consumes concurrent outbound request intents separately from active trust", () => {
-    const store = createReefTrustStore(openStore(), config());
+    const store = openReefTrustStore(runtime(), config());
 
     const first = store.recordOutboundRequest("clawd", 123);
     const second = store.recordOutboundRequest("clawd", 456);
     expect(first).not.toBe(second);
-    expect(createReefTrustStore(openStore(), config()).hasOutboundRequest("clawd")).toBe(true);
+    expect(openReefTrustStore(runtime(), config()).hasOutboundRequest("clawd")).toBe(true);
     expect(store.get("clawd")).toBeUndefined();
     expect(store.removeOutboundRequest("clawd", first)).toBe(true);
     expect(store.outboundRequestStatus("clawd", first)).toBe("superseded");
@@ -109,14 +108,14 @@ describe("ReefTrustStore", () => {
   });
 
   it("rejects autonomy updates for untrusted or invalid peers", () => {
-    const store = createReefTrustStore(openStore(), config());
+    const store = openReefTrustStore(runtime(), config());
 
     expect(() => store.setAutonomy("clawd", "notify-only")).toThrow("not locally trusted");
     expect(() => store.get("not a handle")).toThrow("Invalid Reef peer handle");
   });
 
   it("updates autonomy atomically without overwriting concurrent safety state", () => {
-    const store = createReefTrustStore(openStore(), config());
+    const store = openReefTrustStore(runtime(), config());
     store.set("clawd", peerTrust());
     const beforeSafetyChange = store.snapshot("clawd");
 
@@ -130,7 +129,7 @@ describe("ReefTrustStore", () => {
   });
 
   it("preserves a concurrent autonomy update when repinning peer keys", () => {
-    const store = createReefTrustStore(openStore(), config());
+    const store = openReefTrustStore(runtime(), config());
     store.set("clawd", peerTrust());
     const beforeRepin = store.snapshot("clawd");
     const friend = relayFriend();
@@ -148,7 +147,7 @@ describe("ReefTrustStore", () => {
   });
 
   it("rejects a stale trust commit after local revocation", () => {
-    const store = createReefTrustStore(openStore(), config());
+    const store = openReefTrustStore(runtime(), config());
     const requestId = store.recordOutboundRequest("clawd", 123);
     const beforeRemoval = store.snapshot("clawd");
 
@@ -175,7 +174,7 @@ describe("ReefTrustStore", () => {
       x25519_pub: identity.encryption.publicKey,
       key_epoch: 2,
     };
-    const molty = createReefTrustStore(openStore(), config("molty"));
+    const molty = openReefTrustStore(runtime(), config("molty"));
     const token = molty.createPairingApproval(friend);
 
     expect(isReefPairingApprovalToken(token)).toBe(true);
@@ -185,7 +184,7 @@ describe("ReefTrustStore", () => {
       trustRevision: 0,
     });
     expect(molty.matchesPairingApproval(token, friend)).toBe(true);
-    expect(createReefTrustStore(openStore(), config("other")).parsePairingApproval(token)).toBe(
+    expect(openReefTrustStore(runtime(), config("other")).parsePairingApproval(token)).toBe(
       undefined,
     );
     expect(molty.matchesPairingApproval(token, { ...friend, ed25519_pub: "C".repeat(43) })).toBe(

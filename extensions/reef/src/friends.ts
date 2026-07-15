@@ -13,12 +13,12 @@ type PairingChallenge = (params: {
   approvalToken: string;
 }) => Promise<void>;
 
-export type ReefPairingApprovals = {
+type ReefPairingApprovals = {
   list(): Promise<string[]>;
   remove(peer: string): Promise<boolean>;
 };
 
-export type ListedReefFriend = RelayFriend & {
+type ListedReefFriend = RelayFriend & {
   fingerprint: string;
   autonomy?: ReefAutonomy;
 };
@@ -73,10 +73,12 @@ export class ReefFriendManager {
           try {
             await this.transport.removeFriend(normalized);
           } catch (cleanupError) {
-            throw new AggregateError(
+            const failure = new AggregateError(
               [error, cleanupError],
               `Reef friend request to @${normalized} failed after concurrent revocation`,
+              { cause: cleanupError },
             );
+            throw failure;
           }
         }
         throw error;

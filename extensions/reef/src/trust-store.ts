@@ -1,9 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { z } from "zod";
 import type { ReefChannelConfig } from "./config-schema.js";
 import { normalizeReefTarget } from "./config-schema.js";
@@ -28,15 +25,11 @@ const ReefPeerStateSchema = z
   })
   .strict();
 
-export type ReefPeerStateSnapshot = z.infer<typeof ReefPeerStateSchema>;
+type ReefPeerStateSnapshot = z.infer<typeof ReefPeerStateSchema>;
 
 type ReefTrustStores = {
   peers: PluginStateSyncKeyedStore<ReefPeerStateSnapshot>;
 };
-
-export type OpenReefTrustStore = <T>(
-  options: OpenKeyedStoreOptions,
-) => PluginStateSyncKeyedStore<T>;
 
 function requirePeer(raw: string): string {
   const peer = normalizeReefTarget(raw);
@@ -69,7 +62,7 @@ export function isReefPairingApprovalToken(raw: string): boolean {
   return raw.trim().startsWith(REEF_PAIRING_APPROVAL_PREFIX);
 }
 
-function openStores(openStore: OpenReefTrustStore): ReefTrustStores {
+function openStores(openStore: PluginRuntime["state"]["openSyncKeyedStore"]): ReefTrustStores {
   return {
     peers: openStore<ReefPeerStateSnapshot>({
       namespace: "peer-state",
@@ -307,16 +300,9 @@ export class ReefTrustStore {
   }
 }
 
-export function createReefTrustStore(
-  openStore: OpenReefTrustStore,
-  config: ReefChannelConfig,
-): ReefTrustStore {
-  return new ReefTrustStore(openStores(openStore), config);
-}
-
 export function openReefTrustStore(
   runtime: PluginRuntime,
   config: ReefChannelConfig,
 ): ReefTrustStore {
-  return createReefTrustStore(runtime.state.openSyncKeyedStore, config);
+  return new ReefTrustStore(openStores(runtime.state.openSyncKeyedStore), config);
 }

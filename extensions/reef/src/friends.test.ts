@@ -6,13 +6,14 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
-import { ReefFriendManager, type ReefPairingApprovals } from "./friends.js";
+import { ReefFriendManager } from "./friends.js";
 import type { ReefTransportClient } from "./transport.js";
 import { ReefRelayError } from "./transport.js";
-import { createReefTrustStore, type OpenReefTrustStore } from "./trust-store.js";
+import { openReefTrustStore } from "./trust-store.js";
 import type { RelayFriend } from "./types.js";
 
 let stateDir: string;
@@ -45,12 +46,14 @@ function relayFriend(
   };
 }
 
-function openStore(): OpenReefTrustStore {
-  return <T>(options: OpenKeyedStoreOptions) =>
+function runtime() {
+  const mockRuntime = createPluginRuntimeMock();
+  mockRuntime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
     createPluginStateSyncKeyedStoreForTests<T>("reef", {
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
+  return mockRuntime;
 }
 
 function config() {
@@ -58,10 +61,10 @@ function config() {
 }
 
 function trust() {
-  return createReefTrustStore(openStore(), config());
+  return openReefTrustStore(runtime(), config());
 }
 
-function approvals(...initial: string[]): ReefPairingApprovals & {
+function approvals(...initial: string[]): ConstructorParameters<typeof ReefFriendManager>[2] & {
   values: Set<string>;
   remove: ReturnType<typeof vi.fn>;
 } {
@@ -88,9 +91,9 @@ function transport(friend: RelayFriend) {
     handle: "me",
     listFriends: vi.fn(async () => ({ friendships: [friend] })),
     requestFriend: vi.fn(async () => ({ status: "pending" })),
-    respondFriend: vi.fn(async (friend: RelayFriend, accept: boolean) => {
-      friend.status = accept ? "active" : "blocked";
-      return { peer: friend.peer, status: friend.status };
+    respondFriend: vi.fn(async (candidate: RelayFriend, accept: boolean) => {
+      candidate.status = accept ? "active" : "blocked";
+      return { peer: candidate.peer, status: candidate.status };
     }),
     removeFriend: vi.fn(async () => {
       friend.status = "blocked";
