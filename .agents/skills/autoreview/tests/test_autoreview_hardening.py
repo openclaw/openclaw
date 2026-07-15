@@ -2277,6 +2277,13 @@ class AutoreviewHardeningTests(unittest.TestCase):
             + literal_value
             + '"]'
         )
+        quoted_secret_key = "N7xQ2mP9vK4r" + "T8wZ"
+        typescript_store_literal = (
+            "const pass"
+            + 'word = attemptAuthProfileStore["'
+            + quoted_secret_key
+            + '"];'
+        )
         self.assertFalse(
             self.helper["secret_text_risk"](
                 store_reference,
@@ -2296,6 +2303,12 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
         )
         self.assertTrue(self.helper["secret_text_risk"](yaml_store_literal))
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                typescript_store_literal,
+                javascript_dialect="typescript",
+            )
+        )
 
     def test_lifecycle_reference_scan_is_bounded_for_non_matching_identifier(self) -> None:
         source = "const value = resolved" + "A" * 100_000 + "X;"

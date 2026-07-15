@@ -423,7 +423,7 @@ SOURCE_CODE_REFERENCE_ROOT_PATTERN = re.compile(
     )
     + r")(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
     r"|(?:\?\.)?\[(?:[A-Za-z_$][A-Za-z0-9_$]*"
-    r"|[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+"
+    r"|[\"']profiles[\"']|[0-9]+)\])+"
     r"(?![A-Za-z0-9_$])"
 )
 QUOTED_SECRET_REFERENCE_PATTERNS = (
