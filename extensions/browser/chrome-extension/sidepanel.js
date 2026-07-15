@@ -235,7 +235,11 @@ async function handleChallenge(payload) {
     // neither.
     const failure = err instanceof Error ? err.message : String(err);
     setWsStatus("err", "Auth failed");
-    addMessage("system", failure);
+    // Auth failures repeat on every reconnect and some (an unsupported Chrome)
+    // never clear, so post this once instead of growing the pane forever.
+    if (!document.querySelector(".auth-msg")) {
+      addMessage("system", failure).classList.add("auth-msg");
+    }
   }
 }
 
@@ -284,6 +288,13 @@ function handleMessage(msg) {
   }
   if (msg.type === "res" && msg.ok && msg.payload?.type === "hello-ok") {
     reconnectAttempt = 0;
+    // Pairing succeeded on this socket. The close-driven backoff is faster than
+    // the 5s pairing retry, so without this the stale timer would tear down the
+    // healthy connection it just raced us to.
+    if (pairingRetryTimer) {
+      clearTimeout(pairingRetryTimer);
+      pairingRetryTimer = null;
+    }
     setWsStatus("ok", "Connected");
     void handleHelloOk(msg.payload);
     return;
@@ -316,6 +327,16 @@ function handleMessage(msg) {
       return;
     }
     setWsStatus("err", code || "Error");
+    // A failed response with no waiting request is a refused handshake. The
+    // status dot carries a bare code, which reads as an unexplained reconnect
+    // loop — the origin allowlist rejection lands exactly here — so say what the
+    // gateway actually said, once.
+    const detail = msg.error?.message;
+    if (detail && !document.querySelector(".conn-error-msg")) {
+      addMessage("system", `Gateway refused the connection: ${detail}`).classList.add(
+        "conn-error-msg",
+      );
+    }
     return;
   }
   if (msg.type === "res" && msg.ok && msg.id) {

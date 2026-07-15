@@ -127,12 +127,26 @@ normal `browser` tool.
 - **Per-tab conversations.** Each tab chats in its own gateway session
   (`…:thread:tab-<id>`), so two tabs never mix context. Reopening the panel on
   the same tab resumes its conversation; **New chat** starts a fresh one.
+- **Allow the panel's origin — required once.** The panel is a Chrome
+  extension page, so its WebSocket always sends an
+  `Origin: chrome-extension://<extension-id>` header, and the Gateway checks any
+  origin it is given against `gateway.controlUi.allowedOrigins`. That list is
+  empty by default, so the panel is refused until you add the extension's origin
+  (the id is on the extension's `chrome://extensions` card):
+
+  ```bash
+  openclaw config set gateway.controlUi.allowedOrigins '["chrome-extension://<extension-id>"]'
+  ```
+
+  Without it the panel reports "Gateway refused the connection" and keeps
+  retrying. This applies on the same machine too; loopback does not exempt it.
+
 - **Gateway connection.** The panel connects to the Gateway as its own
   operator device (Ed25519 identity, scopes `operator.read` +
-  `operator.write`). On the same machine it pairs silently; a remote gateway
-  needs a one-time `openclaw devices` approval. Add the extension origin to
-  `gateway.controlUi.allowedOrigins` (`chrome-extension://<extension-id>`) if
-  your config restricts origins.
+  `operator.write`). Once the origin is allowed, it pairs silently on the same
+  machine; a remote gateway needs a one-time `openclaw devices` approval. The
+  panel needs Chrome 137 or newer for Ed25519 device keys, though the rest of
+  the extension works on older versions.
 - **Settings** (⚙ in the panel): gateway URL and token. On the same machine
   the default `http://127.0.0.1:18789` needs no token; remote gateways use
   `wss://` plus the gateway shared secret.
