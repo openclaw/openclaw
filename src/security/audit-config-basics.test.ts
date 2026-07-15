@@ -120,7 +120,7 @@ describe("security audit config basics", () => {
     }
   });
 
-  it("treats an oversized global mcporter registry as missing", async () => {
+  it("warns when an oversized global mcporter registry cannot be inspected", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcporter-oversized-"));
     try {
       await fs.mkdir(path.join(stateDir, "skills", "config"), { recursive: true });
@@ -148,9 +148,119 @@ describe("security audit config basics", () => {
         includeChannelSecurity: false,
       });
 
-      expect(report.findings.map((finding) => finding.checkId)).not.toContain(
-        "tools.exec.agent_skill_mcp_boundary_drift",
+      const checkIds = report.findings.map((finding) => finding.checkId);
+      expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
+      expect(report.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "tools.exec.mcporter_registry_inspection_incomplete",
+            severity: "warn",
+          }),
+        ]),
       );
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not flag mcporter registry inspection when the registry is missing", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcporter-missing-"));
+    try {
+      const report = await runSecurityAudit({
+        config: {
+          agents: {
+            list: [
+              {
+                id: "asset-agent",
+                skills: ["asset-lifecycle-tracking"],
+                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+              },
+            ],
+          },
+        },
+        sourceConfig: {},
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      const checkIds = report.findings.map((finding) => finding.checkId);
+      expect(checkIds).not.toContain("tools.exec.mcporter_registry_inspection_incomplete");
+      expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when a malformed global mcporter registry cannot be inspected", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcporter-malformed-"));
+    try {
+      await fs.mkdir(path.join(stateDir, "skills", "config"), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "skills", "config", "mcporter.json"),
+        "{ not json",
+        "utf8",
+      );
+
+      const report = await runSecurityAudit({
+        config: {
+          agents: {
+            list: [
+              {
+                id: "asset-agent",
+                skills: ["asset-lifecycle-tracking"],
+                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+              },
+            ],
+          },
+        },
+        sourceConfig: {},
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      const checkIds = report.findings.map((finding) => finding.checkId);
+      expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
+      expect(checkIds).toContain("tools.exec.mcporter_registry_inspection_incomplete");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when the global mcporter registry path is not a regular file", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-audit-mcporter-non-regular-"),
+    );
+    try {
+      await fs.mkdir(path.join(stateDir, "skills", "config", "mcporter.json"), {
+        recursive: true,
+      });
+
+      const report = await runSecurityAudit({
+        config: {
+          agents: {
+            list: [
+              {
+                id: "asset-agent",
+                skills: ["asset-lifecycle-tracking"],
+                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+              },
+            ],
+          },
+        },
+        sourceConfig: {},
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      const checkIds = report.findings.map((finding) => finding.checkId);
+      expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
+      expect(checkIds).toContain("tools.exec.mcporter_registry_inspection_incomplete");
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
@@ -195,12 +305,15 @@ describe("security audit config basics", () => {
       expect(report.findings.map((finding) => finding.checkId)).toContain(
         "tools.exec.agent_skill_mcp_boundary_drift",
       );
+      expect(report.findings.map((finding) => finding.checkId)).not.toContain(
+        "tools.exec.mcporter_registry_inspection_incomplete",
+      );
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 
-  it("treats an oversized symlinked global mcporter registry as missing", async () => {
+  it("warns when an oversized symlinked global mcporter registry cannot be inspected", async () => {
     const stateDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-audit-mcporter-symlink-oversized-"),
     );
@@ -230,9 +343,9 @@ describe("security audit config basics", () => {
         includeChannelSecurity: false,
       });
 
-      expect(report.findings.map((finding) => finding.checkId)).not.toContain(
-        "tools.exec.agent_skill_mcp_boundary_drift",
-      );
+      const checkIds = report.findings.map((finding) => finding.checkId);
+      expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
+      expect(checkIds).toContain("tools.exec.mcporter_registry_inspection_incomplete");
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
