@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -43,6 +44,7 @@ const MATURITY_GENERATED_PR_PATHS = [
 ];
 
 type WorkflowStep = {
+  env?: Record<string, unknown>;
   name?: string;
   run?: string;
   uses?: string;
@@ -1515,6 +1517,9 @@ describe("ci workflow guards", () => {
     const bindStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Bind sticky node_modules into workspace",
     );
+    const installStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Install dependencies",
+    );
 
     expect(blacksmithJobs.length).toBeGreaterThan(0);
     for (const [jobName, job] of blacksmithJobs) {
@@ -1543,9 +1548,12 @@ describe("ci workflow guards", () => {
         commit: "if-missing",
       },
     });
-    expect(mountStep.with.key).toContain("node-deps-bind-v1-");
+    expect(mountStep.with.key).toContain("node-deps-bind-v2-");
     expect(mountStep.with.key).toContain("format('pr-{0}', github.event.pull_request.number)");
-    expect(mountStep.with.key).toContain("hashFiles('package.json', 'pnpm-lock.yaml'");
+    expect(mountStep.with.key).toContain("inputs.frozen-lockfile");
+    expect(mountStep.with.key).toContain("hashFiles('**/package.json', 'pnpm-lock.yaml'");
+    expect(mountStep.with.key).toContain(".github/actions/setup-node-env/sticky-importers.sh");
+    expect(mountStep.with.key).toContain("scripts/postinstall-bundled-plugins.mjs");
     expect(cleanupStep).toMatchObject({
       if: "inputs.sticky-disk == 'true'",
       uses: "./.github/actions/register-bind-mount-cleanup",
@@ -1561,6 +1569,20 @@ describe("ci workflow guards", () => {
     expect(bindStep.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$sticky_store"');
     expect(bindStep.run).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(bindStep.run).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
+    expect(installStep.env).toMatchObject({
+      STICKY_DISK: "${{ inputs.sticky-disk }}",
+      STICKY_ROOT: "/var/tmp/openclaw-node-deps",
+    });
+    expect(installStep.run).toContain('sticky_ready_marker="$STICKY_ROOT/.install-complete-v2"');
+    expect(installStep.run).toContain(
+      'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
+    );
+    expect(installStep.run).toContain("Sticky dependency snapshot is ready; skipping pnpm install");
+    expect(installStep.run.indexOf('pnpm "${install_args[@]}"')).toBeLessThan(
+      installStep.run.indexOf(
+        'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
+      ),
+    );
     const cleanupAction = parse(
       readFileSync(".github/actions/register-bind-mount-cleanup/action.yml", "utf8"),
     );
@@ -1579,6 +1601,33 @@ describe("ci workflow guards", () => {
     expect(readFileSync(".github/actions/setup-pnpm-store-cache/action.yml", "utf8")).toContain(
       "actions/cache/restore@",
     );
+  });
+
+  it("restores importer-local node_modules from sticky snapshots", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-sticky-importers-"));
+    try {
+      const workspace = path.join(root, "workspace");
+      const stickyRoot = path.join(root, "sticky");
+      const rootModules = path.join(workspace, "node_modules");
+      const importerModules = path.join(workspace, "packages", "example", "node_modules");
+      const helper = path.resolve(".github/actions/setup-node-env/sticky-importers.sh");
+      mkdirSync(path.join(rootModules, "shared"), { recursive: true });
+      mkdirSync(importerModules, { recursive: true });
+      writeFileSync(path.join(rootModules, "root-sentinel"), "before", "utf8");
+      symlinkSync("../../../node_modules/shared", path.join(importerModules, "shared"));
+
+      execFileSync("bash", [helper, "capture", stickyRoot, workspace]);
+      rmSync(importerModules, { recursive: true });
+      writeFileSync(path.join(rootModules, "root-sentinel"), "after", "utf8");
+      execFileSync("bash", [helper, "restore", stickyRoot, workspace]);
+
+      expect(readlinkSync(path.join(importerModules, "shared"))).toBe(
+        "../../../node_modules/shared",
+      );
+      expect(readFileSync(path.join(rootModules, "root-sentinel"), "utf8")).toBe("after");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
