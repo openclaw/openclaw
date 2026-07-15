@@ -36,7 +36,7 @@ type CodexUsageLimitErrorSource = {
   rateLimitsTrustedForProfile?: boolean;
 };
 
-export type CodexUsageLimitErrorResult = {
+type CodexUsageLimitErrorResult = {
   message: string;
   rateLimitsForProfile?: JsonValue;
 };
