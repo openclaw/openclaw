@@ -13,6 +13,7 @@ import type {
   EmbeddedAgentQueueMessageOptions,
   EmbeddedAgentQueueMessageOutcome,
 } from "./embedded-agent-runner/runs.js";
+import { testing as generatedMediaWakeTesting } from "./generated-media-direct-delivery-wake.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import {
   callGateway as runtimeCallGateway,
@@ -35,6 +36,7 @@ afterEach(() => {
   sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
   setActivePluginRegistry(createTestRegistry());
   testing.setDepsForTest();
+  generatedMediaWakeTesting.setDepsForTest();
 });
 
 const slackThreadOrigin = {
@@ -2715,6 +2717,60 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         content: "The generated music is ready.",
         mediaUrls: ["/tmp/generated-night-drive.mp3"],
         idempotencyKey: "announce-dm-fallback-empty:generated-media-direct",
+      }),
+    );
+  });
+
+  it("queues a session wake after the generated media direct fallback delivers", async () => {
+    const enqueueSystemEvent = vi.fn(() => true);
+    const requestHeartbeat = vi.fn();
+    generatedMediaWakeTesting.setDepsForTest({ enqueueSystemEvent, requestHeartbeat });
+
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction: "Deliver the generated music.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    const [wakeText, wakeOptions] = enqueueSystemEvent.mock.calls[0] as unknown as [
+      string,
+      { sessionKey: string; contextKey?: string; deliveryContext?: Record<string, unknown> },
+    ];
+    expect(wakeText).toContain("already delivered directly to the chat");
+    expect(wakeOptions.sessionKey).toBe("agent:main:discord:dm:U123");
+    expect(wakeOptions.contextKey).toBe("announce-dm-fallback-empty:generated-media-direct");
+    expect(wakeOptions.deliveryContext).toMatchObject({ channel: "discord", to: "dm:U123" });
+    expect(requestHeartbeat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "background-task",
+        intent: "event",
+        reason: "generated-media:direct-delivery",
       }),
     );
   });

@@ -52,6 +52,7 @@ import {
 import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
+import { wakeSessionForGeneratedMediaDirectDelivery } from "./generated-media-direct-delivery-wake.js";
 import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
@@ -1009,6 +1010,23 @@ async function deliverGeneratedMediaCompletionDirect(params: {
         agentId,
         idempotencyKey,
       },
+    });
+    // Direct fallback bypasses the requester's agent turn, so the session
+    // would otherwise never learn the media landed. Queue a system-event wake
+    // so the agent can continue the conversation instead of leaving an
+    // orphaned attachment in the chat.
+    wakeSessionForGeneratedMediaDirectDelivery({
+      cfg: params.cfg,
+      sessionKey: params.requesterSessionKey,
+      mediaLabel,
+      status: "ok",
+      deliveryContext: normalizeDeliveryContext({
+        channel: params.deliveryTarget.channel,
+        accountId: params.deliveryTarget.accountId,
+        to: params.deliveryTarget.to,
+        threadId: params.deliveryTarget.threadId,
+      }),
+      contextKey: idempotencyKey,
     });
     return {
       delivered: true,

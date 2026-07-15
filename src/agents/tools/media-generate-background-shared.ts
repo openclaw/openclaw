@@ -36,6 +36,7 @@ import {
   mediaUrlsFromGeneratedAttachments,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
+import { wakeSessionForGeneratedMediaDirectDelivery } from "../generated-media-direct-delivery-wake.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
 import { MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS } from "../media-generation-task-status-shared.js";
 import {
@@ -737,6 +738,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
           : `${label} generation completed, but the generated media could not be attached here.`,
       mediaUrls,
       idempotencySuffix: "ok",
+      completionLabel: params.completionLabel,
     });
     if (delivered) {
       return { status: "delivered" };
@@ -750,6 +752,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
       toolName: params.toolName,
       content: `${label} generation failed: ${params.result}`,
       idempotencySuffix: "error",
+      completionLabel: params.completionLabel,
     });
     if (delivered) {
       return { status: "delivered" };
@@ -773,6 +776,7 @@ async function tryDeliverMediaGenerationDirect(params: {
   content: string;
   mediaUrls?: string[];
   idempotencySuffix: string;
+  completionLabel?: string;
 }): Promise<boolean> {
   const origin = normalizeDeliveryContext(params.handle.requesterOrigin);
   if (!origin?.channel || !origin.to || !isDeliverableMessageChannel(origin.channel)) {
@@ -798,6 +802,17 @@ async function tryDeliverMediaGenerationDirect(params: {
         agentId,
         idempotencyKey,
       },
+    });
+    // Direct delivery bypasses the requester's agent turn, so wake the owning
+    // session with a system event; otherwise the attachment lands orphaned and
+    // the agent never continues the conversation around it.
+    wakeSessionForGeneratedMediaDirectDelivery({
+      cfg: params.config,
+      sessionKey: params.handle.requesterSessionKey,
+      mediaLabel: params.completionLabel,
+      status: params.idempotencySuffix === "error" ? "error" : "ok",
+      deliveryContext: origin,
+      contextKey: idempotencyKey,
     });
     return true;
   } catch (error) {

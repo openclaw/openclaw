@@ -23,6 +23,9 @@ const taskRegistryDeliveryRuntimeMocks = vi.hoisted(() => ({
 const cronContinuationCleanupMocks = vi.hoisted(() => ({
   removeCronRunContinuationSessionIfIdle: vi.fn(async () => {}),
 }));
+const generatedMediaWakeMocks = vi.hoisted(() => ({
+  wakeSessionForGeneratedMediaDirectDelivery: vi.fn(),
+}));
 const sessionMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn<() => SessionEntry | undefined>(() => undefined),
 }));
@@ -37,6 +40,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => ({
 vi.mock("../../tasks/detached-task-runtime.js", () => detachedTaskRuntimeMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliveryRuntimeMocks);
 vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => cronContinuationCleanupMocks);
+vi.mock("../generated-media-direct-delivery-wake.js", () => generatedMediaWakeMocks);
 
 import {
   createMediaGenerationTaskLifecycle,
@@ -56,6 +60,7 @@ beforeEach(() => {
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
   cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle.mockClear();
   sessionMocks.loadSessionEntry.mockReset().mockReturnValue(undefined);
+  generatedMediaWakeMocks.wakeSessionForGeneratedMediaDirectDelivery.mockReset();
 });
 
 function createImageMediaLifecycle() {
@@ -672,6 +677,15 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       expect.objectContaining({
         content: "Image generation completed.",
         mediaUrls: ["/tmp/proof.png"],
+      }),
+    );
+    // Direct recovery bypasses the requester agent turn, so the session must
+    // be woken afterwards or the delivered media stays orphaned in the chat.
+    expect(generatedMediaWakeMocks.wakeSessionForGeneratedMediaDirectDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:123",
+        status: "ok",
+        deliveryContext: expect.objectContaining({ channel: "discord", to: "channel:123" }),
       }),
     );
     expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
