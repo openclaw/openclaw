@@ -352,6 +352,34 @@ describe("qa coverage report", () => {
     );
   });
 
+  it("uses the live lane for channel scenarios without a driver restriction", () => {
+    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, "dm-per-room-session");
+    const report = renderQaScenarioMatchesMarkdownReport({
+      query: "dm-per-room-session",
+      matches,
+    });
+
+    expect(report).toContain(
+      "- Suite command: `pnpm openclaw qa suite --channel-driver live --channel matrix --scenario dm-per-room-session`",
+    );
+  });
+
+  it("splits flow commands across channel lanes", () => {
+    const scenarios = readQaScenarioPack().scenarios;
+    const matches = [
+      ...findQaScenarioMatches(scenarios, "dm-per-room-session"),
+      ...findQaScenarioMatches(scenarios, "whatsapp-access-control-group-disabled"),
+    ];
+    const report = renderQaScenarioMatchesMarkdownReport({ query: "channel lanes", matches });
+
+    expect(report).toContain(
+      "--channel-driver live --channel matrix --scenario dm-per-room-session",
+    );
+    expect(report).toContain(
+      "--channel-driver live --channel whatsapp --scenario whatsapp-access-control-group-disabled",
+    );
+  });
+
   it("splits qa suite targets when matches mix execution kinds", () => {
     const playwrightExecutionPath = "ui/src/e2e/chat-flow.e2e.test.ts";
     const flowScenario = scenarioWithCoverage({

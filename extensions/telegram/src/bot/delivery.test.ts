@@ -2149,3 +2149,4 @@ describe("deliverReplies", () => {
     expect(observer).toHaveBeenCalledWith({ messageId: 303, text: "Voice fallback" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

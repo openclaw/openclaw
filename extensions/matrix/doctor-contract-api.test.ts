@@ -18,9 +18,10 @@ import { stateMigrations } from "./doctor-contract-api.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
 import { openMatrixStorageMetaStoreOptions } from "./src/matrix/client/storage.js";
 import {
+  MATRIX_RECOVERY_KEY_FILENAME,
   readMatrixIdbSnapshotJson,
-  readMatrixLegacyCryptoMigrationState,
-  readMatrixRecoveryKeyState,
+  readMatrixRecoveryKeyStateForPath,
+  scoreMatrixCryptoStateInStore,
 } from "./src/matrix/crypto-state-store.js";
 import { importNewestInboundDedupeMarkers } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import {
@@ -270,7 +271,10 @@ describe("matrix doctor contract state migrations", () => {
       warnings: [],
     });
 
-    expect(readMatrixRecoveryKeyState(storageRootDir)?.keyId).toBe("SSSS");
+    expect(
+      readMatrixRecoveryKeyStateForPath(path.join(storageRootDir, MATRIX_RECOVERY_KEY_FILENAME))
+        ?.keyId,
+    ).toBe("SSSS");
     expect(fs.existsSync(path.join(storageRootDir, "recovery-key.json"))).toBe(false);
   });
 
@@ -364,7 +368,7 @@ describe("matrix doctor contract state migrations", () => {
       warnings: [],
     });
 
-    expect(readMatrixLegacyCryptoMigrationState(storageRootDir)?.restoreStatus).toBe("pending");
+    expect(scoreMatrixCryptoStateInStore(storageRootDir)).toBe(3);
     expect(fs.existsSync(path.join(storageRootDir, "legacy-crypto-migration.json"))).toBe(false);
   });
 

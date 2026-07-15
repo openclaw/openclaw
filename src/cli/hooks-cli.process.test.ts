@@ -1,23 +1,33 @@
 // Hooks CLI process tests cover plugin-owned handles that outlive command output.
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
+  await Promise.all(Array.from(activeChildren, terminateChild));
 });
+
+async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  child.kill("SIGKILL");
+  await once(child, "close");
+}
 
 async function createLingeringPluginFixture(): Promise<{
   configPath: string;
   markerPath: string;
   stateDir: string;
 }> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-cli-"));
-  tempDirs.push(root);
+  const root = tempDirs.make("openclaw-hooks-cli-");
   const stateDir = path.join(root, "state");
   const pluginDir = path.join(root, "linger-plugin");
   const markerPath = path.join(root, "registered");
@@ -68,24 +78,45 @@ async function createLingeringPluginFixture(): Promise<{
   return { configPath, markerPath, stateDir };
 }
 
-async function runHooksList(fixture: Awaited<ReturnType<typeof createLingeringPluginFixture>>) {
-  const child = spawn(
-    process.execPath,
-    ["--import", "tsx", "src/entry.ts", "hooks", "list", "--json"],
-    {
-      cwd: path.resolve("."),
-      env: {
-        ...process.env,
-        LINGER_MARKER: fixture.markerPath,
-        OPENCLAW_CONFIG_PATH: fixture.configPath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: fixture.stateDir,
-        NODE_ENV: undefined,
-        VITEST: undefined,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
+async function createLingeringPreloadFixture(): Promise<{
+  markerPath: string;
+  preloadPath: string;
+  stateDir: string;
+}> {
+  const root = tempDirs.make("openclaw-hooks-relay-");
+  const markerPath = path.join(root, "loaded");
+  const preloadPath = path.join(root, "linger.mjs");
+  const stateDir = path.join(root, "state");
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.writeFile(
+    preloadPath,
+    [
+      'import fs from "node:fs";',
+      'fs.writeFileSync(process.env.LINGER_MARKER, "loaded\\n");',
+      "setInterval(() => {}, 60_000);",
+      "",
+    ].join("\n"),
   );
+  return { markerPath, preloadPath, stateDir };
+}
+
+async function runHooksCli(params: {
+  args: string[];
+  env?: NodeJS.ProcessEnv;
+  stdin?: string;
+  timeoutMessage: string;
+}) {
+  const child = spawn(process.execPath, ["--import", "tsx", "src/entry.ts", ...params.args], {
+    cwd: path.resolve("."),
+    env: {
+      ...process.env,
+      NODE_ENV: undefined,
+      VITEST: undefined,
+      ...params.env,
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  activeChildren.add(child);
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8");
@@ -96,6 +127,7 @@ async function runHooksList(fixture: Awaited<ReturnType<typeof createLingeringPl
   child.stderr.on("data", (chunk: string) => {
     stderr += chunk;
   });
+  child.stdin.end(params.stdin ?? "");
 
   return await new Promise<{
     code: number | null;
@@ -103,30 +135,88 @@ async function runHooksList(fixture: Awaited<ReturnType<typeof createLingeringPl
     stderr: string;
     stdout: string;
   }>((resolve, reject) => {
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGKILL");
-      reject(new Error("hooks list did not exit after emitting output"));
     }, 15_000);
     child.once("error", (error) => {
       clearTimeout(timer);
+      activeChildren.delete(child);
       reject(error);
     });
     child.once("close", (code, signal) => {
       clearTimeout(timer);
+      activeChildren.delete(child);
+      if (timedOut) {
+        reject(new Error(`${params.timeoutMessage}\nstdout:\n${stdout}\nstderr:\n${stderr}`));
+        return;
+      }
       resolve({ code, signal, stderr, stdout });
     });
   });
 }
 
+async function runHooksRelay(params: { event: "post_tool_use" | "pre_tool_use"; stdin: string }) {
+  const fixture = await createLingeringPreloadFixture();
+  const result = await runHooksCli({
+    args: [
+      "hooks",
+      "relay",
+      "--provider",
+      "codex",
+      "--relay-id",
+      "missing-relay",
+      "--event",
+      params.event,
+      "--timeout",
+      "50",
+    ],
+    env: {
+      LINGER_MARKER: fixture.markerPath,
+      NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_NO_RESPAWN: "1",
+      OPENCLAW_STATE_DIR: fixture.stateDir,
+    },
+    stdin: params.stdin,
+    timeoutMessage: `hooks relay ${params.event} did not exit after emitting output`,
+  });
+  await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
+  return result;
+}
+
 describe("hooks CLI process lifecycle", () => {
-  it("exits after JSON output when plugin registration leaves a ref'd handle", async () => {
+  it("exits after one-shot outputs when plugins leave ref'd handles", async () => {
     const fixture = await createLingeringPluginFixture();
 
-    const result = await runHooksList(fixture);
+    // Both command families need real process coverage. Run their expensive CLI
+    // bootstraps together; unit suites cover the individual relay result shapes.
+    const [listResult, relayResult] = await Promise.all([
+      runHooksCli({
+        args: ["hooks", "list", "--json"],
+        env: {
+          LINGER_MARKER: fixture.markerPath,
+          OPENCLAW_CONFIG_PATH: fixture.configPath,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_STATE_DIR: fixture.stateDir,
+        },
+        timeoutMessage: "hooks list did not exit after emitting output",
+      }),
+      runHooksRelay({ event: "pre_tool_use", stdin: "{}" }),
+    ]);
 
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
-    expect(result.stderr).not.toContain("Error:");
-    expect(JSON.parse(result.stdout)).toMatchObject({ hooks: expect.any(Array) });
+    expect(listResult, listResult.stderr).toMatchObject({ code: 0, signal: null });
+    expect(listResult.stderr).not.toContain("Error:");
+    expect(JSON.parse(listResult.stdout)).toMatchObject({ hooks: expect.any(Array) });
     await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("registered\n");
+    expect(relayResult, relayResult.stderr).toMatchObject({ code: 0, signal: null });
+    expect(JSON.parse(relayResult.stdout)).toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: expect.any(String),
+      },
+    });
   }, 20_000);
 });

@@ -9,8 +9,8 @@ read_when:
 ---
 
 OpenClaw CI runs on pushes to `main` (Markdown and `docs/**` paths are ignored
-at the trigger), on non-draft pull requests (CHANGELOG-only diffs are ignored),
-and on manual dispatch. Canonical `main` pushes first pass through a 90-second
+at the trigger), on every non-draft pull request, and on manual dispatch.
+Canonical `main` pushes first pass through a 90-second
 hosted-runner admission window; the `CI` concurrency group cancels that waiting
 run when a newer commit lands, so sequential merges do not each register a full
 Blacksmith matrix. Pull requests and manual dispatches skip the wait. The
@@ -33,7 +33,7 @@ dispatch.
 | `pnpm-store-warmup`                | Warm the lockfile-pinned pnpm store cache without blocking Linux Node shards                                                                                                                                          | Node or docs-check lanes selected                   |
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, startup memory, and embedded built-artifact checks                                                                                                                 | Node-relevant changes                               |
 | `control-ui-i18n`                  | Verify generated Control UI locale bundles, metadata, and translation memory; advisory on automatic runs, blocking on manual release CI                                                                               | Control UI i18n-relevant changes and manual CI      |
-| `checks-fast-core`                 | Fast Linux correctness lanes: changed-file TypeScript LOC ratchet, bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                     | Node-relevant or production TypeScript changes      |
+| `checks-fast-core`                 | Fast Linux correctness lanes: suppression-baseline max-lines ratchet, bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                  | Node-relevant changes                               |
 | `qa-smoke-ci-profile`              | Two self-contained balanced parts of the bounded automatic QA Smoke representative set; full taxonomy coverage remains available through explicit QA profiles                                                         | Node-relevant changes                               |
 | `checks-fast-contracts-plugins-*`  | Two weighted plugin contract shards                                                                                                                                                                                   | Node-relevant changes                               |
 | `checks-fast-contracts-channels-*` | Two weighted channel contract shards                                                                                                                                                                                  | Node-relevant changes                               |
@@ -49,6 +49,7 @@ dispatch.
 | `macos-swift`                      | Swift lint, build, and tests for the macOS app                                                                                                                                                                        | macOS-relevant changes                              |
 | `ios-build`                        | Xcode project generation plus the iOS app simulator build                                                                                                                                                             | iOS app, shared app kit, or Swabble changes         |
 | `android`                          | Android unit tests for both flavors plus one debug APK build                                                                                                                                                          | Android-relevant changes                            |
+| `openclaw/ci-gate`                 | Final aggregate: requires admission, preflight, and security; accepts skips only for manifest-disabled downstream lanes                                                                                               | Every non-draft CI run                              |
 | `test-performance-agent`           | Separate workflow: daily Codex slow-test optimization after trusted activity                                                                                                                                          | Main CI success or manual dispatch                  |
 | `openclaw-performance`             | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                          | Scheduled and manual dispatch                       |
 
@@ -61,6 +62,14 @@ Standalone Periphery workflows enforce zero dead-code findings for the iOS and m
 3. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
 4. `build-artifacts` and the advisory `control-ui-i18n` check overlap with the fast Linux lanes. Generated locale drift stays visible while the standalone refresh workflow repairs it in the background.
 5. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-*`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, and `android`.
+6. `openclaw/ci-gate` waits for every selected lane. Admission, preflight, and security must succeed; downstream jobs may skip only when the manifest did not select them. A failed or canceled selected lane fails the aggregate.
+
+The merge coordinator may reuse an authenticated successful `openclaw/ci-gate`
+for the same pull-request head for up to 24 hours. This avoids rewriting a
+contributor branch after unrelated `main` changes. The reusable result does not
+replace the separate strict, App-owned test-merge check against current `main`.
+A later pending or failed rerun does not erase an earlier successful result for
+that unchanged head during the freshness window.
 
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Matrix jobs use `fail-fast: false`, and `build-artifacts` reports embedded channel, core-support-boundary, and gateway-watch failures directly instead of queuing tiny verifier jobs. The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs. The plugin-list startup-memory guard keeps a 350 MiB ceiling on self-hosted Blacksmith Linux and allows 425 MiB on GitHub-hosted Linux, whose RSS baseline is higher for the same built CLI.
 
@@ -139,7 +148,7 @@ Treat GitHub titles, comments, bodies, review text, branch names, and commit mes
 
 Manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI i18n. Control UI locale parity is advisory on automatic PR and `main` runs because the standalone refresh workflow repairs generated drift in the background; it is blocking on manual CI and therefore on Full Release Validation. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
 
-Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref. The optional `loc_base_ref` supplies an exact comparison SHA for standalone manual runs. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pr_number` to identify the open pull request. The workflow authenticates that PR's current head and base, waits for GitHub to finish computing mergeability, pins the reported test merge commit, fetches GitHub's synthetic pull-request merge ref, verifies its SHA and both parents, then checks out that tree before installing dependencies and running the changed-file TypeScript LOC ratchet. This matches automatic PR CI's merged tree and policy implementation. Target-owned workflow revisions without `pr_number` cannot provide equivalent merge-tree evidence; update the PR head to the current workflow and restart exact-head proof instead of using the fallback.
+PR max-lines checks derive the baseline from the checked-out synthetic merge tree and verify its head parent against the event head. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; the max-lines baseline is compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated.
 
 ```bash
 gh workflow run ci.yml --ref release/YYYY.M.PATCH
@@ -627,10 +636,11 @@ Local changed-test routing lives in `scripts/test-projects.test-support.mjs` and
 ## Testbox validation
 
 Crabbox is the repo-owned remote-box wrapper for maintainer Linux proof. Agent
-sessions use it by default for tests and computationally intensive work,
-including builds, typechecks, lint fan-out, Docker, package lanes, E2E, live
-proof, and CI parity. Trusted maintainer code defaults to
-`blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
+sessions keep one/few focused tests and cheap static checks local only for
+trusted source when the existing dependency install is ready. They use Crabbox for larger suites and
+computationally intensive work, including builds, typechecks, lint fan-out,
+Docker, package lanes, E2E, live proof, and CI parity. Trusted maintainer heavy
+proof defaults to `blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
 workflow hydrates provider and agent credentials, so untrusted contributor or
 fork code must use secretless fork CI or sanitized direct AWS Crabbox instead.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
@@ -655,14 +665,9 @@ report public networking with no Tailscale state before uploading any script.
 Owned AWS/Hetzner capacity also remains the fallback for Blacksmith outages,
 quota issues, or explicit owned-capacity testing.
 
-At the start of a trusted code task likely to need tests or heavy proof, agents
-should pre-warm immediately in a background command session, continue
-inspection and editing while hydration runs, reuse the returned `tbx_...` id,
-sync the current checkout on every run, and stop it before handoff:
-
-```bash
-node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --keep --timing-json
-```
+Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
+first heavy command is ready, reuse the returned `tbx_...` id for later heavy
+commands, sync the current checkout on every run, and stop it before handoff.
 
 Crabbox-backed Blacksmith runs warm, claim, sync, run, report, and clean up
 one-shot Testboxes. The built-in sync sanity check fails fast when
@@ -709,7 +714,8 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   "corepack pnpm check:changed"
 ```
 
-Focused test rerun:
+Focused test rerun on Testbox when local dependencies are unavailable or the
+target fans out:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \

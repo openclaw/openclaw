@@ -15,6 +15,8 @@ type MockWatcher = {
   __emit: (event: string, ...args: unknown[]) => void;
 };
 
+const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
+
 type CanvasWatchFactory = NonNullable<
   Parameters<typeof import("./server.js").createCanvasHostHandler>[0]["watchFactory"]
 >;
@@ -27,6 +29,7 @@ type TrackingWebSocket = {
   sent: string[];
   on: (event: string, cb: () => void) => TrackingWebSocket;
   send: (message: string) => void;
+  terminate: () => void;
 };
 
 type CapturedResponse = {
@@ -196,7 +199,6 @@ describe("canvas host", () => {
   };
   let createCanvasHostHandler: typeof import("./server.js").createCanvasHostHandler;
   let startCanvasHost: typeof import("./server.js").startCanvasHost;
-  let canvasLiveReloadMaxInboundMessageBytes = 0;
   let WebSocketServerClass: typeof import("ws").WebSocketServer;
   let watcherState: ReturnType<typeof createMockWatcherState>;
   let fixtureRoot = "";
@@ -241,8 +243,6 @@ describe("canvas host", () => {
     vi.resetModules();
     const serverModule = await import("./server.js");
     ({ createCanvasHostHandler, startCanvasHost } = serverModule);
-    canvasLiveReloadMaxInboundMessageBytes =
-      serverModule.CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES;
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
     WebSocketServerClass = wsModule.WebSocketServer;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
@@ -482,10 +482,10 @@ describe("canvas host", () => {
     const constructorOptions: unknown[] = [];
     let connectionHandler: ((socket: TrackingWebSocket) => void) | undefined;
     class CapturingWebSocketServer {
-      on(event: string, cb: (socket: TrackingWebSocket) => void) {
-        if (event === "connection") {
-          connectionHandler = cb;
-        }
+      readonly clients = new Set<TrackingWebSocket>();
+
+      on(_event: string, cb: (socket: TrackingWebSocket) => void) {
+        connectionHandler = cb;
         return this;
       }
 
@@ -506,20 +506,11 @@ describe("canvas host", () => {
     try {
       expect(constructorOptions[0]).toMatchObject({
         noServer: true,
-        maxPayload: canvasLiveReloadMaxInboundMessageBytes,
+        maxPayload: CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES,
       });
-      const socketHandlers: string[] = [];
-      const socket: TrackingWebSocket = {
-        sent: [],
-        on: (event) => {
-          socketHandlers.push(event);
-          return socket;
-        },
-        send: vi.fn(),
-      };
-      expect(connectionHandler).toBeDefined();
-      connectionHandler?.(socket);
-      expect(socketHandlers).toEqual(expect.arrayContaining(["error", "close"]));
+      const socketOn = vi.fn();
+      connectionHandler?.({ on: socketOn } as unknown as TrackingWebSocket);
+      expect(socketOn).toHaveBeenCalledWith("error", expect.any(Function));
     } finally {
       await handler.close();
     }
@@ -593,22 +584,17 @@ describe("canvas host", () => {
 
     const watcherStart = watcherState.watchers.length;
     const TrackingWebSocketServerClass = class TrackingWebSocketServer {
-      static latestInstance: { connectionCount: number } | undefined;
       static latestSocket: TrackingWebSocket | undefined;
-      connectionCount = 0;
-      readonly handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+      readonly clients = new Set<TrackingWebSocket>();
+      private connectionHandler?: (socket: TrackingWebSocket) => void;
 
-      on(event: string, cb: (...args: unknown[]) => void) {
-        const list = this.handlers.get(event) ?? [];
-        list.push(cb);
-        this.handlers.set(event, list);
+      on(_event: string, cb: (socket: TrackingWebSocket) => void) {
+        this.connectionHandler = cb;
         return this;
       }
 
-      emit(event: string, ...args: unknown[]) {
-        for (const cb of this.handlers.get(event) ?? []) {
-          cb(...args);
-        }
+      emit(_event: string, socket: TrackingWebSocket) {
+        this.connectionHandler?.(socket);
       }
 
       handleUpgrade(
@@ -620,15 +606,9 @@ describe("canvas host", () => {
         void req;
         void socket;
         void head;
-        const closeHandlers: Array<() => void> = [];
         const ws: TrackingWebSocket = {
           sent: [],
-          on: (event, handler) => {
-            if (event === "close") {
-              closeHandlers.push(handler);
-            }
-            return ws;
-          },
+          on: () => ws,
           send: (message: string) => {
             ws.sent.push(message);
             if (message === "reload") {
@@ -638,20 +618,15 @@ describe("canvas host", () => {
               resolveReload();
             }
           },
+          terminate: vi.fn(),
         };
+        this.clients.add(ws);
         TrackingWebSocketServerClass.latestSocket = ws;
         cb(ws);
       }
 
       close(cb?: (err?: Error) => void) {
         cb?.();
-      }
-
-      constructor(..._args: unknown[]) {
-        TrackingWebSocketServerClass.latestInstance = this;
-        this.on("connection", () => {
-          this.connectionCount += 1;
-        });
       }
     };
 
@@ -671,11 +646,6 @@ describe("canvas host", () => {
         Buffer.alloc(0),
       );
       expect(upgraded).toBe(true);
-      const latestServer = TrackingWebSocketServerClass.latestInstance;
-      if (!latestServer) {
-        throw new Error("expected Canvas host websocket server");
-      }
-      expect(latestServer.connectionCount).toBe(1);
       const ws = TrackingWebSocketServerClass.latestSocket;
       if (!ws) {
         throw new Error("expected Canvas host websocket");

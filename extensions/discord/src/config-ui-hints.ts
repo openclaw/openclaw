@@ -300,6 +300,22 @@ export const discordChannelConfigUiHints = {
     label: "Discord Auto Presence Exhausted Text",
     help: "Optional custom status text while runtime detects exhausted/unavailable model quota (dnd). Supports {reason} template placeholder.",
   },
+  "guilds.*.presenceEvents": {
+    label: "Discord Online Presence Events",
+    help: "Route selected human offline-to-online transitions into the configured guild channel as agent system events. Requires the Guild Presences privileged intent and an enabled agent heartbeat.",
+  },
+  "guilds.*.presenceEvents.enabled": {
+    label: "Discord Online Presence Events Enabled",
+    help: "Enable online-presence agent wakes for this guild. Defaults to true when presenceEvents is configured.",
+  },
+  "guilds.*.presenceEvents.channelId": {
+    label: "Discord Online Presence Target Channel",
+    help: "Numeric Discord channel ID whose routed agent session receives online-presence events and greeting delivery.",
+  },
+  "guilds.*.presenceEvents.users": {
+    label: "Discord Online Presence User IDs",
+    help: "Optional immutable Discord user ID allowlist. Omit to include all human members in the guild.",
+  },
   activityType: {
     label: "Discord Presence Activity Type",
     help: "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",

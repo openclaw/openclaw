@@ -219,7 +219,6 @@ const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(
 export const testing = {
   loadNativeCommandRuntime: loadTelegramNativeCommandRuntime,
 };
-export { testing as __testing };
 
 type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
 
@@ -1968,3 +1967,4 @@ export const registerTelegramNativeCommands = ({
     }).catch(() => {});
   }
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

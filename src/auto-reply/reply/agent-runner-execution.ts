@@ -70,6 +70,7 @@ import {
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
+import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
@@ -121,7 +122,7 @@ import {
   resolveAgentLifecycleTerminalMetadata,
   type AgentLifecycleTerminalBackstop,
 } from "./agent-lifecycle-terminal.js";
-import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
+import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   clearDroppedCliSessionBinding,
   createCliReasoningStreamBridge,
@@ -133,6 +134,7 @@ import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "./agent-runner-failure-copy.js";
+import { emitModelFallbackStepLifecycle } from "./agent-runner-model-fallback-lifecycle.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveQueuedReplyRuntimeConfig,
@@ -160,6 +162,12 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
+import {
+  buildRestartLifecycleReplyText,
+  isReplyOperationRestartAbort,
+  isReplyOperationUserAbort,
+  resolveRestartLifecycleError,
+} from "./reply-operation-abort.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -168,7 +176,7 @@ import type { TypingSignaler } from "./typing-mode.js";
 // user-visible error. Prevents infinite ping-pong when the persisted session
 // selection keeps conflicting with fallback model choices.
 // See: https://github.com/openclaw/openclaw/issues/58348
-export const MAX_LIVE_SWITCH_RETRIES = 2;
+const MAX_LIVE_SWITCH_RETRIES = 2;
 
 type AgentTurnTimingSpan = {
   name: string;
@@ -1283,80 +1291,6 @@ export function buildContextOverflowRecoveryText(params: {
   return prefix + (heartbeatBleedHint ?? buildContextOverflowResetHint(primaryContextWindow));
 }
 
-function buildRestartLifecycleReplyText(): string {
-  return "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
-}
-
-function resolveRestartLifecycleError(
-  err: unknown,
-): GatewayDrainingError | CommandLaneClearedError | undefined {
-  const pending = [err];
-  const seen = new Set<unknown>();
-
-  let pendingIndex = 0;
-  while (pendingIndex < pending.length) {
-    const candidate = pending[pendingIndex++];
-    if (!candidate || seen.has(candidate)) {
-      continue;
-    }
-    seen.add(candidate);
-
-    if (candidate instanceof GatewayDrainingError || candidate instanceof CommandLaneClearedError) {
-      return candidate;
-    }
-
-    if (isFallbackSummaryError(candidate)) {
-      for (const attempt of candidate.attempts) {
-        pending.push(attempt.error);
-      }
-    }
-
-    if (candidate instanceof Error && "cause" in candidate) {
-      pending.push(candidate.cause);
-    }
-  }
-
-  return undefined;
-}
-
-function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
-  if (
-    replyOperation?.result?.kind === "aborted" &&
-    replyOperation.result.code === "aborted_by_user"
-  ) {
-    return true;
-  }
-  const abortSignal = replyOperation?.abortSignal;
-  return abortSignal?.aborted === true && !isAgentRunRestartAbortReason(abortSignal.reason);
-}
-
-function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
-  if (
-    replyOperation?.result?.kind === "aborted" &&
-    replyOperation.result.code === "aborted_for_restart"
-  ) {
-    return true;
-  }
-  const abortSignal = replyOperation?.abortSignal;
-  return abortSignal?.aborted === true && isAgentRunRestartAbortReason(abortSignal.reason);
-}
-
-function emitModelFallbackStepLifecycle(params: {
-  runId: string;
-  sessionKey?: string;
-  step: Record<string, unknown>;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    stream: "lifecycle",
-    data: {
-      phase: "fallback_step",
-      ...params.step,
-    },
-  });
-}
-
 /** Decides whether to retry after rechecking auto-fallback primary probe state. */
 export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   run: FollowupRun["run"];
@@ -1490,30 +1424,6 @@ async function runAgentTurnWithFallbackInternal(
   const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
     effectiveRun.inputProvenance,
   );
-  const resolveRunForFallbackCandidate = (provider: string, model: string): FollowupRun["run"] => {
-    const probe = effectiveRun.autoFallbackPrimaryProbe;
-    const isPrimaryProbeCandidate = probe && provider === probe.provider && model === probe.model;
-    if (
-      probe &&
-      provider === probe.fallbackProvider &&
-      !isPrimaryProbeCandidate &&
-      probe.fallbackAuthProfileId
-    ) {
-      const candidateRun: FollowupRun["run"] = {
-        ...effectiveRun,
-        provider,
-        model,
-        authProfileId: probe.fallbackAuthProfileId,
-      };
-      if (probe.fallbackAuthProfileIdSource) {
-        candidateRun.authProfileIdSource = probe.fallbackAuthProfileIdSource;
-      } else {
-        delete candidateRun.authProfileIdSource;
-      }
-      return candidateRun;
-    }
-    return effectiveRun;
-  };
   let liveModelSwitchRuntimeEntry:
     | Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked">
     | undefined;
@@ -1670,6 +1580,14 @@ async function runAgentTurnWithFallbackInternal(
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let fallbackExhausted = false;
   let terminalRunFailed = false;
+  const modelPatch = createAgentPatchedSessionModelRunGuard({
+    cfg: runtimeConfig,
+    agentId: params.followupRun.run.agentId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    onError: (error) =>
+      logVerbose(`agent model patch reconciliation failed: ${formatErrorMessage(error)}`),
+  });
   let pendingLifecycleTerminal:
     | {
         provider: string;
@@ -1945,7 +1863,7 @@ async function runAgentTurnWithFallbackInternal(
               queuedUserMessagePersistedAcrossFallback;
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
-            const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const candidateRun = resolveFallbackCandidateRun(effectiveRun, provider, model);
             const candidateThinkLevel = resolveCandidateThinkingLevel({
               cfg: runtimeConfig,
               provider,
@@ -2996,6 +2914,9 @@ async function runAgentTurnWithFallbackInternal(
           terminalErrorMessage ?? "All model fallback candidates failed",
         );
         terminalRunFailed = true;
+        if (modelPatch.captureFallbackFailure(fallbackAttempts) === undefined) {
+          modelPatch.captureFailure(embeddedError ?? exhaustionError);
+        }
         emitSettledLifecycleError(exhaustionError, {
           ...terminalMetadata,
           fallbackExhaustedFailure: true,
@@ -3005,6 +2926,7 @@ async function runAgentTurnWithFallbackInternal(
       } else if (deferredLifecycleError || embeddedError) {
         const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
         terminalRunFailed = true;
+        modelPatch.captureFailure(embeddedError ?? terminalError);
         emitSettledLifecycleError(terminalError, terminalMetadata);
         params.replyOperation?.retainFailureUntilComplete();
         params.replyOperation?.fail("run_failed", terminalError);
@@ -3035,6 +2957,7 @@ async function runAgentTurnWithFallbackInternal(
                 "The requested model may be temporarily unavailable. Please try again shortly."
               : "⚠️ Model switch could not be completed. The requested model may be temporarily unavailable. Please try again shortly.";
           params.replyOperation?.fail("run_failed", err);
+          await modelPatch.fail(err);
           return {
             kind: "final",
             payload: markAgentRunFailureReplyPayload({
@@ -3182,6 +3105,7 @@ async function runAgentTurnWithFallbackInternal(
       if (providerRequestError) {
         takePendingLifecycleTerminal()?.emit("error", err);
         params.replyOperation?.fail("run_failed", err);
+        await modelPatch.fail(err);
         return {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
@@ -3303,6 +3227,7 @@ async function runAgentTurnWithFallbackInternal(
         });
       }
       params.replyOperation?.fail("run_failed", err);
+      await modelPatch.fail(err);
       return {
         kind: "final",
         payload: markAgentRunFailureReplyPayload({
@@ -3375,6 +3300,10 @@ async function runAgentTurnWithFallbackInternal(
       }
     }
   }
+  const patchedModelNeedsRevert = terminalRunFailed
+    ? false
+    : (modelPatch.captureFallbackFailure(fallbackAttempts) ?? false);
+  await modelPatch.finish(!terminalRunFailed && !patchedModelNeedsRevert);
   const terminalFailurePayload = terminalRunFailed
     ? buildTerminalAgentRunFailureReplyPayload({
         isHeartbeat: params.isHeartbeat,
@@ -3419,3 +3348,4 @@ export async function runAgentTurnWithFallback(
     commitTerminalOutcome();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

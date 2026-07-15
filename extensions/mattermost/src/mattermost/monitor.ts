@@ -2144,3 +2144,4 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     await Promise.resolve(slashShutdownCleanupPromise);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

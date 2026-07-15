@@ -256,7 +256,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       historyMessages: [
         {
           content: [{ type: "text", text: "Split toolbar proof." }],
@@ -285,13 +285,40 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           splitEntry.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
         )
         .toBe(true);
+      await page.locator("openclaw-chat-pane").evaluate((pane) => {
+        (
+          globalThis as typeof globalThis & {
+            classicChatPane?: Element;
+          }
+        ).classicChatPane = pane;
+      });
+      const startupRequestsBeforeSplit = (await gateway.getRequests("chat.startup")).length;
+      await gateway.deferNext("chat.startup");
       await splitEntry.click();
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.startup")).length)
+        .toBeGreaterThan(startupRequestsBeforeSplit);
 
       // Each pane owns an in-flow header (title + workspace/split/close
       // actions); no fixed toolbar layer mirrors the split geometry.
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       const headers = page.locator(".chat-pane__header");
       await expect.poll(() => panes.count()).toBe(2);
+      await panes.last().getByText("Split toolbar proof.").waitFor();
+      await expect.poll(() => panes.last().locator(".chat-loading-skeleton").count()).toBe(0);
+      await gateway.resolveDeferred("chat.startup");
+      await expect
+        .poll(() =>
+          panes.first().evaluate(
+            (pane) =>
+              (
+                globalThis as typeof globalThis & {
+                  classicChatPane?: Element;
+                }
+              ).classicChatPane === pane,
+          ),
+        )
+        .toBe(true);
       await expect.poll(() => headers.count()).toBe(2);
       await expect
         .poll(async () => {
@@ -413,7 +440,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
       await gateway.emitChatFinal({ runId, text: "Harness verified." });
 
-      await page.getByText("Harness verified.").waitFor({ timeout: 10_000 });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Harness verified.")
+        .waitFor({ timeout: 10_000 });
 
       const spacedPairCommand = "/ pair qr";
       await page.locator(".agent-chat__composer-combobox textarea").fill(spacedPairCommand);
@@ -422,6 +452,135 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const commandRequests = await waitForRequests(gateway, "chat.send", 2);
       const commandParams = requireRecord(commandRequests[1]?.params);
       expect(commandParams.message).toBe(spacedPairCommand);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("reconciles authoritative history before a trailing final by run identity", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { historyMessages: [] });
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("reconcile the terminal event ordering");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const send = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(send.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      const finalText = "One authoritative final response.";
+      const messageId = "assistant-authoritative-final";
+      const authoritative = {
+        __openclaw: { id: messageId, seq: 2 },
+        content: [{ text: finalText, type: "text" }],
+        role: "assistant",
+        timestamp: Date.now(),
+      };
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: finalText,
+        message: {
+          content: [{ text: finalText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor();
+      await gateway.setHistoryMessages([
+        {
+          __openclaw: { id: "user-reconcile", seq: 1 },
+          content: [{ text: "reconcile the terminal event ordering", type: "text" }],
+          role: "user",
+          timestamp: Date.now() - 1,
+        },
+        authoritative,
+      ]);
+      const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [],
+        clientRunId: runId,
+        hasActiveRun: false,
+        message: authoritative,
+        messageId,
+        messageSeq: 2,
+        session: {
+          activeRunIds: [],
+          hasActiveRun: false,
+          key: "main",
+          kind: "direct",
+          status: "done",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).length)
+        .toBeGreaterThan(historyRequestsBefore);
+      await page.locator(".chat-thread-inner").getByText(finalText, { exact: true }).waitFor();
+      await expect
+        .poll(() =>
+          page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).count(),
+        )
+        .toBe(1);
+
+      await gateway.emitChatFinal({ runId, text: finalText });
+      await expect
+        .poll(() => page.locator(".chat-group.assistant .chat-duplicate-count").count())
+        .toBe(0);
+      await expect
+        .poll(() =>
+          page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).count(),
+        )
+        .toBe(1);
+
+      await gateway.emitChatFinal({ runId: "a-different-legitimate-run", text: finalText });
+      await expect
+        .poll(() =>
+          page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).count(),
+        )
+        .toBe(2);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("restores the selected session transcript after a hard reload", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const historyText = "Transcript survives a hard reload.";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: historyText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat?session=main`);
+      await page.getByText(historyText).waitFor({ timeout: 10_000 });
+      await gateway.waitForRequest("chat.startup");
+
+      await page.reload();
+
+      await page.getByText(historyText).waitFor({ timeout: 10_000 });
+      await expect.poll(async () => (await gateway.getRequests("chat.startup")).length).toBe(1);
     } finally {
       await closeBrowserContext(context);
     }
@@ -474,7 +633,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         runId: requireString(defaultParams.idempotencyKey, "default send idempotency key"),
         text: "Default shortcut received.",
       });
-      await page.getByText("Default shortcut received.").waitFor({ timeout: 10_000 });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Default shortcut received.")
+        .waitFor({ timeout: 10_000 });
 
       // The send shortcut moved to the Settings appearance page; picking it
       // there must apply to the chat composer after navigating back.
@@ -920,11 +1082,15 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         text: "Visible progress from the targetless message tool.",
       });
       await page
+        .locator(".chat-thread-inner")
         .getByText("Visible progress from the targetless message tool.")
         .waitFor({ timeout: 10_000 });
 
       await gateway.emitChatFinal({ runId, text: "Visible automatic final reply." });
-      await page.getByText("Visible automatic final reply.").waitFor({ timeout: 10_000 });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Visible automatic final reply.")
+        .waitFor({ timeout: 10_000 });
       const bubbleTexts = await page.locator(".chat-thread .chat-bubble").allTextContents();
       for (const expectedText of [
         prompt,
@@ -1191,7 +1357,13 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await expect
         .poll(() => workbench.getAttribute("class"))
         .toContain("chat-workbench--dock-bottom");
-      expect(await page.locator(".chat-workspace-rail").isVisible()).toBe(true);
+      const workspaceRail = page.locator(".chat-workspace-rail");
+      await expect
+        .poll(async () => {
+          const box = await workspaceRail.boundingBox();
+          return Boolean(box && box.width > 0 && box.height > 0);
+        })
+        .toBe(true);
       expect(await page.locator(".chat-workspace-rail__dock").count()).toBe(0);
       expect(await page.locator(".chat-workspace-rail__grip").count()).toBe(0);
     } finally {
@@ -1696,7 +1868,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
-      await page.getByText("History race stayed visible.").waitFor({ timeout: 10_000 });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("History race stayed visible.")
+        .waitFor({ timeout: 10_000 });
       await page.locator(".agent-chat__composer-combobox textarea").fill("/");
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
@@ -1746,7 +1921,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
 
       await page.getByText(partialText).waitFor({ timeout: 10_000 });
-      await page.getByText("Error: gateway disconnected").waitFor({ timeout: 10_000 });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Error: gateway disconnected")
+        .waitFor({ timeout: 10_000 });
     } finally {
       await closeBrowserContext(context);
     }
@@ -1842,6 +2020,58 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           fullPage: true,
         });
       }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("steers a restored queued message when only the session row reports the active run", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const queuedPrompt = "steer this after restoring the queue";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
+      await page.getByRole("button", { name: "Queue message" }).click();
+      await page.locator(".chat-queue").getByText(queuedPrompt).waitFor({ timeout: 10_000 });
+
+      await gateway.setMethodResponse(
+        "sessions.list",
+        chatSessionListResponse([
+          {
+            hasActiveRun: true,
+            key: "main",
+            kind: "direct",
+            label: "Main",
+            updatedAt: Date.now(),
+          },
+        ]),
+      );
+      await page.reload();
+
+      const queue = page.locator(".chat-queue");
+      await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
+      await queue.getByRole("button", { name: "Steer" }).click();
+
+      const steerRequest = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(steerRequest.params)).toMatchObject({
+        deliver: false,
+        message: queuedPrompt,
+        sessionKey: "main",
+      });
+      await queue.getByText(queuedPrompt).waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await closeBrowserContext(context);
     }
@@ -2074,6 +2304,194 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           { timeout: 10_000 },
         )
         .toBe(true);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps retained paginated history stable when returning to a session", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await newBrowserContext({
+      locale: "en-US",
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const historyMessage = (seq: number, label: string) => ({
+      __openclaw: { id: `history-${seq}`, seq },
+      content: [
+        {
+          text: `${label} ${seq}\n${"retained transcript detail\n".repeat(3)}`,
+          type: seq % 2 === 0 ? "output_text" : "input_text",
+        },
+      ],
+      role: seq % 2 === 0 ? "assistant" : "user",
+      timestamp: 1_800_000_000_000 + seq,
+    });
+    const shortMessages = [historyMessage(1, "short session"), historyMessage(2, "short session")];
+    const recentMessages = Array.from({ length: 100 }, (_, index) =>
+      historyMessage(index + 41, "recent retained message"),
+    );
+    const olderMessages = Array.from({ length: 40 }, (_, index) =>
+      historyMessage(index + 1, "older retained message"),
+    );
+    const gateway = await installMockGateway(page, {
+      historyMessages: shortMessages,
+      methodResponses: {
+        "chat.history": {
+          cases: [
+            {
+              match: { offset: 100, sessionKey: "agent:main:session-b" },
+              response: {
+                hasMore: false,
+                messages: olderMessages,
+                sessionId: "retained-history-session",
+                thinkingLevel: null,
+                totalMessages: 140,
+              },
+            },
+            {
+              match: { sessionKey: "agent:main:session-b" },
+              response: {
+                hasMore: true,
+                messages: recentMessages,
+                nextOffset: 100,
+                sessionId: "retained-history-session",
+                thinkingLevel: null,
+                totalMessages: 140,
+              },
+            },
+            {
+              match: { sessionKey: "agent:main:session-a" },
+              response: {
+                hasMore: false,
+                messages: shortMessages,
+                sessionId: "short-history-session",
+                thinkingLevel: null,
+                totalMessages: 2,
+              },
+            },
+          ],
+        },
+        "sessions.list": chatSessionListResponse(),
+      },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText(/^short session 2\n/).waitFor({ timeout: 10_000 });
+
+      const sessionB = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
+      );
+      const sessionA = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link',
+      );
+      await sessionB.click();
+      await page.getByText(/^recent retained message 140\n/).waitFor({ timeout: 10_000 });
+      const thread = page.locator(".chat-thread");
+      await thread.hover();
+      await page.mouse.wheel(0, -1_000_000);
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (element) =>
+                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                  .length,
+            ),
+        )
+        .toBe(140);
+      // Prepending preserves the visible anchor. A renewed upward gesture
+      // reaches the newly loaded start instead of teleporting the reader.
+      await page.mouse.wheel(0, -1_000_000);
+      await page.getByText(/^older retained message 1\n/).waitFor({ timeout: 10_000 });
+
+      await sessionA.click();
+      await page.getByText(/^short session 2\n/).waitFor({ timeout: 10_000 });
+      const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
+      await page.evaluate(() => {
+        type FrameSample = {
+          hiddenNotice: boolean;
+          loading: boolean;
+          messageCount: number;
+          minOpacity: number;
+          sessionKey: string;
+        };
+        const samples: FrameSample[] = [];
+        (
+          globalThis as typeof globalThis & {
+            chatSessionReturnSamples: FrameSample[];
+          }
+        ).chatSessionReturnSamples = samples;
+        const deadline = performance.now() + 750;
+        const sample = () => {
+          const pane = document.querySelector("openclaw-chat-pane") as
+            | (HTMLElement & {
+                state?: { chatMessages?: unknown[]; sessionKey?: string };
+              })
+            | null;
+          const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-chat-row-key]"));
+          samples.push({
+            hiddenNotice: document.body.textContent?.includes("Showing last") ?? false,
+            loading: document.querySelector(".chat-history-loading") !== null,
+            messageCount: pane?.state?.chatMessages?.length ?? 0,
+            minOpacity: rows.reduce(
+              (minimum, row) => Math.min(minimum, Number.parseFloat(getComputedStyle(row).opacity)),
+              1,
+            ),
+            sessionKey: pane?.state?.sessionKey ?? "",
+          });
+          if (performance.now() < deadline) {
+            requestAnimationFrame(sample);
+          }
+        };
+        requestAnimationFrame(sample);
+      });
+
+      await sessionB.click();
+      await page.getByText(/^recent retained message 140\n/).waitFor({ timeout: 10_000 });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 800);
+      });
+      const samples = await page.evaluate(
+        () =>
+          (
+            globalThis as typeof globalThis & {
+              chatSessionReturnSamples: Array<{
+                hiddenNotice: boolean;
+                loading: boolean;
+                messageCount: number;
+                minOpacity: number;
+                sessionKey: string;
+              }>;
+            }
+          ).chatSessionReturnSamples,
+      );
+      const returnedSamples = samples.filter(
+        (sample) => sample.sessionKey === "agent:main:session-b",
+      );
+      const restoredIndex = returnedSamples.findIndex((sample) => sample.messageCount === 140);
+      expect(restoredIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        returnedSamples.slice(restoredIndex).every((sample) => sample.messageCount === 140),
+      ).toBe(true);
+      expect(returnedSamples.every((sample) => sample.minOpacity === 1)).toBe(true);
+      expect(returnedSamples.every((sample) => !sample.hiddenNotice)).toBe(true);
+      expect(returnedSamples.every((sample) => !sample.loading)).toBe(true);
+      expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
+      await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn + 1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/retained-history-return.png`,
+          fullPage: true,
+        });
+      }
     } finally {
       await closeBrowserContext(context);
     }
@@ -3112,7 +3530,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await gateway.closeLatest(1006, "lost during tool call");
 
-      await page.getByText("Recovered from refreshed history.").waitFor({ timeout: 15_000 });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Recovered from refreshed history.")
+        .waitFor({ timeout: 15_000 });
       expect(await page.locator(".chat-queue").count()).toBe(0);
     } finally {
       await closeBrowserContext(context);
@@ -3187,3 +3608,4 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

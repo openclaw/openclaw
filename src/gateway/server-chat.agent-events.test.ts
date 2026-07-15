@@ -4640,6 +4640,84 @@ describe("agent event handler", () => {
       });
     });
 
+    it("marks a yielded final as waiting instead of parent-task completion", () => {
+      const { broadcast, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:main:main",
+      });
+
+      chatRunState.registry.add("run-yielded", {
+        sessionKey: "agent:main:main",
+        clientRunId: "client-yielded",
+      });
+      handler({
+        runId: "run-yielded",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "Waiting for registered continuation work." },
+      });
+      handler({
+        runId: "run-yielded",
+        seq: 2,
+        stream: "lifecycle",
+        ts: Date.now(),
+        data: {
+          phase: "end",
+          yielded: true,
+          livenessState: "paused",
+          stopReason: "end_turn",
+        },
+      });
+
+      const finalCall = requireCall(
+        chatBroadcastCalls(broadcast).find(([, payload]) => payload.state === "final"),
+        "yielded final chat call",
+      );
+      expectPayloadFields(finalCall[1], {
+        runId: "client-yielded",
+        sessionKey: "agent:main:main",
+        state: "final",
+        stopReason: "end_turn",
+        yielded: true,
+      });
+    });
+
+    it("does not let stale yield metadata override an aborted lifecycle", () => {
+      const { broadcast, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:main:main",
+      });
+
+      chatRunState.registry.add("run-aborted", {
+        sessionKey: "agent:main:main",
+        clientRunId: "client-aborted",
+      });
+      handler({
+        runId: "run-aborted",
+        seq: 1,
+        stream: "lifecycle",
+        ts: Date.now(),
+        data: {
+          phase: "end",
+          aborted: true,
+          yielded: true,
+          livenessState: "paused",
+          stopReason: "end_turn",
+        },
+      });
+
+      const finalCall = requireCall(
+        chatBroadcastCalls(broadcast).find(([, payload]) => payload.state === "error"),
+        "aborted final chat call",
+      );
+      expectPayloadFields(finalCall[1], {
+        runId: "client-aborted",
+        sessionKey: "agent:main:main",
+        state: "error",
+        stopReason: "end_turn",
+      });
+      expect(finalCall[1]).not.toHaveProperty("yielded");
+    });
+
     it("omits spawnedBy from chat broadcasts for non-subagent sessions", () => {
       vi.mocked(loadGatewaySessionRow).mockReturnValue({
         key: "agent:main:main",
@@ -4984,3 +5062,4 @@ describe("agent event handler", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

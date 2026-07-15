@@ -1,8 +1,4 @@
-/**
- * OpenClaw built-in and plugin tool assembly.
- *
- * Creates the per-run tool inventory from config, channel context, sandbox policy, auth stores, and plugin tools.
- */
+/** Builds the per-run built-in and plugin tool inventory. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SourceReplyDeliveryMode,
@@ -50,7 +46,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
 import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
-import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
+import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import {
   createCreateGoalTool,
@@ -70,6 +66,7 @@ import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
@@ -481,6 +478,11 @@ export function createOpenClawTools(
               ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
               : {}),
           }),
+          createSessionsTool({
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            sandboxed: options?.sandboxed,
+            config: resolvedConfig,
+          }),
         ]),
     ...(!embedded && taskSuggestionSessionKey && options?.taskSuggestionDeliveryMode === "gateway"
       ? createTaskSuggestionTools({
@@ -582,6 +584,9 @@ export function createOpenClawTools(
             agentAccountId: options?.agentAccountId,
             agentTo: options?.agentTo,
             agentThreadId: options?.agentThreadId,
+            currentMessagingTarget: options?.currentMessagingTarget,
+            currentChannelId: options?.currentChannelId,
+            currentThreadTs: options?.currentThreadTs,
             agentGroupId: options?.agentGroupId,
             agentGroupChannel: options?.agentGroupChannel,
             agentGroupSpace: options?.agentGroupSpace,
@@ -601,6 +606,7 @@ export function createOpenClawTools(
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
+      config: resolvedConfig,
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
@@ -640,20 +646,7 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
-  const gatewayCallerIdentity =
-    hookAgentId && options?.agentSessionKey?.trim()
-      ? {
-          agentId: hookAgentId,
-          sessionKey: options.agentSessionKey.trim(),
-          turnSourceChannel: options.agentChannel,
-          turnSourceTo:
-            options.currentMessagingTarget ?? options.currentChannelId ?? options.agentTo,
-          turnSourceAccountId: options.agentAccountId,
-          turnSourceThreadId: options.currentThreadTs ?? options.agentThreadId,
-        }
-      : undefined;
-  const wrapGatewayCallerIdentity = (tool: AnyAgentTool) =>
-    wrapToolWithGatewayCallerIdentity(tool, gatewayCallerIdentity);
+  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(hookAgentId, options);
 
   if (options?.wrapBeforeToolCallHook === false) {
     return allTools.map(wrapGatewayCallerIdentity);
