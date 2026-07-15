@@ -9,7 +9,7 @@ import {
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, vi } from "vitest";
 import { markdownToTelegramHtml } from "./format.js";
-import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-blocks.js";
+import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
 
 function richMessagePlainTextForTest(richMessage: {
   blocks?: InputRichBlock[];

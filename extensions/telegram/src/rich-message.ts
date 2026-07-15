@@ -11,11 +11,11 @@ import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 // Telegram rich message helpers isolate Bot API 10.2 calls until grammY types catch up.
 import {
   inputRichBlocksToPlainText,
-  markdownToTelegramRichBlocks,
-  splitTelegramRichBlocks,
   type InputRichBlock,
   type TelegramRichBlocksDegradationReason,
-} from "./rich-blocks.js";
+} from "./rich-block-model.js";
+import { splitTelegramRichBlocks } from "./rich-block-split.js";
+import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 
 type TelegramRichMessageReplyMarkup =
   | InlineKeyboardMarkup

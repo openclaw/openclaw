@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   countInputRichBlockChars,
   inputRichBlocksToPlainText,
-  markdownToTelegramRichBlocks,
-  splitTelegramRichBlocks,
   type InputRichBlock,
   type RichText,
-} from "./rich-blocks.js";
+} from "./rich-block-model.js";
+import { splitTelegramRichBlocks } from "./rich-block-split.js";
+import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 import { buildTelegramRichMarkdown, splitTelegramRichMessageTextChunks } from "./rich-message.js";
 
 function tableMarkdown(columns: number): string {

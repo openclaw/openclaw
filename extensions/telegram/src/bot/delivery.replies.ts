@@ -45,7 +45,7 @@ import {
   resolveTelegramInteractiveTextFallback,
 } from "../interactive-fallback.js";
 import type { TelegramPromptContextProjectionSequence } from "../prompt-context-projection.js";
-import type { TelegramRichBlocksDegradationReason } from "../rich-blocks.js";
+import type { TelegramRichBlocksDegradationReason } from "../rich-block-model.js";
 import {
   isEmptyTelegramRichMessage,
   splitTelegramRichMessageTextChunks,

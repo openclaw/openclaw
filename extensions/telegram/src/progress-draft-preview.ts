@@ -6,11 +6,11 @@ import {
   boldRichText,
   codeRichText,
   italicRichText,
-  markdownToTelegramRichBlocks,
   paragraphBlock,
   type InputRichBlock,
   type RichText,
-} from "./rich-blocks.js";
+} from "./rich-block-model.js";
+import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 import { buildTelegramRichBlocksPlan } from "./rich-message.js";
 import { clipTelegramProgressText } from "./truncate.js";
 
