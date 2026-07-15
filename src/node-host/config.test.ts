@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -16,14 +16,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostConfig } from "./config.js";
 
-const tempRoots: string[] = [];
 const fixtureDigest = ["fixture", "digest"].join("-");
-
-async function makeTestEnv(): Promise<{ env: NodeJS.ProcessEnv; stateDir: string }> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-host-config-"));
-  tempRoots.push(stateDir);
-  return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, stateDir };
-}
 
 function readStoredToken(env: NodeJS.ProcessEnv): string | null | undefined {
   const database = openOpenClawStateDatabase({ env });
@@ -36,7 +29,9 @@ function readStoredToken(env: NodeJS.ProcessEnv): string | null | undefined {
   )?.token;
 }
 
-async function runConcurrentImplicitConfigures(stateDir: string): Promise<NodeHostConfig[]> {
+async function runConcurrentImplicitConfigures(
+  stateDir: string,
+): Promise<[NodeHostConfig, NodeHostConfig]> {
   const startPath = path.join(stateDir, "configure-start");
   const moduleUrl = new URL("./config.ts", import.meta.url).href;
   const workerSource = `
@@ -119,10 +114,18 @@ async function runConcurrentImplicitConfigures(stateDir: string): Promise<NodeHo
       if (Date.now() >= deadline) {
         throw new Error("timed out waiting for concurrent configure workers");
       }
-      await new Promise((resolve) => setTimeout(resolve, 2));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 2);
+      });
     }
     await fs.writeFile(startPath, "start");
-    return await Promise.all(workers.map(({ outcome }) => outcome));
+    const outcomes = await Promise.all(workers.map(({ outcome }) => outcome));
+    const first = outcomes[0];
+    const second = outcomes[1];
+    if (!first || !second) {
+      throw new Error("expected two concurrent configure results");
+    }
+    return [first, second];
   } finally {
     for (const { child } of workers) {
       if (child.exitCode === null && child.signalCode === null) {
@@ -132,16 +135,21 @@ async function runConcurrentImplicitConfigures(stateDir: string): Promise<NodeHo
   }
 }
 
-afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
-  await Promise.all(
-    tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
-});
-
 describe("node-host SQLite config", () => {
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+    afterEach(() => {
+      closeOpenClawStateDatabaseForTest();
+      cleanup();
+    });
+  });
+
+  function makeTestEnv(): { env: NodeJS.ProcessEnv; stateDir: string } {
+    const stateDir = tempDirs.make("openclaw-node-host-config-");
+    return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, stateDir };
+  }
+
   it("round-trips the complete gateway snapshot across database reopen", async () => {
-    const { env, stateDir } = await makeTestEnv();
+    const { env, stateDir } = makeTestEnv();
     const configured = await configureNodeHost({
       nodeId: "node-custom",
       displayName: "Build Node",
@@ -177,7 +185,7 @@ describe("node-host SQLite config", () => {
   });
 
   it("adds the gateway context-path column to an existing state database", async () => {
-    const { env } = await makeTestEnv();
+    const { env } = makeTestEnv();
     const database = openOpenClawStateDatabase({ env });
     database.db.exec("ALTER TABLE node_host_config DROP COLUMN gateway_context_path");
     closeOpenClawStateDatabaseForTest();
@@ -198,7 +206,7 @@ describe("node-host SQLite config", () => {
   });
 
   it("keeps the first committed implicit node id across processes", async () => {
-    const { env, stateDir } = await makeTestEnv();
+    const { env, stateDir } = makeTestEnv();
     const [first, second] = await runConcurrentImplicitConfigures(stateDir);
 
     expect(["candidate-a", "candidate-b"]).toContain(first.nodeId);
@@ -209,7 +217,7 @@ describe("node-host SQLite config", () => {
   }, 30_000);
 
   it("preserves explicit custom ids and atomically clears omitted gateway fields", async () => {
-    const { env } = await makeTestEnv();
+    const { env } = makeTestEnv();
     await configureNodeHost({
       nodeId: "first-custom-id",
       fallbackDisplayName: "node",
@@ -241,7 +249,7 @@ describe("node-host SQLite config", () => {
   });
 
   it("rejects corrupt canonical rows instead of rotating identity", async () => {
-    const { env } = await makeTestEnv();
+    const { env } = makeTestEnv();
     runOpenClawStateWriteTransaction(
       ({ db }) => {
         executeSqliteQuerySync(
@@ -273,7 +281,7 @@ describe("node-host SQLite config", () => {
   });
 
   it("never reads legacy token material and nulls it on every configure", async () => {
-    const { env } = await makeTestEnv();
+    const { env } = makeTestEnv();
     runOpenClawStateWriteTransaction(
       ({ db }) => {
         executeSqliteQuerySync(
@@ -307,7 +315,7 @@ describe("node-host SQLite config", () => {
   it.each(["source", "claim", "dangling-source-symlink"] as const)(
     "blocks runtime while retired state remains: %s",
     async (kind) => {
-      const { env, stateDir } = await makeTestEnv();
+      const { env, stateDir } = makeTestEnv();
       const sourcePath = path.join(stateDir, "node.json");
       const claimPath = `${sourcePath}.doctor-importing`;
       if (kind === "source") {
