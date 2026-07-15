@@ -8,7 +8,7 @@ import {
 } from "../../lib/gateway-errors.ts";
 import { buildSessionUsageDateParams, requestSessionUsage } from "../../lib/sessions/index.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
-import type { UsageRouteData } from "./usage-page.ts";
+import type { UsageRouteData } from "./route-data.ts";
 
 function currentLocalDate(): string {
   const date = new Date();

@@ -3005,6 +3005,12 @@ export const en: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
+      rebuildingTitle: "Rebuilding usage data",
+      rebuildingBody:
+        "Showing the latest available totals and session results while transcript cache files refresh. Some values may be incomplete or out of date. This page will update automatically.",
+      pausedTitle: "Usage data may be incomplete",
+      pausedBody:
+        "Showing the latest available totals and session results. Automatic checks paused after repeated attempts; select Refresh to check again.",
       warning: "Usage cache is rebuilding in the background. Displayed totals may be stale.",
       title: "{status}: {pending} pending, {stale} stale, {cached} cached",
       status: {

@@ -54,6 +54,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
   return {
     data: {
       loading: false,
+      requestPending: false,
       error: null,
       sessions: [],
       agents: [],
@@ -61,7 +62,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       totals: null,
       aggregates: null,
       costDaily: [],
-      cacheStatus: undefined,
+      cacheRefresh: "ready",
       providerUsage: [],
     },
     filters: {
@@ -257,6 +258,66 @@ describe("renderUsage", () => {
     expect(container.querySelector(".usage-page-header")).toBeNull();
     expect(container.querySelector(".usage-page-title")).toBeNull();
     expect(container.querySelector(".usage-header")).not.toBeNull();
+  });
+
+  it("keeps cached totals visible without labeling a background rebuild as loading", () => {
+    const container = document.createElement("div");
+    const session = usageSession("agent:main:main", "main", "openai");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            sessions: [session],
+            totals: session.usage,
+            cacheRefresh: "rebuilding",
+          },
+        }),
+      ),
+      container,
+    );
+
+    const notice = container.querySelector<HTMLElement>(".usage-cache-notice");
+    expect(container.querySelector(".settings-status")).toBeNull();
+    expect(notice?.getAttribute("role")).toBe("status");
+    expect(notice?.getAttribute("aria-live")).toBe("polite");
+    expect(notice?.textContent).toContain("Rebuilding usage data");
+    expect(notice?.textContent).toContain("latest available totals and session results");
+    expect(container.querySelector(".usage-metric-badge strong")?.textContent?.trim()).toBe("120");
+  });
+
+  it("distinguishes foreground refreshes and paused automatic cache checks", () => {
+    const container = document.createElement("div");
+    const session = usageSession("agent:main:main", "main", "openai");
+    const baseData = {
+      ...createUsageProps().data,
+      sessions: [session],
+      totals: session.usage,
+    };
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: { ...baseData, loading: true, requestPending: true },
+        }),
+      ),
+      container,
+    );
+    expect(container.querySelector(".settings-status")?.textContent?.trim()).toBe("Refreshing…");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: { ...baseData, cacheRefresh: "paused" },
+        }),
+      ),
+      container,
+    );
+    const notice = container.querySelector<HTMLElement>(".usage-cache-notice");
+    expect(notice?.textContent).toContain("Usage data may be incomplete");
+    expect(notice?.textContent).toContain("select Refresh to check again");
+    expect(notice?.querySelector(".usage-loading-spinner")).toBeNull();
   });
 
   it("leaves agent scoping to the shared page header control", () => {
