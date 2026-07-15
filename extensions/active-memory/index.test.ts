@@ -2201,7 +2201,7 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("keeps thinking off by default but allows an explicit thinking override", async () => {
+  it("keeps thinking off and fast mode inherited by default but allows explicit overrides", async () => {
     await requireHook("before_prompt_build")(
       {
         prompt: "What is my favorite food? default-thinking-check",
@@ -2216,11 +2216,14 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().thinkLevel).toBe("off");
+    expect(lastEmbeddedRunParams().fastMode).toBeUndefined();
     expect(lastEmbeddedRunParams().reasoningLevel).toBe("off");
 
     api.pluginConfig = {
       agents: ["main"],
       thinking: "medium",
+      fastMode: true,
+      logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
@@ -2238,7 +2241,13 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().thinkLevel).toBe("medium");
+    expect(lastEmbeddedRunParams().fastMode).toBe(true);
     expect(lastEmbeddedRunParams().reasoningLevel).toBe("off");
+
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expectLinesToContain(infoLines, "thinking=medium fast=on start");
   });
 
   it("allows appending extra prompt instructions without replacing the base prompt", async () => {
@@ -6427,6 +6436,14 @@ describe("active-memory plugin", () => {
     const config = testing.normalizePluginConfig({});
     expect(config.circuitBreakerMaxTimeouts).toBe(3);
     expect(config.circuitBreakerCooldownMs).toBe(60_000);
+  });
+
+  it("normalizes explicit fast-mode overrides and ignores invalid values", () => {
+    expect(testing.normalizePluginConfig({}).fastMode).toBeUndefined();
+    expect(testing.normalizePluginConfig({ fastMode: true }).fastMode).toBe(true);
+    expect(testing.normalizePluginConfig({ fastMode: false }).fastMode).toBe(false);
+    expect(testing.normalizePluginConfig({ fastMode: "auto" }).fastMode).toBe("auto");
+    expect(testing.normalizePluginConfig({ fastMode: "on" }).fastMode).toBeUndefined();
   });
 
   it("normalizes setup grace config with a zero default and bounded opt-in", () => {

@@ -68,6 +68,16 @@ async function maybeResolveActiveRecall(params: {
     ...(resolvedModelRef?.model
       ? [`activeModel=${toSingleLineLogValue(resolvedModelRef.model)}`]
       : []),
+    `thinking=${params.config.thinking}`,
+    `fast=${
+      params.config.fastMode === undefined
+        ? "inherit"
+        : params.config.fastMode === true
+          ? "on"
+          : params.config.fastMode === false
+            ? "off"
+            : "auto"
+    }`,
   ].join(" ");
   if (cached) {
     params.abortSignal?.throwIfAborted();

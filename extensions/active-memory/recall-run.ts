@@ -300,6 +300,7 @@ async function runRecallSubagent(params: {
       bootstrapContextMode: "lightweight",
       verboseLevel: "off",
       thinkLevel: params.config.thinking,
+      fastMode: params.config.fastMode,
       reasoningLevel: "off",
       silentExpected: true,
       authProfileFailurePolicy: "local",
