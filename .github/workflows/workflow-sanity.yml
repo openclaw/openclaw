@@ -192,7 +192,15 @@ jobs:
           sudo install -m 0755 actionlint /usr/local/bin/actionlint
 
       - name: Lint workflows
-        run: actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t workflow_files < <(
+            find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z
+          )
+          for workflow_file in "${workflow_files[@]}"; do
+            actionlint "${workflow_file}"
+          done
 
       - name: Audit all workflows with zizmor
         shell: bash
