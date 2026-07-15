@@ -1894,8 +1894,8 @@
                 "group": "Technical reference",
                 "pages": [
                   "agent-runtime-architecture",
-                  "specs/durable-core-beta3-architecture",
-                  "specs/durable-core-beta3-test-plan",
+                  "specs/durable-core-proposal-architecture",
+                  "specs/durable-core-proposal-test-plan",
                   "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",

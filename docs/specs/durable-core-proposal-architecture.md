@@ -1,18 +1,18 @@
 ---
-title: Durable Core 2026.7.1 Release Architecture
-summary: "Architecture anchor for opt-in durable runtime invariants and boundaries on the 2026.7.1 release line."
+title: Durable Core Residual-Gap Architecture Proposal
+summary: "Proposal anchor for residual durable runtime invariants and boundaries."
 read_when:
-  - Reviewing durable runtime 2026.7.1 release architecture
+  - Reviewing the durable runtime residual-gap proposal
   - Checking durable runtime owner boundaries before implementation
   - Auditing recovery, wake, and delivery invariants
 ---
 
-# Durable Core 2026.7.1 Release Architecture
+# Durable Core Residual-Gap Architecture Proposal
 
-This page is the 2026.7.1 release durable-runtime architecture anchor. It describes the
-intended architecture and review boundary only. It does not claim that runtime
-behavior, external delivery, replay, worker recovery, or CLI/Gateway control
-behavior has landed from this document.
+This page is a durable-runtime architecture proposal. It describes a residual
+gap between existing TaskFlow/database-first owners and future runtime recovery
+work. It does not claim that runtime behavior, external delivery, replay, worker
+recovery, or CLI/Gateway control behavior is implemented by this document.
 
 ## General Durable Runtime RFC
 
@@ -60,14 +60,14 @@ OpenClaw can answer what it accepted, what ran, what is waiting, what failed,
 what became stale after restart, and which bounded recovery action is safe to
 present to an owner or operator.
 
-## Why The 2026.7.1 Release Stack Needs This Foundation
+## Why The Residual Gap Matters
 
-The official release/2026.7.1-based stack needs the durable core foundation before broader runtime and product
-work because the current failure modes are cross-cutting rather than isolated to
-one channel, one prompt, or one UI. The repeated pattern is not merely "a
-message did not arrive"; it is that OpenClaw can accept work, delegate it, defer
-it, or route it through a channel without a durable obligation that later code
-can inspect, recover, acknowledge, or fail closed.
+This residual-gap proposal exists because the remaining failure modes are
+cross-cutting rather than isolated to one channel, one prompt, or one UI. The
+repeated pattern is not merely "a message did not arrive"; it is that OpenClaw
+can accept work, delegate it, defer it, or route it through a channel without a
+shared durable obligation that later code can inspect, recover, acknowledge, or
+fail closed.
 
 The remaining root causes implementation work must address are:
 
@@ -90,10 +90,11 @@ The remaining root causes implementation work must address are:
   return, child spawn, local commit, or channel send can make automatic replay
   unsafe unless idempotency and authority gates prove it.
 
-This foundation lets the 2026.7.1 release stack treat those cases as inspectable runtime states
-instead of as unrelated prompt, channel, or UI bugs. This page documents the
-boundary and proof model; implementation and runtime claims belong to the
-changes that add and validate code.
+If accepted and implemented, this foundation would let durable-runtime work
+treat those cases as inspectable runtime states instead of as unrelated prompt,
+channel, or UI bugs. This page documents the proposed boundary and proof model;
+implementation and runtime claims belong to the changes that add and validate
+code.
 
 ## Implementation Position
 
@@ -109,8 +110,8 @@ new shared record, prefer the existing owner.
 
 ## Durable Core Boundary
 
-The 2026.7.1 release durable core is a local-first runtime substrate, not a
-product UI and not a general workflow engine. It records enough state to
+Durable core is proposed as a local-first runtime substrate, not a product UI
+and not a general workflow engine. If adopted, it should record enough state to
 inspect, explain, and recover agent/session/task work without requiring external
 orchestration.
 
@@ -127,15 +128,15 @@ runtime interpretation derives safe state from those facts; projection policy
 maps facts into Workboard, Task Flow, or channel views; agent policy decides what
 the model or owner should do next.
 
-## 2026.7.1 Release Stack User Promise
+## Intended User Value
 
-The 2026.7.1 release stack promises trustworthy inspection and diagnostics first. The core recovery
-promise is to persist committed facts and surface attention to the owner of the
-work. If a runtime, worker, Gateway request, child run, channel delivery, or
-process dies halfway, durable core records the facts, exposes diagnostics, and
-surfaces pending owner/main-agent work.
+The proposal prioritizes trustworthy inspection and diagnostics first. The core
+recovery goal is to persist committed facts and surface attention to the owner
+of the work. If a runtime, worker, Gateway request, child run, channel delivery,
+or process dies halfway, an accepted durable-core design should record the
+facts, expose diagnostics, and surface pending owner/main-agent work.
 
-The 2026.7.1 release stack does not promise:
+The proposal does not promise:
 
 - automatic arbitrary replay;
 - exactly-once external effects;
@@ -177,7 +178,7 @@ handoff unless implementation work proves it directly.
 
 - No runtime code, schema, worker, CLI, Gateway, or transport changes from this
   docs-only RFC.
-- No default-on durable runtime behavior in the 2026.7.1 release stack.
+- No default-on durable runtime behavior.
 - No product-specific task-card or Workboard policy in durable core.
 - No raw prompt, task, or tool-payload persistence by default.
 - No replay of side effects without idempotency, retention, and operation
@@ -187,4 +188,4 @@ handoff unless implementation work proves it directly.
 
 ## Related
 
-- [Durable Core 2026.7.1 Release Test Plan](/specs/durable-core-beta3-test-plan)
+- [Durable Core Residual-Gap Test Plan](/specs/durable-core-proposal-test-plan)

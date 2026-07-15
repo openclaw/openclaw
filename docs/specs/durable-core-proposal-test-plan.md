@@ -1,17 +1,17 @@
 ---
-title: Durable Core 2026.7.1 Release Test Plan
-summary: "Maintainer-grade proof matrix for 2026.7.1 release durable runtime invariants."
+title: Durable Core Residual-Gap Test Plan
+summary: "Maintainer-grade proof matrix for proposed residual durable runtime invariants."
 read_when:
-  - Planning durable runtime proof
+  - Planning durable runtime proof for the residual-gap proposal
   - Auditing durable runtime merge readiness
   - Converting reviewer concerns into tests
 ---
 
-# Durable Core 2026.7.1 Release Test Plan
+# Durable Core Residual-Gap Test Plan
 
-This plan turns the durable-core architecture into proof expectations for
-official release/2026.7.1-based durable runtime work. It is a review anchor only; it does not require runtime
-proof from docs-only changes that do not alter runtime behavior.
+This plan turns the durable-core residual-gap proposal into proof expectations
+for future durable runtime work. It is a review anchor only; it does not require
+runtime proof from docs-only changes that do not alter runtime behavior.
 
 ## Scope
 
@@ -23,9 +23,10 @@ replay, or external channel delivery.
 
 ## Root-Cause Coverage
 
-2026.7.1 release durable-core work must prove the general runtime root causes are handled
-as durable facts, not as product-specific conventions. Architecture docs define
-the required coverage; implementation changes own executable proof.
+Future durable-core implementation work should prove that general runtime root
+causes are handled as durable facts, not as product-specific conventions. The
+architecture proposal defines the required coverage; implementation changes own
+executable proof.
 
 | Root cause                      | Required durable-core response                                                                                                                                    | Primary proof area              |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
@@ -52,13 +53,13 @@ covers and which rows remain deferred.
 
 ## Docs-Only Gate
 
-| Check         | Required proof                                                                      |
-| ------------- | ----------------------------------------------------------------------------------- |
-| Scope hygiene | `git diff --name-status <base>..<head>` shows docs/spec/test-plan only              |
-| Docs map      | `node scripts/generate-docs-map.mjs --check` or equivalent docs-map check           |
-| Docs syntax   | docs MDX/lint/format checks available in the 2026.7.1 release tree for touched docs |
-| Diff hygiene  | `git diff --check <base>..<head>`                                                   |
-| Ancestry      | `git merge-base --is-ancestor <base> <head>`                                        |
+| Check         | Required proof                                                              |
+| ------------- | --------------------------------------------------------------------------- |
+| Scope hygiene | `git diff --name-status <base>..<head>` shows docs/spec/test-plan only      |
+| Docs map      | `node scripts/generate-docs-map.mjs --check` or equivalent docs-map check   |
+| Docs syntax   | docs MDX/lint/format checks available in the target branch for touched docs |
+| Diff hygiene  | `git diff --check <base>..<head>`                                           |
+| Ancestry      | `git merge-base --is-ancestor <base> <head>`                                |
 
 Docs-only changes should state when live proof is not applicable because they
 claim no runtime delivery behavior.
@@ -144,4 +145,4 @@ applicable when they claim no runtime behavior.
 
 ## Related
 
-- [Durable Core 2026.7.1 Release Architecture](/specs/durable-core-beta3-architecture)
+- [Durable Core Residual-Gap Architecture Proposal](/specs/durable-core-proposal-architecture)

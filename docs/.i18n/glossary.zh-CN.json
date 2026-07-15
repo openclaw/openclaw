@@ -184,12 +184,12 @@
     "target": "Bun"
   },
   {
-    "source": "Durable Core Beta 3 Architecture",
-    "target": "Durable Core Beta 3 架构"
+    "source": "Durable Core Residual-Gap Architecture Proposal",
+    "target": "Durable Core 残余差距架构提案"
   },
   {
-    "source": "Durable Core Beta 3 Test Plan",
-    "target": "Durable Core Beta 3 测试计划"
+    "source": "Durable Core Residual-Gap Test Plan",
+    "target": "Durable Core 残余差距测试计划"
   },
   {
     "source": "Agent harness plugins",

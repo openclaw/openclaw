@@ -8767,27 +8767,27 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Acceptance Tests
   - H2: Open Questions
 
-## specs/durable-core-beta3-architecture.md
+## specs/durable-core-proposal-architecture.md
 
-- Route: /specs/durable-core-beta3-architecture
+- Route: /specs/durable-core-proposal-architecture
 - Headings:
-  - H1: Durable Core 2026.7.1 Release Architecture
+  - H1: Durable Core Residual-Gap Architecture Proposal
   - H2: General Durable Runtime RFC
   - H2: What Problem This Solves
-  - H2: Why The 2026.7.1 Release Stack Needs This Foundation
+  - H2: Why The Residual Gap Matters
   - H2: Implementation Position
   - H2: Durable Core Boundary
-  - H2: 2026.7.1 Release Stack User Promise
+  - H2: Intended User Value
   - H2: Core Invariants
   - H2: Durable Wake And Attention Obligations
   - H2: Non Goals
   - H2: Related
 
-## specs/durable-core-beta3-test-plan.md
+## specs/durable-core-proposal-test-plan.md
 
-- Route: /specs/durable-core-beta3-test-plan
+- Route: /specs/durable-core-proposal-test-plan
 - Headings:
-  - H1: Durable Core 2026.7.1 Release Test Plan
+  - H1: Durable Core Residual-Gap Test Plan
   - H2: Scope
   - H2: Root-Cause Coverage
   - H2: Proof Hygiene
