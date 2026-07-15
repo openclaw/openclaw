@@ -565,6 +565,31 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
+  it("repairs a null dynamic-tool schema type before Codex registration", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "codex_app__automation_update",
+          parameters: {
+            type: null,
+            properties: {
+              action: { type: "string", description: null },
+            },
+          } as never,
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    expect(flattenSpecsWithNamespace(bridge.specs)[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        action: { type: "string" },
+      },
+    });
+    expect(bridge.telemetry.quarantinedTools).toEqual([]);
+  });
+
   it("quarantines dynamic tools with unsupported input schemas", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const diagnosticEvents: DiagnosticEventPayload[] = [];
