@@ -22,6 +22,7 @@ type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").re
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
+  markRestartRecoveryTerminalReceiptFailure: vi.fn(async () => "marked" as const),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
   resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(() => ({ ok: true, to: "resolved" })),
   resolveOutboundSessionRoute: vi.fn(),
@@ -180,6 +181,10 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
+vi.mock("../../config/sessions/restart-recovery-receipt.js", () => ({
+  markRestartRecoveryTerminalReceiptFailure: mocks.markRestartRecoveryTerminalReceiptFailure,
+}));
+
 vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
@@ -263,6 +268,7 @@ async function runMessageActionRequest(
         messageActionContext?: {
           expiresAtMs: number;
           sessionId?: string;
+          sourceReplyFinal?: boolean;
           requesterAccountId?: string;
           requesterSenderId?: string;
           toolContext?: Record<string, unknown>;
@@ -2181,6 +2187,7 @@ describe("gateway send mirroring", () => {
           message: "visible source reply",
         },
         sessionKey,
+        sessionId: "session-1",
         agentId: "main",
         idempotencyKey: "idem-source-message-action",
       },
@@ -2192,6 +2199,7 @@ describe("gateway send mirroring", () => {
             sessionKey,
             messageActionContext: {
               expiresAtMs: Date.now() + 60_000,
+              sessionId: "session-1",
               sourceReplyFinal: true,
               toolContext: {
                 currentChannelProvider: "telegram",
@@ -2209,6 +2217,7 @@ describe("gateway send mirroring", () => {
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "agent:main:telegram:direct:chat-123",
+      expectedSessionId: "session-1",
       text: "visible source reply",
       mediaUrls: undefined,
       idempotencyKey: "idem-source-message-action",
@@ -2219,6 +2228,58 @@ describe("gateway send mirroring", () => {
       },
       config: {},
     });
+  });
+
+  it("marks a rejected terminal source receipt fail closed on the exact session", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-2" }),
+    );
+    mocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
+      ok: false,
+      code: "blocked",
+      reason: "transcript write rejected",
+    });
+    const sessionKey = "agent:main:telegram:direct:chat-123";
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: { to: "chat-123", message: "delivered but unrecorded" },
+        sessionKey,
+        sessionId: "session-2",
+        agentId: "main",
+        idempotencyKey: "idem-source-message-action-2",
+      },
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              sessionId: "session-2",
+              sourceReplyFinal: true,
+              toolContext: {
+                currentChannelProvider: "telegram",
+                currentChannelId: "chat-123",
+                currentSourceTurnId: "channel-user:v1:telegram-message-2",
+              },
+            },
+          },
+        },
+      },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.markRestartRecoveryTerminalReceiptFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-2",
+        sessionKey,
+        sourceTurnId: "channel-user:v1:telegram-message-2",
+      }),
+    );
   });
 
   it("mirrors a Slack DM send after target resolution strips its user prefix", async () => {

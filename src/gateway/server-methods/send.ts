@@ -88,6 +88,7 @@ function resolveTrustedMessageActionToolContext(params: {
       toolContext: InternalChannelThreadingToolContext | undefined;
       requesterAccountId: string | undefined;
       requesterSenderId: string | undefined;
+      sessionId: string | undefined;
       sourceReplyFinal: boolean | undefined;
     }
   | { ok: false; error: ReturnType<typeof errorShape> } {
@@ -101,6 +102,7 @@ function resolveTrustedMessageActionToolContext(params: {
       toolContext: undefined,
       requesterAccountId: undefined,
       requesterSenderId: undefined,
+      sessionId: undefined,
       sourceReplyFinal: undefined,
     };
   }
@@ -139,6 +141,7 @@ function resolveTrustedMessageActionToolContext(params: {
     toolContext: messageActionContext.toolContext,
     requesterAccountId: messageActionContext.requesterAccountId,
     requesterSenderId: messageActionContext.requesterSenderId,
+    sessionId: messageActionContext.sessionId,
     sourceReplyFinal: messageActionContext.sourceReplyFinal,
   };
 }
@@ -486,7 +489,16 @@ async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
 }) {
   try {
-    await mirrorDeliveredSourceReplyToTranscript(params.mirror);
+    const mirrored = await mirrorDeliveredSourceReplyToTranscript(params.mirror);
+    if (!mirrored && params.mirror.sourceReplyFinal === true) {
+      params.context.logGateway?.warn?.(
+        "Terminal source reply receipt was not mirrored; restart recovery is fail-closed.",
+        {
+          channel: params.mirror.channel,
+          sessionKey: params.mirror.sessionKey,
+        },
+      );
+    }
   } catch (err) {
     params.context.logGateway?.warn?.("Source reply transcript mirror failed after delivery.", {
       error: formatForLog(err),
@@ -648,6 +660,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             actionParams: request.params,
             cfg,
             sessionKey,
+            sessionId: trustedContext.sessionId,
             agentId,
             toolContext: trustedContext.toolContext,
             idempotencyKey: request.idempotencyKey,

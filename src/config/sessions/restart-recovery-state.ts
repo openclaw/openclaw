@@ -62,6 +62,7 @@ function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[] | unde
 
 type RestartRecoveryNormalizedField =
   | "restartRecoveryBeforeAgentReplyState"
+  | "restartRecoveryDeliveryReceiptState"
   | "restartRecoveryDeliveryRequestFingerprint"
   | "restartRecoveryDeliveryRunId"
   | "restartRecoveryDeliverySourceRunId"
@@ -95,6 +96,12 @@ export function normalizeRestartRecoveryEntryFields(
       entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
       entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable"
       ? entry.restartRecoveryBeforeAgentReplyState
+      : undefined,
+  );
+  assign(
+    "restartRecoveryDeliveryReceiptState",
+    entry.restartRecoveryDeliveryReceiptState === "unrecorded-terminal"
+      ? "unrecorded-terminal"
       : undefined,
   );
   assign(
@@ -181,6 +188,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
       : undefined;
   return {
     restartRecoveryBeforeAgentReplyState: undefined,
+    restartRecoveryDeliveryReceiptState: undefined,
     restartRecoveryDeliveryContext: undefined,
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,

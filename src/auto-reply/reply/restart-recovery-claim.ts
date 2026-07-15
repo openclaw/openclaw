@@ -30,6 +30,7 @@ function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnEx
   return {
     abortedLastRun: entry.abortedLastRun,
     restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
+    restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
     restartRecoveryDeliveryRequestFingerprint: entry.restartRecoveryDeliveryRequestFingerprint,
     restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
     restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
@@ -52,6 +53,7 @@ function matchesExpectedSessionState(
     entry.sessionId === sessionId &&
     entry.abortedLastRun === expected.abortedLastRun &&
     entry.restartRecoveryBeforeAgentReplyState === expected.restartRecoveryBeforeAgentReplyState &&
+    entry.restartRecoveryDeliveryReceiptState === expected.restartRecoveryDeliveryReceiptState &&
     entry.restartRecoveryDeliveryRequestFingerprint ===
       expected.restartRecoveryDeliveryRequestFingerprint &&
     entry.restartRecoveryDeliveryRunId === expected.restartRecoveryDeliveryRunId &&
@@ -173,6 +175,7 @@ export function createReplyRestartRecoveryClaimController(params: {
           restartRecoveryBeforeAgentReplyState: params.hasBeforeAgentReplyHook
             ? "pending"
             : undefined,
+          restartRecoveryDeliveryReceiptState: undefined,
           restartRecoveryDeliveryRequestFingerprint: undefined,
           updatedAt: Date.now(),
         },
@@ -212,6 +215,7 @@ export function createReplyRestartRecoveryClaimController(params: {
           restartRecoveryBeforeAgentReplyState: params.hasBeforeAgentReplyHook
             ? "pending"
             : undefined,
+          restartRecoveryDeliveryReceiptState: undefined,
           restartRecoveryDeliveryContext: deliveryContext,
           restartRecoveryDeliveryRequestFingerprint: undefined,
           restartRecoveryDeliveryRunId: recoveryRunId,

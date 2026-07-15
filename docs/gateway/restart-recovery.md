@@ -89,6 +89,9 @@ and source correlation, including requester identity and any same-channel/thread
 restriction, so the same receipt remains authoritative even if another restart
 happens during recovery. A message-tool-only turn without reconstructable
 channel authority is failed closed and receives the one-time resend notice.
+If the channel accepted a terminal send but its exact-session transcript receipt
+cannot be committed, the gateway records that ambiguity on the recovery claim.
+Recovery then fails closed instead of replaying any remaining turn effects.
 
 Before resuming, the gateway checks that the transcript tail is safe to
 continue from. If it is not (for example, the turn ended on a stale pending

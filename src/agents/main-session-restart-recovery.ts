@@ -667,9 +667,13 @@ function resolveMainSessionResumePolicy(
   forceRestartSafeTools = false,
   expectedSourceTurnId?: string,
   beforeAgentReplyState?: SessionEntry["restartRecoveryBeforeAgentReplyState"],
+  deliveryReceiptState?: SessionEntry["restartRecoveryDeliveryReceiptState"],
 ): MainSessionResumePolicy {
   if (hasDeliveredTerminalSourceReply(messages, expectedSourceTurnId)) {
     return { action: "complete", reason: "delivered-terminal" };
+  }
+  if (deliveryReceiptState === "unrecorded-terminal") {
+    return { action: "fail", reason: "terminal source reply receipt was not durable" };
   }
   if (beforeAgentReplyState === "handled-silent") {
     return { action: "complete", reason: "handled-silent" };
@@ -910,6 +914,7 @@ async function writeUnresumableSessionNotice(params: {
     expectedSessionState: {
       abortedLastRun: params.entry.abortedLastRun,
       restartRecoveryBeforeAgentReplyState: params.entry.restartRecoveryBeforeAgentReplyState,
+      restartRecoveryDeliveryReceiptState: params.entry.restartRecoveryDeliveryReceiptState,
       restartRecoveryDeliveryRequestFingerprint:
         params.entry.restartRecoveryDeliveryRequestFingerprint,
       restartRecoveryDeliveryRunId: params.entry.restartRecoveryDeliveryRunId,
@@ -1247,6 +1252,7 @@ async function recoverStore(params: {
       entry.restartRecoveryForceSafeTools === true,
       expectedRecoverySourceRunId,
       entry.restartRecoveryBeforeAgentReplyState,
+      entry.restartRecoveryDeliveryReceiptState,
     );
     if (resumePolicy.action === "complete") {
       if (resumePolicy.reason === "delivered-terminal" && !expectedRecoverySourceRunId) {

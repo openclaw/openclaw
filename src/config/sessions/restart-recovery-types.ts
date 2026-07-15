@@ -11,6 +11,8 @@ export type RestartRecoveryBeforeAgentReplyState =
 /** Durable ownership and idempotency state for gateway restart recovery. */
 export type SessionRestartRecoveryState = {
   restartRecoveryBeforeAgentReplyState?: RestartRecoveryBeforeAgentReplyState;
+  /** A terminal external reply landed, but its exact transcript receipt did not. */
+  restartRecoveryDeliveryReceiptState?: "unrecorded-terminal";
   restartRecoveryDeliveryContext?: DeliveryContext;
   restartRecoveryDeliveryRequestFingerprint?: string;
   restartRecoveryDeliveryRunId?: string;

@@ -10,7 +10,10 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { markRestartRecoveryTerminalReceiptFailure } from "../../config/sessions/restart-recovery-receipt.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 
@@ -20,6 +23,7 @@ type SourceReplyTranscriptMirrorParams = {
   actionParams: Record<string, unknown>;
   cfg: OpenClawConfig;
   sessionKey?: string;
+  sessionId?: string;
   agentId?: string;
   toolContext?: InternalChannelThreadingToolContext;
   idempotencyKey?: string;
@@ -229,23 +233,45 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     return false;
   }
   const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
-
-  await appendAssistantMessageToSessionTranscript({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    text: mirror.text,
-    mediaUrls: mirror.mediaUrls.length ? mirror.mediaUrls : undefined,
-    idempotencyKey: params.idempotencyKey,
-    ...(params.sourceReplyFinal !== undefined
-      ? {
-          deliveryMirror: {
-            kind: "message-tool-source-reply" as const,
-            final: params.sourceReplyFinal,
-            ...(sourceTurnId ? { sourceTurnId } : {}),
-          },
-        }
-      : {}),
-    config: params.cfg,
-  });
-  return true;
+  const markTerminalReceiptFailure = async (): Promise<void> => {
+    if (params.sourceReplyFinal !== true || !params.sessionId || !sourceTurnId) {
+      return;
+    }
+    const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+    await markRestartRecoveryTerminalReceiptFailure({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sourceTurnId,
+      storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+    });
+  };
+  let result: Awaited<ReturnType<typeof appendAssistantMessageToSessionTranscript>>;
+  try {
+    result = await appendAssistantMessageToSessionTranscript({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      ...(params.sessionId ? { expectedSessionId: params.sessionId } : {}),
+      text: mirror.text,
+      mediaUrls: mirror.mediaUrls.length ? mirror.mediaUrls : undefined,
+      idempotencyKey: params.idempotencyKey,
+      ...(params.sourceReplyFinal !== undefined
+        ? {
+            deliveryMirror: {
+              kind: "message-tool-source-reply" as const,
+              final: params.sourceReplyFinal,
+              ...(sourceTurnId ? { sourceTurnId } : {}),
+            },
+          }
+        : {}),
+      config: params.cfg,
+    });
+  } catch (error) {
+    await markTerminalReceiptFailure();
+    throw error;
+  }
+  if (result.ok) {
+    return true;
+  }
+  await markTerminalReceiptFailure();
+  return false;
 }
