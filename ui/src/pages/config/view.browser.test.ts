@@ -61,7 +61,7 @@ describe("config view", () => {
     setTextScale: vi.fn(),
     chatSendShortcut: "enter" as const,
     setChatSendShortcut: vi.fn(),
-    chatFollowUpMode: "queue" as const,
+    chatFollowUpMode: "steer" as const,
     setChatFollowUpMode: vi.fn(),
     catalogOpenTarget: "viewer" as const,
     setCatalogOpenTarget: vi.fn(),

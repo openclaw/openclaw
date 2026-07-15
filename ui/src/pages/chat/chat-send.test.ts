@@ -3224,6 +3224,8 @@ describe("handleSendChat", () => {
   });
 
   it("keeps queued normal messages recallable before transcript history catches up", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    patchSettings({ chatFollowUpMode: "queue" });
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -3246,9 +3248,8 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("queued while busy");
   });
 
-  it("auto-steers messages sent during an active run when the follow-up mode is steer", async () => {
+  it("auto-steers messages sent during an active run by default", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
-    patchSettings({ chatFollowUpMode: "steer" });
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
         return { status: "started", runId: "steer-run" };
@@ -3282,7 +3283,6 @@ describe("handleSendChat", () => {
 
   it("keeps busy sends queued in steer mode while disconnected", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
-    patchSettings({ chatFollowUpMode: "steer" });
     const host = makeHost({
       client: null,
       connected: false,
