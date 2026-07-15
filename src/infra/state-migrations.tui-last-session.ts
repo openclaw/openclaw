@@ -33,7 +33,7 @@ type LegacySourceSnapshot = {
 
 const LEGACY_RECORD_KEYS = new Set(["sessionKey", "updatedAt"]);
 
-export function resolveLegacyTuiLastSessionPath(stateDir: string): string {
+function resolveLegacyTuiLastSessionPath(stateDir: string): string {
   return path.join(stateDir, "tui", "last-session.json");
 }
 

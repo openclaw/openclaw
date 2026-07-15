@@ -13,7 +13,6 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   detectLegacyTuiLastSessions,
   migrateLegacyTuiLastSessions,
-  resolveLegacyTuiLastSessionPath,
 } from "./state-migrations.tui-last-session.js";
 
 type TuiLastSessionTestDatabase = Pick<OpenClawStateKyselyDatabase, "tui_last_sessions">;
@@ -26,8 +25,12 @@ function makeStateDir(): string {
   return stateDir;
 }
 
+function legacyTuiLastSessionPath(stateDir: string): string {
+  return path.join(stateDir, "tui", "last-session.json");
+}
+
 function writeLegacyStore(stateDir: string, value: unknown): string {
-  const sourcePath = resolveLegacyTuiLastSessionPath(stateDir);
+  const sourcePath = legacyTuiLastSessionPath(stateDir);
   fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
   fs.writeFileSync(sourcePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   return sourcePath;
@@ -41,7 +44,7 @@ function migrate(
     removeSource?: () => void;
   },
 ) {
-  const sourcePath = resolveLegacyTuiLastSessionPath(stateDir);
+  const sourcePath = legacyTuiLastSessionPath(stateDir);
   return migrateLegacyTuiLastSessions({
     detected: { sourcePath, hasLegacy: true },
     stateDir,
