@@ -260,8 +260,8 @@ export class CodexAppServerClient {
     child.stdout.on("error", (error) =>
       this.closeWithError(error instanceof Error ? error : new Error(String(error))),
     );
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      const text = chunk.toString("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (text: string) => {
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
       const trimmed = text.trim();
       if (trimmed) {

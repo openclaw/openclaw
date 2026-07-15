@@ -430,6 +430,21 @@ describe("CodexAppServerClient", () => {
     );
   });
 
+  it("preserves split UTF-8 in app-server stderr exit errors", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const pending = harness.client.request("test/method");
+    const character = Buffer.from("猫", "utf8");
+
+    harness.process.stderr.write(Buffer.concat([Buffer.from("fatal "), character.subarray(0, 1)]));
+    harness.process.stderr.write(Buffer.concat([character.subarray(1), Buffer.from(" boot\n")]));
+    harness.process.emit("exit", 1, null);
+
+    await expect(pending).rejects.toThrow(
+      'codex app-server exited: code=1 signal=null stderr="fatal 猫 boot"',
+    );
+  });
+
   it("does not write to stdin after the child process exits", () => {
     const harness = createClientHarness();
     clients.push(harness.client);
