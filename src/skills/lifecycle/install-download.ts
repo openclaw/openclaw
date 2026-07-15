@@ -115,6 +115,7 @@ async function downloadFile(params: {
     if (contentLength) {
       const declaredBytes = Number.parseInt(contentLength, 10);
       if (!Number.isFinite(declaredBytes) || declaredBytes > SKILL_DOWNLOAD_MAX_BYTES) {
+        await cancelIgnoredResponseBody(response);
         throw new Error(
           `Download content-length ${declaredBytes} exceeds maximum allowed ${SKILL_DOWNLOAD_MAX_BYTES} bytes`,
         );
