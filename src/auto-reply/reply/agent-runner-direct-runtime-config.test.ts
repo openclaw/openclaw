@@ -386,7 +386,6 @@ describe("runReplyAgent runtime config", () => {
       const onBlockReply = vi.fn();
       replyParams.opts = { onBlockReply };
       const replyOperation = createReplyOperation();
-      const updateSessionIdSpy = vi.mocked(replyOperation.updateSessionId);
       replyParams.replyOperation = replyOperation;
       runPreflightCompactionIfNeededMock.mockImplementation(
         async (params: { sessionEntry?: unknown }) => params.sessionEntry,
@@ -452,7 +451,7 @@ describe("runReplyAgent runtime config", () => {
         queueKey: "main",
       });
       expect(followupRun.run.sessionId).toBe("session-rotated");
-      expect(updateSessionIdSpy).toHaveBeenCalledWith("session-rotated");
+      expect(replyOperation.sessionId).toBe("session-rotated");
       expect(onBlockReply).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
