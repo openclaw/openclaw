@@ -3,6 +3,6 @@ import { fullContextToolPayloadRedactionState } from "./redact-internal-state.js
 
 type LoggingConfig = OpenClawConfig["logging"];
 
-export function isFullContextToolPayloadRedaction(loggingConfig: LoggingConfig): boolean {
-  return fullContextToolPayloadRedactionState.isMarked(loggingConfig);
+export function withFullContextToolPayloadRedaction(loggingConfig: LoggingConfig): LoggingConfig {
+  return fullContextToolPayloadRedactionState.mark(loggingConfig);
 }
