@@ -25,7 +25,7 @@ export type AgentFallbackCycleState = {
   };
 };
 
-export type CompletedFallbackCycle = {
+type CompletedFallbackCycle = {
   kind: "completed";
   runResult: EmbeddedAgentRunResult;
   fallbackProvider: string;
@@ -39,7 +39,7 @@ export type AgentFallbackCycleResult =
   | CompletedFallbackCycle
   | Extract<AgentRunLoopResult, { kind: "final" }>;
 
-export type AgentFallbackModelPatch = {
+type AgentFallbackModelPatch = {
   captureFallbackFailure: (attempts: RuntimeFallbackAttempt[]) => boolean | undefined;
   captureFailure: (error: unknown) => void;
 };
