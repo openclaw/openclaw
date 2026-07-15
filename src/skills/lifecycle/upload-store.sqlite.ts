@@ -91,7 +91,7 @@ export function deleteOwnedSkillUpload(
         .where("scope", "=", SKILL_UPLOAD_LEASE_SCOPE)
         .where("lease_key", "=", uploadId),
     );
-    if (!lease || lease.owner !== owner || lease.expires_at <= nowMs) {
+    if (!lease || lease.owner !== owner || lease.expires_at === null || lease.expires_at <= nowMs) {
       return "not-owner";
     }
     deleteSkillUploadState(db, kysely, uploadId);
