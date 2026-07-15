@@ -1,9 +1,10 @@
 // Operator-approval kind migration: exact-legacy fail-closed repair.
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   hasCanonicalOperatorApprovalKinds,
-  repairOperatorApprovalKinds,
+  repairOperatorApprovalSchemaInTransaction,
 } from "./openclaw-state-db-operator-approval-migration.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
@@ -35,6 +36,13 @@ function seedRow(db: DatabaseSync, kind: string): void {
       'pending', '{}', '[]', '[]', 1, 1, 1, 1
     );
   `);
+}
+
+function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
+  return runSqliteImmediateTransactionSync(
+    db,
+    () => repairOperatorApprovalSchemaInTransaction(db).length > 0,
+  );
 }
 
 describe("repairOperatorApprovalKinds", () => {

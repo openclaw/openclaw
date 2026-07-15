@@ -231,7 +231,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/skills/runtime/refresh.ts: resetSkillsRefreshForTest",
   "src/skills/runtime/remote-skills.ts: resetRemoteNodeSkillsForTests",
   "src/state/openclaw-state-db-operator-approval-migration.ts: hasCanonicalOperatorApprovalKinds",
-  "src/state/openclaw-state-db-operator-approval-migration.ts: repairOperatorApprovalKinds (operatorApprovalMigration)",
   "src/system-agent/agent-turn.ts: runSystemAgentTurnWithDeps",
   "src/tasks/detached-task-runtime.ts: resetDetachedTaskLifecycleRuntimeForTests",
   "src/tasks/detached-task-runtime.ts: setDetachedTaskLifecycleRuntime",
