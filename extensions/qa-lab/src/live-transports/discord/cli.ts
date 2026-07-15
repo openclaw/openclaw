@@ -3,42 +3,35 @@ import {
   createLiveTransportQaAdapterFactory,
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
+  loadLiveTransportQaSuiteRuntime,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
 import { resolveDiscordQaScenarioIds } from "./scenario-selection.js";
 
-type DiscordQaAdapterRuntime = typeof import("./adapter.runtime.js");
-
-const loadDiscordQaAdapterRuntime = createLazyCliRuntimeLoader<DiscordQaAdapterRuntime>(
-  () => import("./adapter.runtime.js"),
-);
-const loadLiveTransportQaSuiteRuntime = createLazyCliRuntimeLoader<
-  typeof import("../shared/live-transport-suite.runtime.js")
->(() => import("../shared/live-transport-suite.runtime.js"));
+const loadDiscordQaAdapterRuntime = createLazyCliRuntimeLoader<
+  typeof import("./adapter.runtime.js")
+>(() => import("./adapter.runtime.js"));
 
 async function runQaDiscord(opts: LiveTransportQaCommandOptions) {
-  await (
-    await loadLiveTransportQaSuiteRuntime()
-  ).runLiveTransportQaSuiteCommand({
+  const runtime = await loadLiveTransportQaSuiteRuntime();
+  await runtime.runLiveTransportQaSuiteCommand({
     channelId: "discord",
     defaultProviderMode: "live-frontier",
     options: opts,
-    selectScenarioIds: ({ scenarioIds }) => resolveDiscordQaScenarioIds(scenarioIds),
+    selectScenarioIds: resolveDiscordQaScenarioIds,
   });
 }
-
-const discordQaAdapterFactory = createLiveTransportQaAdapterFactory({
-  id: "discord",
-  async create(context) {
-    return await (await loadDiscordQaAdapterRuntime()).createDiscordQaTransportAdapter(context);
-  },
-});
 
 export const discordQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({
     commandName: "discord",
-    adapterFactory: discordQaAdapterFactory,
+    adapterFactory: createLiveTransportQaAdapterFactory({
+      id: "discord",
+      async create(context) {
+        return (await loadDiscordQaAdapterRuntime()).createDiscordQaTransportAdapter(context);
+      },
+    }),
     credentialOptions: {
       sourceDescription: "Credential source for Discord QA: env or convex (default: env)",
       roleDescription:

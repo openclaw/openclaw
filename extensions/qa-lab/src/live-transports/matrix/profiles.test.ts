@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { resolveMatrixQaScenarioIds } from "./profiles.js";
 
+const MATRIX_QA_PROFILE_NAMES = [
+  "all",
+  "fast",
+  "release",
+  "transport",
+  "media",
+  "e2ee-smoke",
+  "e2ee-deep",
+  "e2ee-cli",
+] as const;
+
 describe("QA Lab Matrix profiles", () => {
   it("preserves the profile sizes and default selection", () => {
     const allScenarioIds = resolveMatrixQaScenarioIds({ profile: "all" });
@@ -22,19 +33,9 @@ describe("QA Lab Matrix profiles", () => {
   });
 
   it("keeps every profile unique, catalog-backed, and contained by all", () => {
-    const profiles = [
-      "all",
-      "fast",
-      "release",
-      "transport",
-      "media",
-      "e2ee-smoke",
-      "e2ee-deep",
-      "e2ee-cli",
-    ] as const;
     const allScenarioIds = resolveMatrixQaScenarioIds({ profile: "all" });
     const allScenarioIdSet = new Set(allScenarioIds);
-    for (const profile of profiles) {
+    for (const profile of MATRIX_QA_PROFILE_NAMES) {
       const scenarioIds = resolveMatrixQaScenarioIds({ profile });
       expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
       for (const scenarioId of scenarioIds) {
@@ -47,16 +48,9 @@ describe("QA Lab Matrix profiles", () => {
   });
 
   it("keeps explicit-only scenarios out of every named profile", () => {
-    const profileScenarioIds = [
-      "all",
-      "fast",
-      "release",
-      "transport",
-      "media",
-      "e2ee-smoke",
-      "e2ee-deep",
-      "e2ee-cli",
-    ].flatMap((profile) => resolveMatrixQaScenarioIds({ profile }));
+    const profileScenarioIds = MATRIX_QA_PROFILE_NAMES.flatMap((profile) =>
+      resolveMatrixQaScenarioIds({ profile }),
+    );
 
     expect(profileScenarioIds).not.toContain("matrix-room-block-streaming");
     expect(profileScenarioIds).not.toContain("subagent-thread-spawn");

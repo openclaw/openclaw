@@ -75,6 +75,7 @@ describe("live transport suite runtime", () => {
       runLiveTransportQaSuiteCommand({
         channelId: "matrix",
         credentialMode: "env-only",
+        defaultProviderMode: "live-frontier",
         envCredentialReason: "its homeserver is disposable and local.",
         laneLabel: "Matrix",
         options: { credentialSource: "convex" },
@@ -87,6 +88,7 @@ describe("live transport suite runtime", () => {
       runLiveTransportQaSuiteCommand({
         channelId: "matrix",
         credentialMode: "env-only",
+        defaultProviderMode: "live-frontier",
         laneLabel: "Matrix",
         options: { credentialRole: "ci" },
         selectScenarioIds: () => ["channel-chat-baseline"],
@@ -99,6 +101,7 @@ describe("live transport suite runtime", () => {
     await expect(
       runLiveTransportQaSuiteCommand({
         channelId: "discord",
+        defaultProviderMode: "live-frontier",
         options: { providerMode: "unknown" },
         selectScenarioIds: () => ["discord-canary"],
       }),

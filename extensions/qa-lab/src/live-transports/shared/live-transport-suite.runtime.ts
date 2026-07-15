@@ -5,14 +5,14 @@ import { normalizeQaProviderMode } from "../../run-config.js";
 
 type LiveTransportScenarioSelection = (params: {
   profile?: string;
-  providerMode?: QaProviderMode;
+  providerMode: QaProviderMode;
   scenarioIds?: readonly string[];
 }) => string[];
 
 export async function runLiveTransportQaSuiteCommand(params: {
   channelId: string;
   credentialMode?: "env-only" | "shared-lease";
-  defaultProviderMode?: QaProviderMode;
+  defaultProviderMode: QaProviderMode;
   envCredentialReason?: string;
   laneLabel?: string;
   options: LiveTransportQaCommandOptions;
@@ -36,7 +36,7 @@ export async function runLiveTransportQaSuiteCommand(params: {
     options.providerMode === undefined
       ? params.defaultProviderMode
       : normalizeQaProviderMode(options.providerMode);
-  return await runQaSuiteCommand({
+  return runQaSuiteCommand({
     repoRoot: options.repoRoot,
     outputDir: options.outputDir,
     providerMode,

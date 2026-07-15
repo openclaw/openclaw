@@ -54,17 +54,16 @@ describe("live transport QA contributions", () => {
   );
 
   it("keeps the specialized Telegram command runner", async () => {
-    const commandName = "telegram";
     const registration = listLiveTransportQaCliRegistrations().find(
-      (candidate) => candidate.commandName === commandName,
+      (candidate) => candidate.commandName === "telegram",
     );
     const qa = new Command();
     registration?.register(qa);
 
-    await qa.parseAsync(["node", "openclaw", commandName, "--scenario", `${commandName}-canary`]);
+    await qa.parseAsync(["node", "openclaw", "telegram", "--scenario", "telegram-canary"]);
 
     expect(runTelegram).toHaveBeenCalledWith(
-      expect.objectContaining({ scenarioIds: [`${commandName}-canary`] }),
+      expect.objectContaining({ scenarioIds: ["telegram-canary"] }),
     );
   });
 });

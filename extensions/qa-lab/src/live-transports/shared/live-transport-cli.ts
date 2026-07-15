@@ -139,6 +139,11 @@ function createSharedLiveTransportQaCliRegistration(
   };
 }
 
+// All dedicated commands share one memoized import of the consolidated suite host.
+export const loadLiveTransportQaSuiteRuntime = createLazyCliRuntimeLoader<
+  typeof import("./live-transport-suite.runtime.js")
+>(() => import("./live-transport-suite.runtime.js"));
+
 type QaLabLiveTransportQaCliRegistrationOptions = Omit<
   LiveTransportQaCliRegistrationOptions,
   "allowFailuresHelp" | "defaultProviderMode" | "providerModeHelp"

@@ -30,7 +30,7 @@ import {
 } from "./slack-live.scenarios.js";
 
 function findScenario(ids?: string[]) {
-  const requestedIds = new Set(ids?.length ? ids : resolveSlackQaScenarioIds());
+  const requestedIds = new Set(ids?.length ? ids : resolveSlackQaScenarioIds({}));
   return listSlackQaScenarioCatalog()
     .filter(({ id }) => requestedIds.has(id))
     .map(({ id }) => getSlackQaScenarioDefinition(id));

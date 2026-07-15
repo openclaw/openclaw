@@ -4,6 +4,7 @@ import {
   createLiveTransportQaAdapterFactory,
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
+  loadLiveTransportQaSuiteRuntime,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
@@ -11,9 +12,6 @@ import { resolveMatrixQaScenarioIds } from "./profiles.js";
 
 const DISABLE_MATRIX_QA_FORCE_EXIT_ENV = "OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT";
 
-const loadLiveTransportQaSuiteRuntime = createLazyCliRuntimeLoader<
-  typeof import("../shared/live-transport-suite.runtime.js")
->(() => import("../shared/live-transport-suite.runtime.js"));
 const loadMatrixQaAdapterRuntime = createLazyCliRuntimeLoader<
   typeof import("./adapter.runtime.js")
 >(() => import("./adapter.runtime.js"));
@@ -39,18 +37,18 @@ async function exitMatrixQaCommand(code: number): Promise<never> {
 }
 
 async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
-  const run = async () =>
-    await (
-      await loadLiveTransportQaSuiteRuntime()
-    ).runLiveTransportQaSuiteCommand({
+  const run = async () => {
+    const runtime = await loadLiveTransportQaSuiteRuntime();
+    await runtime.runLiveTransportQaSuiteCommand({
       channelId: "matrix",
       credentialMode: "env-only",
+      defaultProviderMode: "live-frontier",
       envCredentialReason: "its homeserver is disposable and local.",
       laneLabel: "Matrix",
       options: opts,
-      selectScenarioIds: ({ profile, scenarioIds }) =>
-        resolveMatrixQaScenarioIds({ profile, scenarioIds }),
+      selectScenarioIds: resolveMatrixQaScenarioIds,
     });
+  };
   if (process.env[DISABLE_MATRIX_QA_FORCE_EXIT_ENV] === "1") {
     await run();
     return;
@@ -67,17 +65,15 @@ async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
   await exitMatrixQaCommand(exitCode);
 }
 
-const matrixQaAdapterFactory = createLiveTransportQaAdapterFactory({
-  id: "matrix",
-  async create(context) {
-    return await (await loadMatrixQaAdapterRuntime()).createMatrixQaTransportAdapter(context);
-  },
-});
-
 export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({
     commandName: "matrix",
-    adapterFactory: matrixQaAdapterFactory,
+    adapterFactory: createLiveTransportQaAdapterFactory({
+      id: "matrix",
+      async create(context) {
+        return (await loadMatrixQaAdapterRuntime()).createMatrixQaTransportAdapter(context);
+      },
+    }),
     defaultProviderMode: "live-frontier",
     description: "Run the Docker-backed Matrix live QA lane against a disposable homeserver",
     outputDirHelp: "Matrix QA artifact directory",

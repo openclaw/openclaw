@@ -45,6 +45,14 @@ export async function createTelegramQaTransportAdapter(
     throw error;
   }
   const heartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
+  const releaseCredentialLease = async () => {
+    // Lease release must still run when heartbeat shutdown reports an error.
+    try {
+      await heartbeat.stop();
+    } finally {
+      await credentialLease.release();
+    }
+  };
   const runtimeEnv = credentialLease.payload;
   let driverIdentity: TelegramBotIdentity;
   let sutIdentity: TelegramBotIdentity;
@@ -68,12 +76,7 @@ export async function createTelegramQaTransportAdapter(
       flushTelegramUpdates(runtimeEnv.sutToken),
     ]);
   } catch (error) {
-    // Lease release must still run when heartbeat shutdown reports an error.
-    try {
-      await heartbeat.stop();
-    } finally {
-      await credentialLease.release();
-    }
+    await releaseCredentialLease();
     throw error;
   }
   const accountId = options.sutAccountId?.trim() || "sut";
@@ -241,12 +244,7 @@ export async function createTelegramQaTransportAdapter(
           quarantineErrors.length > 0 ? { cause: new AggregateError(quarantineErrors) } : undefined,
         );
       }
-      // Lease release must still run when heartbeat shutdown reports an error.
-      try {
-        await heartbeat.stop();
-      } finally {
-        await credentialLease.release();
-      }
+      await releaseCredentialLease();
     },
   };
 }

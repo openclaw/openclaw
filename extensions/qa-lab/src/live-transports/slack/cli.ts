@@ -3,42 +3,35 @@ import {
   createLiveTransportQaAdapterFactory,
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
+  loadLiveTransportQaSuiteRuntime,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
 import { resolveSlackQaScenarioIds } from "./scenario-selection.js";
 
-type SlackQaAdapterRuntime = typeof import("./adapter.runtime.js");
-
-const loadSlackQaAdapterRuntime = createLazyCliRuntimeLoader<SlackQaAdapterRuntime>(
+const loadSlackQaAdapterRuntime = createLazyCliRuntimeLoader<typeof import("./adapter.runtime.js")>(
   () => import("./adapter.runtime.js"),
 );
-const loadLiveTransportQaSuiteRuntime = createLazyCliRuntimeLoader<
-  typeof import("../shared/live-transport-suite.runtime.js")
->(() => import("../shared/live-transport-suite.runtime.js"));
 
 async function runQaSlack(opts: LiveTransportQaCommandOptions) {
-  await (
-    await loadLiveTransportQaSuiteRuntime()
-  ).runLiveTransportQaSuiteCommand({
+  const runtime = await loadLiveTransportQaSuiteRuntime();
+  await runtime.runLiveTransportQaSuiteCommand({
     channelId: "slack",
     defaultProviderMode: "live-frontier",
     options: opts,
-    selectScenarioIds: ({ scenarioIds }) => resolveSlackQaScenarioIds(scenarioIds),
+    selectScenarioIds: resolveSlackQaScenarioIds,
   });
 }
-
-const slackQaAdapterFactory = createLiveTransportQaAdapterFactory({
-  id: "slack",
-  async create(context) {
-    return await (await loadSlackQaAdapterRuntime()).createSlackQaTransportAdapter(context);
-  },
-});
 
 export const slackQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({
     commandName: "slack",
-    adapterFactory: slackQaAdapterFactory,
+    adapterFactory: createLiveTransportQaAdapterFactory({
+      id: "slack",
+      async create(context) {
+        return (await loadSlackQaAdapterRuntime()).createSlackQaTransportAdapter(context);
+      },
+    }),
     credentialOptions: {
       sourceDescription: "Credential source for Slack QA: env or convex (default: env)",
       roleDescription:
