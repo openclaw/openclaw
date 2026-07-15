@@ -418,19 +418,20 @@ const testRuntime = (): RuntimeEnv =>
 
 async function emitMattermostChannelPost(
   socket: FakeWebSocket,
-  params: { id: string; message: string; rootId?: string },
+  params: { id: string; message: string; rootId?: string; userId?: string },
 ) {
+  const userId = params.userId ?? "user-1";
   await socket.emitMessage({
     event: "posted",
     data: {
       channel_id: "chan-1",
       channel_name: "town-square",
       channel_display_name: "Town Square",
-      sender_name: "alice",
+      sender_name: userId === "user-1" ? "alice" : "bob",
       post: JSON.stringify({
         id: params.id,
         channel_id: "chan-1",
-        user_id: "user-1",
+        user_id: userId,
         message: params.message,
         root_id: params.rootId,
         create_at: 1_714_000_000_000,
@@ -438,7 +439,46 @@ async function emitMattermostChannelPost(
     },
     broadcast: {
       channel_id: "chan-1",
-      user_id: "user-1",
+      user_id: userId,
+    },
+  });
+}
+
+async function emitMattermostEditedPost(
+  socket: FakeWebSocket,
+  params: {
+    id: string;
+    message: string;
+    editAt: number;
+    channelId?: string;
+    userId?: string;
+    fileIds?: string[];
+    props?: Record<string, unknown>;
+  },
+) {
+  const channelId = params.channelId ?? "chan-1";
+  const userId = params.userId ?? "user-1";
+  await socket.emitMessage({
+    event: "post_edited",
+    data: {
+      channel_id: channelId,
+      channel_name: "town-square",
+      channel_display_name: "Town Square",
+      sender_name: userId === "user-1" ? "alice" : "mallory",
+      post: JSON.stringify({
+        id: params.id,
+        channel_id: channelId,
+        user_id: userId,
+        message: params.message,
+        file_ids: params.fileIds,
+        props: params.props,
+        create_at: 1_714_000_000_000,
+        edit_at: params.editAt,
+      }),
+    },
+    broadcast: {
+      channel_id: channelId,
+      user_id: userId,
     },
   });
 }
@@ -1002,7 +1042,7 @@ describe("mattermost inbound user posts", () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
     mockState.abortController = abortController;
-    const mentionConfig: OpenClawConfig = {
+    const abortMentionConfig: OpenClawConfig = {
       commands: { useAccessGroups: false },
       messages: { inbound: { debounceMs: 60_000 } },
       channels: {
@@ -1017,7 +1057,7 @@ describe("mattermost inbound user posts", () => {
       },
     };
     const isBareAbort = (text?: string) => ["abort", "stop"].includes(text?.trim() ?? "");
-    const runtimeCore = createRuntimeCore(mentionConfig, undefined, {
+    const runtimeCore = createRuntimeCore(abortMentionConfig, undefined, {
       inboundDebounceMs: 60_000,
       createInboundDebouncer,
       isControlCommandMessage: isBareAbort,
@@ -1028,7 +1068,7 @@ describe("mattermost inbound user posts", () => {
     mockState.runtimeCore = runtimeCore;
 
     const monitor = monitorMattermostProvider({
-      config: mentionConfig,
+      config: abortMentionConfig,
       runtime: testRuntime(),
       abortSignal: abortController.signal,
       webSocketFactory: () => socket,
@@ -1191,6 +1231,186 @@ describe("mattermost inbound user posts", () => {
     expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
+  it("does not wake again when an edited post already mentioned the bot", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.runtimeCore = createRuntimeCore(mentionConfig);
+
+    const monitor = monitorMattermostProvider({
+      config: mentionConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-existing-mention",
+      message: "@openclaw original wake",
+    });
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    await emitMattermostEditedPost(socket, {
+      id: "post-existing-mention",
+      message: "@openclaw reformatted original wake",
+      editAt: 1_714_000_000_125,
+    });
+    abortController.abort();
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not wake for an attachment or metadata-only edit", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.runtimeCore = createRuntimeCore(mentionConfig);
+
+    const monitor = monitorMattermostProvider({
+      config: mentionConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-metadata-edit",
+      message: "@openclaw original wake",
+    });
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    await emitMattermostEditedPost(socket, {
+      id: "post-metadata-edit",
+      message: "@openclaw original wake",
+      editAt: 1_714_000_000_125,
+      fileIds: ["file-1"],
+      props: { attachments: [{ text: "updated" }] },
+    });
+    abortController.abort();
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not wake for an edit that adds a different bot mention", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.runtimeCore = createRuntimeCore(mentionConfig);
+
+    const monitor = monitorMattermostProvider({
+      config: mentionConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-other-bot",
+      message: "not addressed to a bot",
+    });
+    await emitMattermostEditedPost(socket, {
+      id: "post-other-bot",
+      message: "@otherbot edited wake",
+      editAt: 1_714_000_000_125,
+    });
+    abortController.abort();
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when an edited mention changes the observed sender identity", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.runtimeCore = createRuntimeCore(mentionConfig);
+
+    const monitor = monitorMattermostProvider({
+      config: mentionConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-sender-change",
+      message: "not addressed to the bot",
+    });
+    await emitMattermostEditedPost(socket, {
+      id: "post-sender-change",
+      message: "@openclaw forged edit",
+      editAt: 1_714_000_000_125,
+      userId: "user-2",
+    });
+    abortController.abort();
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("ignores malformed and partial edited-post events", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.runtimeCore = createRuntimeCore(mentionConfig);
+
+    const monitor = monitorMattermostProvider({
+      config: mentionConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({ event: "post_edited", data: {} });
+    await socket.emitMessage({
+      event: "post_edited",
+      data: {
+        channel_id: "chan-1",
+        post: JSON.stringify({
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "@openclaw missing post id",
+        }),
+      },
+    });
+    abortController.abort();
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
   it("deduplicates repeated edited-post events", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
@@ -1210,6 +1430,10 @@ describe("mattermost inbound user posts", () => {
     });
     socket.emitOpen();
 
+    await emitMattermostChannelPost(socket, {
+      id: "post-edit-duplicate",
+      message: "not addressed to the bot",
+    });
     const editedEvent = {
       event: "post_edited",
       data: {
@@ -1240,7 +1464,7 @@ describe("mattermost inbound user posts", () => {
     expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
-  it("collapses debounced edited posts to the latest post body", async () => {
+  it("flushes a pending ordinary post before evaluating its edit", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
     mockState.abortController = abortController;
@@ -1297,7 +1521,7 @@ describe("mattermost inbound user posts", () => {
           id: "post-edited",
           channel_id: "chan-1",
           user_id: "user-1",
-          message: "@openclaw latest edited text",
+          message: "latest edited text",
           create_at: 1_714_000_000_000,
           edit_at: 1_714_000_000_050,
         }),
@@ -1315,16 +1539,16 @@ describe("mattermost inbound user posts", () => {
     await monitor;
 
     const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
-    expect(ctx?.BodyForAgent).toBe("latest edited text");
-    expect(ctx?.Body).toContain("latest edited text");
-    expect(ctx?.Body).not.toContain("stale pre-edit text");
+    expect(ctx?.BodyForAgent).toBe("stale pre-edit text");
+    expect(ctx?.Body).toContain("stale pre-edit text");
+    expect(ctx?.Body).not.toContain("latest edited text");
     expect(ctx?.MessageSid).toBe("post-edited");
     expect(ctx?.MessageSids).toBeUndefined();
     expect(ctx?.MessageSidFirst).toBeUndefined();
     expect(ctx?.MessageSidLast).toBeUndefined();
   });
 
-  it("keeps a mixed debounce batch aligned to the latest edited event identity", async () => {
+  it("does not merge a rejected edit into an ordinary debounce batch", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
     mockState.abortController = abortController;
@@ -1349,42 +1573,130 @@ describe("mattermost inbound user posts", () => {
     });
     socket.emitOpen();
 
-    await emitMattermostChannelPost(socket, { id: "post-a", message: "stale post A" });
+    await emitMattermostChannelPost(socket, {
+      id: "post-a",
+      message: "@openclaw original post A",
+    });
+    await vi.waitFor(() => {
+      expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    });
+
     await emitMattermostChannelPost(socket, { id: "post-b", message: "post B" });
-    await socket.emitMessage({
-      event: "post_edited",
-      data: {
-        channel_id: "chan-1",
-        channel_name: "town-square",
-        channel_display_name: "Town Square",
-        sender_name: "alice",
-        post: JSON.stringify({
-          id: "post-a",
-          channel_id: "chan-1",
-          user_id: "user-1",
-          message: "edited post A",
-          create_at: 1_714_000_000_000,
-          edit_at: 1_714_000_000_075,
-        }),
-      },
-      broadcast: {
-        channel_id: "chan-1",
-        user_id: "user-1",
-      },
+    await emitMattermostEditedPost(socket, {
+      id: "post-a",
+      message: "@openclaw reformatted post A",
+      editAt: 1_714_000_000_075,
+    });
+
+    await vi.waitFor(() => {
+      expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(2);
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(1)?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("post B");
+    expect(ctx?.Body).not.toContain("reformatted post A");
+    expect(ctx?.MessageSid).toBe("post-b");
+    expect(ctx?.MessageSids).toBeUndefined();
+  });
+
+  it("retains the observed mention state for each debounced sender", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const debounceConfig: OpenClawConfig = {
+      ...mentionConfig,
+      messages: { inbound: { debounceMs: 5 } },
+    };
+    mockState.runtimeCore = createRuntimeCore(debounceConfig, undefined, {
+      inboundDebounceMs: 5,
+      createInboundDebouncer,
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: debounceConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-alice",
+      message: "alice draft",
+      userId: "user-1",
+    });
+    await emitMattermostChannelPost(socket, {
+      id: "post-bob",
+      message: "bob draft",
+      userId: "user-2",
+    });
+    await emitMattermostEditedPost(socket, {
+      id: "post-alice",
+      message: "@openclaw alice edited wake",
+      editAt: 1_714_000_000_075,
+      userId: "user-1",
     });
 
     await vi.waitFor(() => {
       expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     });
+    abortController.abort();
     socket.emitClose(1000);
     await monitor;
 
     const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
-    expect(ctx?.BodyForAgent).toBe("post B\nedited post A");
-    expect(ctx?.MessageSid).toBe("post-a");
-    expect(ctx?.MessageSids).toEqual(["post-b", "post-a"]);
-    expect(ctx?.MessageSidFirst).toBe("post-b");
-    expect(ctx?.MessageSidLast).toBe("post-a");
+    expect(ctx?.BodyForAgent).toBe("alice edited wake");
+    expect(ctx?.MessageSid).toBe("post-alice");
+  });
+
+  it("does not wake when an edit adds only an on-character prefix", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const oncharConfig: OpenClawConfig = {
+      ...testConfig,
+      channels: {
+        mattermost: {
+          ...testConfig.channels?.mattermost,
+          chatmode: "onchar",
+          oncharPrefixes: ["!"],
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(oncharConfig);
+
+    const monitor = monitorMattermostProvider({
+      config: oncharConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-onchar-edit",
+      message: "ordinary draft",
+    });
+    await emitMattermostEditedPost(socket, {
+      id: "post-onchar-edit",
+      message: "! edited wake",
+      editAt: 1_714_000_000_075,
+    });
+    abortController.abort();
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
   it("does not let bot edited draft posts consume debounced user posts", async () => {
@@ -1444,7 +1756,7 @@ describe("mattermost inbound user posts", () => {
           id: "preview-post",
           channel_id: "chan-1",
           user_id: "bot-user",
-          message: "bot draft preview",
+          message: "@openclaw bot draft preview",
           create_at: 1_714_000_000_025,
           edit_at: 1_714_000_000_050,
         }),

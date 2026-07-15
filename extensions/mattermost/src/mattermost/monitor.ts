@@ -155,6 +155,77 @@ type MattermostDebouncedPost = {
   payload: MattermostEventPayload;
 };
 
+type MattermostMentionSnapshot = {
+  senderId: string;
+  wasMentioned: boolean;
+  expiresAt: number;
+};
+
+const MATTERMOST_MENTION_SNAPSHOT_TTL_MS = 24 * 60 * 60_000;
+const MATTERMOST_MENTION_SNAPSHOT_MAX = 2000;
+
+function updateMattermostMentionSnapshots(params: {
+  entries: readonly MattermostDebouncedPost[];
+  snapshots: Map<string, MattermostMentionSnapshot>;
+  channelId: string;
+  senderId: string;
+  matchesMention: (text: string) => boolean;
+  now?: number;
+}): { hasEdit: boolean; editAddedMention: boolean } {
+  const now = params.now ?? Date.now();
+  for (const [key, snapshot] of params.snapshots) {
+    if (snapshot.expiresAt <= now) {
+      params.snapshots.delete(key);
+    }
+  }
+
+  let hasEdit = false;
+  let editAddedMention = false;
+  for (const entry of params.entries) {
+    const channelId = normalizeOptionalString(
+      entry.post.channel_id ??
+        entry.payload.data?.channel_id ??
+        entry.payload.broadcast?.channel_id,
+    );
+    const senderId = normalizeOptionalString(
+      entry.post.user_id ?? entry.payload.broadcast?.user_id,
+    );
+    const postId = entry.post.id.trim();
+    if (!postId || channelId !== params.channelId || senderId !== params.senderId) {
+      continue;
+    }
+
+    const key = `${channelId}:${postId}`;
+    const previous = params.snapshots.get(key);
+    if (entry.payload.event === "post_edited") {
+      hasEdit = true;
+    }
+    if (previous && previous.senderId !== senderId) {
+      continue;
+    }
+    const text = normalizeOptionalString(entry.post.message) ?? "";
+    const wasMentioned = params.matchesMention(text);
+    if (entry.payload.event === "post_edited") {
+      editAddedMention ||= Boolean(previous && !previous.wasMentioned && wasMentioned);
+    }
+
+    params.snapshots.delete(key);
+    params.snapshots.set(key, {
+      senderId,
+      wasMentioned,
+      expiresAt: now + MATTERMOST_MENTION_SNAPSHOT_TTL_MS,
+    });
+    while (params.snapshots.size > MATTERMOST_MENTION_SNAPSHOT_MAX) {
+      const oldestKey = params.snapshots.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      params.snapshots.delete(oldestKey);
+    }
+  }
+  return { hasEdit, editAddedMention };
+}
+
 function collapseMattermostDebouncedPosts(
   entries: readonly MattermostDebouncedPost[],
 ): MattermostDebouncedPost[] {
@@ -1015,11 +1086,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     return {};
   }
 
+  const mentionSnapshots = new Map<string, MattermostMentionSnapshot>();
   const handlePost = async (
     post: MattermostPost,
     payload: MattermostEventPayload,
     messageIds?: string[],
     replayMessageIds?: string[],
+    batchEntries: readonly MattermostDebouncedPost[] = [{ post, payload }],
   ) => {
     const channelId = post.channel_id ?? payload.data?.channel_id ?? payload.broadcast?.channel_id;
     if (!channelId) {
@@ -1034,10 +1107,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
     // Edited posts need versioned replay keys, but transport metadata must keep
     // the real Mattermost post ids used by replies and reactions.
-    const allReplayMessageIds =
-      replayMessageIds?.length > 0
-        ? replayMessageIds
-        : resolveMattermostPostReplayMessageIds({ post, payload });
+    const allReplayMessageIds = replayMessageIds?.length
+      ? replayMessageIds
+      : resolveMattermostPostReplayMessageIds({ post, payload });
     const replayResult = await processMattermostReplayGuardedPost({
       accountId: account.accountId,
       messageIds: allReplayMessageIds,
@@ -1199,14 +1271,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const historyKey = resolveMattermostPendingHistoryKey({ kind, sessionKey });
 
         const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
-        const wasMentioned =
-          kind !== "direct" &&
-          ((botUsername
-            ? normalizeLowercaseStringOrEmpty(rawText).includes(
+        const matchesMention = (text: string) =>
+          (botUsername
+            ? normalizeLowercaseStringOrEmpty(text).includes(
                 `@${normalizeLowercaseStringOrEmpty(botUsername)}`,
               )
-            : false) ||
-            core.channel.mentions.matchesMentionPatterns(rawText, mentionRegexes));
+            : false) || core.channel.mentions.matchesMentionPatterns(text, mentionRegexes);
+        const wasMentioned = kind !== "direct" && matchesMention(rawText);
         const pendingBody =
           rawText ||
           (post.file_ids?.length
@@ -1236,6 +1307,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           ? stripOncharPrefix(rawText, oncharPrefixes)
           : { triggered: false, stripped: rawText };
         const oncharTriggered = oncharResult.triggered;
+        // Mattermost's post_edited websocket payload contains only the new post snapshot.
+        // Require an observed false->true mention transition so formatting-only or replayed
+        // edits cannot wake the agent again; unknown pre-edit state fails closed.
+        const mentionTransitions = updateMattermostMentionSnapshots({
+          entries: batchEntries,
+          snapshots: mentionSnapshots,
+          channelId,
+          senderId,
+          matchesMention,
+        });
         const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
         // Threads the bot already replied in auto-engage: follow-ups resume without
         // a re-mention even under requireMention. Keyed by the thread root id.
@@ -1273,6 +1354,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           commandAuthorized,
         });
         const { shouldBypassMention } = mentionDecision;
+        if (mentionTransitions.hasEdit && !mentionTransitions.editAddedMention) {
+          logVerboseMessage(
+            `mattermost: drop edited post (no new mention channel=${channelId} sender=${senderId})`,
+          );
+          return;
+        }
 
         if (
           mentionDecision.shouldSkip &&
@@ -2063,14 +2150,22 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         entry.post.channel_id ??
         entry.payload.data?.channel_id ??
         entry.payload.broadcast?.channel_id;
-      if (!channelId) {
+      const senderId = entry.post.user_id ?? entry.payload.broadcast?.user_id;
+      if (!channelId || !senderId) {
         return null;
       }
       const threadId = normalizeOptionalString(entry.post.root_id);
       const threadKey = threadId ? `thread:${threadId}` : "channel";
-      return `mattermost:${account.accountId}:${channelId}:${threadKey}`;
+      // Keep batches sender-homogeneous so access, edit snapshots, and transport
+      // identity are never borrowed from another user's nearby post.
+      return `mattermost:${account.accountId}:${channelId}:${senderId}:${threadKey}`;
     },
     shouldDebounce: (entry) => {
+      // Process edits independently. This flushes earlier ordinary posts first,
+      // then evaluates the edit's own mention transition without mixing identities.
+      if (entry.payload.event === "post_edited") {
+        return false;
+      }
       if (entry.post.file_ids && entry.post.file_ids.length > 0) {
         return false;
       }
@@ -2089,7 +2184,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       const replayMessageIds = resolveMattermostDebouncedReplayMessageIds(entries);
       const messageIds = uniqueStrings(collapsedEntries.map((entry) => entry.post.id));
       if (collapsedEntries.length === 1) {
-        await handlePost(last.post, last.payload, messageIds, replayMessageIds);
+        await handlePost(last.post, last.payload, messageIds, replayMessageIds, entries);
         return;
       }
       const combinedText = collapsedEntries
@@ -2101,7 +2196,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         message: combinedText,
         file_ids: [],
       };
-      await handlePost(mergedPost, last.payload, messageIds, replayMessageIds);
+      await handlePost(mergedPost, last.payload, messageIds, replayMessageIds, entries);
     },
     onError: (err) => {
       runtime.error?.(`mattermost debounce flush failed: ${String(err)}`);
