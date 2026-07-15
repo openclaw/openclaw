@@ -2,7 +2,6 @@
 import {
   decodeNodePtyResumeParams,
   resolveExecutableFromPathEnv,
-  resolveExecutableWithPathEnv,
   runNodePtyCommand,
 } from "openclaw/plugin-sdk/node-host";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
@@ -113,11 +112,11 @@ export async function openOpenCodeCatalogTerminal(
   const title = `opencode --session ${params.threadId.slice(0, 12)}…`;
   if (params.hostId === OPENCODE_LOCAL_SESSION_HOST_ID) {
     const record = await requireLocalOpenCodeSession(params.threadId);
-    const resolution = resolveExecutableWithPathEnv(
+    const resolution = resolveExecutableFromPathEnv(
       "opencode",
       process.env.PATH ?? "",
       process.env,
-      { fallbackToLoginShell: true },
+      { fallbackToLoginShell: true, withPathEnv: true },
     );
     if (!resolution) {
       throw new Error("OpenCode CLI is unavailable");

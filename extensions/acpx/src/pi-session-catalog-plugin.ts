@@ -2,7 +2,6 @@ import process from "node:process";
 import {
   decodeNodePtyResumeParams,
   resolveExecutableFromPathEnv,
-  resolveExecutableWithPathEnv,
   runNodePtyCommand,
 } from "openclaw/plugin-sdk/node-host";
 import type {
@@ -399,8 +398,9 @@ async function openPiTerminal(params: {
   const title = `pi --session ${params.threadId.slice(0, 12)}…`;
   if (params.hostId === LOCAL_HOST_ID) {
     const record = await requireLocalPiSession(params.threadId);
-    const resolution = resolveExecutableWithPathEnv("pi", process.env.PATH ?? "", process.env, {
+    const resolution = resolveExecutableFromPathEnv("pi", process.env.PATH ?? "", process.env, {
       fallbackToLoginShell: true,
+      withPathEnv: true,
     });
     if (!resolution) {
       throw new Error("Pi CLI is unavailable");

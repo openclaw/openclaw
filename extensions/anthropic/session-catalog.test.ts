@@ -37,12 +37,14 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
     command: string,
     pathEnv: string,
     env: NodeJS.ProcessEnv | undefined,
-    options: { fallbackToLoginShell?: boolean } | undefined,
+    options: { fallbackToLoginShell?: boolean; withPathEnv?: boolean } | undefined,
   ) => {
     const fallbackPath = options?.fallbackToLoginShell
       ? nodeHostMocks.userShellPaths.get(command)
       : undefined;
-    const resolution = actual.resolveExecutableWithPathEnv(command, fallbackPath ?? pathEnv, env);
+    const resolution = actual.resolveExecutableFromPathEnv(command, fallbackPath ?? pathEnv, env, {
+      withPathEnv: true,
+    });
     return resolution && fallbackPath ? { ...resolution, pathEnv: fallbackPath } : resolution;
   };
   return {
@@ -52,9 +54,11 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
       command: string,
       pathEnv: string,
       env: NodeJS.ProcessEnv | undefined,
-      options: { fallbackToLoginShell?: boolean } | undefined,
-    ) => resolveWithTestShellPath(command, pathEnv, env, options)?.executable,
-    resolveExecutableWithPathEnv: resolveWithTestShellPath,
+      options: { fallbackToLoginShell?: boolean; withPathEnv?: boolean } | undefined,
+    ) => {
+      const resolution = resolveWithTestShellPath(command, pathEnv, env, options);
+      return options?.withPathEnv ? resolution : resolution?.executable;
+    },
   };
 });
 

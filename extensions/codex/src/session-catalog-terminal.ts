@@ -2,7 +2,6 @@
 import {
   decodeNodePtyResumeParams,
   resolveExecutableFromPathEnv,
-  resolveExecutableWithPathEnv,
   runNodePtyCommand,
 } from "openclaw/plugin-sdk/node-host";
 import type {
@@ -39,8 +38,9 @@ export function resolveLocalCodexTerminalExecutable(
 }
 
 function resolveLocalCodexTerminalExecutableWithPathEnv(env: NodeJS.ProcessEnv = process.env) {
-  return resolveExecutableWithPathEnv("codex", env.PATH ?? env.Path ?? "", env, {
+  return resolveExecutableFromPathEnv("codex", env.PATH ?? env.Path ?? "", env, {
     fallbackToLoginShell: true,
+    withPathEnv: true,
   });
 }
 

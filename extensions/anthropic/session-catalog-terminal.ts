@@ -1,9 +1,6 @@
 // Claude catalog terminal ownership: validated local and paired-node resume plans.
 import fs from "node:fs/promises";
-import {
-  resolveExecutableFromPathEnv,
-  resolveExecutableWithPathEnv,
-} from "openclaw/plugin-sdk/node-host";
+import { resolveExecutableFromPathEnv } from "openclaw/plugin-sdk/node-host";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionCatalogTerminalPlan } from "openclaw/plugin-sdk/session-catalog";
 import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
@@ -97,8 +94,9 @@ export async function openClaudeCatalogTerminal(
     if (!source?.isFile()) {
       throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
     }
-    const resolution = resolveExecutableWithPathEnv("claude", process.env.PATH ?? "", process.env, {
+    const resolution = resolveExecutableFromPathEnv("claude", process.env.PATH ?? "", process.env, {
       fallbackToLoginShell: true,
+      withPathEnv: true,
     });
     if (!resolution) {
       throw new ClaudeCatalogParamsError("Claude CLI is unavailable");
