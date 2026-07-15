@@ -23,8 +23,10 @@ runs:
     - name: Detect docs-only changes
       id: check
       shell: bash
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
       run: |
-        BASE="${{ inputs.base-sha }}"
+        BASE="$BASE_SHA"
 
         # Fail-safe: if we can't diff, assume non-docs (run everything)
         CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")
