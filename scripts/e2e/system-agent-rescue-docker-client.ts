@@ -253,11 +253,9 @@ async function main() {
   assert(doctorRuns.length === 0, "remote rescue must not invoke doctor repair");
 
   const updatedConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+  const updatedModel = updatedConfig.agents?.defaults?.model;
   assert(
-    updatedConfig.agents?.defaults?.model &&
-      typeof updatedConfig.agents.defaults.model === "object" &&
-      "primary" in updatedConfig.agents.defaults.model &&
-      updatedConfig.agents.defaults.model.primary === "openai/gpt-5.2",
+    (typeof updatedModel === "string" ? updatedModel : updatedModel?.primary) === "openai/gpt-5.2",
     "config default model was not updated",
   );
   assert(updatedConfig.gateway?.port === 19001, "generic config set did not update gateway.port");
