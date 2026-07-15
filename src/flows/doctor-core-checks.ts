@@ -1045,12 +1045,9 @@ const finalConfigValidationCheck: HealthCheck = {
   kind: "core",
   description: "Active openclaw.jsonc parses and conforms to the config schema.",
   source: "doctor",
-  async detect(ctx) {
+  async detect() {
     const { readConfigFileSnapshot } = await import("../config/config.js");
-    const snap = await readConfigFileSnapshot({
-      observe: false,
-      skipPluginValidation: ctx.skipConfigPluginValidation === true,
-    });
+    const snap = await readConfigFileSnapshot({ observe: false });
     if (!snap.exists || snap.valid) {
       return [];
     }

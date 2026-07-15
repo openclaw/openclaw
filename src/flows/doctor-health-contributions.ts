@@ -221,7 +221,6 @@ async function runStructuredDoctorHealthContribution(params: {
       configPath: params.ctx.configPath,
       dryRun: !params.ctx.prompter.shouldRepair,
       allowExecSecretRefs: params.ctx.options.allowExec === true,
-      skipConfigPluginValidation: params.ctx.configResult.skipPluginValidationOnWrite === true,
     },
     {
       checks: params.checks,
