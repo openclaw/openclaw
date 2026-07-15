@@ -1,6 +1,6 @@
 // Qa Lab tests cover slack live plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSlackQaScenarioIds } from "./profiles.js";
+import { resolveSlackQaScenarioIds } from "./scenario-selection.js";
 import { resolveApprovalDecision } from "./slack-live.approvals.js";
 import {
   quiesceCodexApprovalAgentRun,

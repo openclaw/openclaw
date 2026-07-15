@@ -11,7 +11,7 @@ import type {
 } from "@openclaw/whatsapp/api.js";
 import { describe, expect, it, vi } from "vitest";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
-import { resolveWhatsAppQaScenarioIds } from "./profiles.js";
+import { resolveWhatsAppQaScenarioIds } from "./scenario-selection.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whatsapp-live.config.js";
 import { resolveWhatsAppQaMessageTargets } from "./whatsapp-live.contracts.js";

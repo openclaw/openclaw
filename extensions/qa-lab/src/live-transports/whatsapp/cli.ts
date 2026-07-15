@@ -1,32 +1,43 @@
 // Qa Lab plugin module implements cli behavior.
 import {
+  createLiveTransportQaAdapterFactory,
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
+import { resolveWhatsAppQaScenarioIds } from "./scenario-selection.js";
 
 type WhatsAppQaAdapterRuntime = typeof import("./adapter.runtime.js");
-type WhatsAppQaCliRuntime = typeof import("./cli.runtime.js");
 
 const loadWhatsAppQaAdapterRuntime = createLazyCliRuntimeLoader<WhatsAppQaAdapterRuntime>(
   () => import("./adapter.runtime.js"),
 );
-const loadWhatsAppQaCliRuntime = createLazyCliRuntimeLoader<WhatsAppQaCliRuntime>(
-  () => import("./cli.runtime.js"),
-);
+const loadLiveTransportQaSuiteRuntime = createLazyCliRuntimeLoader<
+  typeof import("../shared/live-transport-suite.runtime.js")
+>(() => import("../shared/live-transport-suite.runtime.js"));
 
 async function runQaWhatsApp(opts: LiveTransportQaCommandOptions) {
-  await (await loadWhatsAppQaCliRuntime()).runQaWhatsAppCommand(opts);
+  await (
+    await loadLiveTransportQaSuiteRuntime()
+  ).runLiveTransportQaSuiteCommand({
+    channelId: "whatsapp",
+    defaultProviderMode: "live-frontier",
+    options: opts,
+    selectScenarioIds: ({ providerMode, scenarioIds }) =>
+      resolveWhatsAppQaScenarioIds({
+        providerMode: providerMode ?? "live-frontier",
+        scenarioIds,
+      }),
+  });
 }
 
-const whatsappQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
+const whatsappQaAdapterFactory = createLiveTransportQaAdapterFactory({
   id: "whatsapp",
-  matches: ({ channelId, driver }) => driver === "live" && channelId === "whatsapp",
   async create(context) {
     return await (await loadWhatsAppQaAdapterRuntime()).createWhatsAppQaTransportAdapter(context);
   },
-};
+});
 
 export const whatsappQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({

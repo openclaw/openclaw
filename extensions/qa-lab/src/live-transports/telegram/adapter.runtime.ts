@@ -68,10 +68,15 @@ export async function createTelegramQaTransportAdapter(
       flushTelegramUpdates(runtimeEnv.sutToken),
     ]);
   } catch (error) {
-    await heartbeat.stop();
-    await credentialLease.release();
+    // Lease release must still run when heartbeat shutdown reports an error.
+    try {
+      await heartbeat.stop();
+    } finally {
+      await credentialLease.release();
+    }
     throw error;
   }
+  const accountId = options.sutAccountId?.trim() || "sut";
   let stopped = false;
   let pollingError: Error | undefined;
   let logicalConversationId = runtimeEnv.groupId;
@@ -112,7 +117,7 @@ export async function createTelegramQaTransportAdapter(
         if (update.edited_message) {
           if (existingMessageId) {
             await context.messages.editMessage({
-              accountId: options.sutAccountId?.trim() || "sut",
+              accountId,
               messageId: existingMessageId,
               text: message.text,
               timestamp: message.timestamp,
@@ -121,7 +126,7 @@ export async function createTelegramQaTransportAdapter(
           continue;
         }
         const outbound = await context.messages.addOutboundMessage({
-          accountId: options.sutAccountId?.trim() || "sut",
+          accountId,
           to: `${logicalConversationKind}:${logicalConversationId}`,
           senderId: String(message.senderId),
           senderName: message.senderUsername,
@@ -141,8 +146,6 @@ export async function createTelegramQaTransportAdapter(
       pollingError = error instanceof Error ? error : new Error(String(error));
     }
   });
-  const accountId = options.sutAccountId?.trim() || "sut";
-
   return {
     id: "telegram",
     label: "Telegram live",
@@ -238,8 +241,12 @@ export async function createTelegramQaTransportAdapter(
           quarantineErrors.length > 0 ? { cause: new AggregateError(quarantineErrors) } : undefined,
         );
       }
-      await heartbeat.stop();
-      await credentialLease.release();
+      // Lease release must still run when heartbeat shutdown reports an error.
+      try {
+        await heartbeat.stop();
+      } finally {
+        await credentialLease.release();
+      }
     },
   };
 }

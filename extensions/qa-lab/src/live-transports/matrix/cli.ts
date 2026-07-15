@@ -1,17 +1,19 @@
 // Qa Lab plugin module implements Matrix live transport CLI behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createLiveTransportQaAdapterFactory,
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
+import { resolveMatrixQaScenarioIds } from "./profiles.js";
 
 const DISABLE_MATRIX_QA_FORCE_EXIT_ENV = "OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT";
 
-const loadMatrixQaCliRuntime = createLazyCliRuntimeLoader<typeof import("./cli.runtime.js")>(
-  () => import("./cli.runtime.js"),
-);
+const loadLiveTransportQaSuiteRuntime = createLazyCliRuntimeLoader<
+  typeof import("../shared/live-transport-suite.runtime.js")
+>(() => import("../shared/live-transport-suite.runtime.js"));
 const loadMatrixQaAdapterRuntime = createLazyCliRuntimeLoader<
   typeof import("./adapter.runtime.js")
 >(() => import("./adapter.runtime.js"));
@@ -37,7 +39,18 @@ async function exitMatrixQaCommand(code: number): Promise<never> {
 }
 
 async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
-  const run = async () => await (await loadMatrixQaCliRuntime()).runQaMatrixCommand(opts);
+  const run = async () =>
+    await (
+      await loadLiveTransportQaSuiteRuntime()
+    ).runLiveTransportQaSuiteCommand({
+      channelId: "matrix",
+      credentialMode: "env-only",
+      envCredentialReason: "its homeserver is disposable and local.",
+      laneLabel: "Matrix",
+      options: opts,
+      selectScenarioIds: ({ profile, scenarioIds }) =>
+        resolveMatrixQaScenarioIds({ profile, scenarioIds }),
+    });
   if (process.env[DISABLE_MATRIX_QA_FORCE_EXIT_ENV] === "1") {
     await run();
     return;
@@ -54,13 +67,12 @@ async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
   await exitMatrixQaCommand(exitCode);
 }
 
-const matrixQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
+const matrixQaAdapterFactory = createLiveTransportQaAdapterFactory({
   id: "matrix",
-  matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
   async create(context) {
     return await (await loadMatrixQaAdapterRuntime()).createMatrixQaTransportAdapter(context);
   },
-};
+});
 
 export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({
