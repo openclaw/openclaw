@@ -46,7 +46,7 @@ function isAnthropicBedrockModel(modelId: string): boolean {
   return false;
 }
 
-export function isLiteLLMAnthropicModel(modelId: string): boolean {
+function isLiteLLMAnthropicModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.startsWith("anthropic/") || normalized.includes("claude");
 }
