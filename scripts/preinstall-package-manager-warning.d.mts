@@ -11,7 +11,7 @@ export type PackageCliNodeRuntime = {
   bunVersion: string | null;
   execPath: string | null;
 };
-/** Finds the real Node that will launch the installed CLI after Bun removes its lifecycle shim. */
+/** Finds the real Node that will launch the installed CLI after Bun removes its lifecycle PATH. */
 export function probePackageCliNodeRuntime(options?: {
   env?: NodeJS.ProcessEnv;
   pathEnv?: string;

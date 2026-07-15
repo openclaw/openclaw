@@ -102,16 +102,38 @@ function parseNodeRuntimeProbeOutput(value) {
   }
 }
 
-function isPackageLifecycleBinPath(entry, pathApi) {
-  const parts = pathApi
-    .normalize(entry)
-    .split(/[\\/]+/u)
-    .filter(Boolean)
-    .map((part) => part.toLowerCase());
-  return parts.some((part, index) => part === "node_modules" && parts[index + 1] === ".bin");
+function normalizePathForComparison(value, pathApi, platform) {
+  const normalized = pathApi.normalize(value);
+  return platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-/** Finds the real Node that will launch the installed CLI after Bun removes its lifecycle shim. */
+function stripBunLifecyclePathPrefix(pathEntries, cwd, pathApi, platform) {
+  const expectedPrefix = [];
+  let directory = pathApi.resolve(cwd);
+  while (true) {
+    expectedPrefix.push(pathApi.join(directory, "node_modules", ".bin"));
+    const parent = pathApi.dirname(directory);
+    if (parent === directory) {
+      break;
+    }
+    directory = parent;
+  }
+
+  if (pathEntries.length < expectedPrefix.length) {
+    return null;
+  }
+  for (const [index, expected] of expectedPrefix.entries()) {
+    if (
+      normalizePathForComparison(pathEntries[index], pathApi, platform) !==
+      normalizePathForComparison(expected, pathApi, platform)
+    ) {
+      return null;
+    }
+  }
+  return pathEntries.slice(expectedPrefix.length);
+}
+
+/** Finds the real Node that will launch the installed CLI after Bun removes its lifecycle PATH. */
 export function probePackageCliNodeRuntime(options = {}) {
   const {
     env = process.env,
@@ -124,17 +146,18 @@ export function probePackageCliNodeRuntime(options = {}) {
   const delimiter = platform === "win32" ? ";" : ":";
   const executableName = platform === "win32" ? "node.exe" : "node";
   const seen = new Set();
+  // Bun prepends one cwd-to-root node_modules/.bin path per ancestor before
+  // the original PATH. Strip only that exact prefix; anything else persists.
+  const pathEntries = stripBunLifecyclePathPrefix(pathEnv.split(delimiter), cwd, pathApi, platform);
+  if (!pathEntries) {
+    return null;
+  }
 
-  for (const entry of pathEnv.split(delimiter)) {
+  for (const entry of pathEntries) {
     if (!entry || !pathApi.isAbsolute(entry)) {
       // Relative PATH entries resolve against each future CLI invocation's cwd.
       // No preinstall probe can safely approve the Node they may select later.
       return null;
-    }
-    // Lifecycle managers prepend package-controlled node_modules/.bin entries.
-    // Never execute a dependency-provided `node` while validating the trusted runtime.
-    if (isPackageLifecycleBinPath(entry, pathApi)) {
-      continue;
     }
     const candidate = pathApi.join(entry, executableName);
     if (seen.has(candidate)) {
@@ -170,10 +193,10 @@ export function probePackageCliNodeRuntime(options = {}) {
     if (!runtime) {
       return null;
     }
-    // Bun prepends a temporary `node` while running package scripts. The
-    // installed CLI later resolves the next real Node from the user's PATH.
+    // A Bun-backed candidate from the original PATH remains first after install.
+    // It cannot satisfy the package's Node engine contract, so fail closed.
     if (runtime.bunVersion) {
-      continue;
+      return null;
     }
     return runtime;
   }
