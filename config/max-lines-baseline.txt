@@ -516,7 +516,6 @@ src/agents/model-fallback.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
-src/agents/modes/interactive/theme/theme.ts
 src/agents/openai-completions-transport.ts
 src/agents/openai-responses-transport.ts
 src/agents/openai-transport-stream.base.test-utils.ts
