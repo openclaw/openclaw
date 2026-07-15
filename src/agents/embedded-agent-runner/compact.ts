@@ -1600,13 +1600,14 @@ async function compactEmbeddedAgentSessionDirectOnce(
           // limitHistoryTurns can orphan tool_result blocks by removing the
           // assistant message that contained the matching tool_use.
           const limited = transcriptPolicy.repairToolUseResultPairing
-            ? sanitizeToolUseResultPairing(truncated, {
-                ...(effectiveModel.api === "openai-responses" ||
-                effectiveModel.api === "azure-openai-responses" ||
-                effectiveModel.api === "openai-chatgpt-responses"
+            ? sanitizeToolUseResultPairing(
+                truncated,
+                effectiveModel.api === "openai-responses" ||
+                  effectiveModel.api === "azure-openai-responses" ||
+                  effectiveModel.api === "openai-chatgpt-responses"
                   ? { missingToolResultText: "aborted" }
-                  : {}),
-              })
+                  : undefined,
+              )
             : truncated;
           if (limited.length > 0) {
             session.agent.state.messages = limited;
