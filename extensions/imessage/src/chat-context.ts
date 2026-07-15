@@ -14,6 +14,8 @@ type IMessageDirectChatIdentity = {
   identifier: string;
 };
 
+const EMAIL_HANDLE_PATTERN = /^[^\s@]+@[^\s@]+$/u;
+
 function parseDirectChatIdentity(raw: string): IMessageDirectChatIdentity | undefined {
   const trimmed = raw.trim();
   const parts = trimmed.split(";");
@@ -23,14 +25,22 @@ function parseDirectChatIdentity(raw: string): IMessageDirectChatIdentity | unde
       const identifier = parts[2];
       return {
         service,
-        identifier: /^[^\s@]+@[^\s@]+$/u.test(identifier) ? identifier.toLowerCase() : identifier,
+        identifier: EMAIL_HANDLE_PATTERN.test(identifier) ? identifier.toLowerCase() : identifier,
       };
     }
   }
-  if (trimmed.startsWith("+") || /^[^\s@]+@[^\s@]+$/u.test(trimmed)) {
+  if (parts.length !== 1) {
+    return undefined;
+  }
+  if (trimmed.startsWith("+") || EMAIL_HANDLE_PATTERN.test(trimmed)) {
     return { identifier: trimmed.toLowerCase() };
   }
   return undefined;
+}
+
+export function isIMessageEmailChatIdentifier(raw: string): boolean {
+  const identity = parseDirectChatIdentity(raw);
+  return Boolean(identity && EMAIL_HANDLE_PATTERN.test(identity.identifier));
 }
 
 /**

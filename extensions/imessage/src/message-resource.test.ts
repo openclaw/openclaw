@@ -38,14 +38,19 @@ beforeEach(async () => {
     CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
     INSERT INTO chat(ROWID, chat_identifier, guid) VALUES
       (1, '+15550001111', 'iMessage;-;+15550001111'),
-      (2, 'other', 'iMessage;+;other'),
-      (3, '+15550002222', 'SMS;-;+15550002222');
+      (2, 'other', 'iMessage;+;Some@example.com'),
+      (3, '+15550002222', 'SMS;-;+15550002222'),
+      (4, 'Üser@Example.com', 'iMessage;-;Üser@Example.com');
     INSERT INTO message(ROWID, guid) VALUES
       (10, 'message-guid'),
-      (11, 'sms-message-guid');
+      (11, 'sms-message-guid'),
+      (12, 'email-message-guid'),
+      (13, 'other-message-guid');
     INSERT INTO chat_message_join(chat_id, message_id) VALUES
       (1, 10),
-      (3, 11);
+      (3, 11),
+      (4, 12),
+      (2, 13);
   `);
   db.close();
 });
@@ -185,6 +190,30 @@ describe("iMessage provider resource binding", () => {
     ).toBe("match");
     expect(
       checkIMessageResourceBinding({
+        chatContext: { chatIdentifier: "iMessage;-;üser@example.com" },
+        cliPath,
+        dbPath,
+        messageId: "email-message-guid",
+      }),
+    ).toBe("match");
+    expect(
+      checkIMessageResourceBinding({
+        chatContext: { chatGuid: "iMessage;-;üser@example.com" },
+        cliPath,
+        dbPath,
+        messageId: "email-message-guid",
+      }),
+    ).toBe("match");
+    expect(
+      checkIMessageResourceBinding({
+        chatContext: { chatIdentifier: "iMessage;-;other@example.com" },
+        cliPath,
+        dbPath,
+        messageId: "email-message-guid",
+      }),
+    ).toBe("mismatch");
+    expect(
+      checkIMessageResourceBinding({
         chatContext: { chatId: 2 },
         cliPath,
         dbPath,
@@ -197,6 +226,22 @@ describe("iMessage provider resource binding", () => {
         cliPath,
         dbPath,
         messageId: "message-guid",
+      }),
+    ).toBe("mismatch");
+    expect(
+      checkIMessageResourceBinding({
+        chatContext: { chatGuid: "iMessage;+;Some@example.com" },
+        cliPath,
+        dbPath,
+        messageId: "other-message-guid",
+      }),
+    ).toBe("match");
+    expect(
+      checkIMessageResourceBinding({
+        chatContext: { chatGuid: "iMessage;+;some@example.com" },
+        cliPath,
+        dbPath,
+        messageId: "other-message-guid",
       }),
     ).toBe("mismatch");
     expect(
