@@ -63,6 +63,11 @@ describe("CI changed Node test plan", () => {
     expect(hasQaSmokeAffectingChange(["extensions/discord/src/index.ts"])).toBe(false);
     expect(hasQaSmokeAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
     expect(hasQaSmokeAffectingChange(["test/scripts/ci-node-test-plan.test.ts"])).toBe(false);
+    // The QA lane's own orchestration must not be able to skip the lane.
+    expect(hasQaSmokeAffectingChange([".github/workflows/ci.yml"])).toBe(true);
+    expect(hasQaSmokeAffectingChange([".github/actions/setup-node-env/action.yml"])).toBe(true);
+    expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mjs"])).toBe(true);
+    expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
     // Deleted source files cannot be graphed; fail safe to running QA smoke.
     expect(hasQaSmokeAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
   });

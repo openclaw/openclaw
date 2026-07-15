@@ -48,9 +48,11 @@ export function hasBuildArtifactAffectingChange(changedPaths) {
 // graph: the qa-lab harness and scenario data, the packaged-CLI build inputs,
 // the control UI (playwright scenario), the two channels the smoke profile
 // drives (matrix, telegram), and workspace packages whose package-specifier
-// imports the relative import graph cannot see.
+// imports the relative import graph cannot see. The QA lane's own
+// orchestration (this planner, the CI workflow, composite actions) is also
+// QA-impacting: changes to the gate must not be able to skip the gated lane.
 const QA_SMOKE_SURFACE_RE =
-  /^(?:extensions\/(?:matrix|qa-lab|telegram)|packages|qa|ui)\/|^scripts\/(?:build-all\.mjs|package-openclaw-for-docker\.mjs)$|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|npm-shrinkwrap\.json|pnpm-workspace\.yaml|tsdown\.config\.ts)$/u;
+  /^(?:extensions\/(?:matrix|qa-lab|telegram)|packages|qa|ui)\/|^scripts\/(?:build-all\.mjs|package-openclaw-for-docker\.mjs)$|^scripts\/lib\/ci-changed-node-test-plan\.mjs$|^\.github\/(?:workflows\/ci\.yml$|actions\/)|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|npm-shrinkwrap\.json|pnpm-workspace\.yaml|tsdown\.config\.ts)$/u;
 // The smoke profile runs the packaged CLI end to end, so its runtime blast
 // radius is exactly the CLI entry's import graph (dynamic imports included).
 const QA_SMOKE_RUNTIME_ENTRY = "src/index.ts";
