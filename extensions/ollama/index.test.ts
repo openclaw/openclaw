@@ -1448,6 +1448,48 @@ describe("ollama plugin", () => {
     expect(auth).toBeUndefined();
   });
 
+  it("does not attach MiniMax marker cleanup to Ollama Cloud MiniMax transports", () => {
+    const provider = registerOllamaCloudProvider();
+    const nativeBaseStreamFn = vi.fn(() => ({}) as never);
+    const openAiBaseStreamFn = vi.fn(() => ({}) as never);
+
+    expect(
+      provider.resolveDynamicModel?.({
+        provider: "ollama-cloud",
+        modelId: "minimax-m2.7:cloud",
+      } as never),
+    ).toMatchObject({
+      provider: "ollama-cloud",
+      id: "minimax-m2.7:cloud",
+    });
+    expect(provider.textTransforms).toBeUndefined();
+    expect(
+      provider.wrapStreamFn?.({
+        provider: "ollama-cloud",
+        modelId: "minimax-m2.7:cloud",
+        model: {
+          api: "ollama",
+          provider: "ollama-cloud",
+          id: "minimax-m2.7:cloud",
+        },
+        streamFn: nativeBaseStreamFn,
+      } as never),
+    ).toBe(nativeBaseStreamFn);
+    expect(
+      provider.wrapStreamFn?.({
+        provider: "ollama-cloud",
+        modelId: "minimax-m2.7:cloud",
+        model: {
+          api: "openai-completions",
+          provider: "ollama-cloud",
+          id: "minimax-m2.7:cloud",
+          baseUrl: "https://ollama.com/v1",
+        },
+        streamFn: openAiBaseStreamFn,
+      } as never),
+    ).toBe(openAiBaseStreamFn);
+  });
+
   it("registers ollama-cloud as a hosted provider", async () => {
     const provider = registerOllamaCloudProvider();
 

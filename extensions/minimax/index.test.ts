@@ -27,6 +27,13 @@ const minimaxProviderPlugin = {
   },
 };
 
+function createEmptyStream(): ReturnType<StreamFn> {
+  return {
+    result: async () => ({}) as never,
+    async *[Symbol.asyncIterator]() {},
+  } as ReturnType<StreamFn>;
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -69,6 +76,21 @@ describe("minimax provider hooks", () => {
         modelId: "MiniMax-M2.7",
       } as never),
     ).toBe("native");
+  });
+
+  it("owns message-end stream handling in the official MiniMax provider hooks", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const apiProvider = requireRegisteredProvider(providers, "minimax");
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+
+    expect(apiProvider.textTransforms).toBeUndefined();
+    expect(portalProvider.textTransforms).toBeUndefined();
+    expect(apiProvider.wrapStreamFn).toBeTypeOf("function");
+    expect(portalProvider.wrapStreamFn).toBe(apiProvider.wrapStreamFn);
   });
 
   it("defaults M3 thinking on while keeping M2.x thinking off by default", async () => {
@@ -283,7 +305,7 @@ describe("minimax provider hooks", () => {
     let resolvedApiModelId = "";
     const captureApiModel: StreamFn = (model) => {
       resolvedApiModelId = model.id ?? "";
-      return {} as ReturnType<StreamFn>;
+      return createEmptyStream();
     };
     const wrappedApiStream = apiProvider.wrapStreamFn?.({
       provider: "minimax",
@@ -305,7 +327,7 @@ describe("minimax provider hooks", () => {
     let resolvedPortalModelId = "";
     const capturePortalModel: StreamFn = (model) => {
       resolvedPortalModelId = model.id ?? "";
-      return {} as ReturnType<StreamFn>;
+      return createEmptyStream();
     };
     const wrappedPortalStream = portalProvider.wrapStreamFn?.({
       provider: "minimax-portal",
