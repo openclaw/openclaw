@@ -441,45 +441,111 @@ function findSourceTurnRange(
   return undefined;
 }
 
-function hasToolResultForCallInSourceTurn(params: {
+function readToolCallId(message: Record<string, unknown>): string | undefined {
+  return [
+    message.toolCallId,
+    message.toolUseId,
+    message.tool_call_id,
+    message.tool_use_id,
+    message.callId,
+    message.call_id,
+  ]
+    .map(normalizeOptionalString)
+    .find(Boolean);
+}
+
+function findMessageToolCallIndexInSourceTurn(params: {
   messages: readonly unknown[];
   sourceTurnRange: { startIndex: number; endIndex: number };
   toolCallId: string;
-}): boolean {
-  return params.messages
-    .slice(params.sourceTurnRange.startIndex + 1, params.sourceTurnRange.endIndex)
-    .some((message) => {
-      const role = getMessageRole(message);
-      if (!message || typeof message !== "object" || (role !== "tool" && role !== "toolResult")) {
+}): number | undefined {
+  for (
+    let index = params.sourceTurnRange.endIndex - 1;
+    index > params.sourceTurnRange.startIndex;
+    index -= 1
+  ) {
+    const message = params.messages[index];
+    if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
+      continue;
+    }
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    const matched = content.some((block) => {
+      if (!block || typeof block !== "object") {
         return false;
       }
-      const record = message as Record<string, unknown>;
-      return [
-        record.toolCallId,
-        record.toolUseId,
-        record.tool_call_id,
-        record.tool_use_id,
-        record.callId,
-        record.call_id,
-      ].some((value) => normalizeOptionalString(value) === params.toolCallId);
+      const record = block as Record<string, unknown>;
+      const type = normalizeOptionalString(record.type);
+      return (
+        (type === "toolCall" || type === "toolUse" || type === "tool_use") &&
+        normalizeOptionalString(record.id) === params.toolCallId &&
+        normalizeOptionalString(record.name) === "message"
+      );
     });
+    if (matched) {
+      return index;
+    }
+  }
+  return undefined;
+}
+
+function isSuccessfulMessageToolResult(message: unknown, toolCallId: string): boolean {
+  const role = getMessageRole(message);
+  if (!message || typeof message !== "object" || (role !== "tool" && role !== "toolResult")) {
+    return false;
+  }
+  const record = message as Record<string, unknown>;
+  return (
+    readToolCallId(record) === toolCallId &&
+    normalizeOptionalString(record.toolName) === "message" &&
+    record.isError !== true
+  );
+}
+
+function isExactMessageToolDeliveryMirror(params: {
+  message: unknown;
+  sourceTurnId: string;
+  toolCallId: string;
+}): boolean {
+  if (!params.message || typeof params.message !== "object") {
+    return false;
+  }
+  const marker = (params.message as { openclawDeliveryMirror?: unknown }).openclawDeliveryMirror;
+  if (!marker || typeof marker !== "object") {
+    return false;
+  }
+  const delivery = marker as Record<string, unknown>;
+  return (
+    delivery.kind === "message-tool-source-reply" &&
+    delivery.final === true &&
+    normalizeOptionalString(delivery.sourceTurnId) === params.sourceTurnId &&
+    normalizeOptionalString(delivery.toolCallId) === params.toolCallId
+  );
+}
+
+function canAppendRecoveredToolResultAtSourceTurnTail(params: {
+  messages: readonly unknown[];
+  sourceTurnId: string;
+  sourceTurnRange: { startIndex: number; endIndex: number };
+  toolCallId: string;
+  toolCallIndex: number;
+}): boolean {
+  if (params.sourceTurnRange.endIndex !== params.messages.length) {
+    return false;
+  }
+  return params.messages.slice(params.toolCallIndex + 1).every((message) =>
+    isExactMessageToolDeliveryMirror({
+      message,
+      sourceTurnId: params.sourceTurnId,
+      toolCallId: params.toolCallId,
+    }),
+  );
 }
 
 function buildRecoveryToolResultIdempotencyKey(sourceTurnId: string, toolCallId: string): string {
   return `restart-recovery:message-tool-result:${sourceTurnId}:${toolCallId}`;
-}
-
-function hasRecoveryToolResult(messages: readonly unknown[], idempotencyKey: string): boolean {
-  return messages.some((message) => {
-    const role = getMessageRole(message);
-    if (!message || typeof message !== "object" || (role !== "tool" && role !== "toolResult")) {
-      return false;
-    }
-    return (
-      normalizeOptionalString((message as { idempotencyKey?: unknown }).idempotencyKey) ===
-      idempotencyKey
-    );
-  });
 }
 
 function isMeaningfulTailMessage(message: unknown): boolean {
@@ -893,6 +959,11 @@ async function markSessionFailed(params: {
   return marked;
 }
 
+type RecoveryCheckpointCompletion =
+  | { outcome: "completed" }
+  | { outcome: "changed" }
+  | { outcome: "unsafe-transcript"; reason: string };
+
 async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   entry: SessionEntry;
   messages: readonly unknown[];
@@ -901,7 +972,7 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   sessionKey: string;
   sourceTurnId?: string;
   toolCallId?: string;
-}): Promise<boolean> {
+}): Promise<RecoveryCheckpointCompletion> {
   const expectedRecoveryRunId = normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId);
   const expectedRecoverySourceRunId = normalizeOptionalString(
     params.entry.restartRecoveryDeliverySourceRunId,
@@ -936,25 +1007,59 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   const sourceTurnRange = sourceTurnId
     ? findSourceTurnRange(params.messages, sourceTurnId)
     : undefined;
-  if (params.toolCallId && (!sourceTurnId || sourceTurnRange === undefined)) {
-    return false;
+  const toolCallId = normalizeOptionalString(params.toolCallId);
+  if (toolCallId && (!sourceTurnId || sourceTurnRange === undefined)) {
+    return {
+      outcome: "unsafe-transcript",
+      reason: "terminal delivery cannot be matched to its durable source turn",
+    };
+  }
+  const messageToolCallIndex =
+    toolCallId && sourceTurnRange
+      ? findMessageToolCallIndexInSourceTurn({
+          messages: params.messages,
+          sourceTurnRange,
+          toolCallId,
+        })
+      : undefined;
+  if (toolCallId && messageToolCallIndex === undefined) {
+    return {
+      outcome: "unsafe-transcript",
+      reason: "terminal delivery cannot be matched to its message tool call",
+    };
   }
   const recoveryToolResultIdempotencyKey =
-    params.toolCallId && sourceTurnId
-      ? buildRecoveryToolResultIdempotencyKey(sourceTurnId, params.toolCallId)
+    toolCallId && sourceTurnId
+      ? buildRecoveryToolResultIdempotencyKey(sourceTurnId, toolCallId)
       : undefined;
+  const hasSuccessfulToolResult =
+    toolCallId && sourceTurnRange && messageToolCallIndex !== undefined
+      ? params.messages
+          .slice(messageToolCallIndex + 1, sourceTurnRange.endIndex)
+          .some((message) => isSuccessfulMessageToolResult(message, toolCallId))
+      : false;
   if (
-    params.toolCallId &&
+    toolCallId &&
     sourceTurnId &&
     sourceTurnRange !== undefined &&
+    messageToolCallIndex !== undefined &&
     recoveryToolResultIdempotencyKey &&
-    !hasToolResultForCallInSourceTurn({
-      messages: params.messages,
-      sourceTurnRange,
-      toolCallId: params.toolCallId,
-    }) &&
-    !hasRecoveryToolResult(params.messages, recoveryToolResultIdempotencyKey)
+    !hasSuccessfulToolResult
   ) {
+    if (
+      !canAppendRecoveredToolResultAtSourceTurnTail({
+        messages: params.messages,
+        sourceTurnId,
+        sourceTurnRange,
+        toolCallId,
+        toolCallIndex: messageToolCallIndex,
+      })
+    ) {
+      return {
+        outcome: "unsafe-transcript",
+        reason: "terminal delivery would require an out-of-order transcript repair",
+      };
+    }
     const expectedSessionState: SessionTranscriptTurnExpectedState = {
       abortedLastRun: params.entry.abortedLastRun,
       restartRecoveryBeforeAgentReplyState: params.entry.restartRecoveryBeforeAgentReplyState,
@@ -989,7 +1094,7 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
             idempotencyLookup: "scan",
             message: {
               role: "toolResult",
-              toolCallId: params.toolCallId,
+              toolCallId,
               toolName: "message",
               content: [{ type: "text", text: "Message delivered before gateway restart." }],
               idempotencyKey: recoveryToolResultIdempotencyKey,
@@ -1006,7 +1111,7 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     if (completed) {
       log.info(`reconciled delivered terminal reply after restart: ${params.sessionKey}`);
     }
-    return completed;
+    return { outcome: completed ? "completed" : "changed" };
   }
   const marked = await applySessionEntryReplacements({
     sessionKeys: [params.sessionKey],
@@ -1039,7 +1144,7 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
         : `reconciled handled silent reply after restart: ${params.sessionKey}`,
     );
   }
-  return marked;
+  return { outcome: marked ? "completed" : "changed" };
 }
 
 async function sendUnresumableSessionNotice(params: {
@@ -1459,7 +1564,7 @@ async function recoverStore(params: {
         result[disposition]++;
         continue;
       }
-      const completed = await markSessionCompletedAfterRecoveryCheckpoint({
+      const completion = await markSessionCompletedAfterRecoveryCheckpoint({
         entry,
         messages,
         reason: resumePolicy.reason,
@@ -1472,11 +1577,21 @@ async function recoverStore(params: {
               toolCallId: resumePolicy.toolCallId,
             }),
       });
-      if (completed) {
+      if (completion.outcome === "completed") {
         params.resumedSessionKeys.add(resumeDedupeKey);
         result.recovered++;
-      } else {
+      } else if (completion.outcome === "changed") {
         result.skipped++;
+      } else {
+        const disposition = await failUnresumableMainSession({
+          cfg: params.cfg,
+          entry,
+          expectedRecoverySourceRunId,
+          reason: completion.reason,
+          sessionKey,
+          storePath: params.storePath,
+        });
+        result[disposition]++;
       }
       continue;
     }
