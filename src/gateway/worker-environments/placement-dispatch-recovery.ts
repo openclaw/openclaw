@@ -198,9 +198,12 @@ export function createPlacementRecoveryActions(deps: {
 
   // Runtime sweeps must not classify a live dispatch preparation as a crash. They only repair
   // durable active ownership and retry teardown already fenced by a previous failure.
-  const reconcileActive = async (): Promise<void> => {
+  const reconcileActive = async (environmentId?: string): Promise<void> => {
     await environments.reconcileOnce();
     for (const placement of placements.listForReconcile()) {
+      if (environmentId !== undefined && placement.environmentId !== environmentId) {
+        continue;
+      }
       if (isFailedPlacement(placement)) {
         await failure.retryFailedTeardown(placement);
         continue;

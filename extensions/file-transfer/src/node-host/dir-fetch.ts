@@ -285,9 +285,3 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     entries,
   };
 }
-
-export const testing = {
-  createTarArchive,
-  listTarEntries,
-  preflightDu,
-};

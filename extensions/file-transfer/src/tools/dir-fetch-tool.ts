@@ -568,9 +568,3 @@ export function createDirFetchTool(): AnyAgentTool {
     },
   };
 }
-
-export const testing = {
-  preValidateTarball,
-  unpackTar,
-  validateTarUncompressedBudget,
-};

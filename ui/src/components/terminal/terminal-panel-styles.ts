@@ -124,20 +124,23 @@ export const terminalPanelStyles = css`
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
+    align-self: center;
+    flex: 0 0 26px;
+    width: 26px;
+    height: 26px;
     opacity: 0;
     border: none;
     background: transparent;
-    color: inherit;
-    border-radius: 4px;
+    color: var(--muted, #8a919e);
+    border-radius: 6px;
     padding: 0;
   }
-  .tp-tab:hover + .tp-tab__close,
-  .tp-tab[active] + .tp-tab__close,
+  :where(.tp-tab:hover, .tp-tab[active]) + .tp-tab__close {
+    opacity: 0.7;
+  }
   .tp-tab__close:hover,
   .tp-tab__close:focus-visible {
-    opacity: 0.7;
+    opacity: 1;
   }
   .tp-new,
   .tp-icon {

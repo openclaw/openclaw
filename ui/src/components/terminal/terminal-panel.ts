@@ -22,11 +22,11 @@ import {
 } from "./terminal-connection.ts";
 import { terminalPanelStyles } from "./terminal-panel-styles.ts";
 import { renderTerminalPanelTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
+import { terminalPanelUploadStyles } from "./terminal-panel-upload-styles.ts";
 import {
   renderTerminalPanelActions,
   renderTerminalUploadLayer,
   TerminalPanelUploadController,
-  terminalPanelUploadStyles,
 } from "./terminal-panel-upload.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import { renderTerminalSessionPicker } from "./terminal-session-picker.ts";
@@ -696,6 +696,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     if (!tab) {
       return;
     }
+    this.upload.cancelForTab(tab);
     if (tab.gatewaySessionId && tab.status === "live") {
       void this.connection?.close(tab.gatewaySessionId);
     } else if (!tab.gatewaySessionId && tab.status === "live") {

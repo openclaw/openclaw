@@ -20,4 +20,4 @@ channels: discord; contracts: transcriptSourceProviders; skills
 
 ## Related docs
 
-- [discord](/channels/discord)
+- [Discord](/channels/discord)
