@@ -27,7 +27,6 @@ export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
-/** @deprecated Use OpenClawConfig instead */
 
 export type { SecretInput } from "../config/types.secrets.js";
 export type { RuntimeEnv } from "../runtime.js";
@@ -48,4 +47,5 @@ export {
   ContextEngineRuntimeSettingsUnsupportedError,
 } from "../context-engine/types.js";
 export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
+/** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as OpenClawSchemaType } from "../config/config.js";
