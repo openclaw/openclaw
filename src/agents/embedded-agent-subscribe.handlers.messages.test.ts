@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import {
-  buildAssistantStreamData,
   consumePendingAssistantReplyDirectivesIntoReply,
   consumePendingToolMediaIntoReply,
   consumePendingToolMediaReply,
@@ -12,9 +11,12 @@ import {
   handleMessageUpdate,
   hasAssistantVisibleReply,
   readPendingToolMediaReply,
+} from "./embedded-agent-subscribe.handlers.messages.js";
+import {
+  buildAssistantStreamData,
   recordPendingAssistantReplyDirectives,
   resolveSilentReplyFallbackText,
-} from "./embedded-agent-subscribe.handlers.messages.js";
+} from "./embedded-agent-subscribe.handlers.messages.test-support.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import {
   createOpenAiResponsesPartial,
