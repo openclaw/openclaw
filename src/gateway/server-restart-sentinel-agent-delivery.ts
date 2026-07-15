@@ -480,9 +480,12 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       );
     }
     if (hasRestartRecoveryTerminalRun(latestEntry, queuedRunId)) {
-      const terminalEvidence = getRestartRecoveryTerminalDeliveryEvidence(latestEntry, queuedRunId);
-      if (terminalEvidence) {
-        return await evaluateResult(terminalEvidence);
+      const latestTerminalEvidence = getRestartRecoveryTerminalDeliveryEvidence(
+        latestEntry,
+        queuedRunId,
+      );
+      if (latestTerminalEvidence) {
+        return await evaluateResult(latestTerminalEvidence);
       }
       log.warn(
         "queued generated-media agent turn ended without durable delivery evidence; failing closed",

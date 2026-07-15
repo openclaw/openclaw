@@ -448,7 +448,7 @@ async function drainRestartContinuationQueue(params: {
       drainKey: `restart-continuation:${params.entryId}`,
       logLabel: "restart continuation",
       log: params.log,
-      deliver: (entry, context = {}) =>
+      deliver: (entry, context) =>
         deliverQueuedSessionDelivery({
           deps: params.deps,
           entry,
@@ -481,7 +481,7 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
   maxEnqueuedAt?: number;
 }) {
   await recoverPendingSessionDeliveries({
-    deliver: (entry, context = {}) =>
+    deliver: (entry, context) =>
       deliverQueuedSessionDelivery({
         deps: params.deps,
         entry,
