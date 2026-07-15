@@ -37,8 +37,14 @@ export class BoundedBuffer<T> {
     }
     this.values.push(value);
     this.size += valueSize;
-    while (this.size > this.capacity && this.values.length > 1) {
-      this.size -= this.measure(this.values.shift()!);
+        // Only drop old elements if the new element itself fits within capacity.
+    // Otherwise the fit/clear path below will handle it, and dropping old
+    // elements would be wasted work (especially when measure() returns 0
+    // for already-stored elements, causing the loop to scan them all).
+ (valueSize <= this.capacity) {
+      while (this.size > this.capacity && this.values.length > 1) {
+        this.size -= this.measure(this.values.shift()!);
+      }
     }
     if (this.size > this.capacity) {
       const fitted = this.overflow.fit?.(value, this.capacity);

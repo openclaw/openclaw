@@ -51,4 +51,27 @@ describe("BoundedBuffer", () => {
     expect(buffer.drain()).toEqual(drained);
     expect(onOverflow).toHaveBeenCalledTimes(overflowCalls);
   });
-});
+
+  it("skips the drop loop when the new element's measure exceeds capacity", () => {
+    // measure returns 0 for first 5 calls, 15 for the 6th (the oversized element)
+    let callIndex = 0;
+    const measure = vi.fn(() => {
+      callIndex++;
+      return callIndex <= 5 ? 0 : 15;
+    });
+    const buffer = new BoundedBuffer<string>(10, { mode: "drop-oldest" }, measure);
+
+    // Push 5 zero-measure elements
+    for (let i = 0; i < 5; i++) {
+      buffer.push("zero");
+    }
+    expect(measure).toHaveBeenCalledTimes(5);
+
+    // Push oversized element (measure returns 15 > capacity 10)
+    buffer.push("oversized");
+
+    // measure was called exactly 6 times: 5 for 'zero's + 1 for 'oversized'
+    // No extra calls from shift() because valueSize(15) > capacity(10) skips the loop
+    expect(measure).toHaveBeenCalledTimes(6);
+    expect(buffer.drain()).toEqual([]); // buffer cleared by fit/clear
+  });});
