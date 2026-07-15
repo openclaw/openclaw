@@ -221,6 +221,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      // +1: runDetachedWebhookWork gives post-ack work an independently tracked admission root.
       // +9: app-guided provider setup context/candidate/hook types and their public mirrors.
       // +3: atomic SQLite STRICT migration function, options, and result for plugin stores.
       // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
@@ -233,7 +234,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: widget HTML validation helpers and tool input error.
       // Used-union narrowing: 31 wildcard barrels drop to explicit used exports;
       // proxy stream API and codex marker/scaffold pins retained.
-      7948,
+      7949,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -241,6 +242,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // +1: atomic SQLite STRICT migration for plugin stores.
+      // +1: runDetachedWebhookWork gives post-ack work an independently tracked admission root.
       // Harvest: channel-ingress -19; dead channel-message dispatch aliases -23.
       // Harvest: retired qa-live-transport-scenarios subpath -3.
       // +4: shared plan checklist formatter across channel barrels.
@@ -249,7 +251,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +6: active plan-step helpers pinned through channel-outbound and mirrors.
       // +2: widget HTML document detection and size assertion.
       // Used-union narrowing of the 31 wildcard barrels.
-      4436,
+      4437,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
