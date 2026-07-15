@@ -463,23 +463,20 @@ async function closeAcpRuntimeForSession(params: {
     return undefined;
   }
   params.assertCurrent?.();
-  let acpCancelTimedOut = false;
   if (cancelOutcome.status === "timeout") {
     logVerbose(
       `sessions.${params.reason}: ACP cancel timed out for ${params.sessionKey}; evicting runtime handle`,
     );
-    acpManager.evictSessionHandle(acpSessionKey);
     // Cancel may still own the session actor, so skip closeSession and go
     // straight to ACP meta reset so the next message creates a fresh session.
-    acpCancelTimedOut = true;
-  }
-  if (cancelOutcome.status === "error") {
-    logVerbose(
-      `sessions.${params.reason}: ACP cancel failed for ${params.sessionKey}: ${String(cancelOutcome.error)}`,
-    );
-  }
+    acpManager.evictSessionHandle(acpSessionKey);
+  } else {
+    if (cancelOutcome.status === "error") {
+      logVerbose(
+        `sessions.${params.reason}: ACP cancel failed for ${params.sessionKey}: ${String(cancelOutcome.error)}`,
+      );
+    }
 
-  if (!acpCancelTimedOut) {
     if (params.shouldCleanup && !params.shouldCleanup()) {
       return undefined;
     }
@@ -505,9 +502,6 @@ async function closeAcpRuntimeForSession(params: {
         `sessions.${params.reason}: ACP close timed out for ${params.sessionKey}; evicting runtime handle`,
       );
       acpManager.evictSessionHandle(acpSessionKey);
-      // Close timed out while the manager was waiting for runtime.close().
-      // The timed-out operation may still own the session actor, so evict
-      // the cached handle immediately and continue to meta reset below.
     }
     if (closeOutcome.status === "error") {
       logVerbose(
