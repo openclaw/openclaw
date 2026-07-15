@@ -66,6 +66,10 @@ function decodeMessageActionContext(
     return undefined;
   }
   const rawToolContext = value.toolContext;
+  const sourceReplyFinal = value.sourceReplyFinal;
+  if (sourceReplyFinal !== undefined && typeof sourceReplyFinal !== "boolean") {
+    return undefined;
+  }
   if (rawToolContext !== undefined && !isRecord(rawToolContext)) {
     return undefined;
   }
@@ -123,6 +127,7 @@ function decodeMessageActionContext(
     : undefined;
   return {
     expiresAtMs: value.expiresAtMs,
+    sourceReplyFinal,
     sessionId: normalizeOptionalString(value.sessionId),
     requesterAccountId: normalizeOptionalString(value.requesterAccountId),
     requesterSenderId: normalizeOptionalString(value.requesterSenderId),

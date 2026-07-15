@@ -1594,13 +1594,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
               clientDisplayName: "agent",
               mode: GATEWAY_CLIENT_MODES.BACKEND,
-              resolveAgentRuntimeIdentityToken: () =>
+              resolveAgentRuntimeIdentityToken: (context) =>
                 resolveMessageActionAgentRuntimeIdentityToken({
                   opts: gatewayOpts,
                   target: gatewayResolved.target,
                   turnCapability: options?.messageActionTurnCapability,
                   runId: options?.runId,
                   sessionId: options?.sessionId,
+                  sourceReplyFinal: context?.sourceReplyFinal,
                 }),
             };
       const hasCurrentMessageId =

@@ -13,6 +13,7 @@ const MAX_ACTIVE_CAPABILITIES = 4096;
 
 export type AgentRuntimeMessageActionContext = {
   expiresAtMs: number;
+  sourceReplyFinal?: boolean;
   sessionId?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;

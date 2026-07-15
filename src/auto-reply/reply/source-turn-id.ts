@@ -6,6 +6,11 @@ import {
 import { normalizeAccountId } from "../../routing/account-id.js";
 
 const CHANNEL_SOURCE_TURN_ID_PREFIX = "channel-user:v1:";
+const CHANNEL_SOURCE_TURN_ID = Symbol("openclaw.channelSourceTurnId");
+
+type ChannelSourceTurnContext = object & {
+  [CHANNEL_SOURCE_TURN_ID]?: string;
+};
 
 /**
  * Identifies one inbound channel turn across shared sessions.
@@ -31,4 +36,18 @@ export function buildChannelSourceTurnId(params: {
     )
     .digest("hex");
   return `${CHANNEL_SOURCE_TURN_ID_PREFIX}${digest}`;
+}
+
+/** Carries host-only source identity through internal context clones without public type drift. */
+export function setChannelSourceTurnId(context: object, sourceTurnId: string | undefined): void {
+  const scoped = context as ChannelSourceTurnContext;
+  if (sourceTurnId) {
+    scoped[CHANNEL_SOURCE_TURN_ID] = sourceTurnId;
+  } else {
+    delete scoped[CHANNEL_SOURCE_TURN_ID];
+  }
+}
+
+export function readChannelSourceTurnId(context: object): string | undefined {
+  return (context as ChannelSourceTurnContext)[CHANNEL_SOURCE_TURN_ID];
 }

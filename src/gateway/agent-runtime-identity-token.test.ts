@@ -117,6 +117,7 @@ describe("agent runtime identity token", () => {
       sessionKey: "session-1",
       messageActionContext: {
         expiresAtMs: 5000,
+        sourceReplyFinal: true,
         sessionId: "session-id-1",
         requesterAccountId: "ops",
         requesterSenderId: "sender-1",
@@ -135,6 +136,7 @@ describe("agent runtime identity token", () => {
       sessionKey: "session-1",
       messageActionContext: {
         expiresAtMs: 5000,
+        sourceReplyFinal: true,
         sessionId: "session-id-1",
         requesterAccountId: "ops",
         requesterSenderId: "sender-1",

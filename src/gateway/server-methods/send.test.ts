@@ -2182,7 +2182,6 @@ describe("gateway send mirroring", () => {
         },
         sessionKey,
         agentId: "main",
-        sourceReplyFinal: true,
         idempotencyKey: "idem-source-message-action",
       },
       {
@@ -2193,6 +2192,7 @@ describe("gateway send mirroring", () => {
             sessionKey,
             messageActionContext: {
               expiresAtMs: Date.now() + 60_000,
+              sourceReplyFinal: true,
               toolContext: {
                 currentChannelProvider: "telegram",
                 currentChannelId: "chat-123",

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildChannelSourceTurnId } from "./source-turn-id.js";
+import {
+  buildChannelSourceTurnId,
+  readChannelSourceTurnId,
+  setChannelSourceTurnId,
+} from "./source-turn-id.js";
 
 describe("buildChannelSourceTurnId", () => {
   it("is stable for the same normalized channel route", () => {
@@ -51,5 +55,13 @@ describe("buildChannelSourceTurnId", () => {
       buildChannelSourceTurnId({ provider: "telegram", conversationId: "chat:42" }),
     ).toBeUndefined();
     expect(buildChannelSourceTurnId({ provider: "telegram", messageId: "7" })).toBeUndefined();
+  });
+
+  it("carries host-only identity through context clones without serializing it", () => {
+    const context = { MessageSid: "7" };
+    setChannelSourceTurnId(context, "channel-user:v1:source-7");
+
+    expect(readChannelSourceTurnId({ ...context })).toBe("channel-user:v1:source-7");
+    expect(JSON.stringify(context)).toBe('{"MessageSid":"7"}');
   });
 });

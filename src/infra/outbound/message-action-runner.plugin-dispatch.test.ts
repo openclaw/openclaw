@@ -1127,6 +1127,7 @@ describe("runMessageAction plugin dispatch", () => {
         ok: true,
         messageId: "gw-send-1",
       });
+      const resolveAgentRuntimeIdentityToken = vi.fn(async () => "test-token-placeholder");
 
       const result = await runMessageAction({
         cfg: {
@@ -1146,6 +1147,7 @@ describe("runMessageAction plugin dispatch", () => {
           message: "hello from cli",
         },
         gateway: {
+          resolveAgentRuntimeIdentityToken,
           clientName: "cli",
           mode: "cli",
         },
@@ -1164,11 +1166,14 @@ describe("runMessageAction plugin dispatch", () => {
           channel: "gatewaychat",
           action: "send",
           conversationReadOrigin: "direct-operator",
-          sourceReplyFinal: true,
           idempotencyKey: "idem-gateway-action",
         },
         "gateway call params",
       );
+      expect(gatewayParams).not.toHaveProperty("sourceReplyFinal");
+      expect(resolveAgentRuntimeIdentityToken).toHaveBeenCalledWith({
+        sourceReplyFinal: true,
+      });
       expectRecordFields(
         readRecordField(gatewayParams, "params", "gateway message params"),
         {

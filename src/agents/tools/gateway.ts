@@ -387,6 +387,7 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   turnCapability?: string;
   runId?: string;
   sessionId?: string;
+  sourceReplyFinal?: boolean;
 }): Promise<string | undefined> {
   const identity = getGatewayToolCallerIdentity();
   if (!identity) {
@@ -409,7 +410,12 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   }
   return await mintAgentRuntimeIdentityToken({
     ...identity,
-    messageActionContext,
+    messageActionContext: {
+      ...messageActionContext,
+      ...(params.sourceReplyFinal !== undefined
+        ? { sourceReplyFinal: params.sourceReplyFinal }
+        : {}),
+    },
   });
 }
 

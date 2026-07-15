@@ -111,7 +111,9 @@ export type MessageActionRunnerGateway = {
   url?: string;
   token?: string;
   timeoutMs?: number;
-  resolveAgentRuntimeIdentityToken?: () => Promise<string | undefined>;
+  resolveAgentRuntimeIdentityToken?: (context?: {
+    sourceReplyFinal?: boolean;
+  }) => Promise<string | undefined>;
   clientName: GatewayClientName;
   clientDisplayName?: string;
   mode: GatewayClientMode;
@@ -227,12 +229,15 @@ const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
 async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
   actionParams: Record<string, unknown>;
+  sourceReplyFinal?: boolean;
   abortSignal?: AbortSignal;
 }): Promise<T> {
   const { callGatewayLeastPrivilege, isGatewayTransportError } =
     await loadMessageActionGatewayRuntime();
   const gateway = resolveGatewayActionOptions(params.gateway);
-  const agentRuntimeIdentityToken = await params.gateway?.resolveAgentRuntimeIdentityToken?.();
+  const agentRuntimeIdentityToken = await params.gateway?.resolveAgentRuntimeIdentityToken?.({
+    sourceReplyFinal: params.sourceReplyFinal,
+  });
   // A timed-out send is reattached with the same idempotency key. Cap only the
   // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
   const timeoutMs =
@@ -737,6 +742,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
   const payload = await callGatewayMessageAction<unknown>({
     gateway: params.gateway,
     abortSignal: params.input.abortSignal,
+    sourceReplyFinal: params.input.sourceReplyFinal,
     actionParams: {
       channel: params.channel,
       action: params.action,
@@ -746,9 +752,6 @@ async function runGatewayPluginMessageActionOrNull(params: {
       sessionKey: params.input.sessionKey,
       sessionId: params.input.sessionId,
       inboundTurnKind: params.input.inboundEventKind,
-      ...(params.input.sourceReplyFinal !== undefined
-        ? { sourceReplyFinal: params.input.sourceReplyFinal }
-        : {}),
       agentId: params.agentId,
       ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
       idempotencyKey: await resolveGatewayActionIdempotencyKey(

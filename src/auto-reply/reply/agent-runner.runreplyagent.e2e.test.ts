@@ -39,6 +39,7 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
+import { setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type ReplyOptionsWithOperationRunState = {
@@ -228,6 +229,7 @@ function createMinimalRun(params?: {
   replyOperation?: ReplyOperation;
   currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
   sessionCtx?: Partial<TemplateContext>;
+  sourceTurnId?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
   beforeAgentReply?: (admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>;
 }) {
@@ -238,7 +240,7 @@ function createMinimalRun(params?: {
     MessageSid: "msg",
     ...params?.sessionCtx,
   } as unknown as TemplateContext;
-  sessionCtx.SourceTurnId ??= sessionCtx.MessageSid;
+  setChannelSourceTurnId(sessionCtx, params?.sourceTurnId ?? sessionCtx.MessageSid);
   const resolvedQueue = {
     mode: params?.resolvedQueueMode ?? "interrupt",
   } as unknown as QueueSettings;
@@ -957,8 +959,8 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionCtx: {
         Provider: "webchat",
         OriginatingChannel: "webchat",
-        SourceTurnId: "channel-user:v1:different-from-gateway-run",
       },
+      sourceTurnId: "channel-user:v1:different-from-gateway-run",
       runOverrides: { messageProvider: "webchat" },
       sessionEntry,
       sessionStore,

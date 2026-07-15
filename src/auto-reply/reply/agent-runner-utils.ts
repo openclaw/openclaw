@@ -31,6 +31,7 @@ export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
+import { readChannelSourceTurnId } from "./source-turn-id.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 type EmbeddedReplyRoute = Pick<
@@ -120,6 +121,7 @@ export function buildThreadingToolContext(params: {
   const currentMessageId = isRestartSentinelContinuation
     ? sessionCtx.ReplyToId
     : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
+  const currentSourceTurnId = readChannelSourceTurnId(sessionCtx);
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Provider,
@@ -131,14 +133,14 @@ export function buildThreadingToolContext(params: {
   if (!config) {
     return {
       currentMessageId,
-      currentSourceTurnId: sessionCtx.SourceTurnId,
+      currentSourceTurnId,
     };
   }
   const rawProvider = normalizeOptionalLowercaseString(originProvider);
   if (!rawProvider) {
     return {
       currentMessageId,
-      currentSourceTurnId: sessionCtx.SourceTurnId,
+      currentSourceTurnId,
     };
   }
   const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
@@ -149,7 +151,7 @@ export function buildThreadingToolContext(params: {
       currentChannelId: normalizeOptionalString(originTo),
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       currentMessageId,
-      currentSourceTurnId: sessionCtx.SourceTurnId,
+      currentSourceTurnId,
       hasRepliedRef,
     };
   }
@@ -180,7 +182,7 @@ export function buildThreadingToolContext(params: {
     // Some providers expose only thread resources as reply targets; explicit
     // `undefined` means the adapter rejected the generic message-id fallback.
     currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
-    currentSourceTurnId: sessionCtx.SourceTurnId,
+    currentSourceTurnId,
   };
 }
 

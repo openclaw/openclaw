@@ -509,11 +509,13 @@ describe("gateway tool defaults", () => {
           turnCapability,
           runId: "run-1",
           sessionId: "session-1",
+          sourceReplyFinal: true,
         });
         expect(token).toEqual(expect.any(String));
         await expect(verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
           messageActionContext: {
             sessionId: "session-1",
+            sourceReplyFinal: true,
             requesterAccountId: "default",
             toolContext: {
               currentChannelProvider: "telegram",

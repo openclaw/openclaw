@@ -147,6 +147,7 @@ import { createReplyRestartRecoveryClaimController } from "./restart-recovery-cl
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import { readChannelSourceTurnId } from "./source-turn-id.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
   buildStrandedReplyRetryFollowupRun,
@@ -1564,7 +1565,7 @@ export async function runReplyAgent(params: {
         activeSessionStore[sessionKey] = entry;
       }
     },
-    sourceTurnId: sessionCtx.SourceTurnId,
+    sourceTurnId: readChannelSourceTurnId(sessionCtx),
     ...(storePath ? { storePath } : {}),
   });
   type SessionResetOptions = {
