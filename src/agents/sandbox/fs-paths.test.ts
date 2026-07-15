@@ -79,7 +79,10 @@ describe("parseSandboxBindMount", () => {
   });
 
   it("detects bind mounts whose container path differs from the host path", () => {
-    expect(hasSandboxBindContainerPathAliases(["/tmp/data:/tmp/data:rw"])).toBe(false);
+    const posixHostPathAliasesOnThisPlatform = process.platform === "win32";
+    expect(hasSandboxBindContainerPathAliases(["/tmp/data:/tmp/data:rw"])).toBe(
+      posixHostPathAliasesOnThisPlatform,
+    );
     expect(hasSandboxBindContainerPathAliases(["/tmp/data:/data:rw"])).toBe(true);
     expect(hasSandboxBindContainerPathAliases(["invalid-bind"])).toBe(false);
   });
@@ -203,8 +206,9 @@ describe("resolveSandboxFsPathWithMounts", () => {
 
     expect(thrown).toBeInstanceOf(Error);
     const message = (thrown as Error).message;
+    const shortenedWorkspace = `~${path.sep}workspace-coder`;
     expect(message).toContain(
-      "Path escapes sandbox root (~/workspace-coder; container root /workspace): /tmp/outside",
+      `Path escapes sandbox root (${shortenedWorkspace}; container root /workspace): /tmp/outside`,
     );
     expect(message).toContain("Use a path under /workspace/ instead.");
     expect(message).not.toContain(os.homedir());
