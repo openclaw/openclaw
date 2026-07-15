@@ -361,7 +361,7 @@ describe("scripts/test-docker-all scheduler", () => {
         encoding: "utf8",
         env: {
           ...process.env,
-          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "0",
+          OPENCLAW_FROZEN_TARGET_COMPATIBILITY: "0",
           OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
           OPENCLAW_DOCKER_ALL_LANES: "published-upgrade-survivor",
           OPENCLAW_DOCKER_ALL_TIMINGS: "0",
@@ -388,7 +388,7 @@ describe("scripts/test-docker-all scheduler", () => {
         encoding: "utf8",
         env: {
           ...process.env,
-          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_FROZEN_TARGET_COMPATIBILITY: "1",
           OPENCLAW_DOCKER_ALL_BUILD: "0",
           OPENCLAW_DOCKER_ALL_LANES: "published-upgrade-survivor",
           OPENCLAW_DOCKER_ALL_LOG_DIR: logDir,
@@ -422,7 +422,7 @@ describe("scripts/test-docker-all scheduler", () => {
         encoding: "utf8",
         env: {
           ...process.env,
-          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_FROZEN_TARGET_COMPATIBILITY: "1",
           OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
           OPENCLAW_DOCKER_ALL_LANES: "published-upgrade-survivor,plugin-binding-command-escape",
           OPENCLAW_DOCKER_ALL_TIMINGS: "0",

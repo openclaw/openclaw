@@ -1460,8 +1460,8 @@ async function main() {
   const preflightCleanup = parseBool(process.env.OPENCLAW_DOCKER_ALL_PREFLIGHT_CLEANUP, true);
   const timingsEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_TIMINGS, true);
   const buildEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_BUILD, true);
-  const allowFrozenTargetScenarioOmissions = parseBool(
-    process.env.OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS,
+  const frozenTargetCompatibility = parseBool(
+    process.env.OPENCLAW_FROZEN_TARGET_COMPATIBILITY,
     false,
   );
   const planJson =
@@ -1530,11 +1530,11 @@ async function main() {
       upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
       upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
       upgradeSurvivorTargetRoot: process.env.OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT,
-      allowFrozenTargetScenarioOmissions,
+      allowFrozenTargetScenarioOmissions: frozenTargetCompatibility,
     });
-  if (omittedUnsupportedLaneNames.length > 0 && !allowFrozenTargetScenarioOmissions) {
+  if (omittedUnsupportedLaneNames.length > 0 && !frozenTargetCompatibility) {
     throw new Error(
-      `frozen target scenario omissions require trusted workflow opt-in: ${omittedUnsupportedLaneNames.join(", ")}`,
+      `unsupported frozen-target lanes require frozen_target_compatibility=true: ${omittedUnsupportedLaneNames.join(", ")}`,
     );
   }
   if (scheduledLanes.length === 0 && omittedUnsupportedLaneNames.length === 0) {
