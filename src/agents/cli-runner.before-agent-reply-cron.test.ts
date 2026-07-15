@@ -121,7 +121,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("runCliAgent cron before_agent_reply seam", () => {
+describe("runCliAgent before_agent_reply seam", () => {
   it("rejects stale lifecycle ownership before CLI preparation", async () => {
     await expect(
       runCliAgent({
@@ -283,14 +283,21 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
   });
 
-  it("does not invoke before_agent_reply for non-cron triggers", async () => {
+  it("lets before_agent_reply claim user runs before CLI preparation", async () => {
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
-    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
+    runBeforeAgentReplyMock.mockResolvedValue({
+      handled: true,
+      reply: { text: "user turn claimed" },
+    });
 
-    await runCliAgent({ ...baseRunParams, trigger: "user" });
+    const result = await runCliAgent({ ...baseRunParams, trigger: "user" });
 
-    expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
+    expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
+    const [, hookContext] = runBeforeAgentReplyMock.mock.calls.at(0) ?? [];
+    expect(hookContext).toMatchObject({ trigger: "user" });
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.text).toBe("user turn claimed");
   });
 
   it("falls through to the CLI subprocess when no before_agent_reply hook is registered", async () => {

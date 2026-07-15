@@ -1,4 +1,4 @@
-// Coverage for cron before_agent_reply hook handling before embedded attempts.
+// Coverage for before_agent_reply hook handling before embedded attempts.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -49,7 +49,7 @@ function firstAttemptParams(): {
   return call[0];
 }
 
-describe("runEmbeddedAgent cron before_agent_reply seam", () => {
+describe("runEmbeddedAgent before_agent_reply seam", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
     await warmRunOverflowCompactionHarness(runEmbeddedAgent);
@@ -140,19 +140,25 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("does not invoke before_agent_reply for non-cron embedded runs", async () => {
+  it("lets before_agent_reply claim user runs before the embedded attempt starts", async () => {
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName: string) => hookName === "before_agent_reply",
     );
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue({
+      handled: true,
+      reply: { text: "user turn claimed" },
+    });
 
-    await runEmbeddedAgent({
+    const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
       trigger: "user",
     });
 
-    expect(mockedGlobalHookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedGlobalHookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(1);
+    const [, hookContext] = firstBeforeAgentReplyCall();
+    expect(hookContext?.trigger).toBe("user");
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.text).toBe("user turn claimed");
   });
 
   it("forwards one-shot auxiliary-run flags into the embedded attempt", async () => {

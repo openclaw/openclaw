@@ -246,7 +246,7 @@ async function runEmbeddedAgentInternal(
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
       };
-      if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
+      if (hookRunner?.hasHooks("before_agent_reply")) {
         notifyExecutionPhase("before_agent_reply", { provider, model: modelId });
         const hookResult = await hookRunner.runBeforeAgentReply(
           { cleanedBody: params.prompt },
