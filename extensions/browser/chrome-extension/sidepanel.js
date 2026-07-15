@@ -407,8 +407,12 @@ async function bindTabSession() {
   }
   sessionKey = key;
   await ensureSession(key);
-  await subscribeSession(key);
-  await hydrateHistory(key);
+  // ensureSession adopts the gateway's canonical echo into sessionKey, and
+  // handleChatEvent filters on that — so subscribe and hydrate the canonical
+  // key, not the locally derived one, or a canonicalizing gateway would leave
+  // this path listening to a key no event ever carries.
+  await subscribeSession(sessionKey);
+  await hydrateHistory(sessionKey);
 }
 
 // sessions.create with an explicit key adopts the session when it already
@@ -665,10 +669,8 @@ async function onNewChat() {
   if (pinnedTabId == null || !mainSessionKey) {
     return;
   }
-  // The generation bump is persisted, so a failure after it would leave the
-  // pane showing the old thread while sessionKey already points at the new one,
-  // and later sends would land somewhere the user cannot see. Refuse up front
-  // rather than half-applying the swap, and report the rest.
+  // Nothing to bump against without a socket: the create would be dropped and
+  // the generation spent for nothing.
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     addMessage("system", "Not connected to the gateway yet — reconnecting.");
     return;
@@ -676,8 +678,11 @@ async function onNewChat() {
   try {
     await startFreshThread();
   } catch (err) {
+    // The thread already swapped and the pane already shows it, so this reports
+    // what is still missing (the gateway session) rather than claiming the
+    // fresh conversation never started.
     const failure = err instanceof Error ? err.message : String(err);
-    addMessage("system", `Could not start a fresh conversation: ${failure}`);
+    addMessage("system", `This tab's new conversation is not registered yet: ${failure}`);
     setInputEnabled(true);
   }
 }
@@ -685,16 +690,20 @@ async function onNewChat() {
 async function startFreshThread() {
   const generation = await bumpTabGeneration(pinnedTabId);
   sessionKey = deriveTabSessionKey(mainSessionKey, pinnedTabId, generation);
-  await ensureSession(sessionKey);
-  await subscribeSession(sessionKey);
+  // The bump is persisted and sessionKey has already moved, so show the new
+  // thread BEFORE the gateway round trips rather than after. If one of them
+  // throws, the pane still matches where sends will actually land and the
+  // caller appends the failure to it — instead of leaving the old thread on
+  // screen above a swapped key. Swapping also strands the composer, because the
+  // old run's terminal event no longer matches sessionKey, so hand it back here.
   messagesEl.innerHTML = "";
   resetChatStream(stream);
   streamingEl = null;
-  // Starting a fresh thread mid-run swaps sessionKey, so the old run's terminal
-  // event is filtered by handleChatEvent and can no longer re-enable the
-  // composer. A new conversation always accepts input.
   setInputEnabled(true);
   addMessage("system", "Fresh conversation for this tab.");
+  await ensureSession(sessionKey);
+  // ensureSession adopts the gateway's canonical echo, so subscribe to that.
+  await subscribeSession(sessionKey);
 }
 newBtn.addEventListener("click", () => void onNewChat());
 
