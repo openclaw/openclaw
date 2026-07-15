@@ -14,8 +14,8 @@ import { page as sessionsPage } from "./sessions/route.ts";
 import type { SessionsRouteData } from "./sessions/sessions-page.ts";
 import { page as skillsPage } from "./skills/route.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
+import type { UsageRouteData } from "./usage/route-data.ts";
 import { page as usagePage } from "./usage/route.ts";
-import type { UsageRouteData } from "./usage/usage-page.ts";
 
 type RouteWithLoader = {
   loader?: (context: ApplicationContext, options: RouteLoaderOptions) => unknown;

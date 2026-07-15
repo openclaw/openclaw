@@ -1,47 +1,31 @@
 // Control UI module implements usage cache status behavior.
-import { t } from "../../i18n/index.ts";
 import type { SessionsUsageResult } from "./data-types.ts";
 
 type UsageCacheStatus = SessionsUsageResult["cacheStatus"];
+export type UsageCacheState = NonNullable<UsageCacheStatus>["status"] | null;
+export type UsageCacheDisplayState = "ready" | "rebuilding" | "paused";
 
-export function mergeUsageCacheStatus(
-  sessionsStatus: UsageCacheStatus,
-  costStatus: UsageCacheStatus,
-): UsageCacheStatus {
-  if (!sessionsStatus) {
-    return costStatus;
-  }
-  if (!costStatus) {
-    return sessionsStatus;
-  }
+export function getUsageCacheState(...statuses: UsageCacheStatus[]): UsageCacheState {
   const rank = { fresh: 0, partial: 1, stale: 2, refreshing: 3 } as const;
-  const status =
-    rank[costStatus.status] > rank[sessionsStatus.status]
-      ? costStatus.status
-      : sessionsStatus.status;
-  return {
-    status,
-    cachedFiles: Math.max(sessionsStatus.cachedFiles, costStatus.cachedFiles),
-    pendingFiles: Math.max(sessionsStatus.pendingFiles, costStatus.pendingFiles),
-    staleFiles: Math.max(sessionsStatus.staleFiles, costStatus.staleFiles),
-    refreshedAt:
-      Math.max(sessionsStatus.refreshedAt ?? 0, costStatus.refreshedAt ?? 0) || undefined,
-  };
+  let state: UsageCacheState = null;
+  for (const cacheStatus of statuses) {
+    if (cacheStatus && (state === null || rank[cacheStatus.status] > rank[state])) {
+      state = cacheStatus.status;
+    }
+  }
+  return state;
 }
 
-export function getUsageCacheRefreshTitle(cacheStatus: UsageCacheStatus): string | null {
-  if (
-    !cacheStatus ||
-    (cacheStatus.status !== "refreshing" &&
-      cacheStatus.status !== "stale" &&
-      cacheStatus.status !== "partial")
-  ) {
-    return null;
+export function isUsageCacheIncomplete(state: UsageCacheState): boolean {
+  return state !== null && state !== "fresh";
+}
+
+export function getUsageCacheDisplayState(
+  state: UsageCacheState,
+  autoRefreshPaused: boolean,
+): UsageCacheDisplayState {
+  if (!isUsageCacheIncomplete(state)) {
+    return "ready";
   }
-  return t("usage.cacheStatus.title", {
-    status: t(`usage.cacheStatus.status.${cacheStatus.status}`),
-    pending: String(cacheStatus.pendingFiles),
-    stale: String(cacheStatus.staleFiles),
-    cached: String(cacheStatus.cachedFiles),
-  });
+  return autoRefreshPaused ? "paused" : "rebuilding";
 }

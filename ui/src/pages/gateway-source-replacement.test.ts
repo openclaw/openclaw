@@ -6,7 +6,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import type { SessionsRouteData } from "./sessions/sessions-page.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
-import type { UsageRouteData } from "./usage/usage-page.ts";
+import type { UsageRouteData } from "./usage/route-data.ts";
 import "./cron/cron-page.ts";
 import "./debug/debug-page.ts";
 import "./logs/logs-page.ts";

@@ -1,4 +1,6 @@
 // Control UI view renders usageTypes screen content.
+
+import type { UsageCacheDisplayState } from "./cache-status.ts";
 import type {
   CostUsageDailyEntry,
   ProviderUsageSummary,
@@ -38,6 +40,7 @@ export type TimeSeriesPoint = SessionUsageTimePoint;
 
 type UsageDataState = {
   loading: boolean;
+  requestPending: boolean;
   error: string | null;
   sessions: UsageSessionEntry[];
   agents: string[];
@@ -45,7 +48,7 @@ type UsageDataState = {
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
-  cacheStatus: SessionsUsageResult["cacheStatus"];
+  cacheRefresh: UsageCacheDisplayState;
   providerUsage: ProviderUsageSummary["providers"];
 };
 

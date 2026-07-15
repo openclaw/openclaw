@@ -6,7 +6,6 @@ import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/usage.css";
-import { getUsageCacheRefreshTitle } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
 import {
@@ -87,9 +86,9 @@ function addUsageTotals(
   return acc;
 }
 
-function renderUsageLoadingStatus(label: unknown, title?: string) {
+function renderUsageLoadingStatus(label: unknown) {
   return html`
-    <span class="settings-status settings-status--accent" title=${title ?? nothing}>
+    <span class="settings-status settings-status--accent" role="status" aria-live="polite">
       <span class="usage-loading-spinner" aria-hidden="true"></span>
       ${label}
     </span>
@@ -371,7 +370,8 @@ export function renderUsage(props: UsageProps) {
 
   const insightStats = buildUsageInsightStats(aggregateSessions, insightTotals, insightAggregates);
   const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
-  const cacheStatusTitle = getUsageCacheRefreshTitle(data.cacheStatus);
+  const cacheRefreshActive = data.cacheRefresh === "rebuilding";
+  const cacheRefreshPaused = data.cacheRefresh === "paused";
   const hasMissingCost =
     (insightTotals?.missingCostEntries ?? 0) > 0 ||
     (insightTotals
@@ -477,9 +477,7 @@ export function renderUsage(props: UsageProps) {
           <div class="settings-section__header">
             <h2 class="settings-section__heading">${t("usage.filters.title")}</h2>
             <div class="settings-section__actions">
-              ${data.loading || cacheStatusTitle
-                ? renderUsageLoadingStatus(t("usage.loading.badge"), cacheStatusTitle ?? "")
-                : nothing}
+              ${data.loading ? renderUsageLoadingStatus(t("common.refreshing")) : nothing}
               ${isEmpty
                 ? html`<span class="usage-query-hint">${t("usage.empty.hint")}</span>`
                 : nothing}
@@ -664,7 +662,7 @@ export function renderUsage(props: UsageProps) {
                 <button
                   class="btn btn--sm primary"
                   @click=${filterActions.onRefresh}
-                  ?disabled=${data.loading}
+                  ?disabled=${data.requestPending}
                 >
                   ${t("common.refresh")}
                 </button>
@@ -775,10 +773,37 @@ export function renderUsage(props: UsageProps) {
             ${data.error
               ? html`<div class="callout danger usage-callout">${data.error}</div>`
               : nothing}
-            ${cacheStatusTitle
+            ${cacheRefreshActive || cacheRefreshPaused
               ? html`
-                  <div class="callout warning usage-callout usage-cache-warning">
-                    ${t("usage.cacheStatus.warning")} ${cacheStatusTitle}
+                  <div
+                    class="callout ${cacheRefreshPaused
+                      ? "warning"
+                      : "info"} usage-callout usage-cache-notice"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                  >
+                    ${cacheRefreshActive
+                      ? html`<span
+                          class="usage-loading-spinner usage-cache-notice__indicator"
+                          aria-hidden="true"
+                        ></span>`
+                      : html`<span
+                          class="usage-cache-notice__indicator usage-cache-notice__indicator--paused"
+                          aria-hidden="true"
+                        ></span>`}
+                    <span class="usage-cache-notice__content">
+                      <strong>
+                        ${cacheRefreshPaused
+                          ? t("usage.cacheStatus.pausedTitle")
+                          : t("usage.cacheStatus.rebuildingTitle")}
+                      </strong>
+                      <span>
+                        ${cacheRefreshPaused
+                          ? t("usage.cacheStatus.pausedBody")
+                          : t("usage.cacheStatus.rebuildingBody")}
+                      </span>
+                    </span>
                   </div>
                 `
               : nothing}
