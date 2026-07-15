@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-controller.js";
+import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-terminal.js";
 
 describe("buildCodexLifecycleTerminalMeta", () => {
   it("marks sessions_yield as a paused parent continuation", () => {

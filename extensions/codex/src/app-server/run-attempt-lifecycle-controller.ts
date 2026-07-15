@@ -21,36 +21,10 @@ import type {
   CodexDynamicToolCallResponse,
   CodexServerNotification,
 } from "./protocol.js";
+import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-terminal.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-
-export function buildCodexLifecycleTerminalMeta(input: {
-  aborted: boolean;
-  timedOut: boolean;
-  yielded?: boolean;
-  abortStopReason?: string;
-}) {
-  if (input.timedOut || input.abortStopReason === "timeout") {
-    return {
-      aborted: true,
-      status: "timed_out",
-      stopReason: "timeout",
-      timeoutPhase: "provider",
-      providerStarted: true,
-    } as const;
-  }
-  if (input.yielded && !input.aborted) {
-    return {
-      yielded: true,
-      livenessState: "paused",
-      stopReason: "end_turn",
-    } as const;
-  }
-  return input.aborted
-    ? ({ aborted: true, status: "cancelled", stopReason: "stop" } as const)
-    : undefined;
-}
 
 export function createCodexAttemptLifecycleController(
   resources: CodexAttemptResources,

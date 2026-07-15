@@ -1,5 +1,5 @@
 /** Shared classification for an ended model turn whose parent task is still waiting. */
-export type AgentLifecycleParentStateEvent = {
+type AgentLifecycleParentStateEvent = {
   phase?: unknown;
   yielded?: unknown;
   livenessState?: unknown;
