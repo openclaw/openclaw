@@ -1976,11 +1976,10 @@ jobs:
               node scripts/run-additional-boundary-checks.mjs
               ;;
             prompt-snapshots)
-              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["prompt:snapshots:check"] ? 0 : 1);'; then
-                echo "[skip] prompt snapshot check is not present in this checkout"
-              else
-                run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
-              fi
+              # No presence fallback: the boundary runner previously invoked
+              # this unconditionally, and silent success would drop snapshot
+              # drift coverage.
+              run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
               ;;
             session-accessor-boundary)
               if [ ! -f scripts/check-session-accessor-boundary.mjs ]; then
