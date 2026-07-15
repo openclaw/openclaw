@@ -850,7 +850,7 @@ describe("overflow compaction in run loop", () => {
     expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(1);
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedTruncateOversizedToolResultsInSession.mock.invocationCallOrder[0]).toBeLessThan(
-      mockedCompactDirect.mock.invocationCallOrder[0],
+      mockedCompactDirect.mock.invocationCallOrder[0]!,
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.meta.error).toBeUndefined();
