@@ -1,10 +1,8 @@
 // Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
-import { execFile } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -40,8 +38,6 @@ const isGatewayTransportError = vi.hoisted(() =>
 const agentCommand = vi.hoisted(() => vi.fn());
 const agentModuleLoadCount = vi.hoisted(() => vi.fn());
 const loadAgentSessionModuleMock = vi.hoisted(() => vi.fn());
-
-const execFileAsync = promisify(execFile);
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -481,34 +477,6 @@ describe("agentCliCommand", () => {
 
   // FIFOs have no stat-able size; the bounded descriptor read must drain them
   // until EOF like the legacy fs.readFile path did. Windows lacks mkfifo.
-  it.runIf(process.platform !== "win32")(
-    "reads a FIFO message file until EOF within the byte cap",
-    async () => {
-      await withTempStore(async ({ dir }) => {
-        const messageFile = path.join(dir, "pipe.md");
-        await execFileAsync("mkfifo", [messageFile]);
-        mockGatewaySuccessReply();
-
-        // Opening a FIFO blocks until both ends are open, so write from the
-        // event loop while the command reads; a sync write would deadlock.
-        const pending = agentCliCommand(
-          { messageFile, sessionKey: "agent:main:incident-42" },
-          runtime,
-        );
-        await fs.promises.writeFile(messageFile, "hello from fifo");
-        await pending;
-
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.message).toBe("hello from fifo");
-      });
-    },
-  );
-
   it.skipIf(process.platform === "win32")(
     "reads a FIFO message file until EOF",
     async () => {
