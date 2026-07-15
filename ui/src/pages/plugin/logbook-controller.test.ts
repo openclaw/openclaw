@@ -7,6 +7,7 @@ import {
   loadLogbook,
   loadLogbookStandup,
   runLogbookAnalysisNow,
+  setLogbookCapturePaused,
   stopLogbookPolling,
 } from "./logbook-controller.ts";
 import type { LogbookStatusPayload } from "./logbook-types.ts";
@@ -85,13 +86,12 @@ describe("Logbook controller", () => {
       ["logbook.days", days],
       ["logbook.timeline", timeline],
     ]);
-    const request = loadLogbook(
-      state,
-      clientWithRequest(
-        (method) =>
-          responses.get(method)?.promise ?? Promise.reject(new Error(`Unexpected ${method}`)),
-      ),
+    const client = clientWithRequest(
+      (method) =>
+        responses.get(method)?.promise ?? Promise.reject(new Error(`Unexpected ${method}`)),
     );
+    configureLogbookPolling(state, client, true);
+    const request = loadLogbook(state, client);
 
     stopLogbookPolling(host);
     status.resolve(statusFor("2026-07-04"));
@@ -204,6 +204,67 @@ describe("Logbook controller", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(request).toHaveBeenCalledTimes(7);
     expect(state.timeline?.cards[0]?.title).toBe("Resumed poll");
+  });
+
+  it("retires action ownership when the polling client changes", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getLogbookState(host);
+    state.day = "2026-07-04";
+    state.dayPinned = true;
+    const oldAnalysis = deferred<unknown>();
+    const newAnalysis = deferred<unknown>();
+    const oldClient = clientWithRequest(() => oldAnalysis.promise);
+    const newClient = clientWithRequest((method) => {
+      if (method === "logbook.analyze.now") {
+        return newAnalysis.promise;
+      }
+      if (method === "logbook.status") {
+        return Promise.resolve(statusFor("2026-07-04"));
+      }
+      if (method === "logbook.days") {
+        return Promise.resolve({ days: [] });
+      }
+      return Promise.resolve(timelineFor("2026-07-04", "New client"));
+    });
+
+    configureLogbookPolling(state, oldClient, true);
+    const oldRequest = runLogbookAnalysisNow(state, oldClient);
+    expect(state.actionPending).toBe(true);
+
+    configureLogbookPolling(state, newClient, true);
+    expect(state.actionPending).toBe(false);
+    const newRequest = runLogbookAnalysisNow(state, newClient);
+    expect(state.actionPending).toBe(true);
+
+    oldAnalysis.resolve({ started: true });
+    await oldRequest;
+    expect(state.actionPending).toBe(true);
+
+    newAnalysis.resolve({ started: true });
+    await newRequest;
+    expect(state.actionPending).toBe(false);
+  });
+
+  it("discards a capture result from a retired polling client", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getLogbookState(host);
+    const oldStatus = deferred<unknown>();
+    const oldClient = clientWithRequest(() => oldStatus.promise);
+    const newStatus = { ...statusFor("2026-07-05"), capturePaused: true };
+    const newClient = clientWithRequest(() => Promise.resolve(newStatus));
+
+    configureLogbookPolling(state, oldClient, true);
+    const oldRequest = setLogbookCapturePaused(state, oldClient, true);
+    configureLogbookPolling(state, newClient, true);
+    await setLogbookCapturePaused(state, newClient, true);
+    expect(state.status).toEqual(newStatus);
+
+    oldStatus.resolve(statusFor("2026-07-04"));
+    await oldRequest;
+    expect(state.status).toEqual(newStatus);
+    expect(state.actionPending).toBe(false);
   });
 
   it("queues an analysis refresh behind an in-flight poll", async () => {
@@ -329,10 +390,14 @@ describe("Logbook controller", () => {
       return timelineFor("2026-07-05", "New day");
     });
 
-    const olderLoad = loadLogbook(state, clientWithRequest(oldRequest), { day: "2026-07-04" });
+    const oldClient = clientWithRequest(oldRequest);
+    const newClient = clientWithRequest(newerRequest);
+    configureLogbookPolling(state, oldClient, true);
+    const olderLoad = loadLogbook(state, oldClient, { day: "2026-07-04" });
     expect(oldRequest).toHaveBeenCalledWith("logbook.timeline", { day: "2026-07-04" });
 
-    await loadLogbook(state, clientWithRequest(newerRequest), { day: "2026-07-05" });
+    configureLogbookPolling(state, newClient, true);
+    await loadLogbook(state, newClient, { day: "2026-07-05" });
     expect(newerRequest).toHaveBeenCalledWith("logbook.timeline", { day: "2026-07-05" });
     expect(state.timeline?.cards[0]?.title).toBe("New day");
 
@@ -354,11 +419,9 @@ describe("Logbook controller", () => {
     const state = getLogbookState(host);
     state.day = "2026-07-04";
     const pending = deferred<unknown>();
-    const request = loadLogbookStandup(
-      state,
-      clientWithRequest(() => pending.promise),
-      false,
-    );
+    const client = clientWithRequest(() => pending.promise);
+    configureLogbookPolling(state, client, true);
+    const request = loadLogbookStandup(state, client, false);
 
     state.day = "2026-07-05";
     pending.resolve({ day: "2026-07-04", text: "Old day", updatedMs: 1 });
@@ -374,10 +437,9 @@ describe("Logbook controller", () => {
     state.day = "2026-07-04";
     state.askQuestion = "What did I do?";
     const pending = deferred<unknown>();
-    const request = askLogbook(
-      state,
-      clientWithRequest(() => pending.promise),
-    );
+    const client = clientWithRequest(() => pending.promise);
+    configureLogbookPolling(state, client, true);
+    const request = askLogbook(state, client);
 
     state.day = "2026-07-05";
     pending.resolve({ answer: "Old day" });
