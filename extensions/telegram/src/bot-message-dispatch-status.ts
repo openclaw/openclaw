@@ -89,5 +89,3 @@ export function createTelegramDispatchStatus(params: {
 
   return { controller, finalizeInBackground, removeAck };
 }
-
-export type TelegramDispatchStatus = ReturnType<typeof createTelegramDispatchStatus>;

@@ -27,7 +27,7 @@ import { buildTelegramRichMarkdown, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-mess
 
 const DRAFT_MIN_INITIAL_CHARS = 30;
 
-export type DraftPartialTextUpdate = {
+type DraftPartialTextUpdate = {
   text: string;
   delta?: string;
   replace?: true;
@@ -35,7 +35,7 @@ export type DraftPartialTextUpdate = {
 };
 
 type SplitLaneSegment = { lane: LaneName; update: DraftPartialTextUpdate };
-export type SplitLaneSegmentsResult = {
+type SplitLaneSegmentsResult = {
   segments: SplitLaneSegment[];
   suppressedReasoningOnly: boolean;
 };
