@@ -166,7 +166,11 @@ describe("createSlackMessageHandler", () => {
   });
 
   it("keeps HTTP work detached until the debounce flush completes", async () => {
-    const runDetachedWork = vi.fn(async <T>(run: () => Promise<T>) => await run());
+    const runDetachedWorkMock = vi.fn();
+    const runDetachedWork = async <T>(run: () => Promise<T>): Promise<T> => {
+      runDetachedWorkMock();
+      return await run();
+    };
     const handler = createSlackMessageHandler({
       ctx: createContext(),
       account: { accountId: "default" } as Parameters<
@@ -190,7 +194,7 @@ describe("createSlackMessageHandler", () => {
     await onFlushCallbacks[0]?.([entry]);
     await handled;
 
-    expect(runDetachedWork).toHaveBeenCalledOnce();
+    expect(runDetachedWorkMock).toHaveBeenCalledOnce();
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledOnce();
   });
 
