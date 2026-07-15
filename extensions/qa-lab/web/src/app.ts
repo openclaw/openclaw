@@ -3,7 +3,7 @@ import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selectio
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { formatErrorMessage } from "./errors.js";
 import { getJson, getJsonNoStore, postJson } from "./http.js";
-import { conversationSelectionKey } from "./ui-conversation-key.js";
+import { conversationSelectionKey, findConversationBySelectionKey } from "./ui-conversation-key.js";
 import {
   type Bootstrap,
   type EvidenceEnvelope,
@@ -563,7 +563,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
     state.error = null;
     render();
     try {
+      const selectedConversation = findConversationBySelectionKey(
+        state.snapshot?.conversations ?? [],
+        state.selectedConversationKey,
+      );
+      const accountId = selectedConversation?.accountId ?? "default";
       await postJson("/api/inbound/message", {
+        accountId,
         conversation: {
           id: conversationId,
           kind: state.composer.conversationKind,
@@ -575,7 +581,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
         ...(state.selectedThreadId ? { threadId: state.selectedThreadId } : {}),
       });
       state.selectedConversationKey = conversationSelectionKey({
-        accountId: "default",
+        accountId,
         id: conversationId,
         kind: state.composer.conversationKind,
       });

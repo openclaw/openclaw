@@ -1,5 +1,6 @@
 import {
   conversationSelectionKey,
+  findConversationBySelectionKey,
   messageConversationSelectionKey,
   threadConversationSelectionKey,
 } from "./ui-conversation-key.js";
@@ -107,9 +108,7 @@ export function renderChatView(state: UiState): string {
   );
   const selectedConv = deriveSelectedConversation(state);
   const selectedThread = deriveSelectedThread(state);
-  const activeConversation = conversations.find(
-    (conversation) => conversationSelectionKey(conversation) === selectedConv,
-  );
+  const activeConversation = findConversationBySelectionKey(conversations, selectedConv);
   const messages = filteredMessages({
     ...state,
     selectedConversationKey: selectedConv,

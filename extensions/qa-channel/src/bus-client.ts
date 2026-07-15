@@ -2,6 +2,7 @@
 import http from "node:http";
 import https from "node:https";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { parseQaTarget, type QaTargetParts } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
@@ -14,7 +15,7 @@ import type {
   QaBusToolCall,
 } from "./protocol.js";
 
-export { parseQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
+export { parseQaTarget };
 
 export type {
   QaBusAttachment,
@@ -140,6 +141,22 @@ export function normalizeQaTarget(raw: string): string | undefined {
     return undefined;
   }
   return trimmed;
+}
+
+export function resolveQaTargetThread(params: {
+  target: string;
+  threadId?: string | number | null;
+}): { target: QaTargetParts; threadId?: string } {
+  const target = parseQaTarget(params.target);
+  const explicitThreadId = params.threadId == null ? "" : String(params.threadId).trim();
+  if (target.threadId && explicitThreadId && target.threadId !== explicitThreadId) {
+    throw new Error("qa-channel target conflicts with the explicit threadId");
+  }
+  const threadId = explicitThreadId || target.threadId;
+  return {
+    target,
+    ...(threadId ? { threadId } : {}),
+  };
 }
 
 export function buildQaTarget(params: {

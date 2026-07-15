@@ -40,6 +40,13 @@ describe("QA channel account resolution", () => {
     expect(listQaChannelAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultQaChannelAccountId(cfg)).toBe("default");
   });
+
+  it("declares edit message IDs as current-conversation resource references", () => {
+    expect(qaChannelPlugin.actions?.messageActionTargetAliases?.edit).toEqual({
+      aliases: ["messageId"],
+      deliveryTargetAliases: [],
+    });
+  });
 });
 
 function installQaChannelTestRegistry() {
@@ -270,6 +277,18 @@ describe("qa-channel plugin", () => {
     expect(route?.sessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
     expect(route?.baseSessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
     expect(route?.threadId).toBeUndefined();
+  });
+
+  it("rejects conflicting explicit thread routing metadata", () => {
+    expect(() =>
+      qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
+        cfg: {},
+        agentId: "main",
+        accountId: "default",
+        target: "thread:qa-room/thread-1",
+        threadId: "thread-2",
+      }),
+    ).toThrow("qa-channel target conflicts with the explicit threadId");
   });
 
   it("rejects non-canonical target prefix casing before routing", () => {
@@ -843,6 +862,20 @@ describe("qa-channel plugin", () => {
       });
       const payload = extractToolPayload(result) as { message: { text: string } };
       expect(payload.message.text).toBe("hello from action");
+
+      await expect(
+        qaChannelPlugin.actions?.handleAction?.({
+          channel: "qa-channel",
+          action: "send",
+          cfg,
+          accountId: "default",
+          params: {
+            to: "thread:qa-room/thread-1",
+            threadId: "thread-2",
+            message: "conflicting thread",
+          },
+        }),
+      ).rejects.toThrow("qa-channel target conflicts with the explicit threadId");
 
       const outbound = await state.waitFor({
         kind: "message-text",

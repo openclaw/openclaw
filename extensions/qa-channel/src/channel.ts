@@ -9,7 +9,12 @@ import {
   defineChannelMessageAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
-import { buildQaTarget, normalizeQaTarget, parseQaTarget } from "./bus-client.js";
+import {
+  buildQaTarget,
+  normalizeQaTarget,
+  parseQaTarget,
+  resolveQaTargetThread,
+} from "./bus-client.js";
 import { qaChannelMessageActions } from "./channel-actions.js";
 import { createQaChannelPluginBase, QA_CHANNEL_ID, qaChannelRuntimeMeta } from "./channel-base.js";
 import { startQaGatewayAccount } from "./gateway.js";
@@ -73,7 +78,8 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
         threadId,
         currentSessionKey,
       }) => {
-        const parsed = parseQaTarget(target);
+        const resolved = resolveQaTargetThread({ target, threadId });
+        const parsed = resolved.target;
         const baseRoute = buildChannelOutboundSessionRoute({
           cfg,
           agentId,
@@ -101,7 +107,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
         return buildThreadAwareOutboundSessionRoute({
           route: baseRoute,
           replyToId,
-          threadId,
+          threadId: resolved.threadId,
           currentSessionKey,
           canRecoverCurrentThread: ({ route }) =>
             route.chatType !== "direct" || (cfg.session?.dmScope ?? "main") !== "main",

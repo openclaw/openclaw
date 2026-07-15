@@ -8,6 +8,18 @@ export function conversationSelectionKey(identity: ConversationIdentity): string
   return JSON.stringify([identity.accountId, identity.kind, identity.id]);
 }
 
+export function findConversationBySelectionKey(
+  conversations: Conversation[],
+  selectionKey: string | null,
+): Conversation | undefined {
+  if (!selectionKey) {
+    return undefined;
+  }
+  return conversations.find(
+    (conversation) => conversationSelectionKey(conversation) === selectionKey,
+  );
+}
+
 export function messageConversationSelectionKey(message: Message): string {
   return conversationSelectionKey({
     accountId: message.accountId,

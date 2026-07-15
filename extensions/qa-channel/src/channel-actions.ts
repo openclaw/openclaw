@@ -11,6 +11,7 @@ import {
   parseQaTarget,
   reactToQaBusMessage,
   readQaBusMessage,
+  resolveQaTargetThread,
   searchQaBusMessages,
   sendQaBusMessage,
   type QaBusMessage,
@@ -125,6 +126,12 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
       },
     },
   }),
+  messageActionTargetAliases: {
+    edit: {
+      aliases: ["messageId"],
+      deliveryTargetAliases: [],
+    },
+  },
   extractToolSend: ({ args }: { args: Record<string, unknown> }) => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
     if (action === "send") {
@@ -166,20 +173,23 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
         if (!to || text === undefined) {
           throw new Error("qa-channel send requires to/target and message/text");
         }
-        const parsed = parseQaTarget(to);
-        const threadId = readStringParam(params, "threadId") ?? parsed.threadId;
+        const resolved = resolveQaTargetThread({
+          target: to,
+          threadId: readStringParam(params, "threadId"),
+        });
+        const parsed = resolved.target;
         const { message } = await sendQaBusMessage({
           baseUrl,
           accountId: account.accountId,
           to: buildQaTarget({
             chatType: parsed.chatType,
             conversationId: parsed.conversationId,
-            threadId,
+            threadId: resolved.threadId,
           }),
           text,
           senderId: account.botUserId,
           senderName: account.botDisplayName,
-          threadId,
+          threadId: resolved.threadId,
           replyToId: readStringParam(params, "replyTo") ?? readStringParam(params, "replyToId"),
         });
         return jsonResult({ message });
