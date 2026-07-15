@@ -325,7 +325,7 @@ Comment triggers, from a PR with write/maintain/admin access:
 @openclaw-mantis discord status reactions baseline=origin/main candidate=HEAD
 @openclaw-mantis telegram
 @openclaw-mantis telegram scenario=telegram-status-command
-@openclaw-mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
+@openclaw-mantis telegram scenarios=telegram-status-command,channel-canary
 @openclaw-mantis web ui chat
 @openclaw-mantis web-ui-chat candidate=HEAD
 ```

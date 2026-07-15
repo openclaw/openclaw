@@ -288,6 +288,11 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourceDir: "/tmp/state/media/outgoing/records",
       hasLegacy: false,
     },
+    webPush: {
+      subscriptionsPath: "/tmp/state/push/web-push-subscriptions.json",
+      vapidKeysPath: "/tmp/state/push/vapid-keys.json",
+      hasLegacy: false,
+    },
     rescuePending: {
       sourcePaths: ["/tmp/state/crestodian/rescue-pending", "/tmp/state/openclaw/rescue-pending"],
       hasLegacy: false,
