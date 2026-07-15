@@ -101,7 +101,6 @@ async function readJsonBody(
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       totalBytes += buffer.byteLength;
       if (totalBytes > maxBytes) {
-        req.resume();
         return { ok: false, status: 413, message: "Payload too large" };
       }
       chunks.push(buffer);
@@ -227,6 +226,11 @@ export async function handleAdminHttpRpcRequest(
   if (!body.ok) {
     if (body.status === 413) {
       res.setHeader("Connection", "close");
+      res.once("finish", () => {
+        if (!req.destroyed) {
+          req.destroy();
+        }
+      });
     }
     sendError(res, body.status, {
       type: "invalid_request",
