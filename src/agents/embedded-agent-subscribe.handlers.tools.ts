@@ -1318,8 +1318,8 @@ export async function handleToolExecutionEnd(
     initialCallSummary?.instanceReplaySafe === true,
     structuredReplaySafe,
   );
-  // Wrapped calls use the exact host boundary. Older/custom event producers
-  // retain the prior default unless they explicitly report false.
+  // A racing observer can consume the active wrapper boundary. Settled and
+  // custom producers use their terminal fact, while policy blocks override it.
   const executionStarted =
     (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
   const attemptedPotentialSideEffect = !callSummary.replaySafe && executionStarted;

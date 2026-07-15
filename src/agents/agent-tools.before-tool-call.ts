@@ -75,6 +75,7 @@ import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  clearTrackedToolExecution,
   preExecutionBlockedToolCallIds,
   recordToolExecutionTracked,
   recordToolExecutionStarted,
@@ -1753,7 +1754,6 @@ export function wrapToolWithBeforeToolCallHook(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      recordToolExecutionTracked(toolCallId, ctx?.runId);
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
       const normalizedToolName = normalizeToolName(toolName || "tool");
@@ -1998,6 +1998,18 @@ export function wrapToolWithBeforeToolCallHook(
         throw err;
       }
     },
+  };
+  const executeWithHooks = wrappedTool.execute;
+  wrappedTool.execute = async (toolCallId, params, signal, onUpdate) => {
+    recordToolExecutionTracked(toolCallId, ctx?.runId);
+    try {
+      return await executeWithHooks(toolCallId, params, signal, onUpdate);
+    } finally {
+      // Timeout observers may consume this while the call is still pending. The
+      // wrapper owns final cleanup; every pre-body settle records the separate
+      // blocked fact, so direct callers cannot retain settled ids.
+      clearTrackedToolExecution(toolCallId, ctx?.runId);
+    }
   };
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);

@@ -44,7 +44,7 @@ export function peekPreExecutionBlockedToolCall(toolCallId: string, runId?: stri
   return preExecutionBlockedToolCallIds.has(buildAdjustedParamsKey({ runId, toolCallId }));
 }
 
-/** Record that the OpenClaw wrapper owns execution-boundary evidence for this call. */
+/** Record active wrapper ownership so a racing timeout can inspect the boundary. */
 export function recordToolExecutionTracked(toolCallId: string, runId?: string): void {
   trackedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
 }
@@ -55,18 +55,16 @@ export function recordToolExecutionStarted(toolCallId: string, runId?: string): 
   startedToolCallIds.add(key);
 }
 
-/** Return exact wrapped-call state, or undefined for untracked/custom producers. */
-export function peekTrackedToolExecutionStarted(
-  toolCallId: string,
-  runId?: string,
-): boolean | undefined {
+/** Release execution-boundary evidence when the wrapped invocation settles. */
+export function clearTrackedToolExecution(toolCallId: string, runId?: string): void {
   const key = buildAdjustedParamsKey({ runId, toolCallId });
-  return trackedToolCallIds.has(key) ? startedToolCallIds.has(key) : undefined;
+  trackedToolCallIds.delete(key);
+  startedToolCallIds.delete(key);
 }
 
 /**
- * Consume the wrapped call's exact execution state. Undefined means the call
- * came from a producer that does not participate in OpenClaw boundary tracking.
+ * Consume exact in-flight execution state. Undefined means the wrapper already
+ * settled or the producer does not participate in OpenClaw boundary tracking.
  */
 export function consumeTrackedToolExecutionStarted(
   toolCallId: string,
@@ -75,8 +73,7 @@ export function consumeTrackedToolExecutionStarted(
   const key = buildAdjustedParamsKey({ runId, toolCallId });
   const tracked = trackedToolCallIds.has(key);
   const started = startedToolCallIds.has(key);
-  trackedToolCallIds.delete(key);
-  startedToolCallIds.delete(key);
+  clearTrackedToolExecution(toolCallId, runId);
   return tracked ? started : undefined;
 }
 

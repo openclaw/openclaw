@@ -25,6 +25,7 @@ import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definit
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   consumeAdjustedParamsForToolCall,
+  consumePreExecutionBlockedToolCall,
   finalizeToolTerminalPresentation,
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -33,7 +34,6 @@ import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   consumeTrackedToolExecutionStarted,
-  peekTrackedToolExecutionStarted,
   resetAdjustedParamsByToolCallIdForTests,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
@@ -140,9 +140,7 @@ describe("before_tool_call hook integration", () => {
       undefined,
       extensionContext,
     );
-    expect(peekTrackedToolExecutionStarted("call-1")).toBe(true);
-    expect(consumeTrackedToolExecutionStarted("call-1")).toBe(true);
-    expect(peekTrackedToolExecutionStarted("call-1")).toBeUndefined();
+    expect(consumeTrackedToolExecutionStarted("call-1")).toBeUndefined();
   });
 
   it("records structured replay trust only for concrete core-owned tools", async () => {
@@ -233,7 +231,7 @@ describe("before_tool_call hook integration", () => {
       },
     });
     expect(execute).not.toHaveBeenCalled();
-    expect(consumeTrackedToolExecutionStarted("call-3")).toBe(false);
+    expect(consumeTrackedToolExecutionStarted("call-3")).toBeUndefined();
   });
 
   it("does not enter the tool body when a slow hook settles after cancellation", async () => {
@@ -252,14 +250,15 @@ describe("before_tool_call hook integration", () => {
     const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "exec", execute }));
     const result = tool.execute("call-late-abort", { cmd: "pwd" }, controller.signal);
     await vi.waitFor(() => expect(beforeToolCallHook).toHaveBeenCalledOnce());
-    expect(peekTrackedToolExecutionStarted("call-late-abort")).toBe(false);
+    expect(consumeTrackedToolExecutionStarted("call-late-abort")).toBe(false);
 
     controller.abort(new Error("tool timed out"));
     releaseHook();
 
     await expect(result).rejects.toThrow("tool timed out");
     expect(execute).not.toHaveBeenCalled();
-    expect(consumeTrackedToolExecutionStarted("call-late-abort")).toBe(false);
+    expect(consumeTrackedToolExecutionStarted("call-late-abort")).toBeUndefined();
+    expect(consumePreExecutionBlockedToolCall("call-late-abort")).toBe(true);
   });
 
   it("does not execute lower-priority hooks after block=true", async () => {

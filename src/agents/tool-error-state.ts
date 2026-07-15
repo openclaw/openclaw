@@ -1,7 +1,7 @@
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import { isSameToolMutationAction } from "./tool-mutation.js";
 
-export type ToolErrorState = {
+type ToolErrorState = {
   recordFailure: (failure: ToolErrorSummary) => ToolErrorSummary;
   recordSuccess: (
     success: Pick<ToolErrorSummary, "toolName" | "meta" | "actionFingerprint" | "fileTarget">,
