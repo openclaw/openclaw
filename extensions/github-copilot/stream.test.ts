@@ -166,35 +166,38 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(baseStreamFn.mock.calls).toEqual([[model, context, options]]);
   });
 
-  it("sanitizes complete encrypted reasoning and adds Copilot headers", () => {
-    const longReasoningId = Buffer.from(`reasoning-${"x".repeat(320)}`).toString("base64");
+  it("adds Copilot headers, sanitizes reasoning replay, and rewrites message IDs before payload send", () => {
+    const reasoningId = "rs_exact";
+    const messageId = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
     const payloads: Array<{ input: Array<Record<string, unknown>> }> = [];
     const baseStreamFn = vi.fn((_model, _context, options) => {
       const payload = {
         input: [
           {
-            id: "rs_exact",
+            id: reasoningId,
             type: "reasoning",
-            encrypted_content: "exact-ciphertext",
+            encrypted_content: "valid-encrypted-payload",
             summary: [],
           },
           {
-            id: longReasoningId,
             type: "reasoning",
-            encrypted_content: "idless-ciphertext",
+            encrypted_content: "idless-encrypted-payload",
             summary: [],
           },
           {
             id: "thinking_0",
             type: "reasoning",
-            encrypted_content: "foreign-ciphertext",
+            encrypted_content: "foreign-encrypted-payload",
             summary: [],
           },
+          { id: messageId, type: "message" },
         ],
       };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
-      return { async *[Symbol.asyncIterator]() {} } as never;
+      return {
+        async *[Symbol.asyncIterator]() {},
+      } as never;
     });
 
     const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
@@ -207,70 +210,79 @@ describe("wrapCopilotAnthropicStream", () => {
         ],
       },
     ] as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
-    const model = {
-      provider: "github-copilot",
-      api: "openai-responses",
-      id: "gpt-5.4",
-    } as never;
-    const context = { messages } as never;
-    void wrapped(model, context, { headers: { "X-Test": "1" } });
+    const expectedCopilotHeaders = buildCopilotDynamicHeaders({
+      messages,
+      hasImages: true,
+    });
 
-    const receivedOptions = requireFirstStreamOptions(baseStreamFn, "Copilot Responses stream");
-    expect(receivedOptions.headers).toEqual({
-      ...buildCopilotDynamicHeaders({ messages, hasImages: true }),
-      "X-Test": "1",
+    void wrapped(
+      {
+        provider: "github-copilot",
+        api: "openai-responses",
+        id: "gpt-5.4",
+      } as never,
+      { messages } as never,
+      { headers: { "X-Test": "1" } },
+    );
+
+    expect(baseStreamFn).toHaveBeenCalledOnce();
+    const options = requireFirstStreamOptions(baseStreamFn, "Copilot Responses stream");
+    if (!options?.onPayload) {
+      throw new Error("expected Copilot Responses stream options");
+    }
+    expect(options).toEqual({
+      headers: {
+        ...expectedCopilotHeaders,
+        "X-Test": "1",
+      },
+      onPayload: options.onPayload,
     });
-    expect(payloads[0]?.input).toHaveLength(2);
-    expect(payloads[0]?.input[0]).toMatchObject({
-      id: "rs_exact",
-      encrypted_content: "exact-ciphertext",
-    });
-    expect(payloads[0]?.input[1]).toMatchObject({
-      encrypted_content: "idless-ciphertext",
-    });
-    expect(payloads[0]?.input[1]).not.toHaveProperty("id");
+    expect(payloads[0]?.input[0]?.id).toBe(reasoningId);
+    expect(payloads[0]?.input.map((item) => item.type)).toEqual([
+      "reasoning",
+      "reasoning",
+      "message",
+    ]);
+    expect(payloads[0]?.input[1]?.id).toBeUndefined();
+    expect(payloads[0]?.input[2]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
   });
 
-  it("re-sanitizes payloads returned by an async hook", async () => {
+  it("rewrites Copilot Responses reasoning returned by an async payload hook", async () => {
+    const connectionBoundId = Buffer.from(`reasoning-${"y".repeat(320)}`).toString("base64");
     let returnedPayload: unknown;
     const baseStreamFn = vi.fn(async (_model, _context, options) => {
       returnedPayload = await options?.onPayload?.({ input: [] }, _model);
-      return { async *[Symbol.asyncIterator]() {} } as never;
+      return {
+        async *[Symbol.asyncIterator]() {},
+      } as never;
     });
 
     const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
-    const model = {
-      provider: "github-copilot",
-      api: "openai-responses",
-      id: "gpt-5.4",
-    } as never;
-    const context = { messages: [{ role: "user", content: "hi" }] } as never;
-    await wrapped(model, context, {
-      onPayload: async () => ({
-        input: [
-          {
-            id: "rs_hook",
-            type: "reasoning",
-            encrypted_content: "hook-ciphertext",
-            summary: [],
-          },
-          {
-            id: "thinking_0",
-            type: "reasoning",
-            encrypted_content: "foreign-ciphertext",
-            summary: [],
-          },
-        ],
-      }),
-    } as never);
 
-    const input = (returnedPayload as { input: Array<Record<string, unknown>> }).input;
-    expect(input).toEqual([
-      expect.objectContaining({
-        id: "rs_hook",
-        encrypted_content: "hook-ciphertext",
-      }),
-    ]);
+    await wrapped(
+      {
+        provider: "github-copilot",
+        api: "openai-responses",
+        id: "gpt-5.4",
+      } as never,
+      { messages: [{ role: "user", content: "hi" }] } as never,
+      {
+        onPayload: async () => ({
+          input: [
+            {
+              id: connectionBoundId,
+              type: "reasoning",
+              encrypted_content: "hook-ciphertext",
+              summary: [],
+            },
+          ],
+        }),
+      } as never,
+    );
+
+    const reasoning = (returnedPayload as { input: Array<Record<string, unknown>> }).input[0];
+    expect(reasoning?.id).toBeUndefined();
+    expect(reasoning?.encrypted_content).toBe("hook-ciphertext");
   });
 
   it("adds Copilot headers for Chat Completions models", () => {
