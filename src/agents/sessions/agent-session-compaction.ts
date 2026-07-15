@@ -1,6 +1,7 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { streamSimple } from "../../llm/stream.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
+import { acceptsCompactionTimeoutPartialResult } from "../compaction-timeout.js";
 import {
   calculateContextTokens,
   compact,
@@ -9,7 +10,6 @@ import {
   shouldCompact,
   type CompactionResult,
 } from "../runtime/index.js";
-import { acceptsCompactionTimeoutPartialResult } from "../compaction-timeout.js";
 import { AgentSessionInspection } from "./agent-session-inspection.js";
 import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
