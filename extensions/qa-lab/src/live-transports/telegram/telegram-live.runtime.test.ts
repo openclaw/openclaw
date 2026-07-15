@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { summarizeLiveTransportRttSamples } from "../shared/live-transport-rtt.js";
-import { testing } from "./telegram-live.runtime.js";
+import { __testing as testing } from "./telegram-live.runtime.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
   vi.fn(
@@ -1376,3 +1376,4 @@ describe("telegram live qa runtime", () => {
     expect(testing.formatTelegramQaProgressDetails("a".repeat(241))).toBe(`${"a".repeat(237)}...`);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

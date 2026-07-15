@@ -1,7 +1,25 @@
 // Qa Channel tests cover bus client plugin behavior.
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildQaTarget, getQaBusState, parseQaTarget, pollQaBus } from "./bus-client.js";
+
+const guardedFetchCalls = vi.hoisted(
+  () =>
+    [] as Array<
+      Parameters<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>[0]
+    >,
+);
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+      guardedFetchCalls.push(params);
+      return actual.fetchWithSsrFGuard(params);
+    },
+  };
+});
 
 const OVERSIZED_RESPONSE_BYTES = 18 * 1024 * 1024;
 
@@ -134,6 +152,7 @@ describe("qa-bus client", () => {
 
   afterEach(async () => {
     await Promise.all(stops.splice(0).map((stop) => stop()));
+    guardedFetchCalls.length = 0;
   });
 
   it("roundtrips explicit group targets", () => {
@@ -250,6 +269,10 @@ describe("qa-bus client", () => {
       threads: [],
       messages: [],
       events: [],
+    });
+    expect(guardedFetchCalls.at(-1)).toMatchObject({
+      auditContext: "qa-channel.bus-state",
+      timeoutMs: 10_000,
     });
   });
 

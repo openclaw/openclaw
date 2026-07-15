@@ -659,7 +659,7 @@ export async function runWhatsAppQaLive(params: {
   };
 }
 
-export const testing = {
+const testing = {
   assertSafeArchiveEntries,
   appendPreScenarioFailureResults,
   buildPublishedWhatsAppQaRunView,

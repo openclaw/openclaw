@@ -6,7 +6,7 @@ import type {
   MigrationsMemoryPlanResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -346,7 +346,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("memory-import")}</div>
-          <div class="page-sub">${subtitleForRoute("memory-import")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}

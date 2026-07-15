@@ -10,7 +10,6 @@ import type { StreamFn } from "../runtime/index.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 const embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
-let openClawNativeCodexResponsesStreamFnForTest: StreamFn | undefined;
 
 type EmbeddedStreamOptions = Parameters<StreamFn>[2] & {
   authProfileId?: string;
@@ -62,7 +61,7 @@ function resolveOpenClawNativeCodexResponsesStreamFn(params: {
   if (!isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn)) {
     return undefined;
   }
-  return openClawNativeCodexResponsesStreamFnForTest ?? params.currentStreamFn ?? streamSimple;
+  return params.currentStreamFn ?? streamSimple;
 }
 
 export function describeEmbeddedAgentStreamStrategy(params: {
@@ -218,15 +217,6 @@ export function resolveEmbeddedAgentStreamFn(params: {
     promptCacheKey,
   });
 }
-
-export const testing = {
-  setOpenClawNativeCodexResponsesStreamFnForTest(streamFn: StreamFn | undefined): void {
-    openClawNativeCodexResponsesStreamFnForTest = streamFn;
-  },
-  resetOpenClawNativeCodexResponsesStreamFnForTest(): void {
-    openClawNativeCodexResponsesStreamFnForTest = undefined;
-  },
-};
 
 function wrapEmbeddedAgentStreamFn(
   inner: StreamFn,
