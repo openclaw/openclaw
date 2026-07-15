@@ -130,9 +130,12 @@ runs:
         FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
       run: |
         set -euo pipefail
-        # Large parallel installs (sticky-disk cold path) can exhaust the
-        # default soft fd limit; raise it best-effort before pnpm runs.
-        ulimit -n 65536 2>/dev/null || true
+        # Large parallel installs (sticky-disk cold path) can exhaust the soft
+        # fd limit: pnpm's bin-linking fans out one manifest read per package
+        # (~1200 here). Raise to the hard limit — a fixed 65536 silently
+        # no-ops when the runner's hard limit is lower.
+        ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
+        echo "fd limits: soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
         export PATH="$NODE_BIN:$PATH"
         which node
         node -v
