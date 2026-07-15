@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mjs";
 import {
@@ -32,6 +32,7 @@ import {
   tailFile,
   writeRunSummary,
 } from "../../scripts/test-docker-all.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const limits = {
@@ -43,6 +44,7 @@ const limits = {
 };
 const posixIt = process.platform === "win32" ? it.skip : it;
 const { createTempDir } = createScriptTestHarness();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 
 function expectDeclaredDispatchInputs(command: string): void {
@@ -302,7 +304,7 @@ describe("scripts/test-docker-all scheduler", () => {
   });
 
   it("rejects candidate-controlled survivor omissions without trusted opt-in", () => {
-    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-all-untrusted-filter-`);
+    const root = tempDirs.make("openclaw-docker-all-untrusted-filter-");
     const assertionsFile = path.join(root, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
     try {
       mkdirSync(path.dirname(assertionsFile), { recursive: true });
@@ -329,7 +331,7 @@ describe("scripts/test-docker-all scheduler", () => {
   });
 
   it("writes a passing summary when a frozen target cannot run selected survivor lanes", () => {
-    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-all-filtered-`);
+    const root = tempDirs.make("openclaw-docker-all-filtered-");
     const logDir = path.join(root, "logs");
     const assertionsFile = path.join(root, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
     try {
@@ -366,7 +368,7 @@ describe("scripts/test-docker-all scheduler", () => {
   });
 
   it("reports omitted frozen-target lanes when another selected lane remains runnable", () => {
-    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-all-mixed-filtered-`);
+    const root = tempDirs.make("openclaw-docker-all-mixed-filtered-");
     const assertionsFile = path.join(root, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
     try {
       mkdirSync(path.dirname(assertionsFile), { recursive: true });
