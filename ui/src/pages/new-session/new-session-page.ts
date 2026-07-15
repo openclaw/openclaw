@@ -6,6 +6,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import "../../components/web-awesome-select.ts";
@@ -41,6 +42,15 @@ import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 import { renderAgentSelect, renderFolderSelect, renderWhereSelect } from "./target-controls.ts";
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
+
+function renderDraftError(message: string) {
+  return html`
+    <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
+      <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
+      <span class="callout__content new-session-page__alert-message">${message}</span>
+    </div>
+  `;
+}
 
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
@@ -1215,12 +1225,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     return html`
       <div class="new-session-page__draft" aria-busy=${String(this.submitting)}>
         ${this.renderTargetBar()}
-        ${worktreeNameInvalid
-          ? html`<div class="new-session-page__error">${t("newSession.worktreeNameInvalid")}</div>`
-          : nothing}
-        ${this.error ? html`<div class="new-session-page__error">${this.error}</div>` : nothing}
+        ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
+        ${this.error ? renderDraftError(this.error) : nothing}
         ${this.submissionOutcomeUnknown
-          ? html`<div class="new-session-page__error">${t("newSession.createOutcomeUnknown")}</div>`
+          ? renderDraftError(t("newSession.createOutcomeUnknown"))
           : nothing}
         ${renderNewSessionDraftComposer({
           agentDefaultModel: this.selectedAgent()?.model?.primary,
