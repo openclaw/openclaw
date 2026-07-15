@@ -48,6 +48,7 @@ import {
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
   sessionAbortCompactionMock,
+  sessionCompactionCompletionMock,
   sessionMessages,
   sessionCompactImpl,
   triggerInternalHook,
@@ -2309,6 +2310,32 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(result.result?.summary).toBe("summary");
     expect(sessionAbortCompactionMock).not.toHaveBeenCalled();
     expect(sessionCompactImpl.mock.lastCall?.[1]?.reason).toBe(timeoutReason);
+  });
+
+  it("waits for native compaction completion before outer side effects and dispose", async () => {
+    const completion = createDeferred<void>();
+    sessionCompactionCompletionMock.mockReturnValueOnce(completion.promise);
+
+    const resultPromise = compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+    await vi.waitFor(() => expect(sessionCompactImpl).toHaveBeenCalledTimes(1));
+    const created = await createAgentSessionMock.mock.results[0]?.value;
+    if (!created) {
+      throw new Error("Expected a created compaction session");
+    }
+
+    const settledBeforeCompletion = await Promise.race([
+      resultPromise.then(() => true),
+      new Promise<false>((resolve) => {
+        setTimeout(() => resolve(false), 25);
+      }),
+    ]);
+    expect(rotateTranscriptAfterCompactionMock).not.toHaveBeenCalled();
+    expect(created.session.dispose).not.toHaveBeenCalled();
+
+    completion.resolve(undefined);
+    expect(settledBeforeCompletion).toBe(false);
+    await expect(resultPromise).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(created.session.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("aborts in-flight compaction when the caller abort signal fires", async () => {

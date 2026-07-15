@@ -1676,10 +1676,16 @@ async function compactEmbeddedAgentSessionDirectOnce(
             // the sanity check below becomes a no-op instead of crashing compaction.
           }
           const activeSession = session;
+          let nativeCompactionCompletion: Promise<void> = Promise.resolve();
           const result = await compactWithSafetyTimeout(
             (compactAbortSignal) => {
               setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
-              return activeSession.compact(params.customInstructions, compactAbortSignal);
+              const compactionRun = activeSession.startCompaction(
+                params.customInstructions,
+                compactAbortSignal,
+              );
+              nativeCompactionCompletion = compactionRun.completion;
+              return compactionRun.result;
             },
             compactionTimeoutMs,
             {
@@ -1687,6 +1693,10 @@ async function compactEmbeddedAgentSessionDirectOnce(
               acceptResultAfterTimeout: isCompactionTimeoutPartialResult,
             },
           );
+          // A typed partial result may settle as soon as it is durably committed, but
+          // transcript rotation, outer hooks, lane release, and session disposal must
+          // remain behind the exact AgentSession compaction lifecycle that produced it.
+          await nativeCompactionCompletion;
           let effectiveFirstKeptEntryId = result.firstKeptEntryId;
           let postCompactionLeafId =
             typeof sessionManager.getLeafId === "function"

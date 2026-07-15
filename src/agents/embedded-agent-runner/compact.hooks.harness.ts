@@ -78,6 +78,7 @@ export const sessionCompactImpl = vi.fn(
     details: { ok: true },
   }),
 );
+export const sessionCompactionCompletionMock = vi.fn<() => Promise<void>>(async () => {});
 export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
 export const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
@@ -160,10 +161,20 @@ function createMockCompactionSession() {
         systemPrompt: undefined as string | undefined,
       },
     },
-    compact: vi.fn(async (customInstructions?: string, abortSignal?: AbortSignal) => {
-      session.messages.splice(1);
-      return await sessionCompactImpl(customInstructions, abortSignal);
+    startCompaction: vi.fn((customInstructions?: string, abortSignal?: AbortSignal) => {
+      const result = (async () => {
+        session.messages.splice(1);
+        return await sessionCompactImpl(customInstructions, abortSignal);
+      })();
+      return {
+        result,
+        completion: sessionCompactionCompletionMock(),
+      };
     }),
+    compact: vi.fn(
+      (customInstructions?: string, abortSignal?: AbortSignal) =>
+        session.startCompaction(customInstructions, abortSignal).result,
+    ),
     setActiveToolsByName: vi.fn(),
     setBaseSystemPrompt: vi.fn((systemPrompt: string) => {
       session.agent.state.systemPrompt = systemPrompt;
@@ -574,6 +585,8 @@ export function resetCompactHooksHarnessMocks(): void {
     tokensBefore: 120,
     details: { ok: true },
   });
+  sessionCompactionCompletionMock.mockReset();
+  sessionCompactionCompletionMock.mockResolvedValue(undefined);
 
   triggerInternalHook.mockReset();
   resetCompactSessionStateMocks();

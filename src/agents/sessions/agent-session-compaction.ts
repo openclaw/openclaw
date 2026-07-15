@@ -36,35 +36,61 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     customInstructions?: string,
     requestAbortSignal?: AbortSignal,
   ): Promise<CompactionResult> {
+    return await this.startCompaction(customInstructions, requestAbortSignal).result;
+  }
+
+  startCompaction(
+    customInstructions?: string,
+    requestAbortSignal?: AbortSignal,
+  ): { result: Promise<CompactionResult>; completion: Promise<void> } {
     const abortController = new AbortController();
     const signal = requestAbortSignal
       ? AbortSignal.any([abortController.signal, requestAbortSignal])
       : abortController.signal;
     this.compactionAbortControllers.add(abortController);
-    return await new Promise<CompactionResult>((resolve, reject) => {
-      let settled = false;
-      const resolveOnce = (result: CompactionResult) => {
-        if (!settled) {
-          settled = true;
-          resolve(result);
-        }
-      };
-      const rejectOnce = (error: unknown) => {
-        if (!settled) {
-          settled = true;
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      };
-      const work = this.runWithSessionWriteLock(async () => {
-        if (signal.aborted) {
-          throw new Error("Compaction cancelled");
-        }
-        return await this.compactWithSessionWriteLock(signal, customInstructions, resolveOnce);
-      });
-      void work.then(resolveOnce, rejectOnce).finally(() => {
+    let resolveResult = (_result: CompactionResult) => {};
+    let rejectResult = (_error: unknown) => {};
+    const result = new Promise<CompactionResult>((resolve, reject) => {
+      resolveResult = resolve;
+      rejectResult = reject;
+    });
+    let settled = false;
+    const resolveOnce = (value: CompactionResult) => {
+      if (!settled) {
+        settled = true;
+        resolveResult(value);
+      }
+    };
+    const rejectOnce = (error: unknown) => {
+      if (!settled) {
+        settled = true;
+        rejectResult(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+    const work = this.runWithSessionWriteLock(async () => {
+      if (signal.aborted) {
+        throw new Error("Compaction cancelled");
+      }
+      return await this.compactWithSessionWriteLock(signal, customInstructions, resolveOnce);
+    });
+    const completion = work
+      .then(
+        (value) => {
+          resolveOnce(value);
+        },
+        (error: unknown) => {
+          rejectOnce(error);
+          throw error;
+        },
+      )
+      .finally(() => {
         this.compactionAbortControllers.delete(abortController);
       });
-    });
+    // Most callers only need the public result promise. Keep a late hook failure from
+    // becoming an unhandled rejection while allowing lifecycle owners to await the
+    // original completion promise and observe that failure.
+    void completion.catch(() => {});
+    return { result, completion };
   }
 
   private async compactWithSessionWriteLock(

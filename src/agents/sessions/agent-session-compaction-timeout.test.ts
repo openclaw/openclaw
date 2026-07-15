@@ -261,12 +261,21 @@ describe("AgentSession compaction timeout partial results", () => {
     });
 
     try {
+      let firstCompactionCompletion: Promise<void> = Promise.resolve();
       await expect(
-        compactWithSafetyTimeout(() => session.compact(), 25, {
-          onCancel: (reason) => session.abortCompaction(reason),
-          acceptResultAfterTimeout: isCompactionTimeoutPartialResult,
-          timeoutResultGraceMs: 50,
-        }),
+        compactWithSafetyTimeout(
+          () => {
+            const compactionRun = session.startCompaction();
+            firstCompactionCompletion = compactionRun.completion;
+            return compactionRun.result;
+          },
+          25,
+          {
+            onCancel: (reason) => session.abortCompaction(reason),
+            acceptResultAfterTimeout: isCompactionTimeoutPartialResult,
+            timeoutResultGraceMs: 50,
+          },
+        ),
       ).resolves.toMatchObject({
         summary: "partial summary committed before post-commit hook",
       });
@@ -287,7 +296,15 @@ describe("AgentSession compaction timeout partial results", () => {
         setTimeout(resolve, 10);
       });
       expect(beforeCompactCalls).toBe(1);
+      const completedBeforeHookRelease = await Promise.race([
+        firstCompactionCompletion.then(() => true),
+        new Promise<false>((resolve) => {
+          setTimeout(() => resolve(false), 10);
+        }),
+      ]);
+      expect(completedBeforeHookRelease).toBe(false);
       releasePostCommitHook();
+      await expect(firstCompactionCompletion).resolves.toBeUndefined();
       await expect(secondCompaction).resolves.toMatchObject({
         summary: "second compaction after ordered hook",
       });
