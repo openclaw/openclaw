@@ -39,8 +39,11 @@ describe("Reef configuration boundary", () => {
     });
   });
 
-  it("rejects the retired config-backed friendship and allowlist fields", () => {
-    for (const retired of [{ friends: {} }, { allowFrom: [] }, { dmPolicy: "pairing" }]) {
+  it("accepts legacy trust snapshots but rejects retired policy fields", () => {
+    expect(ReefChannelConfigSchema.safeParse({ friends: { peer: { legacy: true } } }).success).toBe(
+      true,
+    );
+    for (const retired of [{ allowFrom: [] }, { dmPolicy: "pairing" }]) {
       expect(ReefChannelConfigSchema.safeParse(retired).success).toBe(false);
     }
   });
