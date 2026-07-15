@@ -21,9 +21,11 @@ export type LineWebhookDispatchCallbacks = {
   onEventAccepted: (event: webhook.Event) => void | Promise<void>;
 };
 
-export type LineWebhookDispatchHandler = (
+export type LineWebhookDispatchHandler = (body: webhook.CallbackRequest) => Promise<void>;
+
+export type LineWebhookAcceptanceDispatchHandler = (
   body: webhook.CallbackRequest,
-  callbacks?: LineWebhookDispatchCallbacks,
+  callbacks: LineWebhookDispatchCallbacks,
 ) => Promise<void>;
 
 function logLineWebhookDispatchError(runtime: RuntimeEnv | undefined, err: unknown): void {
@@ -37,7 +39,7 @@ function logLineWebhookDispatchError(runtime: RuntimeEnv | undefined, err: unkno
  */
 export async function waitForLineWebhookDispatchAcceptance(params: {
   body: webhook.CallbackRequest;
-  dispatch: LineWebhookDispatchHandler;
+  dispatch: LineWebhookAcceptanceDispatchHandler;
   responseDeadlineAt?: number;
   runtime?: RuntimeEnv;
 }): Promise<void> {

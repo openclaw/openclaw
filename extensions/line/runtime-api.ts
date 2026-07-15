@@ -118,6 +118,7 @@ export type {
 } from "./src/types.js";
 export { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./src/webhook-node.js";
 export type {
+  LineWebhookAcceptanceDispatchHandler,
   LineWebhookDispatchCallbacks,
   LineWebhookDispatchHandler,
 } from "./src/webhook-ack.js";

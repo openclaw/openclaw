@@ -14,6 +14,7 @@ import {
 import {
   LINE_WEBHOOK_RESPONSE_DEADLINE_MS,
   assertLineWebhookResponseDeadline,
+  type LineWebhookAcceptanceDispatchHandler,
   type LineWebhookDispatchHandler,
   waitForLineWebhookDispatchAcceptance,
 } from "./webhook-ack.js";
@@ -36,14 +37,28 @@ export async function readLineWebhookRequestBody(
 
 type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) => Promise<string>;
 
-export function createLineNodeWebhookHandler(params: {
+type LineNodeWebhookHandlerParams = {
   channelSecret: string;
-  bot: { handleWebhook: LineWebhookDispatchHandler };
   runtime: RuntimeEnv;
   readBody?: ReadBodyFn;
   maxBodyBytes?: number;
   onRequestAuthenticated?: () => void;
-}): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+} & (
+  | {
+      /** Preserve the existing API contract by acknowledging after dispatch completes. */
+      acknowledgement?: "after_dispatch";
+      bot: { handleWebhook: LineWebhookDispatchHandler };
+    }
+  | {
+      /** Acknowledge once every event is durably adopted, before processing completes. */
+      acknowledgement: "after_event_acceptance";
+      bot: { handleWebhook: LineWebhookAcceptanceDispatchHandler };
+    }
+);
+
+export function createLineNodeWebhookHandler(
+  params: LineNodeWebhookHandlerParams,
+): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const maxBodyBytes = params.maxBodyBytes ?? LINE_WEBHOOK_MAX_BODY_BYTES;
   const readBody = params.readBody ?? readLineWebhookRequestBody;
 
@@ -68,7 +83,10 @@ export function createLineNodeWebhookHandler(params: {
       return;
     }
 
-    const responseDeadlineAt = Date.now() + LINE_WEBHOOK_RESPONSE_DEADLINE_MS;
+    const waitsForEventAcceptance = params.acknowledgement === "after_event_acceptance";
+    const responseDeadlineAt = waitsForEventAcceptance
+      ? Date.now() + LINE_WEBHOOK_RESPONSE_DEADLINE_MS
+      : undefined;
     let receiveContext: MessageReceiveContext<webhook.CallbackRequest> | undefined;
     try {
       const signatureHeader = req.headers["x-line-signature"];
@@ -90,12 +108,16 @@ export function createLineNodeWebhookHandler(params: {
       const rawBody = await readBody(
         req,
         Math.min(maxBodyBytes, LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES),
-        Math.max(
-          1,
-          Math.min(LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS, responseDeadlineAt - Date.now()),
-        ),
+        responseDeadlineAt === undefined
+          ? LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS
+          : Math.max(
+              1,
+              Math.min(LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS, responseDeadlineAt - Date.now()),
+            ),
       );
-      assertLineWebhookResponseDeadline(responseDeadlineAt);
+      if (responseDeadlineAt !== undefined) {
+        assertLineWebhookResponseDeadline(responseDeadlineAt);
+      }
 
       if (!validateLineSignature(rawBody, signature, params.channelSecret)) {
         logVerbose("line: webhook signature validation failed");
@@ -134,12 +156,16 @@ export function createLineNodeWebhookHandler(params: {
       }
 
       logVerbose(`line: received ${body.events.length} webhook events`);
-      await waitForLineWebhookDispatchAcceptance({
-        body,
-        dispatch: params.bot.handleWebhook,
-        responseDeadlineAt,
-        runtime: params.runtime,
-      });
+      if (params.acknowledgement === "after_event_acceptance") {
+        await waitForLineWebhookDispatchAcceptance({
+          body,
+          dispatch: params.bot.handleWebhook,
+          responseDeadlineAt,
+          runtime: params.runtime,
+        });
+      } else {
+        await params.bot.handleWebhook(body);
+      }
       await receiveContext.ack();
     } catch (err) {
       await receiveContext?.nack(err);

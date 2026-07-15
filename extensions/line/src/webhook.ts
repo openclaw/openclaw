@@ -8,6 +8,7 @@ import {
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   LINE_WEBHOOK_RESPONSE_DEADLINE_MS,
+  type LineWebhookAcceptanceDispatchHandler,
   type LineWebhookDispatchHandler,
   waitForLineWebhookDispatchAcceptance,
 } from "./webhook-ack.js";
@@ -15,11 +16,24 @@ import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js"
 
 const LINE_WEBHOOK_MAX_RAW_BODY_BYTES = 64 * 1024;
 
-export interface LineWebhookOptions {
+type LineWebhookOptionsBase = {
   channelSecret: string;
-  onEvents: LineWebhookDispatchHandler;
   runtime?: RuntimeEnv;
-}
+};
+
+export type LineWebhookOptions = LineWebhookOptionsBase &
+  (
+    | {
+        /** Preserve the existing API contract by acknowledging after dispatch completes. */
+        acknowledgement?: "after_dispatch";
+        onEvents: LineWebhookDispatchHandler;
+      }
+    | {
+        /** Acknowledge once every event is durably adopted, before processing completes. */
+        acknowledgement: "after_event_acceptance";
+        onEvents: LineWebhookAcceptanceDispatchHandler;
+      }
+  );
 
 function readRawBody(req: Request): string | null {
   const rawBody =
@@ -41,12 +55,15 @@ function parseWebhookBody(rawBody?: string | null): webhook.CallbackRequest | nu
 export function createLineWebhookMiddleware(
   options: LineWebhookOptions,
 ): (req: Request, res: Response, _next: NextFunction) => Promise<void> {
-  const { channelSecret, onEvents, runtime } = options;
+  const { channelSecret, runtime } = options;
 
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
     // This compatibility middleware receives an already captured raw body, so
     // its budget starts here. Gateway-owned Node routes start before body read.
-    const responseDeadlineAt = Date.now() + LINE_WEBHOOK_RESPONSE_DEADLINE_MS;
+    const responseDeadlineAt =
+      options.acknowledgement === "after_event_acceptance"
+        ? Date.now() + LINE_WEBHOOK_RESPONSE_DEADLINE_MS
+        : undefined;
     let receiveContext: MessageReceiveContext<webhook.CallbackRequest> | undefined;
     try {
       const signature = req.headers["x-line-signature"];
@@ -96,12 +113,16 @@ export function createLineWebhookMiddleware(
       }
 
       logVerbose(`line: received ${body.events.length} webhook events`);
-      await waitForLineWebhookDispatchAcceptance({
-        body,
-        dispatch: onEvents,
-        responseDeadlineAt,
-        runtime,
-      });
+      if (options.acknowledgement === "after_event_acceptance") {
+        await waitForLineWebhookDispatchAcceptance({
+          body,
+          dispatch: options.onEvents,
+          responseDeadlineAt,
+          runtime,
+        });
+      } else {
+        await options.onEvents(body);
+      }
       await receiveContext.ack();
     } catch (err) {
       await receiveContext?.nack(err);
@@ -113,12 +134,9 @@ export function createLineWebhookMiddleware(
   };
 }
 
-export interface StartLineWebhookOptions {
-  channelSecret: string;
-  onEvents: LineWebhookDispatchHandler;
-  runtime?: RuntimeEnv;
+export type StartLineWebhookOptions = LineWebhookOptions & {
   path?: string;
-}
+};
 
 export function startLineWebhook(options: StartLineWebhookOptions): {
   path: string;
@@ -133,11 +151,7 @@ export function startLineWebhook(options: StartLineWebhookOptions): {
     );
   }
   const path = options.path ?? "/line/webhook";
-  const middleware = createLineWebhookMiddleware({
-    channelSecret,
-    onEvents: options.onEvents,
-    runtime: options.runtime,
-  });
+  const middleware = createLineWebhookMiddleware({ ...options, channelSecret });
 
   return { path, handler: middleware };
 }

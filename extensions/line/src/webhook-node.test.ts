@@ -450,6 +450,7 @@ describe("createLineNodeWebhookHandler", () => {
       runtime,
       readBody,
       maxBodyBytes: 1024 * 1024,
+      acknowledgement: "after_event_acceptance",
     });
 
     const { res } = createRes();
@@ -514,6 +515,7 @@ describe("createLineNodeWebhookHandler", () => {
       runtime,
       readBody: async () => rawBody,
       onRequestAuthenticated,
+      acknowledgement: "after_event_acceptance",
     });
 
     const { res } = createRes();
@@ -590,6 +592,7 @@ describe("createLineNodeWebhookHandler", () => {
       bot,
       runtime: createRuntimeMock(),
       readBody: async () => rawBody,
+      acknowledgement: "after_event_acceptance",
     });
 
     const { res } = createRes();
@@ -618,6 +621,43 @@ describe("createLineNodeWebhookHandler", () => {
 
     expect(res.statusCode).toBe(400);
     expect(bot.handleWebhook).not.toHaveBeenCalled();
+  });
+
+  it("preserves completion acknowledgement for callback-less handlers", async () => {
+    vi.useFakeTimers();
+    try {
+      const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+      let finishDispatch: (() => void) | undefined;
+      const bot = {
+        handleWebhook: vi.fn(
+          async () =>
+            await new Promise<void>((resolve) => {
+              finishDispatch = resolve;
+            }),
+        ),
+      };
+      const handler = createLineNodeWebhookHandler({
+        channelSecret: SECRET,
+        bot,
+        runtime: createRuntimeMock(),
+        readBody: async () => rawBody,
+      });
+      const { res } = createRes();
+      const request = runSignedPost({ handler, rawBody, secret: SECRET, res });
+
+      await vi.waitFor(() => expect(bot.handleWebhook).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(res.headersSent).toBe(false);
+      if (!finishDispatch) {
+        throw new Error("Expected callback-less LINE handler to start");
+      }
+      finishDispatch();
+      await request;
+
+      expect(res.statusCode).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -726,5 +766,42 @@ describe("createLineWebhookMiddleware", () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({ error: "Invalid webhook payload" });
     expect(onEvents).not.toHaveBeenCalled();
+  });
+
+  it("preserves completion acknowledgement for callback-less handlers", async () => {
+    vi.useFakeTimers();
+    try {
+      const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+      let finishDispatch: (() => void) | undefined;
+      const onEvents = vi.fn(
+        async () =>
+          await new Promise<void>((resolve) => {
+            finishDispatch = resolve;
+          }),
+      );
+      const middleware = createLineWebhookMiddleware({
+        channelSecret: SECRET,
+        onEvents,
+      });
+      const req = createMiddlewareRequest({
+        headers: { "x-line-signature": sign(rawBody, SECRET) },
+        body: rawBody,
+      });
+      const res = createMiddlewareRes();
+      const request = middleware(req, res, vi.fn() as NextFunction);
+
+      await vi.waitFor(() => expect(onEvents).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(res.status).not.toHaveBeenCalled();
+      if (!finishDispatch) {
+        throw new Error("Expected callback-less LINE middleware handler to start");
+      }
+      finishDispatch();
+      await request;
+
+      expect(res.status).toHaveBeenCalledWith(200);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
