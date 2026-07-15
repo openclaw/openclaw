@@ -36,6 +36,7 @@ import {
   setCommandLaneConcurrency,
 } from "../process/command-queue.js";
 import {
+  getActiveGatewayRootWorkCount,
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -1636,6 +1637,34 @@ describe("gateway hot reload superseded tail recovery", () => {
     expect(startChannel).toHaveBeenCalledWith("discord");
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   });
+
+  it.each(["discord", "telegram"] as const)(
+    "starts the %s channel outside the config-reload request admission",
+    async (channel) => {
+      const startRootCounts: number[] = [];
+      const handlers = createReloadHandlersForTest(undefined, {
+        start: vi.fn(async () => {
+          startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
+        }),
+        stop: vi.fn(async () => {}),
+      });
+      const root = tryBeginGatewayRootWorkAdmission();
+      expect(root).not.toBeNull();
+
+      try {
+        await root?.run(async () => {
+          await handlers.applyHotReload(
+            createHotTailPlan({ restartChannels: new Set([channel]) }),
+            {},
+          );
+        });
+      } finally {
+        root?.release();
+      }
+
+      expect(startRootCounts).toEqual([1]);
+    },
+  );
 });
 
 describe("gateway hot reload commit policy", () => {
@@ -5611,8 +5640,10 @@ describe("gateway plugin hot reload handlers", () => {
     const setState = vi.fn();
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const events: string[] = [];
+    const startRootCounts: number[] = [];
     const startChannel = vi.fn(async (channel: ChannelKind) => {
       events.push(`start:${channel}`);
+      startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
     });
     const stopChannel = vi.fn(async (channel: ChannelKind) => {
       events.push(`stop:${channel}`);
@@ -5654,32 +5685,37 @@ describe("gateway plugin hot reload handlers", () => {
       createHealthMonitor: () => null,
     });
 
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
     try {
       await expect(
-        applyHotReload(
-          {
-            changedPaths: ["plugins.enabled"],
-            restartGateway: false,
-            restartReasons: [],
-            hotReasons: ["plugins.enabled"],
-            reloadHooks: false,
-            restartGmailWatcher: false,
-            restartCron: false,
-            restartHeartbeat: false,
-            restartHealthMonitor: false,
-            reloadPlugins: true,
-            restartChannels: new Set(),
-            disposeMcpRuntimes: false,
-            noopPaths: [],
-          },
-          {
-            plugins: {
-              enabled: false,
+        root?.run(async () => {
+          await applyHotReload(
+            {
+              changedPaths: ["plugins.enabled"],
+              restartGateway: false,
+              restartReasons: [],
+              hotReasons: ["plugins.enabled"],
+              reloadHooks: false,
+              restartGmailWatcher: false,
+              restartCron: false,
+              restartHeartbeat: false,
+              restartHealthMonitor: false,
+              reloadPlugins: true,
+              restartChannels: new Set(),
+              disposeMcpRuntimes: false,
+              noopPaths: [],
             },
-          },
-        ),
+            {
+              plugins: {
+                enabled: false,
+              },
+            },
+          );
+        }),
       ).rejects.toThrow("failed to stop channels before plugin reload: discord");
     } finally {
+      root?.release();
       if (previousSkipChannels === undefined) {
         delete process.env.OPENCLAW_SKIP_CHANNELS;
       } else {
@@ -5704,6 +5740,7 @@ describe("gateway plugin hot reload handlers", () => {
     );
     expect(startChannel).toHaveBeenCalledWith("telegram");
     expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startRootCounts).toEqual([1, 1]);
     expect(setState).not.toHaveBeenCalled();
   });
 
