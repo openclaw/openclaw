@@ -1060,7 +1060,7 @@ describe("web auto-reply connection", () => {
 
     await expect(
       Promise.resolve(capture.getLastOptions()?.resolveDebounceDecision?.(msg)),
-    ).resolves.toEqual({ action: "bypass" });
+    ).resolves.toEqual({ action: "debounce" });
     expect(
       capture
         .getLastOptions()
