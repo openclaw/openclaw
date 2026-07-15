@@ -4566,6 +4566,67 @@ describe("deliverOutboundPayloads", () => {
     }
   });
 
+  it("stages agent-workspace media that only the agent-scoped capability can read", async () => {
+    // The regression this guards: queue staging must resolve the same media
+    // capability the live send resolves. An agent workspace lives at
+    // <state>/workspace-<agentId>, which the unscoped default roots explicitly
+    // reject (see local-media-access.ts), so staging that reads through a raw
+    // params.mediaAccess would refuse media the send itself would deliver.
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-ws", roomId: "!room:example" });
+    const stateDir = await fsPromises.realpath(
+      await fsPromises.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "deliver-ws-")),
+    );
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const workspaceDir = path.join(stateDir, "workspace-proofagent");
+    await fsPromises.mkdir(workspaceDir, { recursive: true });
+    // Host-local sends are buffer-verified, so the fixture needs real audio.
+    const source = path.join(workspaceDir, "voice.mp3");
+    const mp3 = Buffer.alloc(417 * 8);
+    for (let i = 0; i < 8; i++) {
+      const o = i * 417;
+      mp3[o] = 0xff;
+      mp3[o + 1] = 0xfb;
+      mp3[o + 2] = 0x90;
+      mp3[o + 3] = 0xc4;
+    }
+    await fsPromises.writeFile(source, mp3);
+    const payload = { mediaUrl: source, audioAsVoice: true };
+
+    try {
+      await deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [payload],
+        session: { key: "session-ws", agentId: "proofagent" },
+        deps: { matrix: sendMatrix },
+      });
+
+      const queued = (
+        queueMocks.enqueueDelivery.mock.calls as unknown as Array<
+          [{ payloads: { mediaUrl?: string }[] }]
+        >
+      )[0]?.[0];
+      const queuedMediaUrl = queued?.payloads[0]?.mediaUrl;
+      // A durable row exists at all only if staging resolved the agent-scoped
+      // capability; the raw capability rejects this source outright.
+      expect(queuedMediaUrl).toBeDefined();
+      expect(queuedMediaUrl).not.toBe(source);
+      expect(await fsPromises.readFile(queuedMediaUrl as string)).toEqual(mp3);
+      // The live send still carries the agent's own path, uncopied.
+      expect(payload.mediaUrl).toBe(source);
+      expect(sendMatrix).toHaveBeenCalled();
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fsPromises.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a best-effort send live-only when its media cannot be staged", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-live", roomId: "!room:example" });
 
