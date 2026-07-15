@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import type {
   OpenClawConfig,
   OpenClawPluginApi,
