@@ -470,7 +470,7 @@ function resolvePnpmInstallSpecFromCwd(
       !path.isAbsolute(targetPath) &&
       !path.win32.isAbsolute(targetPath)
     ) {
-      const windowsPath = /^[a-z]:[\\/]/iu.test(sourceCwd) || /^\\\\/u.test(sourceCwd);
+      const windowsPath = /^[a-z]:[\\/]/iu.test(sourceCwd) || sourceCwd.startsWith("\\\\");
       const resolvedTarget = (windowsPath ? path.win32 : path).resolve(sourceCwd, targetPath);
       if (protocol.toLowerCase() === "git+file:") {
         return restoreAlias(
