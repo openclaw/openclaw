@@ -162,7 +162,16 @@ export function loadMatrixCredentials(
     if (loaded.source === "legacy") {
       try {
         fs.mkdirSync(path.dirname(currentPath), { recursive: true });
-        fs.renameSync(legacyPath, currentPath);
+        try {
+          fs.renameSync(legacyPath, currentPath);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException | undefined)?.code === "EXDEV") {
+            fs.copyFileSync(legacyPath, currentPath);
+            fs.unlinkSync(legacyPath);
+          } else {
+            throw err;
+          }
+        }
       } catch {
         // Keep returning the legacy credentials even if migration fails.
       }
