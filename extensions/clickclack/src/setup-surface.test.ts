@@ -212,9 +212,8 @@ describe("ClickClack setup wizard", () => {
   });
 
   it("keeps setup saved when workspace resolution fails", async () => {
-    mocks.resolveWorkspaceId.mockRejectedValue(
-      new Error("ClickClack workspace not found: missing"),
-    );
+    mocks.resolveWorkspaceId.mockResolvedValue("wsp_missing");
+    mocks.workspaces.mockResolvedValue([]);
     const note = vi.fn(async () => undefined);
 
     await expect(
@@ -224,7 +223,7 @@ describe("ClickClack setup wizard", () => {
           channels: {
             clickclack: {
               ...configuredAccount.channels.clickclack,
-              workspace: "missing",
+              workspace: "wsp_missing",
             },
           },
         },
@@ -232,7 +231,7 @@ describe("ClickClack setup wizard", () => {
       }),
     ).resolves.toBeUndefined();
     expect(note).toHaveBeenCalledWith(
-      'Workspace "missing" was not found. Check the id, slug, or name, list available workspaces, and rerun setup.',
+      'Workspace "wsp_missing" was not found. Check the id, slug, or name, list available workspaces, and rerun setup.',
       "ClickClack connection check",
     );
   });

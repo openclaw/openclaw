@@ -162,10 +162,13 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
       const workspaceId = await resolveWorkspaceId(client, account.workspace);
       const workspaces = await client.workspaces();
       const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+      if (!workspace) {
+        throw new Error(`ClickClack workspace not found: ${account.workspace}`);
+      }
       await prompter.note(
         t("wizard.clickclack.connected", {
           handle: me.handle,
-          workspace: workspace?.name ?? workspaceId,
+          workspace: workspace.name,
         }),
         t("wizard.clickclack.connectionTitle"),
       );
