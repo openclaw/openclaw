@@ -44,7 +44,7 @@ type BehaviorPolicyRule = {
 };
 
 /** Internal resolved view of a rule after defaults are applied. */
-export type ResolvedBehaviorRule = {
+type ResolvedBehaviorRule = {
   id: string;
   description: string;
   enforce: string;
@@ -160,7 +160,7 @@ type BehaviorPolicyOutputResult =
  *
  * Returns `{ kind: "pass" }` when no rules are active.
  */
-export async function validateBehaviorOutput(params: {
+async function validateBehaviorOutput(params: {
   config?: OpenClawConfig;
   rules: ResolvedBehaviorRule[] | undefined;
   output: string;
