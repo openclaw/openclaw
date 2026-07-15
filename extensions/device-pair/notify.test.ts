@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { listDevicePairing as listDevicePairingFn } from "openclaw/plugin-sdk/device-bootstrap";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -16,7 +17,9 @@ import {
   type NotifySubscription,
 } from "./notify-state.js";
 
-const listDevicePairingMock = vi.hoisted(() => vi.fn(async () => ({ pending: [] })));
+const listDevicePairingMock = vi.hoisted(() =>
+  vi.fn<typeof listDevicePairingFn>(async () => ({ pending: [], paired: [] })),
+);
 
 vi.mock("openclaw/plugin-sdk/device-bootstrap", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/device-bootstrap")>()),
@@ -47,7 +50,7 @@ describe("device-pair notify persistence", () => {
   beforeEach(async () => {
     resetPluginStateStoreForTests();
     vi.clearAllMocks();
-    listDevicePairingMock.mockResolvedValue({ pending: [] });
+    listDevicePairingMock.mockResolvedValue({ pending: [], paired: [] });
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "device-pair-notify-"));
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   });
@@ -92,10 +95,10 @@ describe("device-pair notify persistence", () => {
     const firstPoll = createDeferred<Awaited<ReturnType<typeof listDevicePairingMock>>>();
     const failedPoll = createDeferred<Awaited<ReturnType<typeof listDevicePairingMock>>>();
     listDevicePairingMock
-      .mockResolvedValueOnce({ pending: [] })
+      .mockResolvedValueOnce({ pending: [], paired: [] })
       .mockImplementationOnce(() => firstPoll.promise)
       .mockImplementationOnce(() => failedPoll.promise)
-      .mockResolvedValue({ pending: [] });
+      .mockResolvedValue({ pending: [], paired: [] });
     const api = createApi();
     let service = createPairingNotifierService(api);
 
@@ -112,7 +115,7 @@ describe("device-pair notify persistence", () => {
     await service.start({} as never);
     expect(listDevicePairingMock).toHaveBeenCalledTimes(2);
 
-    firstPoll.resolve({ pending: [] });
+    firstPoll.resolve({ pending: [], paired: [] });
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(listDevicePairingMock).toHaveBeenCalledTimes(3);
@@ -137,12 +140,16 @@ describe("device-pair notify persistence", () => {
     const firstRequest = {
       requestId: "request-1",
       deviceId: "device-1",
+      publicKey: "public-key-1",
       displayName: "First device",
+      ts: 1,
     };
     const secondRequest = {
       requestId: "request-2",
       deviceId: "device-2",
+      publicKey: "public-key-2",
       displayName: "Second device",
+      ts: 2,
     };
     const api = createApi(sendText);
     await handleNotifyCommand({
@@ -153,9 +160,9 @@ describe("device-pair notify persistence", () => {
       },
       action: "on",
     });
-    listDevicePairingMock.mockResolvedValueOnce({ pending: [] }).mockResolvedValue({
-      pending: [firstRequest],
-    });
+    listDevicePairingMock
+      .mockResolvedValueOnce({ pending: [], paired: [] })
+      .mockResolvedValue({ pending: [firstRequest], paired: [] });
     let service = createPairingNotifierService(api);
 
     await service.start({} as never);
@@ -173,7 +180,10 @@ describe("device-pair notify persistence", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(sendText).toHaveBeenCalledTimes(1);
 
-    listDevicePairingMock.mockResolvedValue({ pending: [firstRequest, secondRequest] });
+    listDevicePairingMock.mockResolvedValue({
+      pending: [firstRequest, secondRequest],
+      paired: [],
+    });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(sendText).toHaveBeenCalledTimes(2);
     expect(sendText.mock.calls[1]?.[0]).toMatchObject({
