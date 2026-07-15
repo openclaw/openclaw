@@ -104,7 +104,7 @@ describe("Claw status and remove", () => {
       packageRefsReleased: 1,
       workspaceFiles: [{ path: "SOUL.md", action: "deleted" }],
     });
-    expect(config.agents?.list).toEqual([]);
+    expect(config.agents?.list).toBeUndefined();
     await expect(readFile(join(current.plan.agent.workspace, "SOUL.md"), "utf8")).rejects.toThrow();
     await expect(readClawStatus("worker", { env: current.env, config })).resolves.toMatchObject({
       summary: { claws: 0 },

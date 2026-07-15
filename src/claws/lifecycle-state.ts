@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { stableStringify } from "../agents/stable-stringify.js";
+import { pruneAgentConfig } from "../commands/agents.config.js";
 import { loadConfig, transformConfigFileWithRetry } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
@@ -319,6 +320,7 @@ export async function applyClawRemovePlan(
   if (plan.blockers.length > 0 || !plan.agentId) {
     throw new ClawRemoveError("remove_blocked", "The Claw remove plan contains blockers.");
   }
+  const agentId = plan.agentId;
   const current = await readClawStatus(plan.agentId, options);
   const record = current.records[0];
   if (
@@ -344,13 +346,7 @@ export async function applyClawRemovePlan(
       throw new ClawRemoveError("agent_modified", "Agent config changed during remove.");
     }
     agentRemoved = Boolean(agent);
-    return {
-      ...config,
-      agents: {
-        ...config.agents,
-        list: agents.filter((candidate) => candidate.id !== plan.agentId),
-      },
-    };
+    return pruneAgentConfig(config, agentId).config;
   });
   const workspaceFiles: RemovedWorkspaceFile[] = [];
   for (const file of record.workspaceFiles) {
