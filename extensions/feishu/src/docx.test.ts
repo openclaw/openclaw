@@ -333,6 +333,21 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.blocks_added).toBe(successChunkCount);
   });
 
+  it("does not clear an existing document when Markdown conversion fails", async () => {
+    convertMock.mockResolvedValueOnce({ code: 999, msg: "unsupported Markdown" });
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "write",
+      doc_token: "doc_1",
+      content: "<section>\nunsupported\n</section>",
+    });
+
+    expect(result.details.error).toContain("unsupported Markdown");
+    expect(blockListMock).not.toHaveBeenCalled();
+    expect(blockChildrenBatchDeleteMock).not.toHaveBeenCalled();
+  });
+
   it("keeps fenced code blocks balanced when size fallback split is needed", async () => {
     const convertedChunks: string[] = [];
     let successChunkCount = 0;
@@ -471,6 +486,57 @@ describe("feishu_doc image fetch hardening", () => {
         readIdleTimeoutMs: 1_234,
       }),
     );
+  });
+
+  it("keeps remote Markdown images aligned after non-remote image blocks", async () => {
+    readRemoteMediaBufferMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote image", "utf8"),
+      fileName: "remote.png",
+    });
+    blockDescendantCreateMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        children: [
+          { block_type: 27, block_id: "img_local" },
+          { block_type: 27, block_id: "img_remote" },
+        ],
+      },
+    });
+
+    const feishuDocTool = resolveFeishuDocTool();
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "write",
+      doc_token: "doc_1",
+      content: [
+        "![local](data:image/png;base64,AAAA)",
+        "![remote](https://cdn.test/remote.png)",
+      ].join("\n"),
+    });
+
+    expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(1);
+    expect(readRemoteMediaBufferMock).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "https://cdn.test/remote.png" }),
+    );
+    expect(blockPatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { document_id: "doc_1", block_id: "img_remote" },
+      }),
+    );
+    expect(result.details.images_processed).toBe(1);
+  });
+
+  it("does not fetch Markdown image syntax inside fenced code", async () => {
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "write",
+      doc_token: "doc_1",
+      content: "```md\n![example](https://fake.test/code.png)\n```",
+    });
+
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+    expect(driveUploadAllMock).not.toHaveBeenCalled();
+    expect(result.details.images_processed).toBe(0);
   });
 
   it("create grants permission only to trusted Feishu requester", async () => {
@@ -683,6 +749,87 @@ describe("feishu_doc image fetch hardening", () => {
         readIdleTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
       }),
     );
+  });
+
+  it("does not create an image block when a remote upload cannot be read", async () => {
+    readRemoteMediaBufferMock.mockRejectedValueOnce(new Error("response body idle timeout"));
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "upload_image",
+      doc_token: "doc_1",
+      url: "https://cdn.test/stalled.png",
+    });
+
+    expect(result.details.error).toContain("idle timeout");
+    expect(blockChildrenCreateMock).not.toHaveBeenCalled();
+    expect(driveUploadAllMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed base64 before creating an image block", async () => {
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "upload_image",
+      doc_token: "doc_1",
+      image: "A",
+    });
+
+    expect(result.details.error).toContain("Invalid base64");
+    expect(blockChildrenCreateMock).not.toHaveBeenCalled();
+    expect(driveUploadAllMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized base64 before creating an image block", async () => {
+    resolveFeishuToolAccountMock.mockReturnValue({
+      config: { mediaMaxMb: 1 / (1024 * 1024) },
+    });
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "upload_image",
+      doc_token: "doc_1",
+      image: Buffer.alloc(32).toString("base64"),
+    });
+
+    expect(result.details.error).toContain("exceeds limit");
+    expect(blockChildrenCreateMock).not.toHaveBeenCalled();
+    expect(driveUploadAllMock).not.toHaveBeenCalled();
+  });
+
+  it("does not apply image-read timeouts to remote file uploads", async () => {
+    readRemoteMediaBufferMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote file", "utf8"),
+      fileName: "](/unexpected) ![image](https://attacker.test/image.png)",
+    });
+    blockChildrenCreateMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        children: [{ block_type: 2, block_id: "placeholder_block_1" }],
+      },
+    });
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "upload_file",
+      doc_token: "doc_1",
+      url: "https://cdn.test/remote.txt",
+    });
+
+    expect(result.details.success).toBe(true);
+    const remoteReadInput = requireRecord(
+      callArg(readRemoteMediaBufferMock, 0, 0, "remote media input"),
+      "remote media input",
+    );
+    expect(remoteReadInput.url).toBe("https://cdn.test/remote.txt");
+    expect(remoteReadInput).not.toHaveProperty("responseHeaderTimeoutMs");
+    expect(remoteReadInput).not.toHaveProperty("readIdleTimeoutMs");
+    expect(convertMock).toHaveBeenCalledWith({
+      data: {
+        content_type: "markdown",
+        content: "[file](https://example.com/placeholder)",
+      },
+    });
   });
 
   it("passes workspace localRoots for upload_image absolute local paths when workspace-only policy is active", async () => {

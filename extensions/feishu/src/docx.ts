@@ -12,6 +12,13 @@ import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";
 import { updateColorText } from "./docx-color-text.js";
 import {
+  createDocxMarkdownChunk,
+  createDocxMarkdownPlan,
+  splitDocxMarkdownBySize,
+  type DocxMarkdownChunk,
+  type DocxMarkdownImage,
+} from "./docx-markdown.js";
+import {
   cleanBlocksForDescendant,
   insertTableRow,
   insertTableColumn,
@@ -20,11 +27,7 @@ import {
   mergeTableCells,
 } from "./docx-table-ops.js";
 import type { FeishuDocxBlock, FeishuDocxBlockChild } from "./docx-types.js";
-import {
-  readRemoteDocxFile,
-  readRemoteDocxImage,
-  resolveDocxUploadInput,
-} from "./docx-upload-input.js";
+import { resolveDocxUploadInput } from "./docx-upload-input.js";
 import {
   createFeishuToolClient,
   resolveAnyEnabledFeishuToolsConfig,
@@ -47,24 +50,6 @@ function resolveDocToolLocalRoots(ctx: {
   // Workspace paths are expected to be absolute; resolve() normalizes any
   // accidental relative input before passing roots to loadWebMedia.
   return [resolve(workspaceDir)];
-}
-
-/** Extract image URLs from markdown content */
-function extractImageUrls(markdown: string): string[] {
-  const regex = /!\[[^\]]*\]\(([^)]+)\)/g;
-  const urls: string[] = [];
-  let match;
-  while ((match = regex.exec(markdown)) !== null) {
-    const capturedUrl = match[1];
-    if (capturedUrl === undefined) {
-      continue;
-    }
-    const url = capturedUrl.trim();
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      urls.push(url);
-    }
-  }
-  return urls;
 }
 
 const BLOCK_TYPE_NAMES: Record<number, string> = {
@@ -305,113 +290,54 @@ async function insertBlocks(
   return { children: allInserted, skipped };
 }
 
-/** Split markdown into chunks at top-level headings (# or ##) to stay within API content limits */
-function splitMarkdownByHeadings(markdown: string): string[] {
-  const lines = markdown.split("\n");
-  const chunks: string[] = [];
-  let current: string[] = [];
-  let inFencedBlock = false;
-
-  for (const line of lines) {
-    if (/^(`{3,}|~{3,})/.test(line)) {
-      inFencedBlock = !inFencedBlock;
-    }
-    if (!inFencedBlock && /^#{1,2}\s/.test(line) && current.length > 0) {
-      chunks.push(current.join("\n"));
-      current = [];
-    }
-    current.push(line);
-  }
-  if (current.length > 0) {
-    chunks.push(current.join("\n"));
-  }
-  return chunks;
-}
-
-/** Split markdown by size, preferring to break outside fenced code blocks when possible */
-function splitMarkdownBySize(markdown: string, maxChars: number): string[] {
-  if (markdown.length <= maxChars) {
-    return [markdown];
-  }
-
-  const lines = markdown.split("\n");
-  const chunks: string[] = [];
-  let current: string[] = [];
-  let currentLength = 0;
-  let inFencedBlock = false;
-
-  for (const line of lines) {
-    if (/^(`{3,}|~{3,})/.test(line)) {
-      inFencedBlock = !inFencedBlock;
-    }
-
-    const lineLength = line.length + 1;
-    const wouldExceed = currentLength + lineLength > maxChars;
-    if (current.length > 0 && wouldExceed && !inFencedBlock) {
-      chunks.push(current.join("\n"));
-      current = [];
-      currentLength = 0;
-    }
-
-    current.push(line);
-    currentLength += lineLength;
-  }
-
-  if (current.length > 0) {
-    chunks.push(current.join("\n"));
-  }
-
-  if (chunks.length > 1) {
-    return chunks;
-  }
-
-  // Degenerate case: no safe boundary outside fenced content.
-  const midpoint = Math.floor(lines.length / 2);
-  if (midpoint <= 0 || midpoint >= lines.length) {
-    return [markdown];
-  }
-  return [lines.slice(0, midpoint).join("\n"), lines.slice(midpoint).join("\n")];
-}
-
-async function convertMarkdownWithFallback(client: Lark.Client, markdown: string, depth = 0) {
+async function convertMarkdownWithFallback(
+  client: Lark.Client,
+  chunk: DocxMarkdownChunk,
+  depth = 0,
+) {
   try {
-    return await convertMarkdown(client, markdown);
+    return { ...(await convertMarkdown(client, chunk.markdown)), images: chunk.images };
   } catch (error) {
-    if (depth >= MAX_CONVERT_RETRY_DEPTH || markdown.length < 2) {
+    if (depth >= MAX_CONVERT_RETRY_DEPTH || chunk.markdown.length < 2) {
       throw error;
     }
 
-    const splitTarget = Math.max(256, Math.floor(markdown.length / 2));
-    const chunks = splitMarkdownBySize(markdown, splitTarget);
+    const splitTarget = Math.max(256, Math.floor(chunk.markdown.length / 2));
+    const chunks = splitDocxMarkdownBySize(chunk.markdown, splitTarget).map(
+      createDocxMarkdownChunk,
+    );
     if (chunks.length <= 1) {
       throw error;
     }
 
     const blocks: FeishuDocxBlock[] = [];
     const firstLevelBlockIds: string[] = [];
+    const images: DocxMarkdownImage[] = [];
 
-    for (const chunk of chunks) {
-      const converted = await convertMarkdownWithFallback(client, chunk, depth + 1);
+    for (const fallbackChunk of chunks) {
+      const converted = await convertMarkdownWithFallback(client, fallbackChunk, depth + 1);
       blocks.push(...converted.blocks);
       firstLevelBlockIds.push(...converted.firstLevelBlockIds);
+      images.push(...converted.images);
     }
 
-    return { blocks, firstLevelBlockIds };
+    return { blocks, firstLevelBlockIds, images };
   }
 }
 
 /** Convert markdown in chunks to avoid document.convert content size limits */
-async function chunkedConvertMarkdown(client: Lark.Client, markdown: string) {
-  const chunks = splitMarkdownByHeadings(markdown);
+async function chunkedConvertMarkdown(client: Lark.Client, chunks: readonly DocxMarkdownChunk[]) {
   const allBlocks: FeishuDocxBlock[] = [];
   const allRootIds: string[] = [];
+  const allImages: DocxMarkdownImage[] = [];
   for (const chunk of chunks) {
-    const { blocks, firstLevelBlockIds } = await convertMarkdownWithFallback(client, chunk);
+    const { blocks, firstLevelBlockIds, images } = await convertMarkdownWithFallback(client, chunk);
     const { orderedBlocks, rootIds } = normalizeConvertedBlockTree(blocks, firstLevelBlockIds);
     allBlocks.push(...orderedBlocks);
     allRootIds.push(...rootIds);
+    allImages.push(...images);
   }
-  return { blocks: allBlocks, firstLevelBlockIds: allRootIds };
+  return { blocks: allBlocks, firstLevelBlockIds: allRootIds, images: allImages };
 }
 
 type Logger = { info?: (msg: string) => void };
@@ -508,43 +434,41 @@ async function uploadImageToDocx(
   return fileToken;
 }
 
-async function downloadImage(
-  url: string,
-  maxBytes: number,
-  imageReadTimeoutMs: number,
-): Promise<Buffer> {
-  const fetched = await readRemoteDocxImage(url, maxBytes, imageReadTimeoutMs);
-  return fetched.buffer;
-}
-
 async function processImages(
   client: Lark.Client,
   docToken: string,
-  markdown: string,
+  images: readonly DocxMarkdownImage[],
   insertedBlocks: FeishuDocxBlockChild[],
   maxBytes: number,
   imageReadTimeoutMs: number,
 ): Promise<number> {
-  const imageUrls = extractImageUrls(markdown);
-  if (imageUrls.length === 0) {
+  if (images.length === 0) {
     return 0;
   }
 
   const imageBlocks = insertedBlocks.filter((b) => b.block_type === 27);
 
   let processed = 0;
-  for (let i = 0; i < Math.min(imageUrls.length, imageBlocks.length); i++) {
-    const url = imageUrls[i];
+  for (let i = 0; i < Math.min(images.length, imageBlocks.length); i++) {
+    const url = images[i]?.url;
     const blockId = imageBlocks[i]?.block_id;
     if (!url || !blockId) {
       continue;
     }
 
     try {
-      const buffer = await downloadImage(url, maxBytes, imageReadTimeoutMs);
-      const urlPath = new URL(url).pathname;
-      const fileName = urlPath.split("/").pop() || `image_${i}.png`;
-      const fileToken = await uploadImageToDocx(client, blockId, buffer, fileName, docToken);
+      const upload = await resolveDocxUploadInput({
+        url,
+        maxBytes,
+        remoteReadTimeoutMs: imageReadTimeoutMs,
+      });
+      const fileToken = await uploadImageToDocx(
+        client,
+        blockId,
+        upload.buffer,
+        upload.fileName,
+        docToken,
+      );
 
       await client.docx.documentBlock.patch({
         path: { document_id: docToken, block_id: blockId },
@@ -575,7 +499,18 @@ async function uploadImageBlock(
   index?: number,
   imageInput?: string, // data URI, plain base64, or local path
 ) {
-  // Step 1: Create an empty image block (block_type 27).
+  // Resolve first so rejected or stalled input cannot leave an empty document block behind.
+  const upload = await resolveDocxUploadInput({
+    url,
+    filePath,
+    image: imageInput,
+    maxBytes,
+    localRoots,
+    fileName: filename,
+    remoteReadTimeoutMs: imageReadTimeoutMs,
+  });
+
+  // Create an empty image block (block_type 27).
   // Per Feishu FAQ: image token cannot be set at block creation time.
   const insertRes = await client.docx.documentBlockChildren.create({
     path: { document_id: docToken, block_id: parentBlockId ?? docToken },
@@ -590,17 +525,6 @@ async function uploadImageBlock(
     throw new Error("Failed to create image block");
   }
 
-  // Step 2: Resolve and upload the image buffer.
-  const upload = await resolveDocxUploadInput(
-    url,
-    filePath,
-    maxBytes,
-    localRoots,
-    filename,
-    (remoteUrl, remoteMaxBytes) =>
-      readRemoteDocxImage(remoteUrl, remoteMaxBytes, imageReadTimeoutMs),
-    imageInput,
-  );
   const fileToken = await uploadImageToDocx(
     client,
     imageBlockId,
@@ -609,7 +533,7 @@ async function uploadImageBlock(
     docToken, // drive_route_token for multi-datacenter routing
   );
 
-  // Step 3: Set the image token on the block.
+  // Set the image token on the block.
   const patchRes = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: imageBlockId },
     data: { replace_image: { token: fileToken } },
@@ -642,17 +566,16 @@ async function uploadFileBlock(
   // Feishu API does not allow creating empty file blocks (block_type 23).
   // Workaround: create a placeholder text block, then replace it with file content.
   // Actually, file blocks need a different approach: use markdown link as placeholder.
-  const upload = await resolveDocxUploadInput(
+  const upload = await resolveDocxUploadInput({
     url,
     filePath,
     maxBytes,
     localRoots,
-    filename,
-    readRemoteDocxFile,
-  );
+    fileName: filename,
+  });
 
   // Create a placeholder text block first
-  const placeholderMd = `[${upload.fileName}](https://example.com/placeholder)`;
+  const placeholderMd = "[file](https://example.com/placeholder)";
   const converted = await convertMarkdown(client, placeholderMd);
   const { orderedBlocks } = normalizeConvertedBlockTree(
     converted.blocks,
@@ -825,9 +748,15 @@ async function writeDoc(
   imageReadTimeoutMs: number,
   logger?: Logger,
 ) {
-  const deleted = await clearDocumentContent(client, docToken);
+  const markdownPlan = createDocxMarkdownPlan(markdown);
   logger?.info?.("feishu_doc: Converting markdown...");
-  const { blocks, firstLevelBlockIds } = await chunkedConvertMarkdown(client, markdown);
+  const { blocks, firstLevelBlockIds, images } = await chunkedConvertMarkdown(
+    client,
+    markdownPlan.chunks,
+  );
+  // Complete fallible conversion before deleting existing content so an
+  // unsupported oversized construct cannot leave the document empty.
+  const deleted = await clearDocumentContent(client, docToken);
   if (blocks.length === 0) {
     return { success: true, blocks_deleted: deleted, blocks_added: 0, images_processed: 0 };
   }
@@ -841,7 +770,7 @@ async function writeDoc(
   const imagesProcessed = await processImages(
     client,
     docToken,
-    markdown,
+    images,
     inserted,
     maxBytes,
     imageReadTimeoutMs,
@@ -864,8 +793,12 @@ async function appendDoc(
   imageReadTimeoutMs: number,
   logger?: Logger,
 ) {
+  const markdownPlan = createDocxMarkdownPlan(markdown);
   logger?.info?.("feishu_doc: Converting markdown...");
-  const { blocks, firstLevelBlockIds } = await chunkedConvertMarkdown(client, markdown);
+  const { blocks, firstLevelBlockIds, images } = await chunkedConvertMarkdown(
+    client,
+    markdownPlan.chunks,
+  );
   if (blocks.length === 0) {
     throw new Error("Content is empty");
   }
@@ -879,7 +812,7 @@ async function appendDoc(
   const imagesProcessed = await processImages(
     client,
     docToken,
-    markdown,
+    images,
     inserted,
     maxBytes,
     imageReadTimeoutMs,
@@ -903,6 +836,7 @@ async function insertDoc(
   imageReadTimeoutMs: number,
   logger?: Logger,
 ) {
+  const markdownPlan = createDocxMarkdownPlan(markdown);
   const blockInfo = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: afterBlockId },
   });
@@ -939,7 +873,10 @@ async function insertDoc(
   const insertIndex = blockIndex + 1;
 
   logger?.info?.("feishu_doc: Converting markdown...");
-  const { blocks, firstLevelBlockIds } = await chunkedConvertMarkdown(client, markdown);
+  const { blocks, firstLevelBlockIds, images } = await chunkedConvertMarkdown(
+    client,
+    markdownPlan.chunks,
+  );
   if (blocks.length === 0) {
     throw new Error("Content is empty");
   }
@@ -967,7 +904,7 @@ async function insertDoc(
   const imagesProcessed = await processImages(
     client,
     docToken,
-    markdown,
+    images,
     inserted,
     maxBytes,
     imageReadTimeoutMs,
