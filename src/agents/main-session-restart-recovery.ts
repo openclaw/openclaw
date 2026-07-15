@@ -405,21 +405,80 @@ function getMessageRole(message: unknown): string | undefined {
   return typeof role === "string" ? role : undefined;
 }
 
-function hasToolResultForCall(messages: readonly unknown[], toolCallId: string): boolean {
+function findSourceTurnRange(
+  messages: readonly unknown[],
+  sourceTurnId: string,
+): { startIndex: number; endIndex: number } | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      getMessageRole(message) === "user" &&
+      message &&
+      typeof message === "object" &&
+      normalizeOptionalString((message as { idempotencyKey?: unknown }).idempotencyKey) ===
+        sourceTurnId
+    ) {
+      let endIndex = messages.length;
+      for (let nextIndex = index + 1; nextIndex < messages.length; nextIndex += 1) {
+        const nextMessage = messages[nextIndex];
+        if (getMessageRole(nextMessage) !== "user") {
+          continue;
+        }
+        const nextIdempotencyKey =
+          nextMessage && typeof nextMessage === "object"
+            ? normalizeOptionalString((nextMessage as { idempotencyKey?: unknown }).idempotencyKey)
+            : undefined;
+        // Late media is a second persisted user message for the same logical source turn.
+        if (nextIdempotencyKey === `${sourceTurnId}:late-media`) {
+          continue;
+        }
+        endIndex = nextIndex;
+        break;
+      }
+      return { startIndex: index, endIndex };
+    }
+  }
+  return undefined;
+}
+
+function hasToolResultForCallInSourceTurn(params: {
+  messages: readonly unknown[];
+  sourceTurnRange: { startIndex: number; endIndex: number };
+  toolCallId: string;
+}): boolean {
+  return params.messages
+    .slice(params.sourceTurnRange.startIndex + 1, params.sourceTurnRange.endIndex)
+    .some((message) => {
+      const role = getMessageRole(message);
+      if (!message || typeof message !== "object" || (role !== "tool" && role !== "toolResult")) {
+        return false;
+      }
+      const record = message as Record<string, unknown>;
+      return [
+        record.toolCallId,
+        record.toolUseId,
+        record.tool_call_id,
+        record.tool_use_id,
+        record.callId,
+        record.call_id,
+      ].some((value) => normalizeOptionalString(value) === params.toolCallId);
+    });
+}
+
+function buildRecoveryToolResultIdempotencyKey(sourceTurnId: string, toolCallId: string): string {
+  return `restart-recovery:message-tool-result:${sourceTurnId}:${toolCallId}`;
+}
+
+function hasRecoveryToolResult(messages: readonly unknown[], idempotencyKey: string): boolean {
   return messages.some((message) => {
     const role = getMessageRole(message);
     if (!message || typeof message !== "object" || (role !== "tool" && role !== "toolResult")) {
       return false;
     }
-    const record = message as Record<string, unknown>;
-    return [
-      record.toolCallId,
-      record.toolUseId,
-      record.tool_call_id,
-      record.tool_use_id,
-      record.callId,
-      record.call_id,
-    ].some((value) => normalizeOptionalString(value) === toolCallId);
+    return (
+      normalizeOptionalString((message as { idempotencyKey?: unknown }).idempotencyKey) ===
+      idempotencyKey
+    );
   });
 }
 
@@ -840,6 +899,7 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   reason: "delivered-terminal" | "delivered-terminal-receipt" | "handled-silent";
   storePath: string;
   sessionKey: string;
+  sourceTurnId?: string;
   toolCallId?: string;
 }): Promise<boolean> {
   const expectedRecoveryRunId = normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId);
@@ -872,7 +932,29 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     status: "done",
     updatedAt: endedAt,
   };
-  if (params.toolCallId && !hasToolResultForCall(params.messages, params.toolCallId)) {
+  const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
+  const sourceTurnRange = sourceTurnId
+    ? findSourceTurnRange(params.messages, sourceTurnId)
+    : undefined;
+  if (params.toolCallId && (!sourceTurnId || sourceTurnRange === undefined)) {
+    return false;
+  }
+  const recoveryToolResultIdempotencyKey =
+    params.toolCallId && sourceTurnId
+      ? buildRecoveryToolResultIdempotencyKey(sourceTurnId, params.toolCallId)
+      : undefined;
+  if (
+    params.toolCallId &&
+    sourceTurnId &&
+    sourceTurnRange !== undefined &&
+    recoveryToolResultIdempotencyKey &&
+    !hasToolResultForCallInSourceTurn({
+      messages: params.messages,
+      sourceTurnRange,
+      toolCallId: params.toolCallId,
+    }) &&
+    !hasRecoveryToolResult(params.messages, recoveryToolResultIdempotencyKey)
+  ) {
     const expectedSessionState: SessionTranscriptTurnExpectedState = {
       abortedLastRun: params.entry.abortedLastRun,
       restartRecoveryBeforeAgentReplyState: params.entry.restartRecoveryBeforeAgentReplyState,
@@ -909,7 +991,7 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
               toolCallId: params.toolCallId,
               toolName: "message",
               content: [{ type: "text", text: "Message delivered before gateway restart." }],
-              idempotencyKey: `restart-recovery:message-tool-result:${params.toolCallId}`,
+              idempotencyKey: recoveryToolResultIdempotencyKey,
               isError: false,
               timestamp: endedAt,
             },
@@ -1371,7 +1453,10 @@ async function recoverStore(params: {
         sessionKey,
         ...(resumePolicy.reason === "handled-silent"
           ? {}
-          : { toolCallId: resumePolicy.toolCallId }),
+          : {
+              sourceTurnId: expectedRecoverySourceRunId,
+              toolCallId: resumePolicy.toolCallId,
+            }),
       });
       if (completed) {
         params.resumedSessionKeys.add(resumeDedupeKey);

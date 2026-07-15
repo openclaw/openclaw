@@ -2176,6 +2176,132 @@ describe("main-session-restart-recovery", () => {
     ).toBeUndefined();
   });
 
+  it("does not let another turn's reused tool-call id satisfy the current receipt", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:discord:direct:123";
+    const recoveryEntry: SessionEntry = {
+      sessionId: "main-session",
+      updatedAt: Date.now() - 10_000,
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryBeforeAgentReplyState: "continue",
+      restartRecoveryDeliveryReceiptState: "delivered-terminal",
+      restartRecoveryDeliveryToolCallId: "message-call-reused",
+      restartRecoveryDeliveryRunId: "recovery-1",
+      restartRecoveryDeliverySourceRunId: "discord-message-current",
+      restartRecoveryDeliveryContext: {
+        channel: "discord",
+        to: "discord:dm:123",
+      },
+    };
+    await writeStore(sessionsDir, {
+      [sessionKey]: recoveryEntry,
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "old turn", idempotencyKey: "discord-message-old" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "message-call-reused",
+            name: "message",
+            arguments: { action: "send", message: "old answer" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "message-call-reused",
+        toolName: "message",
+        content: [{ type: "text", text: "old sent" }],
+      },
+      {
+        role: "user",
+        content: "current turn",
+        idempotencyKey: "discord-message-current",
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "message-call-reused",
+            name: "message",
+            arguments: { action: "send", message: "current answer" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+      { role: "user", content: "later turn", idempotencyKey: "discord-message-later" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "message-call-reused",
+            name: "message",
+            arguments: { action: "send", message: "later answer" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "message-call-reused",
+        toolName: "message",
+        content: [{ type: "text", text: "later sent" }],
+      },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+
+    const transcript = (await loadTranscriptEvents({
+      sessionId: "main-session",
+      sessionKey,
+      storePath,
+    })) as Array<{ message?: Record<string, unknown> }>;
+    const matchingResults = transcript
+      .map((event) => event.message)
+      .filter(
+        (message) => message?.role === "toolResult" && message.toolCallId === "message-call-reused",
+      );
+    expect(matchingResults).toHaveLength(3);
+    expect(matchingResults.at(-1)).toMatchObject({
+      idempotencyKey:
+        "restart-recovery:message-tool-result:discord-message-current:message-call-reused",
+      isError: false,
+    });
+
+    // A crash after the receipt append must not duplicate it when later turns exist.
+    await replaceSessionEntry({ sessionKey, storePath }, recoveryEntry);
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+    const retriedTranscript = (await loadTranscriptEvents({
+      sessionId: "main-session",
+      sessionKey,
+      storePath,
+    })) as Array<{ message?: Record<string, unknown> }>;
+    expect(
+      retriedTranscript
+        .map((event) => event.message)
+        .filter(
+          (message) =>
+            message?.idempotencyKey ===
+            "restart-recovery:message-tool-result:discord-message-current:message-call-reused",
+        ),
+    ).toHaveLength(1);
+  });
+
   it("completes a checkpointed silent before_agent_reply result without dispatch", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");

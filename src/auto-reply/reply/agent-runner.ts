@@ -1806,6 +1806,8 @@ export async function runReplyAgent(params: {
             },
           };
         } else {
+          // dispatch-from-config owns source visibility for every returned payload.
+          // This checkpoint records that recovery owes no delivery; the outer gate drops the reply.
           hookCheckpoint = { state: "handled-silent" };
         }
       }
