@@ -746,7 +746,7 @@ describe("chat pane catalog session lifecycle", () => {
     vi.stubGlobal("IntersectionObserver", undefined);
     const thread = document.createElement("div");
     const touchEvent = (type: string, clientY: number) => {
-      const event = new TouchEvent(type);
+      const event = typeof TouchEvent === "function" ? new TouchEvent(type) : new Event(type);
       Object.defineProperty(event, "currentTarget", { value: thread });
       Object.defineProperty(event, "touches", { value: [{ clientY }] });
       return event;
