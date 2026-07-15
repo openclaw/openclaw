@@ -3,7 +3,7 @@
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import path from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { writePackageDistInventory } from "./lib/package-dist-inventory.ts";
@@ -41,11 +41,11 @@ function ocmExternalizesWorkspacePackage(packageName: string, env: NodeJS.Proces
     return false;
   }
   const adapterPath = env[OCM_INTERNAL_NPM_BIN_ENV]?.trim();
-  if (!adapterPath || path.basename(adapterPath) !== OCM_ADAPTER_BASENAME) {
+  if (!adapterPath || basename(adapterPath) !== OCM_ADAPTER_BASENAME) {
     return false;
   }
   const workspaceDirs = (env[OCM_WORKSPACE_DIRS_ENV] ?? "")
-    .split(path.delimiter)
+    .split(delimiter)
     .map((entry) => entry.trim())
     .filter(Boolean);
   // OCM uses these same manifests to pack and install dependencies beside the root archive.
@@ -53,7 +53,7 @@ function ocmExternalizesWorkspacePackage(packageName: string, env: NodeJS.Proces
   return workspaceDirs.some((workspaceDir) => {
     try {
       const manifest = JSON.parse(
-        readFileSync(path.join(workspaceDir, "package.json"), "utf8"),
+        readFileSync(join(workspaceDir, "package.json"), "utf8"),
       ) as PackageManifest;
       return manifest.name === packageName;
     } catch {
