@@ -214,9 +214,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const output = usage.output ?? 0;
     const totalTokens = deriveSessionTotalTokens({
       lastCallUsage,
-      // CLI aggregate usage is cumulative by contract; without a last-call
-      // snapshot it cannot describe the current context window.
-      usage: isCliProvider(providerUsed, cfg) ? undefined : usage,
       contextTokens,
       promptTokens,
     });
