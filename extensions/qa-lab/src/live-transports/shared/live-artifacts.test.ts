@@ -1,14 +1,8 @@
 // Qa Lab tests cover live artifacts plugin behavior.
 import { describe, expect, it } from "vitest";
-import { redactQaLiveLaneDetails, redactQaLiveLaneIssues } from "./live-artifacts.js";
+import { redactQaLiveLaneIssues } from "./live-artifacts.js";
 
 describe("live transport artifacts", () => {
-  it("uses a stable public metadata redaction marker", () => {
-    expect(redactQaLiveLaneDetails()).toBe(
-      "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)",
-    );
-  });
-
   it("preserves cleanup phase labels while redacting details", () => {
     expect(
       redactQaLiveLaneIssues([

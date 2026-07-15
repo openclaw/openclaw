@@ -4,7 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 const REDACTED_QA_LIVE_LANE_ISSUE_DETAILS =
   "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)";
 
-export function redactQaLiveLaneDetails() {
+function redactQaLiveLaneDetails() {
   return REDACTED_QA_LIVE_LANE_ISSUE_DETAILS;
 }
 

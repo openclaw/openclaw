@@ -66,7 +66,7 @@ export function toWhatsAppQaError(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
 
-export const WHATSAPP_QA_SCENARIO_POSTURES = {
+const WHATSAPP_QA_SCENARIO_POSTURES = {
   "whatsapp-agent-message-action-react": "user-path",
   "whatsapp-agent-message-action-upload-file": "user-path",
   "whatsapp-approval-exec-deny-native": "native-approval",
@@ -245,7 +245,7 @@ export type WhatsAppQaApprovalScenarioRun = {
   token: string;
 };
 
-export type WhatsAppQaScenarioRun = WhatsAppQaApprovalScenarioRun | WhatsAppQaMessageScenarioRun;
+type WhatsAppQaScenarioRun = WhatsAppQaApprovalScenarioRun | WhatsAppQaMessageScenarioRun;
 
 export type WhatsAppQaConfigOverrides = {
   actions?: boolean;
@@ -287,31 +287,6 @@ export interface WhatsAppObservedMessage extends WhatsAppQaDriverObservedMessage
   scenarioTitle?: string;
 }
 
-export type WhatsAppObservedMessageArtifact = {
-  approvalState?: "pending" | "resolved";
-  fromPhoneE164?: string | null;
-  hasMedia?: boolean;
-  kind?: WhatsAppQaDriverObservedMessage["kind"];
-  matchedScenario?: boolean;
-  mediaFileName?: string;
-  mediaType?: string;
-  messageId?: string;
-  observedAt: string;
-  poll?: WhatsAppQaDriverObservedMessage["poll"];
-  quoted?: WhatsAppQaDriverObservedMessage["quoted"];
-  reaction?: WhatsAppObservedReactionArtifact;
-  scenarioId?: string;
-  scenarioTitle?: string;
-  text?: string;
-};
-
-export type WhatsAppObservedReactionArtifact = {
-  emoji?: string;
-  fromMe?: boolean;
-  messageId?: string;
-  participant?: string;
-};
-
 export type WhatsAppQaScenarioResult = {
   details: string;
   id: string;
@@ -338,10 +313,3 @@ export function buildWhatsAppQaScenarioResultBase(scenario: WhatsAppQaScenarioDe
     posture: WHATSAPP_QA_SCENARIO_POSTURES[scenario.id],
   };
 }
-
-export type WhatsAppQaPreScenarioPhase =
-  | "auth archive unpack"
-  | "credential heartbeat start"
-  | "credential lease acquisition"
-  | "driver session start"
-  | "scenario execution";

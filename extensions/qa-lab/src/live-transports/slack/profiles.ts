@@ -1,4 +1,4 @@
-export const SLACK_QA_ALL_SCENARIO_IDS = [
+const SLACK_QA_ALL_SCENARIO_IDS = [
   "slack-canary",
   "slack-mention-gating",
   "slack-allowlist-block",

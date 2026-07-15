@@ -1,12 +1,10 @@
 // QA Lab Slack live domain contracts and wire schemas.
 import type { WebClient } from "@slack/web-api";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { z } from "zod";
 import type { startQaGatewayChild } from "../../gateway-child.js";
 import { splitQaModelRef } from "../../model-selection.js";
 import type { RuntimeId } from "../../runtime-parity.js";
-import type { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import type { LiveTransportScenarioDefinition } from "../shared/live-transport-scenarios.js";
 
 export type SlackQaRuntimeEnv = {
@@ -29,8 +27,6 @@ export type SlackChannelReadinessMode = "connected" | "started";
 
 export const SLACK_QA_DEFAULT_READY_TIMEOUT_MS = 45_000;
 export const SLACK_QA_READY_STABILITY_MS = 3_000;
-export const SLACK_QA_GATEWAY_STOP_SETTLE_MS = 3_000;
-export const SLACK_QA_RETRYABLE_SCENARIO_ATTEMPTS = 2;
 export const SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS = 30_000;
 export const SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS = 120_000;
 export const SLACK_QA_REACTION_VERIFY_TIMEOUT_MS = 15_000;
@@ -133,10 +129,6 @@ export function assertSlackCodexApprovalModelSupported(modelRef: string) {
   );
 }
 
-export function resolveSlackQaSutAccountId(value?: string) {
-  return normalizeAccountId(value?.trim() || "sut");
-}
-
 export type SlackQaMessageScenarioRun = {
   afterNoReply?: (context: SlackQaScenarioContext) => Promise<string | void>;
   kind?: "message";
@@ -154,7 +146,7 @@ export type SlackQaMessageScenarioRun = {
   afterReply?: (message: SlackMessage, context: SlackQaScenarioContext) => Promise<string | void>;
 };
 
-export type SlackQaDirectTransportScenarioRun = {
+type SlackQaDirectTransportScenarioRun = {
   kind: "direct-transport";
   execute: (
     context: SlackQaDirectTransportScenarioContext,
@@ -191,13 +183,13 @@ export type SlackQaCodexApprovalScenarioRun = {
   token: string;
 };
 
-export type SlackQaScenarioRun =
+type SlackQaScenarioRun =
   | SlackQaApprovalScenarioRun
   | SlackQaCodexApprovalScenarioRun
   | SlackQaDirectTransportScenarioRun
   | SlackQaMessageScenarioRun;
 
-export type SlackQaBeforeRunResult =
+type SlackQaBeforeRunResult =
   | string
   | void
   | {
@@ -242,8 +234,6 @@ export type SlackQaScenarioDefinition = LiveTransportScenarioDefinition<SlackQaS
   forcedRuntime?: RuntimeId;
 };
 
-export type SlackQaGatewayHarness = Awaited<ReturnType<typeof startQaLiveLaneGateway>>;
-
 export type SlackAuthIdentity = {
   botId?: string;
   teamId?: string;
@@ -261,20 +251,6 @@ export type SlackObservedMessage = {
   blockText?: string[];
   threadTs?: string;
   ts: string;
-  userId?: string;
-};
-
-export type SlackObservedMessageArtifact = {
-  botId?: string;
-  channelId?: string;
-  matchedScenario?: boolean;
-  scenarioId?: string;
-  scenarioTitle?: string;
-  text?: string;
-  actionValues?: string[];
-  blockText?: string[];
-  threadTs?: string;
-  ts?: string;
   userId?: string;
 };
 
@@ -314,28 +290,9 @@ export type SlackApprovalCheckpointMessage = {
   text: string;
 };
 
-export type SlackQaScenarioResult = {
-  approval?: SlackApprovalArtifact;
-  details: string;
-  id: string;
-  requestStartedAt?: string;
-  responseObservedAt?: string;
-  rttMs?: number;
-  rttMeasurement?: {
-    finalMatchedReplyRttMs: number;
-    requestStartedAt: string;
-    responseObservedAt: string;
-    source: "approval-request-to-resolution" | "request-to-observed-message";
-  };
-  standardId?: string;
-  status: "fail" | "pass";
-  title: string;
-};
-
 export const SLACK_QA_APPROVAL_CHECKPOINT_DIR_ENV = "OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR";
 export const SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV =
   "OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS";
-export const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 export const SLACK_QA_WEB_API_TIMEOUT_MS = 45_000;
 export const SLACK_QA_ENV_KEYS = [
   "OPENCLAW_QA_SLACK_CHANNEL_ID",

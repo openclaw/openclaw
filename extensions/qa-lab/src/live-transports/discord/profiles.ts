@@ -1,4 +1,4 @@
-export const DISCORD_QA_ALL_SCENARIO_IDS = [
+const DISCORD_QA_ALL_SCENARIO_IDS = [
   "discord-canary",
   "discord-mention-gating",
   "discord-native-help-command-registration",

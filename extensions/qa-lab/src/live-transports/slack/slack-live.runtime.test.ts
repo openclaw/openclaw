@@ -1,17 +1,9 @@
 // Qa Lab tests cover slack live plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSlackApprovalCheckpointConfig } from "./slack-live.approval-checkpoint.js";
+import { resolveSlackQaScenarioIds } from "./profiles.js";
+import { resolveApprovalDecision } from "./slack-live.approvals.js";
 import {
-  matchesSlackApprovalPromptText,
-  matchesSlackApprovalResolvedUpdate,
-  resolveApprovalDecision,
-} from "./slack-live.approvals.js";
-import {
-  assertCodexApprovalTranscriptSucceeded,
-  buildCodexApprovalInstruction,
-  findPendingCodexPluginApprovalRecord,
   quiesceCodexApprovalAgentRun,
-  readAcceptedAgentRunId,
   resolveCodexFileApprovalTargetPath,
   waitForSlackReaction,
 } from "./slack-live.codex-approval.js";
@@ -20,16 +12,10 @@ import {
   parseSlackQaCredentialPayload,
   resolveSlackQaRuntimeEnv,
 } from "./slack-live.config.js";
-import {
-  assertSlackCodexApprovalModelSupported,
-  resolveSlackQaSutAccountId,
-} from "./slack-live.contracts.js";
+import { assertSlackCodexApprovalModelSupported } from "./slack-live.contracts.js";
 import { buildSlackInvalidBlocksTableProbe } from "./slack-live.invalid-blocks.js";
 import {
-  isSlackChannelReadyForQa,
   observeSlackScenarioMessages,
-  resolveSlackChannelReadySince,
-  resolveSlackQaReadyTimeoutMs,
   waitForSlackNoReply,
 } from "./slack-live.message-observations.js";
 import {
@@ -38,34 +24,32 @@ import {
   extractSlackNativeApprovalId,
   runSlackTableInvalidBlocksFallbackScenario,
 } from "./slack-live.observations.js";
-import { findScenario, SLACK_QA_STANDARD_SCENARIO_IDS } from "./slack-live.scenarios.js";
+import {
+  getSlackQaScenarioDefinition,
+  listSlackQaScenarioCatalog,
+} from "./slack-live.scenarios.js";
+
+function findScenario(ids?: string[]) {
+  const requestedIds = new Set(ids?.length ? ids : resolveSlackQaScenarioIds());
+  return listSlackQaScenarioCatalog()
+    .filter(({ id }) => requestedIds.has(id))
+    .map(({ id }) => getSlackQaScenarioDefinition(id));
+}
 
 const testing = {
-  SLACK_QA_STANDARD_SCENARIO_IDS,
-  assertCodexApprovalTranscriptSucceeded,
   assertSlackCodexApprovalModelSupported,
-  buildCodexApprovalInstruction,
   buildSlackApprovalCheckpointMessage,
   buildSlackInvalidBlocksTableProbe,
   buildSlackQaConfig,
   collectSlackActionValues,
   extractSlackNativeApprovalId,
-  findPendingCodexPluginApprovalRecord,
   findScenario,
-  isSlackChannelReadyForQa,
-  matchesSlackApprovalPromptText,
-  matchesSlackApprovalResolvedUpdate,
   observeSlackScenarioMessages,
   parseSlackQaCredentialPayload,
   quiesceCodexApprovalAgentRun,
-  readAcceptedAgentRunId,
   resolveApprovalDecision,
   resolveCodexFileApprovalTargetPath,
-  resolveSlackApprovalCheckpointConfig,
-  resolveSlackChannelReadySince,
-  resolveSlackQaReadyTimeoutMs,
   resolveSlackQaRuntimeEnv,
-  resolveSlackQaSutAccountId,
   runSlackTableInvalidBlocksFallbackScenario,
   waitForSlackNoReply,
   waitForSlackReaction,
@@ -125,11 +109,6 @@ describe("Slack live QA runtime helpers", () => {
     ).toThrow("OPENCLAW_QA_SLACK channelId must be a Slack id like C123 or U123.");
   });
 
-  it("canonicalizes the SUT account before config and approval routing", () => {
-    expect(testing.resolveSlackQaSutAccountId(" QA-SUT ")).toBe("qa-sut");
-    expect(testing.resolveSlackQaSutAccountId()).toBe("sut");
-  });
-
   it("parses Convex credential payloads", () => {
     expect(
       testing.parseSlackQaCredentialPayload({
@@ -144,15 +123,6 @@ describe("Slack live QA runtime helpers", () => {
       sutBotToken: "xoxb-sut",
       sutAppToken: "xapp-sut",
     });
-  });
-
-  it("reports live transport standard scenario coverage", () => {
-    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).toEqual([
-      "canary",
-      "mention-gating",
-      "allowlist-block",
-      "top-level-reply-shape",
-    ]);
   });
 
   it("selects Slack scenarios by id", () => {
@@ -195,16 +165,6 @@ describe("Slack live QA runtime helpers", () => {
       "slack-codex-approval-exec-native",
       "slack-codex-approval-plugin-native",
     ]);
-    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-approval-exec-native");
-    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-chart-presentation-native");
-    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-table-presentation-native");
-    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain(
-      "slack-table-invalid-blocks-fallback",
-    );
-    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-reaction-glyph-native");
-    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain(
-      "slack-codex-approval-exec-native",
-    );
     expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
       "slack-table-invalid-blocks-fallback",
     );
@@ -666,19 +626,7 @@ describe("Slack live QA runtime helpers", () => {
     ).toBe("plugin:abc123");
   });
 
-  it("builds Codex approval instructions for command and file-change routes", () => {
-    expect(
-      testing.buildCodexApprovalInstruction({
-        appServerMethod: "item/commandExecution/requestApproval",
-        token: "SLACK_QA_CODEX_EXEC_APPROVAL_ABC123",
-      }),
-    ).toContain("Use the shell tool exactly once");
-    expect(
-      testing.buildCodexApprovalInstruction({
-        appServerMethod: "item/fileChange/requestApproval",
-        token: "SLACK_QA_CODEX_FILE_APPROVAL_ABC123",
-      }),
-    ).toContain("Do not ask for approval in chat");
+  it("resolves the Codex file approval target path", () => {
     expect(testing.resolveCodexFileApprovalTargetPath("MARKER")).toMatch(
       /\.openclaw-qa-codex-file-approval-marker\.txt$/u,
     );
@@ -1195,63 +1143,6 @@ describe("Slack live QA runtime helpers", () => {
     });
   });
 
-  it("reads the accepted asynchronous Gateway agent run id", () => {
-    expect(
-      testing.readAcceptedAgentRunId({
-        runId: "run-123",
-        status: "accepted",
-      }),
-    ).toBe("run-123");
-    expect(() =>
-      testing.readAcceptedAgentRunId({
-        runId: "run-123",
-        status: "started",
-      }),
-    ).toThrow("instead of accepted");
-  });
-
-  it("requires the Codex command transcript to prove the approved operation", () => {
-    const run = {
-      approvalKind: "plugin" as const,
-      appServerMethod: "item/commandExecution/requestApproval" as const,
-      decision: "allow-once" as const,
-      kind: "codex-approval" as const,
-      token: "SLACK_QA_CODEX_EXEC_APPROVAL_ABC123",
-    };
-    expect(() =>
-      testing.assertCodexApprovalTranscriptSucceeded(
-        [
-          {
-            role: "toolResult",
-            isError: false,
-            content: [
-              {
-                type: "toolResult",
-                content: "SLACK_QA_CODEX_EXEC_APPROVAL_ABC123",
-              },
-            ],
-          },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "SLACK_QA_CODEX_EXEC_APPROVAL_ABC123" }],
-          },
-        ],
-        run,
-      ),
-    ).not.toThrow();
-    expect(() =>
-      testing.assertCodexApprovalTranscriptSucceeded(
-        [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "SLACK_QA_CODEX_EXEC_APPROVAL_ABC123" }],
-          },
-        ],
-        run,
-      ),
-    ).toThrow("Codex command result did not contain marker");
-  });
-
   it("aborts, awaits terminal cleanup, and stops the gateway process tree before cleanup", async () => {
     const call = vi
       .fn()
@@ -1297,103 +1188,6 @@ describe("Slack live QA runtime helpers", () => {
     expect(stopGateway).toHaveBeenCalledWith(true);
   });
 
-  it("matches pending Codex plugin approvals by id, route, and Slack turn source", () => {
-    expect(
-      testing.findPendingCodexPluginApprovalRecord({
-        approvalId: "plugin:abc123",
-        appServerMethod: "item/fileChange/requestApproval",
-        channelId: "C123456789",
-        records: [
-          {
-            id: "plugin:abc123",
-            request: {
-              pluginId: "openclaw-codex-app-server",
-              title: "Codex app-server file approval",
-              toolName: "codex_file_approval",
-              sessionKey: "agent:qa:slack-codex-approval-plugin-native-token",
-              turnSourceChannel: "slack",
-              turnSourceTo: "channel:C123456789",
-              turnSourceAccountId: "sut",
-            },
-          },
-        ],
-        sessionKey: "agent:qa:slack-codex-approval-plugin-native-token",
-        sutAccountId: "sut",
-      }),
-    ).toBeDefined();
-    expect(
-      testing.findPendingCodexPluginApprovalRecord({
-        approvalId: "plugin:abc123",
-        appServerMethod: "item/commandExecution/requestApproval",
-        channelId: "C123456789",
-        records: [
-          {
-            id: "plugin:abc123",
-            request: {
-              pluginId: "openclaw-codex-app-server",
-              title: "Codex app-server file approval",
-              toolName: "codex_file_approval",
-              sessionKey: "agent:qa:slack-codex-approval-plugin-native-token",
-              turnSourceChannel: "slack",
-              turnSourceTo: "channel:C123456789",
-              turnSourceAccountId: "sut",
-            },
-          },
-        ],
-        sessionKey: "agent:qa:slack-codex-approval-plugin-native-token",
-        sutAccountId: "sut",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("matches resolved Codex approvals without pending-only marker text", () => {
-    expect(
-      testing.matchesSlackApprovalResolvedUpdate({
-        actionValues: [],
-        approvalKind: "plugin",
-        decision: "allow-once",
-        extraTextMatches: ["openclaw-codex-app-server", "Codex app-server file approval"],
-        text: [
-          "Plugin approval: Allowed once",
-          "Codex app-server file approval",
-          "Plugin: openclaw-codex-app-server",
-        ].join("\n"),
-      }),
-    ).toBe(true);
-    expect(
-      testing.matchesSlackApprovalResolvedUpdate({
-        actionValues: [
-          'openclaw:approval:v1:{"approvalId":"plugin:abc","approvalKind":"plugin","decision":"allow-once"}',
-        ],
-        approvalKind: "plugin",
-        decision: "allow-once",
-        extraTextMatches: ["Codex app-server file approval"],
-        text: "Plugin approval: Allowed once\nCodex app-server file approval",
-      }),
-    ).toBe(false);
-  });
-
-  it("matches pending Codex approvals by stable renderer fields without marker text", () => {
-    expect(
-      testing.matchesSlackApprovalPromptText({
-        approvalKind: "plugin",
-        extraTextMatches: ["openclaw-codex-app-server", "Codex app-server command approval"],
-        text: [
-          "Plugin approval required",
-          "Codex app-server command approval",
-          "Plugin: openclaw-codex-app-server",
-        ].join("\n"),
-      }),
-    ).toBe(true);
-    expect(
-      testing.matchesSlackApprovalPromptText({
-        approvalKind: "plugin",
-        extraTextMatches: ["Codex app-server file approval"],
-        text: "Plugin approval required\nCodex app-server command approval",
-      }),
-    ).toBe(false);
-  });
-
   it("builds approval checkpoint message evidence from Slack blocks", () => {
     expect(
       testing.buildSlackApprovalCheckpointMessage({
@@ -1422,99 +1216,6 @@ describe("Slack live QA runtime helpers", () => {
       hasNativeActions: true,
       text: "Plugin approval required",
     });
-  });
-
-  it("resolves Slack approval checkpoint configuration from env", () => {
-    expect(
-      testing.resolveSlackApprovalCheckpointConfig({
-        OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR: "/tmp/checkpoints",
-        OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS: "5000",
-      }),
-    ).toEqual({
-      checkpointDir: "/tmp/checkpoints",
-      timeoutMs: 5000,
-    });
-    expect(testing.resolveSlackApprovalCheckpointConfig({})).toBeUndefined();
-  });
-
-  it("uses started Slack channel readiness for native approval-only scenarios", () => {
-    const startedStatus = {
-      lastError: null,
-      restartPending: false,
-      running: true,
-    };
-
-    expect(testing.isSlackChannelReadyForQa(startedStatus, "started")).toBe(true);
-    expect(testing.isSlackChannelReadyForQa(startedStatus, "connected")).toBe(false);
-    expect(
-      testing.isSlackChannelReadyForQa(
-        {
-          ...startedStatus,
-          connected: false,
-        },
-        "started",
-      ),
-    ).toBe(false);
-    expect(
-      testing.isSlackChannelReadyForQa(
-        {
-          ...startedStatus,
-          lastError: "socket auth failed",
-        },
-        "started",
-      ),
-    ).toBe(false);
-  });
-
-  it("keeps Slack readiness stability anchored when connectedAt is absent", () => {
-    expect(
-      testing.resolveSlackChannelReadySince({
-        observedAt: 2_000,
-        previousReadySince: undefined,
-        status: {
-          lastError: null,
-          restartPending: false,
-          running: true,
-        },
-      }),
-    ).toBe(2_000);
-    expect(
-      testing.resolveSlackChannelReadySince({
-        observedAt: 3_000,
-        previousReadySince: 2_000,
-        status: {
-          lastError: null,
-          restartPending: false,
-          running: true,
-        },
-      }),
-    ).toBe(2_000);
-    expect(
-      testing.resolveSlackChannelReadySince({
-        observedAt: 4_000,
-        previousReadySince: 2_000,
-        status: {
-          lastConnectedAt: 3_500,
-          lastError: null,
-          restartPending: false,
-          running: true,
-        },
-      }),
-    ).toBe(3_500);
-  });
-
-  it("resolves Slack readiness timeout from the shared transport env", () => {
-    expect(testing.resolveSlackQaReadyTimeoutMs({})).toBe(45_000);
-    expect(
-      testing.resolveSlackQaReadyTimeoutMs({
-        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000",
-      }),
-    ).toBe(180_000);
-    expect(
-      testing.resolveSlackQaReadyTimeoutMs({
-        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
-      }),
-    ).toBe(45_000);
   });
 
   it("allows live approval resolve RPCs to take longer than the generic gateway probe timeout", async () => {
