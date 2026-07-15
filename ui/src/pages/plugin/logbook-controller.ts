@@ -228,7 +228,8 @@ export function stopLogbookPolling(host: object): void {
   }
   if (state) {
     state.pollClient = null;
-    retireLogbookLoads(state);
+    // PluginPage replaces the host before calling stop. Let detached-host loads
+    // settle; host identity keeps their results out of the replacement view.
   }
 }
 

@@ -87,6 +87,38 @@ describe("Logbook controller", () => {
     expect(secondRequest).toHaveBeenCalled();
   });
 
+  it("lets an in-flight load settle after polling stops", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getLogbookState(host);
+    state.day = "2026-07-04";
+    state.dayPinned = true;
+    const status = deferred<unknown>();
+    const days = deferred<unknown>();
+    const timeline = deferred<unknown>();
+    const responses = new Map([
+      ["logbook.status", status],
+      ["logbook.days", days],
+      ["logbook.timeline", timeline],
+    ]);
+    const request = loadLogbook(
+      state,
+      clientWithRequest(
+        (method) =>
+          responses.get(method)?.promise ?? Promise.reject(new Error(`Unexpected ${method}`)),
+      ),
+    );
+
+    stopLogbookPolling(host);
+    status.resolve(statusFor("2026-07-04"));
+    days.resolve({ days: [] });
+    timeline.resolve(timelineFor("2026-07-04", "Detached host"));
+    await request;
+
+    expect(state.timeline?.cards[0]?.title).toBe("Detached host");
+    expect(state.pollTimer).toBeNull();
+  });
+
   it("does not overlap silent poll refreshes and resumes after settlement", async () => {
     vi.useFakeTimers();
     const host = {};
