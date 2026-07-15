@@ -144,6 +144,20 @@ describe("mime detection", () => {
     });
   });
 
+  it("uses a secondary audio hint when primary metadata is stale", async () => {
+    const webm = Buffer.from("1a45dfa3874282847765626d", "hex");
+
+    await expectDetectedMime({
+      input: {
+        buffer: webm,
+        filePath: "voice.webm",
+        headerMime: "application/pdf",
+        additionalMimeHints: ["audio/webm"],
+      },
+      expected: "audio/webm",
+    });
+  });
+
   it("preserves audio metadata when an MP4 extension cannot identify track kind", async () => {
     await expectDetectedMime({
       input: { filePath: "voice.mp4", headerMime: "audio/mp4" },

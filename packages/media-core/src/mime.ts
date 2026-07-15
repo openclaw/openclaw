@@ -171,10 +171,14 @@ export function isAudioFileName(fileName?: string | null): boolean {
 export async function detectMime(opts: {
   buffer?: Buffer;
   headerMime?: string | null;
+  additionalMimeHints?: readonly (string | null | undefined)[];
   filePath?: string;
 }): Promise<string | undefined> {
   const extMime = MIME_BY_EXT[getFileExtension(opts.filePath) ?? ""];
-  const headerMime = normalizeMimeType(opts.headerMime);
+  const mimeHints = [opts.headerMime, ...(opts.additionalMimeHints ?? [])]
+    .map((mime) => normalizeMimeType(mime))
+    .filter((mime): mime is string => Boolean(mime));
+  const headerMime = mimeHints[0];
   const sniffed = await sniffMime(opts.buffer);
   const sniffedGenericContainer =
     sniffed === "application/octet-stream" || sniffed === "application/zip";
@@ -187,8 +191,11 @@ export async function detectMime(opts: {
       : (sniffed ?? extMime);
   // file-type defaults these containers to video without parsing their tracks.
   // Preserve a concrete audio hint only for those documented ambiguous results.
-  if (headerMime && AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[headerMime] === inferred) {
-    return headerMime;
+  const audioContainerHint = mimeHints.find(
+    (mime) => AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[mime] === inferred,
+  );
+  if (audioContainerHint) {
+    return audioContainerHint;
   }
   return inferred ?? headerMime;
 }

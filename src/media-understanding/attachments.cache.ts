@@ -222,7 +222,8 @@ export class MediaAttachmentCache {
       entry.bufferMime = await detectMime({
         buffer: fetched.buffer,
         filePath: fetched.fileName ?? url,
-        headerMime: concreteMime(entry.attachment.mime) ?? fetched.contentType,
+        headerMime: concreteMime(entry.attachment.mime),
+        additionalMimeHints: [fetched.contentType],
       });
       entry.bufferFileName = fetched.fileName ?? `media-${params.attachmentIndex + 1}`;
       return {

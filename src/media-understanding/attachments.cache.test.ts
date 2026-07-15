@@ -63,14 +63,14 @@ describe("media understanding attachment MIME detection", () => {
     expect(result.mime).toBe("image/png");
   });
 
-  it("preserves remote audio metadata for an ambiguous WebM container", async () => {
+  it("uses fetched audio metadata when declared MIME is stale for ambiguous WebM", async () => {
     const url = "https://example.com/voice.webm";
     readRemoteMediaBufferMock.mockResolvedValue({
       buffer: AMBIGUOUS_WEBM,
       contentType: "audio/webm",
       fileName: "voice.webm",
     });
-    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "audio/webm" }]);
+    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "application/pdf" }]);
 
     const result = await cache.getBuffer({
       attachmentIndex: 0,
