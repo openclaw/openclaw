@@ -9,7 +9,8 @@ import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import type { Logger } from "./service/state.js";
-import { resetReaperThrottle, sweepCronRunSessions } from "./session-reaper.js";
+import { sweepCronRunSessions } from "./session-reaper.js";
+import { resetReaperThrottle } from "./session-reaper.test-support.js";
 
 const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
 

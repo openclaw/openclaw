@@ -21,6 +21,8 @@ const rootEntries = [
   "src/agents/model-provider-auth.worker.ts!",
   // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
   "src/agents/subagent-orphan-recovery.ts!",
+  // Task cancellation loads this control facade by string path to avoid a registry cycle.
+  "src/tasks/task-registry-control.runtime.ts!",
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
