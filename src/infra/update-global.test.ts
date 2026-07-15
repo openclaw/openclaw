@@ -27,6 +27,7 @@ import {
   createGlobalInstallEnv,
   globalInstallArgs,
   globalInstallFallbackArgs,
+  listActivePnpmIsolatedGlobalPackages,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
@@ -58,6 +59,7 @@ async function writePnpmIsolatedPackage(params: {
   globalRoot: string;
   installName: string;
   version: string;
+  dependencies?: Record<string, string>;
 }): Promise<string> {
   const installDir = path.join(params.globalRoot, params.installName);
   const packageRoot = path.join(installDir, "node_modules", "openclaw");
@@ -66,7 +68,10 @@ async function writePnpmIsolatedPackage(params: {
     writeGlobalPackageJson(packageRoot, params.version),
     fs.writeFile(
       path.join(installDir, "package.json"),
-      JSON.stringify({ private: true, dependencies: { openclaw: params.version } }),
+      JSON.stringify({
+        private: true,
+        dependencies: { openclaw: params.version, ...params.dependencies },
+      }),
       "utf8",
     ),
   ]);
@@ -710,10 +715,161 @@ describe("update global helpers", () => {
       ).resolves.toEqual({
         manager: "pnpm",
         command: "pnpm",
+        pnpmIsolated: {
+          layoutVersion: 11,
+        },
         globalRoot: pnpmGlobalRoot,
         packageRoot: pkgRoot,
       });
       expect(resolvePnpmGlobalDirFromGlobalRoot(pnpmGlobalRoot)).toBe(pnpmGlobalDir);
+    });
+  });
+
+  it("prefers the invoking pnpm 11 project when multiple installs are active", async () => {
+    await withTempDir({ prefix: "openclaw-update-pnpm-isolated-owner-" }, async (base) => {
+      const pnpmGlobalRoot = path.join(base, "pnpm-home", "global", "v11");
+      const otherPackageRoot = await writePnpmIsolatedPackage({
+        globalRoot: pnpmGlobalRoot,
+        installName: "a-other",
+        version: "2026.7.1",
+      });
+      const invokingPackageRoot = await writePnpmIsolatedPackage({
+        globalRoot: pnpmGlobalRoot,
+        installName: "z-invoking",
+        version: "2026.7.2",
+        dependencies: { cowsay: "1.6.0" },
+      });
+      const runCommand: CommandRunner = async (argv) => {
+        if (argv.join(" ") === "pnpm root -g") {
+          return { stdout: `${pnpmGlobalRoot}\n`, stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(
+        listActivePnpmIsolatedGlobalPackages({
+          globalRoot: pnpmGlobalRoot,
+          packageName: "openclaw",
+        }),
+      ).resolves.toEqual([
+        { packageRoot: otherPackageRoot, packageNames: ["openclaw"] },
+        { packageRoot: invokingPackageRoot, packageNames: ["cowsay", "openclaw"] },
+      ]);
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "pnpm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot: invokingPackageRoot,
+          packageName: "openclaw",
+        }),
+      ).resolves.toEqual({
+        manager: "pnpm",
+        command: "pnpm",
+        pnpmIsolated: {
+          layoutVersion: 11,
+        },
+        globalRoot: pnpmGlobalRoot,
+        packageRoot: invokingPackageRoot,
+      });
+    });
+  });
+
+  it("preserves pnpm 11 ownership when the invoking project is orphaned", async () => {
+    await withTempDir({ prefix: "openclaw-update-pnpm-isolated-orphan-" }, async (base) => {
+      const pnpmGlobalRoot = path.join(base, "pnpm-home", "global", "v11");
+      const orphanPackageRoot = path.join(pnpmGlobalRoot, "orphan", "node_modules", "openclaw");
+      await fs.mkdir(orphanPackageRoot, { recursive: true });
+      const orphanInstallRoot = path.join(pnpmGlobalRoot, "orphan");
+      await Promise.all([
+        writeGlobalPackageJson(orphanPackageRoot, "2026.7.1"),
+        fs.writeFile(
+          path.join(orphanInstallRoot, "package.json"),
+          JSON.stringify({ private: true, dependencies: { openclaw: "2026.7.1" } }),
+          "utf8",
+        ),
+        fs.writeFile(path.join(orphanInstallRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n"),
+      ]);
+      const detectRunner = vi.fn<CommandRunner>().mockResolvedValue({
+        stdout: "",
+        stderr: "not active",
+        code: 1,
+      });
+
+      await expect(
+        detectGlobalInstallManagerForRoot(detectRunner, orphanPackageRoot, 1000),
+      ).resolves.toBe("pnpm");
+      expect(detectRunner).toHaveBeenCalledTimes(2);
+
+      const runCommand: CommandRunner = async (argv) => {
+        if (argv.join(" ") === "pnpm root -g") {
+          return {
+            stdout: `${path.join(base, "other-pnpm-home", "global", "v11")}\n`,
+            stderr: "",
+            code: 0,
+          };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "npm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot: orphanPackageRoot,
+          packageName: "openclaw",
+        }),
+      ).resolves.toEqual({
+        manager: "pnpm",
+        command: "pnpm",
+        pnpmIsolated: { layoutVersion: 11 },
+        globalRoot: pnpmGlobalRoot,
+        packageRoot: orphanPackageRoot,
+      });
+    });
+  });
+
+  it("keeps npm ownership when its prefix is named like a pnpm layout", async () => {
+    await withTempDir({ prefix: "openclaw-update-npm-v11-prefix-" }, async (base) => {
+      const npmPrefix = path.join(base, "v11");
+      const npmGlobalRoot = path.join(npmPrefix, "lib", "node_modules");
+      const packageRoot = path.join(npmGlobalRoot, "openclaw");
+      await fs.mkdir(packageRoot, { recursive: true });
+      await writeGlobalPackageJson(packageRoot, "2026.7.1");
+      const runCommand: CommandRunner = async (argv) => {
+        const command = argv.join(" ");
+        if (command === "npm root -g") {
+          return { stdout: `${npmGlobalRoot}\n`, stderr: "", code: 0 };
+        }
+        if (command === "pnpm root -g") {
+          return {
+            stdout: `${path.join(base, "pnpm-home", "global", "v11")}\n`,
+            stderr: "",
+            code: 0,
+          };
+        }
+        throw new Error(`unexpected command: ${command}`);
+      };
+
+      await expect(detectGlobalInstallManagerForRoot(runCommand, packageRoot, 1000)).resolves.toBe(
+        "npm",
+      );
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "npm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot: packageRoot,
+          packageName: "openclaw",
+          honorPackageRoot: true,
+        }),
+      ).resolves.toEqual({
+        manager: "npm",
+        command: "npm",
+        globalRoot: npmGlobalRoot,
+        packageRoot,
+      });
     });
   });
 

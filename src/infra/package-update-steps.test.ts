@@ -63,6 +63,28 @@ function createPnpmTarget(globalRoot: string): ResolvedGlobalInstallTarget {
   };
 }
 
+async function writePnpmIsolatedPackage(params: {
+  globalRoot: string;
+  installName: string;
+  version: string;
+  dependencies?: Record<string, string>;
+}): Promise<{ activeLink: string; packageRoot: string }> {
+  const installRoot = path.join(params.globalRoot, params.installName);
+  const packageRoot = path.join(installRoot, "node_modules", "openclaw");
+  await writePackageRoot(packageRoot, params.version);
+  await fs.writeFile(
+    path.join(installRoot, "package.json"),
+    JSON.stringify({
+      private: true,
+      dependencies: { openclaw: params.version, ...params.dependencies },
+    }),
+    "utf8",
+  );
+  const activeLink = path.join(params.globalRoot, `hash-${params.installName}`);
+  await fs.symlink(installRoot, activeLink, "dir");
+  return { activeLink, packageRoot };
+}
+
 async function expectPathMissing(filePath: string): Promise<void> {
   try {
     await fs.access(filePath);
@@ -744,14 +766,15 @@ describe("runGlobalPackageUpdateSteps", () => {
     }
   });
 
-  it("verifies pnpm 11 replacements in the invoking root when PATH uses another root", async () => {
+  it("uses the owner-reported custom bin without changing pnpm command resolution", async () => {
     await withTempDir({ prefix: "openclaw-package-update-pnpm-isolated-" }, async (base) => {
       const globalDir = path.join(base, "pnpm-home", "global");
       const globalRoot = path.join(globalDir, "v11");
-      const pathGlobalRoot = path.join(base, "path-pnpm-home", "global", "v11");
+      const ownerBinDir = path.join(base, "custom-global-bin");
+      const pathBinDir = path.join(base, "path-pnpm-home", "bin");
       const oldPackageRoot = path.join(globalRoot, "old", "node_modules", "openclaw");
       const newPackageRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
-      await fs.mkdir(pathGlobalRoot, { recursive: true });
+      await fs.mkdir(ownerBinDir, { recursive: true });
       await writePackageRoot(oldPackageRoot, "1.0.0");
       await fs.writeFile(
         path.join(globalRoot, "old", "package.json"),
@@ -760,21 +783,32 @@ describe("runGlobalPackageUpdateSteps", () => {
       );
       await fs.symlink(path.join(globalRoot, "old"), path.join(globalRoot, "hash-openclaw"), "dir");
 
-      const runCommand: CommandRunner = async (argv) => {
+      const runCommand: CommandRunner = async (argv, options) => {
         const command = argv.join(" ");
         if (command === "pnpm root -g") {
-          return { stdout: `${pathGlobalRoot}\n`, stderr: "", code: 0 };
+          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+        }
+        if (command === "pnpm bin -g") {
+          expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
+          return { stdout: `${ownerBinDir}\n`, stderr: "", code: 0 };
+        }
+        if (command === "pnpm --version") {
+          expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
+          return { stdout: "11.4.0\n", stderr: "", code: 0 };
         }
         throw new Error(`unexpected command: ${command}`);
       };
-      const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+      const runStep = vi.fn(async ({ name, argv, cwd, env }): Promise<PackageUpdateStepResult> => {
         if (name === "global update") {
+          expect(env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
           expect(argv).toEqual([
             "pnpm",
             "add",
             "-g",
             "--global-dir",
             globalDir,
+            "--global-bin-dir",
+            ownerBinDir,
             "--allow-build=openclaw",
             "openclaw@2.0.0",
           ]);
@@ -846,6 +880,9 @@ describe("runGlobalPackageUpdateSteps", () => {
         installTarget: {
           manager: "pnpm",
           command: "pnpm",
+          pnpmIsolated: {
+            layoutVersion: 11,
+          },
           globalRoot,
           packageRoot: oldPackageRoot,
         },
@@ -855,6 +892,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         runCommand,
         runStep,
         timeoutMs: 1000,
+        env: { PATH: `${pathBinDir}${path.delimiter}${ownerBinDir}` },
         postVerifyStep,
       });
 
@@ -868,6 +906,273 @@ describe("runGlobalPackageUpdateSteps", () => {
       ]);
       await expectPathMissing(path.join(newPackageRoot, ".openclaw-lifecycle-pending"));
       expect(postVerifyStep).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("rejects a mismatched pnpm major before mutating an isolated install", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-pnpm-major-" }, async (base) => {
+      const globalRoot = path.join(base, "pnpm-home", "global", "v11");
+      const globalBinDir = path.join(base, "pnpm-home", "bin");
+      const { packageRoot } = await writePnpmIsolatedPackage({
+        globalRoot,
+        installName: "install",
+        version: "1.0.0",
+      });
+      const runStep = vi.fn();
+      const runCommand: CommandRunner = async (argv, options) => {
+        const command = argv.join(" ");
+        expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(globalBinDir);
+        if (command === "pnpm root -g") {
+          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+        }
+        if (command === "pnpm bin -g") {
+          return { stdout: `${globalBinDir}\n`, stderr: "", code: 0 };
+        }
+        if (command === "pnpm --version") {
+          return { stdout: "10.32.1\n", stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${command}`);
+      };
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: {
+          manager: "pnpm",
+          command: "pnpm",
+          pnpmIsolated: {
+            layoutVersion: 11,
+          },
+          globalRoot,
+          packageRoot,
+        },
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand,
+        runStep,
+        timeoutMs: 1000,
+        env: { PATH: `${globalBinDir}${path.delimiter}${path.join(base, "pnpm-10", "bin")}` },
+      });
+
+      expect(result.failedStep?.name).toBe("pnpm isolated install preflight");
+      expect(result.failedStep?.stderrTail).toContain("reports pnpm 10.32.1");
+      expect(runStep).not.toHaveBeenCalled();
+      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+        '"version":"1.0.0"',
+      );
+    });
+  });
+
+  it("rejects a pnpm command that owns another global root", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-pnpm-root-" }, async (base) => {
+      const globalRoot = path.join(base, "owner", "global", "v11");
+      const otherGlobalRoot = path.join(base, "other", "global", "v11");
+      const { packageRoot } = await writePnpmIsolatedPackage({
+        globalRoot,
+        installName: "install",
+        version: "1.0.0",
+      });
+      const runCommand = vi.fn<CommandRunner>(async (argv) => {
+        expect(argv).toEqual(["pnpm", "root", "-g"]);
+        return { stdout: `${otherGlobalRoot}\n`, stderr: "", code: 0 };
+      });
+      const runStep = vi.fn();
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: {
+          manager: "pnpm",
+          command: "pnpm",
+          pnpmIsolated: { layoutVersion: 11 },
+          globalRoot,
+          packageRoot,
+        },
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand,
+        runStep,
+        timeoutMs: 1000,
+      });
+
+      expect(result.failedStep?.name).toBe("pnpm isolated install preflight");
+      expect(result.failedStep?.stderrTail).toContain("owns");
+      expect(result.failedStep?.stderrTail).toContain("not the invoking OpenClaw install");
+      expect(runCommand).toHaveBeenCalledOnce();
+      expect(runStep).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects a pnpm update that leaves only an orphaned old package root", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-pnpm-orphan-" }, async (base) => {
+      const globalRoot = path.join(base, "pnpm-home", "global", "v11");
+      const globalBinDir = path.join(base, "pnpm-home", "bin");
+      const { activeLink, packageRoot } = await writePnpmIsolatedPackage({
+        globalRoot,
+        installName: "old",
+        version: "1.0.0",
+      });
+      const runCommand: CommandRunner = async (argv) => {
+        const command = argv.join(" ");
+        if (command === "pnpm root -g") {
+          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+        }
+        if (command === "pnpm bin -g") {
+          return { stdout: `${globalBinDir}\n`, stderr: "", code: 0 };
+        }
+        if (command === "pnpm --version") {
+          return { stdout: "11.4.0\n", stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${command}`);
+      };
+      const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+        expect(name).toBe("global update");
+        await fs.rm(activeLink);
+        return {
+          name,
+          command: argv.join(" "),
+          cwd: cwd ?? process.cwd(),
+          durationMs: 1,
+          exitCode: 0,
+        };
+      });
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: {
+          manager: "pnpm",
+          command: "pnpm",
+          pnpmIsolated: {
+            layoutVersion: 11,
+          },
+          globalRoot,
+          packageRoot,
+        },
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand,
+        runStep,
+        timeoutMs: 1000,
+      });
+
+      expect(result.failedStep?.name).toBe("global install verify");
+      expect(result.failedStep?.stderrTail).toContain("unique active pnpm replacement");
+      expect(runStep).toHaveBeenCalledOnce();
+      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+        '"version":"1.0.0"',
+      );
+    });
+  });
+
+  it("rejects grouped pnpm isolated installs before dropping sibling packages", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-pnpm-group-" }, async (base) => {
+      const globalRoot = path.join(base, "pnpm-home", "global", "v11");
+      await writePnpmIsolatedPackage({
+        globalRoot,
+        installName: "grouped",
+        version: "1.0.0",
+        dependencies: { cowsay: "1.6.0" },
+      });
+      const { packageRoot } = await writePnpmIsolatedPackage({
+        globalRoot,
+        installName: "invoking",
+        version: "1.0.0",
+      });
+      const runCommand = vi.fn<CommandRunner>();
+      const runStep = vi.fn();
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: {
+          manager: "pnpm",
+          command: "pnpm",
+          pnpmIsolated: {
+            layoutVersion: 11,
+          },
+          globalRoot,
+          packageRoot,
+        },
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand,
+        runStep,
+        timeoutMs: 1000,
+      });
+
+      expect(result.failedStep?.name).toBe("pnpm isolated install preflight");
+      expect(result.failedStep?.stderrTail).toContain("with cowsay");
+      expect(result.failedStep?.stderrTail).toContain("stopped before mutation");
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(runStep).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects multiple standalone pnpm installs before an alias-wide update", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-pnpm-multiple-" }, async (base) => {
+      const globalRoot = path.join(base, "pnpm-home", "global", "v11");
+      await writePnpmIsolatedPackage({
+        globalRoot,
+        installName: "other",
+        version: "9.0.0",
+      });
+      const { packageRoot } = await writePnpmIsolatedPackage({
+        globalRoot,
+        installName: "invoking",
+        version: "1.0.0",
+      });
+      const runCommand = vi.fn<CommandRunner>();
+      const runStep = vi.fn();
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: {
+          manager: "pnpm",
+          command: "pnpm",
+          pnpmIsolated: { layoutVersion: 11 },
+          globalRoot,
+          packageRoot,
+        },
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand,
+        runStep,
+        timeoutMs: 1000,
+      });
+
+      expect(result.failedStep?.name).toBe("pnpm isolated install preflight");
+      expect(result.failedStep?.stderrTail).toContain("found 2");
+      expect(result.failedStep?.stderrTail).toContain("stopped before mutation");
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(runStep).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects an orphaned invoking pnpm install before manager probes", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-pnpm-invoking-orphan-" }, async (base) => {
+      const globalRoot = path.join(base, "pnpm-home", "global", "v11");
+      const packageRoot = path.join(globalRoot, "orphan", "node_modules", "openclaw");
+      await writePackageRoot(packageRoot, "1.0.0");
+      const runCommand = vi.fn<CommandRunner>();
+      const runStep = vi.fn();
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: {
+          manager: "pnpm",
+          command: "pnpm",
+          pnpmIsolated: { layoutVersion: 11 },
+          globalRoot,
+          packageRoot,
+        },
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand,
+        runStep,
+        timeoutMs: 1000,
+      });
+
+      expect(result.failedStep?.name).toBe("pnpm isolated install preflight");
+      expect(result.failedStep?.stderrTail).toContain("found 0");
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(runStep).not.toHaveBeenCalled();
     });
   });
 
