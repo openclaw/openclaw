@@ -8,6 +8,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelType, Message } from "../internal/discord.js";
 import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
+import { discordChannelInfoCacheState } from "./message-channel-info-state.js";
 
 export type DiscordChannelInfo = {
   type: ChannelType;
@@ -28,15 +29,6 @@ type DiscordMessageWithChannelId = Message & {
 const DISCORD_CHANNEL_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
 const DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
 const DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES = 1000;
-const DISCORD_CHANNEL_INFO_CACHE = new Map<
-  string,
-  { value: DiscordChannelInfo | null; expiresAt: number }
->();
-
-export function resetDiscordChannelInfoCacheForTest() {
-  DISCORD_CHANNEL_INFO_CACHE.clear();
-}
-
 function resolveDiscordChannelInfoCacheExpiresAt(ttlMs: number, nowMs: number): number | undefined {
   return resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs });
 }
@@ -49,8 +41,8 @@ function cacheDiscordChannelInfo(
 ): void {
   const expiresAt = resolveDiscordChannelInfoCacheExpiresAt(ttlMs, nowMs);
   if (expiresAt !== undefined) {
-    DISCORD_CHANNEL_INFO_CACHE.set(channelId, { value, expiresAt });
-    pruneMapToMaxSize(DISCORD_CHANNEL_INFO_CACHE, DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES);
+    discordChannelInfoCacheState.entries.set(channelId, { value, expiresAt });
+    pruneMapToMaxSize(discordChannelInfoCacheState.entries, DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES);
   }
 }
 
@@ -77,12 +69,12 @@ export async function resolveDiscordChannelInfo(
 ): Promise<DiscordChannelInfo | null> {
   const rawNow = Date.now();
   const now = asDateTimestampMs(rawNow);
-  const cached = DISCORD_CHANNEL_INFO_CACHE.get(channelId);
+  const cached = discordChannelInfoCacheState.entries.get(channelId);
   if (cached) {
     if (now !== undefined && cached.expiresAt > now) {
       return cached.value;
     }
-    DISCORD_CHANNEL_INFO_CACHE.delete(channelId);
+    discordChannelInfoCacheState.entries.delete(channelId);
   }
   try {
     const channel = await client.fetchChannel(channelId);
