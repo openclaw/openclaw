@@ -30,6 +30,8 @@ type TransportOutputShape = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  errorStatus?: number;
+  errorRetryAfterMs?: number;
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -149,6 +151,8 @@ type TransportErrorDetails = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  errorStatus?: number;
+  errorRetryAfterMs?: number;
 };
 
 function readStringLikeProperty(value: unknown, key: string): string | undefined {
@@ -174,6 +178,23 @@ function readObjectProperty(value: unknown, key: string): Record<string, unknown
   return raw && typeof raw === "object" && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : undefined;
+}
+
+function readNumberLikeProperty(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = (value as Record<string, unknown>)[key];
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
 }
 
 function stringifyErrorBody(value: unknown): string | undefined {
@@ -229,11 +250,20 @@ function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
     normalizeTransportErrorBody(readStringLikeProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(readObjectProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(nestedError);
+  const errorStatus = readNumberLikeProperty(errorObject, "status");
+  const retryAfterMs =
+    readNumberLikeProperty(errorObject, "retryAfterMs") ??
+    (() => {
+      const retryAfterSeconds = readNumberLikeProperty(errorObject, "retryAfterSeconds");
+      return retryAfterSeconds !== undefined ? retryAfterSeconds * 1000 : undefined;
+    })();
 
   return {
     ...(errorCode ? { errorCode } : {}),
     ...(errorType ? { errorType } : {}),
     ...(errorBody ? { errorBody } : {}),
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
+    ...(retryAfterMs !== undefined ? { errorRetryAfterMs: retryAfterMs } : {}),
   };
 }
 

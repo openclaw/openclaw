@@ -54,6 +54,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { toErrorObject } from "../infra/errors.js";
 import { readResponseTextSnippet } from "../infra/http-body.js";
+import { parseRetryAfterSeconds } from "./provider-transport-fetch.js";
 import type {
   AssistantMessageDiagnostic,
   Context,
@@ -840,9 +841,19 @@ function createAnthropicMessagesClient(params: {
         });
         if (!response.ok) {
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(
+          const error = new Error(
             detail || `Anthropic Messages request failed with HTTP ${response.status}`,
           );
+          // Surface the HTTP status and any server-specified Retry-After so the
+          // session retry policy can honor the provider's cooldown instead of a
+          // fixed backoff (see AgentSession.prepareRetry).
+          const typedError = error as Error & { status?: number; retryAfterMs?: number };
+          typedError.status = response.status;
+          const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
+          if (retryAfterSeconds !== undefined && Number.isFinite(retryAfterSeconds)) {
+            typedError.retryAfterMs = Math.round(retryAfterSeconds * 1000);
+          }
+          throw typedError;
         }
         if (!response.body) {
           return;

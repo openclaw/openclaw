@@ -319,6 +319,8 @@ export interface AssistantMessage {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  errorStatus?: number; // HTTP status code when the error originated from a provider HTTP response
+  errorRetryAfterMs?: number; // Server-specified Retry-After (ms) for rate-limited requests
   timestamp: number; // Unix timestamp in milliseconds
 }
 

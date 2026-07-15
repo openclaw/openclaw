@@ -114,4 +114,28 @@ describe("transport stream shared helpers", () => {
       expect(output.errorMessage).toBeTruthy();
     }
   });
+
+  it("copies errorStatus and errorRetryAfterMs from a structured transport error", () => {
+    // Regression test for #103849: the HTTP status and server-specified
+    // Retry-After attached to a transport error must survive into the
+    // AssistantMessage so the session retry policy can honor the cooldown.
+    const output: {
+      stopReason: string;
+      errorMessage?: string;
+      errorStatus?: number;
+      errorRetryAfterMs?: number;
+    } = { stopReason: "stop" };
+
+    const error = Object.assign(new Error("Anthropic Messages request failed with HTTP 429"), {
+      status: 429,
+      retryAfterMs: 30_000,
+    });
+
+    assignTransportErrorDetails(output, error);
+
+    expect(output.stopReason).toBe("error");
+    expect(output.errorMessage).toContain("429");
+    expect(output.errorStatus).toBe(429);
+    expect(output.errorRetryAfterMs).toBe(30_000);
+  });
 });

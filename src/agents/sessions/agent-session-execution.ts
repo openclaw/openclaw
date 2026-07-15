@@ -8,6 +8,14 @@ import type { BashExecutionMessage } from "./messages.js";
 import type { BashOperations } from "./tools/bash-operations.js";
 import { createLocalBashOperations } from "./tools/bash.js";
 
+/**
+ * Upper bound on how long a single retry wait may be extended to honor a
+ * server-specified Retry-After. Mirrors the SDK retry wait cap
+ * (OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS, default 60s) so a pathological or very
+ * large Retry-After header cannot stall a turn indefinitely.
+ */
+const MAX_RETRY_AFTER_WAIT_MS = 60_000;
+
 export abstract class AgentSessionExecution extends AgentSessionExtensions {
   // =========================================================================
   // Auto-Retry
@@ -49,7 +57,15 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       return false;
     }
 
-    const delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    const exponentialDelayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    // Honor a server-specified Retry-After (e.g. HTTP 429) so we wait out the
+    // provider's cooldown instead of a fixed backoff that lands inside the
+    // still-active rate-limit window. See issue #103849.
+    const serverRetryAfterMs = message.errorRetryAfterMs;
+    const delayMs =
+      serverRetryAfterMs && serverRetryAfterMs > 0
+        ? Math.min(serverRetryAfterMs, MAX_RETRY_AFTER_WAIT_MS)
+        : exponentialDelayMs;
 
     this.emit({
       type: "auto_retry_start",
