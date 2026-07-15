@@ -588,6 +588,44 @@ describe("handleLineWebhookEvents", () => {
     await task;
   });
 
+  it("preserves group history when durable acceptance rejects", async () => {
+    const groupHistories = new Map<string, HistoryEntry[]>([
+      ["group-history-retry", [{ sender: "user:earlier", body: "earlier", timestamp: 1 }]],
+    ]);
+    const processMessage = vi.fn<LineWebhookContext["processMessage"]>(async (message) => {
+      await message.onEventAccepted?.();
+    });
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-history-retry",
+        type: "text",
+        text: "retry me",
+        quoteToken: "test-token-placeholder",
+      },
+      source: { type: "group", groupId: "group-history-retry", userId: "user-history" },
+      webhookEventId: "evt-history-retry",
+    });
+
+    await expect(
+      handleLineWebhookEvents(
+        [event],
+        createLineWebhookTestContext({
+          processMessage,
+          groupPolicy: "open",
+          requireMention: false,
+          groupHistories,
+          onEventAccepted: async () => {
+            throw new Error("acceptance failed");
+          },
+        }),
+      ),
+    ).rejects.toThrow("acceptance failed");
+
+    expect(groupHistories.get("group-history-retry")).toEqual([
+      { sender: "user:earlier", body: "earlier", timestamp: 1 },
+    ]);
+  });
+
   it("orders group-history mutations across concurrent webhook requests", async () => {
     let allowFirstAdmission: (() => void) | undefined;
     const firstAdmission = new Promise<void>((resolve) => {
@@ -1514,7 +1552,11 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("retries transient media materialization failures before reply-lane acceptance", async () => {
-    downloadLineMediaMock.mockRejectedValueOnce(new Error("connection reset"));
+    downloadLineMediaMock.mockRejectedValueOnce({
+      name: "HTTPFetchError",
+      status: 408,
+      statusText: "Request Timeout",
+    });
     const processMessage = vi.fn();
     const onEventAccepted = vi.fn();
     const event = createTestMessageEvent({

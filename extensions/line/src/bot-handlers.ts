@@ -75,14 +75,15 @@ function isPermanentLineMediaDownloadError(err: unknown): boolean {
   if (!err || typeof err !== "object" || !("status" in err)) {
     return false;
   }
-  // @line/bot-sdk exposes HTTPFetchError.status. Retrying non-429 4xx
-  // responses cannot recover this event's media, so keep its text path usable.
+  // @line/bot-sdk exposes HTTPFetchError.status. Retrying non-timeout/non-rate-limit
+  // 4xx responses cannot recover this event's media, so keep its text path usable.
   const status = (err as { status?: unknown }).status;
   return (
     typeof status === "number" &&
     Number.isInteger(status) &&
     status >= 400 &&
     status < 500 &&
+    status !== 408 &&
     status !== 429
   );
 }
@@ -93,7 +94,7 @@ interface LineHandlerContext {
   runtime: RuntimeEnv;
   mediaMaxBytes: number;
   processMessage: (ctx: LineInboundContext) => Promise<void>;
-  onEventAccepted?: (event: WebhookEvent) => void | Promise<void>;
+  onEventAccepted?: (event: WebhookEvent, finalizeAcceptance?: () => void) => void | Promise<void>;
   abortSignal?: AbortSignal;
   replayCache?: LineWebhookReplayCache;
   groupHistories?: Map<string, HistoryEntry[]>;
@@ -452,7 +453,10 @@ function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
   return "";
 }
 
-async function handleMessageEvent(event: MessageEvent, context: LineHandlerContext): Promise<void> {
+async function handleMessageEvent(
+  event: MessageEvent,
+  context: LineHandlerContext,
+): Promise<(() => void) | undefined> {
   const { cfg, account, mediaMaxBytes, processMessage, runtime } = context;
   const message = event.message;
 
@@ -545,16 +549,12 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   await processMessage({
     ...messageContext,
     onEventAccepted: async () => {
-      // Same-group webhook events start after this durable adoption. Clear
-      // their pending history here so a later event cannot be erased when
-      // this Agent turn eventually completes.
-      clearGroupHistory();
-      await context.onEventAccepted?.(event);
+      await context.onEventAccepted?.(event, clearGroupHistory);
     },
   });
   // Legacy/test handlers that do not call onEventAccepted still need the
-  // original post-processing history cleanup before their event settles.
-  clearGroupHistory();
+  // original history cleanup when completion becomes acceptance.
+  return clearGroupHistory;
 }
 
 async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {
@@ -674,9 +674,10 @@ function startLineWebhookEvent(
   } else {
     context.abortSignal?.addEventListener("abort", abortEvent, { once: true });
   }
-  const acceptEvent = async () => {
+  const acceptEvent = async (finalizeAcceptance?: () => void) => {
     throwIfAborted();
     if (eventAccepted) {
+      finalizeAcceptance?.();
       return;
     }
     eventAcceptance ??= (async () => {
@@ -689,6 +690,9 @@ function startLineWebhookEvent(
         await replayCandidate.cache.commit(replayCandidate.key);
         replayClaimOwned = false;
       }
+      // Finalize owner state only after upstream acceptance and replay commit,
+      // but before later same-conversation events observe this acceptance.
+      finalizeAcceptance?.();
       eventAccepted = true;
       resolveEventAcceptance();
     })();
@@ -700,7 +704,11 @@ function startLineWebhookEvent(
       throw error;
     }
   };
-  const eventContext = { ...context, onEventAccepted: acceptEvent };
+  const eventContext = {
+    ...context,
+    onEventAccepted: (_event: WebhookEvent, finalizeAcceptance?: () => void) =>
+      acceptEvent(finalizeAcceptance),
+  };
   const completion = (async () => {
     try {
       throwIfAborted();
@@ -723,9 +731,10 @@ function startLineWebhookEvent(
         }
         return;
       }
+      let finalizeAcceptance: (() => void) | undefined;
       switch (event.type) {
         case "message":
-          await handleMessageEvent(event, eventContext);
+          finalizeAcceptance = await handleMessageEvent(event, eventContext);
           break;
         case "follow":
           await handleFollowEvent(event, eventContext);
@@ -745,7 +754,7 @@ function startLineWebhookEvent(
         default:
           logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
       }
-      await acceptEvent();
+      await acceptEvent(finalizeAcceptance);
     } catch (err) {
       if (replayClaimOwned && !eventAccepted) {
         // Every error here propagates to the webhook response before durable
