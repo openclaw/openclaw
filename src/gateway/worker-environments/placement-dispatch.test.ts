@@ -349,13 +349,14 @@ describe("worker placement dispatch", () => {
       workspaceBaseManifestRef: harness.reconciledManifestRef,
     });
 
-    expect(harness.log.slice(-10)).toEqual([
+    expect(harness.log.slice(-11)).toEqual([
       "tunnel:attached",
       "workspace:quiesce",
       "workspace:reconcile",
       "workspace:verify",
       "workspace:verify-local",
       "workspace:lease",
+      "workspace:verify",
       "workspace:verify-local",
       "teardown:destroy",
       "teardown:stop",

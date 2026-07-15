@@ -3,7 +3,7 @@ import type {
   WorkerWorkspaceReconcileResult,
 } from "./tunnel-contract.js";
 
-/** Proves remote stability, renews quiescence, then catches local edits made during renewal. */
+/** Rechecks both owners after renewing the remote quiescence lease. */
 export async function verifyReconciledWorkspaceFinal(
   reconciliation: WorkerWorkspaceReconcileResult,
   quiescence: WorkerWorkspaceQuiescence,
@@ -11,5 +11,6 @@ export async function verifyReconciledWorkspaceFinal(
   await reconciliation.verifyStable();
   await reconciliation.verifyLocalStable();
   await quiescence.assertActive();
+  await reconciliation.verifyStable();
   await reconciliation.verifyLocalStable();
 }

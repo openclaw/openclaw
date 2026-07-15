@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 
 describe("final worker workspace fences", () => {
-  it("rechecks local stability after the final quiescence renewal", async () => {
+  it("rechecks remote and local stability after the final quiescence renewal", async () => {
     const log: string[] = [];
     await verifyReconciledWorkspaceFinal(
       {
@@ -23,6 +23,27 @@ describe("final worker workspace fences", () => {
       },
     );
 
-    expect(log).toEqual(["remote", "local", "quiescence", "local"]);
+    expect(log).toEqual(["remote", "local", "quiescence", "remote", "local"]);
+  });
+
+  it("rejects a remote write observed after the final quiescence renewal", async () => {
+    let remoteVerifications = 0;
+    await expect(
+      verifyReconciledWorkspaceFinal(
+        {
+          manifestRef: "sha256:" + "a".repeat(64),
+          changed: true,
+          verifyStable: async () => {
+            remoteVerifications += 1;
+            if (remoteVerifications === 2) {
+              throw new Error("late remote write");
+            }
+          },
+          verifyLocalStable: async () => {},
+        },
+        { assertActive: async () => {}, resume: async () => {} },
+      ),
+    ).rejects.toThrow("late remote write");
+    expect(remoteVerifications).toBe(2);
   });
 });
