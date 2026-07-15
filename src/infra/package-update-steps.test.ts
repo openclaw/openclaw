@@ -744,6 +744,92 @@ describe("runGlobalPackageUpdateSteps", () => {
     }
   });
 
+  it("verifies pnpm 11 updates against the replacement isolated package root", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-pnpm-isolated-" }, async (base) => {
+      const globalDir = path.join(base, "pnpm-home", "global");
+      const globalRoot = path.join(globalDir, "v11");
+      const oldPackageRoot = path.join(globalRoot, "old", "node_modules", "openclaw");
+      const newPackageRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
+      let currentPackageRoot = oldPackageRoot;
+      await writePackageRoot(oldPackageRoot, "1.0.0");
+
+      const runCommand: CommandRunner = async (argv) => {
+        const command = argv.join(" ");
+        if (command === "pnpm root -g") {
+          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+        }
+        if (command === "pnpm list -g --json --depth=0 openclaw") {
+          return {
+            stdout: JSON.stringify([
+              {
+                path: globalRoot,
+                private: true,
+                dependencies: {
+                  openclaw: {
+                    from: "openclaw",
+                    version: currentPackageRoot === oldPackageRoot ? "1.0.0" : "2.0.0",
+                    path: currentPackageRoot,
+                  },
+                },
+              },
+            ]),
+            stderr: "",
+            code: 0,
+          };
+        }
+        throw new Error(`unexpected command: ${command}`);
+      };
+      const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+        expect(name).toBe("global update");
+        expect(argv).toEqual([
+          "pnpm",
+          "add",
+          "-g",
+          "--global-dir",
+          globalDir,
+          "--allow-build=openclaw",
+          "openclaw@2.0.0",
+        ]);
+        await fs.rm(oldPackageRoot, { recursive: true, force: true });
+        await writePackageRoot(newPackageRoot, "2.0.0");
+        currentPackageRoot = newPackageRoot;
+        return {
+          name,
+          command: argv.join(" "),
+          cwd: cwd ?? process.cwd(),
+          durationMs: 1,
+          exitCode: 0,
+        };
+      });
+      const postVerifyStep = vi.fn(async (packageRoot: string) => {
+        expect(packageRoot).toBe(newPackageRoot);
+        return null;
+      });
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: {
+          manager: "pnpm",
+          command: "pnpm",
+          globalRoot,
+          packageRoot: oldPackageRoot,
+        },
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot: oldPackageRoot,
+        runCommand,
+        runStep,
+        timeoutMs: 1000,
+        postVerifyStep,
+      });
+
+      expect(result.failedStep).toBeNull();
+      expect(result.afterVersion).toBe("2.0.0");
+      expect(result.verifiedPackageRoot).toBe(newPackageRoot);
+      expect(result.steps.map((step) => step.name)).toEqual(["global update"]);
+      expect(postVerifyStep).toHaveBeenCalledOnce();
+    });
+  });
+
   it("keeps a successful staged swap when old package cleanup hits a transient Windows native module error", async () => {
     await withTempDir({ prefix: "openclaw-package-update-staged-cleanup-" }, async (base) => {
       const prefix = path.join(base, "prefix");

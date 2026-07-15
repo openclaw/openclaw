@@ -636,6 +636,62 @@ describe("update global helpers", () => {
     });
   });
 
+  it("detects pnpm 11 isolated global installs from the package listing", async () => {
+    await withTempDir({ prefix: "openclaw-update-pnpm-isolated-root-" }, async (base) => {
+      const npmRoot = path.join(base, "npm", "lib", "node_modules");
+      const pnpmGlobalDir = path.join(base, "pnpm-home", "global");
+      const pnpmGlobalRoot = path.join(pnpmGlobalDir, "v11");
+      const pkgRoot = path.join(pnpmGlobalRoot, "a1b2", "node_modules", "openclaw");
+      await fs.mkdir(pkgRoot, { recursive: true });
+      await fs.mkdir(path.join(npmRoot, "openclaw"), { recursive: true });
+
+      const runCommand: CommandRunner = async (argv) => {
+        const command = argv.join(" ");
+        if (command === "npm root -g") {
+          return { stdout: `${npmRoot}\n`, stderr: "", code: 0 };
+        }
+        if (command === "pnpm root -g") {
+          return { stdout: `${pnpmGlobalRoot}\n`, stderr: "", code: 0 };
+        }
+        if (command === "pnpm list -g --json --depth=0 openclaw") {
+          return {
+            stdout: JSON.stringify([
+              {
+                path: pnpmGlobalRoot,
+                private: true,
+                dependencies: {
+                  openclaw: { from: "openclaw", version: "2026.7.1", path: pkgRoot },
+                },
+              },
+            ]),
+            stderr: "",
+            code: 0,
+          };
+        }
+        throw new Error(`unexpected command: ${command}`);
+      };
+
+      await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe(
+        "pnpm",
+      );
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "pnpm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+          honorPackageRoot: true,
+        }),
+      ).resolves.toEqual({
+        manager: "pnpm",
+        command: "pnpm",
+        globalRoot: pnpmGlobalRoot,
+        packageRoot: pkgRoot,
+      });
+      expect(resolvePnpmGlobalDirFromGlobalRoot(pnpmGlobalRoot)).toBe(pnpmGlobalDir);
+    });
+  });
+
   it("does not infer pnpm ownership without pnpm node_modules metadata", async () => {
     await withTempDir({ prefix: "openclaw-update-pnpm-shape-only-" }, async (base) => {
       const customGlobalDir = path.join(base, "custom-pnpm");
@@ -767,6 +823,27 @@ describe("update global helpers", () => {
       "-g",
       "--trust",
       "openclaw@latest",
+    ]);
+    expect(globalInstallArgs("bun", "/tmp/openclaw-current.tgz")).toEqual([
+      "bun",
+      "add",
+      "-g",
+      "--trust",
+      "openclaw@file:/tmp/openclaw-current.tgz",
+    ]);
+    expect(globalInstallArgs("bun", "https://example.test/openclaw.tgz")).toEqual([
+      "bun",
+      "add",
+      "-g",
+      "--trust",
+      "openclaw@https://example.test/openclaw.tgz",
+    ]);
+    expect(globalInstallArgs("bun", "github:openclaw/openclaw#main")).toEqual([
+      "bun",
+      "add",
+      "-g",
+      "--trust",
+      "openclaw@github:openclaw/openclaw#main",
     ]);
     expect(globalInstallFallbackArgs("npm", "openclaw@latest")).toEqual([
       "npm",

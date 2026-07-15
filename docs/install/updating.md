@@ -15,7 +15,7 @@ state needs manual repair.
 
 ## Recommended: `openclaw update`
 
-Detects your install type (npm or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
+Detects your install type (npm, pnpm, Bun, or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
 
 ```bash
 openclaw update
@@ -178,6 +178,11 @@ explicit OpenClaw update means "install the selected release now."
 ```bash
 pnpm add -g openclaw@latest
 ```
+
+If pnpm 11 installed OpenClaw 2026.7.1, run that manual command once. That
+release predates pnpm 11's isolated global-package layout, so its updater can
+mistake another npm installation for the running CLI. Later releases retain
+pnpm ownership and follow the replacement package root during updates.
 
 ```bash
 bun add -g openclaw@latest

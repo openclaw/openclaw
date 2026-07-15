@@ -685,7 +685,20 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
     }
 
+    // pnpm 11 replaces an isolated global project with a new install directory.
+    // Resolve it again before verification so doctor and version checks inspect
+    // the package behind the refreshed global shim, not the removed old root.
+    const refreshedPnpmTarget =
+      finalInstallStep.exitCode === 0 && !stagedInstall && params.installTarget.manager === "pnpm"
+        ? await resolveGlobalInstallTarget({
+            manager: params.installTarget,
+            runCommand: params.runCommand,
+            timeoutMs: params.timeoutMs,
+            packageName: params.packageName,
+          })
+        : null;
     const livePackageRoot =
+      refreshedPnpmTarget?.packageRoot ??
       params.installTarget.packageRoot ??
       params.packageRoot ??
       (
@@ -693,6 +706,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           manager: params.installTarget,
           runCommand: params.runCommand,
           timeoutMs: params.timeoutMs,
+          packageName: params.packageName,
         })
       ).packageRoot ??
       null;

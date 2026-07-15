@@ -4023,7 +4023,10 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(runner).toContain('if [ "$UPDATE_FAILED" -ne 0 ]; then');
     expect(runner).toContain('if [ "$GATEWAY_START_FAILED" -ne 0 ]; then');
     expect(runner).toContain('if [ "$GATEWAY_HEALTH_FAILED" -ne 0 ]; then');
-    expect(runner).toContain("ActiveState=active");
+    expect(runner).toContain('printf "%s\\n" "\\$!" >"$GATEWAY_PID_FILE"');
+    expect(runner).toContain('printf "ActiveState=active\\nSubState=running');
+    expect(runner).toContain('status.service?.runtime?.status !== "running"');
+    expect(runner).toContain("FAIL: gateway service was not running before update");
     expect(runner).toContain("OPENCLAW_NO_RESPAWN=1");
     expect(runner).toContain("is-enabled)");
     expect(runner).toContain("/healthz");
