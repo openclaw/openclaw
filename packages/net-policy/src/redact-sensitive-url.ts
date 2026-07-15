@@ -42,18 +42,14 @@ const URL_QUERY_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
 
 // Telegram bot credentials use `/bot<token>/...`; align this shape with logging/redact.ts.
 const TELEGRAM_BOT_TOKEN_PATH_RE = /\/bot\d{6,}(?::|%3[aA])[A-Za-z0-9_-]{20,}(?=\/|$)/giu;
-// Nested callbacks may be repeatedly percent-encoded. Bound recursive decoding so hostile
-// diagnostics cannot grow work without limit; unresolved URL-like values then fail closed.
+// Bound recursive decoding so hostile nested callbacks cannot grow work without limit.
 const MAX_NESTED_URL_REDACTION_DEPTH = 8;
 const URL_SCHEME_RE = /(?:^|[^a-z\d+.-])[a-z][a-z\d+.-]{0,31}:/iu;
 const SPECIAL_SCHEME_AUTHORITY_RE = /\b(?:https?|wss?|ftp):[\\/]{0,2}[^\\/?#\s]*/giu;
 const SPECIAL_SCHEME_SPILLED_USERINFO_RE = /\b(?:https?|wss?|ftp):[\\/]{0,2}[^\s]*@[^\\/?#\s]*/giu;
 const PROTOCOL_RELATIVE_AUTHORITY_RE = /[\\/]{2,}[^\\/?#\s]*/gu;
 
-type UrlRedactionResult = {
-  value: string;
-  parsedWholeUrl: boolean;
-};
+type UrlRedactionResult = { value: string; parsedWholeUrl: boolean };
 
 function redactSensitiveUrlPath(value: string): string {
   return value.replace(TELEGRAM_BOT_TOKEN_PATH_RE, "/bot***");
@@ -253,8 +249,7 @@ function redactEmbeddedUrlUserInfo(value: string): string {
       }
       const authorityPrefix = candidate.slice(authorityStart, absoluteReservedDelimiter);
       const possiblePort = candidate.slice(credentialSeparator + 1, absoluteReservedDelimiter);
-      // Decoded reserved delimiters can hide inside userinfo, but ordinary host:port and IPv6
-      // URLs must remain untouched even when a later path, query, or fragment contains `@`.
+      // Keep unambiguous host:port and IPv6 authorities when later URL components contain `@`.
       if (/^\d+$/u.test(possiblePort) || /^\[[^\]]+\](?::\d+)?$/u.test(authorityPrefix)) {
         return candidate;
       }
@@ -274,8 +269,19 @@ function redactEmbeddedUrlUserInfo(value: string): string {
 
 function hasUnresolvedEmbeddedUrlUserInfo(value: string): boolean {
   for (const match of value.matchAll(/(?:\b(?:https?|wss?|ftp):[\\/]{0,2}|[\\/]{2,})/giu)) {
-    const authorityStart = (match.index ?? 0) + match[0].length;
-    if (/(?<!\*\*\*:\*\*\*)@/u.test(value.slice(authorityStart))) {
+    const remainder = value.slice((match.index ?? 0) + match[0].length);
+    const userInfoEnd = remainder.search(/(?<!\*\*\*:\*\*\*)@/u);
+    const authorityEnd = remainder.search(/[\\/?#]/u);
+    // After the authority, only path text shaped like spilled userinfo remains ambiguous.
+    const pathBeforeAt = remainder.slice(authorityEnd + 1, userInfoEnd);
+    if (
+      userInfoEnd >= 0 &&
+      (authorityEnd < 0 ||
+        userInfoEnd <= authorityEnd ||
+        (remainder[authorityEnd] === "/" &&
+          (pathBeforeAt.includes(":") ||
+            /^[^/?#\s]+\.[^/?#\s]+(?:[/?#]|$)/u.test(remainder.slice(userInfoEnd + 1)))))
+    ) {
       return true;
     }
   }
@@ -360,14 +366,9 @@ function redactEncodedNestedUrlPath(value: string, depth: number): string {
   }
 
   const direct = redactSensitiveUrlLikeStringAtDepth(decoded, depth);
-  if (direct.value !== decoded) {
-    // Once a secret is found, emit the sanitized decoded path instead of recreating
-    // attacker-controlled encoding layers that could hide it again.
-    return direct.value;
-  }
-  // Unresolved decoded authorities can restore credentials behind any delimiter; fail closed.
-  if (hasUnresolvedEmbeddedUrlUserInfo(decoded)) {
-    return "***";
+  // Emit sanitized decoded secrets; unresolved decoded authorities fail closed.
+  if (direct.value !== decoded || hasUnresolvedEmbeddedUrlUserInfo(decoded)) {
+    return direct.value !== decoded ? direct.value : "***";
   }
   if (direct.parsedWholeUrl) {
     return value;
@@ -392,8 +393,7 @@ function redactSensitiveUrlAtDepth(value: string, depth: number): UrlRedactionRe
       const originalPath = parsed.pathname;
       parsed.pathname = redactedNestedPath;
       if (parsed.pathname === originalPath) {
-        // Opaque schemes such as `data:` and diagnostic prefixes such as `fatal:` reject
-        // pathname assignment. Let the whole-string scanner sanitize their embedded URLs.
+        // Opaque/diagnostic schemes reject pathname assignment; use the whole-string scanner.
         return { value: directRedaction, parsedWholeUrl: false };
       }
       mutated = true;
@@ -448,8 +448,8 @@ function redactEncodedUrlLikeString(value: string, depth: number): string {
   }
 
   const redactedDecoded = redactSensitiveUrlLikeStringAtDepth(decoded, depth + 1);
-  if (redactedDecoded.value !== decoded) {
-    return redactedDecoded.value;
+  if (redactedDecoded.value !== decoded || redactedDecoded.parsedWholeUrl) {
+    return redactedDecoded.value === decoded ? value : redactedDecoded.value;
   }
   return hasUnresolvedEmbeddedUrlUserInfo(decoded) ? "***" : value;
 }

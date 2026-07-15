@@ -21,17 +21,22 @@ const CREDENTIAL_STATUS_KEYS = [
 
 type CredentialStatusKey = (typeof CREDENTIAL_STATUS_KEYS)[number];
 
+/** Redacts a plugin-provided base URL after status hooks have produced their final record. */
+export function redactChannelStatusSummaryBaseUrl<T>(summary: T): T {
+  if (!isRecord(summary) || typeof summary.baseUrl !== "string" || !summary.baseUrl) {
+    return summary;
+  }
+  const redactedBaseUrl = stripUrlUserInfo(redactSensitiveUrlLikeString(summary.baseUrl));
+  return redactedBaseUrl === summary.baseUrl
+    ? summary
+    : ({ ...summary, baseUrl: redactedBaseUrl } as T);
+}
+
 /** Redacts a plugin-provided base URL at the public account-snapshot boundary. */
 export function redactChannelAccountSnapshotBaseUrl<T extends Partial<ChannelAccountSnapshot>>(
   snapshot: T,
 ): T {
-  if (typeof snapshot.baseUrl !== "string" || !snapshot.baseUrl) {
-    return snapshot;
-  }
-  const redactedBaseUrl = stripUrlUserInfo(redactSensitiveUrlLikeString(snapshot.baseUrl));
-  return redactedBaseUrl === snapshot.baseUrl
-    ? snapshot
-    : ({ ...snapshot, baseUrl: redactedBaseUrl } as T);
+  return redactChannelStatusSummaryBaseUrl(snapshot);
 }
 
 function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {

@@ -366,6 +366,31 @@ describe("nested URL-like fallback redaction", () => {
     }
   });
 
+  it("preserves encoded safe URLs when paths, queries, or fragments contain an at sign", () => {
+    const unambiguousEmbeddedUrls = [
+      "https://inner.example:443/path@label",
+      "https://inner.example:443?email=user@example.com",
+      "https://[2001:db8::1]/path@label",
+      "https://[2001:db8::1]#user@example.com",
+    ];
+    const safeUrls = [
+      "https://inner.example/path@label",
+      "https://inner.example?email=user@example.com",
+      "https://inner.example#user@example.com",
+      ...unambiguousEmbeddedUrls,
+    ];
+    for (const nested of safeUrls) {
+      const encoded = encodeURIComponent(nested);
+      expect(redactSensitiveUrlLikeString(encoded)).toBe(encoded);
+      for (const outer of [
+        `https://outer.example/proxy/${encoded}`,
+        `https://outer.example/?next=${encoded}`,
+      ]) {
+        expect(redactSensitiveUrlLikeString(outer)).toBe(outer);
+      }
+    }
+  });
+
   it("redacts embedded URLs when a diagnostic prefix parses as an opaque scheme", () => {
     expect(
       redactSensitiveUrlLikeString(
