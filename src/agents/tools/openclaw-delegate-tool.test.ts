@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
@@ -22,11 +23,14 @@ describe("openclaw delegation tool", () => {
       needsApproval: true,
       proposalId: "system-agent:proposal-1",
     });
-    const [tool] = createOpenClawDelegateToolsForRun({
-      sessionAgentId: "main",
-      runSessionKey: "agent:main:dm:one",
-      agentChannel: "webchat",
-    });
+    const tool = expectDefined(
+      createOpenClawDelegateToolsForRun({
+        sessionAgentId: "main",
+        runSessionKey: "agent:main:dm:one",
+        agentChannel: "webchat",
+      })[0],
+      "delegation tool test invariant",
+    );
 
     const result = await tool.execute("call-1", { message: "Add channel." });
 
@@ -52,10 +56,13 @@ describe("openclaw delegation tool", () => {
       sessionId: params.sessionId,
       reply: "Done.",
     }));
-    const [tool] = createOpenClawDelegateToolsForRun({
-      sessionAgentId: "main",
-      runSessionKey: "agent:main:main",
-    });
+    const tool = expectDefined(
+      createOpenClawDelegateToolsForRun({
+        sessionAgentId: "main",
+        runSessionKey: "agent:main:main",
+      })[0],
+      "delegation tool test invariant",
+    );
 
     await tool.execute("call-1", { message: "First." });
     await tool.execute("call-2", { message: "Second." });
