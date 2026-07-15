@@ -17,6 +17,7 @@ export function resolveExecutableFromPathEnv(
   options: {
     includeExtensionless?: boolean;
     fallbackToLoginShell?: boolean;
+    preferLoginShell?: boolean;
     withPathEnv: true;
   },
 ): { executable: string; pathEnv?: string } | undefined;
@@ -27,6 +28,7 @@ export function resolveExecutableFromPathEnv(
   options?: {
     includeExtensionless?: boolean;
     fallbackToLoginShell?: boolean;
+    preferLoginShell?: boolean;
     withPathEnv?: false;
   },
 ): string | undefined;
@@ -37,6 +39,7 @@ export function resolveExecutableFromPathEnv(
   options?: {
     includeExtensionless?: boolean;
     fallbackToLoginShell?: boolean;
+    preferLoginShell?: boolean;
     withPathEnv?: boolean;
   },
 ): string | { executable: string; pathEnv?: string } | undefined {
@@ -52,6 +55,7 @@ export function resolveExecutableFromPathEnv(
       env: shellEnv,
       pathEnv,
       includeExtensionless: options.includeExtensionless,
+      preferLoginShell: options.preferLoginShell,
     });
   }
   return options?.withPathEnv ? resolution : resolution?.executable;

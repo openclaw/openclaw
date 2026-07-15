@@ -1543,6 +1543,72 @@ html.openclaw-native-macos
   min-height: 12px;
 }
 
+.sidebar-recent-sessions__group[data-session-section^="catalog:"] > .sidebar-recent-sessions__list {
+  gap: 8px;
+}
+
+.sidebar-session-catalog-host {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sidebar-session-catalog-host__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 19px;
+  padding: 1px 12px 1px 20px;
+  color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
+}
+
+.sidebar-session-catalog-host__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+}
+
+.sidebar-session-catalog-host__count {
+  width: 20px;
+  flex: 0 0 20px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.68;
+  text-align: center;
+}
+
+.sidebar-session-catalog-host__count--error {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--warning);
+}
+
+.sidebar-session-catalog-host__count--error svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+}
+
+.sidebar-session-catalog-host__sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-session-catalog-host__sessions .sidebar-recent-session__link {
+  padding-left: 18px;
+}
+
 .sidebar-session-pagination {
   display: flex;
   gap: 14px;
