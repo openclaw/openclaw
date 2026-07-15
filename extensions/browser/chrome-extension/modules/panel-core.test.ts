@@ -206,6 +206,31 @@ describe("isLoopbackUrl", () => {
   it("rejects a remote host that merely embeds a loopback-looking label", () => {
     expect(isLoopbackUrl("https://127.0.0.1.evil.example")).toBe(false);
   });
+
+  it("rejects a remote host carrying a loopback-looking path, query or fragment", () => {
+    // This decides whether the gateway token is optional, so anything outside
+    // the host must not count: a remote URL must never waive the token.
+    for (const url of [
+      "https://evil.example/x//localhost/",
+      "https://evil.example//127.0.0.1/",
+      "https://evil.example/#//localhost/",
+      "https://evil.example/?next=//localhost/",
+      "https://evil.example/[::1]/",
+    ]) {
+      expect(isLoopbackUrl(url)).toBe(false);
+    }
+  });
+
+  it("rejects userinfo that impersonates a loopback host", () => {
+    expect(isLoopbackUrl("https://localhost@evil.example/")).toBe(false);
+    expect(isLoopbackUrl("https://127.0.0.1@evil.example/")).toBe(false);
+  });
+
+  it("is false for input that is not a URL at all", () => {
+    for (const value of [null, undefined, "", "localhost", "not a url"]) {
+      expect(isLoopbackUrl(value)).toBe(false);
+    }
+  });
 });
 
 describe("gatewayUrlFromRelayUrl", () => {

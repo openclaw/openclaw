@@ -127,9 +127,22 @@ export function friendlyToolName(name) {
     .replace(/_/g, " ");
 }
 
-/** Loopback endpoints are trusted locally; remote gateways require a token. */
+/**
+ * Loopback endpoints are trusted locally; remote gateways require a token, so
+ * this decides whether the token is optional. Parse the host rather than
+ * pattern-matching the string: a pattern sees `//localhost` in a PATH too, so
+ * `https://evil.example/x//localhost/` would read as loopback and waive the
+ * token for a remote gateway.
+ */
 export function isLoopbackUrl(url) {
-  return /\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(String(url ?? ""));
+  let host;
+  try {
+    host = new URL(String(url ?? "")).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  // URL.hostname keeps the brackets on an IPv6 literal.
+  return host === "127.0.0.1" || host === "localhost" || host === "[::1]" || host === "::1";
 }
 
 /**
