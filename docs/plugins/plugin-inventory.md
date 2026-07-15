@@ -130,6 +130,7 @@ Each entry lists the package, distribution route, and description.
 - **[mistral](/plugins/reference/mistral)** (`@openclaw/mistral-provider`) - included in OpenClaw. Adds Mistral model provider support to OpenClaw.
 
 - **[novita](/plugins/reference/novita)** (`@openclaw/novita-provider`) - included in OpenClaw. Adds Novita, Novita AI, Novitaai model provider support to OpenClaw.
+- **[pleumrouter](/plugins/reference/pleumrouter)** (`@openclaw/pleumrouter-provider`) - included in OpenClaw. Adds PleumRouter model provider support to OpenClaw.
 
 - **[nvidia](/plugins/reference/nvidia)** (`@openclaw/nvidia-provider`) - included in OpenClaw. Adds NVIDIA model provider support to OpenClaw.
 

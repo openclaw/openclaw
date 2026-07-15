@@ -36,6 +36,7 @@ Pick a provider, authenticate, then set the default model as `provider/model`.
 - [Mistral](/providers/mistral)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [NovitaAI](/providers/novita)
+- [PleumRouter](/providers/pleumrouter)
 - [OpenAI (API + Codex)](/providers/openai)
 - [OpenCode (Zen + Go)](/providers/opencode)
 - [OpenRouter](/providers/openrouter)

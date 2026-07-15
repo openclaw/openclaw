@@ -1508,6 +1508,7 @@
                   "providers/mistral",
                   "providers/moonshot",
                   "providers/novita",
+                  "providers/pleumrouter",
                   "providers/nvidia",
                   "providers/ollama",
                   "providers/ollama-cloud",
