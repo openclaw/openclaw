@@ -651,7 +651,6 @@ src/channels/streaming.ts
 src/channels/turn/kernel.test.ts
 src/channels/turn/kernel.ts
 src/cli/capability-cli.test.ts
-src/cli/capability-cli.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
 src/cli/command-secret-targets.test.ts

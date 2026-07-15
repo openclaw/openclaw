@@ -8,10 +8,17 @@ const SECRET_TARGET_CALLSITES = [
   "src/cli/qr-cli.ts",
   "src/agents/agent-runtime-config.ts",
   "src/agents/command/prepare.ts",
+  "src/cli/capability-cli.audio.ts",
+  "src/cli/capability-cli.embedding.ts",
+  "src/cli/capability-cli.image.ts",
+  "src/cli/capability-cli.model.ts",
+  "src/cli/capability-cli.shared.ts",
+  "src/cli/capability-cli.tts.ts",
+  "src/cli/capability-cli.video.ts",
+  "src/cli/capability-cli.web.ts",
   "src/commands/channels/resolve.ts",
   "src/commands/channels/shared.ts",
   "src/commands/message.ts",
-  "src/cli/capability-cli.ts",
   "src/commands/models/load-config.ts",
   "src/commands/status-all.ts",
   "src/commands/status.scan.ts",
@@ -23,6 +30,7 @@ function hasSupportedTargetIdsWiring(source: string): boolean {
     /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
     /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*getCapabilityWeb(Fetch|Search)CommandSecretTargetIds\(/m.test(source) ||
+    /targetIds:\s*params\.targetIds/m.test(source) ||
     /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
     source.includes("collectStatusScanOverview({")
   );
@@ -32,6 +40,7 @@ function hasSupportedSecretResolutionWiring(source: string): boolean {
   return (
     source.includes("resolveAgentRuntimeConfig(") ||
     source.includes("resolveCommandConfigWithSecrets(") ||
+    source.includes("resolveLocalCapabilityRuntimeConfig(") ||
     source.includes("resolveCommandSecretRefsViaGateway(") ||
     source.includes("collectStatusScanOverview(")
   );
