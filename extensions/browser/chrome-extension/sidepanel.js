@@ -184,7 +184,11 @@ function abandonInFlightTurn(reason) {
   }
   finalizeBubble();
   resetChatStream(stream);
-  setInputEnabled(true);
+  // Not for a tab that is gone: onRemoved closed the composer deliberately, and
+  // handing it back would invite turns into a thread with no tab behind it.
+  if (pinnedTabId != null) {
+    setInputEnabled(true);
+  }
 }
 
 // Null `ws` BEFORE close(): the close listener only retries for the CURRENT
@@ -194,6 +198,12 @@ function dropSocket() {
   const old = ws;
   ws = null;
   subscribedKey = null;
+  // A retry scheduled by an earlier close would fire alongside the connect()
+  // that follows this drop, leaving two live sockets.
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   old?.close();
   abandonInFlightTurn("Disconnected");
 }
@@ -340,7 +350,14 @@ async function bindTabSession() {
   }
   const generation = await tabGeneration(pinnedTabId);
   const key = deriveTabSessionKey(mainSessionKey, pinnedTabId, generation);
-  if (!key || key === sessionKey) {
+  if (!key) {
+    return;
+  }
+  if (key === sessionKey) {
+    // Same thread, new socket: the subscription died with the old one, so a
+    // reconnect still has to resubscribe even though the key is unchanged.
+    // subscribeSession() no-ops when it is already subscribed on this socket.
+    await subscribeSession(key);
     return;
   }
   sessionKey = key;
