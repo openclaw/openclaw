@@ -240,7 +240,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/skills/lifecycle/upload-store.ts: createSkillUploadStore",
   "src/skills/runtime/refresh.ts: resetSkillsRefreshForTest",
   "src/skills/runtime/remote-skills.ts: resetRemoteNodeSkillsForTests",
-  "src/status/status-runtime-lines.ts: resolveSessionCostLine",
   "src/system-agent/agent-turn.ts: runSystemAgentTurnWithDeps",
   "src/tasks/detached-task-runtime.ts: resetDetachedTaskLifecycleRuntimeForTests",
   "src/tasks/detached-task-runtime.ts: setDetachedTaskLifecycleRuntime",
