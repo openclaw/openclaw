@@ -7442,7 +7442,7 @@ describe("gateway server chat", () => {
 
   test("chat.send keeps a real signal-only lifecycle terminal as the only chat terminal", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const dispatchRelease = createDeferred<void>();
+      const dispatchRelease = createDeferred();
       const runId = "idem-signal-only-real-lifecycle-terminal";
       let capturedAbortSignal: AbortSignal | undefined;
       let dispatchRejected = false;
