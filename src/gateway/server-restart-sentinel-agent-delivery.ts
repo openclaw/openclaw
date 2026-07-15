@@ -23,6 +23,7 @@ import {
   moveSessionDeliveryToFailed,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
+  SessionDeliveryRetryChargedError,
   type QueuedSessionDelivery,
   type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.js";
@@ -140,7 +141,6 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
   entry: QueuedAgentTurnSessionDelivery;
   result: AgentDeliveryEvidence;
   route: SessionDeliveryRoute;
-  fromDurableTerminalEvidence?: boolean;
 }) {
   if (hasUnexpectedRecoverySideEffects(params.result)) {
     log.warn("queued generated-media recovery reported an unexpected committed side effect", {
@@ -173,26 +173,39 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
   if (expectedMediaUrls.length > 0 && missingMediaUrls.length === 0) {
     return;
   }
-  const advanceAgentRun = async (updates?: {
-    expectedMediaUrls?: string[];
-    message?: string;
-    suppressTextDelivery?: boolean;
-  }) => {
-    if (updates) {
-      await advanceSessionDeliveryAgentRun(params.entry.id, updates);
-    } else {
-      await advanceSessionDeliveryAgentRun(params.entry.id);
+  const rearmAgentRun = async (
+    reason: string,
+    updates?: {
+      expectedMediaUrls?: string[];
+      message?: string;
+      suppressTextDelivery?: boolean;
+    },
+  ): Promise<never> => {
+    const currentAgentRunAttempt = params.entry.agentRunAttempt ?? 0;
+    const currentAttemptAlreadyCharged =
+      params.entry.lastChargedAgentRunAttempt === currentAgentRunAttempt;
+    // Charge the terminal attempt before advancing its identity. Recovery may
+    // revisit the same durable evidence, but must never charge that attempt twice.
+    if (!currentAttemptAlreadyCharged) {
+      await failSessionDelivery(params.entry.id, reason);
     }
-    if (params.fromDurableTerminalEvidence) {
-      await failSessionDelivery(
-        params.entry.id,
-        "queued generated-media terminal attempt requires a fresh agent run",
-      );
+    try {
+      if (updates) {
+        await advanceSessionDeliveryAgentRun(params.entry.id, updates);
+      } else {
+        await advanceSessionDeliveryAgentRun(params.entry.id);
+      }
       await deferSessionDelivery(params.entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS);
-      throw new SessionDeliveryDeferredError(
-        "queued generated-media terminal evidence rearmed a fresh agent attempt",
+    } catch (error) {
+      log.warn("queued generated-media terminal attempt state transition remains pending", {
+        queueId: params.entry.id,
+        error: String(error),
+      });
+      throw new SessionDeliveryRetryChargedError(
+        `${reason}; queue state transition failed after retry charge`,
       );
     }
+    throw new SessionDeliveryDeferredError(reason);
   };
   if (deliveryFailure && expectedMediaUrls.length > 0) {
     const incompletePartialFailureEvidence =
@@ -222,12 +235,14 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
         "queued generated-media notice dead-lettered after a visible partial delivery",
       );
     }
-    await advanceAgentRun();
-    throw new Error(deliveryFailure);
+    await rearmAgentRun(deliveryFailure);
   }
   if (missingMediaUrls.length > 0) {
     const retryMessage = formatGeneratedMediaDeliveryRetryForPrompt(missingMediaUrls);
-    await advanceAgentRun({
+    const qualifier =
+      missingMediaUrls.length < expectedMediaUrls.length ? "partially missed" : "missed";
+    const reason = `queued generated-media agent turn ${qualifier} expected media: ${missingMediaUrls.join(", ")}`;
+    await rearmAgentRun(reason, {
       expectedMediaUrls: missingMediaUrls,
       ...(missingMediaUrls.length < expectedMediaUrls.length ||
       hasQueuedVisibleReplyEvidence(params)
@@ -235,15 +250,9 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
         : {}),
       ...(retryMessage ? { message: retryMessage } : {}),
     });
-    const qualifier =
-      missingMediaUrls.length < expectedMediaUrls.length ? "partially missed" : "missed";
-    throw new Error(
-      `queued generated-media agent turn ${qualifier} expected media: ${missingMediaUrls.join(", ")}`,
-    );
   }
   if (expectedMediaUrls.length === 0 && !hasQueuedVisibleReplyEvidence(params)) {
-    await advanceAgentRun();
-    throw new Error("queued generated-media agent turn completed without a visible reply");
+    await rearmAgentRun("queued generated-media agent turn completed without a visible reply");
   }
 }
 
@@ -329,7 +338,6 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
           entry: params.entry,
           result: terminalEvidence,
           route,
-          fromDurableTerminalEvidence: true,
         });
         return true;
       }

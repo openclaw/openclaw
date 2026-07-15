@@ -11,6 +11,7 @@ import {
   moveSessionDeliveryToFailed,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
+  SessionDeliveryRetryChargedError,
 } from "./session-delivery-queue-storage.js";
 import {
   drainPendingSessionDeliveries,
@@ -353,6 +354,37 @@ describe("session-delivery queue recovery", () => {
       expect(summary.failed).toBe(0);
       expect(entry?.retryCount).toBe(0);
       expect(entry?.availableAt).toBeGreaterThan(Date.now());
+    });
+  });
+
+  it("does not charge retry budget twice after a charged transition failure", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-charged-transition:agent-loop",
+        },
+        tempDir,
+      );
+      const summary = await recoverPendingSessionDeliveries({
+        stateDir: tempDir,
+        deliver: async () => {
+          await failSessionDelivery(id, "terminal attempt failed", tempDir);
+          throw new SessionDeliveryRetryChargedError("advance failed after retry charge");
+        },
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      expect(summary.failed).toBe(1);
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
+        expect.objectContaining({
+          id,
+          retryCount: 1,
+          lastChargedAgentRunAttempt: 0,
+        }),
+      ]);
     });
   });
 

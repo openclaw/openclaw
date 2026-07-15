@@ -946,7 +946,8 @@ describe("scheduleRestartSentinelWake", () => {
           message: "generation completed",
           messageId: "image:task-terminal-empty:agent-loop",
           enqueuedAt: 1,
-          retryCount: 0,
+          retryCount: 1,
+          lastChargedAgentRunAttempt: 0,
           route: { channel: "discord", to: "channel:123", chatType: "channel" },
           inputProvenance: {
             kind: "inter_session",
@@ -957,15 +958,12 @@ describe("scheduleRestartSentinelWake", () => {
           expectedMediaUrls: [],
         },
       }),
-    ).rejects.toThrow("terminal evidence rearmed a fresh agent attempt");
+    ).rejects.toThrow("completed without a visible reply");
 
     expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
       "session-delivery-media-terminal-empty",
     );
-    expect(mocks.failSessionDelivery).toHaveBeenCalledWith(
-      "session-delivery-media-terminal-empty",
-      expect.stringContaining("requires a fresh agent run"),
-    );
+    expect(mocks.failSessionDelivery).not.toHaveBeenCalled();
     expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
       "session-delivery-media-terminal-empty",
       1_000,
@@ -1017,7 +1015,7 @@ describe("scheduleRestartSentinelWake", () => {
           expectedMediaUrls: ["/tmp/proof.png"],
         },
       }),
-    ).rejects.toThrow("terminal evidence rearmed a fresh agent attempt");
+    ).rejects.toThrow("missed expected media");
 
     expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
       "session-delivery-media-terminal-missing",
@@ -1025,7 +1023,7 @@ describe("scheduleRestartSentinelWake", () => {
     );
     expect(mocks.failSessionDelivery).toHaveBeenCalledWith(
       "session-delivery-media-terminal-missing",
-      expect.stringContaining("requires a fresh agent run"),
+      expect.stringContaining("missed expected media"),
     );
     expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
       "session-delivery-media-terminal-missing",
@@ -1077,7 +1075,7 @@ describe("scheduleRestartSentinelWake", () => {
           expectedMediaUrls: ["/tmp/proof.png"],
         },
       }),
-    ).rejects.toThrow("terminal evidence rearmed a fresh agent attempt");
+    ).rejects.toThrow("missed expected media");
 
     expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
       "session-delivery-media-terminal-private",
@@ -1085,7 +1083,7 @@ describe("scheduleRestartSentinelWake", () => {
     );
     expect(mocks.failSessionDelivery).toHaveBeenCalledWith(
       "session-delivery-media-terminal-private",
-      expect.stringContaining("requires a fresh agent run"),
+      expect.stringContaining("missed expected media"),
     );
     expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
       "session-delivery-media-terminal-private",

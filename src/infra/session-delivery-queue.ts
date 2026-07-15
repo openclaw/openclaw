@@ -13,6 +13,7 @@ export {
   releaseSessionDeliveryClaim,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
+  SessionDeliveryRetryChargedError,
 } from "./session-delivery-queue-storage.js";
 export type {
   QueuedSessionDelivery,

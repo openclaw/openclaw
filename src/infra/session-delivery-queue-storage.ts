@@ -67,6 +67,7 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   id: string;
   enqueuedAt: number;
   agentRunAttempt?: number;
+  lastChargedAgentRunAttempt?: number;
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
@@ -76,6 +77,11 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
 
 export class SessionDeliveryDeferredError extends Error {
   override name = "SessionDeliveryDeferredError";
+}
+
+/** Signals that retry budget was already persisted before a later transition failed. */
+export class SessionDeliveryRetryChargedError extends Error {
+  override name = "SessionDeliveryRetryChargedError";
 }
 
 /** Signals that delivery was deliberately moved to failed and must not be retried or acknowledged. */
@@ -247,6 +253,9 @@ export async function failSessionDelivery(
     return {
       ...queued,
       retryCount: queued.retryCount + 1,
+      ...(queued.kind === "agentTurn"
+        ? { lastChargedAgentRunAttempt: queued.agentRunAttempt ?? 0 }
+        : {}),
       lastAttemptAt: Date.now(),
       lastError: error,
     };

@@ -7,6 +7,7 @@ import {
   advanceSessionDeliveryAgentRun,
   deferSessionDelivery,
   failSessionDelivery,
+  loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
   moveSessionDeliveryToFailed,
 } from "./session-delivery-queue-storage.js";
@@ -186,6 +187,34 @@ describe("session-delivery queue storage", () => {
       await ackSessionDelivery(id, tempDir);
       expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
       expect(readSessionQueueStatus(tempDir, id)).toBe("completed");
+    });
+  });
+
+  it("records which agent run attempt consumed retry budget", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-charge:agent-loop",
+        },
+        tempDir,
+      );
+
+      await failSessionDelivery(id, "delivery failed", tempDir);
+      expect(await loadPendingSessionDelivery(id, tempDir)).toMatchObject({
+        retryCount: 1,
+        lastChargedAgentRunAttempt: 0,
+      });
+
+      await advanceSessionDeliveryAgentRun(id, undefined, tempDir);
+      await failSessionDelivery(id, "fresh delivery failed", tempDir);
+      expect(await loadPendingSessionDelivery(id, tempDir)).toMatchObject({
+        retryCount: 2,
+        agentRunAttempt: 1,
+        lastChargedAgentRunAttempt: 1,
+      });
     });
   });
 

@@ -21,6 +21,7 @@ import {
   SessionDeliveryAcknowledgementFinalizeError,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
+  SessionDeliveryRetryChargedError,
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
 
@@ -148,6 +149,9 @@ async function drainQueuedEntry(opts: {
     }
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
+    if (err instanceof SessionDeliveryRetryChargedError) {
+      return "failed";
+    }
     try {
       await failSessionDelivery(entry.id, errMsg, opts.stateDir);
       return "failed";
