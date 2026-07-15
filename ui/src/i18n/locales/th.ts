@@ -489,6 +489,7 @@ export const th: TranslationMap = {
     cloudSecureContextRequired:
       "เวิร์กเกอร์คลาวด์ต้องใช้บริบทเบราว์เซอร์ที่ปลอดภัย เพื่อให้การกู้คืนสามารถปกป้องงานของคุณได้",
     cloudStartFailed: "สร้างเซสชันภายในเครื่องแล้ว แต่การเริ่มต้นระบบคลาวด์ล้มเหลว: {error}",
+    cloudSyncsFolder: "ซิงค์ {folder} ไปยัง Cloud Worker",
     folder: "โฟลเดอร์",
     folderPlaceholder: "พื้นที่ทำงานของ Agent",
     browse: "เรียกดูโฟลเดอร์",
@@ -3324,6 +3325,9 @@ export const th: TranslationMap = {
     sendShortcut: "ปุ่มลัดสำหรับส่ง",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    followUpMode: "การติดตามผลขณะที่เอเจนต์กำลังทำงาน",
+    followUpModeQueue: "เข้าคิวจนกว่าการทำงานจะสิ้นสุด",
+    followUpModeSteer: "แทรกคำสั่งในการทำงานที่กำลังดำเนินอยู่",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
