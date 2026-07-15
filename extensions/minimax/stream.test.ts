@@ -100,13 +100,8 @@ async function collectEvents(stream: ReturnType<StreamFn>): Promise<AssistantMes
   return events;
 }
 
-function runWrapper(
-  events: AssistantMessageEvent[],
-  onIteratorClose?: () => void,
-) {
-  const wrapped = createMinimaxMessageEndMarkerWrapper(
-    createEventStream(events, onIteratorClose),
-  );
+function runWrapper(events: AssistantMessageEvent[], onIteratorClose?: () => void) {
+  const wrapped = createMinimaxMessageEndMarkerWrapper(createEventStream(events, onIteratorClose));
   return wrapped(
     {
       api: "anthropic-messages",
