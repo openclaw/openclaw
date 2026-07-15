@@ -10,7 +10,7 @@ import type {
 const FRAME_PREVIEW_CACHE_LIMIT = 48;
 const POLL_INTERVAL_MS = 30_000;
 
-export type LogbookControllerState = LogbookUiState & {
+type LogbookControllerState = LogbookUiState & {
   // Every load advances result ownership; foreground loading state has its own
   // owner so a superseded request cannot clear a newer spinner.
   loadGeneration: number;
