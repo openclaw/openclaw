@@ -175,17 +175,31 @@ location, and quoted replies. This lets plugin-owned config define different
 windows for accounts, DMs, groups, senders, or individual conversations without
 adding those settings to core config.
 
+External plugins must opt into conversation data with
+`plugins.entries.<id>.hooks.allowConversationAccess: true`. Read the policy from
+`api.pluginConfig` during registration; each handler keeps that plugin-local
+config in its closure.
+
 ```typescript
-api.on("inbound_debounce", (event, ctx) => {
-  const configuredMs = resolveConversationDebounceMs({
-    accountId: ctx.accountId,
-    conversationId: ctx.conversationId,
-    conversationKind: event.conversationKind,
-  });
-  if (configuredMs === undefined) {
-    return;
-  }
-  return { action: "debounce", debounceMs: configuredMs };
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+export default definePluginEntry({
+  id: "conversation-debounce",
+  name: "Conversation Debounce",
+  register(api) {
+    const policy = parseConversationDebounceConfig(api.pluginConfig);
+    api.on("inbound_debounce", (event, ctx) => {
+      const configuredMs = policy.resolve({
+        accountId: ctx.accountId,
+        conversationId: ctx.conversationId,
+        conversationKind: event.conversationKind,
+      });
+      if (configuredMs === undefined) {
+        return;
+      }
+      return { action: "debounce", debounceMs: configuredMs };
+    });
+  },
 });
 ```
 

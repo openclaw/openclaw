@@ -1,6 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-fixtures.js";
+import {
+  cleanupPluginLoaderFixturesForTest,
+  loadOpenClawPlugins,
+  resetPluginLoaderTestStateForTest,
+  writePlugin,
+} from "./loader.test-fixtures.js";
 
 const event = {
   debounceKey: "default:chat:sender",
@@ -20,6 +27,11 @@ const context = {
   conversationId: "chat",
   senderId: "sender",
 };
+
+afterEach(() => {
+  resetPluginLoaderTestStateForTest();
+  cleanupPluginLoaderFixturesForTest();
+});
 
 describe("inbound_debounce hook", () => {
   it("uses the first explicit decision in priority order", async () => {
@@ -61,5 +73,60 @@ describe("inbound_debounce hook", () => {
     await expect(runner.runInboundDebounce(event, context)).resolves.toEqual({
       action: "bypass",
     });
+  });
+
+  it("loads and invokes a configured external conversation policy", async () => {
+    const plugin = writePlugin({
+      id: "conversation-debounce",
+      filename: "conversation-debounce.cjs",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          conversationId: { type: "string" },
+          debounceMs: { type: "integer", minimum: 0 },
+        },
+      },
+      body: `module.exports = {
+        id: "conversation-debounce",
+        register(api) {
+          const config = api.pluginConfig;
+          api.on("inbound_debounce", (event, ctx) => {
+            if (ctx.channelId !== "whatsapp" || ctx.conversationId !== config.conversationId) {
+              return;
+            }
+            return { action: "debounce", debounceMs: config.debounceMs };
+          });
+        },
+      };`,
+    });
+
+    loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: [plugin.id],
+          entries: {
+            [plugin.id]: {
+              enabled: true,
+              config: { conversationId: "chat", debounceMs: 12_000 },
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+      },
+      cache: false,
+    });
+
+    const runner = getGlobalHookRunner();
+    expect(runner?.hasHooks("inbound_debounce")).toBe(true);
+    await expect(runner?.runInboundDebounce(event, context)).resolves.toEqual({
+      action: "debounce",
+      debounceMs: 12_000,
+    });
+    await expect(
+      runner?.runInboundDebounce(event, { ...context, conversationId: "other" }),
+    ).resolves.toBeUndefined();
   });
 });
