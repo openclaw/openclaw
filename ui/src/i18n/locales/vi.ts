@@ -1613,6 +1613,8 @@ export const vi: TranslationMap = {
     attachSession: "Kết nối phiên",
     attachFailed: "Không thể kết nối phiên terminal",
     starting: "Starting terminal…",
+    connecting: "Đang kết nối với phiên…",
+    connectionTimedOut: "Không thể kết nối với phiên trong vòng 30 giây.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

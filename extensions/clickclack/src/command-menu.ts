@@ -44,7 +44,7 @@ function errorStatus(error: unknown): number | undefined {
   return typeof status === "number" ? status : undefined;
 }
 
-export function mapNativeCommandSpecsToClickClackMenu(
+function mapNativeCommandSpecsToClickClackMenu(
   specs: NativeCommandSpec[],
   log?: ClickClackCommandMenuLogger,
 ): ClickClackCommandMenuEntry[] {

@@ -1583,6 +1583,8 @@ export const zh_CN: TranslationMap = {
     attachSession: "连接会话",
     attachFailed: "无法连接终端会话",
     starting: "Starting terminal…",
+    connecting: "正在连接到会话…",
+    connectionTimedOut: "未能在 30 秒内连接到会话。",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

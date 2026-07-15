@@ -1621,6 +1621,8 @@ export const es: TranslationMap = {
     attachSession: "Conectar sesión",
     attachFailed: "No se pudo conectar la sesión de terminal",
     starting: "Starting terminal…",
+    connecting: "Conectando con la sesión…",
+    connectionTimedOut: "La sesión no se conectó en un plazo de 30 segundos.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",
