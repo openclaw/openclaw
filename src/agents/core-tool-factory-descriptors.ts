@@ -9,7 +9,7 @@ type CoreToolFactoryDescriptor = {
   family: CoreToolFactoryFamily;
 };
 
-export const CORE_TOOL_FACTORY_DESCRIPTORS = [
+const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "edit", family: "base-coding" },
   { name: "read", family: "base-coding" },
   { name: "write", family: "base-coding" },
