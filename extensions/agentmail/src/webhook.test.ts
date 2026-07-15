@@ -97,7 +97,7 @@ describe("AgentMail webhook", () => {
       request(body, signed(body)),
       wrongRes,
     );
-    expect(wrongRes.statusCode).toBe(403);
+    expect(wrongRes.statusCode).toBe(200);
     expect(receive).not.toHaveBeenCalled();
   });
 

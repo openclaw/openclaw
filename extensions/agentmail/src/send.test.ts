@@ -48,6 +48,8 @@ describe("AgentMail reply-only outbound", () => {
         to: "message:msg_1",
         text: "Hello",
         payload: { text: "Hello", mediaUrls: ["file:///proof.txt"] },
+        replyToId: "msg_1",
+        replyToIdSource: "implicit",
         deliveryQueueId: "queue_1",
         onPlatformSendDispatch,
       },
@@ -71,6 +73,42 @@ describe("AgentMail reply-only outbound", () => {
     expect(requestOptions.idempotencyKey).toMatch(/^openclaw-agentmail-[a-f0-9]{64}$/u);
   });
 
+  it("rejects a different target than the active turn's triggering message", async () => {
+    await expect(
+      sendAgentMailReply(
+        {
+          cfg: { channels: { agentmail: { apiKey: "key", inboxId: "inbox_1" } } },
+          to: "message:msg_b",
+          text: "Wrong recipient",
+          replyToId: "msg_a",
+          replyToIdSource: "implicit",
+          deliveryQueueId: "queue_1",
+        },
+        { client: { inboxes: { messages: { reply } } } as never },
+      ),
+    ).rejects.toThrow("triggering message");
+  });
+
+  it("rejects explicit and proactive message targets", async () => {
+    const base = {
+      cfg: { channels: { agentmail: { apiKey: "key", inboxId: "inbox_1" } } },
+      to: "message:msg_1",
+      text: "Not an automatic source reply",
+      deliveryQueueId: "queue_1",
+    };
+    await expect(
+      sendAgentMailReply(
+        { ...base, replyToId: "msg_1", replyToIdSource: "explicit" },
+        { client: { inboxes: { messages: { reply } } } as never },
+      ),
+    ).rejects.toThrow("triggering message");
+    await expect(
+      sendAgentMailReply(base, {
+        client: { inboxes: { messages: { reply } } } as never,
+      }),
+    ).rejects.toThrow("triggering message");
+  });
+
   it("refuses delivery without a durable queue id", async () => {
     await expect(
       sendAgentMailReply(
@@ -78,6 +116,8 @@ describe("AgentMail reply-only outbound", () => {
           cfg: { channels: { agentmail: { apiKey: "key", inboxId: "inbox_1" } } },
           to: "message:msg_1",
           text: "Hello",
+          replyToId: "msg_1",
+          replyToIdSource: "implicit",
         },
         { client: { inboxes: { messages: { reply } } } as never },
       ),
@@ -95,6 +135,7 @@ describe("AgentMail reply-only outbound", () => {
         accountId: "default",
         enqueuedAt: 1,
         retryCount: 1,
+        effectiveReplyToId: "msg_1",
         payloads: [{ text: "Hello" }],
       },
       { client: { inboxes: { messages: { reply } } } as never },
@@ -102,6 +143,28 @@ describe("AgentMail reply-only outbound", () => {
     expect(result.status).toBe("sent");
     expect(reply.mock.calls[0]?.[3]).toEqual({
       idempotencyKey: expect.stringMatching(/^openclaw-agentmail-[a-f0-9]{64}$/u),
+    });
+  });
+
+  it("refuses recovery when the persisted reply target differs", async () => {
+    const result = await reconcileAgentMailUnknownSend(
+      {
+        cfg: { channels: { agentmail: { apiKey: "key", inboxId: "inbox_1" } } },
+        queueId: "queue_1",
+        channel: "agentmail",
+        to: "message:msg_b",
+        accountId: "default",
+        enqueuedAt: 1,
+        retryCount: 1,
+        effectiveReplyToId: "msg_a",
+        payloads: [{ text: "Hello" }],
+      },
+      { client: { inboxes: { messages: { reply } } } as never },
+    );
+    expect(result).toEqual({
+      status: "unresolved",
+      error: "AgentMail recovery target is not bound to its triggering message",
+      retryable: false,
     });
   });
 });

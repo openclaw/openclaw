@@ -5,10 +5,12 @@ import { startAgentMailWebSocket } from "./websocket.js";
 const handlers = new Map<string, (value?: unknown) => void>();
 const sendSubscribe = vi.fn();
 const close = vi.fn();
+const waitForOpen = vi.fn(async () => undefined);
 const connect = vi.fn(async () => ({
   on: (event: string, handler: (value?: unknown) => void) => handlers.set(event, handler),
   sendSubscribe,
-  waitForOpen: vi.fn(async () => undefined),
+  waitForOpen,
+  readyState: 0,
   close,
 }));
 
@@ -47,6 +49,7 @@ describe("AgentMail WebSocket ingress", () => {
     expect(connect).toHaveBeenCalledWith(
       expect.objectContaining({ reconnectAttempts: Number.POSITIVE_INFINITY }),
     );
+    expect(waitForOpen).not.toHaveBeenCalled();
     handlers.get("open")?.();
     handlers.get("close")?.();
     handlers.get("open")?.();
@@ -74,6 +77,22 @@ describe("AgentMail WebSocket ingress", () => {
     controller.abort();
     await running;
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("stops cleanly when aborted before the initial socket opens", async () => {
+    handlers.clear();
+    close.mockClear();
+    const controller = new AbortController();
+    const running = startAgentMailWebSocket({
+      account,
+      abortSignal: controller.signal,
+      receive: vi.fn(async () => undefined),
+    });
+    await vi.waitFor(() => expect(handlers.has("open")).toBe(true));
+    controller.abort();
+    await expect(running).resolves.toBeUndefined();
+    expect(close).toHaveBeenCalledOnce();
+    expect(waitForOpen).not.toHaveBeenCalled();
   });
 
   it("retries until a WebSocket event is durably admitted", async () => {

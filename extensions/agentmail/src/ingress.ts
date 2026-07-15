@@ -8,12 +8,17 @@ type DispatchParams = {
   journal: AgentMailJournal;
   id: string;
   record: AgentMailIngressRecord;
-  dispatch: (record: AgentMailIngressRecord) => Promise<void>;
+  dispatch: AgentMailIngressDispatch;
   abortSignal?: AbortSignal;
   retryDelay?: (attempt: number) => number;
   initialAttempts: number;
   dispatchCompleted?: boolean;
 };
+
+export type AgentMailIngressDispatch = (
+  record: AgentMailIngressRecord,
+  lifecycle: { onTurnAdopted: () => Promise<void> },
+) => Promise<void>;
 
 type ActiveDispatch = {
   task: Promise<boolean>;
@@ -52,7 +57,7 @@ function errorText(error: unknown): string {
 export async function processAgentMailIngress(params: {
   journal: AgentMailJournal;
   record: AgentMailIngressRecord;
-  dispatch: (record: AgentMailIngressRecord) => Promise<void>;
+  dispatch: AgentMailIngressDispatch;
   abortSignal?: AbortSignal;
   retryDelayMs?: (attempt: number) => number;
 }): Promise<"accepted" | "duplicate"> {
@@ -112,15 +117,40 @@ async function dispatchAgentMailIngressUntilSettled(params: DispatchParams): Pro
   let attempts = params.initialAttempts;
   while (!params.abortSignal?.aborted) {
     if (!params.dispatchCompleted) {
+      let turnAdopted = false;
+      const onTurnAdopted = async () => {
+        if (turnAdopted) {
+          return;
+        }
+        // Core persists restart-recovery delivery state before this callback. A fresh turn does
+        // not begin if it rejects; an already-committed active steer falls through to the
+        // marker-only retry below. Completing here closes the normal crash window before tools.
+        await params.journal.complete(params.id);
+        turnAdopted = true;
+        params.dispatchCompleted = true;
+      };
       try {
-        await params.dispatch(params.record);
+        await params.dispatch(params.record, { onTurnAdopted });
+        if (turnAdopted) {
+          return true;
+        }
         params.dispatchCompleted = true;
       } catch (error) {
+        if (turnAdopted) {
+          // The adopted turn is now owned by core's restart-recovery machinery. Releasing the
+          // ingress row would replay agent tools even if the later turn failed.
+          return true;
+        }
         attempts += 1;
         const lastError = errorText(error);
         while (!params.abortSignal?.aborted) {
           try {
-            await params.journal.release(params.id, { lastError });
+            const released = await params.journal.release(params.id, { lastError });
+            if (!released) {
+              // A concurrent completion or retention prune means this worker no longer owns a
+              // pending row. Redispatching without ownership could duplicate an adopted turn.
+              return true;
+            }
             break;
           } catch {
             attempts += 1;
@@ -168,7 +198,7 @@ async function dispatchAgentMailIngressUntilSettled(params: DispatchParams): Pro
 
 export async function replayPendingAgentMailIngress(params: {
   journal: AgentMailJournal;
-  dispatch: (record: AgentMailIngressRecord) => Promise<void>;
+  dispatch: AgentMailIngressDispatch;
   abortSignal?: AbortSignal;
   retryDelayMs?: (attempt: number) => number;
 }): Promise<void> {

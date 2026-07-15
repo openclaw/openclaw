@@ -55,13 +55,17 @@ export async function startAgentMailGatewayAccount(params: {
     accountId: params.account.accountId,
     inboxId: params.account.inboxId,
   });
-  const dispatch = async (record: AgentMailIngressRecord) =>
+  const dispatch = async (
+    record: AgentMailIngressRecord,
+    lifecycle: { onTurnAdopted: () => Promise<void> },
+  ) =>
     await dispatchAgentMailInboundEvent({
       cfg: params.cfg,
       account: params.account,
       record,
       channelRuntime: params.channelRuntime,
       log: params.log,
+      onTurnAdopted: lifecycle.onTurnAdopted,
     });
   const receive = async (record: AgentMailIngressRecord) => {
     await processAgentMailIngress({

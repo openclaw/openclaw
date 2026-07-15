@@ -84,7 +84,7 @@ The only outbound target is:
 message:<messageId>
 ```
 
-The triggering message ID is fixed for the whole turn. OpenClaw does not keep a thread-to-latest-message pointer. Each reply calls AgentMail with `replyAll: false`, omits all recipient overrides, and uses an idempotency key derived from OpenClaw's durable delivery queue record. A multi-recipient email therefore receives a reply only through AgentMail's sender-reply semantics.
+The triggering message ID is fixed for the whole turn. The outbound adapter accepts only the implicit source-message binding supplied by the active inbound turn; proactive sends, explicit reply overrides, and attempts to switch to another message ID are rejected. OpenClaw does not keep a thread-to-latest-message pointer. Each reply calls AgentMail with `replyAll: false`, omits all recipient overrides, and uses an idempotency key derived from OpenClaw's durable delivery queue record. A multi-recipient email therefore receives a reply only through AgentMail's sender-reply semantics.
 
 Sessions are keyed by OpenClaw account, AgentMail inbox, and AgentMail thread ID. Participants share the thread context, while sender authorization remains per message.
 
@@ -98,7 +98,7 @@ Outbound text and attachments are normalized and loaded before one AgentMail rep
 
 ## Durability
 
-Webhook and WebSocket events share a digest of account ID, inbox ID, and message ID, so retries, reconnects, and transport changes deduplicate to one turn. Pending and failed ingress records are retained for 30 days; completed records for 7 days; each journal state is capped at 450 records. These values follow the WhatsApp durable-receive precedent.
+Webhook and WebSocket events share a digest of account ID, inbox ID, and message ID, so retries, reconnects, and transport changes deduplicate to one turn. OpenClaw persists restart-recovery delivery state before agent or tool execution, and the plugin durably adopts the turn by completing its ingress row at that boundary. A fresh turn does not start if completion fails. If an active turn was already irrevocably queued, ingress retries only the completion marker and never redispatches it. After successful adoption, core recovery owns interrupted delivery. Pending and failed ingress records are retained for 30 days; completed records for 7 days; each journal state is capped at 450 records. These values follow the WhatsApp durable-receive precedent.
 
 ## Why a new official plugin
 
@@ -110,7 +110,6 @@ The pinned AgentMail SDK documents `from` as either `sender@example.com` or `Dis
 
 - `401`: the AgentMail webhook signing secret or forwarded raw body/headers do not match.
 - `413`: the webhook body exceeds 1 MiB.
-- `403`: the event belongs to a different configured inbox.
 - `503`: the durable queue commit failed, so AgentMail should retry the webhook.
 - No agent turn: verify the hydrated `From` mailbox appears in `allowFrom`; an empty list denies everyone.
 - WebSocket did not start: remove `webhookSecret`; its presence always selects webhook mode.

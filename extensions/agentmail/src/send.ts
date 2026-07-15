@@ -42,7 +42,14 @@ function idempotencyKey(queueId: string): string {
 
 type AgentMailSendContext = Pick<
   ChannelMessageSendTextContext,
-  "cfg" | "to" | "text" | "accountId" | "deliveryQueueId" | "onPlatformSendDispatch"
+  | "cfg"
+  | "to"
+  | "text"
+  | "accountId"
+  | "replyToId"
+  | "replyToIdSource"
+  | "deliveryQueueId"
+  | "onPlatformSendDispatch"
 > &
   Partial<
     Pick<
@@ -50,6 +57,17 @@ type AgentMailSendContext = Pick<
       "payload" | "mediaUrl" | "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"
     >
   >;
+
+function assertTriggeringMessageBoundary(
+  ctx: Pick<AgentMailSendContext, "replyToId" | "replyToIdSource">,
+  triggeringMessageId: string,
+): void {
+  if (ctx.replyToIdSource !== "implicit" || ctx.replyToId !== triggeringMessageId) {
+    throw new Error(
+      "AgentMail replies must remain bound to the triggering message for the active inbound turn.",
+    );
+  }
+}
 
 function collectMediaUrls(ctx: AgentMailSendContext): string[] {
   if (!ctx.payload) {
@@ -62,12 +80,12 @@ function collectMediaUrls(ctx: AgentMailSendContext): string[] {
   ] as string[];
 }
 
-export async function sendAgentMailReply(
+async function sendBoundAgentMailReply(
   ctx: AgentMailSendContext,
-  options: { client?: AgentMailClient } = {},
+  triggeringMessageId: string,
+  options: { client?: AgentMailClient },
 ) {
   const account = resolveAgentMailAccount(ctx.cfg, ctx.accountId);
-  const triggeringMessageId = parseAgentMailMessageTarget(ctx.to);
   if (!ctx.deliveryQueueId) {
     throw new Error("AgentMail replies require a durable OpenClaw delivery queue ID.");
   }
@@ -118,6 +136,15 @@ export async function sendAgentMailReply(
   };
 }
 
+export async function sendAgentMailReply(
+  ctx: AgentMailSendContext,
+  options: { client?: AgentMailClient } = {},
+) {
+  const triggeringMessageId = parseAgentMailMessageTarget(ctx.to);
+  assertTriggeringMessageBoundary(ctx, triggeringMessageId);
+  return await sendBoundAgentMailReply(ctx, triggeringMessageId, options);
+}
+
 /**
  * Repeats an uncertain reply with the same queue-derived AgentMail idempotency key. AgentMail
  * returns the original reply for a committed key, so this both reconciles and completes recovery.
@@ -138,13 +165,21 @@ export async function reconcileAgentMailUnknownSend(
     return { status: "not_sent" };
   }
   const rendered = ctx.renderedBatchPlan?.items[0];
+  const triggeringMessageId = parseAgentMailMessageTarget(ctx.to);
+  if (ctx.effectiveReplyToId !== triggeringMessageId) {
+    return {
+      status: "unresolved",
+      error: "AgentMail recovery target is not bound to its triggering message",
+      retryable: false,
+    };
+  }
   const mediaUrls = rendered?.mediaUrls.length
     ? [...rendered.mediaUrls]
     : [payload.mediaUrl, ...(payload.mediaUrls ?? [])].filter((value): value is string =>
         Boolean(value),
       );
   const text = rendered?.text ?? payload.text ?? "";
-  const result = await sendAgentMailReply(
+  const result = await sendBoundAgentMailReply(
     {
       cfg: ctx.cfg,
       to: ctx.to,
@@ -157,6 +192,7 @@ export async function reconcileAgentMailUnknownSend(
         ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
       },
     },
+    triggeringMessageId,
     options,
   );
   return { status: "sent", messageId: result.messageId, receipt: result.receipt };

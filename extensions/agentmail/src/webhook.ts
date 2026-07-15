@@ -95,8 +95,10 @@ export function createAgentMailWebhookHandler(params: {
       return respond(res, 400, "Invalid event");
     }
     if (event.inboxId !== params.account.inboxId) {
-      params.log?.warn?.("AgentMail webhook rejected an event for the wrong inbox");
-      return respond(res, 403, "Wrong inbox");
+      // The signature is valid but this route cannot ever own the inbox. Acknowledge permanently
+      // so provider retries cannot amplify a routing/configuration error.
+      params.log?.warn?.("AgentMail webhook ignored an event for the wrong inbox");
+      return respond(res, 200);
     }
     try {
       await params.receive({

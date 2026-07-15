@@ -116,10 +116,11 @@ export async function startAgentMailWebSocket(params: {
       log: params.log,
     });
   });
-  await socket.waitForOpen();
-  // The SDK begins connecting before this wrapper can install its `open` handler.
-  // Subscribe here as well to close that initial-open race; the guard prevents duplicates.
-  subscribe();
+  // The SDK's waitForOpen() does not settle when an initial connection is aborted. Register the
+  // lifecycle listeners immediately and close the already-open race from readyState instead.
+  if (socket.readyState === 1) {
+    subscribe();
+  }
   await new Promise<void>((resolve) => {
     if (params.abortSignal.aborted) {
       socket.close();

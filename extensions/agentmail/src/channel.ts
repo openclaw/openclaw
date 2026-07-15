@@ -1,3 +1,4 @@
+import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   createHybridChannelConfigAdapter,
   createScopedDmSecurityResolver,
@@ -10,7 +11,6 @@ import {
 import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
 import { createConditionalWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   inspectAgentMailAccount,
   isAgentMailAccountConfigured,
@@ -49,7 +49,7 @@ const configAdapter = createHybridChannelConfigAdapter<ResolvedAgentMailAccount>
   ],
   resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) =>
-    normalizeStringEntries(allowFrom.map((entry) => normalizeMailbox(String(entry)))),
+    formatNormalizedAllowFromEntries({ allowFrom, normalizeEntry: normalizeMailbox }),
 });
 
 const resolveDmPolicy = createScopedDmSecurityResolver<ResolvedAgentMailAccount>({

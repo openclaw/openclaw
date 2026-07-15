@@ -158,6 +158,149 @@ describe("AgentMail durable ingress", () => {
     expect(dispatch).toHaveBeenCalledOnce();
   });
 
+  it("completes ingress at turn adoption before agent work can begin", async () => {
+    const events: string[] = [];
+    const dispatch = vi.fn(
+      async (
+        _record: AgentMailIngressRecord,
+        lifecycle: { onTurnAdopted: () => Promise<void> },
+      ) => {
+        events.push("recovery-persisted");
+        await lifecycle.onTurnAdopted();
+        events.push("agent-started");
+      },
+    );
+    const complete = vi.fn(async () => {
+      events.push("ingress-complete");
+    });
+    await processAgentMailIngress({
+      journal: {
+        accept: async () => ({ kind: "accepted", duplicate: false, record: {} }),
+        complete,
+        release: vi.fn(),
+      } as never,
+      record,
+      dispatch,
+    });
+    await vi.waitFor(() => expect(events).toContain("agent-started"));
+    expect(events).toEqual(["recovery-persisted", "ingress-complete", "agent-started"]);
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it("does not replay a turn after adoption if later dispatch settlement fails", async () => {
+    let state: "pending" | "completed" = "pending";
+    const dispatch = vi.fn(
+      async (
+        _record: AgentMailIngressRecord,
+        lifecycle: { onTurnAdopted: () => Promise<void> },
+      ) => {
+        await lifecycle.onTurnAdopted();
+        throw new Error("process exited after agent adoption");
+      },
+    );
+    const journal = {
+      accept: vi.fn(async () =>
+        state === "completed"
+          ? { kind: "completed", duplicate: true, record: { id: "durable_1" } }
+          : { kind: "accepted", duplicate: false, record: { id: "durable_1" } },
+      ),
+      complete: vi.fn(async () => {
+        state = "completed";
+      }),
+      release: vi.fn(async () => true),
+      pending: vi.fn(async () => []),
+    } as never;
+    await processAgentMailIngress({ journal, record, dispatch });
+    await vi.waitFor(() => expect(state).toBe("completed"));
+    await replayPendingAgentMailIngress({ journal, dispatch });
+    await processAgentMailIngress({ journal, record, dispatch });
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(journal.release).not.toHaveBeenCalled();
+  });
+
+  it("retries journal adoption before starting the agent turn", async () => {
+    const complete = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("database busy"))
+      .mockResolvedValueOnce(undefined);
+    const agentStarted = vi.fn();
+    const dispatch = vi.fn(
+      async (
+        _record: AgentMailIngressRecord,
+        lifecycle: { onTurnAdopted: () => Promise<void> },
+      ) => {
+        await lifecycle.onTurnAdopted();
+        agentStarted();
+      },
+    );
+    await processAgentMailIngress({
+      journal: {
+        accept: async () => ({ kind: "accepted", duplicate: false, record: {} }),
+        complete,
+        release: vi.fn(async () => true),
+      } as never,
+      record,
+      dispatch,
+      retryDelayMs: () => 0,
+    });
+    await vi.waitFor(() => expect(agentStarted).toHaveBeenCalledOnce());
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries only the marker after an irrevocable active-turn adoption", async () => {
+    const complete = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("database busy"))
+      .mockResolvedValueOnce(undefined);
+    const activeTurnCommitted = vi.fn();
+    const dispatch = vi.fn(
+      async (
+        _record: AgentMailIngressRecord,
+        lifecycle: { onTurnAdopted: () => Promise<void> },
+      ) => {
+        // Core cannot unwind an active-turn transcript commit, so it deliberately absorbs an
+        // adoption observer failure. Ingress must then retry only its completion marker.
+        await lifecycle.onTurnAdopted().catch(() => undefined);
+        activeTurnCommitted();
+      },
+    );
+    await processAgentMailIngress({
+      journal: {
+        accept: async () => ({ kind: "accepted", duplicate: false, record: {} }),
+        complete,
+        release: vi.fn(),
+      } as never,
+      record,
+      dispatch,
+      retryDelayMs: () => 0,
+    });
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+    expect(activeTurnCommitted).toHaveBeenCalledOnce();
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("does not redispatch when releasing a failed row reports lost ownership", async () => {
+    const dispatch = vi.fn(async () => {
+      throw new Error("temporary hydration failure");
+    });
+    const complete = vi.fn();
+    await processAgentMailIngress({
+      journal: {
+        accept: async () => ({ kind: "accepted", duplicate: false, record: {} }),
+        complete,
+        release: vi.fn(async () => false),
+      } as never,
+      record,
+      dispatch,
+      retryDelayMs: () => 0,
+    });
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
   it("retries a released pending record but not an active pending record", async () => {
     const dispatch = vi.fn(async () => undefined);
     const complete = vi.fn(async () => undefined);
@@ -172,7 +315,10 @@ describe("AgentMail durable ingress", () => {
       dispatch,
     });
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
-    expect(dispatch).toHaveBeenCalledWith(record);
+    expect(dispatch).toHaveBeenCalledWith(
+      record,
+      expect.objectContaining({ onTurnAdopted: expect.any(Function) }),
+    );
     expect(complete).toHaveBeenCalledWith(createAgentMailDurableInboundId(record));
 
     dispatch.mockClear();
@@ -209,7 +355,10 @@ describe("AgentMail durable ingress", () => {
       dispatch,
     });
     await vi.waitFor(() => expect(complete).toHaveBeenCalledWith("durable_1"));
-    expect(dispatch).toHaveBeenCalledWith(record);
+    expect(dispatch).toHaveBeenCalledWith(
+      record,
+      expect.objectContaining({ onTurnAdopted: expect.any(Function) }),
+    );
   });
 
   it("hands an in-flight record to a replacement journal without concurrent dispatch", async () => {

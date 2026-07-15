@@ -153,6 +153,7 @@ describe("AgentMail REST-authoritative inbound", () => {
     const get = vi.fn(async () => message());
     const resolveAgentRoute = vi.fn(() => ({ agentId: "main", sessionKey: "session-thread-1" }));
     const buildAgentSessionKey = vi.fn(() => "session-thread-1");
+    const onTurnAdopted = vi.fn(async () => undefined);
     let turn: Record<string, unknown> | undefined;
     const channelRuntime = {
       routing: { resolveAgentRoute, buildAgentSessionKey },
@@ -161,10 +162,13 @@ describe("AgentMail REST-authoritative inbound", () => {
         run: async ({
           raw,
           adapter,
+          onTurnAdopted: receivedOnTurnAdopted,
         }: {
           raw: AgentMail.Message;
           adapter: Record<string, Function>;
+          onTurnAdopted?: () => Promise<void>;
         }) => {
+          expect(receivedOnTurnAdopted).toBe(onTurnAdopted);
           const ingested = adapter.ingest!(raw);
           turn = await adapter.resolveTurn!(ingested);
         },
@@ -182,6 +186,7 @@ describe("AgentMail REST-authoritative inbound", () => {
       record,
       channelRuntime: channelRuntime as never,
       client: { inboxes: { messages: { get } } } as never,
+      onTurnAdopted,
     });
 
     expect(get).toHaveBeenCalledWith("inbox_1", "message_1");

@@ -635,7 +635,11 @@ export async function applyPluginUninstallDirectoryRemoval(
     return { directoryRemoved: false, warnings };
   }
 
-  if (removal.cleanup?.kind === "npm" && npmCleanupManifestExists) {
+  if (
+    removal.cleanup?.kind === "npm" &&
+    npmCleanupManifestExists &&
+    !removal.cleanup.removeProjectRoot
+  ) {
     const uninstall = await runCommandWithTimeout(
       [
         "npm",

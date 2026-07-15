@@ -54,8 +54,9 @@ export async function loadAgentMailInboundAttachments(params: {
     }
   }
 
-  // Download every part before persisting any of them so a failed signed URL never
-  // dispatches a partial attachment set to the agent.
+  // Download every part before persisting any of them so a failed signed URL never dispatches a
+  // partial set. Keep this serial: each bounded fetch receives the remaining aggregate budget,
+  // while parallel fetches could temporarily buffer the full limit once per attachment.
   const downloaded: Array<{
     buffer: Buffer;
     contentType?: string;

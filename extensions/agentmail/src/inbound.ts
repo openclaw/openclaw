@@ -53,6 +53,7 @@ export async function dispatchAgentMailInboundEvent(params: {
   channelRuntime: AgentMailChannelRuntime;
   client?: AgentMailClient;
   log?: AgentMailLog;
+  onTurnAdopted?: () => void | Promise<void>;
 }): Promise<void> {
   const client = params.client ?? createAgentMailClient(params.account);
   let message: AgentMail.Message;
@@ -149,6 +150,7 @@ export async function dispatchAgentMailInboundEvent(params: {
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
     raw: message,
+    ...(params.onTurnAdopted ? { onTurnAdopted: params.onTurnAdopted } : {}),
     adapter: {
       ingest: (raw) => ({
         id: raw.messageId,

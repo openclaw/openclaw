@@ -1131,7 +1131,7 @@ describe("uninstallPlugin", () => {
     const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
 
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
-    expectNpmUninstallCommand({ packageName: "@openclaw/kitchen-sink", npmRoot });
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     await expectPathAccessState(pluginDir, "missing");
     await expectPathAccessState(npmRoot, "missing");
   });
