@@ -1776,6 +1776,7 @@ describe("package artifact reuse", () => {
 
   it("runs Docker live harnesses from trusted helper scripts", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
+    const providerSuites = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_docker_provider_suites");
     const scenarios = readFileSync("scripts/lib/docker-e2e-scenarios.mjs", "utf8");
     const scheduler = readFileSync("scripts/test-docker-all.mjs", "utf8");
     const harness = readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8");
@@ -1809,6 +1810,37 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
     );
+    const codexCompatibility = workflowStep(
+      providerSuites,
+      "Resolve frozen Codex live compatibility",
+    );
+    expect(codexCompatibility).toMatchObject({
+      id: "codex_compat",
+      env: {
+        OPENCLAW_FROZEN_CODEX_SUITE_ID: "${{ matrix.suite_id }}",
+        OPENCLAW_FROZEN_TARGET_ROOT: "${{ github.workspace }}",
+        OPENCLAW_SELECTED_SHA: "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+        OPENCLAW_WORKFLOW_SHA: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+      },
+      run: "node .release-harness/scripts/resolve-frozen-codex-live-suite.mjs",
+    });
+    for (const stepName of [
+      "Validate live-test image artifact binding",
+      "Download live-test image artifact",
+      "Verify and load live-test image artifact",
+      "Setup Node environment",
+      "Hydrate live auth/profile inputs",
+      "Log in to GHCR",
+      "Configure suite-specific env",
+    ]) {
+      expect(workflowStep(providerSuites, stepName).if, stepName).toContain(
+        "steps.codex_compat.outputs.run_lane != 'false'",
+      );
+    }
+    const runCodexSuite = providerSuites.steps?.find((candidate) =>
+      candidate.name?.startsWith("Run ${{ matrix.label }}"),
+    );
+    expect(runCodexSuite?.if).toContain("steps.codex_compat.outputs.run_lane != 'false'");
     for (const [model, thinking] of [
       ["sol", "ultra"],
       ["terra", "ultra"],
