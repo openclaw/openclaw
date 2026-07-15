@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -96,8 +97,18 @@ function seedActivePlacement(
 
 function createHarness(
   placementStore: PlacementStore,
-  options: { failAt?: DispatchStage; destroyFails?: boolean; claimOnDrain?: boolean } = {},
+  options: {
+    failAt?: DispatchStage;
+    destroyFails?: boolean;
+    claimOnDrain?: boolean;
+    reconcileFails?: boolean;
+    verifyFails?: boolean;
+    leaseFails?: boolean;
+    localVerifyFails?: boolean;
+    resumeFails?: boolean;
+  } = {},
 ) {
+  const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
   const log: string[] = [];
   const fail = (stage: DispatchStage) => {
     log.push(stage);
@@ -107,6 +118,21 @@ function createHarness(
   };
   const placements: WorkerDispatchPlacementStore = {
     get: (sessionId) => placementStore.get(sessionId),
+    loadWorkspaceReconciliation: (owner) => placementStore.loadWorkspaceReconciliation(owner),
+    beginWorkspaceReconciliation: (owner, journal) =>
+      placementStore.beginWorkspaceReconciliation(owner, journal),
+    abortWorkspaceReconciliation: (owner) => placementStore.abortWorkspaceReconciliation(owner),
+    listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
+    listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
+    workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
+    acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
+    completeWorkspaceResultAndReleaseTurn: (claim, options) =>
+      placementStore.completeWorkspaceResultAndReleaseTurn(claim, options),
+    abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
+    releaseTurn: (claim) => placementStore.releaseTurn(claim),
+    updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
+    acceptIdleWorkspaceReconciliation: (params) =>
+      placementStore.acceptIdleWorkspaceReconciliation(params),
     startDispatch: (params) => {
       log.push("placement:requested");
       return placementStore.startDispatch(params);
@@ -119,10 +145,28 @@ function createHarness(
       log.push("placement:failed");
       return placementStore.fail(params);
     },
+    finishReclaim: (params) => {
+      log.push("placement:reclaimed");
+      if (options.claimOnDrain && !placementStore.get(params.sessionId)?.turnClaim) {
+        placementStore.claimTurn({
+          sessionId: params.sessionId,
+          sessionKey: REQUEST.sessionKey,
+          agentId: REQUEST.agentId,
+          claimId: "claim-on-drain",
+          runId: "run-on-drain",
+          owner: {
+            kind: "worker",
+            environmentId: params.environmentId,
+            ownerEpoch: params.ownerEpoch,
+          },
+        });
+      }
+      return placementStore.finishReclaim(params);
+    },
     listForReconcile: () => placementStore.listForReconcile(),
     startDrain: (params) => {
       log.push("placement:draining");
-      if (options.claimOnDrain) {
+      if (options.claimOnDrain && !placementStore.get(params.sessionId)?.turnClaim) {
         placementStore.claimTurn({
           sessionId: params.sessionId,
           sessionKey: REQUEST.sessionKey,
@@ -208,6 +252,46 @@ function createHarness(
     environmentId: ready.environmentId,
     ownerEpoch,
     remoteSocketPath: "/worker/gateway.sock",
+    quiesceWorkspace: vi.fn(async () => {
+      log.push("workspace:quiesce");
+      return {
+        assertActive: vi.fn(async () => {
+          log.push("workspace:lease");
+          if (options.leaseFails) {
+            throw new Error("workspace quiescence expired");
+          }
+        }),
+        resume: vi.fn(async () => {
+          log.push("workspace:resume");
+          if (options.resumeFails) {
+            throw new Error("workspace resume failed");
+          }
+        }),
+      };
+    }),
+    reconcileWorkspace: vi.fn(async (request) => {
+      log.push("workspace:reconcile");
+      if (options.reconcileFails) {
+        throw new Error("workspace conflict");
+      }
+      request.journal.commit(reconciledManifestRef);
+      return {
+        manifestRef: reconciledManifestRef,
+        changed: true,
+        verifyStable: async () => {
+          log.push("workspace:verify");
+          if (options.verifyFails) {
+            throw new Error("workspace changed after reconciliation");
+          }
+        },
+        verifyLocalStable: async () => {
+          log.push("workspace:verify-local");
+          if (options.localVerifyFails) {
+            throw new Error("local workspace changed after reconciliation");
+          }
+        },
+      };
+    }),
     runWorkspaceCommand: vi.fn(async () => ({
       stdout: "",
       stderr: "",
@@ -282,6 +366,7 @@ function createHarness(
       fail("activation");
       return activate();
     },
+    runReclaimBarrier: async ({ reclaim }) => await reclaim("/gateway/workspace"),
     resolveWorkspacePath: async () => {
       fail("workspace");
       return "/gateway/workspace";
@@ -289,6 +374,7 @@ function createHarness(
   });
   return {
     log,
+    reconciledManifestRef,
     placements: {
       current: () => placementStore.get(REQUEST.sessionId),
       seedStarting: () => seedStartingPlacement(placementStore, environmentId),
@@ -313,6 +399,9 @@ function createHarness(
     },
     markEnvironmentOwnerEpoch: (ownerEpoch: number) => {
       currentEnvironment = { ...attached, ownerEpoch };
+    },
+    markEnvironmentAttachments: (attachedSessionIds: string[]) => {
+      currentEnvironment = { ...attached, attachedSessionIds };
     },
     service,
     ready,
@@ -363,6 +452,381 @@ describe("worker placement dispatch", () => {
       "activation",
       "placement:active",
     ]);
+  });
+
+  it("reconciles the workspace before destroying and reclaiming an active worker", async () => {
+    const harness = createHarness(placementStore);
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).resolves.toMatchObject({
+      state: "reclaimed",
+      workspaceBaseManifestRef: harness.reconciledManifestRef,
+    });
+
+    expect(harness.log.slice(-9)).toEqual([
+      "tunnel:attached",
+      "workspace:quiesce",
+      "workspace:reconcile",
+      "workspace:verify",
+      "workspace:lease",
+      "workspace:verify-local",
+      "teardown:destroy",
+      "teardown:stop",
+      "placement:reclaimed",
+    ]);
+  });
+
+  it("recovers a completed turn's durable pending workspace result before stale-claim teardown", async () => {
+    const harness = createHarness(placementStore);
+    const active = harness.placements.seedActive(2);
+    harness.markEnvironmentOwnerEpoch(2);
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      claimId: "completed-turn-claim",
+      runId: "completed-turn-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placementStore.markWorkspaceResultPending(claim);
+
+    await harness.service.reconcile();
+    expect(harness.placements.current()).toMatchObject({
+      state: "active",
+      turnClaim: { claimId: claim.claimId },
+    });
+
+    placementStore.handoffWorkspaceResultRecovery(claim);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "active",
+      turnClaim: null,
+      workspaceBaseManifestRef: harness.reconciledManifestRef,
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
+
+  it("destroys and reclaims a pending result owned by a previous gateway instance", async () => {
+    const originalHarness = createHarness(placementStore);
+    const active = originalHarness.placements.seedActive(2);
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      claimId: "restarted-turn-claim",
+      runId: "restarted-turn-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placementStore.markWorkspaceResultPending(claim);
+
+    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    const restartedHarness = createHarness(restartedStore);
+    restartedHarness.markEnvironmentOwnerEpoch(2);
+    await restartedHarness.service.reconcile();
+
+    expect(restartedHarness.placements.current()).toMatchObject({
+      state: "reclaimed",
+      turnClaim: null,
+      workspaceBaseManifestRef: restartedHarness.reconciledManifestRef,
+    });
+    expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(restartedHarness.environments.destroy).toHaveBeenCalledOnce();
+    expect(restartedHarness.log).not.toContain("workspace:resume");
+  });
+
+  it("keeps a previous-instance pending result fenced when another session is attached", async () => {
+    const originalHarness = createHarness(placementStore);
+    const active = originalHarness.placements.seedActive(2);
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      claimId: "shared-worker-claim",
+      runId: "shared-worker-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placementStore.markWorkspaceResultPending(claim);
+
+    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    const restartedHarness = createHarness(restartedStore);
+    restartedHarness.markEnvironmentAttachments([REQUEST.sessionId, "session-2"]);
+    await restartedHarness.service.reconcile();
+
+    expect(restartedHarness.placements.current()).toMatchObject({
+      state: "active",
+      turnClaim: { claimId: claim.claimId },
+    });
+    expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
+  });
+
+  it("recovers a draining turn result using the admitted claim generation", async () => {
+    const harness = createHarness(placementStore);
+    const active = harness.placements.seedActive(2);
+    harness.markEnvironmentOwnerEpoch(2);
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      claimId: "draining-result-claim",
+      runId: "draining-result-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    const draining = placementStore.startDrain({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    expect(draining.generation).not.toBe(claim.placementGeneration);
+    placementStore.markWorkspaceResultPending(claim);
+    placementStore.handoffWorkspaceResultRecovery(claim);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      turnClaim: null,
+      workspaceBaseManifestRef: harness.reconciledManifestRef,
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(harness.log.indexOf("workspace:resume")).toBeLessThan(
+      harness.log.indexOf("teardown:destroy"),
+    );
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the pending result fenced when same-instance quiescence cannot resume", async () => {
+    const harness = createHarness(placementStore, { resumeFails: true });
+    const active = harness.placements.seedActive(2);
+    harness.markEnvironmentOwnerEpoch(2);
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      claimId: "resume-failure-claim",
+      runId: "resume-failure-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placementStore.markWorkspaceResultPending(claim);
+    placementStore.handoffWorkspaceResultRecovery(claim);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "active",
+      turnClaim: { claimId: claim.claimId },
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
+
+  it("fails a pending result with diagnostics when its worker is proven lost", async () => {
+    const harness = createHarness(placementStore);
+    const active = harness.placements.seedActive(2);
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      claimId: "lost-result-claim",
+      runId: "lost-result-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placementStore.markWorkspaceResultPending(claim);
+    placementStore.handoffWorkspaceResultRecovery(claim);
+    harness.markEnvironmentDestroyed();
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: expect.stringContaining("lost its worker"),
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+  });
+
+  it("reclaims an accepted pending result after a post-destroy gateway restart", async () => {
+    const harness = createHarness(placementStore);
+    const active = harness.placements.seedActive(2);
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      claimId: "accepted-lost-result-claim",
+      runId: "accepted-lost-result-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placementStore.markWorkspaceResultPending(claim);
+    placementStore.updateWorkspaceBaseManifest({
+      claim,
+      manifestRef: harness.reconciledManifestRef,
+    });
+    placementStore.acceptWorkspaceResult(claim);
+    placementStore.handoffWorkspaceResultRecovery(claim);
+    harness.markEnvironmentDestroyed();
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "reclaimed",
+      turnClaim: null,
+      workspaceBaseManifestRef: harness.reconciledManifestRef,
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+  });
+
+  it("coalesces overlapping reclaim requests and accepts completed retries", async () => {
+    const harness = createHarness(placementStore);
+    await harness.service.dispatch(REQUEST);
+    const request = {
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+    };
+
+    const [first, second] = await Promise.all([
+      harness.service.reclaim(request),
+      harness.service.reclaim(request),
+    ]);
+    const retry = await harness.service.reclaim(request);
+
+    expect(first).toMatchObject({ state: "reclaimed" });
+    expect(second).toEqual(first);
+    expect(retry).toEqual(first);
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the active worker when inbound workspace reconciliation conflicts", async () => {
+    const harness = createHarness(placementStore, { reconcileFails: true });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).rejects.toThrow("workspace conflict");
+
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.log).toContain("workspace:resume");
+  });
+
+  it("keeps the active worker when the remote workspace changes after local acceptance", async () => {
+    const harness = createHarness(placementStore, { verifyFails: true });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).rejects.toThrow("workspace changed after reconciliation");
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "active",
+      workspaceBaseManifestRef: harness.reconciledManifestRef,
+    });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.log).toContain("workspace:resume");
+  });
+
+  it("keeps the active worker when its quiescence lease expires", async () => {
+    const harness = createHarness(placementStore, { leaseFails: true });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).rejects.toThrow("workspace quiescence expired");
+
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.log).toContain("workspace:resume");
+  });
+
+  it("keeps the active worker when the accepted local result changes", async () => {
+    const harness = createHarness(placementStore, { localVerifyFails: true });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).rejects.toThrow("local workspace changed after reconciliation");
+
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.log).toContain("workspace:resume");
+  });
+
+  it("keeps the accepted placement active when provider destruction is not proven", async () => {
+    const harness = createHarness(placementStore, { destroyFails: true });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).rejects.toThrow("destroy pending");
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "active",
+      workspaceBaseManifestRef: harness.reconciledManifestRef,
+    });
+    expect(harness.log).not.toContain("placement:draining");
+    expect(harness.log).toContain("workspace:resume");
   });
 
   it.each<DispatchStage>([
@@ -458,6 +922,42 @@ describe("worker placement dispatch", () => {
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
+  it("does not reclaim an active placement with an unresolved workspace journal", async () => {
+    const harness = createHarness(placementStore);
+    harness.placements.seedActive(harness.attached.ownerEpoch);
+    const active = placementStore.get(REQUEST.sessionId);
+    expect(active?.state).toBe("active");
+    if (active?.state !== "active") {
+      return;
+    }
+    placementStore.beginWorkspaceReconciliation(
+      {
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        placementGeneration: active.generation,
+      },
+      {
+        version: 1,
+        temporaryNonce: "f".repeat(32),
+        baseManifestRef: active.workspaceBaseManifestRef,
+        currentManifestRef: harness.reconciledManifestRef,
+        baseEntries: [],
+        appliedEntries: [],
+        baseTree: "f".repeat(40),
+        basePackSha256: createHash("sha256").update("").digest("hex"),
+        basePack: Buffer.alloc(0),
+      },
+    );
+    harness.markEnvironmentDestroyed();
+    harness.log.length = 0;
+
+    await harness.service.reconcileActive();
+
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
+    expect(harness.log).toEqual(["environment:reconcile"]);
+  });
+
   it("fails closed when an active worker turn claim cannot be proven live after restart", async () => {
     const harness = createHarness(placementStore);
     await harness.environments.attachSession({
@@ -488,9 +988,9 @@ describe("worker placement dispatch", () => {
     expect(harness.log).toEqual([
       "environment:reconcile",
       "placement:draining",
+      "placement:reconciling",
       "teardown:stop",
       "teardown:destroy",
-      "placement:reconciling",
       "placement:failed",
     ]);
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
@@ -532,9 +1032,9 @@ describe("worker placement dispatch", () => {
     });
     expect(harness.log).toEqual([
       "environment:reconcile",
+      "placement:reconciling",
       "teardown:stop",
       "teardown:destroy",
-      "placement:reconciling",
       "placement:failed",
     ]);
   });
@@ -551,9 +1051,9 @@ describe("worker placement dispatch", () => {
     expect(harness.log).toEqual([
       "environment:reconcile",
       "placement:draining",
+      "placement:reconciling",
       "teardown:stop",
       "teardown:destroy",
-      "placement:reconciling",
       "placement:reclaimed",
     ]);
 
@@ -628,9 +1128,9 @@ describe("worker placement dispatch", () => {
     expect(harness.log).toEqual([
       "environment:reconcile",
       "placement:draining",
+      "placement:reconciling",
       "teardown:stop",
       "teardown:destroy",
-      "placement:reconciling",
       "placement:failed",
     ]);
   });
@@ -698,9 +1198,9 @@ describe("worker placement dispatch", () => {
     expect(harness.log).toEqual([
       "environment:reconcile",
       "placement:draining",
+      "placement:reconciling",
       "teardown:stop",
       "teardown:destroy",
-      "placement:reconciling",
       "placement:failed",
     ]);
   });

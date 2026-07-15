@@ -26,6 +26,7 @@ type TestWorkerService = {
   get: (environmentId: string) => TestWorkerRecord | undefined;
   create: (profileId: string, idempotencyKey: string) => Promise<TestWorkerRecord>;
   destroy: (environmentId: string) => Promise<TestWorkerRecord>;
+  destroyUnattached: (environmentId: string) => Promise<TestWorkerRecord>;
 };
 
 function mockContext(
@@ -99,6 +100,7 @@ function workerService(overrides: Partial<TestWorkerService> = {}) {
     get: vi.fn(() => undefined),
     create: vi.fn(async () => workerRecord()),
     destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
+    destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
     ...overrides,
   };
 }
@@ -403,8 +405,8 @@ describe("environment gateway methods", () => {
 
   it("destroys an environment idempotently", async () => {
     const destroyed = workerRecord({ state: "destroyed" });
-    const destroy = vi.fn(async () => destroyed);
-    const service = workerService({ destroy });
+    const destroyUnattached = vi.fn(async () => destroyed);
+    const service = workerService({ destroyUnattached });
     const first = await callEnvironmentMethod(
       "environments.destroy",
       { environmentId: "worker-1" },
@@ -423,7 +425,30 @@ describe("environment gateway methods", () => {
       status: "unavailable",
       worker: { state: "destroyed" },
     });
-    expect(destroy).toHaveBeenCalledTimes(2);
+    expect(destroyUnattached).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects raw destruction of a session-attached worker", async () => {
+    const service = workerService({
+      destroyUnattached: vi.fn(async () => {
+        throw new FakeWorkerServiceError(
+          "invalid_state",
+          "Attached cloud workers must be stopped through sessions.reclaim",
+        );
+      }),
+    });
+
+    const [ok, , error] = await callEnvironmentMethod(
+      "environments.destroy",
+      { environmentId: "worker-1" },
+      { service },
+    );
+
+    expect(ok).toBe(false);
+    expect(error).toEqual({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "Attached cloud workers must be stopped through sessions.reclaim",
+    });
   });
 
   it("reconciles active placements before returning destroyed worker state", async () => {
@@ -439,7 +464,7 @@ describe("environment gateway methods", () => {
     expect(ok).toBe(true);
     expect(payload).toMatchObject({ worker: { state: "destroyed" } });
     expect(reconcileActive).toHaveBeenCalledExactlyOnceWith("worker-1");
-    expect(service.destroy).toHaveBeenCalledBefore(reconcileActive);
+    expect(service.destroyUnattached).toHaveBeenCalledBefore(reconcileActive);
   });
 
   it("preserves destroyed worker success when placement reconciliation fails", async () => {
@@ -461,7 +486,7 @@ describe("environment gateway methods", () => {
 
   it("rejects an unknown worker environment on destroy", async () => {
     const service = workerService({
-      destroy: vi.fn(async () => {
+      destroyUnattached: vi.fn(async () => {
         throw new FakeWorkerServiceError("environment_not_found", "unknown environmentId");
       }),
     });
@@ -480,7 +505,7 @@ describe("environment gateway methods", () => {
 
   it("returns unavailable without provider details when destroy fails", async () => {
     const service = workerService({
-      destroy: vi.fn(async () => {
+      destroyUnattached: vi.fn(async () => {
         throw new FakeWorkerServiceError("provider_not_found", "private provider details");
       }),
     });
