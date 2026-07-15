@@ -13,7 +13,10 @@ import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import {
+  persistSessionTranscriptTurn,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -149,6 +152,7 @@ type PersistTextTurnTranscriptParams = {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
+  touchSessionEntryWhenEmpty?: boolean;
   assistant: {
     api: string;
     provider: string;
@@ -278,6 +282,29 @@ async function persistTextTurnTranscript(
         } as PersistedUserTurnMessage)
       : undefined);
   if (!userMessage && !replyText) {
+    if (params.touchSessionEntryWhenEmpty) {
+      const currentEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+      const nextUpdatedAt = Math.max(Date.now(), (currentEntry?.updatedAt ?? 0) + 1);
+      if (params.storePath) {
+        const persistedEntry = await updateSessionEntry(
+          { storePath: params.storePath, sessionKey: params.sessionKey },
+          (entry) => (entry.sessionId === params.sessionId ? { updatedAt: nextUpdatedAt } : null),
+        );
+        if (!persistedEntry) {
+          return { kind: "session-rebound", sessionEntry: undefined };
+        }
+        if (params.sessionEntry) {
+          Object.assign(params.sessionEntry, persistedEntry);
+        }
+        if (params.sessionStore) {
+          params.sessionStore[params.sessionKey] = params.sessionEntry ?? persistedEntry;
+        }
+        return { kind: "persisted", sessionEntry: params.sessionEntry ?? persistedEntry };
+      }
+      if (currentEntry?.sessionId === params.sessionId) {
+        currentEntry.updatedAt = nextUpdatedAt;
+      }
+    }
     return { kind: "persisted", sessionEntry: params.sessionEntry };
   }
 
@@ -380,15 +407,21 @@ export async function persistAcpTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+  skipUserTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
   return await persistTextTurnTranscript({
     ...params,
-    ...(params.userInput ? { userMessage: buildPersistedUserTurnMessage(params.userInput) } : {}),
+    body: params.skipUserTurn ? "" : params.body,
+    transcriptBody: params.skipUserTurn ? undefined : params.transcriptBody,
+    ...(!params.skipUserTurn && params.userInput
+      ? { userMessage: buildPersistedUserTurnMessage(params.userInput) }
+      : {}),
     assistant: {
       api: "openai-responses",
       provider: "openclaw",
       model: "acp-runtime",
     },
+    touchSessionEntryWhenEmpty: params.skipUserTurn,
   });
 }
 
@@ -432,6 +465,7 @@ export async function persistCliTurnTranscript(params: {
     sessionCwd: params.sessionCwd,
     config: params.config,
     embeddedAssistantGapFill: gapFill,
+    touchSessionEntryWhenEmpty: skipUserTurn,
     assistant: {
       api: "cli",
       provider,

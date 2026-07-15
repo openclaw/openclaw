@@ -18,8 +18,10 @@ import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
+import * as sessionAccessorModule from "../config/sessions/session-accessor.js";
 import {
   listSessionEntries,
+  loadTranscriptEvents,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -104,6 +106,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
     emitAcpLifecycleEnd: vi.fn(),
     emitAcpLifecycleError: vi.fn(),
     emitAcpLifecycleStart: vi.fn(),
+    emitAcpRuntimeEvent: vi.fn(),
     persistAcpTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
       kind: "persisted",
       sessionEntry: params.sessionEntry,
@@ -331,6 +334,16 @@ function readSessionStore<T>(storePath: string): Record<string, T> {
   return Object.fromEntries(
     listSessionEntries({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry as T]),
   );
+}
+
+function transcriptMessages(events: unknown[]): unknown[] {
+  return events.flatMap((event) => {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      return [];
+    }
+    const record = event as { type?: unknown; message?: unknown };
+    return record.type === "message" ? [record.message] : [];
+  });
 }
 
 function expectSqliteSessionFileMarker(params: {
@@ -1019,6 +1032,179 @@ describe("agentCommand", () => {
       expect(callArgs?.modelRun).toBe(true);
       expect(callArgs?.promptMode).toBe("none");
       expect(callArgs?.disableTools).toBe(true);
+    });
+  });
+
+  it("persists ACP user turns before the runtime turn can fail", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:acp-failure";
+      mockConfig(home, store, { models: {} });
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "acp-backed-session",
+          updatedAt: Date.now(),
+        },
+      });
+      const runTurn = vi.fn(async () => {
+        throw new Error("acp runtime failed before reply");
+      });
+      acpManagerTesting.setAcpSessionManagerForTests({
+        resolveSession: vi.fn(() => ({
+          kind: "ready",
+          sessionKey,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "runtime-1",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        })),
+        runTurn,
+      });
+
+      await expect(
+        agentCommand({ message: "please persist me", sessionKey }, runtime),
+      ).rejects.toThrow("acp runtime failed before reply");
+
+      const entry = loadSessionEntry({ storePath: store, sessionKey, clone: false });
+      expect(
+        transcriptMessages(
+          await loadTranscriptEvents({
+            agentId: "main",
+            sessionId: entry?.sessionId ?? "acp-backed-session",
+            storePath: store,
+          }),
+        ),
+      ).toContainEqual(
+        expect.objectContaining({
+          role: "user",
+          content: "please persist me",
+        }),
+      );
+      expect(vi.mocked(attemptExecutionRuntime.persistAcpTurnTranscript)).not.toHaveBeenCalled();
+    });
+  });
+
+  it("continues ACP turns when pre-turn transcript persistence fails", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:acp-transcript-failure";
+      mockConfig(home, store, { models: {} });
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "acp-transcript-failure-session",
+          updatedAt: Date.now(),
+        },
+      });
+      const persistenceError = new Error("transcript storage unavailable");
+      const persistSpy = vi
+        .spyOn(sessionAccessorModule, "persistSessionTranscriptTurn")
+        .mockRejectedValueOnce(persistenceError);
+      vi.mocked(attemptExecutionRuntime.createAcpVisibleTextAccumulator).mockReturnValueOnce({
+        consume: vi.fn(() => null),
+        finalizeRaw: () => "done",
+        finalize: () => "done",
+      });
+      vi.mocked(attemptExecutionRuntime.buildAcpResult).mockReturnValueOnce({
+        payloads: [{ text: "done" }],
+        meta: { durationMs: 0, aborted: false, stopReason: "end_turn" },
+      });
+      const runTurn = vi.fn(async (params: { onEvent?: (event: unknown) => void }) => {
+        params.onEvent?.({ type: "done", stopReason: "end_turn", status: "completed" });
+      });
+      acpManagerTesting.setAcpSessionManagerForTests({
+        resolveSession: vi.fn(() => ({
+          kind: "ready",
+          sessionKey,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "runtime-1",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        })),
+        runTurn,
+      });
+
+      try {
+        await expect(
+          agentCommand({ message: "keep running", sessionKey }, runtime),
+        ).resolves.toBeUndefined();
+      } finally {
+        persistSpy.mockRestore();
+      }
+
+      expect(runTurn).toHaveBeenCalledOnce();
+      const transcriptParams = vi.mocked(attemptExecutionRuntime.persistAcpTurnTranscript).mock
+        .calls[0]?.[0] as { body?: string; skipUserTurn?: boolean } | undefined;
+      expect(transcriptParams?.body).toBe("keep running");
+      expect(transcriptParams).not.toHaveProperty("skipUserTurn");
+    });
+  });
+
+  it("does not write an ACP user turn after the session rebounds", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:acp-rebound";
+      mockConfig(home, store, { models: {} });
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "old-acp-session",
+          updatedAt: Date.now(),
+        },
+      });
+      const persistSessionTranscriptTurn = sessionAccessorModule.persistSessionTranscriptTurn;
+      const persistSpy = vi
+        .spyOn(sessionAccessorModule, "persistSessionTranscriptTurn")
+        .mockImplementationOnce(async (...args) => {
+          await replaceSessionEntry(
+            { storePath: store, sessionKey },
+            { sessionId: "new-acp-session", updatedAt: Date.now() },
+          );
+          return await persistSessionTranscriptTurn(...args);
+        });
+      const runTurn = vi.fn(async () => {
+        throw new Error("stop after rebound check");
+      });
+      acpManagerTesting.setAcpSessionManagerForTests({
+        resolveSession: vi.fn(() => ({
+          kind: "ready",
+          sessionKey,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "runtime-1",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        })),
+        runTurn,
+      });
+
+      try {
+        await expect(
+          agentCommand({ message: "do not persist", sessionKey }, runtime),
+        ).rejects.toThrow("stop after rebound check");
+      } finally {
+        persistSpy.mockRestore();
+      }
+
+      expect(runTurn).toHaveBeenCalledOnce();
+      expect(
+        transcriptMessages(
+          await loadTranscriptEvents({
+            agentId: "main",
+            sessionId: "old-acp-session",
+            storePath: store,
+          }),
+        ),
+      ).not.toContainEqual(expect.objectContaining({ role: "user", content: "do not persist" }));
     });
   });
 
