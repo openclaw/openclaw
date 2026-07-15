@@ -1,6 +1,6 @@
 ---
 name: openclaw-parallels-smoke
-description: Run, rerun, debug, or interpret OpenClaw Parallels install, onboarding, gateway smoke, and upgrade checks.
+description: Prepare, snapshot, run, rerun, debug, or interpret OpenClaw Parallels guest install, onboarding, gateway smoke, and upgrade checks across macOS, Windows, and Linux.
 ---
 
 # OpenClaw Parallels Smoke
@@ -120,8 +120,25 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 ## Windows flow
 
+- The sibling `openclaw-windows-node` repo owns Windows VM provisioning, snapshot lifecycle, and native app validation. Keep that policy in one place; this repo provides a thin bridge:
+
+  ```bash
+  pnpm test:parallels:windows:prepare -- inventory
+  pnpm test:parallels:windows:prepare -- prepare
+  pnpm test:parallels:windows:prepare -- verify
+  ```
+
+- The bridge expects `../openclaw-windows-node` or `OPENCLAW_WINDOWS_NODE_REPO=/path/to/openclaw-windows-node`. The preparation command assumes Parallels Desktop is installed and activated and a Windows 11 VM has been downloaded. It configures Parallels Tools, WSL 2 without a distro, Git, Node.js, .NET, the Windows SDK, WebView2, a clean Windows app checkout, and dated clean/E2E snapshots.
+- Restore or run native Windows validation through the same owner:
+
+  ```bash
+  pnpm test:parallels:windows:prepare -- restore --snapshot e2e
+  pnpm test:parallels:windows:prepare -- run-tests --ref origin/main
+  ```
+
+- Read `../openclaw-windows-node/.agents/skills/openclaw-parallels-windows/SKILL.md` for the complete remote-management, snapshot, local-ref, and troubleshooting workflow.
 - Preferred entrypoint: `pnpm test:parallels:windows`
-- Use the snapshot closest to `pre-openclaw-native-e2e-2026-03-12`.
+- Use the newest verified `pre-openclaw-native-e2e-*` snapshot and pass its exact name with `--snapshot-hint`.
 - Default upgrade coverage on Windows should now include: fresh snapshot -> site installer pinned to the requested stable tag -> `openclaw update --channel dev` on the guest. Keep the older host-tgz upgrade path only when the caller explicitly passes `--target-package-spec`.
 - Optional exact npm-tag baseline on Windows: `bash scripts/e2e/parallels-windows-smoke.sh --mode upgrade --target-package-spec openclaw@<tag> --json`. That lane installs the published npm tarball as baseline, then runs `openclaw update --channel dev`.
 - Optional forward-fix Windows validation: `bash scripts/e2e/parallels-windows-smoke.sh --mode upgrade --upgrade-from-packed-main --json`. That lane installs the packed current-main npm tgz as baseline, then runs `openclaw update --channel dev`.

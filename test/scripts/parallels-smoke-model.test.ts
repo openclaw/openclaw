@@ -73,6 +73,7 @@ const WRAPPERS = {
   npmUpdate: "scripts/e2e/parallels-npm-update-smoke.sh",
   windows: "scripts/e2e/parallels-windows-smoke.sh",
 };
+const WINDOWS_PREPARE_WRAPPER = "scripts/e2e/parallels-windows-prepare.sh";
 
 const TS_PATHS = {
   agentWorkspace: "scripts/e2e/parallels/agent-workspace.ts",
@@ -270,6 +271,14 @@ describe("Parallels smoke model selection", () => {
       expect(wrapper, wrapperPath).not.toContain("pnpm exec tsx");
       expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(6);
     }
+  });
+
+  it("routes Windows baseline preparation to the sibling Windows app owner", () => {
+    const wrapper = readFileSync(WINDOWS_PREPARE_WRAPPER, "utf8");
+    expect(wrapper).toContain("OPENCLAW_WINDOWS_NODE_REPO");
+    expect(wrapper).toContain("scripts/parallels-windows-vm.sh");
+    expect(wrapper).toContain("openclaw/openclaw-windows-node");
+    expect(wrapper).toContain('exec bash "$CONTROLLER" "$@"');
   });
 
   it("accepts leading package-manager separators and still honors later terminators", () => {
