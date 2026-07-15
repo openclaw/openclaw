@@ -545,6 +545,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       if (
         overrideRequested &&
         !allowOverride &&
+        !scope?.pluginHttpRoute &&
         (!hasRequestScopeClient || hasServerAttestedPluginSubagentScope)
       ) {
         const fallbackAuth = authorizeFallbackModelOverride({

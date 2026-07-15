@@ -1613,17 +1613,6 @@ describe("loadGatewayPlugins", () => {
     });
     const scope = {
       context: createTestContext("scoped-plugin-http-trusted-overrides"),
-      client: {
-        connect: {
-          client: {
-            id: "gateway-client",
-            version: "test",
-            platform: "node",
-            mode: "backend",
-          },
-          scopes: ["operator.write"],
-        },
-      } as GatewayRequestOptions["client"],
       isWebchatConnect: () => false,
       pluginHttpRoute: true,
     } satisfies PluginRuntimeGatewayRequestScope;
