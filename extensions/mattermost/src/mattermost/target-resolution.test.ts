@@ -1,5 +1,5 @@
 // Mattermost tests cover target resolution plugin behavior.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveMattermostAccount = vi.fn();
 const createMattermostClient = vi.fn();
@@ -19,14 +19,10 @@ vi.mock("./client.js", () => ({
 describe("mattermost target resolution", () => {
   let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
   let resolveMattermostOpaqueTarget: typeof import("./target-resolution.js").resolveMattermostOpaqueTarget;
-  let resetMattermostOpaqueTargetCacheForTests: typeof import("./target-resolution.js").resetMattermostOpaqueTargetCacheForTests;
 
   beforeAll(async () => {
-    ({
-      parseMattermostTarget,
-      resolveMattermostOpaqueTarget,
-      resetMattermostOpaqueTargetCacheForTests,
-    } = await import("./target-resolution.js"));
+    ({ parseMattermostTarget, resolveMattermostOpaqueTarget } =
+      await import("./target-resolution.js"));
   });
 
   beforeEach(() => {
@@ -34,10 +30,6 @@ describe("mattermost target resolution", () => {
     createMattermostClient.mockReset();
     fetchMattermostUser.mockReset();
     normalizeMattermostBaseUrl.mockClear();
-  });
-
-  afterEach(() => {
-    resetMattermostOpaqueTargetCacheForTests();
   });
 
   it("recognizes ID-shaped values", () => {

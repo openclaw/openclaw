@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -32,7 +31,6 @@ import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -58,6 +56,7 @@ import {
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
+import { appendSessionCostLine, buildStatusUptimeLine } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
 // Status text assembly gathers runtime/model/session/task facts, then delegates
@@ -268,16 +267,6 @@ function formatAgentTaskCountsLine(agentId: string): string | undefined {
     return undefined;
   }
   return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
-}
-
-function formatStatusUptimeDuration(ms: number): string {
-  return formatDurationCompact(ms, { spaced: true }) ?? "0s";
-}
-
-function buildStatusUptimeLine(): string {
-  const gatewayUptimeMs = Math.max(0, Math.round(process.uptime() * 1000));
-  const systemUptimeMs = Math.max(0, Math.round(os.uptime() * 1000));
-  return `⏱️ Uptime: gateway ${formatStatusUptimeDuration(gatewayUptimeMs)} · system ${formatStatusUptimeDuration(systemUptimeMs)}`;
 }
 
 async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
@@ -499,6 +488,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       usageLine = null;
     }
   }
+  usageLine = await appendSessionCostLine(usageLine, cfg, statusAgentId, sessionEntry, storePath);
   const { getFollowupQueueDepth, resolveQueueSettings } = await loadStatusQueueRuntime();
   const queueSettings = resolveQueueSettings({
     cfg,
