@@ -294,6 +294,7 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
     env: {
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
       FULL_RELEASE_VALIDATION_RUN_ID: "222",
+      OPENCLAW_NPM_RESUME_RUN_ID: "",
       PATH: process.env.PATH,
       PLUGINS: "",
       PLUGIN_PUBLISH_SCOPE: "all-publishable",
@@ -428,6 +429,14 @@ describe("package acceptance workflow", () => {
     expect(partialEvidence.stderr).toContain("require full_release_validation_run_id");
 
     expect(runReleasePublishInputValidation({ PUBLISH_OPENCLAW_NPM: "false" }).status).toBe(0);
+
+    const invalidResumeRun = runReleasePublishInputValidation({
+      OPENCLAW_NPM_RESUME_RUN_ID: "not-a-run-id",
+    });
+    expect(invalidResumeRun.status).toBe(1);
+    expect(invalidResumeRun.stderr).toContain(
+      "openclaw_npm_resume_run_id must be a positive GitHub Actions run id",
+    );
   });
 
   it("accepts only main-reachable protected SHA-pinned release publish tags", () => {
@@ -3961,7 +3970,7 @@ describe("package artifact reuse", () => {
     );
     expect(releaseWorkflow).toContain("resolve_openclaw_npm_publish_state");
     expect(releaseWorkflow).toContain(
-      "already published on npm with this tag's preflight tarball; skipping the core npm dispatch and resuming the remaining publish stages",
+      "already published on npm with this tag's preflight tarball; resuming from",
     );
     expect(releaseWorkflow).toContain("Cut a correction tag instead of resuming this publish.");
     expect(
@@ -4005,6 +4014,21 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain('conclusion" == "skipped"');
     expect(releaseWorkflow).toContain("approve_child_publish_environment");
     expect(releaseWorkflow).toContain("Approve child release gate after parent release approval");
+    expect(releaseWorkflow).toContain("openclaw_npm_resume_run_id");
+    expect(releaseWorkflow).toContain(
+      '.name == "validate_publish_request" and .conclusion == "success"',
+    );
+    expect(releaseWorkflow).toContain("actions/workflows/openclaw-npm-release.yml\" --jq '.id'");
+    expect(releaseWorkflow).toContain(
+      '".github/workflows/openclaw-npm-release.yml@refs/tags/${resume_branch}"',
+    );
+    expect(releaseWorkflow).toContain("git/ref/tags/${resume_branch}");
+    expect(releaseWorkflow).toContain(".verification.verified");
+    expect(releaseWorkflow).toContain("compare/${resume_sha}...main");
+    expect(releaseWorkflow).toContain(
+      '"${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-postpublish-verify.ts"',
+    );
+    expect(releaseWorkflow).toContain("verify_args+=(--skip-postpublish)");
     expect(releaseWorkflow).toContain('"${verify_args[@]}"');
     expect(releaseWorkflow).toContain(
       "OpenClaw Release Publish must use trusted main workflow tooling",
@@ -4018,10 +4042,14 @@ describe("package artifact reuse", () => {
       '"${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha"',
     );
     expect(releaseWorkflow).toContain('--workflow-ref "${CHILD_WORKFLOW_REF}"');
-    expect(releaseWorkflow).toContain('OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${GITHUB_REF}"');
+    expect(releaseWorkflow).toContain('openclaw_npm_expected_workflow_ref="${GITHUB_REF}"');
     expect(releaseWorkflow).toContain(
-      'OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${PARENT_WORKFLOW_SHA}"',
+      'openclaw_npm_expected_workflow_sha="${PARENT_WORKFLOW_SHA}"',
     );
+    expect(releaseWorkflow).toContain(
+      'OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${openclaw_npm_expected_workflow_ref}"',
+    );
+    expect(releaseWorkflow).toContain('if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]');
     expect(releaseWorkflow).toContain("--skip-github-release");
     expect(clawHubReleasePlanScript).toContain("--plugin-clawhub-bootstrap-run");
     expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');

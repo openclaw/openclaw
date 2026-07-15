@@ -1717,6 +1717,37 @@ CREATE INDEX IF NOT EXISTS idx_worker_session_placements_session_key
 CREATE INDEX IF NOT EXISTS idx_worker_session_placements_reconcile
   ON worker_session_placements(updated_at_ms, session_id);
 
+-- A reconciliation journal is written before managed-worktree mutation. The
+-- bounded Git base snapshot repairs any subset left by an interrupted apply.
+CREATE TABLE IF NOT EXISTS worker_workspace_reconciliations (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  environment_id TEXT NOT NULL,
+  owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 1),
+  placement_generation INTEGER NOT NULL CHECK (placement_generation >= 0),
+  base_manifest_ref TEXT NOT NULL,
+  current_manifest_ref TEXT NOT NULL,
+  plan_json TEXT NOT NULL,
+  base_pack BLOB NOT NULL CHECK (length(base_pack) <= 268435456),
+  created_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+);
+
+-- A completed remote turn is fenced from stale-claim teardown until its
+-- workspace result is durably reconciled into the managed worktree.
+CREATE TABLE IF NOT EXISTS worker_workspace_pending_results (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  environment_id TEXT NOT NULL,
+  owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 1),
+  placement_generation INTEGER NOT NULL CHECK (placement_generation >= 0),
+  claim_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  gateway_instance_id TEXT NOT NULL,
+  recovery_requested_at_ms INTEGER,
+  workspace_accepted_at_ms INTEGER,
+  created_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+);
+
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.
 CREATE TABLE IF NOT EXISTS worker_environment_credentials (

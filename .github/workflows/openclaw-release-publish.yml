@@ -31,6 +31,10 @@ on:
         description: Optional successful NPM Telegram Beta E2E run id to include in final release evidence
         required: false
         type: string
+      openclaw_npm_resume_run_id:
+        description: Successful original OpenClaw NPM Release run id when resuming an already-published package
+        required: false
+        type: string
       npm_dist_tag:
         description: npm dist-tag for the OpenClaw package
         required: true
@@ -104,6 +108,7 @@ jobs:
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
+          OPENCLAW_NPM_RESUME_RUN_ID: ${{ inputs.openclaw_npm_resume_run_id }}
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
           WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
@@ -151,6 +156,14 @@ jobs:
           fi
           if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" && ! "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
             echo "full_release_validation_run_attempt must be a positive integer." >&2
+            exit 1
+          fi
+          if [[ -n "${OPENCLAW_NPM_RESUME_RUN_ID}" && ! "${OPENCLAW_NPM_RESUME_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "openclaw_npm_resume_run_id must be a positive GitHub Actions run id." >&2
+            exit 1
+          fi
+          if [[ -n "${OPENCLAW_NPM_RESUME_RUN_ID}" && "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
+            echo "openclaw_npm_resume_run_id requires publish_openclaw_npm=true." >&2
             exit 1
           fi
           stable_release=true
@@ -782,6 +795,7 @@ jobs:
           WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
           PREFLIGHT_ARTIFACT_NAME: ${{ needs.resolve_release_target.outputs.preflight_artifact_name }}
           NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
+          OPENCLAW_NPM_RESUME_RUN_ID: ${{ inputs.openclaw_npm_resume_run_id }}
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
           WINDOWS_NODE_INSTALLER_DIGESTS: ${{ needs.resolve_release_target.outputs.windows_node_installer_digests }}
           POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
@@ -789,6 +803,9 @@ jobs:
           CLAWHUB_PLAN_PATH: ${{ runner.temp }}/openclaw-release-clawhub-plan.json
         run: |
           set -euo pipefail
+
+          openclaw_npm_expected_workflow_ref="${GITHUB_REF}"
+          openclaw_npm_expected_workflow_sha="${PARENT_WORKFLOW_SHA}"
 
           is_stable_release() {
             [[ "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
@@ -1273,6 +1290,7 @@ jobs:
 
           resolve_openclaw_npm_publish_state() {
             local artifact_name manifest_dir manifest_path manifest_sha manifest_tarball_sha published_sha published_tarball_path published_tarball_url release_version
+            local canonical_workflow_id resume_branch resume_compare_status resume_conclusion resume_event resume_jobs resume_json resume_path resume_path_trusted resume_sha resume_tag_commit_sha resume_tag_json resume_tag_object_sha resume_tag_verified resume_url resume_workflow_id
 
             openclaw_npm_already_published="false"
             if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
@@ -1317,8 +1335,66 @@ jobs:
               exit 1
             fi
 
+            if [[ -z "${OPENCLAW_NPM_RESUME_RUN_ID//[[:space:]]/}" ]]; then
+              echo "openclaw@${release_version} is already published; openclaw_npm_resume_run_id is required to bind postpublish proof to the original workflow identity." >&2
+              exit 1
+            fi
+            resume_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${OPENCLAW_NPM_RESUME_RUN_ID}")"
+            canonical_workflow_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/openclaw-npm-release.yml" --jq '.id')"
+            resume_branch="$(printf '%s' "${resume_json}" | jq -er '.head_branch | select(type == "string" and length > 0)')"
+            resume_sha="$(printf '%s' "${resume_json}" | jq -er '.head_sha | select(test("^[a-f0-9]{40}$"))')"
+            resume_conclusion="$(printf '%s' "${resume_json}" | jq -er '.conclusion')"
+            resume_event="$(printf '%s' "${resume_json}" | jq -er '.event')"
+            resume_path="$(printf '%s' "${resume_json}" | jq -er '.path')"
+            resume_workflow_id="$(printf '%s' "${resume_json}" | jq -er '.workflow_id')"
+            resume_url="$(printf '%s' "${resume_json}" | jq -er '.html_url')"
+            if [[ ! "${resume_branch}" =~ ^release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
+              echo "OpenClaw npm resume run has an untrusted workflow ref: ${resume_url}" >&2
+              exit 1
+            fi
+            resume_path_trusted="false"
+            case "${resume_path}" in
+              ".github/workflows/openclaw-npm-release.yml" | \
+                ".github/workflows/openclaw-npm-release.yml@${resume_branch}" | \
+                ".github/workflows/openclaw-npm-release.yml@refs/tags/${resume_branch}")
+                resume_path_trusted="true"
+                ;;
+            esac
+            if [[ "${resume_conclusion}" != "success" ||
+              "${resume_event}" != "workflow_dispatch" ||
+              "${resume_path_trusted}" != "true" ||
+              "${resume_workflow_id}" != "${canonical_workflow_id}" ||
+              "${resume_sha:0:12}" != "${BASH_REMATCH[1]}" ]]; then
+              echo "OpenClaw npm resume run has an untrusted workflow identity: ${resume_url}" >&2
+              exit 1
+            fi
+            resume_tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${resume_branch}")"
+            resume_tag_object_sha="$(printf '%s' "${resume_tag_json}" | jq -er '.object.sha | select(test("^[a-f0-9]{40}$"))')"
+            if [[ "$(printf '%s' "${resume_tag_json}" | jq -er '.object.type')" != "tag" ]]; then
+              echo "OpenClaw npm resume run tooling ref is not a signed annotated tag: ${resume_url}" >&2
+              exit 1
+            fi
+            resume_tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${resume_tag_object_sha}")"
+            resume_tag_commit_sha="$(printf '%s' "${resume_tag_json}" | jq -er '.object.sha | select(test("^[a-f0-9]{40}$"))')"
+            resume_tag_verified="$(printf '%s' "${resume_tag_json}" | jq -er '.verification.verified')"
+            resume_compare_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${resume_sha}...main" --jq '.status')"
+            if [[ "$(printf '%s' "${resume_tag_json}" | jq -er '.object.type')" != "commit" ||
+              "${resume_tag_commit_sha}" != "${resume_sha}" ||
+              "${resume_tag_verified}" != "true" ||
+              ( "${resume_compare_status}" != "ahead" && "${resume_compare_status}" != "identical" ) ]]; then
+              echo "OpenClaw npm resume run is not bound to a real, main-reachable protected tooling tag: ${resume_url}" >&2
+              exit 1
+            fi
+            resume_jobs="$(gh run view "${OPENCLAW_NPM_RESUME_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs --jq '.jobs')"
+            if ! printf '%s' "${resume_jobs}" | jq -e '.[] | select(.name == "validate_publish_request" and .conclusion == "success")' >/dev/null; then
+              echo "OpenClaw npm resume run lacks successful parent release approval validation: ${resume_url}" >&2
+              exit 1
+            fi
+            openclaw_npm_expected_workflow_ref="refs/tags/${resume_branch}"
+            openclaw_npm_expected_workflow_sha="${resume_sha}"
+
             openclaw_npm_already_published="true"
-            echo "openclaw@${release_version} is already published on npm with this tag's preflight tarball; skipping the core npm dispatch and resuming the remaining publish stages."
+            echo "openclaw@${release_version} is already published on npm with this tag's preflight tarball; resuming from ${resume_url}."
           }
 
           resolve_clawhub_release_plan() {
@@ -1841,9 +1917,16 @@ jobs:
               verify_args+=(--npm-telegram-run "${NPM_TELEGRAM_RUN_ID}")
             fi
 
-            OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${GITHUB_REF}" \
-              OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${PARENT_WORKFLOW_SHA}" \
-              node --import tsx \
+            if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+              OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${openclaw_npm_expected_workflow_ref}" \
+                OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${openclaw_npm_expected_workflow_sha}" \
+                node --import tsx \
+                "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-postpublish-verify.ts" \
+                "${release_version}"
+              verify_args+=(--skip-postpublish)
+            fi
+
+            node --import tsx \
               "${GITHUB_WORKSPACE}/.release-harness/scripts/release-verify-beta.ts" \
               "${verify_args[@]}"
 

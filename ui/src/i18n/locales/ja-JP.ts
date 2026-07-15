@@ -662,6 +662,8 @@ export const ja_JP: TranslationMap = {
     archiveSession: "セッションをアーカイブ",
     archiveSessionCount: "{count} 件をアーカイブ",
     restoreSession: "セッションを復元",
+    stopCloudWorker: "クラウドワーカーを停止…",
+    stopCloudWorkerConfirm: "「{session}」のクラウドワーカーを停止しますか？",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "{count} 件を削除…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',
