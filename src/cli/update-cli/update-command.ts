@@ -1,7 +1,9 @@
 // Main update orchestration for source checkouts and package installs.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -22,6 +24,10 @@ import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js"
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import {
+  isExactSemverVersion,
+  isRegistryNpmDistTagSelector,
+} from "../../infra/npm-registry-spec.js";
+import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
 } from "../../infra/package-update-steps.js";
@@ -36,9 +42,11 @@ import {
 import {
   checkUpdateStatus,
   compareSemverStrings,
+  fetchNpmPackageTargetStatus,
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
 } from "../../infra/update-check.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
   readControlPlaneUpdateSentinelMeta,
@@ -56,6 +64,7 @@ import {
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
   resolvePnpmGlobalDirFromGlobalRoot,
+  type GlobalInstallManager,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
@@ -144,6 +153,8 @@ export { updateFinalizeCommand } from "./update-command-post-core.js";
 
 const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
+const PUBLIC_NPM_REGISTRY = "https://registry.npmjs.org/";
+const NPM_REGISTRY_CONFIG_TIMEOUT_MS = 5_000;
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -511,6 +522,315 @@ async function withUpdateInProgressEnv<T>(run: () => Promise<T>): Promise<T> {
   });
 }
 
+function normalizeNpmRegistryUrl(value: string | undefined | null): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const urlInput = trimmed.startsWith("//")
+    ? `https:${trimmed}`
+    : /^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed)
+      ? trimmed
+      : `https://${trimmed}`;
+  try {
+    const url = new URL(urlInput);
+    url.hash = "";
+    url.search = "";
+    const pathname = url.pathname.replace(/\/+$/u, "");
+    return `${url.protocol.toLowerCase()}//${url.host.toLowerCase()}${pathname}/`;
+  } catch {
+    return `${trimmed.replace(/\/+$/u, "").toLowerCase()}/`;
+  }
+}
+
+function isPublicNpmRegistry(value: string | undefined | null): boolean {
+  const normalized = normalizeNpmRegistryUrl(value);
+  if (!normalized) {
+    return false;
+  }
+  try {
+    const url = new URL(normalized);
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      url.host === "registry.npmjs.org" &&
+      url.pathname === "/"
+    );
+  } catch {
+    return normalized === PUBLIC_NPM_REGISTRY;
+  }
+}
+
+function readRegistryEnv(env: NodeJS.ProcessEnv, preferredNames: string[]): string | null {
+  const preferredLowerNames = new Set(preferredNames.map((name) => name.toLowerCase()));
+  const registries: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (!preferredLowerNames.has(key.toLowerCase())) {
+      continue;
+    }
+    const next = normalizeOptionalString(value);
+    if (next) {
+      registries.push(next);
+    }
+  }
+  const customRegistry = registries.find((registry) => !isPublicNpmRegistry(registry));
+  if (registries.length > 1 && customRegistry) {
+    return customRegistry;
+  }
+  return registries.at(-1) ?? null;
+}
+
+function readNpmRegistryEnv(env: NodeJS.ProcessEnv): string | null {
+  return readRegistryEnv(env, ["NPM_CONFIG_REGISTRY", "npm_config_registry"]);
+}
+
+function readPnpmRegistryEnv(env: NodeJS.ProcessEnv): string | null {
+  const upper = normalizeOptionalString(env.PNPM_CONFIG_REGISTRY);
+  const lower = normalizeOptionalString(env.pnpm_config_registry);
+  if (upper && lower && normalizeNpmRegistryUrl(upper) !== normalizeNpmRegistryUrl(lower)) {
+    return null;
+  }
+  return readRegistryEnv(env, ["PNPM_CONFIG_REGISTRY", "pnpm_config_registry"]);
+}
+
+function readBunRegistryEnv(env: NodeJS.ProcessEnv): string | null {
+  return (
+    readRegistryEnv(env, ["BUN_CONFIG_REGISTRY", "bun_config_registry"]) ??
+    readNpmRegistryEnv(env)
+  );
+}
+
+function parseNpmrcDefaultRegistry(contents: string): string | null {
+  for (const rawLine of contents.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#") || line.startsWith(";")) {
+      continue;
+    }
+    const match = /^registry\s*=\s*(?<value>.+)$/iu.exec(line);
+    const value = normalizeOptionalString(match?.groups?.value);
+    if (value) {
+      return stripConfigStringQuotes(value);
+    }
+  }
+  return null;
+}
+
+function stripConfigStringQuotes(value: string): string {
+  const trimmed = value.trim();
+  const quote = trimmed[0];
+  if (
+    (quote === `"` || quote === "'") &&
+    trimmed.endsWith(quote) &&
+    trimmed.length >= 2
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function parseBunfigInstallRegistry(contents: string): string | null {
+  let inInstallSection = false;
+  for (const rawLine of contents.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    const section = /^\[(?<name>[^\]]+)\]$/u.exec(line);
+    if (section?.groups?.name) {
+      inInstallSection = section.groups.name.trim() === "install";
+      continue;
+    }
+    if (!inInstallSection) {
+      continue;
+    }
+    const registry = /^registry\s*=\s*(?<value>.+)$/u.exec(line)?.groups?.value;
+    const normalized = normalizeOptionalString(registry);
+    if (!normalized) {
+      continue;
+    }
+    if (normalized.startsWith("{")) {
+      const url = /\burl\s*=\s*(?<value>"[^"]*"|'[^']*'|[^,}#\s]+)/u.exec(normalized)?.groups
+        ?.value;
+      const parsedUrl = normalizeOptionalString(url);
+      return parsedUrl ? stripConfigStringQuotes(parsedUrl) : null;
+    }
+    const bareValue = normalized.split(/\s+#/u)[0]?.trim() ?? "";
+    return stripConfigStringQuotes(bareValue);
+  }
+  return null;
+}
+
+async function readRegistryConfigFile(
+  filePath: string,
+  parse: (contents: string) => string | null,
+): Promise<string | null> {
+  try {
+    return parse(await fs.readFile(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function readBunRegistryConfig(cwd: string | undefined): Promise<string | null> {
+  if (!cwd) {
+    return null;
+  }
+  return (
+    (await readRegistryConfigFile(path.join(cwd, "bunfig.toml"), parseBunfigInstallRegistry)) ??
+    (await readRegistryConfigFile(path.join(cwd, ".npmrc"), parseNpmrcDefaultRegistry))
+  );
+}
+
+function resolvePackageManagerRegistryConfigArgs(params: {
+  manager?: GlobalInstallManager | null;
+  command?: string | null;
+}): string[] | null {
+  const manager = params.manager ?? "npm";
+  const command = params.command ?? manager;
+  if (manager === "pnpm") {
+    return [command, "config", "get", "registry"];
+  }
+  if (manager !== "npm") {
+    return null;
+  }
+  return [command, "config", "get", "registry", "--global"];
+}
+
+async function resolveEffectiveNpmRegistry(params: {
+  env: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+  registryConfigCwd?: string;
+  registryConfigCommand?: string;
+  timeoutMs?: number;
+  manager?: GlobalInstallManager | null;
+}): Promise<string | null> {
+  if (params.manager === "bun") {
+    return (
+      readBunRegistryEnv(params.env) ??
+      (await readBunRegistryConfig(params.registryConfigCwd ?? params.invocationCwd))
+    );
+  }
+  if (params.manager === "pnpm") {
+    const registryEnv = readPnpmRegistryEnv(params.env);
+    if (registryEnv) {
+      return registryEnv;
+    }
+  }
+  const argv = resolvePackageManagerRegistryConfigArgs({
+    manager: params.manager,
+    command: params.registryConfigCommand,
+  });
+  if (!argv) {
+    return readNpmRegistryEnv(params.env);
+  }
+  const result = await runCommandWithTimeout(
+    argv,
+    {
+      cwd: params.registryConfigCwd ?? params.invocationCwd,
+      env: params.env,
+      timeoutMs: Math.min(
+        params.timeoutMs ?? NPM_REGISTRY_CONFIG_TIMEOUT_MS,
+        NPM_REGISTRY_CONFIG_TIMEOUT_MS,
+      ),
+    },
+  ).catch(() => null);
+  if (!result || result.code !== 0) {
+    return params.manager === "pnpm"
+      ? readPnpmRegistryEnv(params.env)
+      : readNpmRegistryEnv(params.env);
+  }
+  return normalizeOptionalString(result.stdout) ?? null;
+}
+
+async function hasCustomNpmRegistryOverride(params: {
+  env?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+  registryConfigCwd?: string;
+  registryConfigCommand?: string;
+  timeoutMs?: number;
+  manager?: GlobalInstallManager | null;
+}): Promise<boolean> {
+  const env = params.env ?? process.env;
+  const registry = await resolveEffectiveNpmRegistry({
+    env,
+    invocationCwd: params.invocationCwd,
+    registryConfigCwd: params.registryConfigCwd,
+    registryConfigCommand: params.registryConfigCommand,
+    timeoutMs: params.timeoutMs,
+    manager: params.manager,
+  });
+  return registry ? !isPublicNpmRegistry(registry) : false;
+}
+
+function isNpmRegistryMissingTargetError(error: string | undefined): boolean {
+  return /^HTTP 404\b/u.test(error?.trim() ?? "");
+}
+
+function resolveRegistryLookupTarget(target: string): string | null {
+  const trimmed = target.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (isExactSemverVersion(trimmed)) {
+    return trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
+  }
+  return isRegistryNpmDistTagSelector(trimmed) ? trimmed : null;
+}
+
+function resolvePackageRegistryTargetFromInstallSpec(installSpec: string | null): string | null {
+  const trimmed = installSpec?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const packagePrefix = `${DEFAULT_PACKAGE_NAME}@`;
+  if (!trimmed.toLowerCase().startsWith(packagePrefix)) {
+    return null;
+  }
+  const target = trimmed.slice(packagePrefix.length).trim();
+  if (!target || !canResolveRegistryVersionForPackageTarget(target)) {
+    return null;
+  }
+  return resolveRegistryLookupTarget(target);
+}
+
+async function resolvePackageTargetAvailabilityPreflightError(params: {
+  installSpec: string | null;
+  timeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+  registryConfigCwd?: string;
+  registryConfigCommand?: string;
+  manager?: GlobalInstallManager | null;
+}): Promise<string | null> {
+  const target = resolvePackageRegistryTargetFromInstallSpec(params.installSpec);
+  if (!target) {
+    return null;
+  }
+  if (
+    await hasCustomNpmRegistryOverride({
+      env: params.env,
+      invocationCwd: params.invocationCwd,
+      registryConfigCwd: params.registryConfigCwd,
+      registryConfigCommand: params.registryConfigCommand,
+      timeoutMs: params.timeoutMs,
+      manager: params.manager,
+    })
+  ) {
+    return null;
+  }
+  const status = await fetchNpmPackageTargetStatus({
+    target,
+    timeoutMs: params.timeoutMs,
+  });
+  if (status.version || !isNpmRegistryMissingTargetError(status.error)) {
+    return null;
+  }
+  return [
+    `openclaw@${target} is not available on the npm registry yet.`,
+    "`openclaw update --dry-run` checks npm before apply so it does not green-light a target that npm install will reject with ETARGET.",
+    "Wait for npm propagation, choose an available dist-tag, or use a GitHub package spec such as `--tag github:openclaw/openclaw#v<version>`.",
+  ].join("\n");
+}
+
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const recoveryState: UpdateCommandRecoveryState = {};
   return await withUpdateInProgressEnv(async () => {
@@ -783,6 +1103,71 @@ async function updateCommandInternal(
     }
   }
 
+  let packageUpdateManager: GlobalInstallManager | null = null;
+  const resolvePackageUpdateManager = async (): Promise<GlobalInstallManager | null> => {
+    if (updateInstallKind !== "package") {
+      return null;
+    }
+    if (packageUpdateManager) {
+      return packageUpdateManager;
+    }
+    packageUpdateManager = await resolveGlobalManager({
+      root,
+      installKind,
+      timeoutMs: updateStepTimeoutMs,
+    });
+    return packageUpdateManager;
+  };
+  let packageRegistryPreflightTarget:
+    | {
+        manager: GlobalInstallManager | null;
+        installTarget?: ResolvedGlobalInstallTarget;
+        registryConfigCwd?: string;
+      }
+    | undefined;
+  const resolvePackageRegistryPreflightTarget = async (
+    manager: GlobalInstallManager | null,
+  ): Promise<{
+    manager: GlobalInstallManager | null;
+    registryConfigCommand?: string;
+    registryConfigCwd?: string;
+  }> => {
+    if (!manager) {
+      return { manager: null, registryConfigCwd: invocationCwd };
+    }
+    if (packageRegistryPreflightTarget?.manager === manager) {
+      return {
+        manager: packageRegistryPreflightTarget.installTarget?.manager ?? manager,
+        ...(packageRegistryPreflightTarget.installTarget?.command
+          ? { registryConfigCommand: packageRegistryPreflightTarget.installTarget.command }
+          : {}),
+        ...(packageRegistryPreflightTarget.registryConfigCwd
+          ? { registryConfigCwd: packageRegistryPreflightTarget.registryConfigCwd }
+          : {}),
+      };
+    }
+    const installTarget = await resolveGlobalInstallTarget({
+      manager,
+      runCommand: createGlobalCommandRunner(),
+      timeoutMs: updateStepTimeoutMs,
+      pkgRoot: root,
+    });
+    const registryConfigCwd =
+      installTarget.manager === "pnpm" && installTarget.globalRoot
+        ? path.dirname(installTarget.globalRoot)
+        : invocationCwd;
+    packageRegistryPreflightTarget = {
+      manager,
+      installTarget,
+      registryConfigCwd,
+    };
+    return {
+      manager: installTarget.manager,
+      ...(installTarget.command ? { registryConfigCommand: installTarget.command } : {}),
+      ...(registryConfigCwd ? { registryConfigCwd } : {}),
+    };
+  };
+
   if (updateInstallKind !== "git") {
     packageInstallEnv = await createGlobalInstallEnv();
     packageInstallCwd = tryResolveInvocationCwd();
@@ -869,6 +1254,39 @@ async function updateCommandInternal(
       tag,
       env: packageInstallEnv,
     });
+    // Run the availability preflight against the spec the package manager will
+    // actually install. When OPENCLAW_UPDATE_PACKAGE_SPEC is set, that override
+    // *is* the install target, so a registry-style override such as
+    // `openclaw@<version|tag>` must be preflighted too — otherwise dry-run/apply
+    // green-lights an override target npm install later rejects with ETARGET.
+    // Non-registry overrides (tarball/git/URL specs) and custom registries stay
+    // exempt because resolvePackageTargetAvailabilityPreflightError only probes
+    // registry-style `openclaw@<target>` specs on the public npm registry.
+    const availabilityInstallSpec = packageInstallSpec;
+    const packageTargetManager = resolvePackageRegistryTargetFromInstallSpec(availabilityInstallSpec)
+      ? await resolvePackageUpdateManager()
+      : null;
+    const registryPreflightTarget =
+      packageTargetManager === null
+        ? {
+            manager: packageTargetManager,
+            ...(invocationCwd ? { registryConfigCwd: invocationCwd } : {}),
+          }
+        : await resolvePackageRegistryPreflightTarget(packageTargetManager);
+    const targetAvailabilityError = await resolvePackageTargetAvailabilityPreflightError({
+      installSpec: availabilityInstallSpec,
+      timeoutMs,
+      env: process.env,
+      invocationCwd,
+      registryConfigCwd: registryPreflightTarget.registryConfigCwd,
+      registryConfigCommand: registryPreflightTarget.registryConfigCommand,
+      manager: registryPreflightTarget.manager,
+    });
+    if (targetAvailabilityError) {
+      defaultRuntime.error(targetAvailabilityError);
+      defaultRuntime.exit(1);
+      return;
+    }
   }
 
   if (opts.dryRun) {
@@ -876,11 +1294,7 @@ async function updateCommandInternal(
     if (updateInstallKind === "git") {
       mode = "git";
     } else if (updateInstallKind === "package") {
-      mode = await resolveGlobalManager({
-        root,
-        installKind,
-        timeoutMs: updateStepTimeoutMs,
-      });
+      mode = (await resolvePackageUpdateManager()) ?? "unknown";
     }
 
     const actions: string[] = [];
