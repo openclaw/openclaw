@@ -53,6 +53,27 @@ type ResolvedChannelAccountRowParams = {
   accountId: string;
 };
 
+const RUNTIME_CREDENTIAL_STATUS_KEYS = [
+  "tokenStatus",
+  "botTokenStatus",
+  "appTokenStatus",
+  "signingSecretStatus",
+  "userTokenStatus",
+] as const;
+
+function applyRuntimeCredentialStatuses(account: unknown, live: unknown): unknown {
+  const liveRecord = asRecord(live);
+  const statuses = Object.fromEntries(
+    RUNTIME_CREDENTIAL_STATUS_KEYS.flatMap((key) => {
+      const value = liveRecord[key];
+      return value === "available" || value === "configured_unavailable" || value === "missing"
+        ? [[key, value]]
+        : [];
+    }),
+  );
+  return Object.keys(statuses).length > 0 ? { ...asRecord(account), ...statuses } : account;
+}
+
 function existsSyncMaybe(p: string | undefined): boolean | null {
   const path = normalizeOptionalString(p) ?? "";
   if (!path) {
@@ -299,6 +320,7 @@ export async function buildChannelsTable(
       return {
         account: {
           ...account,
+          account: applyRuntimeCredentialStatuses(account.account, live),
           enabled,
           configured,
           snapshot: { ...account.snapshot, enabled, configured },
@@ -320,17 +342,20 @@ export async function buildChannelsTable(
         !credentialResolutionSkipped &&
         !hasRuntimeCredentialAvailable({ liveAccounts, accountId: a.accountId }),
     );
-    const accountsForTokenSummary = accounts.map((entry) =>
-      hasConfiguredUnavailableCredentialStatus(entry.account) &&
-      (credentialResolutionSkipped ||
-        hasRuntimeCredentialAvailable({ liveAccounts, accountId: entry.accountId }))
-        ? {
-            ...entry,
-            // Fast-mode scans may not resolve local secrets; runtime evidence can still prove availability.
-            account: markConfiguredUnavailableCredentialStatusesAvailable(entry.account),
-          }
-        : entry,
-    );
+    const accountsForTokenSummary: ChannelAccountRow[] = [];
+    for (const { account: entry } of effectiveAccountStates) {
+      accountsForTokenSummary.push(
+        hasConfiguredUnavailableCredentialStatus(entry.account) &&
+          (credentialResolutionSkipped ||
+            hasRuntimeCredentialAvailable({ liveAccounts, accountId: entry.accountId }))
+          ? {
+              ...entry,
+              // Fast-mode scans may not resolve local secrets; runtime evidence can still prove availability.
+              account: markConfiguredUnavailableCredentialStatusesAvailable(entry.account),
+            }
+          : entry,
+      );
+    }
     const defaultEntry = accounts.find((a) => a.accountId === defaultAccountId) ?? accounts[0];
 
     const summary = plugin.status?.buildChannelSummary
