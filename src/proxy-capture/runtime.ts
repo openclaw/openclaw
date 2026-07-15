@@ -110,6 +110,18 @@ const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
   "session",
 ];
 
+function parseDeclaredCaptureContentLength(raw: string | null | undefined): number | undefined {
+  if (raw === null || raw === undefined) {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const declaredLength = Number(trimmed);
+  return Number.isSafeInteger(declaredLength) ? declaredLength : undefined;
+}
+
 // Runtime capture records HTTP/fetch and websocket events into the SQLite store,
 // redacting sensitive headers and persisting bodies in capture_blobs.
 type GlobalFetchPatchedState = {
@@ -564,7 +576,7 @@ export function captureHttpExchange(
   // Fast path: when the provider declares an oversized Content-Length, skip the
   // body entirely instead of buffering it. Missing/chunked lengths fall through
   // to the bounded streaming read below, which cancels on overflow.
-  const declaredLength = Number(
+  const declaredLength = parseDeclaredCaptureContentLength(
     typeof params.response.headers?.get === "function"
       ? params.response.headers.get("content-length")
       : undefined,
