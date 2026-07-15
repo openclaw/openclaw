@@ -19,6 +19,12 @@ const RETRYABLE_INFERENCE_STATUSES = new Set([
   "unavailable",
 ]);
 
+// auth/billing/rate_limit failures commonly apply to one key/account/project,
+// so another credential owner of the same provider may still work. Everything
+// else retryable (timeout, unavailable) is provider-wide, so its whole provider
+// is skipped for the rest of the ladder.
+const CREDENTIAL_SCOPED_FAILURE_STATUSES = new Set(["auth", "billing", "rate_limit"]);
+
 type InferenceFallbackDeps = {
   readConfig?: () => Promise<OpenClawConfig>;
   resolveRoute?: (
@@ -85,9 +91,21 @@ export async function verifySystemAgentInferenceWithFallback(params: {
   const hasAuth = deps.hasAuth ?? hasAvailableAuthForProvider;
   const verify = deps.verify ?? verifySetupInference;
   let lastFailure: BoundVerifySetupInferenceResult | undefined;
-  const attemptedProviders = new Set<string>();
+  const failedProviders = new Set<string>();
+  const attemptedOwners = new Set<string>();
   for (const candidate of ordered) {
-    if (attemptedProviders.has(candidate.provider)) {
+    if (failedProviders.has(candidate.provider)) {
+      continue;
+    }
+    // Dedup by credential owner (provider + auth profile + agent dir), not just
+    // provider, so distinct credential owners of one provider are each tried.
+    // JSON-encode the tuple so unrestricted field values cannot collide.
+    const ownerKey = JSON.stringify([
+      candidate.provider,
+      candidate.route.authProfileId ?? null,
+      candidate.route.agentDir ?? null,
+    ]);
+    if (attemptedOwners.has(ownerKey)) {
       continue;
     }
     if (
@@ -102,7 +120,7 @@ export async function verifySystemAgentInferenceWithFallback(params: {
     ) {
       continue;
     }
-    attemptedProviders.add(candidate.provider);
+    attemptedOwners.add(ownerKey);
     const result = await verify({
       runtime: params.runtime,
       bindSession: true,
@@ -115,6 +133,11 @@ export async function verifySystemAgentInferenceWithFallback(params: {
     // Bad/empty answers and owner-integrity failures are not availability failover.
     if (!RETRYABLE_INFERENCE_STATUSES.has(result.status)) {
       return result;
+    }
+    // A provider-wide failure applies to all of its routes; a credential-scoped
+    // one may not, so only the former retires the whole provider.
+    if (!CREDENTIAL_SCOPED_FAILURE_STATUSES.has(result.status)) {
+      failedProviders.add(candidate.provider);
     }
   }
   return (
