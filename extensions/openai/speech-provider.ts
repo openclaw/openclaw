@@ -50,6 +50,10 @@ type OpenAITtsProviderOverrides = {
   speed?: number;
 };
 
+function resolveOpenAISpeechApiKey(config: OpenAITtsProviderConfig): string | undefined {
+  return trimToUndefined(config.apiKey) ?? trimToUndefined(process.env.OPENAI_API_KEY);
+}
+
 function normalizeOpenAISpeechResponseFormat(
   value: unknown,
 ): OpenAiSpeechResponseFormat | undefined {
@@ -322,9 +326,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     }),
     listVoices: async () => OPENAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ providerConfig }) =>
-      Boolean(
-        readOpenAIProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY?.trim(),
-      ),
+      Boolean(resolveOpenAISpeechApiKey(readOpenAIProviderConfig(providerConfig))),
     prepareSynthesis: (ctx) => {
       const config = readOpenAIProviderConfig(ctx.providerConfig);
       if (config.instructions) {
@@ -345,7 +347,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     synthesize: async (req) => {
       const config = readOpenAIProviderConfig(req.providerConfig);
       const overrides = readOpenAIOverrides(req.providerOverrides, config.baseUrl);
-      const apiKey = config.apiKey || process.env.OPENAI_API_KEY?.trim();
+      const apiKey = resolveOpenAISpeechApiKey(config);
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
       }
@@ -380,7 +382,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     synthesizeTelephony: async (req) => {
       const config = readOpenAIProviderConfig(req.providerConfig);
       const overrides = readOpenAIOverrides(req.providerOverrides, config.baseUrl);
-      const apiKey = config.apiKey || process.env.OPENAI_API_KEY?.trim();
+      const apiKey = resolveOpenAISpeechApiKey(config);
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
       }
