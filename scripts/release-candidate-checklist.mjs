@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
@@ -1197,8 +1197,12 @@ export function candidateParallelsShellCommand(
   timeoutBin,
   dependencyTarballPaths = [],
 ) {
+  // Login shells can replace the candidate's supported Node with ambient host Node.
+  // Keep the invoking Node first so pnpm and npm use the validated runtime.
+  const nodeBinDir = dirname(process.execPath);
   return [
     'set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a;',
+    `export PATH=${shellQuote(nodeBinDir)}:"$PATH";`,
     "exec",
     shellQuote(timeoutBin),
     "--foreground",

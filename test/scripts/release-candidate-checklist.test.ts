@@ -1,5 +1,6 @@
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
@@ -449,13 +450,12 @@ describe("release candidate checklist", () => {
       ".artifacts/preflight/openclaw.tgz",
       "--json",
     ]);
-    expect(
-      candidateParallelsShellCommand(
-        ".artifacts/preflight/openclaw candidate.tgz",
-        "/opt/homebrew/bin/gtimeout",
-      ),
-    ).toContain(
-      "set -a; source \"$HOME/.profile\" >/dev/null 2>&1 || true; set +a; exec '/opt/homebrew/bin/gtimeout' --foreground 150m pnpm",
+    const command = candidateParallelsShellCommand(
+      ".artifacts/preflight/openclaw candidate.tgz",
+      "/opt/homebrew/bin/gtimeout",
+    );
+    expect(command).toContain(
+      `set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a; export PATH='${dirname(process.execPath)}':"$PATH"; exec '/opt/homebrew/bin/gtimeout' --foreground 150m pnpm`,
     );
     expect(
       candidateParallelsShellCommand(
