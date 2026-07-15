@@ -317,21 +317,6 @@ final class StatusItemMouseRouter: NSResponder {
         }
     }
 
-    func uninstall() {
-        if let eventMonitor {
-            self.eventMonitorRemover(eventMonitor)
-            self.eventMonitor = nil
-        }
-        if let button, let trackingArea {
-            button.removeTrackingArea(trackingArea)
-        }
-        self.button = nil
-        self.trackingArea = nil
-        self.onLeftClick = nil
-        self.onRightClick = nil
-        self.onHoverChanged = nil
-    }
-
     func route(_ event: NSEvent) -> NSEvent? {
         Self.route(
             event,
