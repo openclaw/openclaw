@@ -43,7 +43,11 @@ type QaRunnerTransportFlowPreparationInput = {
     tempRoot: string;
     workspaceDir: string;
     runtimeEnv: NodeJS.ProcessEnv;
-    call: (method: string, params?: unknown, options?: { timeoutMs?: number }) => Promise<unknown>;
+    call: (
+      method: string,
+      params?: unknown,
+      options?: { expectFinal?: boolean; timeoutMs?: number },
+    ) => Promise<unknown>;
     restartAfterStateMutation?: (
       mutateState: (context: {
         configPath: string;
@@ -53,6 +57,10 @@ type QaRunnerTransportFlowPreparationInput = {
       }) => Promise<void>,
     ) => Promise<void>;
   };
+  waitForConfigRestartSettle: (options?: {
+    restartDelayMs?: number;
+    timeoutMs?: number;
+  }) => Promise<void>;
   outputDir: string;
   timeoutMs: number;
 };

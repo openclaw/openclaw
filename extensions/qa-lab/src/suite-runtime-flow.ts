@@ -337,6 +337,8 @@ export function createQaSuiteScenarioStepRunner(
             gateway: env.gateway,
             outputDir: env.outputDir,
             timeoutMs: execution.timeoutMs ?? deps.liveTurnTimeoutMs(env, 60_000),
+            waitForConfigRestartSettle: async (options) =>
+              await waitForConfigRestartSettle(env, options?.restartDelayMs, options?.timeoutMs),
           });
           if (prepared) {
             Object.assign(vars, prepared);
