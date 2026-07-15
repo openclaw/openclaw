@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { getFeishuRuntime } from "./runtime.js";
 
-export type DocxUploadInput = {
+type DocxUploadInput = {
   url?: string;
   filePath?: string;
   image?: string;

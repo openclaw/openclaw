@@ -7,7 +7,7 @@ export type DocxMarkdownChunk = {
   images: DocxMarkdownImage[];
 };
 
-export type DocxMarkdownPlan = {
+type DocxMarkdownPlan = {
   chunks: DocxMarkdownChunk[];
 };
 
