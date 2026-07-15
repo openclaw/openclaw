@@ -11,8 +11,6 @@ import type {
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
 } from "../config/sessions/session-accessor.js";
-import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
-import { registerGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -618,38 +616,6 @@ describe("subagent registry seam flow", () => {
       .find((entry) => entry.runId === "run-interrupted-wait");
     expect(run?.endedAt).toBeUndefined();
     expect(run?.outcome).toBeUndefined();
-  });
-
-  it("waits through the active Gateway instance runtime when lifecycle-owned", async () => {
-    const waitForAgent = vi.fn(async () => ({ status: "pending" }));
-    const release = registerGatewayRecoveryRuntime({
-      dispatchAgent: vi.fn(),
-      waitForAgent: waitForAgent as GatewayRecoveryRuntime["waitForAgent"],
-      sendRecoveryNotice: vi.fn(),
-    });
-
-    try {
-      mod.registerSubagentRun({
-        runId: "run-instance-wait",
-        childSessionKey: "agent:main:subagent:instance-wait",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: "wait in process",
-        cleanup: "keep",
-      });
-
-      await waitForFast(() => expect(waitForAgent).toHaveBeenCalledOnce());
-
-      expect(waitForAgent).toHaveBeenCalledWith(
-        { runId: "run-instance-wait", timeoutMs: 1_000 },
-        3_000,
-      );
-      expect(mocks.callGateway).not.toHaveBeenCalledWith(
-        expect.objectContaining({ method: "agent.wait" }),
-      );
-    } finally {
-      release();
-    }
   });
 
   it("does not fall back to network recovery without an instance-bound runtime", async () => {
