@@ -53,6 +53,7 @@ import {
   stampConfigVersion,
   tightenStateDirPermissionsIfNeeded,
 } from "./io.write-safety.js";
+import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
@@ -360,6 +361,13 @@ export async function writeConfigFileFromContext(
           assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
         }
         options.assertConfigPathForWrite?.();
+        // Warn only after final guards pass, with no later await before rename.
+        warnIfJSON5CommentsWillBeStripped({
+          raw: snapshot.raw,
+          filePath: configPath,
+          warn: (message) => deps.logger.warn(message),
+          skipOutputLogs: options.skipOutputLogs,
+        });
       },
     });
     configCommitted = true;
