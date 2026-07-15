@@ -242,6 +242,12 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain("Slack desktop screenshot is missing or empty");
     expect(remoteScript).not.toContain('test -s "$out/slack-desktop-smoke.png"');
     expect(remoteScript).toContain("OPENCLAW_MANTIS_SLACK_BROWSER_PROFILE_DIR");
+    expect(remoteScript)
+      .toContain(`const response = await fetch("https://slack.com/api/auth.test", {
+  method: "POST",
+  headers: { authorization: \`Bearer \${token}\` },
+  signal: AbortSignal.timeout(15_000),
+});`);
     const rsyncArgs = commands
       .filter((entry) => entry.command === "rsync")
       .flatMap((entry) => entry.args);

@@ -548,6 +548,10 @@ export async function noteMemorySearchHealth(
     return;
   }
 
+  if (provider === "none") {
+    return;
+  }
+
   if (provider === "local") {
     const suggestedRemoteProvider = resolveSuggestedRemoteMemoryProvider();
     const runtimeFacts = opts?.gatewayMemoryProbe?.runtimeFacts;
