@@ -115,11 +115,22 @@ export function createCronAgentWatchdog(params: {
     if (preExecutionTimeoutId || state !== "waiting_for_execution") {
       return;
     }
+    const baseDelayMs = resolveCronAgentPreExecutionWatchdogMs(params.jobTimeoutMs);
+    // C4: clip the re-arm delay to the remaining absolute deadline so that
+    // a late fallback re-entry (e.g. T=290s with C4 at 300s) cannot extend
+    // the watchdog past the absolute elapsed bound.
+    const delayMs =
+      executionStartedAt != null
+        ? Math.max(
+            0,
+            Math.min(baseDelayMs, CRON_AGENT_MAX_ELAPSED_MS - (Date.now() - executionStartedAt)),
+          )
+        : baseDelayMs;
     preExecutionTimeoutId = setTimeout(() => {
       if (state === "waiting_for_execution") {
         setTimedOut(preExecutionTimeoutErrorMessage(activeExecution));
       }
-    }, resolveCronAgentPreExecutionWatchdogMs(params.jobTimeoutMs));
+    }, delayMs);
   };
   const noteExecutionProgress = (info?: CronAgentExecutionStarted) => {
     if (!info) {
