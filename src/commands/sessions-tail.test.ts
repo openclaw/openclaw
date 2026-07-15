@@ -15,7 +15,8 @@ import {
 } from "../trajectory/paths.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
-import { sessionsTailCommand, setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.js";
+import { sessionsTailCommand } from "./sessions-tail.js";
+import { setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),

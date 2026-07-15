@@ -433,7 +433,7 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
  * throw. Path and query whitespace is intentionally preserved — the WHATWG URL
  * parser percent-encodes those characters correctly per RFC 3986.
  */
-export function sanitizeWebFetchUrl(raw: string): string {
+function sanitizeWebFetchUrl(raw: string): string {
   let end = raw.length;
   while (end > 0 && raw.charCodeAt(end - 1) <= 0x20) {
     end -= 1;
@@ -441,6 +441,12 @@ export function sanitizeWebFetchUrl(raw: string): string {
   const trimmed = raw.slice(0, end).replace(/^\s+/, "");
   const repaired = trimmed.replace(/^(https?:\/\/)\s+/i, "$1");
   return repaired.replace(/^(https?:\/\/[^/?#\s]+)\s+$/i, "$1");
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.webFetchTestApi")] = {
+    sanitizeWebFetchUrl,
+  };
 }
 
 async function normalizeProviderWebFetchPayload(params: {
