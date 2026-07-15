@@ -49,7 +49,7 @@ function createConcurrentExtensionBatchPlan() {
   ] as const;
   return {
     extensionCount: groups.length,
-    extensionIds: groups.map(([, , extensionId]) => extensionId),
+    extensionIds: groups.map((group) => group[2]),
     estimatedCost: 60,
     hasTests: true,
     planGroups: groups.map(([config, estimatedCost, extensionId, testFileCount]) => ({
