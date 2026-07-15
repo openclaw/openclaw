@@ -66,7 +66,7 @@ async function waitForProcessExit(pid: number, timeoutMs = 2_000): Promise<boole
       return true;
     }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 5);
     });
   }
   return !isProcessAlive(pid);
