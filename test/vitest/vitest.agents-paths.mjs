@@ -6,9 +6,11 @@ export const agentsAllTestPatterns = ["src/agents/**/*.test.ts"];
 export const agentsCoreIsolatedTestFiles = [
   "src/agents/image-generation-task-status.test.ts",
   "src/agents/media-generation-task-status-shared.test.ts",
+  "src/agents/mcp-http-fetch.test.ts",
   "src/agents/mcp-transport.test.ts",
   "src/agents/model-auth-env.provider-aliases.test.ts",
   "src/agents/model-selection.plugin-runtime.test.ts",
+  "src/agents/models-config.runtime-source-snapshot.test.ts",
   "src/agents/video-generation-task-status.test.ts",
 ];
 

@@ -11,6 +11,7 @@ import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_SYSTEM_PROMPT } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import type { SystemAgentOperation } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
@@ -55,7 +56,7 @@ export type SystemAgentSession = {
   /** Exact live-tested inference owner for this ephemeral conversation. */
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   /** Host-owned pending-proposal fingerprint; see system-agent-tool.ts. */
-  proposalRef: { current?: string };
+  proposalRef: { current?: string; operation?: SystemAgentOperation };
   /** Native CLI continuity, bound to the exact configured model/auth owner route. */
   cliSession?: {
     routeKey: string;
@@ -146,6 +147,7 @@ function clearSystemAgentCliSession(session: SystemAgentSession): void {
 
 function clearFailedSystemAgentSessionState(session: SystemAgentSession): void {
   session.proposalRef.current = undefined;
+  session.proposalRef.operation = undefined;
   clearSystemAgentCliSession(session);
 }
 
@@ -227,7 +229,7 @@ function resolveSystemAgentCliToolAvailability(
  */
 async function mirrorSystemAgentToolStateFromEvents(params: {
   runId: string;
-  proposalRef: { current?: string };
+  proposalRef: { current?: string; operation?: SystemAgentOperation };
   directiveRef: { current?: SystemAgentTurnDirective };
 }): Promise<() => void> {
   const [
@@ -256,6 +258,7 @@ async function mirrorSystemAgentToolStateFromEvents(params: {
     const transition = resolveSystemAgentProposalTransition({ args, resultText });
     if (transition) {
       params.proposalRef.current = transition.proposal;
+      params.proposalRef.operation = transition.operation;
     }
     const directive = resolveSystemAgentDirectiveTransition({ args, resultText });
     if (directive && params.directiveRef.current?.kind !== "approved-operation") {

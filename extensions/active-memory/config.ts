@@ -240,7 +240,7 @@ function normalizePluginConfig(
     allowedChatIds: normalizeChatIdList(raw.allowedChatIds),
     deniedChatIds: normalizeChatIdList(raw.deniedChatIds),
     thinking: resolveThinkingLevel(raw.thinking),
-    fastMode: resolveFastMode(raw.fastMode),
+    fastMode: normalizeActiveMemoryFastMode(raw.fastMode),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
     toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow, cfg }),
     promptOverride: normalizePromptConfigText(raw.promptOverride),
@@ -347,7 +347,7 @@ function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
   return "off";
 }
 
-function resolveFastMode(fastMode: unknown): ActiveMemoryFastMode | undefined {
+function normalizeActiveMemoryFastMode(fastMode: unknown): ActiveMemoryFastMode | undefined {
   return fastMode === true || fastMode === false || fastMode === "auto" ? fastMode : undefined;
 }
 
@@ -392,6 +392,7 @@ export {
   clampInt,
   hasDeprecatedModelFallbackPolicy,
   isMissingRegisteredMemoryToolsError,
+  normalizeActiveMemoryFastMode,
   normalizePluginConfig,
   requireTransientWorkspaceDir,
   resetActiveMemoryConfigForTests,

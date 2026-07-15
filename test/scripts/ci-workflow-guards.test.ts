@@ -2641,13 +2641,12 @@ describe("ci workflow guards", () => {
     expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
-    expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
-    expect(runStep.run).toContain("env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON");
-    expect(runStep.run).toContain('["exec", "node", "scripts/test-projects.mjs", target]');
-    expect(runStep.run).toContain('if (plan.env && typeof plan.env === "object"');
-    expect(runStep.run).toContain("childEnv[key] = value");
+    // Shard execution policy lives in the unit-tested wrapper script, not in
+    // inline workflow JavaScript.
+    expect(runStep.run).toBe("node scripts/ci-run-node-test-shard.mjs");
+    expect(existsSync("scripts/ci-run-node-test-shard.mjs")).toBe(true);
   });
 
   it("keeps the CI timing summary parked for timing optimization work", () => {
