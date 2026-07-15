@@ -234,7 +234,7 @@ async function main() {
 
   const doctorRuns: string[] = [];
   const doctorCommand = makeParams("/openclaw doctor fix", cfg).command;
-  const doctorPlan = await runSystemAgentRescueMessage({
+  const doctorReply = await runSystemAgentRescueMessage({
     cfg,
     command: doctorCommand,
     commandBody: "/openclaw doctor fix",
@@ -247,23 +247,10 @@ async function main() {
     },
   });
   assert(
-    doctorPlan?.includes("Reply /openclaw yes to apply"),
-    "doctor fix did not require approval",
+    doctorReply?.includes("openclaw doctor --fix"),
+    "remote doctor fix did not point to the local repair command",
   );
-  const doctorApplied = await runSystemAgentRescueMessage({
-    cfg,
-    command: doctorCommand,
-    commandBody: "/openclaw yes",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runDoctor: async (_runtime, options) => {
-        doctorRuns.push(options.repair ? "repair" : "check");
-      },
-    },
-  });
-  assert(doctorApplied?.includes("[openclaw] done: doctor.fix"), "doctor fix did not apply");
-  assert(doctorRuns.join(",") === "repair", "doctor repair dependency was not invoked once");
+  assert(doctorRuns.length === 0, "remote rescue must not invoke doctor repair");
 
   const updatedConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
   assert(
@@ -321,10 +308,6 @@ async function main() {
   assert(
     audits.some((audit) => audit.operation === "gateway.restart"),
     "gateway restart audit operation missing",
-  );
-  assert(
-    audits.some((audit) => audit.operation === "doctor.fix"),
-    "doctor fix audit missing",
   );
 
   console.log("OpenClaw rescue Docker E2E passed");
