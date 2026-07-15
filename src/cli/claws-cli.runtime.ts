@@ -32,7 +32,12 @@ import {
 import { agentsDeleteCommand } from "../commands/agents.commands.delete.js";
 // Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
-import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import {
+  defaultRuntime,
+  writeRuntimeJson,
+  type OutputRuntimeEnv,
+  type RuntimeEnv,
+} from "../runtime.js";
 import type {
   ClawsAddOptions,
   ClawsExportOptions,
@@ -385,18 +390,21 @@ export async function runClawsRemoveCommand(
     const result = await applyClawRemovePlan(plan, {
       consentPlanIntegrity: opts.planIntegrity,
       deleteAgent: async (agentId) => {
+        const quietRuntime: OutputRuntimeEnv = {
+          ...runtime,
+          log: () => {},
+          error: (message) => {
+            throw new Error(String(message));
+          },
+          writeJson: () => {},
+          writeStdout: () => {},
+          exit: (code) => {
+            throw new Error(`Agent deletion failed with exit code ${code}.`);
+          },
+        };
         await agentsDeleteCommand(
           { id: agentId, force: true, json: true, deleteFiles: false },
-          {
-            ...runtime,
-            log: () => {},
-            error: (message) => {
-              throw new Error(String(message));
-            },
-            exit: (code) => {
-              throw new Error(`Agent deletion failed with exit code ${code}.`);
-            },
-          },
+          quietRuntime,
         );
       },
       cronGateway: {
