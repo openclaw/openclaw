@@ -1,13 +1,14 @@
 // Qa Lab tests cover telegram live plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { summarizeLiveTransportRttSamples } from "../shared/live-transport-rtt.js";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
-} from "../shared/live-transport-scenarios.js";
-import { testing } from "./telegram-live.runtime.js";
+} from "openclaw/plugin-sdk/qa-live-transport-scenarios";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { summarizeLiveTransportRttSamples } from "../shared/live-transport-rtt.js";
+import { __testing as testing } from "./telegram-live.runtime.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
   vi.fn(
@@ -666,10 +667,13 @@ describe("telegram live qa runtime", () => {
     ).steps[0];
     expect(otherBotStep?.expectReply).toBe(false);
     expect(otherBotStep?.input).toBe("/status@OpenClawQaOtherBot");
+    const mentionedReplyRun = requireScenario(
+      scenarios,
+      "telegram-mentioned-message-reply",
+    ).buildRun("sut_bot");
     expect(
-      scenarios
-        .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
-        ?.buildRun("sut_bot").steps[0].replyToLatestSutMessage,
+      expectDefined(mentionedReplyRun.steps[0], "mentioned-message reply step")
+        .replyToLatestSutMessage,
     ).toBe(true);
     expect(
       scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply")
@@ -1372,3 +1376,4 @@ describe("telegram live qa runtime", () => {
     expect(testing.formatTelegramQaProgressDetails("a".repeat(241))).toBe(`${"a".repeat(237)}...`);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

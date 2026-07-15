@@ -1837,6 +1837,8 @@ describe("loadModelCatalog", () => {
     ]);
 
     const result = await loadModelCatalog({
+      agentDir: "/tmp/catalog-agent",
+      workspaceDir: "/tmp/catalog-workspace",
       config: {
         models: {
           providers: {
@@ -1875,6 +1877,10 @@ describe("loadModelCatalog", () => {
         contextWindow: 128_000,
       }),
     );
+    expect(augmentCatalogMock.mock.calls[0]?.[0]).toMatchObject({
+      workspaceDir: "/tmp/catalog-workspace",
+      context: { agentDir: "/tmp/catalog-agent", workspaceDir: "/tmp/catalog-workspace" },
+    });
   });
 
   it("includes configured provider models missing from discovery", async () => {
@@ -2219,3 +2225,4 @@ describe("loadModelCatalog", () => {
     expect(modelSupportsInput(catalog[2], "image")).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

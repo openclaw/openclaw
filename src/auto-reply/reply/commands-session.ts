@@ -323,7 +323,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
       config: params.cfg,
       agentId: sessionAgentId,
     });
-    const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
+    const summary = await loadCostUsageSummary({ config: params.cfg });
 
     const sessionCost = formatUsd(sessionSummary?.totalCost);
     const sessionTokens = sessionSummary?.totalTokens
@@ -822,3 +822,4 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
 };
 
 export { handleAbortTrigger, handleStopCommand };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

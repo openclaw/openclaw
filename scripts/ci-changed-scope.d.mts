@@ -43,6 +43,7 @@ export function writeGitHubOutput(
   installSmokeScope?: InstallSmokeScope,
   nodeFastScope?: NodeFastScope,
   runNativeI18n?: boolean,
+  changedPaths?: string[] | null,
 ): void;
 
 export function parseArgs(argv: string[]): ChangedScopeArgs;

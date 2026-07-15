@@ -12,11 +12,13 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { describe, expect, it, vi } from "vitest";
+import { buildCodexAppServerPromptTimeoutOutcome } from "./attempt-results.js";
 import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 import * as authBridge from "./auth-bridge.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import {
@@ -36,7 +38,13 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
-import { testing } from "./run-attempt.js";
+
+const testing = {
+  buildCodexAppServerPromptTimeoutOutcome,
+  flushPendingCodexNativeHookRelayUnregistersForTests(): void {
+    nativeHookRelayUnregisterQueue.flush();
+  },
+};
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
@@ -3198,13 +3206,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("clears the thread binding after a completion-idle timeout so the next turn starts fresh", async () => {
-    // Regression for openclaw#89974. The "user interrupted the previous turn on
-    // purpose" wording is Codex's generic <turn_aborted> rollout marker, written
-    // whenever a turn is interrupted (including OpenClaw's own watchdog abort).
-    // OpenClaw cannot change that text (turn/interrupt carries no reason); it can
-    // only avoid replaying it. This proves a turn_completion_idle_timeout clears
-    // the timed-out thread's binding so the next turn starts a fresh thread
-    // rather than resuming the thread that may hold that marker.
+    // Regression for openclaw#89974. Codex writes a generic <turn_aborted>
+    // marker for every interrupted turn. Clearing the timed-out binding keeps
+    // that marker out of the next turn by starting a fresh thread.
     vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const sessionFile = path.join(tempDir, "session-89974.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-89974");
@@ -4568,7 +4572,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
   });
 
-  it("does not recover a completed reply when a queued native abort marker follows it", async () => {
+  it("waits for interrupted turn completion after a queued native abort marker", async () => {
     let releaseProjection!: () => void;
     let markProjectionStarted!: () => void;
     const projectionGate = new Promise<void>((resolve) => {
@@ -4592,6 +4596,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const run = runCodexAppServerAttempt(params, {
       turnAssistantCompletionIdleTimeoutMs: 5,
       turnTerminalIdleTimeoutMs: 500,
+    });
+    let resolved = false;
+    void run.then(() => {
+      resolved = true;
     });
     await harness.waitForMethod("turn/start");
     await harness.notify(completedAssistant("msg-final-1", "Done."));
@@ -4636,6 +4644,20 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     releaseProjection();
     await Promise.all([pendingProjection, pendingAbort]);
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(resolved).toBe(false);
+
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "interrupted", items: [] },
+      },
+    });
 
     await expect(run).resolves.toMatchObject({
       aborted: true,
@@ -4822,7 +4844,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
   });
 
-  it("releases completion and native hook relay state when Codex raw-events an interrupted turn marker", async () => {
+  it("releases completion and native hook relay state after marker plus interrupted completion", async () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
@@ -4852,6 +4874,21 @@ describe("runCodexAppServerAttempt turn watches", () => {
             },
           ],
         },
+      },
+    });
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(resolved).toBe(false);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeDefined();
+
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "interrupted", items: [] },
       },
     });
 
@@ -5263,8 +5300,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
   it("does not treat a user prompt containing the interrupted marker as terminal", async () => {
     const harness = createStartedThreadHarness();
-    const markerPrompt =
-      "<turn_aborted>\nThe user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.\n</turn_aborted>";
+    const markerPrompt = "<turn_aborted>\narbitrary prompt prose\n</turn_aborted>";
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -5381,3 +5417,4 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.timedOut).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

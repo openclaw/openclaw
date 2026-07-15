@@ -46,7 +46,7 @@ export type MantisTelegramDesktopBuilderOptions = {
 
 export type MantisTelegramDesktopHydrateMode = "prehydrated" | "source";
 
-export type MantisTelegramDesktopBuilderResult = {
+type MantisTelegramDesktopBuilderResult = {
   outputDir: string;
   reportPath: string;
   screenshotPath?: string;
@@ -397,7 +397,9 @@ qa_status=0
     fi
     driver_user_id="$(node --input-type=module >"$out/telegram-driver-getme.json" 2>"$out/telegram-driver-getme.err" <<'MANTIS_TELEGRAM_GETME'
 const token = process.env.OPENCLAW_MANTIS_TELEGRAM_DRIVER_BOT_TOKEN;
-const response = await fetch(\`https://api.telegram.org/bot\${token}/getMe\`);
+const response = await fetch(\`https://api.telegram.org/bot\${token}/getMe\`, {
+  signal: AbortSignal.timeout(15_000),
+});
 const body = await response.json();
 process.stdout.write(JSON.stringify({ ok: body.ok, id: body.result?.id, username: body.result?.username }));
 if (!body.ok || !body.result?.id) process.exit(1);
@@ -438,6 +440,7 @@ const response = await fetch(\`https://api.telegram.org/bot\${token}/sendMessage
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({ chat_id: chatId, text, disable_notification: true }),
+  signal: AbortSignal.timeout(15_000),
 });
 const body = await response.json();
 process.stdout.write(JSON.stringify({ ok: body.ok, message_id: body.result?.message_id }));
@@ -830,3 +833,4 @@ export async function runMantisTelegramDesktopBuilder(
 function toErrorObject(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

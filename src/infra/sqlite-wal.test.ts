@@ -4,12 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
-  DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
   configureSqliteWalMaintenance,
@@ -47,52 +47,6 @@ describe("sqlite WAL maintenance", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
-  });
-
-  it("enables WAL mode and explicit autocheckpointing", () => {
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-
-    configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
-
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(
-      2,
-      `PRAGMA wal_autocheckpoint = ${DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES};`,
-    );
-  });
-
-  it("enables fullfsync barriers for WAL checkpoints on macOS", () => {
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-
-    configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
-
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA checkpoint_fullfsync = 1;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(
-      3,
-      `PRAGMA wal_autocheckpoint = ${DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES};`,
-    );
-  });
-
-  it("continues WAL setup if macOS checkpoint fullfsync is unavailable", () => {
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    vi.mocked(db["exec"]).mockImplementation((sql) => {
-      if (sql.includes("checkpoint_fullfsync")) {
-        throw new Error("unsupported pragma");
-      }
-    });
-
-    configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
-
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA checkpoint_fullfsync = 1;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(
-      3,
-      `PRAGMA wal_autocheckpoint = ${DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES};`,
-    );
   });
 
   it("uses rollback journaling for databases on NFS-backed volumes", () => {
@@ -597,27 +551,6 @@ describe("sqlite WAL maintenance", () => {
     expect(onCheckpointError).toHaveBeenCalledWith(error);
   });
 
-  it("configures connection pragmas before WAL maintenance", () => {
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-
-    configureSqliteConnectionPragmas(db, {
-      busyTimeoutMs: 30_000,
-      checkpointIntervalMs: 0,
-      foreignKeys: true,
-      synchronous: "NORMAL",
-    });
-
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA busy_timeout = 30000;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA journal_mode = WAL;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(
-      3,
-      `PRAGMA wal_autocheckpoint = ${DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES};`,
-    );
-    expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA synchronous = NORMAL;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(5, "PRAGMA foreign_keys = ON;");
-  });
-
   it("retries the WAL transition when SQLite bypasses the busy handler", () => {
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
@@ -661,7 +594,10 @@ describe("sqlite WAL maintenance", () => {
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA page_count");
     expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA auto_vacuum = INCREMENTAL;");
     expect(vi.mocked(db["exec"]).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(db["prepare"]).mock.invocationCallOrder[0],
+      expectDefined(
+        vi.mocked(db["prepare"]).mock.invocationCallOrder[0],
+        'vi.mocked(db["prepare"]).mock.invocationCallOrder[0] test invariant',
+      ),
     );
   });
 

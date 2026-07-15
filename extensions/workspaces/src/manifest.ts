@@ -52,7 +52,7 @@ function hashBytes(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-export type ApprovedWidgetSnapshot = {
+type ApprovedWidgetSnapshot = {
   /** sha256 of every servable file, keyed by the logical path the route serves. */
   files: Record<string, string>;
   /** Parsed from the exact `widget.json` bytes that were hashed. */
@@ -200,13 +200,13 @@ export function matchesApprovedFile(
   return expected !== undefined && expected === hashBytes(bytes);
 }
 const BINDING_ID_PATTERN = /^(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
-export const WIDGET_CAPABILITIES = ["data:read", "prompt:send"] as const;
+const WIDGET_CAPABILITIES = ["data:read", "prompt:send"] as const;
 
-export type WidgetCapability = (typeof WIDGET_CAPABILITIES)[number];
+type WidgetCapability = (typeof WIDGET_CAPABILITIES)[number];
 
-export type WidgetManifestBinding = { id: string; source: "static"; value: unknown };
+type WidgetManifestBinding = { id: string; source: "static"; value: unknown };
 
-export type WidgetManifest = {
+type WidgetManifest = {
   schemaVersion: 1;
   name: string;
   title: string;
@@ -366,33 +366,4 @@ export function resolveWidgetDir(name: string, stateDir = resolveStateDir()): st
     throw new Error("widget name is invalid");
   }
   return widgetDir;
-}
-
-/** Loads and validates the `widget.json` for a named custom widget, or null if absent. */
-export async function loadWidgetManifest(
-  name: string,
-  options: { stateDir?: string } = {},
-): Promise<WidgetManifest | null> {
-  const widgetDir = resolveWidgetDir(name, options.stateDir);
-  const manifestPath = path.join(widgetDir, "widget.json");
-  let raw: string;
-  try {
-    const stat = await fs.stat(manifestPath);
-    if (!stat.isFile() || stat.size > MANIFEST_MAX_BYTES) {
-      return null;
-    }
-    raw = await fs.readFile(manifestPath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error("widget.json is not valid JSON", { cause: error });
-  }
-  return validateWidgetManifest(parsed, name);
 }

@@ -3,6 +3,7 @@ import {
   channelIngressRoutes,
   resolveStableChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 import {
   normalizeOptionalString,
@@ -26,8 +27,8 @@ import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
   normalizeNextcloudTalkAllowEntry,
   normalizeNextcloudTalkAllowlist,
+  resolveNextcloudTalkGroupRequireMention,
   resolveNextcloudTalkAllowlistMatch,
-  resolveNextcloudTalkRequireMention,
   resolveNextcloudTalkRoomMatch,
 } from "./policy.js";
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
@@ -158,9 +159,10 @@ export async function handleNextcloudTalkInbound(params: {
   });
   const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
   const shouldRequireMention = isGroup
-    ? resolveNextcloudTalkRequireMention({
-        roomConfig,
-        wildcardConfig: roomMatch.wildcardConfig,
+    ? resolveNextcloudTalkGroupRequireMention({
+        cfg: config as OpenClawConfig,
+        accountId: account.accountId,
+        groupId: roomToken,
       })
     : false;
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -325,6 +327,7 @@ export async function handleNextcloudTalkInbound(params: {
   });
 
   const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
@@ -387,9 +390,7 @@ export async function handleNextcloudTalkInbound(params: {
     replyOptions: {
       skillFilter: roomConfig?.skills,
       disableBlockStreaming:
-        typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
+        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
     },
     record: {
       onRecordError: (err) => {
