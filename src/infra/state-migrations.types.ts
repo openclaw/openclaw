@@ -87,6 +87,10 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  tuiLastSessions: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
   channelPairing: LegacyChannelPairingStateDetection;
   execApprovals: {
     sourcePath: string;
