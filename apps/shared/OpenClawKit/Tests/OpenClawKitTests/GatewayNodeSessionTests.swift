@@ -604,6 +604,51 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test func `node requests preserve numeric JSON params`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["terminal"],
+            commands: ["codex.terminal.resume.v1"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+        let pending = Task {
+            try await gateway.request(
+                method: "node.invoke.progress",
+                paramsJSON: #"{"invokeId":"terminal-1","nodeId":"node-1","seq":0,"ratio":1.5}"#,
+                timeoutSeconds: 30)
+        }
+        try await waitUntil("progress request sent") {
+            session.latestTask()?.sentRequestCount(method: "node.invoke.progress") == 1
+        }
+        let task = try #require(session.latestTask())
+        let request = try #require(task.sentRequests(method: "node.invoke.progress").first)
+        let params = try #require(request["params"] as? [String: Any])
+        let seq = try #require(params["seq"] as? NSNumber)
+        let ratio = try #require(params["ratio"] as? NSNumber)
+
+        #expect(CFGetTypeID(seq) != CFBooleanGetTypeID())
+        #expect(seq.intValue == 0)
+        #expect(ratio.doubleValue == 1.5)
+
+        await gateway.disconnect()
+        _ = try? await pending.value
+    }
+
     @Test func `node invoke input and cancellation reach route callbacks`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()

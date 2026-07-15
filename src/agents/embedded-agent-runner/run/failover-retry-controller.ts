@@ -67,17 +67,17 @@ export function createEmbeddedRunFailoverRetryController(input: {
     get consecutiveSameModelRateLimitRetries() {
       return consecutiveSameModelRateLimitRetries;
     },
-    resetSameModelRateLimitRetries() {
+    resetSameModelRateLimitRetries: () => {
       consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
         retriesSoFar: consecutiveSameModelRateLimitRetries,
         retriedSameModelRateLimit: false,
       });
     },
-    maybeEscalateRateLimitProfileFallback(paramsLocal: {
+    maybeEscalateRateLimitProfileFallback: (paramsLocal: {
       failoverProvider: string;
       failoverModel: string;
       logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
-    }) {
+    }) => {
       rateLimitProfileRotations += 1;
       if (rateLimitProfileRotations <= rateLimitProfileRotationLimit || !fallbackConfigured) {
         return;
@@ -100,11 +100,11 @@ export function createEmbeddedRunFailoverRetryController(input: {
         },
       );
     },
-    async maybeMarkAuthProfileFailure(failure: {
+    maybeMarkAuthProfileFailure: async (failure: {
       profileId?: string;
       reason?: AuthProfileFailureReason | null;
       modelId?: string;
-    }) {
+    }) => {
       if (params.authProfileStateMode === "read-only") {
         return;
       }
@@ -125,10 +125,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
         modelId: failure.modelId,
       });
     },
-    resolveAuthProfileFailureReason(
+    resolveAuthProfileFailureReason: (
       failoverReason: FailoverReason | null,
       opts?: { providerStarted?: boolean; transientRateLimit?: boolean },
-    ) {
+    ) => {
       return resolveAuthProfileFailureReason({
         failoverReason,
         providerStarted: opts?.providerStarted,
@@ -136,7 +136,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         policy: params.authProfileFailurePolicy,
       });
     },
-    async maybeBackoffBeforeOverloadFailover(reason: FailoverReason | null) {
+    maybeBackoffBeforeOverloadFailover: async (reason: FailoverReason | null) => {
       if (reason !== "overloaded" || overloadFailoverBackoffMs <= 0) {
         return;
       }
@@ -145,7 +145,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
       );
       await sleepForRetry(overloadFailoverBackoffMs);
     },
-    async maybeRetrySameModelRateLimit(retry?: { retryAfterSeconds?: number }): Promise<boolean> {
+    maybeRetrySameModelRateLimit: async (retry?: {
+      retryAfterSeconds?: number;
+    }): Promise<boolean> => {
       if (consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES) {
         return false;
       }
