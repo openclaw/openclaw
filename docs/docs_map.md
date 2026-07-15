@@ -4710,8 +4710,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Restart the gateway
   - H3: Verify
   - H2: Rollback
-  - H3: Pin a version (npm)
-  - H3: Pin a commit (source)
+  - H3: Before updating: create a verified backup
+  - H3: Roll back a package install
+  - H3: Roll back a source checkout
+  - H3: Downgrading across the session SQLite migration
+  - H3: Restore state only when necessary
+  - H3: Verify the rollback
   - H2: If you are stuck
   - H2: Related
 
