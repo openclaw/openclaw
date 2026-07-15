@@ -125,7 +125,6 @@ export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 export { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.js";
 export { isHostScopedAgentToolActive } from "../agents/agent-tools.ring-zero-context.js";
-export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export {
   classifyEmbeddedAgentRunResultForModelFallback,
