@@ -465,7 +465,7 @@ function completeEmbeddedRun(
           : {}),
         stopReason,
         pendingToolCalls: input.attempt.clientToolCalls?.map((call) => ({
-          id: randomBytes(5).toString("hex").slice(0, 9),
+          id: randomBytes(5).toString("hex"),
           name: call.name,
           arguments: JSON.stringify(call.params),
         })),
