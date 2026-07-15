@@ -257,8 +257,10 @@ describe("doctor session transcript repair", () => {
       },
     });
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const cfg = {};
 
     await noteSessionTranscriptHealth({
+      cfg,
       env,
       sessionDirs: [sessionsDir],
       sessionSqlite: true,
@@ -267,6 +269,7 @@ describe("doctor session transcript repair", () => {
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
       allAgents: true,
+      cfg,
       env,
       mode: "import",
     });
@@ -301,8 +304,10 @@ describe("doctor session transcript repair", () => {
       },
     });
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const cfg = {};
 
     await noteSessionTranscriptHealth({
+      cfg,
       env,
       sessionDirs: [sessionsDir],
       sessionSqlite: true,
@@ -311,6 +316,7 @@ describe("doctor session transcript repair", () => {
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
       allAgents: true,
+      cfg,
       env,
       mode: "dry-run",
     });
