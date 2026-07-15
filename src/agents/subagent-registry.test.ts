@@ -23,11 +23,13 @@ import {
   findDetachedTaskRun,
   finalizeTaskRunByRunId,
   getDetachedTaskLifecycleRuntime,
-  resetDetachedTaskLifecycleRuntimeForTests,
-  setDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime.js";
-import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
-import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../tasks/task-runtime.test-helpers.js";
 import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
