@@ -1570,6 +1570,8 @@ describe("ci workflow guards", () => {
     expect(mountStep.with.key).toContain("format('pr-{0}', github.event.pull_request.number)");
     expect(mountStep.with.key).toContain("inputs.frozen-lockfile");
     expect(mountStep.with.key).toContain("hashFiles('**/package.json', 'pnpm-lock.yaml'");
+    expect(mountStep.with.key).toContain("'.npmrc'");
+    expect(mountStep.with.key).toContain("'.pnpmfile.cjs'");
     expect(mountStep.with.key).toContain(".github/actions/setup-node-env/sticky-importers.sh");
     expect(mountStep.with.key).toContain("scripts/postinstall-bundled-plugins.mjs");
     expect(cleanupStep).toMatchObject({
