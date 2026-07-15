@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
-import { executeJobCore, onTimer } from "../../cron/service/timer.js";
+import { executeJobCore, onTimer } from "../../cron/service/timer.test-support.js";
 import * as cronStoreModule from "../../cron/store.js";
 import { loadCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
