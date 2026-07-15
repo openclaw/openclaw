@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 type ShellEnvModule = typeof import("./shell-env.js");
 
@@ -15,6 +16,8 @@ let resolveExecutableFromUserShellPathWithPathEnv: ShellEnvModule["resolveExecut
 let resolveShellEnvFallbackTimeoutMs: ShellEnvModule["resolveShellEnvFallbackTimeoutMs"];
 let shouldDeferShellEnvFallback: ShellEnvModule["shouldDeferShellEnvFallback"];
 let shouldEnableShellEnvFallback: ShellEnvModule["shouldEnableShellEnvFallback"];
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(async () => {
   vi.resetModules();
@@ -598,7 +601,7 @@ describe("shell env fallback", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-path-"));
+    const root = tempDirs.make("openclaw-shell-path-");
     const daemonBin = path.join(root, "daemon-bin");
     const shellBin = path.join(root, "shell-bin");
     fs.mkdirSync(daemonBin);
@@ -609,20 +612,16 @@ describe("shell env fallback", () => {
     fs.writeFileSync(shellTool, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const exec = vi.fn(() => Buffer.from(`PATH=${shellBin}\0`));
 
-    try {
-      const result = resolveExecutableFromUserShellPathWithPathEnv("tool", {
-        env: { PATH: daemonBin, SHELL: "/bin/sh" },
-        exec: exec as unknown as Parameters<
-          typeof resolveExecutableFromUserShellPathWithPathEnv
-        >[1]["exec"],
-        preferLoginShell: true,
-      });
+    const result = resolveExecutableFromUserShellPathWithPathEnv("tool", {
+      env: { PATH: daemonBin, SHELL: "/bin/sh" },
+      exec: exec as unknown as Parameters<
+        typeof resolveExecutableFromUserShellPathWithPathEnv
+      >[1]["exec"],
+      preferLoginShell: true,
+    });
 
-      expect(result).toEqual({ executable: shellTool, pathEnv: shellBin });
-      expect(exec).toHaveBeenCalledOnce();
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    expect(result).toEqual({ executable: shellTool, pathEnv: shellBin });
+    expect(exec).toHaveBeenCalledOnce();
   });
 
   it("returns the login-shell PATH needed by env-based executable launchers", () => {
