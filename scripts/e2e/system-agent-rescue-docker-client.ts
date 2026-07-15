@@ -24,6 +24,7 @@ function makeParams(commandBody: string, cfg: OpenClawConfig, isGroup = false) {
       surface: "whatsapp",
       channel: "whatsapp",
       channelId: "whatsapp",
+      accountId: "default",
       ownerList: ["user:owner"],
       senderIsOwner: true,
       isAuthorizedSender: true,
@@ -148,6 +149,41 @@ async function main() {
     gatewayPlan?.includes("Reply /openclaw yes to apply"),
     "gateway restart did not require approval",
   );
+  const pluginList = await runSystemAgentRescueMessage({
+    cfg,
+    command: gatewayCommand,
+    commandBody: "/openclaw plugins list",
+    agentId: "default",
+    isGroup: false,
+    deps: {
+      runPluginsList: async (runtime) => runtime.log("plugin rows"),
+    },
+  });
+  assert(pluginList === "plugin rows", "read-only rescue command did not run");
+  const revokedApproval = await runSystemAgentRescueMessage({
+    cfg,
+    command: gatewayCommand,
+    commandBody: "/openclaw yes",
+    agentId: "default",
+    isGroup: false,
+    deps: {
+      runGatewayRestart: async () => {
+        gatewayRestarts.push("restart");
+      },
+    },
+  });
+  assert(
+    revokedApproval === "No pending OpenClaw rescue change is waiting for approval.",
+    "fresh rescue command did not revoke the older pending change",
+  );
+  assert(gatewayRestarts.length === 0, "revoked gateway restart was invoked");
+  await runSystemAgentRescueMessage({
+    cfg,
+    command: gatewayCommand,
+    commandBody: "/openclaw restart gateway",
+    agentId: "default",
+    isGroup: false,
+  });
   const gatewayApplied = await runSystemAgentRescueMessage({
     cfg,
     command: gatewayCommand,

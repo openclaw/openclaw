@@ -1044,8 +1044,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   file remains file-backed, recovery snapshots stay next to the config file,
   and durable config audit/health state belongs to the Gateway SQLite store.
 - System-agent rescue pending approvals now use core SQLite plugin state instead
-  of `crestodian/rescue-pending/*.json`. Doctor imports legacy pending approval
-  files and removes them after successful import.
+  of `crestodian/rescue-pending/*.json` or `openclaw/rescue-pending/*.json`.
+  These short-lived security capabilities are never imported; doctor discards
+  both retired directories so an upgrade cannot reactivate a stale write.
 - Phone Control temporary arm state now uses SQLite plugin state instead of
   `plugins/phone-control/armed.json`. Doctor imports the legacy armed-state
   file into the `phone-control/arm-state` namespace and removes the file.
@@ -2238,6 +2239,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `audit/file-transfer.jsonl`
 - `audit/crestodian.jsonl`
 - `crestodian/rescue-pending/*.json`
+- `openclaw/rescue-pending/*.json`
 - `plugins/phone-control/armed.json`
 - Memory Wiki `.openclaw-wiki/log.jsonl`
 - Memory Wiki `.openclaw-wiki/state.json`
