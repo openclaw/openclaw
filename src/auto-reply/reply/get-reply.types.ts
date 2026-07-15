@@ -11,6 +11,8 @@ export type ReplySessionBinding = {
   sessionKey?: string;
   sessionId: string;
   storePath?: string;
+  /** Exact first-turn state captured before session bootstrap persists system metadata. */
+  isFirstTurnInSession?: boolean;
 };
 
 type InternalReplySessionOptions = {

@@ -22,6 +22,7 @@ function titleParams(entry: SessionEntry | undefined = baseEntry) {
     cfg: {},
     agentId: "main",
     entry,
+    isFirstTurnInSession: true,
     sessionId: "session-1",
     sessionKey: "agent:main:dashboard:chat-1",
     storePath: "/tmp/openclaw/sessions.json",
@@ -70,6 +71,21 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     });
   });
 
+  it("generates after first-turn bootstrap persists system metadata", async () => {
+    const bootstrappedEntry = { ...baseEntry, systemSent: true };
+    mockSessionUpdate(bootstrappedEntry);
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams(bootstrappedEntry))).resolves.toBe(
+      true,
+    );
+
+    expect(generateConversationLabel).toHaveBeenCalledOnce();
+    const update = updateSessionEntry.mock.calls[0]?.[1];
+    expect(await update?.({ ...bootstrappedEntry })).toEqual({
+      displayName: "Release Planning",
+    });
+  });
+
   it("keeps utility title prompt input on a UTF-16 boundary", async () => {
     await expect(
       maybeGenerateDashboardSessionTitle({
@@ -107,7 +123,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     ["slash command", { userMessage: "/status" }],
     ["manual label", { entry: { ...baseEntry, label: "My release" } }],
     ["manual display name", { entry: { ...baseEntry, displayName: "My release" } }],
-    ["existing session history", { entry: { ...baseEntry, systemSent: true } }],
+    ["existing session history", { isFirstTurnInSession: false }],
   ])("skips %s", async (_name, override) => {
     await expect(
       maybeGenerateDashboardSessionTitle({ ...titleParams(), ...override }),

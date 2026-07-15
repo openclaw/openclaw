@@ -56,6 +56,7 @@ export async function maybeGenerateDashboardSessionTitle(params: {
   cfg: OpenClawConfig;
   agentId: string;
   entry: SessionEntry | undefined;
+  isFirstTurnInSession: boolean;
   sessionId: string;
   sessionKey: string;
   storePath: string;
@@ -68,7 +69,7 @@ export async function maybeGenerateDashboardSessionTitle(params: {
       userMessage: sourceText,
     }) ||
     hasExplicitSessionName(params.entry) ||
-    params.entry?.systemSent === true ||
+    !params.isFirstTurnInSession ||
     params.entry?.sessionId !== params.sessionId
   ) {
     return false;

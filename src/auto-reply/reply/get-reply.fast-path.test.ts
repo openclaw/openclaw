@@ -271,6 +271,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         sessionKey: "agent:main:slack:channel:C123",
         sessionId: "rotated-session",
         storePath: "/tmp/custom-sessions.json",
+        isNewSession: true,
+        systemSent: true,
       }),
     );
     const onSessionPrepared = vi.fn();
@@ -289,6 +291,38 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       sessionKey: "agent:main:slack:channel:C123",
       sessionId: "rotated-session",
       storePath: "/tmp/custom-sessions.json",
+      isFirstTurnInSession: true,
+    });
+  });
+
+  it("reports an existing prepared session as not being on its first turn", async () => {
+    vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
+    mocks.initSessionState.mockResolvedValue(
+      createGetReplySessionState({
+        sessionKey: "agent:main:slack:channel:C123",
+        sessionId: "existing-session",
+        storePath: "/tmp/custom-sessions.json",
+        isNewSession: false,
+        systemSent: true,
+      }),
+    );
+    const onSessionPrepared = vi.fn();
+
+    await getReplyFromConfig(
+      buildGetReplyCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: "agent:main:slack:channel:C123",
+      }),
+      { onSessionPrepared } as never,
+      {} as OpenClawConfig,
+    );
+
+    expect(onSessionPrepared).toHaveBeenCalledWith({
+      sessionKey: "agent:main:slack:channel:C123",
+      sessionId: "existing-session",
+      storePath: "/tmp/custom-sessions.json",
+      isFirstTurnInSession: false,
     });
   });
 

@@ -1130,20 +1130,26 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(true, ackPayload, undefined, { runId: clientRunId });
       const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
       const titleSource = stripInlineDirectiveTagsForDisplay(rawMessage).text;
-      if (isDashboardSessionTitleCandidate({ sessionKey, userMessage: titleSource })) {
+      const shouldGenerateDashboardSessionTitle = isDashboardSessionTitleCandidate({
+        sessionKey,
+        userMessage: titleSource,
+      });
+      const dashboardSessionTitleIds = new Set<string>();
+      const scheduleDashboardSessionTitle = (titleSessionId: string) => {
+        if (dashboardSessionTitleIds.has(titleSessionId) || !shouldGenerateDashboardSessionTitle) {
+          return;
+        }
+        dashboardSessionTitleIds.add(titleSessionId);
         void runWithGatewayIndependentRootWorkContinuation(async () => {
-          const titleEntry =
-            entry?.sessionId === admittedSessionId
-              ? entry
-              : loadSessionEntry(sessionKey, sessionLoadOptions).entry;
-          const titleSessionId = titleEntry?.sessionId;
-          if (!titleSessionId) {
+          const titleEntry = loadSessionEntry(sessionKey, sessionLoadOptions).entry;
+          if (titleEntry?.sessionId !== titleSessionId) {
             return;
           }
           const updated = await maybeGenerateDashboardSessionTitle({
             cfg,
             agentId,
             entry: titleEntry,
+            isFirstTurnInSession: true,
             sessionId: titleSessionId,
             sessionKey,
             storePath,
@@ -1161,6 +1167,15 @@ export const chatHandlers: GatewayRequestHandlers = {
             `dashboard session title generation failed: ${formatForLog(err)}`,
           );
         });
+      };
+      const titleEntryBeforeResolver = shouldGenerateDashboardSessionTitle
+        ? loadSessionEntry(sessionKey, sessionLoadOptions).entry
+        : undefined;
+      if (
+        titleEntryBeforeResolver?.sessionId === admittedSessionId &&
+        titleEntryBeforeResolver.systemSent !== true
+      ) {
+        scheduleDashboardSessionTitle(admittedSessionId);
       }
       const {
         accountId,
@@ -1278,6 +1293,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                   onSessionPrepared: (binding) => {
                     if (binding.sessionKey === sessionKey) {
                       userTurn.setAcceptedSessionId(binding.sessionId);
+                      if (binding.isFirstTurnInSession === true) {
+                        scheduleDashboardSessionTitle(binding.sessionId);
+                      }
                     }
                   },
                   abortSignal: activeRunAbort.controller.signal,
