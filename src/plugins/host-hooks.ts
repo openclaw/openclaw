@@ -16,7 +16,10 @@ import type {
 export { isPluginJsonValue } from "./host-hook-json.js";
 export type { PluginJsonValue } from "./host-hook-json.js";
 export type {
+  PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
   PluginNextTurnInjection,
   PluginNextTurnInjectionEnqueueResult,
   PluginNextTurnInjectionRecord,
@@ -110,7 +113,7 @@ export type PluginControlUiDescriptor = {
   order?: number;
 };
 
-type PluginSessionActionContext = {
+export type PluginSessionActionContext = {
   pluginId: string;
   actionId: string;
   sessionKey?: string;
@@ -121,7 +124,7 @@ type PluginSessionActionContext = {
   };
 };
 
-type PluginSessionActionResult =
+export type PluginSessionActionResult =
   | {
       ok?: true;
       result?: PluginJsonValue;
