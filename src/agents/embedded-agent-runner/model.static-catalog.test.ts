@@ -153,6 +153,36 @@ function setConflictingAzureAliasPlugins() {
   });
 }
 
+function setConditionalSuppressionAliasPlugin(params?: { unconditional?: boolean }) {
+  manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: [
+      {
+        id: "conditional-provider",
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["target-provider"],
+        modelCatalog: {
+          aliases: {
+            "conditional-alias": {
+              provider: "target-provider",
+              api: "openai-responses",
+            },
+          },
+          suppressions: [
+            {
+              provider: "conditional-alias",
+              model: "conditional-model",
+              ...(params?.unconditional
+                ? {}
+                : { when: { baseUrlHosts: ["matching.example.com"] } }),
+            },
+          ],
+        },
+      },
+    ],
+  });
+}
+
 beforeEach(() => {
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReset();
   manifestMocks.listOpenClawPluginManifestMetadata.mockReset();
@@ -349,6 +379,72 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
       api: "azure-openai-responses",
       baseUrl: "https://manifest-alias.example.com/openai/v1",
     });
+  });
+
+  it.each([
+    ["matches", "https://matching.example.com/v1"],
+    ["does not match", "https://other.example.com/v1"],
+  ])(
+    "does not use a conditional suppression to rewrite alias ownership when the endpoint %s",
+    (_condition, baseUrl) => {
+      setConditionalSuppressionAliasPlugin();
+      const cfg = {
+        models: {
+          providers: {
+            "conditional-alias": {
+              baseUrl,
+              api: "openai-responses" as const,
+              models: [],
+            },
+          },
+        },
+      };
+
+      expect(
+        canonicalizeManifestModelCatalogProviderAlias({
+          provider: "conditional-alias",
+          modelId: "conditional-model",
+          cfg,
+        }),
+      ).toBe("conditional-alias");
+      expect(
+        resolveManifestModelCatalogProviderTransport({
+          provider: "conditional-alias",
+          modelId: "conditional-model",
+          cfg,
+        }),
+      ).toEqual({ api: "openai-responses" });
+    },
+  );
+
+  it("lets an unconditional suppression canonicalize a transport alias", () => {
+    setConditionalSuppressionAliasPlugin({ unconditional: true });
+    const cfg = {
+      models: {
+        providers: {
+          "conditional-alias": {
+            baseUrl: "https://matching.example.com/v1",
+            api: "openai-responses" as const,
+            models: [],
+          },
+        },
+      },
+    };
+
+    expect(
+      canonicalizeManifestModelCatalogProviderAlias({
+        provider: "conditional-alias",
+        modelId: "conditional-model",
+        cfg,
+      }),
+    ).toBe("target-provider");
+    expect(
+      resolveManifestModelCatalogProviderTransport({
+        provider: "conditional-alias",
+        modelId: "conditional-model",
+        cfg,
+      }),
+    ).toBeUndefined();
   });
 
   it("ignores inactive workspace claims that collide with a bundled transport alias", () => {

@@ -68,7 +68,7 @@ function hasConfiguredModelCatalogProviderEndpointSurface(params: {
   );
 }
 
-function hasManifestModelCatalogSuppression(params: {
+function hasUnconditionalManifestModelCatalogSuppression(params: {
   provider: string;
   modelId?: string;
   plugin: Pick<PluginManifestRecord, "id" | "providers" | "modelCatalog">;
@@ -82,7 +82,9 @@ function hasManifestModelCatalogSuppression(params: {
     registry: { plugins: [params.plugin] },
     providerFilter: provider,
     modelFilter: modelId,
-  }).suppressions.some((suppression) => normalizeProviderId(suppression.provider) === provider);
+  }).suppressions.some(
+    (suppression) => !suppression.when && normalizeProviderId(suppression.provider) === provider,
+  );
 }
 
 type ManifestModelCatalogAliasPlugin = Pick<
@@ -171,7 +173,7 @@ function resolveManifestModelCatalogProviderAlias(params: {
       const hasModelId = Boolean(params.modelId?.trim());
       const hasApplicableSuppression =
         hasModelId &&
-        hasManifestModelCatalogSuppression({
+        hasUnconditionalManifestModelCatalogSuppression({
           provider,
           modelId: params.modelId,
           plugin,
