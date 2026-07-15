@@ -198,10 +198,9 @@ bus.
   same trace.
 - **Model-call correlation:** `openclaw.model.call` spans include safe prompt
   component sizes by default and per-call token attributes when the provider
-  result exposes usage. `openclaw.model.usage` remains the run-level
-  accounting span for aggregate cost, context, and channel dashboards, and
-  stays on the same diagnostic trace when the emitting runtime has trusted
-  trace context.
+  result exposes usage. `openclaw.model.usage` is the aggregate accounting span
+  for agent runs and plugin completions, and stays on the same diagnostic trace
+  when the emitting runtime has trusted trace context.
 
 ## Exported metrics
 
@@ -209,7 +208,7 @@ bus.
 
 - `openclaw.tokens` (counter, attrs: `openclaw.token`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`, `openclaw.plugin`)
 - `openclaw.cost.usd` (counter, attrs: `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`, `openclaw.plugin`)
-- `openclaw.run.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`, `openclaw.plugin`)
+- `openclaw.run.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`)
 - `openclaw.context.tokens` (histogram, attrs: `openclaw.context`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`, `openclaw.plugin`)
 - `gen_ai.client.token.usage` (histogram, GenAI semantic-conventions metric, attrs: `gen_ai.token.type` = `input`/`output`, `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model`)
 - `gen_ai.client.operation.duration` (histogram, seconds, GenAI semantic-conventions metric, attrs: `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model`, optional `error.type`)
@@ -219,6 +218,11 @@ bus.
 - `openclaw.model_call.time_to_first_byte_ms` (histogram, elapsed time before the first streamed response event)
 - `openclaw.model.failover` (counter, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.failover.to_provider`, `openclaw.failover.to_model`, `openclaw.failover.reason`, `openclaw.failover.suspended`, `openclaw.lane`)
 - `openclaw.skill.used` (counter, attrs: `openclaw.skill.name`, `openclaw.skill.source`, `openclaw.skill.activation`, optional `openclaw.agent`, optional `openclaw.toolName`)
+
+Plugin-owned usage uses the trusted low-cardinality plugin id for
+`openclaw.plugin`. Non-plugin usage, and plugin ids rejected by low-cardinality
+normalization, use `none`. Plugin completion usage does not add call latency to
+the agent-run `openclaw.run.duration_ms` histogram.
 
 ### Message flow
 

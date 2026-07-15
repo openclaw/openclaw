@@ -723,8 +723,99 @@ describe("runtime.llm.complete", () => {
       },
       costUsd: 0.0042,
     });
-    expect(events[0]?.durationMs).toEqual(expect.any(Number));
-    expect(events[0]?.durationMs).toBeGreaterThanOrEqual(0);
+    // Plugin completion latency is not an agent-run duration. Keeping this absent
+    // prevents usage exporters from adding call samples to run-duration metrics.
+    expect(events[0]?.durationMs).toBeUndefined();
+  });
+
+  it("does not emit model usage diagnostics for zero provider usage", async () => {
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [{ type: "text", text: "done" }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+        cost: { total: 0 },
+      },
+    });
+    const { events, stop } = collectTrustedUsageEvents();
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+
+    await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+      llm.complete({
+        messages: [{ role: "user", content: "Ping" }],
+      }),
+    );
+    stop();
+
+    expect(events).toHaveLength(0);
+  });
+
+  it("emits cache-only plugin usage with canonical prompt and total counts", async () => {
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [{ type: "text", text: "done" }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 9,
+        cacheWrite: 0,
+        total: 9,
+        cost: { total: 0.0009 },
+      },
+    });
+    const { events, stop } = collectTrustedUsageEvents();
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+
+    await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+      llm.complete({
+        messages: [{ role: "user", content: "Ping" }],
+      }),
+    );
+    stop();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      pluginId: "trusted-plugin",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 9,
+        cacheWrite: 0,
+        promptTokens: 9,
+        total: 9,
+      },
+      costUsd: 0.0009,
+    });
+  });
+
+  it("does not emit model usage diagnostics when the provider rejects", async () => {
+    hoisted.completeWithPreparedSimpleCompletionModel.mockRejectedValueOnce(
+      new Error("provider failed"),
+    );
+    const { events, stop } = collectTrustedUsageEvents();
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("trusted-plugin", () =>
+        llm.complete({
+          messages: [{ role: "user", content: "Ping" }],
+        }),
+      ),
+    ).rejects.toThrow("provider failed");
+    stop();
+
+    expect(events).toHaveLength(0);
   });
 
   it("does not emit plugin usage when diagnostics are disabled", async () => {

@@ -156,6 +156,10 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 
     Label values are redacted and must match OpenClaw's low-cardinality character policy. Values that fail the policy are replaced with `unknown`, `other`, or `none`, depending on the metric. Labels that look like scoped agent session keys are also replaced with `unknown`.
 
+    Plugin-owned usage uses the trusted low-cardinality plugin id for `plugin`.
+    Non-plugin usage, and plugin ids rejected by low-cardinality normalization,
+    use `plugin="none"`.
+
   </Accordion>
   <Accordion title="Series cap and overflow accounting">
     The exporter caps retained time series in memory at **2048** series across counters, gauges, and histograms combined. New series beyond that cap are dropped, and `openclaw_prometheus_series_dropped_total` increments by one each time.

@@ -228,7 +228,6 @@ function emitLlmCompleteUsageDiagnostic(params: {
   pluginId?: string;
   provider: string;
   model: string;
-  durationMs: number;
 }) {
   if (!isDiagnosticsEnabled(params.cfg) || !hasNonzeroUsage(params.usage)) {
     return;
@@ -254,7 +253,6 @@ function emitLlmCompleteUsageDiagnostic(params: {
       total: params.usage.total ?? promptTokens + output,
     },
     ...(params.costUsd !== undefined ? { costUsd: params.costUsd } : {}),
-    durationMs: params.durationMs,
   });
 }
 
@@ -479,7 +477,6 @@ export function createRuntimeLlm(
         }),
       };
 
-      const completionStartedAt = Date.now();
       const result = await completeWithPreparedSimpleCompletionModel({
         model: prepared.model,
         auth: prepared.auth,
@@ -525,7 +522,6 @@ export function createRuntimeLlm(
         pluginId: pluginPolicyId,
         provider: prepared.selection.provider,
         model: prepared.selection.modelId,
-        durationMs: Date.now() - completionStartedAt,
       });
 
       return {
