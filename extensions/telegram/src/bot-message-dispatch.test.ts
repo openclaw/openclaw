@@ -1626,7 +1626,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("skips answer draft stream for same-chat selected quotes", async () => {
+  it("preserves inherited block streaming when selected quotes cannot open a draft", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
       return { queuedFinal: true };
@@ -1646,9 +1646,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
           ReplyToIsQuote: true,
         } as unknown as TelegramMessageContext["ctxPayload"],
       }),
+      cfg: { agents: { defaults: { blockStreamingDefault: "on" } } },
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
     });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expectRecordFields(expectDispatchParams({}).replyOptions, {
+      disableBlockStreaming: undefined,
+    });
     const delivery = expectDeliverRepliesParams({
       replyQuoteMessageId: 9001,
       replyQuoteText: " quoted slice\n",
@@ -3018,6 +3024,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "partial", preview: { toolProgress: true } } },
     });
 
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expectRecordFields(expectDispatchParams({}).replyOptions, { disableBlockStreaming: true });
     expect(deliverReplies).toHaveBeenCalledTimes(2);
     expectRecordFields(mockCallArg(deliverReplies, 0), {
       transcriptMirror: undefined,

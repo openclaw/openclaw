@@ -203,16 +203,18 @@ export async function runCliFallbackCandidate(params: {
               ),
             ]);
           },
-          onCommentaryText:
-            turn.opts?.onItemEvent && shouldBridgeCliPreambleEvents(turn.opts)
-              ? async (payload) => {
-                  await turn.opts?.onItemEvent?.({
-                    itemId: payload.itemId,
-                    kind: "preamble",
-                    progressText: payload.text,
-                  });
+          onCommentaryText: turn.opts?.onItemEvent
+            ? async (payload) => {
+                if (!shouldBridgeCliPreambleEvents(turn.opts)) {
+                  return;
                 }
-              : undefined,
+                await turn.opts?.onItemEvent?.({
+                  itemId: payload.itemId,
+                  kind: "preamble",
+                  progressText: payload.text,
+                });
+              }
+            : undefined,
           onFastModeAutoProgress: async (payload) => {
             await turn.opts?.onToolResult?.(payload);
           },

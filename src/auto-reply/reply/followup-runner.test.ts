@@ -2271,6 +2271,58 @@ describe("createFollowupRunner runtime config", () => {
     );
   });
 
+  it("captures queued CLI commentary without rendering it when hidden", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: { "claude-cli": { command: "claude" } },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const onItemEvent = vi.fn(async () => {});
+    runCliAgentMock.mockImplementationOnce(
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
+        expect(params.emitCommentaryText).toBe(true);
+        const agentEvents = await import("../../infra/agent-events.js");
+        agentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "item",
+          data: { kind: "preamble", itemId: "commentary-1", progressText: "Checking." },
+        });
+        return { payloads: [{ text: "final" }], meta: {} };
+      },
+    );
+    const runner = createFollowupRunner({
+      opts: {
+        onItemEvent,
+        commentaryProgressEnabled: false,
+        progressPreambleEnabled: false,
+      },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "telegram",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onItemEvent).not.toHaveBeenCalled();
+  });
+
   it("starts queued CLI tool presentation before later commentary", async () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
