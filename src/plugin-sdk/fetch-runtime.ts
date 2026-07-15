@@ -23,12 +23,7 @@ export {
   resolveEnvHttpProxyUrl,
   shouldUseEnvHttpProxyForUrl,
 } from "../infra/net/proxy-env.js";
-export {
-  closeProxyFetch,
-  getProxyUrlFromFetch,
-  makeProxyFetch,
-  PROXY_FETCH_CLOSE,
-} from "../infra/net/proxy-fetch.js";
+export { getProxyUrlFromFetch, makeProxyFetch } from "../infra/net/proxy-fetch.js";
 export { createPinnedLookup } from "../infra/net/ssrf.js";
 export type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 
