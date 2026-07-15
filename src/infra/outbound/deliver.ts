@@ -947,6 +947,43 @@ function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
   return changed ? next : value;
 }
 
+/** Every media reference a payload set carries, in payload order. */
+function collectPayloadMediaSources(payloads: readonly ReplyPayload[]): string[] {
+  return payloads.flatMap((payload) => [
+    ...(typeof payload.mediaUrl === "string" && payload.mediaUrl.trim() ? [payload.mediaUrl] : []),
+    ...(payload.mediaUrls ?? []).filter((url) => typeof url === "string" && url.trim()),
+  ]);
+}
+
+/**
+ * Resolves the media read capability for one send. Queue staging and the live
+ * send must resolve it identically: staging copies exactly the bytes the send is
+ * already allowed to read, so a narrower gate here would reject media the send
+ * would have delivered, and a wider one would widen read authority.
+ */
+function resolveOutboundMediaAccessForSend(
+  params: DeliverOutboundPayloadsCoreParams,
+  channel: string,
+  mediaSources: readonly string[],
+): OutboundMediaAccess {
+  if (mediaSources.length === 0) {
+    return params.mediaAccess ?? {};
+  }
+  return resolveAgentScopedOutboundMediaAccess({
+    cfg: params.cfg,
+    agentId: params.session?.agentId ?? params.mirror?.agentId,
+    mediaSources,
+    mediaAccess: params.mediaAccess,
+    sessionKey: params.session?.policyKey ?? params.session?.key,
+    messageProvider: params.session?.key ? undefined : channel,
+    accountId: params.session?.requesterAccountId ?? params.accountId,
+    requesterSenderId: params.session?.requesterSenderId,
+    requesterSenderName: params.session?.requesterSenderName,
+    requesterSenderUsername: params.session?.requesterSenderUsername,
+    requesterSenderE164: params.session?.requesterSenderE164,
+  });
+}
+
 function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload): ReplyPayload {
   const stripped = stripInternalRuntimeScaffoldingFromValue(payload);
   return stripped && typeof stripped === "object" && !Array.isArray(stripped)
@@ -1403,7 +1440,14 @@ export async function deliverOutboundPayloadsInternal(
     // keeps the original path and stays copy-free.
     const staged = await stageQueuePayloadMedia({
       payloads: strippedQueuePayloads,
-      mediaAccess: params.mediaAccess,
+      // Resolved exactly as the live send resolves it: staging must neither
+      // reject media the send would deliver (agent workspace sources are only
+      // reachable through the agent-scoped roots) nor read more than the send may.
+      mediaAccess: resolveOutboundMediaAccessForSend(
+        params,
+        channel,
+        collectPayloadMediaSources(strippedQueuePayloads),
+      ),
       maxBytes: resolveOutboundMediaMaxBytes({
         cfg: params.cfg,
         channel,
@@ -1995,21 +2039,7 @@ async function deliverOutboundPayloadsCore(
       })
     )[0] ?? false;
   const resolveMediaAccess = (mediaSources: readonly string[]): OutboundMediaAccess =>
-    mediaSources.length > 0
-      ? resolveAgentScopedOutboundMediaAccess({
-          cfg,
-          agentId: params.session?.agentId ?? params.mirror?.agentId,
-          mediaSources,
-          mediaAccess: params.mediaAccess,
-          sessionKey: params.session?.policyKey ?? params.session?.key,
-          messageProvider: params.session?.key ? undefined : channel,
-          accountId: params.session?.requesterAccountId ?? accountId,
-          requesterSenderId: params.session?.requesterSenderId,
-          requesterSenderName: params.session?.requesterSenderName,
-          requesterSenderUsername: params.session?.requesterSenderUsername,
-          requesterSenderE164: params.session?.requesterSenderE164,
-        })
-      : (params.mediaAccess ?? {});
+    resolveOutboundMediaAccessForSend(params, channel, mediaSources);
   const createHandler = (mediaSources: readonly string[]) =>
     createChannelHandler({
       cfg,

@@ -1,7 +1,6 @@
 // Covers outbound delivery core: hooks, queue cleanup, durable capability
 // checks, adapter sends, transcript mirroring, and payload outcomes.
 import fsPromises from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -4520,11 +4519,25 @@ describe("deliverOutboundPayloads", () => {
 
   it("queues a spool copy while the live send keeps the producer's path", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-spool", roomId: "!room:example" });
+    // Production shape: no explicit mediaAccess, and the source sits in the
+    // OpenClaw temp root that TTS actually writes to. Staging must resolve the
+    // same capability the live send resolves, so a fabricated localRoots here
+    // would hide whether the two gates agree.
     const sourceDir = await fsPromises.realpath(
-      await fsPromises.mkdtemp(path.join(os.tmpdir(), "deliver-spool-")),
+      await fsPromises.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "deliver-spool-")),
     );
-    const source = path.join(sourceDir, "voice.ogg");
-    await fsPromises.writeFile(source, "opus-bytes");
+    // Real MPEG-1 Layer III frames: host-local media sends are buffer-verified,
+    // so placeholder text would be rejected before staging is even exercised.
+    const source = path.join(sourceDir, "voice.mp3");
+    const mp3 = Buffer.alloc(417 * 8);
+    for (let i = 0; i < 8; i++) {
+      const o = i * 417;
+      mp3[o] = 0xff;
+      mp3[o + 1] = 0xfb;
+      mp3[o + 2] = 0x90;
+      mp3[o + 3] = 0xc4;
+    }
+    await fsPromises.writeFile(source, mp3);
     const payload = { mediaUrl: source, audioAsVoice: true };
 
     try {
@@ -4533,7 +4546,6 @@ describe("deliverOutboundPayloads", () => {
         channel: "matrix",
         to: "!room:example",
         payloads: [payload],
-        mediaAccess: { localRoots: [sourceDir] },
         deps: { matrix: sendMatrix },
       });
 
@@ -4545,7 +4557,7 @@ describe("deliverOutboundPayloads", () => {
       const queuedMediaUrl = queued?.payloads[0]?.mediaUrl;
       // The row points at the queue's own copy...
       expect(queuedMediaUrl).not.toBe(source);
-      expect(await fsPromises.readFile(queuedMediaUrl as string, "utf8")).toBe("opus-bytes");
+      expect(await fsPromises.readFile(queuedMediaUrl as string)).toEqual(mp3);
       // ...while the live send stays copy-free on the producer's path.
       expect(payload.mediaUrl).toBe(source);
       expect(sendMatrix.mock.calls[0]?.[0]?.mediaUrl ?? source).toBe(source);
