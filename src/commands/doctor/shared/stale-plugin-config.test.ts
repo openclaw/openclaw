@@ -431,9 +431,15 @@ describe("doctor stale plugin config helpers", () => {
       },
     } as OpenClawConfig;
 
-    // codex is a version-bound runtime plugin — its allowlist entry is not
-    // flagged as stale so the release backfill install step can install it.
+    // scanStalePluginConfig flags codex in plugins.allow because it is not in
+    // knownIds. Protection happens at the repair-sequencing caller via
+    // preservePluginIds, not in the scanner.
     expect(scanStalePluginConfig(cfg)).toEqual([
+      {
+        pluginId: "codex",
+        pathLabel: "plugins.allow",
+        surface: "allow",
+      },
       {
         pluginId: "acpx",
         pathLabel: "plugins.allow",
