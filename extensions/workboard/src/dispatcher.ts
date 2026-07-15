@@ -122,7 +122,7 @@ async function materializeWorkspace(params: {
     return {};
   }
   const sourcePath = workspace.sourcePath ?? workspace.path;
-  const sourceBranch = workspace.sourcePath ? workspace.sourceBranch : workspace.branch;
+  const requestedSourceBranch = workspace.sourcePath ? workspace.sourceBranch : workspace.branch;
   if (!sourcePath || !path.isAbsolute(sourcePath)) {
     throw new Error("worktree workspace path must be an absolute git checkout path");
   }
@@ -147,10 +147,22 @@ async function materializeWorkspace(params: {
   if (!params.worktrees) {
     throw new Error("managed worktree runtime is unavailable");
   }
+  const allowedMainRefs = new Set([
+    "main",
+    "origin/main",
+    "refs/heads/main",
+    "refs/remotes/origin/main",
+  ]);
+  if (requestedSourceBranch && !allowedMainRefs.has(requestedSourceBranch)) {
+    throw new Error(
+      `managed feature worktrees must be based on main, not ${requestedSourceBranch}`,
+    );
+  }
+  const sourceBranch = "origin/main";
   const worktree = await params.worktrees.create({
     repoRoot: canonicalSourcePath,
     name: managedWorktreeName(params.card.id),
-    ...(sourceBranch ? { baseRef: sourceBranch } : {}),
+    baseRef: sourceBranch,
     ownerKind: "workboard",
     ownerId: params.card.id,
   });
@@ -199,8 +211,10 @@ function buildWorkerPrompt(params: {
     `Claim token: ${params.token}`,
     "",
     "Heartbeat with workboard_heartbeat using the card id and token while working.",
-    "When done, call workboard_complete with the card id, token, summary, and proof.",
-    "If blocked, call workboard_block with the card id, token, and reason.",
+    "Do not end the session normally until a lifecycle tool call succeeds.",
+    "For code changes: branch from origin/main, push, open a PR targeting main, then call workboard_complete with status review, summary, and proof including the PR URL.",
+    "For completed non-code work: perform the required action, then call workboard_complete with status done, summary, and proof.",
+    "If required work is absent from origin/main or delivery cannot be completed, call workboard_block with the reason, then terminate with an error/non-zero outcome.",
     "",
     params.context,
   ].join("\n");

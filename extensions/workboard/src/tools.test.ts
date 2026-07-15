@@ -413,6 +413,7 @@ describe("workboard tools", () => {
       await tools.get("workboard_complete")?.execute("call-4", {
         id: parent.id,
         token,
+        status: "done",
         summary: "Done.",
         createdCardIds: [child.id],
         proof: { status: "passed", command: "pnpm test extensions/workboard" },

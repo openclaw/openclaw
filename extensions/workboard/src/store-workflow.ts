@@ -230,6 +230,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     }
     assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
     const now = Date.now();
+    const status = normalizeStatus(input.status, "done");
+    if (status !== "review" && status !== "done") {
+      throw new Error("completion status must be review or done.");
+    }
     const createdCardIds = normalizeStringList(input.createdCardIds, "created card ids", 120);
     const childIds = cardChildIds(existing);
     for (const createdCardId of createdCardIds) {
@@ -267,12 +271,12 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     };
     const execution =
       existing.execution?.status === "running"
-        ? { ...existing.execution, status: "done" as const, updatedAt: now }
+        ? { ...existing.execution, status, updatedAt: now }
         : existing.execution;
     return await this.updateCard(
       id,
       {
-        status: "done",
+        status,
         ...(execution ? { execution } : {}),
         metadata: {
           ...metadata,

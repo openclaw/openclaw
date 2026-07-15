@@ -486,6 +486,11 @@ export function createWorkboardTools(params: {
         {
           id: cardIdField(),
           token: claimTokenField(),
+          status: Type.Optional(
+            Type.Union([Type.Literal("review"), Type.Literal("done")], {
+              description: "Review for code awaiting merge; done for completed non-code work.",
+            }),
+          ),
           summary: Type.Optional(Type.String({ description: "Completion summary." })),
           proof: Type.Optional(
             Type.Object(

@@ -6,6 +6,7 @@ import { registerWorkboardCommand } from "./src/command.js";
 import { cleanupWorkboardRunWorktree } from "./src/dispatcher-workspace.js";
 import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
+import { reconcileWorkboardRunEnd } from "./src/worker-terminal.js";
 import {
   guardWorkboardToolsForWorkspaceAccess,
   WORKBOARD_TOOL_NAMES,
@@ -21,6 +22,7 @@ export default definePluginEntry({
     registerWorkboardCommand({ api, store });
     api.registerService(createWorkboardChangeEventService(store));
     api.on("subagent_ended", async (event) => {
+      await reconcileWorkboardRunEnd({ store, event });
       if (event.runId) {
         await cleanupWorkboardRunWorktree({
           store,

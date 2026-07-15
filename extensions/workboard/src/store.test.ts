@@ -1702,6 +1702,23 @@ describe("WorkboardStore", () => {
     });
     expect(completed.metadata?.claim).toBeUndefined();
 
+    const reviewCard = await store.create({ title: "Code awaiting merge", status: "running" });
+    await store.claim(reviewCard.id, { ownerId: "main", token: "token-review" });
+    const review = await store.complete(reviewCard.id, {
+      ownerId: "main",
+      token: "token-review",
+      status: "review",
+      summary: "PR opened against main.",
+    });
+    expect(review).toMatchObject({ status: "review" });
+    expect(review.execution?.status).not.toBe("running");
+
+    await expect(
+      store.complete((await store.create({ title: "Invalid completion" })).id, {
+        status: "ready",
+      }),
+    ).rejects.toThrow(/completion status must be review or done/);
+
     const blockedCard = await store.create({
       title: "Blocked work",
       status: "running",

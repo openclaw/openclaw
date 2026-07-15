@@ -108,6 +108,7 @@ export type WorkboardBulkInput = {
 export type WorkboardCompleteInput = {
   ownerId?: unknown;
   token?: unknown;
+  status?: unknown;
   summary?: unknown;
   proof?: unknown;
   artifacts?: unknown;

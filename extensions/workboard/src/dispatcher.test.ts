@@ -58,7 +58,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect(worktrees.create).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: "/repo",
-        baseRef: "main",
+        baseRef: "origin/main",
         ownerKind: "workboard",
         ownerId: card.id,
       }),
@@ -74,7 +74,7 @@ describe("dispatchAndStartWorkboardCards", () => {
             path: "/state/worktrees/fingerprint/wb-card",
             branch: `openclaw/wb-${card.id}`,
             sourcePath: "/repo",
-            sourceBranch: "main",
+            sourceBranch: "origin/main",
           },
         },
       },
@@ -86,6 +86,41 @@ describe("dispatchAndStartWorkboardCards", () => {
       ownerKind: "workboard",
       ownerId: card.id,
     });
+  });
+
+  it("rejects managed worktrees based on a feature branch", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Stacked worker",
+      status: "ready",
+      workspace: { kind: "worktree", path: "/repo", branch: "feature/other-card" },
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn();
+    const create = vi.fn();
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      worktrees: {
+        resolveCheckoutRoot: vi.fn().mockResolvedValue("/repo"),
+        create,
+        release: vi.fn(),
+        removeIfLossless: vi.fn(),
+      },
+      options: { maxStarts: 1, materializeWorktree: true },
+    });
+
+    expect(result.started).toEqual([]);
+    expect(result.startFailures).toEqual([
+      expect.objectContaining({
+        cardId: card.id,
+        error: expect.stringContaining("must be based on main"),
+      }),
+    ]);
+    expect(create).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "blocked" });
   });
 
   it("requires explicit reauthorization for legacy cards under full-host dispatch", async () => {
@@ -721,7 +756,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({ repoRoot: "/repo", ownerId: card.id }),
     );
-    expect(create.mock.calls[0]?.[0]).not.toHaveProperty("baseRef");
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ baseRef: "origin/main" });
   });
 
   it("claims ready cards and starts bounded subagent worker runs", async () => {
@@ -768,7 +803,8 @@ describe("dispatchAndStartWorkboardCards", () => {
       deliver: false,
     });
     expect(run.mock.calls[0]?.[0]?.message).toContain("Claim token:");
-    expect(run.mock.calls[0]?.[0]?.message).toContain("workboard_complete with the card id");
+    expect(run.mock.calls[0]?.[0]?.message).toContain("PR targeting main");
+    expect(run.mock.calls[0]?.[0]?.message).toContain("status review");
     expect(run.mock.calls[0]?.[0]?.message).not.toContain("ownerId and token");
     await expect(store.get(first.id)).resolves.toMatchObject({
       status: "running",
