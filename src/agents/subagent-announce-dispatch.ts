@@ -43,7 +43,7 @@ type SubagentAnnounceDispatchPhaseResult = {
 };
 
 /** Converts a steer outcome into the shared delivery result shape. */
-export function mapSteerOutcomeToDeliveryResult(
+function mapSteerOutcomeToDeliveryResult(
   outcome: SubagentAnnounceSteerOutcome,
 ): SubagentAnnounceDeliveryResult {
   if (outcome.status === "steered") {

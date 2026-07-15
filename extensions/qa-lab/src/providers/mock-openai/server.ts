@@ -193,7 +193,7 @@ async function buildResponsesPayload(
     /forked subagent context qa check/i.test(allInputText) ||
     /delegate (?:one |a )bounded qa task/i.test(allInputText) ||
     /subagent handoff/i.test(allInputText) ||
-    buildExplicitSessionsSpawnArgs(allInputText) !== null;
+    buildExplicitSessionsSpawnArgs(prompt) !== null;
   const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn") || canCallMockSubagentTool;
   const canCallSessionsYield =
     hasDeclaredTool(body, "sessions_yield") ||
@@ -471,7 +471,7 @@ async function buildResponsesPayload(
       },
     ]);
   }
-  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(allInputText);
+  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(prompt, input);
   if (whatsAppPendingHistoryReply) {
     return buildAssistantEvents(whatsAppPendingHistoryReply);
   }
@@ -1133,7 +1133,7 @@ async function buildResponsesPayload(
     scenarioState.subagentFanoutPhase = 3;
     return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
   }
-  const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
+  const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(prompt);
   if (explicitSessionsSpawnArgs && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
@@ -1551,3 +1551,4 @@ export async function startQaMockOpenAiServer(params?: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3627,3 +3627,4 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

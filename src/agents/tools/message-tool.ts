@@ -1075,11 +1075,9 @@ type InferredSessionDelivery = {
   to: string;
 };
 
-const USER_PREFIXED_DIRECT_TARGET_CHANNELS = new Set(["discord", "mattermost", "msteams", "slack"]);
-
 function formatSessionDeliveryTarget(channel: string, peerKind: string, to: string): string {
   return (peerKind === "direct" || peerKind === "dm") &&
-    USER_PREFIXED_DIRECT_TARGET_CHANNELS.has(channel)
+    getChannelPlugin(channel)?.messaging?.directTargetStyle === "user-prefixed"
     ? `user:${to}`
     : to;
 }
@@ -1731,3 +1729,4 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

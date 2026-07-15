@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { getContextEngineFactory, listContextEngineIds } from "../context-engine/registry.js";
+import { getContextEngineRegistration } from "../context-engine/registry.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -248,8 +248,7 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.securityAuditCollectors).toStrictEqual([]);
     expect(registry.interactiveHandlers).toStrictEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
-    expect(getContextEngineFactory("failme-context")).toBeUndefined();
-    expect(listContextEngineIds()).not.toContain("failme-context");
+    expect(getContextEngineRegistration("failme-context")).toBeUndefined();
 
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(event);
@@ -1737,3 +1736,4 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

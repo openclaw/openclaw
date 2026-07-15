@@ -46,6 +46,7 @@ afterEach(() => {
 /** Simple hash-tracking config.get/config.set/config.apply mock gateway. */
 function createConfigServerMock() {
   let hashCounter = 1;
+  let appliedHash = "hash-1";
   let storedRaw = '{\n  "count": 1\n}\n';
   const submissions: Array<{ method: string; raw: string; baseHash: string }> = [];
   const request = vi.fn(async (method: string, params?: unknown) => {
@@ -54,6 +55,8 @@ function createConfigServerMock() {
         config: JSON.parse(storedRaw) as Record<string, unknown>,
         raw: storedRaw,
         hash: `hash-${hashCounter}`,
+        configRevisionHash: `hash-${hashCounter}`,
+        appliedConfigHash: appliedHash,
         valid: true,
         issues: [],
       };
@@ -63,6 +66,9 @@ function createConfigServerMock() {
       submissions.push({ method, raw, baseHash });
       storedRaw = raw;
       hashCounter += 1;
+      if (method === "config.apply") {
+        appliedHash = `hash-${hashCounter}`;
+      }
       // Like the real gateway: ack with the persisted snapshot hash.
       return { hash: `hash-${hashCounter}` };
     }
@@ -109,20 +115,6 @@ function createDeferredSetServerMock(options: { legacyAck?: boolean } = {}) {
     return Promise.resolve({});
   });
   return { request, submissions, applySubmissions, firstSet };
-}
-
-/** Map-backed localStorage stub; node/jsdom test envs lack a stable one. */
-function stubLocalStorage(): Map<string, string> {
-  const store = new Map<string, string>();
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    removeItem: (key: string) => void store.delete(key),
-    clear: () => store.clear(),
-    key: () => null,
-    length: 0,
-  });
-  return store;
 }
 
 describe("createRuntimeConfigCapability", () => {
@@ -449,7 +441,6 @@ describe("config form auto-save", () => {
 
   it("clears needsApply only on apply; a discarding refresh keeps the banner", async () => {
     vi.useFakeTimers();
-    const store = stubLocalStorage();
     const server = createConfigServerMock();
     const { runtimeConfig } = createHarness(server.request as GatewayBrowserClient["request"]);
     await runtimeConfig.ensureLoaded();
@@ -469,13 +460,11 @@ describe("config form auto-save", () => {
     expect(runtimeConfig.state.configNeedsApply).toBe(false);
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
     expect(server.submissions.at(-1)?.method).toBe("config.apply");
-    expect(store.size).toBe(0);
     runtimeConfig.dispose();
   });
 
-  it("persists needsApply across capability recreation keyed to the saved hash", async () => {
+  it("derives needsApply across capability recreation from Gateway revision truth", async () => {
     vi.useFakeTimers();
-    const store = stubLocalStorage();
     const server = createConfigServerMock();
     const first = createHarness(server.request as GatewayBrowserClient["request"]);
     await first.runtimeConfig.ensureLoaded();
@@ -483,38 +472,231 @@ describe("config form auto-save", () => {
     first.runtimeConfig.patchForm(["count"], 2);
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
     expect(first.runtimeConfig.state.configNeedsApply).toBe(true);
-    expect([...store.values()]).toEqual([server.currentHash()]);
     first.runtimeConfig.dispose();
 
-    // A fresh capability (page reload) re-derives the banner from storage.
+    // A fresh capability compares the persisted and applied revisions.
     const second = createHarness(server.request as GatewayBrowserClient["request"]);
     await second.runtimeConfig.ensureLoaded();
     expect(second.runtimeConfig.state.configNeedsApply).toBe(true);
 
     await expect(second.runtimeConfig.apply()).resolves.toBe(true);
     expect(second.runtimeConfig.state.configNeedsApply).toBe(false);
-    expect(store.size).toBe(0);
     second.runtimeConfig.dispose();
 
-    // After apply cleared the record, a third load shows no banner.
+    // After apply advances runtime truth, a third load shows no banner.
     const third = createHarness(server.request as GatewayBrowserClient["request"]);
     await third.runtimeConfig.ensureLoaded();
     expect(third.runtimeConfig.state.configNeedsApply).toBe(false);
     third.runtimeConfig.dispose();
   });
 
-  it("drops the persisted banner when the config hash moved out from under it", async () => {
-    vi.useFakeTimers();
-    const store = stubLocalStorage();
-    store.set("openclaw.config.needsApplyHash.v1", "hash-from-another-life");
-    const server = createConfigServerMock();
-    const { runtimeConfig } = createHarness(server.request as GatewayBrowserClient["request"]);
+  it("does not invent needsApply when an older Gateway omits the applied hash", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "config.get" ? { config: {}, hash: "hash-1", valid: true, issues: [] } : {},
+    );
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
     await runtimeConfig.ensureLoaded();
 
     expect(runtimeConfig.state.configNeedsApply).toBe(false);
-    // The mismatched record is deleted so a hash that cycles back to this
-    // value later cannot resurrect the stale banner.
-    expect(store.size).toBe(0);
+    runtimeConfig.dispose();
+  });
+
+  it("preserves process-local needsApply after saving through an older Gateway", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: '{\n  "count": 1\n}\n',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return method === "config.set" ? { hash: "hash-2" } : {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    runtimeConfig.patchForm(["count"], 2);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+
+    expect(runtimeConfig.state.configNeedsApply).toBe(true);
+    runtimeConfig.dispose();
+  });
+
+  it("treats a missing current config as drift from an applied revision", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "config.get"
+        ? {
+            config: {},
+            hash: null,
+            configRevisionHash: null,
+            appliedConfigHash: "applied-hash",
+            valid: true,
+            issues: [],
+          }
+        : {},
+    );
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    expect(runtimeConfig.state.configNeedsApply).toBe(true);
+    runtimeConfig.dispose();
+  });
+
+  it("refreshes until a hot-reloaded revision becomes active", async () => {
+    vi.useFakeTimers();
+    let getCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "config.get") {
+        return {};
+      }
+      getCount += 1;
+      return {
+        config: { count: 2 },
+        raw: '{"count":2}',
+        hash: "raw-hash-2",
+        configRevisionHash: "revision-2",
+        appliedConfigHash: getCount >= 2 ? "revision-2" : "revision-1",
+        valid: true,
+        issues: [],
+      };
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    expect(runtimeConfig.state.configNeedsApply).toBe(true);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(runtimeConfig.state.configNeedsApply).toBe(false);
+    runtimeConfig.dispose();
+  });
+
+  it("continues mismatch polling after a transient config.get failure", async () => {
+    vi.useFakeTimers();
+    let getCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "config.get") {
+        return {};
+      }
+      getCount += 1;
+      if (getCount === 2) {
+        throw new Error("gateway restarting");
+      }
+      return {
+        config: { count: 2 },
+        raw: '{"count":2}',
+        hash: "raw-hash-2",
+        configRevisionHash: "revision-2",
+        appliedConfigHash: getCount >= 3 ? "revision-2" : "revision-1",
+        valid: true,
+        issues: [],
+      };
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(runtimeConfig.state.configNeedsApply).toBe(true);
+    await vi.advanceTimersByTimeAsync(750);
+    expect(runtimeConfig.state.configNeedsApply).toBe(false);
+    runtimeConfig.dispose();
+  });
+
+  it("discards an applied-hash poll superseded by a config write", async () => {
+    vi.useFakeTimers();
+    const stalePoll = deferred<ConfigSnapshot>();
+    let getCount = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        getCount += 1;
+        if (getCount === 2) {
+          return stalePoll.promise;
+        }
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{\n  "count": 1\n}\n',
+          hash: "hash-1",
+          configRevisionHash: "revision-1",
+          appliedConfigHash: "revision-0",
+          valid: true,
+          issues: [],
+        });
+      }
+      return Promise.resolve(method === "config.set" ? { hash: "hash-2" } : {});
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await vi.advanceTimersByTimeAsync(250);
+    runtimeConfig.patchForm(["count"], 2);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+
+    stalePoll.resolve({
+      config: { count: 1 },
+      raw: '{\n  "count": 1\n}\n',
+      hash: "hash-1",
+      configRevisionHash: "revision-1",
+      appliedConfigHash: "revision-1",
+      valid: true,
+      issues: [],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    expect(runtimeConfig.state.configNeedsApply).toBe(true);
+    runtimeConfig.dispose();
+  });
+
+  it("does not re-arm an invalidated applied-hash poll during config.patch", async () => {
+    vi.useFakeTimers();
+    const stalePoll = deferred<ConfigSnapshot>();
+    const patchGate = deferred<unknown>();
+    let getCount = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        getCount += 1;
+        if (getCount === 2) {
+          return stalePoll.promise;
+        }
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{\n  "count": 1\n}\n',
+          hash: "hash-1",
+          configRevisionHash: "revision-1",
+          appliedConfigHash: "revision-0",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "config.patch") {
+        return patchGate.promise;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await vi.advanceTimersByTimeAsync(250);
+    const patchPromise = runtimeConfig.patch({ raw: { count: 2 }, note: "test patch" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    stalePoll.resolve({
+      config: { count: 1 },
+      raw: '{\n  "count": 1\n}\n',
+      hash: "hash-1",
+      configRevisionHash: "revision-1",
+      appliedConfigHash: "revision-1",
+      valid: true,
+      issues: [],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(getCount).toBe(2);
+    patchGate.resolve({ hash: "hash-2" });
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(patchPromise).resolves.toBe(true);
     runtimeConfig.dispose();
   });
 
@@ -621,7 +803,6 @@ describe("config form auto-save", () => {
 
   it("flushes a dirty draft once on dispose instead of dropping it", async () => {
     vi.useFakeTimers();
-    const store = stubLocalStorage();
     const server = createConfigServerMock();
     const { runtimeConfig } = createHarness(server.request as GatewayBrowserClient["request"]);
     await runtimeConfig.ensureLoaded();
@@ -634,9 +815,6 @@ describe("config form auto-save", () => {
     ]);
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 4);
     expect(server.submissions).toHaveLength(1);
-    // The ack hash lands in the restart marker even though the disposed
-    // capability can no longer touch its own state.
-    expect([...store.values()]).toEqual(["hash-2"]);
   });
 
   it("does not flush clean or raw drafts on dispose", async () => {
@@ -761,9 +939,8 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
-  it("persists the restart marker from the ack even when the reload fails", async () => {
+  it("keeps process-local needsApply when the post-save reload fails", async () => {
     vi.useFakeTimers();
-    const store = stubLocalStorage();
     let failReloads = false;
     let hashCounter = 1;
     const request = vi.fn(async (method: string) => {
@@ -775,6 +952,8 @@ describe("config form auto-save", () => {
           config: { count: 1 },
           raw: '{\n  "count": 1\n}\n',
           hash: `hash-${hashCounter}`,
+          configRevisionHash: `hash-${hashCounter}`,
+          appliedConfigHash: "hash-1",
           valid: true,
           issues: [],
         };
@@ -792,8 +971,6 @@ describe("config form auto-save", () => {
     first.runtimeConfig.patchForm(["count"], 2);
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
 
-    // The ack carried the persisted hash; no reload was needed for the marker.
-    expect([...store.values()]).toEqual(["hash-2"]);
     expect(first.runtimeConfig.state.configNeedsApply).toBe(true);
     first.runtimeConfig.dispose();
 
@@ -873,7 +1050,6 @@ describe("config form auto-save", () => {
 
   it("chains one final save when disposed mid-flight with a newer edit", async () => {
     vi.useFakeTimers();
-    stubLocalStorage();
     const { request, submissions, firstSet } = createDeferredSetServerMock();
     const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
     await runtimeConfig.ensureLoaded();
@@ -894,7 +1070,6 @@ describe("config form auto-save", () => {
 
   it("does not chain an extra save when disposed mid-flight without newer edits", async () => {
     vi.useFakeTimers();
-    stubLocalStorage();
     const { request, submissions, firstSet } = createDeferredSetServerMock();
     const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
     await runtimeConfig.ensureLoaded();
@@ -1190,7 +1365,6 @@ describe("config form auto-save", () => {
 
   it("skips the teardown flush when the settled flight acked without a hash", async () => {
     vi.useFakeTimers();
-    stubLocalStorage();
     const { request, submissions, firstSet } = createDeferredSetServerMock({ legacyAck: true });
     const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
     await runtimeConfig.ensureLoaded();
@@ -1322,6 +1496,39 @@ describe("config form auto-save", () => {
     await vi.advanceTimersByTimeAsync(0);
     await drainPromise;
     await expect(patchPromise).resolves.toBe(true);
+    runtimeConfig.dispose();
+  });
+
+  it("refreshes applied revision truth after config.patch", async () => {
+    vi.useFakeTimers();
+    let getCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCount += 1;
+        const revision = getCount === 1 ? "revision-1" : "revision-2";
+        return {
+          config: { count: getCount },
+          raw: `{\n  "count": ${getCount}\n}\n`,
+          hash: `hash-${getCount}`,
+          configRevisionHash: revision,
+          appliedConfigHash: revision,
+          valid: true,
+          issues: [],
+        };
+      }
+      return method === "config.patch" ? { hash: "hash-2" } : {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await expect(runtimeConfig.patch({ raw: { count: 2 }, note: "test patch" })).resolves.toBe(
+      true,
+    );
+    expect(runtimeConfig.state.configNeedsApply).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(runtimeConfig.state.configNeedsApply).toBe(false);
+    expect(runtimeConfig.state.configSnapshot?.configRevisionHash).toBe("revision-2");
     runtimeConfig.dispose();
   });
 
@@ -1538,7 +1745,6 @@ describe("config form auto-save", () => {
 
   it("recovers a manual save whose ack was lost to a disconnect", async () => {
     vi.useFakeTimers();
-    stubLocalStorage();
     let committedRaw = '{\n  "count": 1\n}\n';
     let hash = "hash-1";
     const sets: Array<{ raw: string; baseHash: string }> = [];
@@ -1579,7 +1785,7 @@ describe("config form auto-save", () => {
 
     // The reconnect reload recognizes the committed bytes as ours even
     // though the ack (and its manualFlightInfo hash) never arrived: the
-    // restart marker survives instead of silently disappearing.
+    // process-local pending state survives instead of silently disappearing.
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
 
     // …and the still-dirty draft retries against the committed hash.
@@ -1592,7 +1798,6 @@ describe("config form auto-save", () => {
 
   it("retries reconciliation on the next reconnect when the reload fails", async () => {
     vi.useFakeTimers();
-    stubLocalStorage();
     let committedRaw = '{\n  "count": 1\n}\n';
     let hash = "hash-1";
     let failNextGet = false;
@@ -1651,7 +1856,6 @@ describe("config form auto-save", () => {
 
   it("restores a revert made while the interrupted write was in flight", async () => {
     vi.useFakeTimers();
-    stubLocalStorage();
     let committedRaw = '{\n  "count": 1\n}\n';
     let hash = "hash-1";
     const sets: Array<{ raw: string; baseHash: string }> = [];
@@ -1702,9 +1906,8 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
-  it("persists the restart marker recovered from a hashless ack reload", async () => {
+  it("keeps process-local needsApply after a legacy hashless ack reload", async () => {
     vi.useFakeTimers();
-    const store = stubLocalStorage();
     const { request, firstSet, submissions } = createDeferredSetServerMock({ legacyAck: true });
     const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
     await runtimeConfig.ensureLoaded();
@@ -1715,9 +1918,6 @@ describe("config form auto-save", () => {
 
     expect(submissions).toHaveLength(1);
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
-    // The reload's authoritative hash stands in for the ack the legacy
-    // gateway never sent; without it a page reload drops the banner.
-    expect(store.size).toBe(1);
     runtimeConfig.dispose();
   });
 
@@ -1839,7 +2039,6 @@ describe("config form auto-save", () => {
 
   it("chains the teardown flush behind a pending manual save", async () => {
     vi.useFakeTimers();
-    stubLocalStorage();
     const { request, submissions, firstSet } = createDeferredSetServerMock();
     const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
     await runtimeConfig.ensureLoaded();
@@ -1865,7 +2064,6 @@ describe("config form auto-save", () => {
 
   it("skips the teardown flush behind a pending apply", async () => {
     vi.useFakeTimers();
-    stubLocalStorage();
     const firstApply = deferred<unknown>();
     let setCalls = 0;
     const request = vi.fn((method: string) => {
@@ -1939,3 +2137,5 @@ describe("agent config helpers", () => {
     ).toBe(1);
   });
 });
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

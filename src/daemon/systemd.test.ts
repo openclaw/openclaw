@@ -2364,3 +2364,4 @@ describe("systemd service control", () => {
     await assertRestartSuccess({ USER: "debian" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

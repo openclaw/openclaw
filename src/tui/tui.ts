@@ -1368,7 +1368,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     exitRequested = true;
     exitResult = {
       exitReason: result?.exitReason ?? "exit",
-      ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
+      ...(result?.systemAgentMessage ? { systemAgentMessage: result.systemAgentMessage } : {}),
     };
     pluginApprovals?.dispose();
     taskSuggestions?.dispose();
@@ -1728,3 +1728,4 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   }
   return exitResult;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

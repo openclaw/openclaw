@@ -9,7 +9,7 @@ type CoreToolFactoryDescriptor = {
   family: CoreToolFactoryFamily;
 };
 
-export const CORE_TOOL_FACTORY_DESCRIPTORS = [
+const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "edit", family: "base-coding" },
   { name: "read", family: "base-coding" },
   { name: "write", family: "base-coding" },
@@ -17,7 +17,7 @@ export const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "exec", family: "shell" },
   { name: "process", family: "shell" },
   { name: "agents_list", family: "openclaw" },
-  { name: "crestodian", family: "openclaw" },
+  { name: "openclaw", family: "openclaw" },
   { name: "computer", family: "openclaw" },
   { name: "cron", family: "openclaw" },
   { name: "gateway", family: "openclaw" },
@@ -30,6 +30,7 @@ export const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "nodes", family: "openclaw" },
   { name: "pdf", family: "openclaw" },
   { name: "session_status", family: "openclaw" },
+  { name: "sessions", family: "openclaw" },
   { name: "sessions_history", family: "openclaw" },
   { name: "sessions_list", family: "openclaw" },
   { name: "sessions_search", family: "openclaw" },

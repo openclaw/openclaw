@@ -7,11 +7,11 @@ import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import "./doctor-tool-result-cap-advice.js";
+import { resolveDoctorContributionHealthChecks } from "./doctor-health-contributions.js";
 import {
   createDoctorHealthContribution,
-  resolveDoctorContributionHealthChecks,
   resolveDoctorHealthContributions,
-} from "./doctor-health-contributions.js";
+} from "./doctor-health-contributions.test-support.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
@@ -1447,6 +1447,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
       cfg,
+      doctorOnlyStateMigrations: true,
       crossStateDirImports: false,
     });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
@@ -1471,6 +1472,7 @@ describe("doctor health contributions", () => {
     await contribution.run(directRepairContext);
     expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
       cfg: {},
+      doctorOnlyStateMigrations: true,
       crossStateDirImports: true,
     });
 
@@ -1484,6 +1486,7 @@ describe("doctor health contributions", () => {
     });
     expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
       cfg: {},
+      doctorOnlyStateMigrations: true,
       crossStateDirImports: true,
     });
 
@@ -1494,6 +1497,7 @@ describe("doctor health contributions", () => {
     await contribution.run(automatedRepairContext);
     expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
       cfg: {},
+      doctorOnlyStateMigrations: true,
       crossStateDirImports: false,
     });
   });
@@ -3491,3 +3495,4 @@ describe("doctor health contributions", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

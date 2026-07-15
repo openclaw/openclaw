@@ -42,4 +42,5 @@ export type WorkerPlacementDispatchContract = {
   dispatch(
     request: WorkerPlacementDispatchRequest,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
+  reconcileActive?(environmentId?: string): Promise<void>;
 };

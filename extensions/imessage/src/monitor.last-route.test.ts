@@ -2349,3 +2349,4 @@ describe("iMessage monitor last-route updates", () => {
     expect(debouncerOptions?.debounceMsOverride).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

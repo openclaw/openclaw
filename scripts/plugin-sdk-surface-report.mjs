@@ -111,7 +111,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "config-types": 425,
   "config-schema": 3,
   "reply-dedupe": 1,
-  "inbound-reply-dispatch": 33,
+  "inbound-reply-dispatch": 26,
   "channel-reply-pipeline": 12,
   "channel-reply-options-runtime": 2,
   "channel-runtime": 144,
@@ -135,7 +135,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   types: 6,
   "agent-config-primitives": 2,
   "command-auth": 81,
-  compat: 160,
+  // +2: group scope encoder/key builder mirrored by deprecated compat.
+  compat: 162,
   "direct-dm": 9,
   "direct-dm-access": 5,
   discord: 48,
@@ -150,9 +151,10 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-location": 4,
   "channel-mention-gating": 7,
   "channel-lifecycle": 23,
-  "channel-ingress": 8,
-  "channel-message": 232,
-  "channel-message-runtime": 229,
+  // Registry sweep: 77 packages, zero fetch failures; channel-ingress and dead aliases
+  // had zero consumers.
+  "channel-message": 224,
+  "channel-message-runtime": 221,
   "channel-pairing-paths": 1,
   // Deprecated pairing/conversation exports from the SQLite pairing migration
   // landed on main (#105802) without entrypoint pins; not touched by this PR.
@@ -199,30 +201,39 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      329,
+      // Registry sweep: 77 packages, zero fetch failures; retired dead channel-ingress facade.
+      328,
       env,
     ),
     // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
     // Its flat channel-groups builder adds one function, also mirrored by compat.
     // Its case-insensitive scope-key resolver adds one function, also mirrored by compat.
+    // Its length-prefixed segment encoder and scope-key builder add two functions, also mirrored.
     // The focused HTML entity runtime and quote-aware HTML tokenizer add one public function each.
     // Plugin service Gateway event scope and emitter types add four facade exports.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +4: registerMcpServerConnectionResolver context/result/resolver/registration types (#106229).
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
-      10694,
+      // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
+      // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
+      10612,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
-      5381,
+      // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      // Harvest: channel-ingress -19; dead channel-message dispatch aliases -23.
+      5344,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3292,
+      // +2: group scope encoder/key builder mirrored by deprecated compat.
+      // Harvest: channel-ingress -8; dead channel-message dispatch aliases -23.
+      3262,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

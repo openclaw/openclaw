@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
 let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
-let resetMattermostOpaqueTargetCacheForTests: typeof import("./target-resolution.js").resetMattermostOpaqueTargetCacheForTests;
 
 type SendMessageMattermostOptions = NonNullable<
   Parameters<typeof import("./send.js").sendMessageMattermost>[2]
@@ -216,9 +215,7 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostChannelByName.mockResolvedValue({ id: "town-square" });
     mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
     ({ sendMessageMattermost } = await import("./send.js"));
-    ({ parseMattermostTarget, resetMattermostOpaqueTargetCacheForTests } =
-      await import("./target-resolution.js"));
-    resetMattermostOpaqueTargetCacheForTests();
+    ({ parseMattermostTarget } = await import("./target-resolution.js"));
   });
 
   it("uses provided cfg and skips runtime loadConfig", async () => {
