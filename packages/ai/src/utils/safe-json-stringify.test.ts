@@ -40,4 +40,40 @@ describe("safeJsonStringify", () => {
     expect(() => JSON.stringify(10n)).toThrow(TypeError);
     expect(safeJsonStringify(10n)).toBe("10");
   });
+
+  it("does not throw when String() itself would throw (null-prototype object)", () => {
+    // Object.create(null) has no toString/valueOf; String() throws TypeError.
+    const bare = Object.create(null);
+    bare.circular = bare;
+    expect(() => JSON.stringify(bare)).toThrow(TypeError);
+    // First JSON.stringify fails, then String() also fails → sentinel.
+    expect(safeJsonStringify(bare)).toBe("<unserializable error>");
+  });
+
+  it("does not throw on a circular object whose Symbol.toPrimitive also throws", () => {
+    // Circular so JSON.stringify throws; then String() also throws because
+    // Symbol.toPrimitive is invoked during primitive conversion.
+    const hostile: Record<string, unknown> = {
+      [Symbol.toPrimitive](): string {
+        throw new TypeError("toPrimitive boom");
+      },
+    };
+    hostile.self = hostile;
+    expect(() => JSON.stringify(hostile)).toThrow(TypeError);
+    expect(() => String(hostile)).toThrow(TypeError);
+    expect(safeJsonStringify(hostile)).toBe("<unserializable error>");
+  });
+
+  it("does not throw when JSON.stringify-undefined value's toString throws", () => {
+    // JSON.stringify returns undefined for functions. If the function's custom
+    // toString throws, the String(…) fallback itself must be guarded.
+    const fn = Object.defineProperty(() => {}, "toString", {
+      value() {
+        throw new TypeError("toString boom");
+      },
+    });
+    expect(JSON.stringify(fn)).toBeUndefined();
+    expect(() => String(fn)).toThrow(TypeError);
+    expect(safeJsonStringify(fn)).toBe("<unserializable error>");
+  });
 });
