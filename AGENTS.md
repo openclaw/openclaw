@@ -198,6 +198,7 @@ Skills own workflows; root owns hard policy and routing.
 - After every PR push, rerun `scripts/pr review-init`; checkout alone leaves stale guard SHA.
 - `rg`: options/globs before `--`; `--` immediately before a leading-dash pattern only.
 - `gh --jq` is not standalone `jq`; pipe JSON to `jq` for variables or `--arg`.
+- Shared checkout: serialize `git fetch`; on ref-lock failure, re-read the ref before retry.
 - `gh api --paginate '<endpoint>' | jq -s ...`; gh `--slurp` may emit nothing and forbids `--jq`/`--template`.
 - Main-bound workflow dispatch: resolve server `main` SHA immediately before dispatch; retry if identity fails after `main` advances.
 - `gh run view --json` uses `attempt`, not `attemptNumber`.
