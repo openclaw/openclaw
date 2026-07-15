@@ -5,7 +5,7 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 describe("worker workspace operation coordinator", () => {
   it("drains local reconciliation before forced teardown for the same environment", async () => {
     const coordinator = createWorkerWorkspaceOperationCoordinator();
-    const release = createDeferred<void>();
+    const release = createDeferred();
     const log: string[] = [];
     const reconciliation = coordinator.run("worker-1", async () => {
       log.push("reconcile:start");

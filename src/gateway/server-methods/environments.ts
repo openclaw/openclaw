@@ -208,12 +208,12 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     await respondWorkerMutation(
       respond,
       async () => {
-        const forceDestroy = context.workerPlacementDispatchService?.forceDestroyEnvironment;
-        if (params.force && !forceDestroy) {
+        const placementService = context.workerPlacementDispatchService;
+        if (params.force && !placementService?.forceDestroyEnvironment) {
           throw new Error("cloud worker placement control is unavailable");
         }
         const destroyed = params.force
-          ? await forceDestroy!(params.environmentId)
+          ? await placementService!.forceDestroyEnvironment!(params.environmentId)
           : await service.destroyUnattached(params.environmentId);
         // Destruction is authoritative. Project the dead worker into its owning
         // placement before returning, or immediate session deletion stays fenced.
