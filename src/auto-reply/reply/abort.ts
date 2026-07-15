@@ -32,6 +32,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAcpSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import { isTerminalTaskStatus } from "../../tasks/task-executor-policy.js";
+import { listTasksForOwnerKey } from "../../tasks/task-owner-access.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import {
@@ -57,6 +59,8 @@ const defaultAbortDeps = {
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
   markSubagentRunTerminated,
+  listTasksForOwnerKey,
+  isTerminalTaskStatus,
 };
 
 const abortDeps = {
@@ -82,6 +86,10 @@ export const testing = {
       deps?.listSubagentRunsForController ?? defaultAbortDeps.listSubagentRunsForController;
     abortDeps.markSubagentRunTerminated =
       deps?.markSubagentRunTerminated ?? defaultAbortDeps.markSubagentRunTerminated;
+    abortDeps.listTasksForOwnerKey =
+      deps?.listTasksForOwnerKey ?? defaultAbortDeps.listTasksForOwnerKey;
+    abortDeps.isTerminalTaskStatus =
+      deps?.isTerminalTaskStatus ?? defaultAbortDeps.isTerminalTaskStatus;
   },
   resetDepsForTests(): void {
     abortDeps.getAcpSessionManager = defaultAbortDeps.getAcpSessionManager;
@@ -94,6 +102,8 @@ export const testing = {
       defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
     abortDeps.listSubagentRunsForController = defaultAbortDeps.listSubagentRunsForController;
     abortDeps.markSubagentRunTerminated = defaultAbortDeps.markSubagentRunTerminated;
+    abortDeps.listTasksForOwnerKey = defaultAbortDeps.listTasksForOwnerKey;
+    abortDeps.isTerminalTaskStatus = defaultAbortDeps.isTerminalTaskStatus;
   },
 };
 
@@ -248,10 +258,6 @@ export function stopSubagentsForRequester(params: {
     }
   }
   const runs = Array.from(dedupedRunsByChildKey.values());
-  if (runs.length === 0) {
-    return { stopped: 0 };
-  }
-
   const seenChildKeys = new Set<string>();
   let stopped = 0;
 
@@ -260,9 +266,14 @@ export function stopSubagentsForRequester(params: {
     if (!childKey || seenChildKeys.has(childKey)) {
       continue;
     }
-    seenChildKeys.add(childKey);
+    // Only mark active runs as seen so an ended subagent record cannot mask an
+    // active ACP detached task that shares the same child session key.
+    const isActiveRun = !run.endedAt || run.pauseReason === "sessions_yield";
+    if (isActiveRun) {
+      seenChildKeys.add(childKey);
+    }
 
-    if (!run.endedAt || run.pauseReason === "sessions_yield") {
+    if (isActiveRun) {
       const cleared = clearSessionQueues([childKey]);
       const parsed = parseAgentSessionKey(childKey);
       const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
@@ -302,6 +313,31 @@ export function stopSubagentsForRequester(params: {
       requesterSessionKey: childKey,
     });
     stopped += cascadeResult.stopped;
+  }
+
+  // ACP spawns create owner-scoped task records, not subagent-registry runs.
+  // Cancel non-terminal ACP children that the subagent walk did not already cover.
+  // Cancel is fire-and-forget: AcpSessionManager owns mode-aware process cleanup.
+  for (const task of abortDeps.listTasksForOwnerKey(requesterKey)) {
+    const childKey = normalizeOptionalString(task.childSessionKey);
+    if (
+      task.runtime !== "acp" ||
+      abortDeps.isTerminalTaskStatus(task.status) ||
+      !childKey ||
+      seenChildKeys.has(childKey)
+    ) {
+      continue;
+    }
+    seenChildKeys.add(childKey);
+    stopped += 1;
+    abortDeps
+      .getAcpSessionManager()
+      .cancelSession({ cfg: params.cfg, sessionKey: childKey, reason: "owner-stopped" })
+      .catch((err: unknown) => {
+        logVerbose(
+          `abort: failed to cancel ACP task ${task.taskId} for ${requesterKey}: ${formatErrorMessage(err)}`,
+        );
+      });
   }
 
   if (stopped > 0) {

@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   findTaskByRunId,
   getTaskById,
+  listTasksForOwnerKey,
   listTasksForRelatedSessionKey,
   markTaskTerminalById as markTaskTerminalRecordById,
   resolveTaskForLookupToken,
@@ -10,6 +11,10 @@ import {
 } from "./task-registry.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 import { buildTaskStatusSnapshot } from "./task-status.js";
+
+// Owner-scoped abort and status callers use this access seam rather than the
+// raw registry import so ownership checks stay co-located with other owner APIs.
+export { listTasksForOwnerKey };
 
 function canOwnerAccessTask(task: TaskRecord, callerOwnerKey: string): boolean {
   return (

@@ -85,6 +85,36 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
   }),
 }));
 
+const taskRegistryMocks = vi.hoisted(() => ({
+  listTasksForOwnerKey: vi.fn(
+    () =>
+      [] as Array<{
+        taskId: string;
+        runtime: string;
+        status: string;
+        childSessionKey?: string;
+        ownerKey: string;
+        task: string;
+        requesterSessionKey: string;
+        scopeKind: string;
+        deliveryStatus: string;
+        notifyPolicy: string;
+        createdAt: number;
+      }>,
+  ),
+  isTerminalTaskStatus: vi.fn((status: string) =>
+    ["succeeded", "failed", "timed_out", "lost", "cancelled"].includes(status),
+  ),
+}));
+
+vi.mock("../../tasks/task-owner-access.js", () => ({
+  listTasksForOwnerKey: taskRegistryMocks.listTasksForOwnerKey,
+}));
+
+vi.mock("../../tasks/task-executor-policy.js", () => ({
+  isTerminalTaskStatus: taskRegistryMocks.isTerminalTaskStatus,
+}));
+
 const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-abort-" });
 
 describe("abort detection", () => {
@@ -1591,6 +1621,152 @@ describe("abort detection", () => {
 
     expect(result).toEqual({ stopped: 0 });
     expect(subagentRegistryMocks.markSubagentRunTerminated).not.toHaveBeenCalled();
+  });
+
+  it("stopSubagentsForRequester cancels active ACP detached tasks not in the subagent registry", async () => {
+    subagentRegistryMocks.listSubagentRunsForRequester.mockReset().mockReturnValue([]);
+    acpManagerMocks.cancelSession.mockClear();
+    taskRegistryMocks.listTasksForOwnerKey.mockReset().mockReturnValueOnce([
+      {
+        taskId: "task-acp-1",
+        runtime: "acp",
+        status: "running",
+        childSessionKey: "acp:session:orphan-1",
+        ownerKey: "telegram:owner",
+        task: "background acp task",
+        requesterSessionKey: "telegram:owner",
+        scopeKind: "session",
+        deliveryStatus: "pending",
+        notifyPolicy: "default",
+        createdAt: Date.now() - 5_000,
+      },
+    ]);
+
+    const result = stopSubagentsForRequester({
+      cfg: {} as OpenClawConfig,
+      requesterSessionKey: "telegram:owner",
+    });
+
+    expect(result).toEqual({ stopped: 1 });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(acpManagerMocks.cancelSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "acp:session:orphan-1",
+        reason: "owner-stopped",
+      }),
+    );
+  });
+
+  it("stopSubagentsForRequester skips terminal ACP tasks and active subagent-covered children", async () => {
+    const subagentChildKey = "agent:main:subagent:covered-child";
+    const terminalAcpKey = "acp:session:already-done";
+    const activeAcpKey = "acp:session:active-orphan";
+    const now = Date.now();
+
+    subagentRegistryMocks.listSubagentRunsForRequester.mockReset().mockReturnValueOnce([
+      {
+        runId: "run-covered",
+        childSessionKey: subagentChildKey,
+        requesterSessionKey: "telegram:owner",
+        requesterDisplayKey: "telegram:owner",
+        task: "covered by subagent registry",
+        cleanup: "keep",
+        createdAt: now,
+      },
+    ]);
+    acpManagerMocks.cancelSession.mockClear();
+    taskRegistryMocks.listTasksForOwnerKey.mockReset().mockReturnValueOnce([
+      {
+        taskId: "task-terminal",
+        runtime: "acp",
+        status: "succeeded",
+        childSessionKey: terminalAcpKey,
+        ownerKey: "telegram:owner",
+        task: "already done",
+        requesterSessionKey: "telegram:owner",
+        scopeKind: "session",
+        deliveryStatus: "delivered",
+        notifyPolicy: "default",
+        createdAt: now - 10_000,
+      },
+      {
+        taskId: "task-active",
+        runtime: "acp",
+        status: "running",
+        childSessionKey: activeAcpKey,
+        ownerKey: "telegram:owner",
+        task: "active orphan",
+        requesterSessionKey: "telegram:owner",
+        scopeKind: "session",
+        deliveryStatus: "pending",
+        notifyPolicy: "default",
+        createdAt: now - 2_000,
+      },
+    ]);
+
+    const result = stopSubagentsForRequester({
+      cfg: {} as OpenClawConfig,
+      requesterSessionKey: "telegram:owner",
+    });
+
+    expect(result.stopped).toBeGreaterThanOrEqual(1);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(acpManagerMocks.cancelSession).toHaveBeenCalledTimes(1);
+    expect(acpManagerMocks.cancelSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: activeAcpKey }),
+    );
+  });
+
+  it("stopSubagentsForRequester does not let an ended subagent record mask an active ACP task", async () => {
+    const sharedChildKey = "acp:session:shared-child";
+    const now = Date.now();
+
+    subagentRegistryMocks.listSubagentRunsForRequester.mockReset().mockReturnValueOnce([
+      {
+        runId: "run-ended",
+        childSessionKey: sharedChildKey,
+        requesterSessionKey: "telegram:owner",
+        requesterDisplayKey: "telegram:owner",
+        task: "ended subagent",
+        cleanup: "keep",
+        createdAt: now - 5_000,
+        endedAt: now - 1_000,
+      },
+    ]);
+    acpManagerMocks.cancelSession.mockClear();
+    taskRegistryMocks.listTasksForOwnerKey.mockReset().mockReturnValueOnce([
+      {
+        taskId: "task-active",
+        runtime: "acp",
+        status: "running",
+        childSessionKey: sharedChildKey,
+        ownerKey: "telegram:owner",
+        task: "active acp task",
+        requesterSessionKey: "telegram:owner",
+        scopeKind: "session",
+        deliveryStatus: "pending",
+        notifyPolicy: "default",
+        createdAt: now - 1_000,
+      },
+    ]);
+
+    const result = stopSubagentsForRequester({
+      cfg: {} as OpenClawConfig,
+      requesterSessionKey: "telegram:owner",
+    });
+
+    expect(result.stopped).toBe(1);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(acpManagerMocks.cancelSession).toHaveBeenCalledTimes(1);
+    expect(acpManagerMocks.cancelSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: sharedChildKey }),
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
