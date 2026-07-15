@@ -104,6 +104,35 @@ describe("loadWorkspace", () => {
     expect(state.workspace?.tabs[0]?.title).toBe("Newest");
   });
 
+  it("keeps loading owned by the newest foreground reload", async () => {
+    const state = getWorkspaceState({});
+    const resolveRequests: Array<(value: unknown) => void> = [];
+    const client = mockClient({
+      request: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveRequests.push(resolve);
+          }),
+      ) as never,
+    });
+
+    const olderLoad = loadWorkspace(state, client);
+    const newerLoad = loadWorkspace(state, client);
+    expect(state.loading).toBe(true);
+
+    resolveRequests[0]?.({ doc: sampleWorkspace(), workspaceVersion: 3 });
+    await olderLoad;
+    expect(state.loading).toBe(true);
+
+    resolveRequests[1]?.({
+      doc: sampleWorkspace({ workspaceVersion: 4 }),
+      workspaceVersion: 4,
+    });
+    await newerLoad;
+    expect(state.loading).toBe(false);
+    expect(state.workspace?.workspaceVersion).toBe(4);
+  });
+
   it("ignores an older reload error after a newer workspace loads", async () => {
     const state = getWorkspaceState({});
     const requests: Array<{
