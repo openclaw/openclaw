@@ -1791,17 +1791,92 @@ jobs:
 
             (
               cd "${download_dir}"
+              export TZ=UTC
+              find dependency-evidence -type f -exec touch -t 198001010000 {} +
               find dependency-evidence -type f -print | LC_ALL=C sort | zip -X -q "${asset_path}" -@
             )
-            attach_or_verify_release_asset "${asset_path}" "${asset_name}"
+            attach_or_verify_release_asset "${asset_path}" "${asset_name}" zip-tree
             echo "- Dependency evidence asset: \`${asset_name}\`" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          release_evidence_zip_trees_match() {
+            local source_path="$1"
+            local existing_path="$2"
+            python3 - "${source_path}" "${existing_path}" <<'PY'
+          import hashlib
+          import stat
+          import sys
+          import zipfile
+          from pathlib import PurePosixPath
+
+          MAX_ENTRIES = 4096
+          MAX_FILE_BYTES = 64 * 1024 * 1024
+          MAX_TOTAL_BYTES = 256 * 1024 * 1024
+
+          def archive_tree(path):
+              files = {}
+              total_bytes = 0
+              with zipfile.ZipFile(path) as archive:
+                  infos = archive.infolist()
+                  if len(infos) > MAX_ENTRIES:
+                      raise ValueError("too many dependency evidence archive entries")
+                  seen = set()
+                  for info in infos:
+                      name = info.filename
+                      pure = PurePosixPath(name)
+                      normalized = str(pure) + ("/" if info.is_dir() else "")
+                      if (
+                          not name
+                          or "\\" in name
+                          or name != normalized
+                          or len(pure.parts) < 2
+                          or pure.parts[0] != "dependency-evidence"
+                          or any(part in (".", "..") for part in pure.parts)
+                          or name in seen
+                      ):
+                          raise ValueError(f"unsafe dependency evidence archive entry: {name!r}")
+                      seen.add(name)
+                      file_type = stat.S_IFMT(info.external_attr >> 16)
+                      allowed_types = (0, stat.S_IFDIR) if info.is_dir() else (0, stat.S_IFREG)
+                      if file_type not in allowed_types or info.flag_bits & 0x1:
+                          raise ValueError(f"unsupported dependency evidence archive entry: {name!r}")
+                      if info.is_dir():
+                          continue
+                      if info.file_size > MAX_FILE_BYTES:
+                          raise ValueError(f"oversized dependency evidence archive entry: {name!r}")
+                      total_bytes += info.file_size
+                      if total_bytes > MAX_TOTAL_BYTES:
+                          raise ValueError("dependency evidence archive exceeds the size limit")
+                      digest = hashlib.sha256()
+                      with archive.open(info) as source:
+                          while chunk := source.read(1024 * 1024):
+                              digest.update(chunk)
+                      files[name] = (info.file_size, digest.hexdigest())
+              return files
+
+          try:
+              matches = archive_tree(sys.argv[1]) == archive_tree(sys.argv[2])
+          except (OSError, ValueError, zipfile.BadZipFile, RuntimeError) as error:
+              print(f"dependency evidence ZIP comparison failed: {error}", file=sys.stderr)
+              raise SystemExit(1)
+          raise SystemExit(0 if matches else 1)
+          PY
           }
 
           attach_or_verify_release_asset() {
             local source_path="$1"
             local asset_name="$2"
+            local comparison_mode="${3:-exact}"
             local existing_dir="${RUNNER_TEMP}/openclaw-release-existing-assets/${asset_name}"
             local existing_path="${existing_dir}/${asset_name}"
+
+            case "${comparison_mode}" in
+              exact | zip-tree) ;;
+              *)
+                echo "Unknown release evidence comparison mode: ${comparison_mode}" >&2
+                exit 1
+                ;;
+            esac
 
             if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets |
               jq -e --arg name "${asset_name}" 'any(.assets[]?; .name == $name)' >/dev/null; then
@@ -1809,11 +1884,15 @@ jobs:
               mkdir -p "${existing_dir}"
               gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
                 --pattern "${asset_name}" --dir "${existing_dir}"
-              cmp --silent "${source_path}" "${existing_path}" || {
-                echo "Existing release evidence asset ${asset_name} differs from this release run." >&2
-                exit 1
-              }
-              return
+              if cmp --silent "${source_path}" "${existing_path}"; then
+                return
+              fi
+              if [[ "${comparison_mode}" == "zip-tree" ]] &&
+                release_evidence_zip_trees_match "${source_path}" "${existing_path}"; then
+                return
+              fi
+              echo "Existing release evidence asset ${asset_name} differs from this release run." >&2
+              exit 1
             fi
 
             gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" --repo "${GITHUB_REPOSITORY}"
