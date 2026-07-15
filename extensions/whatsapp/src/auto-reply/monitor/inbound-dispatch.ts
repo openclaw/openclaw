@@ -398,7 +398,7 @@ export async function buildWhatsAppInboundContext(params: {
           }
         : {}),
       commands: {
-        authorized: params.commandAuthorized,
+        authorized: params.commandAuthorized === true,
       },
     },
     commandTurn: params.commandTurn,
