@@ -316,10 +316,7 @@ describe("gateway aux handlers", () => {
       });
     activateSnapshot(slackConfig("old-slack-secret"));
     const prepared = createSnapshot(slackConfig("new-slack-secret"));
-    const activateRuntimeSecrets = vi.fn().mockImplementation(async () => {
-      activateSecretsRuntimeSnapshot(prepared);
-      return prepared;
-    });
+    const activateRuntimeSecrets = vi.fn().mockResolvedValue(prepared);
     const { reload, respond, startChannel, stopChannel } =
       createSecretsReloadHarnessWithChannelMocks({
         activateRuntimeSecrets,
