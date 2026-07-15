@@ -48,7 +48,6 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import {
   type GatewayRestartEmitter,
@@ -1540,20 +1539,17 @@ export async function startGatewayServer(
       await import("./operator-approval-session-events.js");
     // Managers publish through this runtime, while replay routes durable
     // expiry back through the owning manager to release its parked waiter once.
-    const approvalManagersForReplay: {
-      exec?: ExecApprovalManager;
-      plugin?: ExecApprovalManager<PluginApprovalRequestPayload>;
-    } = {};
+    const approvalManagersForReplay = new Map<
+      string,
+      Pick<ExecApprovalManager, "reconcileDurableTerminal">
+    >();
     const approvalSessionEvents = createOperatorApprovalSessionEventRuntime({
       clients,
       sessionMessageSubscribers,
       broadcastToConnIds,
       controlUiBasePath,
       reconcileTerminal: (record) => {
-        const manager =
-          record.kind === "exec"
-            ? approvalManagersForReplay.exec
-            : approvalManagersForReplay.plugin;
+        const manager = approvalManagersForReplay.get(record.kind);
         return manager?.reconcileDurableTerminal(record) ?? false;
       },
     });
@@ -1562,6 +1558,7 @@ export async function startGatewayServer(
       execApprovalManager,
       forwardPluginApprovalRequest,
       pluginApprovalManager,
+      systemAgentApprovalManager,
       extraHandlers,
       coreGatewayHandlers,
     } = await startupTrace.measure("gateway.handlers", async () => {
@@ -1583,8 +1580,9 @@ export async function startGatewayServer(
         coreGatewayHandlers: coreGatewayHandlersLocal,
       };
     });
-    approvalManagersForReplay.exec = execApprovalManager;
-    approvalManagersForReplay.plugin = pluginApprovalManager;
+    approvalManagersForReplay.set("exec", execApprovalManager);
+    approvalManagersForReplay.set("plugin", pluginApprovalManager);
+    approvalManagersForReplay.set("system-agent", systemAgentApprovalManager);
     revokeWorkerDispatchSessionAuthority = ({ sessionId, sessionKeys }) => {
       const keys = new Set(sessionKeys);
       for (const sessionKey of keys) {
@@ -1840,6 +1838,7 @@ export async function startGatewayServer(
           execApprovalManager,
           forwardPluginApprovalRequest,
           pluginApprovalManager,
+          systemAgentApprovalManager,
           listSessionPendingApprovals: approvalSessionEvents.replay,
           loadGatewayModelCatalog,
           loadGatewayModelCatalogSnapshot,

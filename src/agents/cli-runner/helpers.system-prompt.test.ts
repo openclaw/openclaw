@@ -174,7 +174,7 @@ describe("buildCliAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Telegram rich ON");
     expect(prompt).toContain("headings, tables");
-    expect(prompt).toContain("media tags block-only");
+    expect(prompt).toContain("media https URLs only, block-level only");
     expect(prompt).toContain("Not MarkdownV2/parse_mode");
     expect(prompt).toContain("channel=telegram");
     expect(prompt).not.toContain("### message tool");
