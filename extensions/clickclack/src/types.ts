@@ -74,6 +74,18 @@ export type ClickClackUser = {
   created_at: string;
 };
 
+/** Bot command row returned by the ClickClack command-menu API. */
+export type ClickClackBotCommand = {
+  id: string;
+  workspace_id: string;
+  bot_user_id: string;
+  command: string;
+  description: string;
+  args_hint: string;
+  created_at: string;
+  updated_at: string;
+};
+
 /** Workspace object returned by the ClickClack API. */
 export type ClickClackWorkspace = {
   id: string;
