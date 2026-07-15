@@ -5,21 +5,22 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
 import { checkIMessageResourceBinding } from "./message-resource-db.js";
-import { authorizeIMessageResourceReference } from "./message-resource.js";
-import {
-  rememberIMessageReplyCache,
-  resetIMessageShortIdState,
-  resolveIMessageCachedResourceBinding,
-} from "./monitor-reply-cache.js";
-import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
+import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
+
+type MessageResourceModule = typeof import("./message-resource.js");
+type ReplyCacheModule = typeof import("./monitor-reply-cache.js");
+let authorizeIMessageResourceReference: MessageResourceModule["authorizeIMessageResourceReference"];
+let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
+let resolveIMessageCachedResourceBinding: ReplyCacheModule["resolveIMessageCachedResourceBinding"];
 
 let tempDir = "";
 let dbPath = "";
 let cliPath = "";
 
-beforeEach(() => {
-  installIMessageStateRuntimeForTest();
-  resetIMessageShortIdState();
+beforeEach(async () => {
+  ({ rememberIMessageReplyCache, resolveIMessageCachedResourceBinding } =
+    await loadFreshIMessageReplyCacheForTest());
+  ({ authorizeIMessageResourceReference } = await import("./message-resource.js"));
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imessage-resource-"));
   dbPath = path.join(tempDir, "chat.db");
   const binDir = path.join(tempDir, "bin");
@@ -50,7 +51,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  resetIMessageShortIdState();
   vi.unstubAllEnvs();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
