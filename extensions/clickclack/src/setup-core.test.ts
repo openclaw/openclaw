@@ -1,0 +1,165 @@
+// ClickClack tests cover non-interactive setup validation and config writes.
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { describe, expect, it } from "vitest";
+import { clickClackSetupAdapter, normalizeClickClackBaseUrl } from "./setup-core.js";
+
+function validate(params: {
+  cfg?: OpenClawConfig;
+  accountId?: string;
+  input: Parameters<NonNullable<typeof clickClackSetupAdapter.validateInput>>[0]["input"];
+}) {
+  return clickClackSetupAdapter.validateInput?.({
+    cfg: params.cfg ?? {},
+    accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
+    input: params.input,
+  });
+}
+
+describe("ClickClack setup adapter", () => {
+  it("normalizes http(s) base URLs and rejects other schemes", () => {
+    expect(normalizeClickClackBaseUrl(" https://clickclack.example.com/// ")).toBe(
+      "https://clickclack.example.com",
+    );
+    expect(normalizeClickClackBaseUrl("http://localhost:3000/")).toBe("http://localhost:3000");
+    expect(normalizeClickClackBaseUrl("ssh://clickclack.example.com")).toBeUndefined();
+    expect(normalizeClickClackBaseUrl("not-a-url")).toBeUndefined();
+  });
+
+  it("requires token, base URL, and workspace for explicit setup", () => {
+    const message = "ClickClack requires --token, --base-url, and --workspace (or --use-env).";
+    expect(
+      validate({ input: { baseUrl: "https://clickclack.example", workspace: "default" } }),
+    ).toBe(message);
+    expect(validate({ input: { token: "ccb_test", workspace: "default" } })).toBe(message);
+    expect(validate({ input: { token: "ccb_test", baseUrl: "https://clickclack.example" } })).toBe(
+      message,
+    );
+    expect(
+      validate({
+        input: {
+          token: "ccb_test",
+          baseUrl: "https://clickclack.example",
+          workspace: "default",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("limits --use-env to the default account and requires URL and workspace config", () => {
+    expect(
+      validate({
+        accountId: "work",
+        input: {
+          useEnv: true,
+          baseUrl: "https://clickclack.example",
+          workspace: "default",
+        },
+      }),
+    ).toBe("CLICKCLACK_BOT_TOKEN can only be used for the default account.");
+    expect(validate({ input: { useEnv: true } })).toBe(
+      "ClickClack requires --token, --base-url, and --workspace (or --use-env).",
+    );
+    expect(
+      validate({
+        cfg: {
+          channels: {
+            clickclack: {
+              baseUrl: "https://clickclack.example",
+              workspace: "default",
+            },
+          },
+        } as OpenClawConfig,
+        input: { useEnv: true },
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects malformed base URLs before writing config", () => {
+    expect(
+      validate({
+        input: {
+          token: "ccb_test",
+          baseUrl: "clickclack.example",
+          workspace: "default",
+        },
+      }),
+    ).toBe("ClickClack --base-url must be a valid http(s) URL.");
+  });
+
+  it("writes normalized default and named account config", () => {
+    expect(
+      clickClackSetupAdapter.applyAccountConfig({
+        cfg: {},
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          name: "Primary",
+          token: "ccb_default",
+          baseUrl: "https://clickclack.example/",
+          workspace: " default ",
+        },
+      }),
+    ).toEqual({
+      channels: {
+        clickclack: {
+          enabled: true,
+          name: "Primary",
+          token: "ccb_default",
+          baseUrl: "https://clickclack.example",
+          workspace: "default",
+        },
+      },
+    });
+
+    expect(
+      clickClackSetupAdapter.applyAccountConfig({
+        cfg: { channels: { clickclack: { name: "Legacy" } } } as OpenClawConfig,
+        accountId: "Work Team",
+        input: {
+          name: "Work",
+          tokenFile: "/run/secrets/clickclack",
+          baseUrl: "https://work.clickclack.example/",
+          workspace: "wsp_work",
+        },
+      }),
+    ).toEqual({
+      channels: {
+        clickclack: {
+          enabled: true,
+          accounts: {
+            default: { name: "Legacy" },
+            "work-team": {
+              enabled: true,
+              name: "Work",
+              tokenFile: "/run/secrets/clickclack",
+              baseUrl: "https://work.clickclack.example",
+              workspace: "wsp_work",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("keeps --use-env config free of token fields", () => {
+    expect(
+      clickClackSetupAdapter.applyAccountConfig({
+        cfg: {},
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          useEnv: true,
+          baseUrl: "https://clickclack.example/",
+          workspace: "default",
+        },
+      }),
+    ).toEqual({
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://clickclack.example",
+          workspace: "default",
+        },
+      },
+    });
+  });
+});
