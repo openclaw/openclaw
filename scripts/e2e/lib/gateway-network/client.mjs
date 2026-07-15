@@ -219,10 +219,7 @@ export async function runGatewaySuspensionPreRestartClient(
   assert.equal(blockedAdminHealth.status, 503, "Admin health must return HTTP 503");
   assertGatewaySuspendingError(blockedAdminHealth.body);
 
-  const upgrade = await requestUpgradeRejection(
-    url,
-    remainingDeadlineMs(requestContext.deadline),
-  );
+  const upgrade = await requestUpgradeRejection(url, remainingDeadlineMs(requestContext.deadline));
   assert.equal(upgrade.status, 503, "new websocket upgrade must return HTTP 503");
   assert.equal(
     upgrade.body,

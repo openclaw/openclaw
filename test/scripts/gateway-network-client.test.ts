@@ -1,9 +1,8 @@
 // Gateway Network Client tests cover gateway network client script behavior.
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type GatewayFrame,
   assertGatewaySuspendingError,
@@ -15,6 +14,9 @@ import {
 } from "../../scripts/e2e/lib/gateway-network/client.mjs";
 import { readGatewayNetworkClientConnectTimeoutMs } from "../../scripts/e2e/lib/gateway-network/limits.mjs";
 import { onceFrame } from "../../scripts/e2e/lib/gateway-network/ws-frames.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("gateway network client", () => {
   function rejectWhenAborted(signal: AbortSignal | null | undefined): Promise<never> {
@@ -147,7 +149,7 @@ describe("gateway network client", () => {
   });
 
   it("bounds a stalled post-restart admin request by the client deadline", async () => {
-    const workDir = mkdtempSync(join(tmpdir(), "openclaw-gateway-network-post-restart-"));
+    const workDir = tempDirs.make("openclaw-gateway-network-post-restart-");
     const statePath = join(workDir, "suspension.json");
     writeFileSync(
       statePath,
@@ -163,26 +165,22 @@ describe("gateway network client", () => {
       return rejectWhenAborted(requestSignal);
     });
 
-    try {
-      const startedAt = Date.now();
-      await expect(
-        runGatewaySuspensionPostRestartClient(
-          {
-            statePath,
-            token: "x",
-            url: "ws://127.0.0.1:12345",
-            timeoutMs: 25,
-          },
-          { fetchImpl },
-        ),
-      ).rejects.toMatchObject({ name: "TimeoutError" });
+    const startedAt = Date.now();
+    await expect(
+      runGatewaySuspensionPostRestartClient(
+        {
+          statePath,
+          token: "x",
+          url: "ws://127.0.0.1:12345",
+          timeoutMs: 25,
+        },
+        { fetchImpl },
+      ),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
 
-      expect(Date.now() - startedAt).toBeLessThan(500);
-      expect(requestSignal?.aborted).toBe(true);
-      expect(fetchImpl).toHaveBeenCalledOnce();
-    } finally {
-      rmSync(workDir, { recursive: true, force: true });
-    }
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(requestSignal?.aborted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("resolves matching frames and ignores unrelated frames", async () => {
