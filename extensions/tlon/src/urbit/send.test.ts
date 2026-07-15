@@ -102,6 +102,23 @@ describe("buildMediaStory", () => {
     ]);
   });
 
+  it("keeps image URLs with queries as image blocks", async () => {
+    const { buildMediaStory } = await import("./send.js");
+
+    expect(buildMediaStory(undefined, "https://cdn.example/image.png?token=1")).toEqual([
+      {
+        block: {
+          image: {
+            src: "https://cdn.example/image.png?token=1",
+            height: 0,
+            width: 0,
+            alt: "",
+          },
+        },
+      },
+    ]);
+  });
+
   it("keeps non-image URL paths with image-looking fragments as links", async () => {
     const { buildMediaStory } = await import("./send.js");
 
