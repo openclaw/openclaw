@@ -640,6 +640,8 @@ export const zh_CN: TranslationMap = {
     archiveSession: "归档会话",
     archiveSessionCount: "归档 {count}",
     restoreSession: "恢复会话",
+    stopCloudWorker: "停止云工作进程…",
+    stopCloudWorkerConfirm: "要停止“{session}”的云工作进程吗？",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "删除 {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

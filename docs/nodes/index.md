@@ -144,7 +144,7 @@ If the node retries with changed auth details, re-run `openclaw devices list` an
 
 Naming options:
 
-- `--display-name` on `openclaw node run` / `openclaw node install` (persists in `~/.openclaw/node.json` on the node, alongside the client instance ID and Gateway connection metadata).
+- `--display-name` on `openclaw node run` / `openclaw node install` (persists in the shared `node_host_config` SQLite row alongside the client instance ID and Gateway connection metadata).
 - `openclaw nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
 
 ### Node-hosted MCP servers
@@ -231,15 +231,15 @@ operators can ignore skills from every paired node with
 
 ### Headless identity state
 
-The headless node keeps three separate state files:
+The headless node keeps three separate state records:
 
-- `~/.openclaw/node.json`: the legacy client instance ID (stored as `nodeId`), display name, and Gateway connection metadata.
+- `~/.openclaw/state/openclaw.sqlite` (`node_host_config`): the client instance ID, display name, and Gateway connection metadata.
 - `~/.openclaw/identity/device.json`: the signed device keypair and derived cryptographic device ID.
 - `~/.openclaw/identity/device-auth.json`: paired device auth tokens keyed by cryptographic device ID and role.
 
 For a signed node, the Gateway uses the cryptographic device ID for pairing and
 node routing. The client instance ID is only connection metadata. Changing
-`--node-id` or deleting only `node.json` therefore does not reset pairing. See
+`--node-id` or migrating a retired `node.json` therefore does not reset pairing. See
 [Identity and pairing state](/cli/node#identity-and-pairing-state) for the
 supported revoke-and-re-pair flow and upgrade notes.
 

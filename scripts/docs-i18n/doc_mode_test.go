@@ -783,6 +783,40 @@ func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 	}
 }
 
+func TestMaskMarkdownDocSyntaxProtectsProductLinkLabelsInsideRawHTML(t *testing.T) {
+	t.Parallel()
+
+	source := strings.Join([]string{
+		`<div className="maturity-category-docs">`,
+		"",
+		"Use `channel links`: [Discord](/channels/discord), [Render](https://render.com/docs), [Groups](/channels/groups).",
+		"[Render](/guides/pre-render) the page first.",
+		"",
+		`</div>`,
+		"",
+	}, "\n")
+	state := NewPlaceholderState(source)
+	placeholders := []string{}
+	mapping := map[string]string{}
+	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+
+	if strings.Contains(masked, "[Discord]") {
+		t.Fatalf("expected protected link label %q to be masked:\n%s", "Discord", masked)
+	}
+	if strings.Contains(masked, "[Render](https://render.com/docs)") {
+		t.Fatalf("expected contextual product link label %q to be masked:\n%s", "Render", masked)
+	}
+	if !strings.Contains(masked, "[Groups]") {
+		t.Fatalf("expected ordinary link label to remain translatable:\n%s", masked)
+	}
+	if !strings.Contains(masked, "[Render](/guides/pre-render)") {
+		t.Fatalf("expected contextual ordinary-word label to remain translatable:\n%s", masked)
+	}
+	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+		t.Fatalf("protected link-label round trip changed source:\n%s\nwant:\n%s", restored, source)
+	}
+}
+
 func TestValidateDocBodyRejectsTranslatedInlineCode(t *testing.T) {
 	t.Parallel()
 
@@ -2384,8 +2418,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 29") {
-		t.Fatalf("expected prompt version 29 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 30") {
+		t.Fatalf("expected prompt version 30 in output metadata:\n%s", text)
 	}
 }
 
