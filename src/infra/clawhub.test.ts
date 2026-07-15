@@ -1112,23 +1112,30 @@ describe("clawhub helpers", () => {
     expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
-  it("times out and cancels stalled non-retryable ClawHub error bodies", async () => {
-    const stalled = createStalledBodyResponse({
-      firstChunk: new TextEncoder().encode("partial error"),
-      headers: { "content-type": "text/plain" },
-      status: 400,
-      statusText: "Bad Request",
-    });
+  it("times out and cancels stalled ClawHub error bodies", async () => {
+    const stalledResponses: ReturnType<typeof createStalledBodyResponse>[] = [];
 
     await expect(
       searchClawHubSkills({
         query: "calendar",
         timeoutMs: 5,
-        fetchImpl: async () => stalled.response,
+        fetchImpl: async () => {
+          const stalled = createStalledBodyResponse({
+            firstChunk: new TextEncoder().encode("partial error"),
+            headers: { "content-type": "text/plain", "retry-after": "0" },
+            status: 500,
+            statusText: "Server Error",
+          });
+          stalledResponses.push(stalled);
+          return stalled.response;
+        },
       }),
-    ).rejects.toThrow("ClawHub /api/v1/search failed (400): Bad Request");
-    expect(stalled.cancel).toHaveBeenCalledTimes(1);
-    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    ).rejects.toThrow("ClawHub /api/v1/search failed (500): Server Error");
+    for (const stalled of stalledResponses) {
+      expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    }
+    const finalResponse = stalledResponses.at(-1);
+    expect(finalResponse?.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
   it("bounds oversized successful ClawHub JSON responses and cancels the stream", async () => {
@@ -1165,20 +1172,21 @@ describe("clawhub helpers", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds oversized non-retryable ClawHub error bodies to a short collapsed snippet", async () => {
+  it("bounds oversized ClawHub error bodies to a short collapsed snippet", async () => {
     const oversized = "boom ".repeat(64 * 1024); // ~320 KiB error body
     let error: unknown;
     try {
       await searchClawHubSkills({
         query: "calendar",
-        fetchImpl: async () => new Response(oversized, { status: 400 }),
+        fetchImpl: async () =>
+          new Response(oversized, { status: 500, headers: { "retry-after": "0" } }),
       });
     } catch (caught) {
       error = caught;
     }
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
-    expect(message.startsWith("ClawHub /api/v1/search failed (400): ")).toBe(true);
+    expect(message.startsWith("ClawHub /api/v1/search failed (500): ")).toBe(true);
     expect(message.endsWith("…")).toBe(true);
     // prefix + 400-char snippet + "…" stays far below the raw ~320 KiB body.
     expect(message.length).toBeLessThanOrEqual(500);
