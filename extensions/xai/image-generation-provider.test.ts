@@ -88,13 +88,6 @@ vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
   readStringValue: (v: unknown) => (typeof v === "string" ? v.trim() : undefined),
 }));
 
-function jsonResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
 function requirePostJsonCall(index = 0): {
   url?: string;
   timeoutMs?: number;
@@ -113,6 +106,14 @@ function requirePostJsonCall(index = 0): {
     throw new Error(`Expected postJsonRequest call ${index}`);
   }
   return params;
+}
+
+function mockResponse(data: Record<string, unknown>) {
+  const body = JSON.stringify(data);
+  return {
+    json: async () => data,
+    arrayBuffer: async () => Buffer.from(body),
+  };
 }
 
 describe("xai image generation provider", () => {
@@ -166,7 +167,7 @@ describe("xai image generation provider", () => {
 
   it("uses main provider URL and resolves auth for generation", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
+      response: mockResponse({
         data: [{ b64_json: Buffer.from("testpng").toString("base64") }],
       }),
       release: vi.fn(async () => {}),
@@ -222,7 +223,7 @@ describe("xai image generation provider", () => {
 
   it("supports edit with exact user-provided payload format including image object with type image_url", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
+      response: mockResponse({
         data: [
           {
             b64_json:
@@ -262,7 +263,7 @@ describe("xai image generation provider", () => {
   it("forwards xAI attribution User-Agent through the SDK image request", async () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
+      response: mockResponse({
         data: [{ b64_json: Buffer.from("ua-png").toString("base64") }],
       }),
       release: vi.fn(async () => {}),
@@ -285,7 +286,7 @@ describe("xai image generation provider", () => {
 
   it("uses the plural xAI images payload for multiple edit inputs", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
+      response: mockResponse({
         data: [
           {
             b64_json: Buffer.from("edited").toString("base64"),
@@ -342,11 +343,9 @@ describe("xai image generation provider", () => {
   it("defaults allowPrivateNetwork to false when no SSRF opt-in is configured", async () => {
     isPrivateNetworkOptInEnabledMock.mockReturnValue(false);
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [{ b64_json: Buffer.from("deny").toString("base64") }],
-        }),
-      },
+      response: mockResponse({
+        data: [{ b64_json: Buffer.from("deny").toString("base64") }],
+      }),
       release: vi.fn(async () => {}),
     });
 
@@ -368,11 +367,9 @@ describe("xai image generation provider", () => {
   it("allows private network when browser.ssrfPolicy opts in", async () => {
     isPrivateNetworkOptInEnabledMock.mockReturnValueOnce(true);
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [{ b64_json: Buffer.from("ssrf-ok").toString("base64") }],
-        }),
-      },
+      response: mockResponse({
+        data: [{ b64_json: Buffer.from("ssrf-ok").toString("base64") }],
+      }),
       release: vi.fn(async () => {}),
     });
 
@@ -400,11 +397,9 @@ describe("xai image generation provider", () => {
   it("allows private network when xai provider request.allowPrivateNetwork is set", async () => {
     isPrivateNetworkOptInEnabledMock.mockReturnValueOnce(false);
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [{ b64_json: Buffer.from("provider-opt-in").toString("base64") }],
-        }),
-      },
+      response: mockResponse({
+        data: [{ b64_json: Buffer.from("provider-opt-in").toString("base64") }],
+      }),
       release: vi.fn(async () => {}),
     });
 
