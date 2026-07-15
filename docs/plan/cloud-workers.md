@@ -9,7 +9,7 @@ read_when:
 
 ## Status
 
-Proposal, revision 3. Not implemented. Direction agreed 2026-07; revision 2 incorporated adversarial review findings (dedicated worker protocol, placement/environment state machines, git-aware inbound sync, one-way v1 handoff, controlled-egress security wording). Revision 3 settles the sync ownership model (worker authors commits, gateway adopts and publishes), adds a no-git plain sync mode, fixes worker exec at full-within-box, moves internet policy to provision time, and restores agent dispatch to milestone 3.
+Revision 3. Milestones 1-3 shipped: environment state machine + provider contract, Crabbox provider, worker bundle bootstrap/admission, pinned SSH tunnel, authenticated worker protocol, durable transcript commits, replayable live events, gateway inference proxy, `openclaw worker` embedded loop, fault-injection gate, placement/dispatch/turn routing, and UI dispatch/reclaim are all in `main` (2026-06 through 2026-07-15). Shipped behavior is documented in `docs/gateway/cloud-workers.md`. Remaining scope: milestone 4 (symmetric live handoff) and the "Later" items below are not implemented; the plan's "both humans and agents can dispatch" goal is also only half-shipped — human/UI dispatch (`sessions.dispatch` RPC) exists, but no agent-facing dispatch tool does (`src/agents/tools`, `src/plugin-sdk` have no such tool yet).
 
 ## Problem
 
