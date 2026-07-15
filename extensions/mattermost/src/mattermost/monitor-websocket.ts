@@ -6,7 +6,7 @@ import {
   createDebugProxyWebSocketAgent,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
-import WebSocket from "ws";
+import WebSocket, { type ClientOptions } from "ws";
 import { z } from "zod";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
@@ -43,11 +43,16 @@ type MattermostWebSocketLike = {
   terminate(): void;
 };
 
-export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
+type MattermostWebSocketClientOptions = Pick<ClientOptions, "handshakeTimeout" | "maxPayload">;
+
+export type MattermostWebSocketFactory = (
+  url: string,
+  options: MattermostWebSocketClientOptions,
+) => MattermostWebSocketLike;
 // Mattermost events can include double-encoded post props plus server/plugin metadata.
 // Keep channel-compatible headroom while bounding ws's 100 MiB default before parsing.
 const MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
-// Bound websocket upgrade waits the same way Slack relay / browser CDP do.
+// A TCP peer can accept without completing the HTTP upgrade; ws has no default deadline.
 const MATTERMOST_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
 const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
@@ -116,28 +121,12 @@ type CreateMattermostConnectOnceOpts = {
   pongTimeoutMs?: number;
 };
 
-/**
- * Canonical Mattermost `ws` client options. Keep handshakeTimeout here so the
- * default factory and regressions share one production wiring surface.
- */
-function buildMattermostWebSocketClientOptions(
-  agent?: NonNullable<ReturnType<typeof createDebugProxyWebSocketAgent>>,
-) {
-  return {
-    ...(agent ? { agent } : {}),
-    maxPayload: MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
-    // Without this, createMattermostConnectOnce waits forever for `open` when the
-    // TCP peer accepts but never completes the websocket upgrade.
-    handshakeTimeout: MATTERMOST_WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
-  };
-}
-
-const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) => {
+const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url, options) => {
   const agent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
-  return new WebSocket(
-    url,
-    buildMattermostWebSocketClientOptions(agent),
-  ) as MattermostWebSocketLike;
+  return new WebSocket(url, {
+    ...options,
+    ...(agent ? { agent } : {}),
+  }) as MattermostWebSocketLike;
 };
 
 function parsePostedPayload(
@@ -166,7 +155,10 @@ export function createMattermostConnectOnce(
   const pongTimeoutMs = opts.pongTimeoutMs ?? 10_000;
   return async () => {
     const flowId = randomUUID();
-    const ws = webSocketFactory(opts.wsUrl);
+    const ws = webSocketFactory(opts.wsUrl, {
+      maxPayload: MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
+      handshakeTimeout: MATTERMOST_WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
+    });
     const onAbort = () => ws.terminate();
     opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
     const getBotUpdateAt = opts.getBotUpdateAt;
