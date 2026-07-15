@@ -306,6 +306,14 @@ vi.mock("./active-tool-schema-warnings.js", () => ({
   collectActiveToolSchemaProjectionWarnings: () => activeToolSchemaState.warnings,
 }));
 
+vi.mock("./codex-route-warnings.js", () => ({
+  collectCodexRouteWarnings: vi.fn(() => []),
+}));
+
+vi.mock("./context-engine-host-compat.js", () => ({
+  collectContextEngineHostCompatibilityWarnings: vi.fn(async () => []),
+}));
+
 function manifest(id: string): TestManifestRecord {
   return {
     id,
