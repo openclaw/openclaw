@@ -798,6 +798,22 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(() => page.locator(".new-session-page__error").textContent())
         .toContain("cloud worker placement could not be verified");
+      const alert = page.locator(".new-session-page__alert");
+      await expect.poll(() => alert.getAttribute("role")).toBe("alert");
+      await expect.poll(() => alert.locator("svg").count()).toBe(1);
+      const [alertBox, composerBox] = await Promise.all([
+        alert.boundingBox(),
+        page.locator(".new-session-page__composer").boundingBox(),
+      ]);
+      expect(alertBox).not.toBeNull();
+      expect(composerBox).not.toBeNull();
+      expect(
+        Math.abs(
+          (alertBox?.x ?? 0) +
+            (alertBox?.width ?? 0) / 2 -
+            ((composerBox?.x ?? 0) + (composerBox?.width ?? 0) / 2),
+        ),
+      ).toBeLessThanOrEqual(1);
       await expect.poll(() => startButton.isDisabled()).toBe(false);
       await page.getByRole("button", { name: "Start session" }).click();
       await expect
