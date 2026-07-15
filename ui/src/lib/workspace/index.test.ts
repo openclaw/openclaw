@@ -76,6 +76,63 @@ describe("loadWorkspace", () => {
     expect(state.activeSlug).toBe("archive");
   });
 
+  it("keeps a newer workspace when an older reload finishes last", async () => {
+    const state = getWorkspaceState({});
+    const resolveRequests: Array<(value: unknown) => void> = [];
+    const client = mockClient({
+      request: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveRequests.push(resolve);
+          }),
+      ) as never,
+    });
+
+    const olderLoad = loadWorkspace(state, client);
+    const newerLoad = loadWorkspace(state, client, { silent: true });
+    expect(resolveRequests).toHaveLength(2);
+
+    const newer = sampleWorkspace({ workspaceVersion: 4 });
+    expectDefined(newer.tabs[0], "newer tab").title = "Newest";
+    resolveRequests[1]?.({ doc: newer, workspaceVersion: 4 });
+    await newerLoad;
+
+    resolveRequests[0]?.({ doc: sampleWorkspace(), workspaceVersion: 3 });
+    await olderLoad;
+
+    expect(state.workspace?.workspaceVersion).toBe(4);
+    expect(state.workspace?.tabs[0]?.title).toBe("Newest");
+  });
+
+  it("ignores an older reload error after a newer workspace loads", async () => {
+    const state = getWorkspaceState({});
+    const requests: Array<{
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const client = mockClient({
+      request: vi.fn(
+        () =>
+          new Promise((resolve, reject) => {
+            requests.push({ resolve, reject });
+          }),
+      ) as never,
+    });
+
+    const olderLoad = loadWorkspace(state, client);
+    const newerLoad = loadWorkspace(state, client, { silent: true });
+    expect(requests).toHaveLength(2);
+
+    requests[1]?.resolve({ doc: sampleWorkspace({ workspaceVersion: 4 }), workspaceVersion: 4 });
+    await newerLoad;
+    requests[0]?.reject(new Error("stale failure"));
+    await olderLoad;
+
+    expect(state.workspace?.workspaceVersion).toBe(4);
+    expect(state.error).toBeNull();
+    expect(state.loading).toBe(false);
+  });
+
   it("records an error on failure", async () => {
     const host = {};
     const state = getWorkspaceState(host);

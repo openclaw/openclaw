@@ -25,6 +25,8 @@ const CHANGED_EVENT = "plugin.workspaces.changed";
 
 export type WorkspaceUiState = {
   loading: boolean;
+  loadGeneration: number;
+  loadingGeneration: number | null;
   loaded: boolean;
   error: string | null;
   workspace: WorkspaceDocument | null;
@@ -88,6 +90,8 @@ export function getWorkspaceState(host: WorkspaceHost): WorkspaceUiState {
   if (!state) {
     state = {
       loading: false,
+      loadGeneration: 0,
+      loadingGeneration: null,
       loaded: false,
       error: null,
       workspace: null,
@@ -352,7 +356,9 @@ export async function loadWorkspace(
   if (!client) {
     return;
   }
+  const generation = ++state.loadGeneration;
   if (!opts?.silent) {
+    state.loadingGeneration = generation;
     state.loading = true;
     state.error = null;
     notify(state);
@@ -364,15 +370,31 @@ export async function loadWorkspace(
       // (a bare payload is tolerated for forward-compat).
       isRecord(payload) && "doc" in payload ? payload.doc : payload,
     );
+    if (generation !== state.loadGeneration) {
+      return;
+    }
+    const currentVersion = state.workspace?.workspaceVersion;
+    if (currentVersion !== undefined && workspace.workspaceVersion < currentVersion) {
+      return;
+    }
     state.workspace = workspace;
     state.activeSlug = resolveActiveSlug(workspace, opts?.requestedSlug ?? state.activeSlug);
     state.error = null;
     state.loaded = true;
   } catch (err) {
-    state.error = formatError(err);
+    if (generation === state.loadGeneration) {
+      state.error = formatError(err);
+    }
   } finally {
-    state.loading = false;
-    notify(state);
+    let shouldNotify = generation === state.loadGeneration;
+    if (state.loadingGeneration === generation) {
+      state.loadingGeneration = null;
+      state.loading = false;
+      shouldNotify = true;
+    }
+    if (shouldNotify) {
+      notify(state);
+    }
   }
 }
 
