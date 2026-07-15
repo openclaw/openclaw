@@ -60,8 +60,7 @@ function parseOptionalBoolean(value: string): boolean {
 }
 
 function parseWorkspaceGrid(value: string): WorkspaceGrid {
-  // parseStrictNonNegativeInteger rejects the JS-coercion tokens (hex, octal,
-  // exponent, negative, empty) that bare `Number()` used to let through.
+  // Reject alternate JS numeric spellings that the CLI contract does not expose.
   const parts = value.split(",").map((entry) => parseStrictNonNegativeInteger(entry.trim()));
   if (parts.length !== 4 || parts.includes(undefined)) {
     throw new Error("grid must be x,y,w,h");
