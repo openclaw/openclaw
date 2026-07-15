@@ -11,11 +11,12 @@ var (
 	inlineCodeRe  = regexp.MustCompile("`[^`]+`")
 	angleLinkRe   = regexp.MustCompile(`<https?://[^>]+>`)
 	linkURLRe     = regexp.MustCompile(`\[[^\]]*\]\(([^)]+)\)`)
+	linkLabelRe   = regexp.MustCompile(`!?\[([^\]\r\n]+)\]\(([^)\r\n]+)\)`)
 	placeholderRe = regexp.MustCompile(`__OC_I18N_\d+__`)
 	listMarkerRe  = regexp.MustCompile(`^([ \t]*(?:>[ \t]*)*)([-+*]|[0-9]+[.)])([ \t]+)`)
 	// Hard validation stays limited to low-ambiguity composite literals. Plain numbers remain
 	// model-visible so target-language plurals and ordinals can change grammar without false failures.
-	numericValueRe = regexp.MustCompile(`(?:0[xX][0-9A-Za-z_]+|0[bB][0-9A-Za-z_]+|0[oO][0-9A-Za-z_]+|[0-9]+(?:\.[0-9]+)?(?::[0-9]+(?:\.[0-9]+)?)+|(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[eE][+-]?[0-9]+)`)
+	numericValueRe = regexp.MustCompile(`(?:0[xX][0-9A-Za-z_]+|0[bB][0-9A-Za-z_]+|0[oO][0-9A-Za-z_]+|[0-9]+(?:\.[0-9]+)?(?::[0-9]+(?:\.[0-9]+)?)+|[0-9]+(?:\.[0-9]+)?(?:/[0-9]+(?:\.[0-9]+)?)+|(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[eE][+-]?[0-9]+)`)
 )
 
 func maskMarkdown(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
@@ -83,6 +84,7 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 			inlineRanges = append(inlineRanges, span)
 		}
 	}
+	inlineRanges = append(inlineRanges, protectedMarkdownLinkLabelRanges(text)...)
 	masked := maskByteRanges(text, inlineRanges, nextPlaceholder, placeholders, mapping)
 
 	listRanges := make([][2]int, 0)
@@ -114,6 +116,34 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 		offset += len(line)
 	}
 	return maskByteRanges(masked, listRanges, nextPlaceholder, placeholders, mapping)
+}
+
+func protectedMarkdownLinkLabelRanges(text string) [][2]int {
+	ranges := make([][2]int, 0)
+	for _, match := range linkLabelRe.FindAllStringSubmatchIndex(text, -1) {
+		if len(match) < 6 {
+			continue
+		}
+		label := text[match[2]:match[3]]
+		destination := markdownInlineLinkDestination(text[match[4]:match[5]])
+		if isProtectedProductLinkLabel(label, destination) {
+			ranges = append(ranges, [2]int{match[2], match[3]})
+		}
+	}
+	return ranges
+}
+
+func markdownInlineLinkDestination(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "<") {
+		if end := strings.IndexByte(value, '>'); end > 0 {
+			return value[1:end]
+		}
+	}
+	if fields := strings.Fields(value); len(fields) > 0 {
+		return fields[0]
+	}
+	return value
 }
 
 func extractNumericValues(text string) []string {

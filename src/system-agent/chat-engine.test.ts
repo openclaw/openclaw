@@ -9,9 +9,10 @@ import {
   fingerprintOpaqueRuntimeOwner,
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
+import { hashSystemAgentOperation } from "../agents/tools/system-agent-tool.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { runSystemAgentTurnWithDeps } from "./agent-turn.js";
+import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { classifySystemAgentApprovalText } from "./approval-intent.js";
 import {
   SystemAgentChatEngine as RuntimeSystemAgentChatEngine,
@@ -287,6 +288,87 @@ afterEach(() => {
 });
 
 describe("SystemAgentChatEngine", () => {
+  it("lets only an operator arm delegated persistent writes", async () => {
+    useTempStateDir();
+    const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
+    const proposalHash = hashSystemAgentOperation(operation);
+    const armed: boolean[] = [];
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new SystemAgentChatEngine({
+      operatorApprovalOnly: true,
+      runAgentTurn: async (params) => {
+        armed.push(params.approvalArmed);
+        if (!params.approvalArmed) {
+          params.session.proposalRef.current = proposalHash;
+          params.session.proposalRef.operation = operation;
+          return { text: "Change ready." };
+        }
+        return {
+          text: "Applying.",
+          directive: { kind: "approved-operation", operation },
+        };
+      },
+      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+    });
+
+    await engine.handle("Change port.");
+    const agentApproval = await engine.handle("yes");
+
+    expect(agentApproval.text).toContain("Approval pending");
+    expect(armed).toEqual([false]);
+    expect(runConfigSet).not.toHaveBeenCalled();
+
+    await engine.resolveOperatorApproval("allow-once", proposalHash);
+
+    expect(armed).toEqual([false, true]);
+    expect(runConfigSet).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a delegated channel-setup directive instead of starting the wizard", async () => {
+    useTempStateDir();
+    const runChannelSetupWizard = vi.fn(async () => {});
+    const engine = new SystemAgentChatEngine({
+      operatorApprovalOnly: true,
+      runAgentTurn: async () => ({
+        text: "Setting up.",
+        directive: { kind: "channel-setup", channel: "telegram" },
+      }),
+      runChannelSetupWizard,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("connect telegram");
+
+    expect(reply.text).toContain("human operator");
+    expect(reply.action).toBe("none");
+    expect(runChannelSetupWizard).not.toHaveBeenCalled();
+  });
+
+  it("applies a delegated host proposal without another model turn", async () => {
+    useTempStateDir();
+    const runAgentTurn = vi.fn(async () => ({ text: "must not run" }));
+    const runConfigSet = vi.fn(async () => {});
+    const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
+    const engine = new SystemAgentChatEngine({
+      operatorApprovalOnly: true,
+      runAgentTurn,
+      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+    });
+    engine.propose(operation);
+
+    const pending = await engine.handle("yes");
+    const applied = await engine.resolveOperatorApproval(
+      "allow-once",
+      hashSystemAgentOperation(operation),
+    );
+
+    expect(pending.text).toContain("Approval pending");
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(applied?.text).toContain("[openclaw] done: config.set");
+    expect(engine.hasPendingProposal()).toBe(false);
+  });
+
   it("applies a seeded proposal on a bare yes with verified inference", async () => {
     useTempStateDir();
     const runConfigSet = vi.fn(async () => {});

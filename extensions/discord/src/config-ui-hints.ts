@@ -316,6 +316,18 @@ export const discordChannelConfigUiHints = {
     label: "Discord Online Presence User IDs",
     help: "Optional immutable Discord user ID allowlist. Omit to include all human members in the guild.",
   },
+  "guilds.*.presenceEvents.reconnectSuppressSeconds": {
+    label: "Discord Online Presence Reconnect Suppression",
+    help: "Suppress online-presence events for this many seconds after a new Gateway session while guild presence state is rebuilt. Resumed sessions are unaffected. 0 disables. Default: 300.",
+  },
+  "guilds.*.presenceEvents.burstLimit": {
+    label: "Discord Online Presence Burst Limit",
+    help: "Maximum successfully queued online-presence events for this guild per burst window; the rest are suppressed and logged once. Default: 8.",
+  },
+  "guilds.*.presenceEvents.burstWindowSeconds": {
+    label: "Discord Online Presence Burst Window",
+    help: "Sliding window in seconds used for burst detection. Default: 60.",
+  },
   activityType: {
     label: "Discord Presence Activity Type",
     help: "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",
@@ -360,5 +372,18 @@ export const discordChannelConfigUiHints = {
   applicationId: {
     label: "Discord Application ID",
     help: "Optional Discord application/client ID. Set this when hosted environments cannot reach Discord's application lookup endpoint during startup.",
+  },
+  activities: {
+    label: "Discord Activities",
+    help: "Enable Discord Activity widgets for this account. Routes, the agent tool, and the launch handler remain disabled when this block is absent.",
+  },
+  "activities.clientSecret": {
+    label: "Discord Activities Client Secret",
+    help: "OAuth2 client secret for the Discord application. DISCORD_CLIENT_SECRET is used when this field is unset.",
+    sensitive: true,
+  },
+  "activities.applicationId": {
+    label: "Discord Activities Application ID",
+    help: "Optional Activity application ID. Defaults to the bot application ID learned at gateway startup.",
   },
 } satisfies Record<string, ChannelConfigUiHint>;
