@@ -166,8 +166,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/commitments/runtime.ts: configureCommitmentExtractionRuntime",
   "src/commitments/runtime.ts: drainCommitmentExtractionQueue",
   "src/commitments/runtime.ts: resetCommitmentExtractionRuntimeForTests",
-  "src/commitments/store.ts: loadCommitmentStore",
-  "src/commitments/store.ts: saveCommitmentStore",
   "src/cron/isolated-agent/delivery-dispatch.ts: getCompletedDirectCronDeliveriesCountForTests",
   "src/cron/isolated-agent/delivery-dispatch.ts: resetCompletedDirectCronDeliveriesForTests",
   "src/cron/schedule.ts: clearCronScheduleCacheForTest",
