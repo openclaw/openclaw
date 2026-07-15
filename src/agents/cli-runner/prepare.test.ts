@@ -36,7 +36,7 @@ import {
   resetCliAuthEpochTestDeps,
   setCliAuthEpochTestDeps,
 } from "../cli-auth-epoch.test-support.js";
-import { testing as cliBackendsTesting } from "../cli-backends.js";
+import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";

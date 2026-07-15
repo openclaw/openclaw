@@ -11,7 +11,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  clearPluginStateStoreForTests,
   closePluginStateDatabase,
   createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
@@ -20,10 +19,11 @@ import {
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
 import {
+  clearPluginStateStoreForTests,
   probePluginStateStore,
+  seedPluginStateEntriesForTests,
   setMaxPluginStateEntriesPerPluginForTests,
-} from "./plugin-state-store.sqlite.js";
-import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
+} from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
 let testState: OpenClawTestState | undefined;

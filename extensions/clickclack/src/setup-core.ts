@@ -211,4 +211,12 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
       useEnv: input.useEnv,
     });
   },
+  afterAccountConfigWritten: async ({ cfg, accountId, runtime }) => {
+    const { verifyClickClackAccountAfterSetup } = await import("./setup-verify.js");
+    await verifyClickClackAccountAfterSetup({
+      cfg: cfg as CoreConfig,
+      accountId,
+      runtime,
+    });
+  },
 };

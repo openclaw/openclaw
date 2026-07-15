@@ -7,7 +7,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
-import { testing as cliBackendsTesting } from "../cli-backends.js";
+import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,

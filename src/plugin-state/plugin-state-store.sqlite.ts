@@ -905,7 +905,7 @@ export function clearPluginStateDatabaseForTests(): void {
   );
 }
 
-export function setMaxPluginStateEntriesPerPluginForTests(value?: number): void {
+function setMaxPluginStateEntriesPerPluginForTests(value?: number): void {
   maxPluginStateEntriesPerPluginForTests = value;
 }
 
@@ -923,7 +923,7 @@ export function countPluginStateLiveEntries(pluginId: string): number {
   }
 }
 
-export function seedPluginStateDatabaseEntriesForTests(
+function seedPluginStateDatabaseEntriesForTests(
   entries: readonly PluginStateSeedEntryForTests[],
 ): void {
   if (entries.length === 0) {
@@ -948,7 +948,7 @@ export function seedPluginStateDatabaseEntriesForTests(
   });
 }
 
-export function probePluginStateStore(): PluginStateStoreProbeResult {
+function probePluginStateStore(): PluginStateStoreProbeResult {
   const databasePath = resolveOpenClawStateSqlitePath(process.env);
   const steps: PluginStateStoreProbeStep[] = [];
   const wasOpen = cachedDatabase !== null;
@@ -1038,5 +1038,13 @@ export function probePluginStateStore(): PluginStateStoreProbeResult {
 export function closePluginStateDatabase(): void {
   cachedDatabase = null;
   closeOpenClawStateDatabase();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.pluginStateSqliteTestApi")] = {
+    probePluginStateStore,
+    seedPluginStateDatabaseEntriesForTests,
+    setMaxPluginStateEntriesPerPluginForTests,
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

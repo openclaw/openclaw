@@ -511,7 +511,7 @@ export function createCorePluginStateSyncKeyedStore<T>(
 }
 
 /** Clears plugin-state rows and option signatures for tests. */
-export function clearPluginStateStoreForTests(): void {
+function clearPluginStateStoreForTests(): void {
   clearPluginStateDatabaseForTests();
   namespaceOptionSignatures.clear();
 }
@@ -523,4 +523,10 @@ export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean
     closeOpenClawStateDatabaseForTest();
   }
   namespaceOptionSignatures.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.pluginStateStoreTestApi")] = {
+    clearPluginStateStoreForTests,
+  };
 }

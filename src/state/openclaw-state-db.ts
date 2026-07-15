@@ -1466,6 +1466,15 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "commitments", "dismissed_at_ms INTEGER");
   ensureColumn(db, "commitments", "snoozed_until_ms INTEGER");
   ensureColumn(db, "commitments", "expired_at_ms INTEGER");
+  // The shipped JSON runtime predeclared this table but never populated it.
+  // Add required typed columns before Doctor or runtime can insert canonical rows.
+  ensureColumn(db, "managed_outgoing_image_records", "original_media_root TEXT NOT NULL");
+  ensureColumn(db, "managed_outgoing_image_records", "agent_id TEXT");
+  ensureColumn(
+    db,
+    "managed_outgoing_image_records",
+    "cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))",
+  );
   ensureColumn(db, "current_conversation_bindings", "target_agent_id TEXT NOT NULL DEFAULT 'main'");
   ensureColumn(db, "current_conversation_bindings", "target_session_id TEXT");
   ensureColumn(

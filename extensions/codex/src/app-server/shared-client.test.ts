@@ -598,11 +598,15 @@ describe("shared Codex app-server client", () => {
       expect(harness.writes).toHaveLength(writeCountBeforeThreadRequests);
 
       const releaseFence = await acquireCodexNativeConfigFence(fenceKey as string);
+      const guardedRequestOptions = { timeoutMs: 5_000 };
       const guardedRequests = [
-        client.request("thread/start", {}),
-        client.request("thread/resume", { threadId: "thread-1" }),
-        client.request("thread/fork", { threadId: "thread-1" }),
+        client.request("thread/start", {}, guardedRequestOptions),
+        client.request("thread/resume", { threadId: "thread-1" }, guardedRequestOptions),
+        client.request("thread/fork", { threadId: "thread-1" }, guardedRequestOptions),
       ];
+      const guardedRequestAssertions = guardedRequests.map((request) =>
+        expect(request).rejects.toThrow("managed executable selection changed during startup"),
+      );
       await Promise.resolve();
       expect(harness.writes).toHaveLength(writeCountBeforeThreadRequests);
       await fs.mkdir(path.join(agentDir, "codex-home"), { recursive: true });
@@ -611,14 +615,7 @@ describe("shared Codex app-server client", () => {
         '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
       );
       releaseFence();
-      await Promise.all(
-        guardedRequests.map(
-          async (request) =>
-            await expect(request).rejects.toThrow(
-              "managed executable selection changed during startup",
-            ),
-        ),
-      );
+      await Promise.all(guardedRequestAssertions);
       expect(harness.writes).toHaveLength(writeCountBeforeThreadRequests);
       expect(() =>
         assertCodexAppServerClientStartSelectionCurrent({ client, startOptions, agentDir }),

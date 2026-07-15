@@ -13,14 +13,21 @@ Use this when you want an OpenClaw agent to appear as a ClickClack bot user. Cli
 ## Quick setup
 
 In ClickClack, open **Workspace settings → Integrations → OpenClaw**, create a
-bot, and copy its token. Then configure the channel and start the gateway:
+bot, and copy its token. Then configure the channel:
 
 ```bash
 openclaw channels add clickclack --base-url https://clickclack.example.com --token ccb_... --workspace default
-openclaw gateway
 ```
 
 `workspace` accepts a workspace id (`wsp_...`), slug, or display name.
+`channels add` verifies the server, token, and workspace after saving, then
+reports whether the running gateway picked up the new account. If OpenClaw is
+already running, ClickClack connects automatically and no second command is
+needed. Otherwise, start it with:
+
+```bash
+openclaw gateway
+```
 
 For guided setup, run:
 

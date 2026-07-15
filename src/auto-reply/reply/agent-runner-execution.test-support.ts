@@ -1,6 +1,6 @@
 // Shared mocks and fixtures for agent-runner execution tests.
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/errors.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";

@@ -56,11 +56,7 @@ import {
   ToolInputError,
   type AnyAgentTool,
 } from "./tools/common.js";
-export {
-  CODE_MODE_EXEC_TOOL_NAME,
-  CODE_MODE_WAIT_TOOL_NAME,
-  isCodeModeControlTool,
-} from "./code-mode-control-tools.js";
+export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
