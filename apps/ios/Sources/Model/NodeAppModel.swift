@@ -474,6 +474,7 @@ final class NodeAppModel {
     @ObservationIgnored private var gatewaySessionResetGeneration: UInt64 = 0
     @ObservationIgnored private var gatewayRouteGeneration: UInt64 = 0
     @ObservationIgnored private var operatorTalkConnectionGeneration: UInt64 = 0
+    @ObservationIgnored private var operatorTalkHydrationGeneration: UInt64?
     @ObservationIgnored private var credentialHandoffFailureGeneration: UInt64?
     @ObservationIgnored private(set) var gatewayConnectGeneration: UInt64 = 0
     private var forceOperatorTalkPermissionUpgradeRequest = false
@@ -1346,7 +1347,9 @@ final class NodeAppModel {
     }
 
     private func pollTalkPermissionUpgrade() async {
-        guard self.talkMode.gatewayTalkPermissionState.isApprovalRequestInProgress else { return }
+        guard self.talkMode.gatewayTalkPermissionState.isApprovalRequestInProgress,
+              self.operatorTalkHydrationGeneration == nil
+        else { return }
         guard let config = activeGatewayConnectConfig else {
             self.forceOperatorTalkPermissionUpgradeRequest = false
             self.talkMode.gatewayTalkPermissionState = .requestFailed("Gateway is not connected")
@@ -3838,6 +3841,7 @@ extension NodeAppModel {
     {
         self.invalidateNodePushToTalkRoute()
         self.operatorTalkConnectionGeneration &+= 1
+        self.operatorTalkHydrationGeneration = nil
         self.chatSessionRoutingRestoreTask?.cancel()
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
@@ -4248,6 +4252,12 @@ extension NodeAppModel {
         else { return }
         self.operatorTalkConnectionGeneration &+= 1
         let talkConnectionGeneration = self.operatorTalkConnectionGeneration
+        self.operatorTalkHydrationGeneration = talkConnectionGeneration
+        defer {
+            if self.operatorTalkHydrationGeneration == talkConnectionGeneration {
+                self.operatorTalkHydrationGeneration = nil
+            }
+        }
         self.setOperatorConnected(true)
         self.clearOperatorGatewayConnectionProblemIfCurrent()
         GatewayDiagnostics.log(
@@ -4540,6 +4550,7 @@ extension NodeAppModel {
 
     private func invalidateOperatorTalkRoute() {
         self.operatorTalkConnectionGeneration &+= 1
+        self.operatorTalkHydrationGeneration = nil
         // A socket replacement invalidates Talk, not gateway identity hydration. The
         // replacement connection must await the same restore before admitting capture.
         self.setOperatorConnected(false)
