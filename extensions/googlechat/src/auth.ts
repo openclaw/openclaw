@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
+  testing as googleAuthRuntimeTesting,
   getGoogleAuthTransport,
   loadGoogleAuthRuntime,
   resolveValidatedGoogleChatCredentials,
@@ -198,3 +199,12 @@ export async function verifyGoogleChatRequest(params: {
 
   return { ok: false, reason: "unsupported audience type" };
 }
+
+export const testing = {
+  resetGoogleChatAuthForTests(): void {
+    authCache.clear();
+    cachedCerts = null;
+    verifyClientPromise = null;
+    googleAuthRuntimeTesting.resetGoogleAuthRuntimeForTests();
+  },
+};

@@ -1075,9 +1075,11 @@ type InferredSessionDelivery = {
   to: string;
 };
 
+const USER_PREFIXED_DIRECT_TARGET_CHANNELS = new Set(["discord", "mattermost", "msteams", "slack"]);
+
 function formatSessionDeliveryTarget(channel: string, peerKind: string, to: string): string {
   return (peerKind === "direct" || peerKind === "dm") &&
-    getChannelPlugin(channel)?.messaging?.directTargetStyle === "user-prefixed"
+    USER_PREFIXED_DIRECT_TARGET_CHANNELS.has(channel)
     ? `user:${to}`
     : to;
 }

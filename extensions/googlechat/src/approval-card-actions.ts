@@ -313,3 +313,9 @@ export function unregisterGoogleChatApprovalCardBindings(tokens: readonly string
     }
   }
 }
+
+export function clearGoogleChatApprovalCardBindingsForTest(): void {
+  approvalCardBindings.clear();
+  approvalCardResolvingTokens.clear();
+  manualApprovalFollowupSuppressions.clear();
+}

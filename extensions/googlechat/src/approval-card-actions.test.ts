@@ -1,34 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
+  clearGoogleChatApprovalCardBindingsForTest,
   getGoogleChatApprovalCardBinding,
-  registerGoogleChatManualApprovalFollowupSuppression as registerGoogleChatManualApprovalFollowupSuppressionRaw,
-  registerGoogleChatApprovalCardBinding as registerGoogleChatApprovalCardBindingRaw,
+  registerGoogleChatManualApprovalFollowupSuppression,
+  registerGoogleChatApprovalCardBinding,
   shouldSuppressGoogleChatManualExecApprovalFollowupPayload,
   shouldSuppressGoogleChatManualExecApprovalFollowupText,
-  unregisterGoogleChatApprovalCardBindings,
-  unregisterGoogleChatManualApprovalFollowupSuppression,
 } from "./approval-card-actions.js";
 
 const approvalId = "12345678-1234-1234-1234-123456789012";
 type TestExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 let tokenCounter = 0;
-const registeredTokens = new Set<string>();
-const registeredApprovalIds = new Set<string>();
-
-function registerGoogleChatApprovalCardBinding(
-  binding: Parameters<typeof registerGoogleChatApprovalCardBindingRaw>[0],
-): boolean {
-  registeredTokens.add(binding.token);
-  registeredApprovalIds.add(binding.approvalId);
-  return registerGoogleChatApprovalCardBindingRaw(binding);
-}
-
-function registerGoogleChatManualApprovalFollowupSuppression(
-  suppression: Parameters<typeof registerGoogleChatManualApprovalFollowupSuppressionRaw>[0],
-): boolean {
-  registeredApprovalIds.add(suppression.approvalId);
-  return registerGoogleChatManualApprovalFollowupSuppressionRaw(suppression);
-}
 
 function registerExecApprovalCard(overrides?: {
   approvalId?: string;
@@ -49,13 +31,9 @@ function registerExecApprovalCard(overrides?: {
 }
 
 describe("Google Chat approval card action registry", () => {
-  afterEach(() => {
-    unregisterGoogleChatApprovalCardBindings([...registeredTokens]);
-    for (const registeredApprovalId of registeredApprovalIds) {
-      unregisterGoogleChatManualApprovalFollowupSuppression(registeredApprovalId);
-    }
-    registeredTokens.clear();
-    registeredApprovalIds.clear();
+  beforeEach(() => {
+    clearGoogleChatApprovalCardBindingsForTest();
+    tokenCounter = 0;
   });
 
   it("suppresses manual exec approval follow-up text for an active native card", () => {
@@ -96,6 +74,7 @@ describe("Google Chat approval card action registry", () => {
       ),
     ).toBe(false);
 
+    clearGoogleChatApprovalCardBindingsForTest();
     registerExecApprovalCard();
     expect(
       shouldSuppressGoogleChatManualExecApprovalFollowupText("/approve deadbeef allow-once"),

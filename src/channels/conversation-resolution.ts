@@ -216,7 +216,6 @@ function resolveChannelTargetId(params: {
   if (!target) {
     return undefined;
   }
-  const messaging = resolveRuntimeChannelPlugin(params.channel)?.messaging;
 
   const lower = normalizeLowercaseStringOrEmpty(target);
   const channelPrefix = `${params.channel}:`;
@@ -235,7 +234,7 @@ function resolveChannelTargetId(params: {
   if (!prefixedChannel || prefixedChannel !== params.channel) {
     const explicitConversationId = resolveFallbackConversationTargetId({
       rawTarget: target,
-      allowNumericTopicShorthand: messaging?.numericTopicShorthand === true,
+      allowNumericTopicShorthand: params.channel === "telegram",
       preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
     });
     if (explicitConversationId) {
@@ -243,12 +242,14 @@ function resolveChannelTargetId(params: {
     }
   }
 
-  const normalizedTarget = normalizeOptionalString(messaging?.normalizeTarget?.(target));
+  const normalizedTarget = normalizeOptionalString(
+    resolveRuntimeChannelPlugin(params.channel)?.messaging?.normalizeTarget?.(target),
+  );
   if (normalizedTarget) {
     const withoutProvider = stripTargetProviderPrefix(normalizedTarget, params.channel);
     const conversationId = resolveFallbackConversationTargetId({
       rawTarget: withoutProvider,
-      allowNumericTopicShorthand: messaging?.numericTopicShorthand === true,
+      allowNumericTopicShorthand: params.channel === "telegram",
       preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
     });
     return conversationId || withoutProvider || normalizedTarget;

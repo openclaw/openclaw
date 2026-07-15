@@ -1,9 +1,9 @@
 // Matrix tests cover reaction events plugin behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  clearMatrixApprovalReactionTargetsForTest,
   registerMatrixApprovalReactionTarget as registerMatrixApprovalReactionTargetRaw,
   resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
-  unregisterMatrixApprovalReactionTarget,
 } from "../../approval-reactions.js";
 import type { CoreConfig } from "../../types.js";
 import { handleInboundMatrixReaction } from "./reaction-events.js";
@@ -12,17 +12,11 @@ type RegisterTargetParams = Parameters<typeof registerMatrixApprovalReactionTarg
 type ResolveTargetParams = Parameters<
   typeof resolveMatrixApprovalReactionTargetWithPersistenceRaw
 >[0];
-const touchedTargets = new Map<
-  string,
-  Parameters<typeof unregisterMatrixApprovalReactionTarget>[0]
->();
 
 function registerMatrixApprovalReactionTarget(
   params: Omit<RegisterTargetParams, "accountId"> & { accountId?: string },
 ): void {
   const { accountId = "default", ...target } = params;
-  const targetRef = { accountId, roomId: target.roomId, eventId: target.eventId };
-  touchedTargets.set(JSON.stringify(targetRef), targetRef);
   registerMatrixApprovalReactionTargetRaw({ ...target, accountId });
 }
 
@@ -59,13 +53,7 @@ beforeEach(() => {
     approval: { id: "req-123", status: "allowed", decision: "allow-once" },
   });
   editMessageMatrix.mockReset().mockResolvedValue("$edit");
-});
-
-afterEach(() => {
-  for (const target of touchedTargets.values()) {
-    unregisterMatrixApprovalReactionTarget(target);
-  }
-  touchedTargets.clear();
+  clearMatrixApprovalReactionTargetsForTest();
 });
 
 function buildConfig(): CoreConfig {

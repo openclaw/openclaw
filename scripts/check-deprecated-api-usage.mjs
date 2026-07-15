@@ -206,7 +206,17 @@ const rules = [
   {
     id: "message-api",
     roots: ["src", "extensions", "packages"],
-    names: ["deliverOutboundPayloads"],
+    names: [
+      "deliverOutboundPayloads",
+      "dispatchChannelMessageReplyWithBase",
+      "recordChannelMessageReplyDispatch",
+      "buildChannelMessageReplyDispatchBase",
+      "hasFinalChannelMessageReplyDispatch",
+      "hasVisibleChannelMessageReplyDispatch",
+      "resolveChannelMessageReplyDispatchCounts",
+      "createChannelTurnReplyPipeline",
+      "deliverDurableInboundReplyPayload",
+    ],
     allowedFiles: [
       "src/channels/message/inbound-reply-dispatch.ts",
       "src/infra/outbound/deliver-runtime.ts",

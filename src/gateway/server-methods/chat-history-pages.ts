@@ -1,7 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   dropPreSessionStartAnnouncePairs,
-  isHeartbeatHistoryTurnBoundaryMessage,
   projectChatDisplayMessages,
   projectRecentChatDisplayMessages,
 } from "../chat-display-projection.js";
@@ -304,11 +303,9 @@ export async function readChatHistoryPage(params: {
       ? projectRecentChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
           maxMessages: max,
-          turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
         })
       : projectChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
-          turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
         });
     const windowed = messageId
       ? (capChatHistoryAroundMessage({
@@ -347,7 +344,6 @@ export async function readChatHistoryPage(params: {
   });
   const overreadContextMessage =
     readPage.messages.length > rawHistoryWindow.maxMessages ? readPage.messages[0] : undefined;
-  const turnBoundaryPending = isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage);
   const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
     dropPreSessionStartAnnouncePairs(
       readPage.messages,
@@ -417,7 +413,6 @@ export async function readChatHistoryPage(params: {
   const displayMessages = projectRecentChatDisplayMessages(recencyFilteredMessages, {
     maxChars: effectiveMaxChars,
     maxMessages: max,
-    turnBoundaryPending,
   });
   return {
     messages: augmentChatHistoryWithCanvasBlocks(displayMessages),

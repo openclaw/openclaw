@@ -388,12 +388,9 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         : null;
     const timestamp = normalized.timestamp || Date.now();
     const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
-    const startsProjectedTurn =
-      asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
 
     if (
       !currentGroup ||
-      startsProjectedTurn ||
       currentGroup.role !== role ||
       (shouldSplitBySender && currentGroup.senderLabel !== senderLabel)
     ) {
@@ -767,10 +764,6 @@ function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
   });
 }
 
-function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
-  return asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true;
-}
-
 function annotateToolTurnOutcome(
   items: Array<ChatItem | MessageGroup>,
 ): Array<ChatItem | MessageGroup> {
@@ -781,12 +774,10 @@ function annotateToolTurnOutcome(
       continue;
     }
     const role = item.role.toLowerCase();
-    const forwardedBoundary = role === "assistant" && assistantGroupIsForwardedBoundary(item);
-    const projectedBoundary = groupStartsProjectedTurnBoundary(item);
     if (role === "user") {
       sawAssistantReply = false;
     } else if (role === "assistant") {
-      if (forwardedBoundary) {
+      if (assistantGroupIsForwardedBoundary(item)) {
         // Gateway preserves sessions_send provenance when projecting inputs as assistant groups.
         // Those groups start a new autonomous turn; they are not replies to an earlier tool.
         sawAssistantReply = false;
@@ -795,11 +786,6 @@ function annotateToolTurnOutcome(
       }
     } else if (role === "tool") {
       item.turnSucceeded = sawAssistantReply;
-    }
-    if (role !== "user" && !forwardedBoundary && projectedBoundary) {
-      // This group belongs to the new hidden-input turn. Reset only after
-      // processing it so replies from this turn cannot classify older tools.
-      sawAssistantReply = false;
     }
   }
   return items;
@@ -1771,11 +1757,7 @@ function isTurnBoundaryGroup(item: TurnRenderItem): boolean {
   const role = item.role.toLowerCase();
   // sessions_send projections start a new autonomous turn, same contract as
   // annotateToolTurnOutcome; they are inputs, not work produced by this turn.
-  return (
-    role === "user" ||
-    groupStartsProjectedTurnBoundary(item) ||
-    (role === "assistant" && assistantGroupIsForwardedBoundary(item))
-  );
+  return role === "user" || (role === "assistant" && assistantGroupIsForwardedBoundary(item));
 }
 
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {

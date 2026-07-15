@@ -59,26 +59,13 @@ async function readAuditRows(auditStore: PluginStateKeyedStore<AuditRow>, limit:
         right.value.timestampMs - left.value.timestampMs || right.key.localeCompare(left.key),
     )
     .slice(0, limit)
-    .map(({ value }) => {
-      const row: {
-        timestamp: string;
-        agent: string;
-        slug: string;
-        outcome: string;
-        errorCode?: string;
-        reason: string;
-      } = {
-        timestamp: new Date(value.timestampMs).toISOString(),
-        agent: value.agentId,
-        slug: value.slug,
-        outcome: value.outcome,
-        reason: truncateReason(value.reason),
-      };
-      if (value.errorCode) {
-        row.errorCode = value.errorCode;
-      }
-      return row;
-    });
+    .map(({ value }) => ({
+      timestamp: new Date(value.timestampMs).toISOString(),
+      agent: value.agentId,
+      slug: value.slug,
+      outcome: value.outcome,
+      reason: truncateReason(value.reason),
+    }));
 }
 
 export function registerOnePasswordCommands(context: OnePasswordCliContext): void {

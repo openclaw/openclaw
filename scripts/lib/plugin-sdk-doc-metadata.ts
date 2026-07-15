@@ -75,6 +75,9 @@ export const pluginSdkDocMetadata = {
   "channel-pairing": {
     category: "channel",
   },
+  "channel-ingress": {
+    category: "channel",
+  },
   "channel-ingress-runtime": {
     category: "channel",
   },

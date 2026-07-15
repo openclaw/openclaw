@@ -36,17 +36,6 @@ type RoleContentMessage = {
   content?: unknown;
 };
 
-type ChatDisplayProjectionOptions = {
-  maxChars?: number;
-  stripEnvelope?: boolean;
-  turnBoundaryPending?: boolean;
-};
-
-type ChatDisplayProjectionResult = {
-  messages: Array<Record<string, unknown>>;
-  turnBoundaryPending: boolean;
-};
-
 type PendingMessageToolVisibleReply = {
   toolCallId?: string;
   text: string;
@@ -1608,34 +1597,6 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   return isHeartbeatOkResponse(roleContent);
 }
 
-/** Identifies the hidden native input that starts a heartbeat-driven turn. */
-export function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
-  const record = readRecord(message);
-  if (!record || isSessionsSendInterSessionUserMessage(record)) {
-    return false;
-  }
-  const roleContent = asRoleContentMessage(record);
-  return roleContent?.role === "user" && isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT);
-}
-
-function attachProjectedTurnBoundary(message: Record<string, unknown>): Record<string, unknown> {
-  const metadata = readRecord(message["__openclaw"]);
-  if (metadata?.turnBoundary === true) {
-    return message;
-  }
-  return {
-    ...message,
-    __openclaw: {
-      ...metadata,
-      turnBoundary: true,
-    },
-  };
-}
-
-function canCarryProjectedTurnBoundary(message: RoleContentMessage | null): boolean {
-  return Boolean(message && message.role !== "system" && message.role !== "custom");
-}
-
 function openclawAssistantModel(message: Record<string, unknown>): string | undefined {
   return message.role === "assistant" &&
     message.provider === "openclaw" &&
@@ -1711,15 +1672,10 @@ function toProjectedMessages(messages: unknown[]): Array<Record<string, unknown>
 
 function filterVisibleProjectedHistoryMessages(
   messages: Array<Record<string, unknown>>,
-  turnBoundaryPending = false,
-): {
-  messages: Array<Record<string, unknown>>;
-  turnBoundaryPending: boolean;
-} {
+): Array<Record<string, unknown>> {
   if (messages.length === 0) {
-    return { messages, turnBoundaryPending };
+    return messages;
   }
-  let pendingTurnBoundary = turnBoundaryPending;
   let changed = false;
   const visible: Array<Record<string, unknown>> = [];
   for (let i = 0; i < messages.length; i++) {
@@ -1739,13 +1695,11 @@ function filterVisibleProjectedHistoryMessages(
       !isProjectedSessionsSendForwardedMessage(next)
     ) {
       changed = true;
-      pendingTurnBoundary = true;
       i++;
       continue;
     }
     if (shouldHideProjectedHistoryMessage(current)) {
       changed = true;
-      pendingTurnBoundary ||= isHeartbeatHistoryTurnBoundaryMessage(current);
       continue;
     }
     if (
@@ -1755,18 +1709,9 @@ function filterVisibleProjectedHistoryMessages(
       changed = true;
       continue;
     }
-    if (pendingTurnBoundary && canCarryProjectedTurnBoundary(currentRoleContent)) {
-      visible.push(attachProjectedTurnBoundary(current));
-      pendingTurnBoundary = false;
-      changed = true;
-    } else {
-      visible.push(current);
-    }
+    visible.push(current);
   }
-  return {
-    messages: changed ? visible : messages,
-    turnBoundaryPending: pendingTurnBoundary,
-  };
+  return changed ? visible : messages;
 }
 
 function stripInterSessionPromptPrefixFromContent(content: unknown): unknown {
@@ -1937,33 +1882,24 @@ function projectEmptyAssistantErrorMessages(
   return changed ? projected : messages;
 }
 
-export function projectChatDisplayMessagesWithState(
+export function projectChatDisplayMessages(
   messages: unknown[],
-  options?: ChatDisplayProjectionOptions,
-): ChatDisplayProjectionResult {
+  options?: { maxChars?: number; stripEnvelope?: boolean },
+): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
   const mirrored = mirrorMessageToolVisibleReplies(source);
   const projectedErrors = projectEmptyAssistantErrorMessages(toProjectedMessages(mirrored));
-  const filtered = filterVisibleProjectedHistoryMessages(
-    projectSessionsSendInterSessionMessages(
-      toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),
+  const projectedForwarded = mergeTtsSupplementMessages(
+    filterVisibleProjectedHistoryMessages(
+      projectSessionsSendInterSessionMessages(
+        toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),
+      ),
     ),
-    options?.turnBoundaryPending,
   );
-  return {
-    messages: sanitizeChatHistoryMessages(
-      mergeTtsSupplementMessages(filtered.messages),
-      options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-    ) as Array<Record<string, unknown>>,
-    turnBoundaryPending: filtered.turnBoundaryPending,
-  };
-}
-
-export function projectChatDisplayMessages(
-  messages: unknown[],
-  options?: ChatDisplayProjectionOptions,
-): Array<Record<string, unknown>> {
-  return projectChatDisplayMessagesWithState(messages, options).messages;
+  return sanitizeChatHistoryMessages(
+    projectedForwarded,
+    options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  ) as Array<Record<string, unknown>>;
 }
 
 function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
@@ -1980,7 +1916,7 @@ function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
 
 export function projectRecentChatDisplayMessages(
   messages: unknown[],
-  options?: ChatDisplayProjectionOptions & { maxMessages?: number },
+  options?: { maxChars?: number; maxMessages?: number; stripEnvelope?: boolean },
 ): Array<Record<string, unknown>> {
   return limitChatDisplayMessages(
     projectChatDisplayMessages(messages, options),
@@ -1990,7 +1926,7 @@ export function projectRecentChatDisplayMessages(
 
 export function projectChatDisplayMessage(
   message: unknown,
-  options?: ChatDisplayProjectionOptions,
+  options?: { maxChars?: number; stripEnvelope?: boolean },
 ): Record<string, unknown> | undefined {
   return projectChatDisplayMessages([message], options)[0];
 }

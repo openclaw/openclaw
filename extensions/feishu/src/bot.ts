@@ -1263,7 +1263,7 @@ export async function handleFeishuMessage(params: {
             requireMention,
           },
           commands: {
-            authorized: commandAuthorized === true,
+            authorized: commandAuthorized,
           },
         },
         extra: {

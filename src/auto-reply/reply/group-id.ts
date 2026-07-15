@@ -36,7 +36,7 @@ function extractInferredGroupTargetId(params: {
         "room",
         "thread",
       ]),
-      { allowNumericShorthand: params.messaging?.numericTopicShorthand === true },
+      { allowNumericShorthand: params.channelId === "telegram" },
     );
     if (target) {
       return target;
@@ -62,7 +62,7 @@ function extractLegacyParsedGroupTargetId(params: {
       "room",
       "thread",
     ]),
-    { allowNumericShorthand: params.messaging?.numericTopicShorthand === true },
+    { allowNumericShorthand: params.channelId === "telegram" },
   );
   return target || undefined;
 }

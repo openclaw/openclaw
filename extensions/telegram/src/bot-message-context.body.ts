@@ -134,6 +134,7 @@ function resolveTelegramMentionFacts(params: {
   implicitMentionKinds: TelegramMentionFacts["implicitMentionKinds"];
   requireMention: boolean;
   shouldBypassMention: boolean;
+  shouldSkip: boolean;
 }): TelegramMentionFacts {
   let mentionSource: TelegramMentionFacts["mentionSource"];
   if (params.explicitlyMentionedBot) {
@@ -154,6 +155,7 @@ function resolveTelegramMentionFacts(params: {
     implicitMentionKinds: params.implicitMentionKinds,
     effectiveWasMentioned: params.effectiveWasMentioned,
     requireMention: params.requireMention,
+    shouldSkip: params.shouldSkip,
   };
 }
 
@@ -505,6 +507,7 @@ export async function resolveTelegramInboundBody(params: {
       implicitMentionKinds,
       requireMention: Boolean(requireMention),
       shouldBypassMention: mentionDecision.shouldBypassMention,
+      shouldSkip: mentionDecision.shouldSkip,
     }),
     canDetectMention,
     shouldBypassMention: mentionDecision.shouldBypassMention,

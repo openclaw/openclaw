@@ -144,7 +144,7 @@ export function createEmbeddedRunSessionPromptState(input: {
       activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT, true),
     onUserMessagePersisted,
     waitForCurrentUserMessagePersistence,
-    prepareCompactedTranscriptRetry: async () => {
+    async prepareCompactedTranscriptRetry() {
       await waitForCurrentUserMessagePersistence();
       if (activePrompt.internal) {
         suppressNextUserMessagePersistence = activePrompt.persisted;

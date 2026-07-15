@@ -411,7 +411,7 @@ function resolveGoogleAuthDispatcherPolicy(
   return { init: nextInit };
 }
 
-function createGoogleAuthFetch(): FetchLike {
+export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input);
     const guardedOptions = resolveGoogleAuthDispatcherPolicy(input, init);
@@ -423,6 +423,7 @@ function createGoogleAuthFetch(): FetchLike {
       signal: guardedOptions.init?.signal ?? undefined,
       timeoutMs: GOOGLE_AUTH_FETCH_TIMEOUT_MS,
       url,
+      ...(baseFetch ? { fetchImpl: baseFetch } : {}),
     });
     try {
       const body = await readGoogleAuthResponseBytes(response);
@@ -519,3 +520,14 @@ export async function resolveValidatedGoogleChatCredentials(
   }
   return null;
 }
+
+export const testing = {
+  resetGoogleAuthRuntimeForTests(): void {
+    googleAuthRuntimePromise = null;
+  },
+  normalizeGoogleAuthPreparedRequestHeaders,
+  normalizeGoogleAuthResponseHeaders,
+  resolveGoogleAuthEnvProxyUrl,
+  validateGoogleChatServiceAccountCredentials,
+};
+export { testing as __testing };

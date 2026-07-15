@@ -259,37 +259,6 @@ describe("collapseCompletedTurnWork", () => {
     expect(new Set(workGroups.map((item) => item.key)).size).toBe(2);
   });
 
-  it("collapses hidden-input runs independently without changing duration arithmetic", () => {
-    const items = collapsedItems({
-      messages: [
-        {
-          ...toolResult("call-1", 1_000),
-          __openclaw: { id: "work-1", seq: 1, turnBoundary: true },
-        },
-        {
-          role: "assistant",
-          content: "First run done.",
-          timestamp: 3_000,
-          __openclaw: { id: "reply-1", seq: 2 },
-        },
-        {
-          ...toolResult("call-2", 4_000),
-          __openclaw: { id: "work-2", seq: 3, turnBoundary: true },
-        },
-        {
-          role: "assistant",
-          content: "Second run done.",
-          timestamp: 9_000,
-          __openclaw: { id: "reply-2", seq: 4 },
-        },
-      ],
-    });
-
-    expect(items.map((item) => item.kind)).toEqual(["work-group", "group", "work-group", "group"]);
-    expect(requireWorkGroup(items[0]).durationMs).toBe(2_000);
-    expect(requireWorkGroup(items[2]).durationMs).toBe(5_000);
-  });
-
   it("keeps a completed-work row keyed to its final reply as older work is prepended", () => {
     resetChatThreadState();
     const finalReply = {
@@ -436,29 +405,6 @@ describe("buildCachedChatItems row identity", () => {
 
     expect(prepended.key).toBe(initial.key);
     expect(appended.key).toBe(initial.key);
-  });
-
-  it("splits otherwise mergeable same-role messages at a projected turn boundary", () => {
-    const groups = messageGroups({
-      messages: [
-        {
-          __openclaw: { id: "assistant-1", seq: 1 },
-          role: "assistant",
-          content: "First run",
-          timestamp: 1,
-        },
-        {
-          __openclaw: { id: "assistant-2", seq: 2, turnBoundary: true },
-          role: "assistant",
-          content: "Second run",
-          timestamp: 2,
-        },
-      ],
-    });
-
-    expect(groups).toHaveLength(2);
-    expect(groupAt(groups, 0).messages).toHaveLength(1);
-    expect(groupAt(groups, 1).messages).toHaveLength(1);
   });
 
   it("does not reclaim a group key naturally owned by another reordered group", () => {

@@ -27,6 +27,7 @@ const { inboundBodyResult, recordInboundSessionMock, resolveStorePathMock } = vi
       explicitlyMentionedBot: false,
       effectiveWasMentioned: true,
       requireMention: false,
+      shouldSkip: false,
     },
     canDetectMention: false,
     shouldBypassMention: false,
@@ -218,6 +219,7 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
         mentionSource: "explicit_bot",
         effectiveWasMentioned: true,
         requireMention: false,
+        shouldSkip: false,
       },
     };
 

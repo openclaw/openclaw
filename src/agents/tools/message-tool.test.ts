@@ -417,24 +417,6 @@ function createChannelPlugin(params: {
   };
 }
 
-function registerMessagingPlugin(id: string, messaging: NonNullable<ChannelPlugin["messaging"]>) {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: id,
-        source: "test",
-        plugin: createChannelPlugin({
-          id,
-          label: id,
-          docsPath: `/channels/${id}`,
-          blurb: "Test channel",
-          messaging,
-        }),
-      },
-    ]),
-  );
-}
-
 async function executeSend(params: {
   action: Record<string, unknown>;
   toolOptions?: Partial<Parameters<typeof createMessageTool>[0]>;
@@ -1158,64 +1140,35 @@ describe("message tool secret scoping", () => {
     expect(input?.toolContext?.currentChannelId).toBeUndefined();
   });
 
-  it.each([
-    {
-      name: "declared user-prefixed",
-      channel: "discord",
-      declareUserPrefix: true,
-      sessionKey: "agent:main:discord:direct:123456789",
-      expectedTarget: "user:123456789",
-      secretField: "token",
-      secretId: "DISCORD_TOKEN",
-    },
-    {
-      name: "undeclared provider-native",
-      channel: "telegram",
-      declareUserPrefix: false,
-      sessionKey: "agent:main:telegram:direct:123456789",
-      expectedTarget: "123456789",
-      secretField: "botToken",
-      secretId: "TELEGRAM_BOT_TOKEN",
-    },
-  ])(
-    "uses $name DM target metadata when ambient channel drifted to webchat",
-    async ({ channel, declareUserPrefix, sessionKey, expectedTarget, secretField, secretId }) => {
-      registerMessagingPlugin(
-        channel,
-        declareUserPrefix ? { directTargetStyle: "user-prefixed" } : {},
-      );
-      mockSendResult({ channel, to: expectedTarget });
+  it("preserves direct session keys as explicit user targets when ambient channel drifted to webchat", async () => {
+    mockSendResult({ channel: "discord", to: "user:123456789" });
 
-      const input = await executeSend({
-        action: { message: "hi" },
-        toolOptions: {
-          config: {
-            channels: {
-              [channel]: {
-                [secretField]: { source: "env", provider: "default", id: secretId },
-              },
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            discord: {
+              token: { source: "env", provider: "default", id: "DISCORD_TOKEN" },
             },
-          } as never,
-          sourceReplyDeliveryMode: "message_tool_only",
-          currentChannelProvider: "webchat",
-          agentSessionKey: sessionKey,
-        },
-      });
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:discord:direct:123456789",
+      },
+    });
 
-      expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(input?.toolContext?.currentChannelProvider).toBe(channel);
-      expect(input?.toolContext?.currentChannelId).toBe(expectedTarget);
-      expect(input?.params).toEqual({ action: "send", message: "hi" });
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("discord");
+    expect(input?.toolContext?.currentChannelId).toBe("user:123456789");
+    expect(input?.params).toEqual({ action: "send", message: "hi" });
 
-      const secretResolveCall = latestSecretResolveCall();
-      expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual([
-        `channels.${channel}.${secretField}`,
-      ]);
-    },
-  );
+    const secretResolveCall = latestSecretResolveCall();
+    expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.discord.token"]);
+  });
 
   it("preserves MS Teams DM session keys as explicit user targets when ambient channel drifted to webchat", async () => {
-    registerMessagingPlugin("msteams", { directTargetStyle: "user-prefixed" });
     mockSendResult({ channel: "msteams", to: "user:user-1" });
 
     const input = await executeSend({
@@ -1244,8 +1197,35 @@ describe("message tool secret scoping", () => {
     expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.msteams.appPassword"]);
   });
 
+  it("keeps provider-native direct session targets when ambient channel drifted to webchat", async () => {
+    mockSendResult({ channel: "telegram", to: "123456789" });
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            telegram: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:telegram:direct:123456789",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("telegram");
+    expect(input?.toolContext?.currentChannelId).toBe("123456789");
+    expect(input?.params).toEqual({ action: "send", message: "hi" });
+
+    const secretResolveCall = latestSecretResolveCall();
+    expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.telegram.botToken"]);
+  });
+
   it("uses account-scoped session keys for secret and account fallback when ambient channel drifted to webchat", async () => {
-    registerMessagingPlugin("discord", { directTargetStyle: "user-prefixed" });
     mockSendResult({ channel: "discord", to: "user:123456789" });
 
     const input = await executeSend({
@@ -1280,7 +1260,6 @@ describe("message tool secret scoping", () => {
   });
 
   it("keeps account-scoped direct keys when account id matches a peer marker", async () => {
-    registerMessagingPlugin("discord", { directTargetStyle: "user-prefixed" });
     mockSendResult({ channel: "discord", to: "user:123456789" });
 
     const input = await executeSend({
@@ -1317,7 +1296,6 @@ describe("message tool secret scoping", () => {
   });
 
   it("handles legacy dm markers when ambient channel drifted to webchat", async () => {
-    registerMessagingPlugin("slack", { directTargetStyle: "user-prefixed" });
     mockSendResult({ channel: "slack", to: "user:u123" });
 
     const input = await executeSend({

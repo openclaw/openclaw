@@ -37,7 +37,7 @@ type ButtonPropsInput = {
 };
 
 function buildButtonAttachmentsForTest(params: ButtonPropsInput): ButtonAttachments {
-  const signedChannelId = params.buttons[0]?.context?.["__openclaw_channel_id"];
+  const signedChannelId = params.buttons[0]?.context?.__openclaw_channel_id;
   const props = buildButtonProps({
     ...params,
     channelId: typeof signedChannelId === "string" ? signedChannelId : "test-channel",

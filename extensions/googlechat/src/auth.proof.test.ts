@@ -30,11 +30,13 @@ vi.mock("./google-auth.runtime.js", () => ({
   loadGoogleAuthRuntime: vi.fn().mockResolvedValue({ OAuth2Client: mockOAuth2Client }),
   getGoogleAuthTransport: vi.fn().mockResolvedValue({}),
   resolveValidatedGoogleChatCredentials: vi.fn().mockResolvedValue(null),
+  testing: { resetGoogleAuthRuntimeForTests: vi.fn() },
 }));
 
-import { verifyGoogleChatRequest } from "./auth.js";
+import { testing, verifyGoogleChatRequest } from "./auth.js";
 
 afterEach(() => {
+  testing.resetGoogleChatAuthForTests();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });

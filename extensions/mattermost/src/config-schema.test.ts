@@ -64,9 +64,7 @@ describe("MattermostConfigSchema", () => {
           label: "Shelling",
           maxLines: 4,
           toolProgress: false,
-          commandText: "status",
         },
-        preview: { commandText: "raw" },
       },
       accounts: {
         quiet: {

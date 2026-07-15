@@ -58,7 +58,7 @@ export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => vo
   }).unregister;
 }
 
-async function handleGoogleChatWebhookRequest(
+export async function handleGoogleChatWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {

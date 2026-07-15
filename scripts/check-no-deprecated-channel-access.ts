@@ -20,6 +20,15 @@ const RULES: Rule[] = [
     pattern: /\)\.legacyAccess\b/u,
   },
   {
+    label: "low-level compatibility ingress resolver",
+    pattern: /\bresolveChannelIngressAccess\b/u,
+  },
+  {
+    label: "deprecated channel ingress compatibility projection",
+    pattern:
+      /\b(?:findChannelIngressSenderReasonCode|formatChannelIngressPolicyReason|mapChannelIngressReasonCodeToDmGroupAccessReason|projectChannelIngressDmGroupAccess|projectChannelIngressSenderGroupAccess)\b/u,
+  },
+  {
     label: "deprecated pairing-store access helper",
     pattern: /\breadStoreAllowFromForDmPolicy\b/u,
   },
@@ -47,6 +56,10 @@ const RULES: Rule[] = [
   {
     label: "deprecated command auth SDK facade",
     pattern: /from\s+["']openclaw\/plugin-sdk\/command-auth["']/u,
+  },
+  {
+    label: "deprecated AccessFacts command authorizers",
+    pattern: /\bcommands\.authorizers\b/u,
   },
 ];
 

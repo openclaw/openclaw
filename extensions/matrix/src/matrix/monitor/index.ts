@@ -119,6 +119,12 @@ function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixStreamingInput
   );
 }
 
+export const testing = {
+  resolveMatrixPreviewToolProgress,
+  resolveMatrixPreviewToolProgressEnabled,
+  resolveMatrixStreamingMode,
+};
+
 const DEFAULT_MEDIA_MAX_MB = 20;
 
 export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promise<void> {

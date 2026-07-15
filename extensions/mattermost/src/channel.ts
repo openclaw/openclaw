@@ -811,8 +811,6 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     }),
     messaging: {
       targetPrefixes: ["mattermost"],
-      directTargetStyle: "user-prefixed",
-      targetIdComparison: "case-sensitive",
       defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
