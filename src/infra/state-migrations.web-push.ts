@@ -6,6 +6,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { root, type Root } from "@openclaw/fs-safe";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
@@ -732,7 +733,9 @@ export async function migrateLegacyWebPush(params: {
     }
   }
   if (releaseError) {
-    result.warnings.push(`Web Push migration lock release failed: ${String(releaseError)}`);
+    result.warnings.push(
+      `Web Push migration lock release failed: ${formatErrorMessage(releaseError)}`,
+    );
   }
   return result;
 }
