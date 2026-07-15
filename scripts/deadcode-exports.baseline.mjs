@@ -213,7 +213,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/entry.compile-cache.ts: shouldEnableOpenClawCompileCache",
   "src/flows/doctor-health-contributions.ts: createDoctorHealthContribution",
   "src/flows/doctor-health-contributions.ts: resolveDoctorHealthContributions",
-  "src/gateway/terminal/launch.ts: shellQuote",
   "src/hooks/gmail-setup-utils.ts: resetGmailSetupUtilsCachesForTest",
   "src/logging/diagnostic-run-activity.ts: markDiagnosticModelStartedForTest",
   "src/logging/diagnostic-run-activity.ts: markDiagnosticRunProgressForTest",
