@@ -239,6 +239,7 @@ describe("OpenClawTerminalPanel", () => {
       true,
       0,
       controller.terminal,
+      0,
     );
   });
 

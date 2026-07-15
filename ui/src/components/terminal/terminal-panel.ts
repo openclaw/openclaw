@@ -83,7 +83,8 @@ const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
 function forceTerminalRender(controller: GhosttyTerminalController): void {
   const term = controller.terminal;
   if (term.renderer && term.wasmTerm) {
-    term.renderer.render(term.wasmTerm, true, term.viewportY, term);
+    // An omitted opacity defaults to 1; repaint without inventing a visible scrollbar.
+    term.renderer.render(term.wasmTerm, true, term.viewportY, term, 0);
   }
 }
 
