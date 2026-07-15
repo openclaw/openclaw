@@ -465,7 +465,12 @@ describe("buildCachedChatItems row identity", () => {
             content: "Earlier projection from the same record",
             timestamp: 2,
           },
-          ...siblings.map((message) => ({ ...message, __openclaw: { ...message.__openclaw } })),
+          ...siblings.map((message) => ({
+            __openclaw: { seq: message["__openclaw"].seq },
+            role: message.role,
+            content: message.content,
+            timestamp: message.timestamp,
+          })),
         ],
       }),
       1,

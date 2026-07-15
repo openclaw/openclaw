@@ -170,7 +170,7 @@ export function cacheChatSessionSnapshot(
   if (
     snapshot.messages.length === 0 &&
     snapshot.sessionId === null &&
-    snapshot.pagination.hasMore === false &&
+    !snapshot.pagination.hasMore &&
     (snapshot.pagination.totalMessages ?? 0) === 0 &&
     snapshot.pagination.completeSnapshot !== true
   ) {
@@ -312,14 +312,18 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
       return null;
     }
     const boundarySeq = readTranscriptSequence(snapshot.messages[start]);
-    do {
+    retainedMessageWeight -= messageWeights[start] ?? 0;
+    start += 1;
+    if (boundarySeq === null) {
+      continue;
+    }
+    while (start < snapshot.messages.length) {
+      if (readTranscriptSequence(snapshot.messages[start]) !== boundarySeq) {
+        break;
+      }
       retainedMessageWeight -= messageWeights[start] ?? 0;
       start += 1;
-    } while (
-      boundarySeq !== null &&
-      start < snapshot.messages.length &&
-      readTranscriptSequence(snapshot.messages[start]) === boundarySeq
-    );
+    }
   }
 }
 

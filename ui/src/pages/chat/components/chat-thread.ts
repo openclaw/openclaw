@@ -229,7 +229,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
         ) {
           return indexes;
         }
-        return [...indexes, focused].sort((left, right) => left - right);
+        return [...indexes, focused].toSorted((left, right) => left - right);
       },
       scrollEndThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,

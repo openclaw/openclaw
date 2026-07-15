@@ -103,20 +103,20 @@ const buildChatItemsMock = vi.hoisted(() =>
           (message) =>
             typeof message === "object" &&
             message !== null &&
-            (message as { __testVirtualRow?: unknown }).__testVirtualRow === true,
+            (message as { testVirtualRow?: unknown }).testVirtualRow === true,
         );
         if (virtualRows) {
           items.push(
             ...props.messages.map((message, index) => {
               const testMessage = message as {
-                __testVirtualKey?: string;
-                __testVirtualRole?: string;
+                testVirtualKey?: string;
+                testVirtualRole?: string;
               };
-              const key = testMessage.__testVirtualKey ?? String(index);
+              const key = testMessage.testVirtualKey ?? String(index);
               return {
                 kind: "group",
                 key: `group:${key}`,
-                role: testMessage.__testVirtualRole ?? (index % 2 === 0 ? "user" : "assistant"),
+                role: testMessage.testVirtualRole ?? (index % 2 === 0 ? "user" : "assistant"),
                 messages: [{ key: `message:${key}`, message }],
                 timestamp: index + 1,
                 isStreaming: false,
@@ -1037,7 +1037,7 @@ describe("chat transcript rendering", () => {
 
   it("mounts a bounded end-anchored range for long transcripts", () => {
     const messages = Array.from({ length: 500 }, (_, index) => ({
-      __testVirtualRow: true,
+      testVirtualRow: true,
       content: `message ${index}`,
     }));
 
@@ -1070,9 +1070,9 @@ describe("chat transcript rendering", () => {
     } satisfies ReactiveControllerHost);
     const container = document.createElement("div");
     const message = (key: string, role: "user" | "assistant", content: string) => ({
-      __testVirtualRow: true,
-      __testVirtualKey: key,
-      __testVirtualRole: role,
+      testVirtualRow: true,
+      testVirtualKey: key,
+      testVirtualRole: role,
       content,
     });
     const renderMessages = (messages: unknown[]) =>
@@ -1113,15 +1113,15 @@ describe("chat transcript rendering", () => {
     } satisfies ReactiveControllerHost);
     const container = document.createElement("div");
     const existing = {
-      __testVirtualRow: true,
-      __testVirtualKey: "assistant-1",
-      __testVirtualRole: "assistant",
+      testVirtualRow: true,
+      testVirtualKey: "assistant-1",
+      testVirtualRole: "assistant",
       content: "Existing answer",
     };
     const appended = {
-      __testVirtualRow: true,
-      __testVirtualKey: "assistant-2",
-      __testVirtualRole: "assistant",
+      testVirtualRow: true,
+      testVirtualKey: "assistant-2",
+      testVirtualRole: "assistant",
       content: "New answer",
     };
 

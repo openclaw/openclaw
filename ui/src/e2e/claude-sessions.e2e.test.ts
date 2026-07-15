@@ -54,7 +54,7 @@ type VirtualRowPrependSample = {
 async function startVirtualRowPrependProbe(thread: Locator, anchor: VisibleVirtualRow) {
   await thread.evaluate((element, expected) => {
     const target = globalThis as typeof globalThis & {
-      __chatPrependProbe?: {
+      chatPrependProbe?: {
         observer: MutationObserver;
         samples: VirtualRowPrependSample[];
       };
@@ -92,24 +92,24 @@ async function startVirtualRowPrependProbe(thread: Locator, anchor: VisibleVirtu
       childList: true,
       subtree: true,
     });
-    target.__chatPrependProbe = { observer, samples };
+    target.chatPrependProbe = { observer, samples };
   }, anchor);
 }
 
 async function finishVirtualRowPrependProbe(thread: Locator) {
   return thread.evaluate(() => {
     const target = globalThis as typeof globalThis & {
-      __chatPrependProbe?: {
+      chatPrependProbe?: {
         observer: MutationObserver;
         samples: VirtualRowPrependSample[];
       };
     };
-    const probe = target.__chatPrependProbe;
+    const probe = target.chatPrependProbe;
     if (!probe) {
       throw new Error("expected an active virtual row prepend probe");
     }
     probe.observer.disconnect();
-    delete target.__chatPrependProbe;
+    delete target.chatPrependProbe;
     return probe.samples;
   });
 }

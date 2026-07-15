@@ -288,9 +288,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator("openclaw-chat-pane").evaluate((pane) => {
         (
           globalThis as typeof globalThis & {
-            __classicChatPane?: Element;
+            classicChatPane?: Element;
           }
-        ).__classicChatPane = pane;
+        ).classicChatPane = pane;
       });
       const startupRequestsBeforeSplit = (await gateway.getRequests("chat.startup")).length;
       await gateway.deferNext("chat.startup");
@@ -313,9 +313,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
             (pane) =>
               (
                 globalThis as typeof globalThis & {
-                  __classicChatPane?: Element;
+                  classicChatPane?: Element;
                 }
-              ).__classicChatPane === pane,
+              ).classicChatPane === pane,
           ),
         )
         .toBe(true);
@@ -2426,9 +2426,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         const samples: FrameSample[] = [];
         (
           globalThis as typeof globalThis & {
-            __chatSessionReturnSamples: FrameSample[];
+            chatSessionReturnSamples: FrameSample[];
           }
-        ).__chatSessionReturnSamples = samples;
+        ).chatSessionReturnSamples = samples;
         const deadline = performance.now() + 750;
         const sample = () => {
           const pane = document.querySelector("openclaw-chat-pane") as
@@ -2438,7 +2438,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
             | null;
           const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-chat-row-key]"));
           samples.push({
-            hiddenNotice: document.body.textContent?.includes("Showing last") === true,
+            hiddenNotice: document.body.textContent?.includes("Showing last") ?? false,
             loading: document.querySelector(".chat-history-loading") !== null,
             messageCount: pane?.state?.chatMessages?.length ?? 0,
             minOpacity: rows.reduce(
@@ -2456,12 +2456,14 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await sessionB.click();
       await page.getByText(/^recent retained message 140\n/).waitFor({ timeout: 10_000 });
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 800);
+      });
       const samples = await page.evaluate(
         () =>
           (
             globalThis as typeof globalThis & {
-              __chatSessionReturnSamples: Array<{
+              chatSessionReturnSamples: Array<{
                 hiddenNotice: boolean;
                 loading: boolean;
                 messageCount: number;
@@ -2469,7 +2471,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
                 sessionKey: string;
               }>;
             }
-          ).__chatSessionReturnSamples,
+          ).chatSessionReturnSamples,
       );
       const returnedSamples = samples.filter(
         (sample) => sample.sessionKey === "agent:main:session-b",
