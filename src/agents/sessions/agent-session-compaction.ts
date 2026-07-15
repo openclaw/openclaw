@@ -32,24 +32,45 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
    * Aborts current agent operation first.
    * @param customInstructions Optional instructions for the compaction summary
    */
-  async compact(customInstructions?: string): Promise<CompactionResult> {
+  async compact(
+    customInstructions?: string,
+    requestAbortSignal?: AbortSignal,
+  ): Promise<CompactionResult> {
     const abortController = new AbortController();
+    const signal = requestAbortSignal
+      ? AbortSignal.any([abortController.signal, requestAbortSignal])
+      : abortController.signal;
     this.compactionAbortControllers.add(abortController);
-    try {
-      return await this.runWithSessionWriteLock(async () => {
-        if (abortController.signal.aborted) {
+    return await new Promise<CompactionResult>((resolve, reject) => {
+      let settled = false;
+      const resolveOnce = (result: CompactionResult) => {
+        if (!settled) {
+          settled = true;
+          resolve(result);
+        }
+      };
+      const rejectOnce = (error: unknown) => {
+        if (!settled) {
+          settled = true;
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      };
+      const work = this.runWithSessionWriteLock(async () => {
+        if (signal.aborted) {
           throw new Error("Compaction cancelled");
         }
-        return await this.compactWithSessionWriteLock(abortController.signal, customInstructions);
+        return await this.compactWithSessionWriteLock(signal, customInstructions, resolveOnce);
       });
-    } finally {
-      this.compactionAbortControllers.delete(abortController);
-    }
+      void work.then(resolveOnce, rejectOnce).finally(() => {
+        this.compactionAbortControllers.delete(abortController);
+      });
+    });
   }
 
   private async compactWithSessionWriteLock(
     signal: AbortSignal,
     customInstructions?: string,
+    onTimeoutPartialCommitted?: (result: CompactionResult) => void,
   ): Promise<CompactionResult> {
     this.disconnectFromAgent();
     await this.abort();
@@ -57,9 +78,27 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     try {
       const settings = this.settingsManager.getCompactionSettings();
+      let emittedCompactionEnd = false;
+      const emitCompactionEnd = (result: CompactionResult) => {
+        if (emittedCompactionEnd) {
+          return;
+        }
+        emittedCompactionEnd = true;
+        this.emit({
+          type: "compaction_end",
+          reason: "manual",
+          result,
+          aborted: false,
+          willRetry: false,
+        });
+      };
       const outcome = await this.runCompactionWork({
         customInstructions,
         mode: "manual",
+        onTimeoutPartialCommitted: (result) => {
+          emitCompactionEnd(result);
+          onTimeoutPartialCommitted?.(result);
+        },
         settings,
         signal,
       });
@@ -67,13 +106,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         throw new Error("Compaction cancelled");
       }
 
-      this.emit({
-        type: "compaction_end",
-        reason: "manual",
-        result: outcome.result,
-        aborted: false,
-        willRetry: false,
-      });
+      emitCompactionEnd(outcome.result);
       return outcome.result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -135,6 +168,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     signal: AbortSignal;
     customInstructions?: string;
     mode: "manual" | "auto";
+    onTimeoutPartialCommitted?: (result: CompactionResult) => void;
   }): Promise<CompactionWorkOutcome> {
     if (options.signal.aborted) {
       return { status: "aborted" };
@@ -225,19 +259,19 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       (e) => e.type === "compaction" && e.summary === compactionResult.summary,
     ) as CompactionEntry | undefined;
 
+    if (acceptsTimeoutPartialResult) {
+      // The caller may settle from the authoritative commit while this internal task
+      // keeps the session write lock until post-compaction hooks finish.
+      options.onTimeoutPartialCommitted?.(compactionResult);
+    }
+
     if (this.currentExtensionRunner && savedCompactionEntry) {
       const event = {
         type: "session_compact",
         compactionEntry: savedCompactionEntry,
         fromExtension,
       } as const;
-      if (acceptsTimeoutPartialResult) {
-        // Persistence and context rebuild are authoritative at this point. Do not let a slow
-        // notification turn an accepted timeout partial result back into an outer timeout.
-        void this.currentExtensionRunner.emit(event);
-      } else {
-        await this.currentExtensionRunner.emit(event);
-      }
+      await this.currentExtensionRunner.emit(event);
     }
 
     return { status: "compacted", result: compactionResult };

@@ -45,6 +45,8 @@ type CompactionPartialSummaryProgress = {
   kind: "safety-timeout";
   completedChunks: number;
   totalChunks: number;
+  completedMessages: number;
+  totalMessages: number;
 };
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
@@ -157,6 +159,8 @@ async function summarizeChunks(params: {
     params.summarizationInstructions,
   );
   let hasGeneratedChunk = false;
+  let completedMessages = 0;
+  const totalMessages = chunks.reduce((count, chunk) => count + chunk.length, 0);
   for (const chunk of chunks) {
     try {
       summary = await retryAsync(
@@ -194,6 +198,7 @@ async function summarizeChunks(params: {
         },
       );
       hasGeneratedChunk = true;
+      completedMessages += chunk.length;
     } catch (err) {
       const timeout = isTimeoutError(err);
       if (params.signal.aborted) {
@@ -203,11 +208,15 @@ async function summarizeChunks(params: {
             err,
             completedChunks,
             totalChunks: chunks.length,
+            completedMessages,
+            totalMessages,
           });
           params.onPartialSummary?.({
             kind: "safety-timeout",
             completedChunks,
             totalChunks: chunks.length,
+            completedMessages,
+            totalMessages,
           });
           return `${summary!}\n\n[Partial summary: chunks 1-${completedChunks} of ${chunks.length} were summarized. Chunks ${completedChunks + 1}-${chunks.length} could not be processed.]`;
         }
@@ -416,6 +425,7 @@ export async function summarizeInStages(params: {
   }
 
   const partialSummaries: string[] = [];
+  let completedMessages = 0;
   for (const chunk of plan.chunks) {
     let timedOutWithPartialProgress = false;
     let chunkSummary: string;
@@ -426,7 +436,11 @@ export async function summarizeInStages(params: {
         previousSummary: undefined,
         onPartialSummary: (progress) => {
           timedOutWithPartialProgress = true;
-          params.onPartialSummary?.(progress);
+          params.onPartialSummary?.({
+            ...progress,
+            completedMessages: completedMessages + progress.completedMessages,
+            totalMessages: messages.length,
+          });
         },
       });
     } catch (err) {
@@ -439,6 +453,8 @@ export async function summarizeInStages(params: {
           kind: "safety-timeout" as const,
           completedChunks: partialSummaries.length,
           totalChunks: plan.chunks.length,
+          completedMessages,
+          totalMessages: messages.length,
         };
         log.warn("safety timeout interrupted staged summarization; partial summary available", {
           err,
@@ -451,6 +467,7 @@ export async function summarizeInStages(params: {
       throw err;
     }
     partialSummaries.push(chunkSummary);
+    completedMessages += chunk.length;
     if (timedOutWithPartialProgress) {
       if (partialSummaries.length === 1) {
         return chunkSummary;
@@ -498,11 +515,23 @@ export async function summarizeInStages(params: {
     ? `${MERGE_SUMMARIES_INSTRUCTIONS}\n\n${custom}`
     : MERGE_SUMMARIES_INSTRUCTIONS;
 
-  return summarizeWithFallback({
+  let mergeTimedOutWithPartialProgress = false;
+  const mergedSummary = await summarizeWithFallback({
     ...params,
     messages: summaryMessages,
     customInstructions: mergeInstructions,
+    onPartialSummary: (progress) => {
+      mergeTimedOutWithPartialProgress = true;
+      params.onPartialSummary?.({
+        ...progress,
+        completedMessages: messages.length,
+        totalMessages: messages.length,
+      });
+    },
   });
+  return mergeTimedOutWithPartialProgress
+    ? formatPartialStagedSummary(partialSummaries, plan.chunks.length)
+    : mergedSummary;
 }
 
 /** Resolves a positive context-window token count from model metadata. */

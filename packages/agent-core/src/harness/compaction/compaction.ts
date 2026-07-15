@@ -681,8 +681,12 @@ export interface CompactionPreparation {
   firstKeptEntryId: string;
   /** Messages summarized into the history summary. */
   messagesToSummarize: AgentMessage[];
+  /** Source entry ids aligned with messagesToSummarize. */
+  messageEntryIdsToSummarize?: string[];
   /** Prefix messages summarized separately when compaction splits a turn. */
   turnPrefixMessages: AgentMessage[];
+  /** Source entry ids aligned with turnPrefixMessages. */
+  turnPrefixEntryIds?: string[];
   /** Whether compaction splits a turn. */
   isSplitTurn: boolean;
   /** Estimated context tokens before compaction. */
@@ -740,20 +744,24 @@ export function prepareCompaction(
 
   const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
   const messagesToSummarize: AgentMessage[] = [];
+  const messageEntryIdsToSummarize: string[] = [];
   for (let i = boundaryStart; i < historyEnd; i++) {
     const entry = pathEntries.at(i);
     const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-    if (msg) {
+    if (entry && msg) {
       messagesToSummarize.push(msg);
+      messageEntryIdsToSummarize.push(entry.id);
     }
   }
   const turnPrefixMessages: AgentMessage[] = [];
+  const turnPrefixEntryIds: string[] = [];
   if (cutPoint.isSplitTurn) {
     for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
       const entry = pathEntries.at(i);
       const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      if (msg) {
+      if (entry && msg) {
         turnPrefixMessages.push(msg);
+        turnPrefixEntryIds.push(entry.id);
       }
     }
   }
@@ -767,7 +775,9 @@ export function prepareCompaction(
   return ok({
     firstKeptEntryId,
     messagesToSummarize,
+    messageEntryIdsToSummarize,
     turnPrefixMessages,
+    turnPrefixEntryIds,
     isSplitTurn: cutPoint.isSplitTurn,
     tokensBefore,
     previousSummary,

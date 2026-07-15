@@ -21,7 +21,10 @@ import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
-import { markCompactionTimeoutPartialResult } from "../compaction-timeout.js";
+import {
+  isCompactionSafetyTimeoutError,
+  markCompactionTimeoutPartialResult,
+} from "../compaction-timeout.js";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -249,6 +252,7 @@ async function summarizeViaLLM(params: {
     messages: params.messages,
     previousSummary: params.previousSummary,
   });
+  const prependedMessages = messages.length - params.messages.length;
   return compactionSafeguardDeps.summarizeInStages({
     messages,
     model: params.model,
@@ -261,8 +265,56 @@ async function summarizeViaLLM(params: {
     customInstructions: params.customInstructions,
     summarizationInstructions: params.summarizationInstructions,
     previousSummary: undefined,
-    onPartialSummary: params.onPartialSummary,
+    onPartialSummary: params.onPartialSummary
+      ? (progress) => {
+          const completedMessages = Math.max(
+            0,
+            Math.min(params.messages.length, progress.completedMessages - prependedMessages),
+          );
+          params.onPartialSummary?.({
+            ...progress,
+            completedMessages,
+            totalMessages: params.messages.length,
+          });
+        }
+      : undefined,
   });
+}
+
+function selectAlignedEntryIds(params: {
+  sourceMessages: AgentMessage[];
+  sourceEntryIds?: string[];
+  selectedMessages: AgentMessage[];
+}): string[] | undefined {
+  if (params.sourceEntryIds?.length !== params.sourceMessages.length) {
+    return undefined;
+  }
+  const selected = new Set(params.selectedMessages);
+  const entryIds = params.sourceMessages.flatMap((message, index) => {
+    if (!selected.has(message)) {
+      return [];
+    }
+    const entryId = params.sourceEntryIds?.at(index);
+    return entryId ? [entryId] : [];
+  });
+  return entryIds.length === params.selectedMessages.length ? entryIds : undefined;
+}
+
+function resolvePartialFirstKeptEntryId(params: {
+  progress: Parameters<NonNullable<Parameters<typeof summarizeViaLLM>[0]["onPartialSummary"]>>[0];
+  entryIds?: string[];
+  afterSummarizedRangeEntryId: string;
+}): string | undefined {
+  if (
+    !params.entryIds ||
+    params.entryIds.length !== params.progress.totalMessages ||
+    params.progress.completedMessages <= 0
+  ) {
+    return undefined;
+  }
+  return (
+    params.entryIds.at(params.progress.completedMessages) ?? params.afterSummarizedRangeEntryId
+  );
 }
 
 /**
@@ -898,7 +950,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let baseMessagesToSummarize = stripRuntimeContextCustomMessages(
       preparation.messagesToSummarize,
     );
+    let messageEntryIdsToSummarize = selectAlignedEntryIds({
+      sourceMessages: preparation.messagesToSummarize,
+      sourceEntryIds: preparation.messageEntryIdsToSummarize,
+      selectedMessages: baseMessagesToSummarize,
+    });
     let baseTurnPrefixMessages = stripRuntimeContextCustomMessages(rawTurnPrefixMessages);
+    let turnPrefixEntryIds = selectAlignedEntryIds({
+      sourceMessages: rawTurnPrefixMessages,
+      sourceEntryIds: preparation.turnPrefixEntryIds,
+      selectedMessages: baseTurnPrefixMessages,
+    });
     let hasRealSummarizable = containsRealConversation(baseMessagesToSummarize);
     let hasRealTurnPrefix = containsRealConversation(baseTurnPrefixMessages);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
@@ -910,7 +972,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           "Compaction safeguard: using session branch messages after compaction preparation omitted real conversation content.",
         );
         baseMessagesToSummarize = branchMessages;
+        messageEntryIdsToSummarize = undefined;
         baseTurnPrefixMessages = [];
+        turnPrefixEntryIds = [];
         hasRealSummarizable = true;
         hasRealTurnPrefix = false;
       }
@@ -1113,6 +1177,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 `(${pruned.droppedMessages} messages) to fit history budget.`,
             );
             messagesToSummarize = pruned.messages;
+            // The worker may clone and repair messages while pruning. Without an exact
+            // source-id alignment, a timeout partial result must fail closed.
+            messageEntryIdsToSummarize = undefined;
 
             // Summarize dropped messages so context isn't lost
             if (pruned.droppedMessagesList.length > 0) {
@@ -1162,6 +1229,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: messagesToSummarize,
         recentTurnsPreserve,
       });
+      messageEntryIdsToSummarize = selectAlignedEntryIds({
+        sourceMessages: messagesToSummarize,
+        sourceEntryIds: messageEntryIdsToSummarize,
+        selectedMessages: summaryTargetMessages,
+      });
       messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSectionLocal = formatPreservedTurnsSection(preservedRecentMessages);
       const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
@@ -1196,6 +1268,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let lastSplitTurnSection = "";
       let currentInstructions = structuredInstructions;
       let timeoutPartialProgress = false;
+      let partialFirstKeptEntryId: string | undefined;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
       let lastSuccessfulSummary: string | null = null;
 
@@ -1219,8 +1292,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: currentInstructions,
                   summarizationInstructions,
                   previousSummary: effectivePreviousSummary,
-                  onPartialSummary: () => {
+                  onPartialSummary: (progress) => {
                     timeoutPartialProgress = true;
+                    partialFirstKeptEntryId = resolvePartialFirstKeptEntryId({
+                      progress,
+                      entryIds: messageEntryIdsToSummarize,
+                      afterSummarizedRangeEntryId:
+                        turnPrefixEntryIds?.at(0) ?? preparation.firstKeptEntryId,
+                    });
                   },
                 })
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
@@ -1242,8 +1321,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ),
               summarizationInstructions,
               previousSummary: undefined,
-              onPartialSummary: () => {
+              onPartialSummary: (progress) => {
                 timeoutPartialProgress = true;
+                partialFirstKeptEntryId = resolvePartialFirstKeptEntryId({
+                  progress,
+                  entryIds: turnPrefixEntryIds,
+                  afterSummarizedRangeEntryId: preparation.firstKeptEntryId,
+                });
               },
             });
             splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
@@ -1322,14 +1406,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const bodyToCap = lastHistorySummary || summary;
       summary = capCompactionSummaryPreservingSuffix(bodyToCap, suffix);
 
+      if (timeoutPartialProgress && !partialFirstKeptEntryId) {
+        throw signal.reason ?? new Error("Compaction partial summary has no retained boundary");
+      }
+
       const compaction = {
         summary,
-        firstKeptEntryId: preparation.firstKeptEntryId,
+        firstKeptEntryId: partialFirstKeptEntryId ?? preparation.firstKeptEntryId,
         tokensBefore: preparation.tokensBefore,
         details: { readFiles, modifiedFiles },
       };
+      const isAcceptedSafetyTimeoutPartial =
+        timeoutPartialProgress && signal.aborted && isCompactionSafetyTimeoutError(signal.reason);
       return {
-        compaction: timeoutPartialProgress
+        compaction: isAcceptedSafetyTimeoutPartial
           ? markCompactionTimeoutPartialResult(compaction)
           : compaction,
       };

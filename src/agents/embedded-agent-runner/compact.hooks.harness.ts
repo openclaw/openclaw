@@ -70,12 +70,14 @@ export const resolveModelAsyncMock = vi.fn(
   async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
     resolveModelMock(provider, modelId, agentDir, cfg),
 );
-export const sessionCompactImpl = vi.fn(async () => ({
-  summary: "summary",
-  firstKeptEntryId: "entry-1",
-  tokensBefore: 120,
-  details: { ok: true },
-}));
+export const sessionCompactImpl = vi.fn(
+  async (_customInstructions?: string, _abortSignal?: AbortSignal) => ({
+    summary: "summary",
+    firstKeptEntryId: "entry-1",
+    tokensBefore: 120,
+    details: { ok: true },
+  }),
+);
 export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
 export const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
@@ -158,9 +160,9 @@ function createMockCompactionSession() {
         systemPrompt: undefined as string | undefined,
       },
     },
-    compact: vi.fn(async () => {
+    compact: vi.fn(async (customInstructions?: string, abortSignal?: AbortSignal) => {
       session.messages.splice(1);
-      return await sessionCompactImpl();
+      return await sessionCompactImpl(customInstructions, abortSignal);
     }),
     setActiveToolsByName: vi.fn(),
     setBaseSystemPrompt: vi.fn((systemPrompt: string) => {

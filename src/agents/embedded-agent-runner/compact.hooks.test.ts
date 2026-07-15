@@ -2286,19 +2286,20 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
-  it("passes safety timeout cancellation reason into native compaction abort", async () => {
+  it("passes the safety timeout signal only to its native compaction request", async () => {
     const safetyTimeoutModule = await import("./compaction-safety-timeout.js");
     const timeoutReason = new CompactionSafetyTimeoutError();
     vi.mocked(safetyTimeoutModule.compactWithSafetyTimeout).mockImplementationOnce(
       async (compact, _timeoutMs, opts) => {
-        (opts?.onCancel as ((reason: unknown) => void) | undefined)?.(timeoutReason);
         expect(
           opts?.acceptResultAfterTimeout?.(
             markCompactionTimeoutPartialResult({ summary: "partial" }),
           ),
         ).toBe(true);
         expect(opts?.acceptResultAfterTimeout?.({ summary: "ordinary" })).toBe(false);
-        return await compact(undefined);
+        const controller = new AbortController();
+        controller.abort(timeoutReason);
+        return await compact(controller.signal);
       },
     );
 
@@ -2306,7 +2307,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     expect(result.ok).toBe(true);
     expect(result.result?.summary).toBe("summary");
-    expect(sessionAbortCompactionMock).toHaveBeenCalledWith(timeoutReason);
+    expect(sessionAbortCompactionMock).not.toHaveBeenCalled();
+    expect(sessionCompactImpl.mock.lastCall?.[1]?.reason).toBe(timeoutReason);
   });
 
   it("aborts in-flight compaction when the caller abort signal fires", async () => {

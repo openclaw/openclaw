@@ -1677,16 +1677,13 @@ async function compactEmbeddedAgentSessionDirectOnce(
           }
           const activeSession = session;
           const result = await compactWithSafetyTimeout(
-            () => {
+            (compactAbortSignal) => {
               setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
-              return activeSession.compact(params.customInstructions);
+              return activeSession.compact(params.customInstructions, compactAbortSignal);
             },
             compactionTimeoutMs,
             {
               abortSignal: params.abortSignal,
-              onCancel: (reason) => {
-                activeSession.abortCompaction(reason);
-              },
               acceptResultAfterTimeout: isCompactionTimeoutPartialResult,
             },
           );

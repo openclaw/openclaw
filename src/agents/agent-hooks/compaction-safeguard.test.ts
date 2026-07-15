@@ -11,7 +11,10 @@ import {
   clearCompactionProviders,
   registerCompactionProvider,
 } from "../../plugins/compaction-provider.js";
-import { isCompactionTimeoutPartialResult } from "../compaction-timeout.js";
+import {
+  CompactionSafetyTimeoutError,
+  isCompactionTimeoutPartialResult,
+} from "../compaction-timeout.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -1632,12 +1635,16 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   it("marks a safety-timeout partial summary for AgentSession commit", async () => {
+    const controller = new AbortController();
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockImplementationOnce(async (params) => {
+      controller.abort(new CompactionSafetyTimeoutError());
       params.onPartialSummary?.({
         kind: "safety-timeout",
         completedChunks: 1,
         totalChunks: 2,
+        completedMessages: 1,
+        totalMessages: 2,
       });
       return "Summary of chunk 1\n\n[Partial summary: chunks 1-1 of 2 were summarized.]";
     });
@@ -1648,6 +1655,15 @@ describe("compaction-safeguard recent-turn preservation", () => {
       recentTurnsPreserve: 0,
     });
     const event = createCompactionEvent({ messageText: "older context", tokensBefore: 1_500 });
+    event.signal = controller.signal;
+    event.preparation.messagesToSummarize = [
+      { role: "user", content: "older context", timestamp: 1 },
+      { role: "assistant", content: "newer context", timestamp: 2 } as unknown as AgentMessage,
+    ];
+    Object.assign(event.preparation, {
+      messageEntryIdsToSummarize: ["entry-old", "entry-newer"],
+      firstKeptEntryId: "entry-retained-tail",
+    });
     (event.preparation as { settings?: { reserveTokens: number } }).settings = {
       reserveTokens: 4_000,
     };
@@ -1658,10 +1674,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
         sessionManager,
         getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
       }),
-    )) as { cancel?: boolean; compaction?: object };
+    )) as {
+      cancel?: boolean;
+      compaction?: { firstKeptEntryId?: string };
+    };
 
     expect(result.cancel).not.toBe(true);
     expect(isCompactionTimeoutPartialResult(result.compaction)).toBe(true);
+    expect(result.compaction?.firstKeptEntryId).toBe("entry-newer");
   });
 
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {
