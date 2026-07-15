@@ -25,7 +25,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { validateRequestedSkillSlug } from "./archive-install.js";
 import {
-  deleteSkillUploadRow,
+  deleteOwnedSkillUpload,
   deleteSkillUploadState,
   deleteExpiredSkillUploadUnlessLeased,
   hasLiveSkillUploadInstallLease,
@@ -591,7 +591,6 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
             kysely
               .updateTable("skill_uploads")
               .set({
-                sha256: current.sha256 ?? requestedSha ?? actualSha256,
                 actual_sha256: actualSha256,
                 archive_blob: archive,
                 committed: 1,
@@ -709,7 +708,16 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
               const archivePath = path.join(tmp.dir, "archive.zip");
               await fs.writeFile(archivePath, Buffer.from(row.archive_blob), { mode: 0o600 });
               return await action(toRecord(row, archivePath), {
-                remove: async () => deleteSkillUploadRow(uploadId, stateOptions),
+                remove: async () => {
+                  // Only the callback that still owns the install lease may consume the upload.
+                  // A stalled callback must not erase a successor Gateway's replacement lease.
+                  if (
+                    deleteOwnedSkillUpload(uploadId, leaseOwner, now(), stateOptions) ===
+                    "not-owner"
+                  ) {
+                    throw new SkillUploadRequestError("upload install lease is no longer active");
+                  }
+                },
               });
             },
           );
@@ -727,14 +735,6 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
             );
           }, stateOptions);
         }
-      });
-    },
-
-    async remove(uploadIdRaw: string): Promise<void> {
-      const uploadId = validateUploadId(uploadIdRaw);
-      const root = lockRoot();
-      await withLock(`${root}:upload:${uploadId}`, async () => {
-        deleteSkillUploadRow(uploadId, stateOptions);
       });
     },
   };

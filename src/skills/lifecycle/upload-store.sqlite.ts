@@ -68,12 +68,34 @@ export function deleteSkillUploadState(
   executeSqliteQuerySync(db, kysely.deleteFrom("skill_uploads").where("upload_id", "=", uploadId));
 }
 
-export function deleteSkillUploadRow(
+export function deleteOwnedSkillUpload(
   uploadId: string,
+  owner: string,
+  nowMs: number,
   options: OpenClawStateDatabaseOptions,
-): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    deleteSkillUploadState(db, getNodeSqliteKysely<SkillUploadDatabase>(db), uploadId);
+): "deleted" | "missing" | "not-owner" {
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
+    const upload = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely.selectFrom("skill_uploads").select("upload_id").where("upload_id", "=", uploadId),
+    );
+    if (!upload) {
+      return "missing";
+    }
+    const lease = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("state_leases")
+        .select(["owner", "expires_at"])
+        .where("scope", "=", SKILL_UPLOAD_LEASE_SCOPE)
+        .where("lease_key", "=", uploadId),
+    );
+    if (!lease || lease.owner !== owner || lease.expires_at <= nowMs) {
+      return "not-owner";
+    }
+    deleteSkillUploadState(db, kysely, uploadId);
+    return "deleted";
   }, options);
 }
 

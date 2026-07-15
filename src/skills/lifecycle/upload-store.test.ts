@@ -438,6 +438,35 @@ describe("skill upload store", () => {
     );
   });
 
+  it("keeps the optional begin sha immutable across commit retries", async () => {
+    const { databasePath, store } = await makeStore();
+    const archive = Buffer.from("abc");
+    const digest = sha256(archive);
+    const params = {
+      kind: "skill-archive" as const,
+      slug: "late-sha-skill",
+      sizeBytes: archive.length,
+      idempotencyKey: "late-sha-key",
+    };
+    const begin = await store.begin(params);
+    await store.chunk({
+      uploadId: begin.uploadId,
+      offset: 0,
+      dataBase64: archive.toString("base64"),
+    });
+    await store.commit({ uploadId: begin.uploadId, sha256: digest });
+
+    await expect(store.begin(params)).resolves.toMatchObject({
+      uploadId: begin.uploadId,
+      receivedBytes: archive.length,
+    });
+    expect(
+      stateDatabase(databasePath)
+        .prepare("SELECT sha256, actual_sha256 FROM skill_uploads WHERE upload_id = ?")
+        .get(begin.uploadId),
+    ).toMatchObject({ sha256: null, actual_sha256: digest });
+  });
+
   it("rejects idempotent commit when committed metadata is missing the actual sha", async () => {
     const { databasePath, store } = await makeStore();
     const archive = Buffer.from("abc");
@@ -709,39 +738,95 @@ describe("skill upload store", () => {
     expect(installLeaseCount(databasePath, committed.uploadId)).toBe(0);
   });
 
-  it("removes parent, chunks, and temporary materialization on failure", async () => {
+  it("lets the install lease owner remove the upload", async () => {
     const { databasePath, store } = await makeStore();
     const archive = Buffer.from("abc");
-    const pending = await store.begin({
+    const committed = await store.begin({
       kind: "skill-archive",
-      slug: "pending-skill",
+      slug: "consumed-skill",
       sizeBytes: archive.length,
     });
     await store.chunk({
-      uploadId: pending.uploadId,
+      uploadId: committed.uploadId,
       offset: 0,
       dataBase64: archive.toString("base64"),
     });
-    expect(chunkCount(databasePath, pending.uploadId)).toBe(1);
-    const leaseTime = Date.now() - 1;
-    stateDatabase(databasePath)
-      .prepare(
-        "INSERT INTO state_leases (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
-      )
-      .run(
-        "skill-upload-install",
-        pending.uploadId,
-        "crashed-owner",
-        leaseTime,
-        leaseTime,
-        leaseTime,
-        leaseTime,
-      );
-    expect(installLeaseCount(databasePath, pending.uploadId)).toBe(1);
-    await store.remove(pending.uploadId);
+    await store.commit({ uploadId: committed.uploadId });
+    let archivePath = "";
+    await store.withCommittedUpload(committed.uploadId, async (record, controls) => {
+      archivePath = record.archivePath;
+      await controls.remove();
+    });
+    await expectMissingPath(archivePath);
     expect(uploadCount(databasePath)).toBe(0);
-    expect(chunkCount(databasePath)).toBe(0);
-    expect(installLeaseCount(databasePath, pending.uploadId)).toBe(0);
+    expect(installLeaseCount(databasePath, committed.uploadId)).toBe(0);
+  });
+
+  it("does not remove an upload after the callback loses lease ownership", async () => {
+    const { databasePath, store } = await makeStore();
+    const archive = Buffer.from("abc");
+    const committed = await store.begin({
+      kind: "skill-archive",
+      slug: "replacement-owner-skill",
+      sizeBytes: archive.length,
+    });
+    await store.chunk({
+      uploadId: committed.uploadId,
+      offset: 0,
+      dataBase64: archive.toString("base64"),
+    });
+    await store.commit({ uploadId: committed.uploadId });
+
+    await store.withCommittedUpload(committed.uploadId, async (_record, controls) => {
+      const replacementAt = Date.now();
+      stateDatabase(databasePath)
+        .prepare(
+          "UPDATE state_leases SET owner = ?, expires_at = ?, updated_at = ? WHERE scope = 'skill-upload-install' AND lease_key = ?",
+        )
+        .run("replacement-owner", replacementAt + 60_000, replacementAt, committed.uploadId);
+      await expectUploadError(controls.remove(), "upload install lease is no longer active");
+    });
+
+    expect(uploadCount(databasePath)).toBe(1);
+    expect(
+      stateDatabase(databasePath)
+        .prepare(
+          "SELECT owner FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
+        )
+        .get(committed.uploadId),
+    ).toMatchObject({ owner: "replacement-owner" });
+  });
+
+  it("does not remove an upload after its install lease expires", async () => {
+    const { databasePath, store } = await makeStore();
+    const archive = Buffer.from("abc");
+    const committed = await store.begin({
+      kind: "skill-archive",
+      slug: "expired-owner-skill",
+      sizeBytes: archive.length,
+    });
+    await store.chunk({
+      uploadId: committed.uploadId,
+      offset: 0,
+      dataBase64: archive.toString("base64"),
+    });
+    await store.commit({ uploadId: committed.uploadId });
+
+    await store.withCommittedUpload(committed.uploadId, async (_record, controls) => {
+      stateDatabase(databasePath)
+        .prepare(
+          "UPDATE state_leases SET expires_at = ? WHERE scope = 'skill-upload-install' AND lease_key = ?",
+        )
+        .run(Date.now() - 1, committed.uploadId);
+      await expectUploadError(controls.remove(), "upload install lease is no longer active");
+    });
+
+    expect(uploadCount(databasePath)).toBe(1);
+  });
+
+  it("cleans temporary materialization and preserves the upload on action failure", async () => {
+    const { databasePath, store } = await makeStore();
+    const archive = Buffer.from("abc");
 
     const committed = await store.begin({
       kind: "skill-archive",
