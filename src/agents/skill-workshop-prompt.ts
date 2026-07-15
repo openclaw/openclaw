@@ -10,6 +10,7 @@ export function buildSkillWorkshopPromptSection(): string[] {
     "## Skill Workshop",
     "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write proposal/skill files directly.",
     "Generated = pending proposal. Apply/reject/quarantine only explicit user ask.",
+    "proposal_content = final skill body content, not a plan or change description.",
     "",
   ];
 }

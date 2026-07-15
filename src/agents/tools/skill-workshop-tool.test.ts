@@ -44,6 +44,16 @@ describe("skill_workshop tool", () => {
     expect(schema).toContain("shortens the proposal listing entry");
   });
 
+  it("documents that proposal_content must be final skill body content, not a plan or change description", () => {
+    const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
+    const schema = JSON.stringify(tool.parameters);
+
+    expect(schema).toContain("final skill body");
+    expect(schema).toContain("not a plan");
+    expect(schema).toContain("change description");
+    expect(schema).toContain("Proposal frontmatter is added automatically");
+  });
+
   it("is exposed in the OpenClaw tool set", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tools = createOpenClawTools({

@@ -789,11 +789,12 @@ describe("buildAgentSystemPrompt", () => {
   it("instructs models to use skill_workshop only when the tool is available", () => {
     const section = buildSkillWorkshopPromptSection();
     const sectionText = section.join("\n");
-    expect(section.length).toBeLessThanOrEqual(4);
+    expect(section.length).toBeLessThanOrEqual(5);
     expect(sectionText).toContain("Durable reusable skill/playbook/workflow work");
     expect(sectionText).toContain("`skill_workshop`");
     expect(sectionText).toContain("Generated = pending proposal");
     expect(sectionText).toContain("only explicit user ask");
+    expect(sectionText).toContain("final skill body content");
 
     const withoutTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
