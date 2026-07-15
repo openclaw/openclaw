@@ -2,7 +2,11 @@ const CLI_RUNNER_OUTPUT_TAIL_BYTES = 64 * 1024;
 
 function trimLeadingUtf8ContinuationBytes(buffer: Buffer): Buffer {
   let start = 0;
-  while (start < buffer.byteLength && (buffer[start] & 0xc0) === 0x80) {
+  while (start < buffer.byteLength) {
+    const byte = buffer[start];
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
     start++;
   }
   return start === 0 ? buffer : buffer.subarray(start);
