@@ -20,8 +20,8 @@ WhatsApp/Telegram issues).
 Turn on Crostini before installing anything:
 
 1. Open ChromeOS **Settings**.
-2. Go to **Advanced** then **Developers**.
-3. Under **Linux development environment**, select **Turn on** and follow the
+2. Go to **About ChromeOS** then **Developers**.
+3. Next to **Linux development environment**, select **Set up** and follow the
    prompts. ChromeOS downloads the Debian container and opens a **Terminal**.
 
 Run every command below inside that Terminal.
