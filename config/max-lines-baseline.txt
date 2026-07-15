@@ -89,7 +89,6 @@ extensions/device-pair/index.test.ts
 extensions/device-pair/index.ts
 extensions/diagnostics-otel/src/service.test.ts
 extensions/diagnostics-prometheus/src/service.ts
-extensions/discord/src/actions/runtime.guild.ts
 extensions/discord/src/actions/runtime.test.ts
 extensions/discord/src/channel.ts
 extensions/discord/src/monitor.test.ts
@@ -275,7 +274,6 @@ extensions/qa-matrix/src/runners/contract/scenario-runtime-approval.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-room.ts
 extensions/qa-matrix/src/runners/contract/scenarios.test.ts
-extensions/qa-matrix/src/substrate/client.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.ts
 extensions/qqbot/src/engine/messaging/outbound-deliver.ts
@@ -1049,7 +1047,6 @@ src/plugins/install-security-scan.runtime.ts
 src/plugins/install.npm-spec.e2e.test.ts
 src/plugins/install.npm-spec.test.ts
 src/plugins/install.test.ts
-src/plugins/install.ts
 src/plugins/installed-plugin-index.test.ts
 src/plugins/loader.activation.test-utils.ts
 src/plugins/loader.base.test-utils.ts

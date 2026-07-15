@@ -1394,6 +1394,9 @@ describe("WhatsApp QA live runtime", () => {
       messageId: "driver-message-1",
       to: "+15550000001",
     });
+    expect(calls[2]?.payload).toMatchObject({
+      conversationReadOrigin: "direct-operator",
+    });
   });
 
   it("formats redacted wait diagnostics for unmatched WhatsApp observations", () => {
