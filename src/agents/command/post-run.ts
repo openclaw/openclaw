@@ -1,4 +1,5 @@
 import type { CliDeps } from "../../cli/deps.types.js";
+import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -6,7 +7,11 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
-import { shouldPersistCurrentRunSessionCleanup } from "../agent-command-restart-recovery.js";
+import {
+  buildRestartRecoveryTerminalDeliveryEvidence,
+  constrainRestartRecoveryDeliveryPayloads,
+  shouldPersistCurrentRunSessionCleanup,
+} from "../agent-command-restart-recovery.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
@@ -44,6 +49,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
     runOwnedSessionId: string;
     sessionReboundDuringRun: boolean;
   }) => void;
+  onTerminalDeliveryEvidenceChanged: (
+    evidence: RestartRecoveryTerminalDeliveryEvidenceResult,
+  ) => void;
 }) {
   const {
     cfg,
@@ -61,7 +69,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
     agentCfg,
   } = params.prepared;
   const {
-    result,
     fallbackProvider,
     fallbackModel,
     fallbackExhausted,
@@ -80,6 +87,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
   const { skillsSnapshot, runContext } = params.embeddedSessionState;
   const effectiveCwd = cwd ?? workspaceDir;
   let sessionEntry = params.sessionEntry;
+  let result = params.attempt.result;
   let { runOwnedSessionId, sessionReboundDuringRun } = params.sessionOwnership;
   const publishSessionOwnership = () => {
     // Outer restart-recovery cleanup runs even after later delivery failures.
@@ -88,6 +96,17 @@ export async function finalizeEmbeddedAgentCommand(params: {
 
   try {
     await fallbackTrajectoryRecorder?.flush();
+    if (params.opts.internalDeliveryMediaUrls !== undefined) {
+      result = {
+        ...result,
+        payloads: constrainRestartRecoveryDeliveryPayloads(
+          result.payloads,
+          params.opts.internalDeliveryMediaUrls,
+          params.opts.internalDeliverySuppressText === true,
+        ),
+      };
+    }
+    params.onTerminalDeliveryEvidenceChanged(buildRestartRecoveryTerminalDeliveryEvidence(result));
 
     const rotatedSessionFile = result.meta.agentMeta?.sessionFile;
     const effectiveSessionId = rotatedSessionFile
@@ -276,6 +295,15 @@ export async function finalizeEmbeddedAgentCommand(params: {
       result,
       payloads,
       assertDeliveryCurrent: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
+      onDeliveryResult: (
+        deliveryResult: Parameters<
+          NonNullable<Parameters<typeof deliverAgentCommandResult>[0]["onDeliveryResult"]>
+        >[0],
+      ) => {
+        params.onTerminalDeliveryEvidenceChanged(
+          buildRestartRecoveryTerminalDeliveryEvidence(deliveryResult),
+        );
+      },
     };
     const deliveryResult = await deliverAgentCommandResult(
       resolveFreshSessionEntryForDelivery

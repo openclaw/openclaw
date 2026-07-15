@@ -2287,6 +2287,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       "preclaimed restart recovery session",
     );
     claimedEntry.restartRecoveryDeliveryRunId = "session-1";
+    claimedEntry.restartRecoveryDeliveryContext = {
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
+    };
     const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
       typeof makeSuccessResult
     > & {

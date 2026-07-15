@@ -49,6 +49,9 @@ export function clearPendingFinalDeliveryFields(
     pendingFinalDeliveryContext: undefined,
     pendingFinalDeliveryIntentId: undefined,
     restartRecoveryForceSafeTools: undefined,
+    restartRecoveryDeliveryMediaUrls: undefined,
+    restartRecoveryDisableMessageTool: undefined,
+    restartRecoverySuppressTextDelivery: undefined,
     updatedAt,
   };
 }
