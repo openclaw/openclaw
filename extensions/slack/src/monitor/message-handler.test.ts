@@ -165,6 +165,39 @@ describe("createSlackMessageHandler", () => {
     expect(enqueueMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps HTTP work detached until the debounce flush completes", async () => {
+    const runDetachedWorkMock = vi.fn();
+    const runDetachedWork = async <T>(run: () => Promise<T>): Promise<T> => {
+      runDetachedWorkMock();
+      return await run();
+    };
+    const handler = createSlackMessageHandler({
+      ctx: createContext(),
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+      runDetachedWork,
+    });
+
+    const handled = handler(
+      {
+        type: "message",
+        channel: "D1",
+        ts: "123.456",
+        text: "hello",
+      } as never,
+      { source: "message" },
+    );
+    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledOnce());
+
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    await onFlushCallbacks[0]?.([entry]);
+    await handled;
+
+    expect(runDetachedWorkMock).toHaveBeenCalledOnce();
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledOnce();
+  });
+
   it("records explicit channel type before the first delivery-state await", async () => {
     let settleDeliveryLookup: ((delivered: boolean) => void) | undefined;
     hasSlackInboundMessageDeliveryMock.mockImplementationOnce(

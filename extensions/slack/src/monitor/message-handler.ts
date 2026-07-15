@@ -52,6 +52,8 @@ type IngressSlackMessageOptions = Parameters<SlackMessageHandler>[1] & {
   retryAttempt?: number;
 };
 
+type SlackDetachedWorkRunner = <T>(run: () => Promise<T>) => Promise<T>;
+
 type QueuedSlackMessageOptions = IngressSlackMessageOptions & {
   dispatchCompletion?: Omit<SlackDispatchCompletion, "promise">;
 };
@@ -103,8 +105,10 @@ export function createSlackMessageHandler(params: {
   account: ResolvedSlackAccount;
   /** Called on each inbound event to update liveness tracking. */
   trackEvent?: () => void;
+  /** Keeps HTTP event processing admitted after Slack acknowledges the webhook. */
+  runDetachedWork?: SlackDetachedWorkRunner;
 }): SlackMessageHandler {
-  const { ctx, account, trackEvent } = params;
+  const { ctx, account, trackEvent, runDetachedWork } = params;
   const { debounceMs, debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
     opts: QueuedSlackMessageOptions;
@@ -474,8 +478,19 @@ export function createSlackMessageHandler(params: {
     return dispatchCompletion;
   }
 
-  return async (message, opts) => {
-    const dispatchCompletion = await enqueueSlackMessage(message, opts);
+  const handleMessage = async (message: SlackMessageEvent, opts: IngressSlackMessageOptions) => {
+    const dispatchCompletion = await enqueueSlackMessage(message, {
+      ...opts,
+      ...(runDetachedWork ? { awaitDispatch: true } : {}),
+    });
     await dispatchCompletion?.promise;
+  };
+
+  return async (message, opts) => {
+    if (runDetachedWork) {
+      await runDetachedWork(async () => await handleMessage(message, opts));
+      return;
+    }
+    await handleMessage(message, opts);
   };
 }

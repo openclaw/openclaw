@@ -26,7 +26,10 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
+import {
+  installRequestBodyLimitGuard,
+  runDetachedWebhookWork,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import {
   resolveSlackAccount,
   resolveSlackAccountAllowFrom,
@@ -484,7 +487,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     : undefined;
 
-  const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
+  const handleSlackMessage = createSlackMessageHandler({
+    ctx,
+    account,
+    trackEvent,
+    ...(slackMode === "http" ? { runDetachedWork: runDetachedWebhookWork } : {}),
+  });
   if (
     installationIdentity.kind !== "enterprise" &&
     isSlackAnyNativeApprovalClientEnabled({
