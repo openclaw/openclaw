@@ -76,6 +76,8 @@ const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
+const CRON_AGENT_TOOLS_ALLOW_CLEAR_ERROR =
+  "cannot clear toolsAllow from the agent cron tool while a creator tool allowlist is enforced; use openclaw cron edit --clear-tools from the CLI";
 
 function isMissingOrEmptyObject(value: unknown): boolean {
   return !value || (isRecord(value) && Object.keys(value).length === 0);
@@ -581,6 +583,14 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
   const payload = isRecord(params.patch.payload) ? params.patch.payload : undefined;
   const patchPayloadKind = readCronPayloadKind(payload);
   const patchRequestsAgentTurn = patchPayloadKind === "agentTurn";
+  if (
+    payload &&
+    Object.hasOwn(payload, "toolsAllow") &&
+    payload.toolsAllow === null &&
+    (patchPayloadKind === undefined || patchPayloadKind === "agentTurn")
+  ) {
+    throw new Error(CRON_AGENT_TOOLS_ALLOW_CLEAR_ERROR);
+  }
   if (patchPayloadKind === "agentTurn" && payload && Object.hasOwn(payload, "toolsAllow")) {
     capCronAgentTurnToolsAllow({
       payload,

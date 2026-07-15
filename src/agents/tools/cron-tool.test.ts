@@ -2440,38 +2440,27 @@ describe("cron tool", () => {
     });
   });
 
-  it("keeps the creator tool surface when an agentTurn update clears toolsAllow", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
+  it("rejects agentTurn toolsAllow clears under a creator tool surface", async () => {
     const tool = createTestCronTool({
       agentSessionKey: "agent:main:telegram:group:restricted-room",
       creatorToolAllowlist: ["read", "cron"],
     });
-    await tool.execute("call-update-capped-tools-clear", {
-      action: "update",
-      id: "job-8",
-      patch: {
-        payload: {
-          toolsAllow: null,
-        },
-      },
-    });
 
-    const params = expectSingleGatewayCallMethod("cron.update") as
-      | {
-          patch?: {
-            payload?: {
-              kind?: string;
-              toolsAllow?: string[];
-            };
-          };
-        }
-      | undefined;
-    expect(params?.patch?.payload).toEqual({
-      kind: "agentTurn",
-      toolsAllow: ["read", "cron"],
-      toolsAllowIsDefault: true,
-    });
+    await expect(
+      tool.execute("call-update-capped-tools-clear", {
+        action: "update",
+        id: "job-8",
+        patch: {
+          payload: {
+            toolsAllow: null,
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      "cannot clear toolsAllow from the agent cron tool while a creator tool allowlist is enforced",
+    );
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("adds the creator tool surface when updating an existing agentTurn without a payload patch", async () => {
