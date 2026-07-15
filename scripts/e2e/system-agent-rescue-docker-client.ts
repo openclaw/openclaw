@@ -51,6 +51,23 @@ async function invoke(commandBody: string, cfg: OpenClawConfig, isGroup = false)
   return text;
 }
 
+async function invokeWithDeps(
+  commandBody: string,
+  cfg: OpenClawConfig,
+  deps: NonNullable<Parameters<typeof runSystemAgentRescueMessage>[0]["deps"]>,
+): Promise<string> {
+  const result = await runSystemAgentRescueMessage({
+    cfg,
+    command: makeParams(commandBody, cfg).command,
+    commandBody,
+    agentId: "default",
+    isGroup: false,
+    deps,
+  });
+  assert(typeof result === "string", `Direct rescue command did not return text: ${commandBody}`);
+  return result;
+}
+
 async function main() {
   const tempState = await createE2eStateDir("openclaw-openclaw-");
   tempState.registerExitCleanup();
@@ -79,18 +96,30 @@ async function main() {
   assert(denied.includes("sandboxing is active"), "sandboxed rescue was not denied");
 
   const cfg: OpenClawConfig = {};
+  const deterministicInference = {
+    verifyInferenceConfig: async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.2",
+      latencyMs: 1,
+    }),
+  };
   const refusedTui = await invoke("/openclaw talk to agent", cfg);
   assert(
     refusedTui.includes("cannot open the local TUI"),
     "remote rescue TUI handoff was not refused",
   );
 
-  const plan = await invoke("/openclaw set default model openai/gpt-5.2", cfg);
+  // This packaged smoke verifies rescue persistence, not live provider credentials.
+  const plan = await invokeWithDeps(
+    "/openclaw set default model openai/gpt-5.2",
+    cfg,
+    deterministicInference,
+  );
   assert(
     plan.includes("Reply /openclaw yes to apply"),
     "persistent change did not require approval",
   );
-  const applied = await invoke("/openclaw yes", cfg);
+  const applied = await invokeWithDeps("/openclaw yes", cfg, deterministicInference);
   assert(applied.includes("Default model: openai/gpt-5.2"), "approved change did not apply");
 
   const configValid = await invoke("/openclaw validate config", cfg);
@@ -123,12 +152,13 @@ async function main() {
   const agentApplied = await invoke("/openclaw yes", cfg);
   assert(agentApplied.includes("[openclaw] done: agents.create"), "agent creation did not apply");
 
-  const setupPlan = await invoke(
+  const setupPlan = await invokeWithDeps(
     "/openclaw setup workspace /tmp/openclaw-setup model openai/gpt-5.2",
     cfg,
+    deterministicInference,
   );
   assert(setupPlan.includes("Reply /openclaw yes to apply"), "setup did not require approval");
-  const setupApplied = await invoke("/openclaw yes", cfg);
+  const setupApplied = await invokeWithDeps("/openclaw yes", cfg, deterministicInference);
   assert(setupApplied.includes("[openclaw] done: openclaw.setup"), "setup did not apply");
 
   const gatewayRestarts: string[] = [];
