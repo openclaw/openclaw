@@ -113,6 +113,9 @@ function parseAllowFromFilename(
     } else if (matchingAccountIds.length > 1) {
       hasAccountCollision = true;
     } else if (accountKey === DEFAULT_ACCOUNT_ID && CHANNEL_IDS.includes(channel)) {
+      // "default" is canonical, so bundled `<channel>-default` files resolve without config.
+      // Keep this on CHANNEL_IDS: knownChannelIds also includes configured and pairing-file ids.
+      // After safeAccountKey finds no match, those other channels must remain unresolved.
       targets.push({ channel: channel as PairingChannel, accountId: DEFAULT_ACCOUNT_ID });
     }
   }
