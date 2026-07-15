@@ -823,9 +823,6 @@ private struct PostUpdateView: View {
             }
         case .complete, .external:
             HStack {
-                if self.model.phase == .external {
-                    Button("Update guide") { PostUpdateController.shared.openUpdateGuide() }
-                }
                 Spacer()
                 Button("Continue") { PostUpdateController.shared.close() }
                     .buttonStyle(.borderedProminent)
