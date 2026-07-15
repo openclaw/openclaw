@@ -129,7 +129,9 @@
   {
     "description": "List ids allowed for `sessions_spawn(runtime:\"subagent\")`.",
     "inputSchema": {
+      "additionalProperties": false,
       "properties": {},
+      "required": [],
       "type": "object"
     },
     "name": "agents_list",
