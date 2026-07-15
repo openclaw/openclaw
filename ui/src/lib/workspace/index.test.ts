@@ -98,6 +98,7 @@ describe("loadWorkspace", () => {
     expectDefined(newer.tabs[0], "newer tab").title = "Newest";
     resolveRequests[1]?.({ doc: newer, workspaceVersion: 4 });
     await newerLoad;
+    expect(state.loading).toBe(false);
 
     resolveRequests[0]?.({ doc: sampleWorkspace(), workspaceVersion: 3 });
     await olderLoad;
@@ -242,6 +243,7 @@ describe("loadWorkspace", () => {
     const state = getWorkspaceState({});
     state.workspace = sampleWorkspace({ workspaceVersion: 5 });
     state.activeSlug = "main";
+    state.error = "previous failure";
     const client = mockClient({
       request: vi.fn(async () => ({
         doc: sampleWorkspace({ workspaceVersion: 4 }),
@@ -253,6 +255,7 @@ describe("loadWorkspace", () => {
 
     expect(state.workspace?.workspaceVersion).toBe(5);
     expect(state.activeSlug).toBe("archive");
+    expect(state.error).toBeNull();
   });
 
   it("keeps the active tab when requested navigation fails and retries the intent", async () => {

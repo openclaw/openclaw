@@ -439,6 +439,8 @@ export async function loadWorkspace(
       if (workspaceLoadIntents.get(state) === intent) {
         workspaceLoadIntents.delete(state);
       }
+      state.error = null;
+      state.loaded = true;
       return;
     }
     const requestedSlug =
@@ -459,8 +461,14 @@ export async function loadWorkspace(
       state.error = formatError(err);
     }
   } finally {
-    let shouldNotify = generation === state.loadGeneration;
-    if (state.loadingGeneration === generation) {
+    const isCurrent = generation === state.loadGeneration;
+    let shouldNotify = isCurrent;
+    if (
+      state.loadingGeneration === generation ||
+      (isCurrent && state.loadingGeneration !== null)
+    ) {
+      // A current silent completion supersedes any older foreground owner; keep
+      // no spinner tied to a response that can only finish stale.
       state.loadingGeneration = null;
       state.loading = false;
       shouldNotify = true;
