@@ -9,7 +9,7 @@ import { sendTyping } from "./typing.js";
 const DISCORD_REPLY_TYPING_MAX_DURATION_MS = 20 * 60_000;
 
 // Discord can keep long tool-heavy replies alive, but not forever.
-// The dispatch restart path refreshes this TTL after queue wait time.
+// The dispatch restart path gives each accepted run a fresh controller.
 export type DiscordReplyTypingFeedback = ReturnType<typeof createTypingCallbacks> & {
   updateChannelId: (channelId: string) => void;
   getChannelId: () => string;
@@ -57,15 +57,14 @@ export function createDiscordReplyTypingFeedback(params: {
   let callbacks = createCallbacks();
   return {
     // Expose one stable owner while allowing the inner typing controller to
-    // rotate between prequeue feedback and the actual dispatch lifecycle.
+    // rotate at the actual dispatch boundary.
     onReplyStart: () => callbacks.onReplyStart(),
     onIdle: () => callbacks.onIdle?.(),
     onCleanup: () => callbacks.onCleanup?.(),
     updateChannelId,
     restartForDispatch: (nextChannelId) => {
       updateChannelId(nextChannelId);
-      // Prequeue typing may have hit its TTL before the job starts.
-      // Rotate the inner controller so dispatch always owns a live heartbeat.
+      // Rotate the prepared controller so dispatch owns a fresh heartbeat.
       callbacks.onCleanup?.();
       callbacks = createCallbacks();
     },

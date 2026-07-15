@@ -57,7 +57,7 @@ type DiscordMessageHandlerTestingHooks = DiscordMessageRunQueueTestingHooks & {
   createReplyTypingFeedback?: CreateDiscordReplyTypingFeedback;
 };
 
-type PrestartedTypingFeedbackEntry = {
+type PreparedTypingFeedbackEntry = {
   channelId: string;
   feedback: DiscordReplyTypingFeedback;
 };
@@ -74,11 +74,11 @@ function isNonEmptyString(value: string | undefined): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function startAcceptedTypingFeedback(params: {
+function prepareAcceptedTypingFeedback(params: {
   ctx: DiscordMessagePreflightContext;
   createFeedback?: CreateDiscordReplyTypingFeedback;
   dedupeKey: string;
-  activeFeedback: Map<string, PrestartedTypingFeedbackEntry>;
+  activeFeedback: Map<string, PreparedTypingFeedbackEntry>;
 }): DiscordReplyTypingFeedback | undefined {
   const { ctx, createFeedback, dedupeKey, activeFeedback } = params;
   if (!resolveDiscordAcceptedTypingPrestart(ctx).shouldPrestart) {
@@ -87,8 +87,8 @@ function startAcceptedTypingFeedback(params: {
   const channelId = ctx.messageChannelId.trim();
   const existing = activeFeedback.get(dedupeKey);
   if (existing) {
-    // One pre-dispatch keepalive owns each serialized Discord queue key.
-    // Later queued jobs get fresh typing when their dispatch turn starts.
+    // One prepared feedback lease owns each serialized Discord queue key.
+    // Later queued jobs create fresh feedback when their dispatch turn starts.
     return undefined;
   }
   const replyTypingFeedback =
@@ -114,9 +114,6 @@ function startAcceptedTypingFeedback(params: {
   };
   activeFeedback.set(dedupeKey, { channelId, feedback: replyTypingFeedback });
   ctx.replyTypingFeedback = replyTypingFeedback;
-  void replyTypingFeedback.onReplyStart().catch((err: unknown) => {
-    logVerbose(`discord accepted typing feedback failed: ${String(err)}`);
-  });
   return replyTypingFeedback;
 }
 
@@ -134,9 +131,9 @@ export function createDiscordMessageHandler(
     "group-mentions";
   const preflightDiscordMessageImpl = params.testing?.preflightDiscordMessage;
   const replayGuard = createDiscordInboundReplayGuard();
-  // The map owns pre-dispatch typing leases, not queued work itself.
+  // The map owns prepared feedback leases, not queued work itself.
   // Each lease is released by the feedback cleanup hook installed below.
-  const prestartedTypingFeedback = new Map<string, PrestartedTypingFeedbackEntry>();
+  const preparedTypingFeedback = new Map<string, PreparedTypingFeedbackEntry>();
   const messageRunQueue = createDiscordMessageRunQueue({
     runtime: params.runtime,
     setStatus: params.setStatus,
@@ -215,11 +212,11 @@ export function createDiscordMessageHandler(
             return;
           }
           const queueKey = resolveDiscordInboundJobQueueKey(ctx);
-          startAcceptedTypingFeedback({
+          prepareAcceptedTypingFeedback({
             ctx,
             createFeedback: params.testing?.createReplyTypingFeedback,
             dedupeKey: queueKey,
-            activeFeedback: prestartedTypingFeedback,
+            activeFeedback: preparedTypingFeedback,
           });
           applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
           messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
@@ -271,11 +268,11 @@ export function createDiscordMessageHandler(
           return;
         }
         const queueKey = resolveDiscordInboundJobQueueKey(ctx);
-        startAcceptedTypingFeedback({
+        prepareAcceptedTypingFeedback({
           ctx,
           createFeedback: params.testing?.createReplyTypingFeedback,
           dedupeKey: queueKey,
-          activeFeedback: prestartedTypingFeedback,
+          activeFeedback: preparedTypingFeedback,
         });
         applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
         if (entries.length > 1) {
