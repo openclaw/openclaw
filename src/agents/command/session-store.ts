@@ -14,21 +14,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 
 const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
-const contextModuleLoader = createLazyImportLoader(() => import("../context.js"));
 
 async function getUsageFormatModule() {
   return await usageFormatModuleLoader.load();
-}
-
-async function getContextModule() {
-  return await contextModuleLoader.load();
 }
 
 function resolvePositiveInteger(value: number | undefined): number | undefined {
@@ -100,17 +94,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const activeSessionFile = normalizeOptionalString(result.meta.agentMeta?.sessionFile);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
-  const contextTokens =
-    runtimeContextTokens !== undefined
-      ? runtimeContextTokens
-      : ((await getContextModule()).resolveContextTokensForModel({
-          cfg,
-          provider: providerUsed,
-          model: modelUsed,
-          contextTokensOverride: params.contextTokensOverride,
-          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-          allowAsyncLoad: false,
-        }) ?? DEFAULT_CONTEXT_TOKENS);
+  // Only propagate context tokens from actual runtime usage data.
+  // When the provider does not report usage, avoid storing the raw model
+  // context window as the session's effective token count so status surfaces
+  // do not produce misleading "full" indicators.
+  const contextTokens = runtimeContextTokens;
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
@@ -129,9 +117,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     lastActivityAt: touchActivity ? now : entry.lastActivityAt,
     ...(preserveRuntimeModel
       ? {}
-      : {
-          contextTokens,
-        }),
+      : contextTokens !== undefined
+        ? { contextTokens }
+        : {}),
   };
   if (entry.sessionId !== sessionId) {
     next.sessionFile =
