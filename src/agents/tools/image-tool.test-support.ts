@@ -24,8 +24,21 @@ import "./image-tool.js";
 
 type ResolveModelAsync = (typeof import("../embedded-agent-runner/model.js"))["resolveModelAsync"];
 
+type ImageToolLoadWebMediaOptions = {
+  maxBytes?: number;
+  sandboxValidated?: boolean;
+  readFile?: (filePath: string) => Promise<Buffer>;
+  imageCompression?: ImageCompressionPolicy;
+  localRoots?: readonly string[] | "any";
+  inboundRoots?: readonly string[];
+  ssrfPolicy?: ReturnType<
+    (typeof import("./media-tool-shared.js"))["resolveRemoteMediaSsrfPolicy"]
+  >;
+  readIdleTimeoutMs?: number;
+};
+
 type ImageWebMediaRuntime = {
-  loadWebMedia(mediaUrl: string, options?: Record<string, unknown>): Promise<WebMediaResult>;
+  loadWebMedia(mediaUrl: string, options?: ImageToolLoadWebMediaOptions): Promise<WebMediaResult>;
   optimizeImageBufferForWebMedia: (typeof import("../../media/web-media.js"))["optimizeImageBufferForWebMedia"];
 };
 
