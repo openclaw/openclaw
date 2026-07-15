@@ -212,6 +212,20 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     return false;
   }
 
+  const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
+  const markTerminalReceiptFailure = async (): Promise<void> => {
+    if (params.sourceReplyFinal !== true || !params.sessionId || !sourceTurnId) {
+      return;
+    }
+    const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+    await markRestartRecoveryTerminalReceiptFailure({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sourceTurnId,
+      storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+    });
+  };
+
   const plan = createOutboundPayloadPlan([
     {
       text: readFirstString(params.actionParams, ["message", "content", "text", "caption"]) ?? "",
@@ -230,21 +244,9 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   ]);
   const mirror = projectOutboundPayloadPlanForMirror(plan);
   if (!mirror.text && mirror.mediaUrls.length === 0) {
+    await markTerminalReceiptFailure();
     return false;
   }
-  const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
-  const markTerminalReceiptFailure = async (): Promise<void> => {
-    if (params.sourceReplyFinal !== true || !params.sessionId || !sourceTurnId) {
-      return;
-    }
-    const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-    await markRestartRecoveryTerminalReceiptFailure({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sourceTurnId,
-      storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
-    });
-  };
   let result: Awaited<ReturnType<typeof appendAssistantMessageToSessionTranscript>>;
   try {
     result = await appendAssistantMessageToSessionTranscript({

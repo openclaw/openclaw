@@ -2282,6 +2282,57 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("marks an unmirrorable terminal source reply fail closed on the exact session", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-unmirrorable" }),
+    );
+    const sessionKey = "agent:main:telegram:direct:chat-123";
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "chat-123",
+          presentation: { blocks: [{ type: "divider" }] },
+        },
+        sessionKey,
+        sessionId: "session-unmirrorable",
+        agentId: "main",
+        idempotencyKey: "idem-unmirrorable-source-message-action",
+      },
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              sessionId: "session-unmirrorable",
+              sourceReplyFinal: true,
+              toolContext: {
+                currentChannelProvider: "telegram",
+                currentChannelId: "chat-123",
+                currentSourceTurnId: "channel-user:v1:telegram-message-unmirrorable",
+              },
+            },
+          },
+        },
+      },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(mocks.markRestartRecoveryTerminalReceiptFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-unmirrorable",
+        sessionKey,
+        sourceTurnId: "channel-user:v1:telegram-message-unmirrorable",
+      }),
+    );
+  });
+
   it("mirrors a Slack DM send after target resolution strips its user prefix", async () => {
     const slackPlugin: ChannelPlugin = {
       id: "slack",
