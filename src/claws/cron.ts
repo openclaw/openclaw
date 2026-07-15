@@ -13,7 +13,7 @@ export type PersistedClawCronRef = {
   manifestId: string;
   declarationKey: string;
   schedulerJobId?: string;
-  status: "pending" | "complete" | "failed";
+  status: "pending" | "complete" | "failed" | "removed";
   job: ClawCronJob;
   error?: string;
   createdAtMs: number;
@@ -324,4 +324,15 @@ export function deleteClawCronRef(
       manifestId,
     );
   }, options);
+}
+
+export function markClawCronRefRemoved(
+  agentId: string,
+  manifestId: string,
+  options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
+): PersistedClawCronRef | undefined {
+  const ref = readClawCronRefs(agentId, options).find(
+    (candidate) => candidate.manifestId === manifestId,
+  );
+  return ref ? updateRef(ref, { status: "removed" }, options) : undefined;
 }

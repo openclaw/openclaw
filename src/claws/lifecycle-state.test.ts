@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
+import { markClawCronRefRemoved } from "./cron.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import {
@@ -268,6 +269,37 @@ describe("Claw status and remove", () => {
     expect(result).toMatchObject({
       status: "complete",
       agentRemoved: true,
+      cronJobs: [{ manifestId: "daily-report", action: "removed" }],
+    });
+  });
+
+  it("finishes local cleanup without repeating a confirmed remote cron removal", async () => {
+    const current = await addFixture({ withCron: true });
+    markClawCronRefRemoved("worker", "daily-report", { env: current.env });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    let config = current.getConfig();
+    const remoteRemovals: string[] = [];
+
+    const result = await applyClawRemovePlan(plan, {
+      env: current.env,
+      config,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+      cronGateway: {
+        remove: async (id) => {
+          remoteRemovals.push(id);
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(remoteRemovals).toEqual([]);
+    expect(result).toMatchObject({
+      status: "complete",
       cronJobs: [{ manifestId: "daily-report", action: "removed" }],
     });
   });
