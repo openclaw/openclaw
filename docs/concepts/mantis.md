@@ -362,11 +362,16 @@ noVNC, Node 22.22.3+, 24.15+, or 25.9+ and pnpm, an OpenClaw checkout, and
 outbound access to the target transport, GitHub, model providers, and the
 credential broker.
 
-Credential and environment names used across the Mantis workflows:
+Credential and environment names used across Mantis commands and workflows:
 
 - `OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN`
 - `OPENCLAW_QA_DISCORD_GUILD_ID`
 - `OPENCLAW_QA_DISCORD_CHANNEL_ID`
+- Local `qa mantis run --credential-source env` also requires
+  `OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN`, `OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN`,
+  and `OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID`. GitHub workflows normally use
+  `--credential-source convex` and the broker credentials below instead of raw
+  Discord bot tokens.
 - `OPENCLAW_QA_REDACT_PUBLIC_METADATA=1` for public artifact uploads
 - `OPENCLAW_QA_CONVEX_SITE_URL`, `OPENCLAW_QA_CONVEX_SECRET_CI`
 - `OPENAI_API_KEY` (or the Telegram Desktop proof-specific
