@@ -73,7 +73,7 @@ type AttemptControl = {
   noteLaneTaskProgress: () => void;
   onToolOutcome: ToolOutcomeObserver;
   allocateToolOutcomeOrdinal: (toolCallId?: string) => number;
-  onToolStreamBoundary: () => void;
+  onToolStreamBoundary: NonNullable<EmbeddedRunAttemptParams["onToolStreamBoundary"]>;
   onRunProgress: NonNullable<EmbeddedRunAttemptParams["onRunProgress"]>;
   onToolResult: NonNullable<EmbeddedRunAttemptParams["onToolResult"]>;
   onAgentEvent: NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>;

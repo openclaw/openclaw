@@ -330,6 +330,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       messaging: {
         targetPrefixes: ["discord"],
+        directTargetStyle: "user-prefixed",
+        targetIdComparison: "lowercase",
         normalizeTarget: normalizeDiscordMessagingTarget,
         resolveInboundConversation: ({
           from,
