@@ -439,6 +439,21 @@ describe("config shared auth disconnects", () => {
     expect(payload?.stats?.requiresRestart).toBe(false);
   });
 
+  it("schedules a direct restart for write-budget changes when reload is off", async () => {
+    mockPreviousConfig({
+      gateway: {
+        reload: { mode: "off" },
+        controlPlaneWritesPerMinute: 3,
+      },
+    });
+
+    await runConfigPatch({ gateway: { controlPlaneWritesPerMinute: 60 } });
+
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
+    expect(payload?.stats?.requiresRestart).toBe(true);
+  });
+
   it("does not schedule a direct restart for hot-mode browser profile config.patch writes", async () => {
     installBrowserReloadRegistry();
     mockPreviousConfig({

@@ -61,9 +61,9 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   // permissions) and the bootstrap availability flag, both fixed at document
   // load, plus live PTYs — none can hot-update a connected client, so a change
   // must restart the gateway (clients reconnect with a fresh page and CSP).
-  // The write budget is read per request from the live runtime config, so a
-  // change takes effect on the next control-plane write without any reload.
-  { prefix: "gateway.controlPlaneWritesPerMinute", kind: "none" },
+  // Per-request reads still require runtime snapshot publication; hot mode
+  // also requests a restart when config reload is disabled.
+  { prefix: "gateway.controlPlaneWritesPerMinute", kind: "hot" },
   {
     prefix: "gateway.channelHealthCheckMinutes",
     kind: "hot",

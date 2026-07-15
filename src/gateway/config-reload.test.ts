@@ -330,7 +330,6 @@ describe("buildGatewayReloadPlan", () => {
     "tui.footer.showRemoteHost",
     "diagnostics.stuckSessionWarnMs",
     "diagnostics.stuckSessionAbortMs",
-    "gateway.controlPlaneWritesPerMinute",
   ])("keeps runtime-irrelevant path as a no-op: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
 
@@ -338,6 +337,15 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toStrictEqual([]);
     expect(plan.hotReasons).toStrictEqual([]);
     expect(plan.noopPaths).toEqual([path]);
+  });
+
+  it("hot reloads the control-plane write budget", () => {
+    const path = "gateway.controlPlaneWritesPerMinute";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toEqual([path]);
+    expect(plan.noopPaths).toEqual([]);
   });
 
   it("treats plugin install timestamp-only changes as no-ops", () => {
