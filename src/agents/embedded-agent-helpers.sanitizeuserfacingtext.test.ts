@@ -282,6 +282,29 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Before\nAfter");
   });
 
+  it("strips trailing runtime stream-boundary markers from user-visible text (#105113)", () => {
+    expect(sanitizeUserFacingText("Hello, how can I help?[e~[")).toBe("Hello, how can I help?");
+    expect(sanitizeUserFacingText("The answer is 42.[e~[")).toBe("The answer is 42.");
+    expect(sanitizeUserFacingText("[e~[")).toBe("");
+    expect(sanitizeUserFacingText("[e[")).toBe("");
+  });
+
+  it("preserves inline [e~[ references that are not trailing markers", () => {
+    expect(sanitizeUserFacingText("[e~[ is a stream marker")).toBe("[e~[ is a stream marker");
+    expect(sanitizeUserFacingText("The marker [e~[ appears here")).toBe(
+      "The marker [e~[ appears here",
+    );
+  });
+
+  it("preserves all inline bracket references", () => {
+    expect(sanitizeUserFacingText("See [1] and [2] for details")).toBe(
+      "See [1] and [2] for details",
+    );
+    expect(sanitizeUserFacingText("RFC [1] defines the protocol")).toBe(
+      "RFC [1] defines the protocol",
+    );
+  });
+
   it("strips MiniMax plain-text tool calls before user-facing delivery", () => {
     const input = [
       "Let me check that.",
