@@ -593,7 +593,6 @@ describe("package acceptance workflow", () => {
     if (!orchestration) {
       throw new Error("Expected release publish orchestration script");
     }
-    const matcher = shellFunctionSource(orchestration, "release_evidence_zip_trees_match");
     const tempDir = tempDirs.make("release-evidence-zip-");
     const sourceDir = `${tempDir}/source`;
     const existingDir = `${tempDir}/existing`;
@@ -621,20 +620,9 @@ describe("package acceptance workflow", () => {
     writeFileSync(corruptZip, sourceArchive.subarray(0, sourceArchive.length - 10));
 
     const compare = (left: string, right: string) =>
-      spawnSync(
-        "bash",
-        [
-          "-c",
-          `set -euo pipefail\n${matcher}\nrelease_evidence_zip_trees_match "$1" "$2"`,
-          "bash",
-          left,
-          right,
-        ],
-        {
-          encoding: "utf8",
-          env: { ...process.env, RUNNER_TEMP: tempDir },
-        },
-      );
+      spawnSync("python3", ["scripts/compare-release-evidence-zip.py", left, right], {
+        encoding: "utf8",
+      });
 
     const result = compare(sourceZip, existingZip);
     const symlinkResult = compare(symlinkZip, symlinkZip);
@@ -648,6 +636,9 @@ describe("package acceptance workflow", () => {
     expect(orchestration).toContain("find dependency-evidence -type f -exec touch -t 198001010000");
     expect(orchestration).toContain(
       'attach_or_verify_release_asset "${asset_path}" "${asset_name}" zip-tree',
+    );
+    expect(orchestration).toContain(
+      '"${GITHUB_WORKSPACE}/.release-harness/scripts/compare-release-evidence-zip.py"',
     );
   });
 
