@@ -43,6 +43,7 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   isRetryableStartupUnavailable,
   isUnknownGatewayMethodError,
@@ -65,7 +66,6 @@ import { scheduleChatScroll } from "./scroll.ts";
 import {
   cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
-  type ChatHistoryPagination,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 import {

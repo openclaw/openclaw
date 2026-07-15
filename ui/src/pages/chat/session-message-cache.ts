@@ -10,6 +10,7 @@ import {
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { readTranscriptSequence } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
@@ -20,10 +21,6 @@ const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
 // History reconciliation replaces changed messages and retains unchanged
 // objects, so serialization weight can follow the same immutable identity.
 const cachedMessageWeights = new WeakMap<object, number>();
-
-export type ChatHistoryPagination =
-  | { hasMore: false; totalMessages?: number; completeSnapshot?: true }
-  | { hasMore: true; nextOffset: number; totalMessages?: number };
 
 export type ChatSessionSnapshot = {
   messages: unknown[];

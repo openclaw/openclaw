@@ -63,6 +63,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   applyChatAgentsList,
   clearChatHistory,
@@ -143,7 +144,6 @@ import { scheduleChatScroll } from "./scroll.ts";
 import {
   clearChatMessagesFromCache,
   readChatSessionSnapshot,
-  type ChatHistoryPagination,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";

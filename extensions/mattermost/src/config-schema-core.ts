@@ -80,7 +80,6 @@ const MattermostNetworkSchema = z
   .optional();
 
 const MattermostStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
-const MattermostStreamingCommandTextSchema = z.enum(["raw", "status"]);
 const MattermostStreamingProgressSchema = z
   .object({
     label: z.union([z.string(), z.literal(false)]).optional(),
@@ -88,13 +87,13 @@ const MattermostStreamingProgressSchema = z
     maxLines: z.number().int().positive().optional(),
     maxLineChars: z.number().int().positive().optional(),
     toolProgress: z.boolean().optional(),
-    commandText: MattermostStreamingCommandTextSchema.optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
 const MattermostStreamingPreviewSchema = z
   .object({
     toolProgress: z.boolean().optional(),
-    commandText: MattermostStreamingCommandTextSchema.optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
 const MattermostStreamingBlockSchema = z

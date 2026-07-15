@@ -66,10 +66,11 @@ describe("MattermostConfigSchema", () => {
           toolProgress: false,
           commandText: "status",
         },
+        preview: { commandText: "raw" },
       },
       accounts: {
         quiet: {
-          streaming: { mode: "off", preview: { commandText: "raw" } },
+          streaming: { mode: "off" },
         },
       },
     });
