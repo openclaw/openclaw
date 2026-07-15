@@ -755,6 +755,109 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
   });
 
+  it("does not recover a stale prior assistant after the current prompt times out", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const staleAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Stale answer from the prior attempt." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        lastAssistant: staleAssistant,
+        currentAttemptAssistant: undefined,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-stale-assistant",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.some((payload) => payload.text?.includes("timed out"))).toBe(true);
+    expect(result.payloads?.some((payload) => payload.text?.includes("Stale answer"))).toBe(false);
+    expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+  });
+
+  it("preserves tool media when prompt-timeout recovery replaces partial assistant text", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const partialText = "Partial answer before the timeout race.";
+    const finalText = "Complete answer after the timeout race.";
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: finalText }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [partialText],
+        timedOut: true,
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        toolMediaUrls: ["https://example.test/recovered-output.png"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-final-assistant-media",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: finalText,
+        mediaUrl: "https://example.test/recovered-output.png",
+        mediaUrls: ["https://example.test/recovered-output.png"],
+      },
+    ]);
+  });
+
+  it("replaces the latest partial assistant payload after prompt-timeout recovery", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const completedText = "Completed answer block before the final response.";
+    const partialText = "Partial final response before the timeout race.";
+    const finalText = "Complete final response after the timeout race.";
+    mockedBuildEmbeddedRunPayloads.mockReturnValueOnce([
+      { text: completedText },
+      { text: partialText },
+    ]);
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: finalText }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [completedText, partialText],
+        timedOut: true,
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-latest-partial",
+    });
+
+    expect(result.payloads).toEqual([{ text: completedText }, { text: finalText }]);
+  });
+
   it("records same-model rate-limit retries without a profile-rotation trace", async () => {
     const rateLimitMessage =
       "429 rate_limit_exceeded: requests per minute exceeded; Retry-After: 30";
