@@ -30,7 +30,7 @@ describe("loadCombinedSessionStoreForGateway", () => {
         },
         sessionId: "transcript-isolation-session",
         updatedAt: 10,
-      } satisfies InternalSessionEntry);
+      } as InternalSessionEntry);
 
       const { store } = loadCombinedSessionStoreForGateway({ session: { store: storePath } });
 
