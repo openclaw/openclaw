@@ -8,14 +8,27 @@ import { EventType } from "@ag-ui/core";
 // ---------------------------------------------------------------------------
 
 vi.mock("@ag-ui/encoder", () => ({
-  EventEncoder: vi.fn().mockImplementation(() => ({
-    getContentType: () => "text/event-stream",
-    encode: (event: unknown) => `data: ${JSON.stringify(event)}\n\n`,
-  })),
+  // Regular (constructable) function — production does `new EventEncoder(...)`,
+  // and this vitest version cannot `new` a mock whose implementation is an
+  // arrow function (arrows have no [[Construct]]).
+  EventEncoder: vi.fn().mockImplementation(function () {
+    return {
+      getContentType: () => "text/event-stream",
+      encode: (event: unknown) => `data: ${JSON.stringify(event)}\n\n`,
+    };
+  }),
 }));
 
 vi.mock("openclaw/plugin-sdk", () => ({
   emptyPluginConfigSchema: () => ({}),
+}));
+
+// The handler ensures a SQLite session entry exists before runEmbeddedAgent.
+// Mock the session store so unit tests don't touch a real store; getSessionEntry
+// returns undefined (cold turn -> upsert runs, then no-op).
+vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
+  getSessionEntry: vi.fn(() => undefined),
+  upsertSessionEntry: vi.fn(async () => {}),
 }));
 
 import { createAguiHttpHandler } from "./http-handler.js";
@@ -281,8 +294,8 @@ describe("AG-UI HTTP handler", () => {
       EventType.RUN_STARTED,
       EventType.RUN_FINISHED,
     ]);
-    expect(events[0].threadId).toBe("t-empty");
-    expect(events[0].runId).toBe("r-empty");
+    expect(events[0]!.threadId).toBe("t-empty");
+    expect(events[0]!.runId).toBe("r-empty");
   });
 
   it("accepts tool-only messages (tool result submission)", async () => {
@@ -1245,7 +1258,7 @@ describe("Device pairing", () => {
     await handler(req, res);
 
     expect(res.statusCode).toBe(403);
-    const body = JSON.parse(res._chunks[0]);
+    const body = JSON.parse(res._chunks[0]!);
     expect(body.error.type).toBe("pairing_pending");
     expect(body.error.pairing.pairingCode).toBe("TEST1234");
     expect(body.error.pairing.token).toBeDefined();
@@ -1304,7 +1317,7 @@ describe("Device pairing", () => {
     await handler(req, res);
 
     expect(res.statusCode).toBe(403);
-    const body = JSON.parse(res._chunks[0]);
+    const body = JSON.parse(res._chunks[0]!);
     expect(body.error.type).toBe("pairing_pending");
     expect(body.error.message).toContain("pending approval");
   });
@@ -1340,7 +1353,7 @@ describe("Device pairing", () => {
     await handler(req, res);
 
     expect(res.statusCode).toBe(429);
-    const body = JSON.parse(res._chunks[0]);
+    const body = JSON.parse(res._chunks[0]!);
     expect(body.error.type).toBe("rate_limit");
     expect(body.error.message).toContain("Too many pending pairing requests");
   });

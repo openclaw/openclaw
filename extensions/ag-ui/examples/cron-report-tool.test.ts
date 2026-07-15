@@ -29,9 +29,9 @@ describe("cronReportToolFactory", () => {
 
     const result = await tool.execute("tc-1", { runs });
     expect(result.content).toHaveLength(1);
-    expect(result.content[0].type).toBe("text");
+    expect(result.content[0]!.type).toBe("text");
 
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(result.content[0]!.text);
     expect(parsed.a2ui_operations).toHaveLength(3);
 
     const [create, update, data] = parsed.a2ui_operations;

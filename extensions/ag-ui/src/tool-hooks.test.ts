@@ -14,7 +14,7 @@ import {
 import {
   handleBeforeToolCall,
   handleToolResultPersist,
-} from "../index.js";
+} from "./hooks.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -103,22 +103,22 @@ describe("Tool event hooks", () => {
 
       // After before_tool_call: START + ARGS only (no END yet)
       expect(mock.events).toHaveLength(2);
-      expect(mock.events[0].type).toBe(EventType.TOOL_CALL_START);
-      expect(mock.events[0].toolCallName).toBe("search_db");
-      expect(mock.events[1].type).toBe(EventType.TOOL_CALL_ARGS);
-      expect(mock.events[1].delta).toBe(JSON.stringify({ query: "test" }));
+      expect(mock.events[0]!.type).toBe(EventType.TOOL_CALL_START);
+      expect(mock.events[0]!.toolCallName).toBe("search_db");
+      expect(mock.events[1]!.type).toBe(EventType.TOOL_CALL_ARGS);
+      expect(mock.events[1]!.delta).toBe(JSON.stringify({ query: "test" }));
 
-      const toolCallId = mock.events[0].toolCallId;
+      const toolCallId = mock.events[0]!.toolCallId;
 
       // After tool_result_persist: RESULT + END
       handleToolResultPersist({}, { sessionKey: SESSION_KEY });
 
       expect(mock.events).toHaveLength(4);
-      expect(mock.events[2].type).toBe(EventType.TOOL_CALL_RESULT);
-      expect(mock.events[2].toolCallId).toBe(toolCallId);
-      expect(mock.events[2].messageId).toBe(`msg-tool-${toolCallId}`);
-      expect(mock.events[3].type).toBe(EventType.TOOL_CALL_END);
-      expect(mock.events[3].toolCallId).toBe(toolCallId);
+      expect(mock.events[2]!.type).toBe(EventType.TOOL_CALL_RESULT);
+      expect(mock.events[2]!.toolCallId).toBe(toolCallId);
+      expect(mock.events[2]!.messageId).toBe(`msg-tool-${toolCallId}`);
+      expect(mock.events[3]!.type).toBe(EventType.TOOL_CALL_END);
+      expect(mock.events[3]!.toolCallId).toBe(toolCallId);
     });
 
     it("does not emit RESULT/END when no pending toolCallId exists", () => {
@@ -140,7 +140,7 @@ describe("Tool event hooks", () => {
         { sessionKey: SESSION_KEY },
       );
 
-      const toolCallId = mock.events[0].toolCallId;
+      const toolCallId = mock.events[0]!.toolCallId;
 
       const a2uiJson = JSON.stringify({
         a2ui_operations: [
@@ -156,16 +156,16 @@ describe("Tool event hooks", () => {
 
       // Events: START, ARGS, RESULT, ACTIVITY_SNAPSHOT, END
       expect(mock.events).toHaveLength(5);
-      expect(mock.events[2].type).toBe(EventType.TOOL_CALL_RESULT);
-      expect(mock.events[2].content).toBe(a2uiJson);
+      expect(mock.events[2]!.type).toBe(EventType.TOOL_CALL_RESULT);
+      expect(mock.events[2]!.content).toBe(a2uiJson);
 
-      expect(mock.events[3].type).toBe(EventType.ACTIVITY_SNAPSHOT);
-      expect(mock.events[3].activityType).toBe("a2ui-surface");
-      expect(mock.events[3].replace).toBe(true);
-      expect(mock.events[3].messageId).toContain("a2ui-surface-cron-report-");
-      expect(mock.events[3].messageId).toContain(toolCallId as string);
+      expect(mock.events[3]!.type).toBe(EventType.ACTIVITY_SNAPSHOT);
+      expect(mock.events[3]!.activityType).toBe("a2ui-surface");
+      expect(mock.events[3]!.replace).toBe(true);
+      expect(mock.events[3]!.messageId).toContain("a2ui-surface-cron-report-");
+      expect(mock.events[3]!.messageId).toContain(toolCallId as string);
 
-      expect(mock.events[4].type).toBe(EventType.TOOL_CALL_END);
+      expect(mock.events[4]!.type).toBe(EventType.TOOL_CALL_END);
     });
 
     it("does not emit ACTIVITY_SNAPSHOT for non-A2UI results", () => {
@@ -181,9 +181,9 @@ describe("Tool event hooks", () => {
 
       // Events: START, ARGS, RESULT, END (no ACTIVITY_SNAPSHOT)
       expect(mock.events).toHaveLength(4);
-      expect(mock.events[2].type).toBe(EventType.TOOL_CALL_RESULT);
-      expect(mock.events[2].content).toBe("plain result");
-      expect(mock.events[3].type).toBe(EventType.TOOL_CALL_END);
+      expect(mock.events[2]!.type).toBe(EventType.TOOL_CALL_RESULT);
+      expect(mock.events[2]!.content).toBe("plain result");
+      expect(mock.events[3]!.type).toBe(EventType.TOOL_CALL_END);
     });
 
     it("populates TOOL_CALL_RESULT content from event.message", () => {

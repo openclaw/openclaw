@@ -343,7 +343,7 @@ describeIntegration("ag-ui integration", () => {
 
   // -- Concurrent requests -----------------------------------------------
 
-  it("handles concurrent requests with different threadIds", async () => {
+  it("handles concurrent requests with different threadIds", { timeout: 60_000 }, async () => {
     const requests = Array.from({ length: 3 }, (_, i) =>
       postRun({
         threadId: `int-concurrent-${Date.now()}-${i}`,
@@ -360,4 +360,4 @@ describeIntegration("ag-ui integration", () => {
       expect(types).toContain(EventType.RUN_FINISHED);
     }
   });
-}, { timeout: 60_000 });
+});

@@ -8,7 +8,7 @@ describe("aguiChannelPlugin", () => {
 
   it("has meta with label and docsPath", () => {
     expect(aguiChannelPlugin.meta.label).toBe("AG-UI");
-    expect(aguiChannelPlugin.meta.docsPath).toBe("/channels/agui");
+    expect(aguiChannelPlugin.meta.docsPath).toBe("/channels/ag-ui");
   });
 
   it("supports direct chat type", () => {
@@ -20,7 +20,9 @@ describe("aguiChannelPlugin", () => {
   });
 
   it("lists default account", () => {
-    expect(aguiChannelPlugin.config.listAccountIds()).toEqual(["default"]);
+    expect(aguiChannelPlugin.config.listAccountIds({} as any)).toEqual([
+      "default",
+    ]);
   });
 
   it("resolves default account", () => {
