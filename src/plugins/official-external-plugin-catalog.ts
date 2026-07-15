@@ -726,7 +726,16 @@ function isHostedCatalogSignedFeedRollback(params: {
   if (params.candidate.sequence > params.current.sequence) {
     return false;
   }
-  return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);
+  const candidateAt = Date.parse(params.candidate.generatedAt);
+  const currentAt = Date.parse(params.current.generatedAt);
+  // If either date is invalid, treat the candidate as older (conservative rollback).
+  if (!Number.isFinite(candidateAt)) {
+    return true;
+  }
+  if (!Number.isFinite(currentAt)) {
+    return false;
+  }
+  return candidateAt < currentAt;
 }
 
 function assertSnapshotMatchesRequestValidators(params: {
@@ -1434,4 +1443,7 @@ export function getOfficialExternalPluginCatalogEntryForPackage(
     (entry) => normalizeOptionalString(entry.name) === normalized,
   );
 }
+
+const testing = { isHostedCatalogSignedFeedRollback };
+export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

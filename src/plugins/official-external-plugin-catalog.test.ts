@@ -23,6 +23,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
+import { __testing } from "./official-external-plugin-catalog.js";
 
 function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
   const entry = getOfficialExternalPluginCatalogEntry(id);
@@ -1204,3 +1205,65 @@ describe("official external plugin catalog", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("isHostedCatalogSignedFeedRollback", () => {
+  const { isHostedCatalogSignedFeedRollback } = __testing;
+
+  function feed(
+    overrides: Partial<OfficialExternalPluginCatalogFeed>,
+  ): OfficialExternalPluginCatalogFeed {
+    return {
+      schemaVersion: 1,
+      id: "test-feed",
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      sequence: 10,
+      entries: [],
+      ...overrides,
+    };
+  }
+
+  it("returns false when candidate is newer by sequence", () => {
+    expect(
+      isHostedCatalogSignedFeedRollback({
+        candidate: feed({ sequence: 11, generatedAt: "2026-01-01T00:00:00.000Z" }),
+        current: feed({ sequence: 10, generatedAt: "2026-01-02T00:00:00.000Z" }),
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when candidate is older by sequence", () => {
+    expect(
+      isHostedCatalogSignedFeedRollback({
+        candidate: feed({ sequence: 9, generatedAt: "2026-01-02T00:00:00.000Z" }),
+        current: feed({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
+      }),
+    ).toBe(true);
+  });
+
+  it("compares generatedAt when sequences are equal", () => {
+    expect(
+      isHostedCatalogSignedFeedRollback({
+        candidate: feed({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
+        current: feed({ sequence: 10, generatedAt: "2026-01-02T00:00:00.000Z" }),
+      }),
+    ).toBe(true);
+  });
+
+  it("treats candidate with invalid generatedAt as a rollback", () => {
+    expect(
+      isHostedCatalogSignedFeedRollback({
+        candidate: feed({ sequence: 10, generatedAt: "not-a-date" }),
+        current: feed({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat current with invalid generatedAt as a rollback", () => {
+    expect(
+      isHostedCatalogSignedFeedRollback({
+        candidate: feed({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
+        current: feed({ sequence: 10, generatedAt: "not-a-date" }),
+      }),
+    ).toBe(false);
+  });
+});
