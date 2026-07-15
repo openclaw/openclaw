@@ -206,13 +206,21 @@ function mergeRetainedSessionDepth(
   const existingTotal = existing.pagination.totalMessages;
   const incomingTotal = incoming.pagination.totalMessages;
   if (
+    existingBounds &&
+    incomingBounds &&
+    typeof existingTotal === "number" &&
+    incomingTotal === existingTotal &&
+    incomingBounds.newest < existingBounds.newest
+  ) {
+    return existing;
+  }
+  if (
     !existingBounds ||
     !incomingBounds ||
     typeof existingTotal !== "number" ||
     typeof incomingTotal !== "number" ||
     incomingTotal < existingTotal ||
     incomingBounds.oldest <= existingBounds.oldest ||
-    incomingBounds.newest < existingBounds.newest ||
     incomingBounds.oldest > existingBounds.newest + 1
   ) {
     return incoming;

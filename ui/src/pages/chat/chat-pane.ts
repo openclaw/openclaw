@@ -979,6 +979,7 @@ class ChatPane extends OpenClawLightDomElement {
     }
     if (
       typeof IntersectionObserver !== "function" ||
+      !this.state?.connected ||
       this.loadingOlder ||
       !this.hasOlderMessages()
     ) {
@@ -1089,7 +1090,7 @@ class ChatPane extends OpenClawLightDomElement {
     let upward =
       (event instanceof WheelEvent && event.deltaY < 0) ||
       (event instanceof KeyboardEvent && CHAT_HISTORY_UPWARD_KEYS.has(event.key));
-    if (event instanceof TouchEvent) {
+    if (typeof TouchEvent !== "undefined" && event instanceof TouchEvent) {
       const touchY = event.touches[0]?.clientY ?? null;
       if (event.type === "touchstart") {
         this.historyTouchY = touchY;

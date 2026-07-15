@@ -148,6 +148,42 @@ describe("session message cache", () => {
     expect(snapshot?.pagination).toEqual({ hasMore: false, totalMessages: 140 });
   });
 
+  it("keeps the newer same-depth snapshot when a stale pane saves later", () => {
+    const host = createHost();
+    const cache: ChatMessageCache = new Map();
+    const current = [1, 2, 3].map((seq) => ({
+      content: `current-${seq}`,
+      __openclaw: { seq },
+    }));
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: current,
+        pagination: { hasMore: false, totalMessages: 3 },
+        sessionId: "session-1",
+      },
+    );
+
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "home" },
+      {
+        messages: current.slice(0, 2),
+        pagination: { hasMore: true, nextOffset: 2, totalMessages: 3 },
+        sessionId: "session-1",
+      },
+    );
+
+    expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })).toEqual({
+      messages: current,
+      pagination: { hasMore: false, totalMessages: 3 },
+      sessionId: "session-1",
+    });
+  });
+
   it("does not retain history across backing session changes", () => {
     const host = createHost();
     const cache: ChatMessageCache = new Map();

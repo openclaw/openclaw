@@ -732,6 +732,7 @@ describe("chat pane catalog session lifecycle", () => {
     pane.hasOlderMessages = vi.fn(() => true);
     pane.loadOlderMessages = vi.fn(async () => undefined);
     vi.stubGlobal("IntersectionObserver", undefined);
+    vi.stubGlobal("TouchEvent", undefined);
     const thread = document.createElement("div");
     const event = new WheelEvent("wheel", { deltaY: -1 });
     Object.defineProperty(event, "currentTarget", { value: thread });
@@ -823,6 +824,27 @@ describe("chat pane native history pagination", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("does not consume bootstrap history while disconnected", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.connected = false;
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
+    const construct = vi.fn();
+    class FakeIntersectionObserver {
+      constructor() {
+        construct();
+      }
+      disconnect() {}
+      observe() {}
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+
+    pane.syncHistoryObserver();
+
+    expect(construct).not.toHaveBeenCalled();
+    expect(pane.historyAutoLoadBlocked).toBe(false);
   });
 
   it("stops non-scrollable bootstrap after one older page", async () => {
