@@ -8,6 +8,9 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 
+type StartSessionDeliveryRuntime =
+  typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
+
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
     stop: vi.fn(),
@@ -27,7 +30,9 @@ const hoisted = vi.hoisted(() => {
     stopModelPricingRefresh,
     stopSessionUpstreamMonitor,
     stopSessionDeliveryRuntime,
-    startSessionDeliveryRuntime: vi.fn(() => stopSessionDeliveryRuntime),
+    startSessionDeliveryRuntime: vi.fn<StartSessionDeliveryRuntime>(
+      () => stopSessionDeliveryRuntime,
+    ),
     schedulePendingSessionDeliveries: vi.fn(async () => undefined),
     startSessionUpstreamMonitor: vi.fn(() => ({ stop: stopSessionUpstreamMonitor })),
     startGatewayModelPricingRefresh: vi.fn(() => stopModelPricingRefresh),

@@ -13,6 +13,7 @@ import {
   SessionDeliveryDeferredError,
   SessionDeliveryRetryChargedError,
   SessionDeliverySafeRetryError,
+  type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
 import {
   drainPendingSessionDeliveries,
@@ -194,7 +195,7 @@ describe("session-delivery queue recovery", () => {
           lastAttemptAt: Date.now(),
           availableAt: Date.now() + 60_000,
           maxRetries: 1,
-        },
+        } as QueuedSessionDelivery,
         stateDir: tempDir,
       });
 
@@ -239,7 +240,7 @@ describe("session-delivery queue recovery", () => {
           retryCount: 1,
           lastAttemptAt: Date.now(),
           availableAt: Date.now() + 60_000,
-        },
+        } as QueuedSessionDelivery,
         stateDir: tempDir,
       });
       const deliver = vi.fn(async () => undefined);
