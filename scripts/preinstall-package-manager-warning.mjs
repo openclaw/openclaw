@@ -1,5 +1,7 @@
 // Enforces the package runtime contract, then warns for non-pnpm lifecycle installs.
+import { spawnSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
+import { posix, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const allowedLifecyclePackageManagers = new Set(["pnpm", "npm", "yarn", "bun"]);
@@ -8,7 +10,10 @@ const lifecyclePackageManagerLauncherAliases = new Map([
   ["yarn-berry", "yarn"],
 ]);
 const NODE_ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/iu;
-const NODE_VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)$/u;
+const NODE_VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+const NODE_RUNTIME_PROBE_SOURCE =
+  "process.stdout.write(JSON.stringify({version:process.versions.node??null,bunVersion:process.versions.bun??null,execPath:process.execPath??null}))";
+const PACKAGE_CLI_NODE_PROBE_TIMEOUT_MS = 10_000;
 export const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 
 function normalizeEnvValue(value) {
@@ -81,6 +86,101 @@ export function readPackageNodeEngine(
   }
 }
 
+function parseNodeRuntimeProbeOutput(value) {
+  try {
+    const parsed = JSON.parse(normalizeEnvValue(value));
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return {
+      version: normalizeEnvValue(parsed.version) || null,
+      bunVersion: normalizeEnvValue(parsed.bunVersion) || null,
+      execPath: normalizeEnvValue(parsed.execPath) || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isPackageLifecycleBinPath(entry, pathApi) {
+  const parts = pathApi
+    .normalize(entry)
+    .split(/[\\/]+/u)
+    .filter(Boolean)
+    .map((part) => part.toLowerCase());
+  return parts.some((part, index) => part === "node_modules" && parts[index + 1] === ".bin");
+}
+
+/** Finds the real Node that will launch the installed CLI after Bun removes its lifecycle shim. */
+export function probePackageCliNodeRuntime(options = {}) {
+  const {
+    env = process.env,
+    pathEnv = env.PATH ?? "",
+    platform = process.platform,
+    cwd = process.cwd(),
+    run = spawnSync,
+  } = options;
+  const pathApi = platform === "win32" ? win32 : posix;
+  const delimiter = platform === "win32" ? ";" : ":";
+  const executableName = platform === "win32" ? "node.exe" : "node";
+  const seen = new Set();
+
+  for (const entry of pathEnv.split(delimiter)) {
+    if (!entry || !pathApi.isAbsolute(entry)) {
+      // Relative PATH entries resolve against each future CLI invocation's cwd.
+      // No preinstall probe can safely approve the Node they may select later.
+      return null;
+    }
+    // Lifecycle managers prepend package-controlled node_modules/.bin entries.
+    // Never execute a dependency-provided `node` while validating the trusted runtime.
+    if (isPackageLifecycleBinPath(entry, pathApi)) {
+      continue;
+    }
+    const candidate = pathApi.join(entry, executableName);
+    if (seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+
+    const childEnv = { ...env };
+    for (const key of Object.keys(childEnv)) {
+      if (key.toUpperCase() === "NODE_OPTIONS") {
+        delete childEnv[key];
+      }
+    }
+    const result = run(candidate, ["-e", NODE_RUNTIME_PROBE_SOURCE], {
+      cwd,
+      encoding: "utf8",
+      env: childEnv,
+      timeout: PACKAGE_CLI_NODE_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    if (
+      result?.error?.code === "EACCES" ||
+      result?.error?.code === "ENOENT" ||
+      result?.error?.code === "ENOTDIR"
+    ) {
+      continue;
+    }
+    if (result?.status !== 0) {
+      return null;
+    }
+
+    const runtime = parseNodeRuntimeProbeOutput(result.stdout);
+    if (!runtime) {
+      return null;
+    }
+    // Bun prepends a temporary `node` while running package scripts. The
+    // installed CLI later resolves the next real Node from the user's PATH.
+    if (runtime.bunVersion) {
+      continue;
+    }
+    return runtime;
+  }
+
+  return null;
+}
+
 /** Rejects installation before an unsupported runtime can replace a working release. */
 export function enforceSupportedNodeRuntime(
   {
@@ -88,14 +188,14 @@ export function enforceSupportedNodeRuntime(
     bunVersion = process.versions.bun ?? null,
     engine = readPackageNodeEngine(),
     execPath = process.execPath,
+    probeNodeRuntime = probePackageCliNodeRuntime,
   } = {},
   reportError = console.error,
 ) {
-  // Bun itself remains supported for dependency installation and package scripts.
-  if (normalizeEnvValue(bunVersion)) {
-    return true;
-  }
-  if (nodeVersionSatisfiesPackageEngine(version, engine)) {
+  const detectedRuntime = normalizeEnvValue(bunVersion)
+    ? probeNodeRuntime()
+    : { version, execPath };
+  if (nodeVersionSatisfiesPackageEngine(detectedRuntime?.version ?? null, engine)) {
     return true;
   }
 
@@ -105,7 +205,7 @@ export function enforceSupportedNodeRuntime(
   reportError(
     [
       `[openclaw] error: ${requirement}`,
-      `[openclaw] detected Node ${version ?? "unknown"} (exec: ${execPath || "unknown"}).`,
+      `[openclaw] detected Node ${detectedRuntime?.version ?? "missing"} (exec: ${detectedRuntime?.execPath || "unknown"}).`,
       "[openclaw] install Node: https://nodejs.org/en/download",
       "[openclaw] upgrade Node, then retry the OpenClaw update.",
     ].join("\n"),
