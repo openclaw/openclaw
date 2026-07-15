@@ -42,7 +42,7 @@ function buildMatrixQaE2eeStoragePaths(params: {
   const actorKey = params.actorId.replace(/[^A-Za-z0-9_-]/g, "-").slice(-40);
   return {
     accountDir,
-    cryptoDatabasePrefix: `qa-matrix-${runKey || "run"}-${actorKey || "actor"}`,
+    cryptoDatabasePrefix: `qa-lab-matrix-${runKey || "run"}-${actorKey || "actor"}`,
     idbSnapshotPath: path.join(accountDir, "crypto-idb-snapshot.json"),
     recoveryKeyPath: path.join(accountDir, "recovery-key.json"),
     rootDir,
