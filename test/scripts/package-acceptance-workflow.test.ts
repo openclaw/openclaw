@@ -3963,6 +3963,10 @@ describe("package artifact reuse", () => {
     expect(clawHubNewWorkflow).toContain(
       "Download and verify immutable ClawHub bootstrap artifact",
     );
+    expect(clawHubNewWorkflow).toContain("WORKFLOW_HEAD_BRANCH: ${{ github.ref_name }}");
+    expect(clawHubNewWorkflow).toContain("WORKFLOW_REF: ${{ github.ref }}");
+    expect(clawHubNewWorkflow).toContain('--workflow-head-branch "${WORKFLOW_HEAD_BRANCH}"');
+    expect(clawHubNewWorkflow).toContain('--workflow-ref "${WORKFLOW_REF}"');
     expect(clawHubNewWorkflow).toContain("Rehash immutable ClawHub bootstrap artifacts");
     expect(clawHubNewWorkflow).toContain("Download parent ClawHub bootstrap approval");
     expect(clawHubNewWorkflow).toContain("RELEASE_APPROVAL_KIND: clawhub-bootstrap");

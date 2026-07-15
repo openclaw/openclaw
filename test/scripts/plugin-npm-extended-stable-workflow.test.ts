@@ -329,15 +329,11 @@ describe("plugin npm extended-stable workflow", () => {
     });
     expect(publish.env?.NODE_AUTH_TOKEN).toBeUndefined();
     expect(publish.env?.NPM_TOKEN).toBeUndefined();
-    const bootstrap = step(
-      parsed.jobs?.publish_plugins_npm,
-      "Publish approved Meta bootstrap tarball",
-    );
+    const bootstrap = step(parsed.jobs?.publish_plugins_npm, "Publish approved bootstrap tarball");
     expect(bootstrap.if).toContain("npm-token-bootstrap");
     expect(bootstrap.env?.NPM_TOKEN).toBe("${{ secrets.NPM_TOKEN }}");
-    expect(bootstrap.run).toContain(
-      '[[ "$PACKAGE_NAME" == "@openclaw/meta-provider" && "$PACKAGE_DIR" == "extensions/meta" ]]',
-    );
+    expect(bootstrap.env?.PACKAGE_NAME).toContain("publication_evidence.outputs.package_name");
+    expect(bootstrap.run).not.toContain("@openclaw/meta-provider");
     expect(bootstrap.run).toContain("NPM_CONFIG_USERCONFIG");
     expect(bootstrap.run).toContain("unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS");
     expect(bootstrap.run).toContain('npm publish "$TARBALL_PATH"');
