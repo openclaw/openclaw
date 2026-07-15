@@ -14,7 +14,9 @@ import type { InternalSessionEntry } from "../config/sessions/main-session-recov
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionEntry } from "../plugins/runtime/session-store-facade.js";
 
-const pluginAcpManagerFacades = new WeakMap<AcpSessionManager, AcpSessionManager>();
+type PluginAcpSessionManagerFacade = Pick<AcpSessionManager, keyof AcpSessionManager>;
+
+const pluginAcpManagerFacades = new WeakMap<AcpSessionManager, PluginAcpSessionManagerFacade>();
 
 function projectAcpSessionStoreEntry(
   storeEntry: AcpSessionStoreEntry | null,
@@ -44,9 +46,8 @@ export function getAcpSessionManager(): AcpSessionManager {
   const manager = getInternalAcpSessionManager();
   const existing = pluginAcpManagerFacades.get(manager);
   if (existing) {
-    return existing;
+    return existing as AcpSessionManager;
   }
-  const boundMethods = new Map<PropertyKey, unknown>();
   const resolveSession = ((params: Parameters<AcpSessionManager["resolveSession"]>[0]) => {
     const resolved = manager.resolveSession(params);
     if (resolved.kind !== "ready" || !resolved.entry) {
@@ -57,26 +58,24 @@ export function getAcpSessionManager(): AcpSessionManager {
       entry: projectPluginSessionEntry(resolved.entry as InternalSessionEntry),
     };
   }) as AcpSessionManager["resolveSession"];
-  const facade = new Proxy(manager, {
-    get(target, property) {
-      if (property === "resolveSession") {
-        return resolveSession;
-      }
-      const value = Reflect.get(target, property, target);
-      if (typeof value !== "function") {
-        return value;
-      }
-      const cached = boundMethods.get(property);
-      if (cached) {
-        return cached;
-      }
-      const bound = value.bind(target);
-      boundMethods.set(property, bound);
-      return bound;
-    },
-  });
+  const facade = {
+    resolveSession,
+    getObservabilitySnapshot: manager.getObservabilitySnapshot.bind(manager),
+    reconcilePendingSessionIdentities: manager.reconcilePendingSessionIdentities.bind(manager),
+    initializeSession: manager.initializeSession.bind(manager),
+    getSessionStatus: manager.getSessionStatus.bind(manager),
+    setSessionRuntimeMode: manager.setSessionRuntimeMode.bind(manager),
+    setSessionConfigOption: manager.setSessionConfigOption.bind(manager),
+    updateSessionRuntimeOptions: manager.updateSessionRuntimeOptions.bind(manager),
+    resetSessionRuntimeOptions: manager.resetSessionRuntimeOptions.bind(manager),
+    runTurn: manager.runTurn.bind(manager),
+    cancelSession: manager.cancelSession.bind(manager),
+    closeSession: manager.closeSession.bind(manager),
+  } satisfies PluginAcpSessionManagerFacade;
+  Object.setPrototypeOf(facade, null);
+  Object.freeze(facade);
   pluginAcpManagerFacades.set(manager, facade);
-  return facade;
+  return facade as AcpSessionManager;
 }
 
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
