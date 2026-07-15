@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render, type TemplateResult } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
@@ -22,6 +22,10 @@ import { createBackgroundTasksProps } from "./components/chat-background-tasks.t
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
