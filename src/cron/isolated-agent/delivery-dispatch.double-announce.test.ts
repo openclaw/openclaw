@@ -2769,5 +2769,25 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       ],
     });
   });
+
+  it("delivers substantive menu-style text that starts with a recipient", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloads = [
+      {
+        text: "Sent Alex:\n- Turkey burger\n- Tuna salad",
+      },
+    ];
+    params.summary = "Sent Alex:\n- Turkey burger\n- Tuna salad";
+    params.outputText = "Sent Alex:\n- Turkey burger\n- Tuna salad";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      payloads: [{ text: "Sent Alex:\n- Turkey burger\n- Tuna salad" }],
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,7 +1,6 @@
 // Isolated agent helper tests cover utility behavior used by cron agent runs.
 import { describe, expect, it } from "vitest";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { isLikelyCronAutoDeliverySelfNarrationText } from "./isolated-agent/delivery-dispatch.js";
 import { resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
 
 describe("resolveCronPayloadOutcome", () => {
@@ -462,28 +461,5 @@ describe("resolveCronPayloadOutcome", () => {
 
     expect(result.hasFatalErrorPayload).toBe(true);
     expect(result.embeddedRunError).toBe("Exec failed before SYSTEM_RUN_DENIED could be retried");
-  });
-});
-
-describe("isLikelyCronAutoDeliverySelfNarrationText", () => {
-  it("detects compact automatic delivery meta narration", () => {
-    expect(
-      isLikelyCronAutoDeliverySelfNarrationText(
-        "Sent Alex a short weekly planning menu and asked them to pick what they want so the grocery list can be built afterward.",
-      ),
-    ).toBe(true);
-    expect(isLikelyCronAutoDeliverySelfNarrationText("I sent you the lunch options.")).toBe(true);
-  });
-
-  it("does not flag substantive user-facing messages", () => {
-    expect(
-      isLikelyCronAutoDeliverySelfNarrationText(
-        "Here are your lunch options for next week. Reply with the ones you want.",
-      ),
-    ).toBe(false);
-    expect(
-      isLikelyCronAutoDeliverySelfNarrationText("Sent Alex:\n- Turkey burger\n- Tuna salad"),
-    ).toBe(false);
-    expect(isLikelyCronAutoDeliverySelfNarrationText("sent despite mirror failure")).toBe(false);
   });
 });

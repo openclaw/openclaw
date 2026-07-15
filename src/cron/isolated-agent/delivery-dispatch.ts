@@ -107,7 +107,7 @@ const CRON_AUTO_DELIVERY_SELF_NARRATION_RECIPIENT_RE =
   /^(?:[A-Z][a-z]+|you|him|her|them|the\s+user)\b/;
 
 /** Returns true for meta summaries that describe delivery instead of being the delivery text. */
-export function isLikelyCronAutoDeliverySelfNarrationText(text: string | undefined): boolean {
+function isLikelyCronAutoDeliverySelfNarrationText(text: string | undefined): boolean {
   const clean = normalizeOptionalString(text);
   if (!clean || clean.length > CRON_AUTO_DELIVERY_SELF_NARRATION_MAX_CHARS) {
     return false;
