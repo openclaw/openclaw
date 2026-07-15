@@ -68,7 +68,8 @@ import type {
   PluginInteractiveHandlerRegistration,
   PluginRegistrationMode,
 } from "./plugin-registration.types.js";
-import type { ProviderPlugin, UnifiedModelCatalogProviderPlugin } from "./provider-plugin.types.js";
+import type { UnifiedModelCatalogProviderPlugin } from "./provider-catalog.types.js";
+import type { ProviderPlugin } from "./provider-plugin.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {

@@ -142,4 +142,8 @@ export type * from "./plugin-command.types.js";
 export type * from "./plugin-config-schema.types.js";
 export type * from "./plugin-registration.types.js";
 export type * from "./provider-authentication.types.js";
+export type * from "./provider-catalog.types.js";
 export type * from "./provider-plugin.types.js";
+export type * from "./provider-replay.types.js";
+export type * from "./provider-runtime.types.js";
+export type * from "./provider-transport.types.js";
