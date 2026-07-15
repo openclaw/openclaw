@@ -7,5 +7,21 @@ export function isValidElevenLabsVoiceId(voiceId: string): boolean {
 
 export function normalizeElevenLabsBaseUrl(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
-  return trimmed?.replace(/\/+$/, "") || DEFAULT_ELEVENLABS_BASE_URL;
+  if (!trimmed) {
+    return DEFAULT_ELEVENLABS_BASE_URL;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error("Invalid ElevenLabs baseUrl: value is not a valid URL");
+  }
+  const { protocol } = parsed;
+  if (protocol !== "http:" && protocol !== "https:") {
+    throw new Error(
+      `Invalid ElevenLabs baseUrl: unsupported scheme "${protocol}" (expected http or https)`,
+    );
+  }
+  // Strip trailing slash for consistency, keep search/hash for custom endpoints.
+  return trimmed.replace(/\/+$/, "");
 }

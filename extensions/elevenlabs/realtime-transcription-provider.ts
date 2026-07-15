@@ -14,7 +14,7 @@ import {
   parseFiniteNumber as readFiniteNumber,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
-import { normalizeElevenLabsBaseUrl } from "./shared.js";
+import { DEFAULT_ELEVENLABS_BASE_URL } from "./shared.js";
 
 type ElevenLabsRealtimeTranscriptionProviderConfig = {
   apiKey?: string;
@@ -131,15 +131,36 @@ function normalizeProviderConfig(
 }
 
 function normalizeElevenLabsRealtimeBaseUrl(value?: string): string {
-  const url = new URL(normalizeElevenLabsBaseUrl(value));
-  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
-  return url.toString().replace(/\/+$/, "");
+  const resolved = value?.trim();
+  if (!resolved) {
+    return DEFAULT_ELEVENLABS_BASE_URL;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(resolved);
+  } catch {
+    throw new Error("Invalid ElevenLabs baseUrl: value is not a valid URL");
+  }
+  const { protocol } = parsed;
+  if (protocol !== "http:" && protocol !== "https:" && protocol !== "ws:" && protocol !== "wss:") {
+    throw new Error(
+      `Invalid ElevenLabs baseUrl: unsupported scheme "${protocol}" (expected http, https, ws, or wss)`,
+    );
+  }
+  // Strip trailing slash for consistency, keep search/hash for custom endpoints.
+  return resolved.replace(/\/+$/, "");
 }
 
 function toElevenLabsRealtimeWsUrl(config: ElevenLabsRealtimeTranscriptionSessionConfig): string {
-  const url = new URL(
-    `${normalizeElevenLabsRealtimeBaseUrl(config.baseUrl)}/v1/speech-to-text/realtime`,
-  );
+  const url = new URL(normalizeElevenLabsRealtimeBaseUrl(config.baseUrl));
+  // Self-hosted ElevenLabs may explicitly use ws:// without TLS. Translate only
+  // matching HTTP schemes so direct WebSocket endpoints keep their contract.
+  if (url.protocol === "http:") {
+    url.protocol = "ws:";
+  } else if (url.protocol === "https:") {
+    url.protocol = "wss:";
+  }
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/speech-to-text/realtime`;
   url.searchParams.set("model_id", config.modelId);
   url.searchParams.set("audio_format", config.audioFormat);
   url.searchParams.set("commit_strategy", config.commitStrategy);
@@ -277,7 +298,7 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
       return createElevenLabsRealtimeTranscriptionSession({
         ...req,
         apiKey,
-        baseUrl: normalizeElevenLabsBaseUrl(config.baseUrl),
+        baseUrl: normalizeElevenLabsRealtimeBaseUrl(config.baseUrl),
         modelId: config.modelId ?? ELEVENLABS_REALTIME_DEFAULT_MODEL,
         audioFormat: config.audioFormat ?? ELEVENLABS_REALTIME_DEFAULT_AUDIO_FORMAT,
         sampleRate: config.sampleRate ?? ELEVENLABS_REALTIME_DEFAULT_SAMPLE_RATE,
@@ -294,5 +315,6 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
 
 export const testing = {
   normalizeProviderConfig,
+  normalizeElevenLabsRealtimeBaseUrl,
   toElevenLabsRealtimeWsUrl,
 };
