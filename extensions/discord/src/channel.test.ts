@@ -319,6 +319,56 @@ describe("discordPlugin outbound", () => {
     });
   });
 
+  it("rejects unresolved Discord names after the shared directory lookup misses", async () => {
+    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValue([]);
+    const resolveTarget = discordPlugin.messaging?.targetResolver?.resolveTarget;
+    if (!resolveTarget) {
+      throw new Error(
+        "Expected discordPlugin.messaging.targetResolver.resolveTarget to be defined",
+      );
+    }
+
+    await expect(
+      resolveTarget({
+        cfg: createCfg(),
+        accountId: "default",
+        input: "channel:missing",
+        normalized: "channel:missing",
+        preferredKind: "channel",
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      resolveTarget({
+        cfg: createCfg(),
+        accountId: "default",
+        input: "user:missing",
+        normalized: "user:missing",
+        preferredKind: "user",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("does not reinterpret a bare channel name as a Discord username on fallback", async () => {
+    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([
+      { kind: "user", id: "user:999", name: "General" } as const,
+    ]);
+    const resolveTarget = discordPlugin.messaging?.targetResolver?.resolveTarget;
+    if (!resolveTarget) {
+      throw new Error(
+        "Expected discordPlugin.messaging.targetResolver.resolveTarget to be defined",
+      );
+    }
+
+    await expect(
+      resolveTarget({
+        cfg: createCfg(),
+        accountId: "default",
+        input: "general",
+        normalized: "channel:general",
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("preserves the normalized channel kind for bare current-channel ids", async () => {
     const resolveTarget = discordPlugin.messaging?.targetResolver?.resolveTarget;
     if (!resolveTarget) {
