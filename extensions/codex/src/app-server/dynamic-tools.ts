@@ -686,17 +686,13 @@ export function createCodexDynamicToolBridge(params: {
           toolName === "message" &&
           !resultIsError &&
           (rawResult.terminate === true || result.terminate === true);
-        const hasExplicitFinalControl = typeof executedArgs.final === "boolean";
-        // Omitted final on a confirmed source reply must degrade to legacy
-        // terminate-on-delivery (completed marker), never progress; otherwise
-        // stranded-reply recovery re-delivers a duplicate of that reply.
         const sourceReplyFinal =
           params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
           toolName === "message" &&
           (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply)
-            ? hasExplicitFinalControl
-              ? executedArgs.final === true
-              : true
+            ? typeof executedArgs.final !== "boolean"
+              ? true
+              : executedArgs.final
             : undefined;
         collectToolTelemetry({
           toolName,
@@ -721,7 +717,10 @@ export function createCodexDynamicToolBridge(params: {
             )) ||
             isToolResultYield(rawResult) ||
             isToolResultYield(result) ||
-            ((deliveredSourceReply || receiptConfirmedSourceReply) && executedArgs.final !== false),
+            (params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
+              toolName === "message" &&
+              executedArgs.final === true &&
+              (deliveredSourceReply || receiptConfirmedSourceReply)),
         );
         const asyncStarted =
           isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
