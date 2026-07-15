@@ -546,7 +546,7 @@ const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS = [
 
 const UNUSED_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = UNUSED_PUBLIC_PLUGIN_SDK_SUBPATHS.map(
   (subpath) => ({
-    code: `plugin-sdk-${subpath}-unused-subpath`,
+    code: `plugin-sdk-${subpath}-unused-subpath` as const,
     status: "deprecated" as const,
     owner: "sdk" as const,
     introduced: "2026-07-15",
@@ -566,7 +566,7 @@ const UNUSED_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = UNUSED_PUBLIC_PLUGIN_SDK_SUBPAT
 
 const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS.map(
   (subpath) => ({
-    code: `plugin-sdk-${subpath}-public-demotion`,
+    code: `plugin-sdk-${subpath}-public-demotion` as const,
     status: "deprecated" as const,
     owner: "sdk" as const,
     introduced: "2026-07-15",
