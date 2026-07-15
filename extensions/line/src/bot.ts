@@ -30,6 +30,7 @@ interface LineBot {
     callbacks?: LineWebhookDispatchCallbacks,
   ) => Promise<void>;
   account: ResolvedLineAccount;
+  webhookAcknowledgement: "after_event_acceptance";
 }
 
 export function createLineBot(opts: LineBotOptions): LineBot {
@@ -77,5 +78,6 @@ export function createLineBot(opts: LineBotOptions): LineBot {
   return {
     handleWebhook,
     account,
+    webhookAcknowledgement: "after_event_acceptance",
   };
 }

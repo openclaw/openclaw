@@ -446,11 +446,10 @@ describe("createLineNodeWebhookHandler", () => {
     });
     const handler = createLineNodeWebhookHandler({
       channelSecret: "secret",
-      bot,
+      bot: { ...bot, webhookAcknowledgement: "after_event_acceptance" },
       runtime,
       readBody,
       maxBodyBytes: 1024 * 1024,
-      acknowledgement: "after_event_acceptance",
     });
 
     const { res } = createRes();
@@ -511,11 +510,10 @@ describe("createLineNodeWebhookHandler", () => {
     const runtime = createRuntimeMock();
     const handler = createLineNodeWebhookHandler({
       channelSecret: SECRET,
-      bot,
+      bot: { ...bot, webhookAcknowledgement: "after_event_acceptance" },
       runtime,
       readBody: async () => rawBody,
       onRequestAuthenticated,
-      acknowledgement: "after_event_acceptance",
     });
 
     const { res } = createRes();
@@ -589,10 +587,9 @@ describe("createLineNodeWebhookHandler", () => {
     };
     const handler = createLineNodeWebhookHandler({
       channelSecret: SECRET,
-      bot,
+      bot: { ...bot, webhookAcknowledgement: "after_event_acceptance" },
       runtime: createRuntimeMock(),
       readBody: async () => rawBody,
-      acknowledgement: "after_event_acceptance",
     });
 
     const { res } = createRes();

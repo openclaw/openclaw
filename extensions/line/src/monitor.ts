@@ -326,7 +326,6 @@ export async function monitorLineProvider(
       channelSecret: target.channelSecret,
       bot: target.bot,
       runtime: target.runtime,
-      acknowledgement: "after_event_acceptance",
     });
   const { unregister: unregisterHttp } = registerWebhookTargetWithPluginRoute({
     targetsByPath: lineWebhookTargets,

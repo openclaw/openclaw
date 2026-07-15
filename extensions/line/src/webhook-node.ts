@@ -43,18 +43,18 @@ type LineNodeWebhookHandlerParams = {
   readBody?: ReadBodyFn;
   maxBodyBytes?: number;
   onRequestAuthenticated?: () => void;
-} & (
-  | {
-      /** Preserve the existing API contract by acknowledging after dispatch completes. */
-      acknowledgement?: "after_dispatch";
-      bot: { handleWebhook: LineWebhookDispatchHandler };
-    }
-  | {
-      /** Acknowledge once every event is durably adopted, before processing completes. */
-      acknowledgement: "after_event_acceptance";
-      bot: { handleWebhook: LineWebhookAcceptanceDispatchHandler };
-    }
-);
+  bot:
+    | {
+        /** Preserve the existing API contract by acknowledging after dispatch completes. */
+        webhookAcknowledgement?: "after_dispatch";
+        handleWebhook: LineWebhookDispatchHandler;
+      }
+    | {
+        /** Acknowledge once every event is durably adopted, before processing completes. */
+        webhookAcknowledgement: "after_event_acceptance";
+        handleWebhook: LineWebhookAcceptanceDispatchHandler;
+      };
+};
 
 export function createLineNodeWebhookHandler(
   params: LineNodeWebhookHandlerParams,
@@ -83,7 +83,7 @@ export function createLineNodeWebhookHandler(
       return;
     }
 
-    const waitsForEventAcceptance = params.acknowledgement === "after_event_acceptance";
+    const waitsForEventAcceptance = params.bot.webhookAcknowledgement === "after_event_acceptance";
     const responseDeadlineAt = waitsForEventAcceptance
       ? Date.now() + LINE_WEBHOOK_RESPONSE_DEADLINE_MS
       : undefined;
@@ -156,7 +156,7 @@ export function createLineNodeWebhookHandler(
       }
 
       logVerbose(`line: received ${body.events.length} webhook events`);
-      if (params.acknowledgement === "after_event_acceptance") {
+      if (params.bot.webhookAcknowledgement === "after_event_acceptance") {
         await waitForLineWebhookDispatchAcceptance({
           body,
           dispatch: params.bot.handleWebhook,
