@@ -52,7 +52,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete b81666ca6af25c86cc099983a4358cdc5ea9ced8..81975ec99ee62a28e22f6127a5a8f8aaa5772d0c history: 2425 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete b81666ca6af25c86cc099983a4358cdc5ea9ced8..c7bcc28371df3b94fa7b2d5dd7195c053cc7192a history: 2425 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 Shipped baseline exclusions: v2026.7.1 (80 PRs: #90145, #91685, #98021, #98620, #99756, #99960, #100648, #101685, #102087, #102289, #102344, #102444, #102600, #102610, #102732, #102780, #102858, #102873, #102896, #102948, #102980, #103070, #103095, #103132, #103157, #103163, #103222, #103244, #103281, #103467, #103549, #103556, #103581, #103596, #103608, #103635, #103650, #103654, #103664, #103680, #103681, #103685, #103695, #103718, #103725, #103760, #103775, #103861, #103906, #103916, #103923, #103946, #103952, #103965, #104000, #104162, #104186, #104230, #104433, #104441, #104491, #104504, #104529, #104555, #104706, #104778, #104848, #104892, #104905, #104956, #104957, #105055, #105401, #105405, #105444, #105488, #105493, #105500, #105518, #106065).
 
