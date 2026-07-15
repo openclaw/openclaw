@@ -1,17 +1,18 @@
 ---
-title: Durable Core Residual-Gap Test Plan
-summary: "Maintainer-grade proof matrix for proposed residual durable runtime invariants."
+title: Durable Core Residual-Gap Compatibility Check Plan
+summary: "Candidate compatibility checks for proposed residual durable runtime invariants."
 read_when:
-  - Planning durable runtime proof for the residual-gap proposal
+  - Planning durable runtime compatibility checks for the residual-gap proposal
   - Auditing durable runtime merge readiness
-  - Converting reviewer concerns into tests
+  - Converting reviewer concerns into candidate checks
 ---
 
-# Durable Core Residual-Gap Test Plan
+# Durable Core Residual-Gap Compatibility Check Plan
 
-This plan turns the durable-core residual-gap proposal into proof expectations
-for future durable runtime work. It is a review anchor only; it does not require
-runtime proof from docs-only changes that do not alter runtime behavior.
+This plan turns the durable-core residual-gap proposal into candidate
+compatibility checks for future durable runtime work. It is a review anchor only;
+it does not require runtime proof from docs-only changes that do not alter
+runtime behavior.
 
 ## Scope
 
@@ -23,12 +24,12 @@ replay, or external channel delivery.
 
 ## Root-Cause Coverage
 
-Future durable-core implementation work should prove that general runtime root
-causes are handled as durable facts, not as product-specific conventions. The
-architecture proposal defines the required coverage; implementation changes own
-executable proof.
+Future durable-core implementation work should show how general runtime root
+causes would be handled as durable facts, not as product-specific conventions.
+The architecture proposal defines the candidate coverage; implementation changes
+own executable proof.
 
-| Root cause                      | Required durable-core response                                                                                                                                    | Primary proof area              |
+| Root cause                      | Candidate durable-core response                                                                                                                                   | Primary proof area              |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
 | Coordinator silence             | Accepted deferred work creates an inspectable wake, report-route, progress, timeout, or owner-decision obligation instead of relying only on transcript intent    | Wake and owner attention        |
 | Restart and interruption loss   | Runtime facts distinguish complete, failed, cancelled, interrupted, stale, and decision-needed work after process exit, gateway restart, tool failure, or handoff | Storage and recovery            |
@@ -37,23 +38,23 @@ executable proof.
 | Delivery and attention unknowns | Internal handoff and any claimed external delivery record target, attempt, acknowledgement, failure, no-handler, and unresolved states with bounded inspection    | Delivery and inspection         |
 | Side-effect uncertainty         | Automatic replay is denied unless operation authority, input material, side-effect class, idempotency, dedupe/CAS or reconciliation, and retention gates all pass | Replay authority and safeguards |
 
-Reviewers should treat these as durable-runtime acceptance criteria. A change may
-implement a narrow slice, but it should still name which root-cause rows it
-covers and which rows remain deferred.
+Reviewers can use these as candidate durable-runtime compatibility checks. A
+future implementation change may cover a narrow slice, but it should still name
+which root-cause rows it covers and which rows remain deferred.
 
-## Proof Hygiene
+## Compatibility Check Hygiene
 
-- Run proof on the change being reviewed, with the same configuration that
-  enables the claimed durable behavior.
+- Run compatibility checks on the change being reviewed, with the same
+  configuration that enables the claimed durable behavior.
 - Record the command, relevant configuration, data directory setup, and output or
   log path.
-- Re-run affected proof after rebases or changes to touched runtime surfaces.
+- Re-run affected checks after rebases or changes to touched runtime surfaces.
 - Docs map and generated artifacts must be regenerated with repo scripts, not
   copied from another worktree.
 
-## Docs-Only Gate
+## Docs-Only Validation Gate
 
-| Check         | Required proof                                                              |
+| Check         | Candidate validation                                                        |
 | ------------- | --------------------------------------------------------------------------- |
 | Scope hygiene | `git diff --name-status <base>..<head>` shows docs/spec/test-plan only      |
 | Docs map      | `node scripts/generate-docs-map.mjs --check` or equivalent docs-map check   |
@@ -64,9 +65,9 @@ covers and which rows remain deferred.
 Docs-only changes should state when live proof is not applicable because they
 claim no runtime delivery behavior.
 
-## Proof Matrix
+## Candidate Compatibility Matrix
 
-| Area                          | Required proof                                                                                                                                                          | Proof surface                     |
+| Area                          | Candidate compatibility check                                                                                                                                           | Proof surface                     |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | Disabled-path no mutation     | CLI and Gateway durable inspection reject before creating SQLite, WAL, SHM, migration, or durable tables                                                                | Durable config and inspection     |
 | Runtime opt-in                | Durable recording and inspection are inert by default and enabled only by explicit durable runtime config                                                               | Runtime config                    |
@@ -86,7 +87,7 @@ claim no runtime delivery behavior.
 | Internal session handoff      | Resolved session targets move through internal delivery handoff with durable evidence and no external transport claim                                                   | Internal delivery                 |
 | External delivery             | Only claimed if the implementation includes external transport delivery and direct proof                                                                                | External transport implementation |
 
-## Required Scenarios
+## Candidate Scenarios
 
 ### Disabled Paths Never Mutate
 
@@ -137,8 +138,8 @@ claim no runtime delivery behavior.
 
 ## Live Proof Policy
 
-Runtime changes must include local or remote tests for their touched surface.
-Live OpenClaw E proof is required only when the change claims runtime, session,
+Runtime changes should include local or remote tests for their touched surface.
+Live OpenClaw E proof is relevant only when the change claims runtime, session,
 wake, worker, or delivery behavior that local tests cannot prove with
 maintainer-grade confidence. Docs-only changes can state that live proof is not
 applicable when they claim no runtime behavior.

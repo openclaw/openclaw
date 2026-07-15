@@ -188,4 +188,4 @@ handoff unless implementation work proves it directly.
 
 ## Related
 
-- [Durable Core Residual-Gap Test Plan](/specs/durable-core-proposal-test-plan)
+- [Durable Core Residual-Gap Compatibility Check Plan](/specs/durable-core-proposal-test-plan)

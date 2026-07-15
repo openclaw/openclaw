@@ -8787,13 +8787,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /specs/durable-core-proposal-test-plan
 - Headings:
-  - H1: Durable Core Residual-Gap Test Plan
+  - H1: Durable Core Residual-Gap Compatibility Check Plan
   - H2: Scope
   - H2: Root-Cause Coverage
-  - H2: Proof Hygiene
-  - H2: Docs-Only Gate
-  - H2: Proof Matrix
-  - H2: Required Scenarios
+  - H2: Compatibility Check Hygiene
+  - H2: Docs-Only Validation Gate
+  - H2: Candidate Compatibility Matrix
+  - H2: Candidate Scenarios
   - H3: Disabled Paths Never Mutate
   - H3: Runtime Opt-In Without Worker Mutation
   - H3: Wake And Owner Attention
