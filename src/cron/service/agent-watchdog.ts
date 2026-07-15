@@ -16,6 +16,16 @@ const CRON_TIMEOUT_CLEANUP_GUARD_MS = 20_000;
 export const CRON_AGENT_SETUP_WATCHDOG_MS = 60_000;
 const CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS = 60_000;
 const CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS = 1_000;
+/**
+ * Absolute upper bound on total elapsed time between runner start and
+ * any phase transition.  Any path that would allow a re-arming timer to
+ * extend the watchdog past this point is cut off to prevent infinite
+ * stalls (Scheme C multi-layer safety net).
+ *
+ * Default: 5 minutes — generous enough to cover slow model resolution
+ * chains while still guaranteeing progress or timeout.
+ */
+const CRON_AGENT_MAX_ELAPSED_MS = 300_000;
 
 type CronAgentWatchdogState =
   | "waiting_for_runner"
@@ -69,6 +79,8 @@ export function createCronAgentWatchdog(params: {
   let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
   let observedLaneWait = false;
+  /** Timestamp (ms) when the runner was first started; used by the C4 elapsed guard. */
+  let executionStartedAt: number | undefined;
 
   const setTimedOut = (reason: string) => {
     if (state === "timed_out" || state === "disposed") {
@@ -113,11 +125,24 @@ export function createCronAgentWatchdog(params: {
     if (!info) {
       return;
     }
+    // C4: absolute elapsed-time safety net — if the runner has been alive
+    // beyond the max allowed window, force a timeout immediately.  This
+    // prevents any path from rewinding the watchdog indefinitely.
+    if (executionStartedAt != null && Date.now() - executionStartedAt > CRON_AGENT_MAX_ELAPSED_MS) {
+      setTimedOut(
+        `Cron agent execution exceeded absolute deadline of ${CRON_AGENT_MAX_ELAPSED_MS}ms`,
+      );
+      return;
+    }
     const previousPhase = activeExecution?.phase;
     activeExecution = { ...activeExecution, ...info };
     const stage = info.phase ? CRON_AGENT_PHASE_WATCHDOG_STAGE[info.phase] : undefined;
     // A fallback attempt can return to setup-like phases after execution began;
     // re-arm pre-execution timing so the fallback path cannot stall silently.
+    //
+    // C1: The re-entry is now guarded by an elapsed-time check so that a
+    // flapping agent cannot repeatedly restart the pre-execution timer past
+    // the absolute deadline (checked above).
     if (
       state === "executing" &&
       previousPhase === "before_agent_reply" &&
@@ -126,6 +151,10 @@ export function createCronAgentWatchdog(params: {
       // Model fallback can move from an execution phase back into setup-like
       // phases; restart the pre-execution watchdog so fallback stalls are seen.
       state = "waiting_for_execution";
+      // C2: startPreExecutionTimeout has its own state guard
+      // (state === "waiting_for_execution"), so it will only arm when
+      // the state was just set above.  The C4 guard above ensures this
+      // re-arm can never extend past the absolute deadline.
       startPreExecutionTimeout();
       return;
     }
@@ -160,6 +189,10 @@ export function createCronAgentWatchdog(params: {
     noteRunnerStarted: (info?: CronAgentExecutionStarted) => {
       if (state === "disposed" || state === "timed_out") {
         return;
+      }
+      // C4: record the start timestamp for elapsed-time guard.
+      if (executionStartedAt == null) {
+        executionStartedAt = Date.now();
       }
       clearSetupTimeout();
       startTimeout();
