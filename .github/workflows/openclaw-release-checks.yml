@@ -1468,104 +1468,24 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  qa_live_matrix_release_checks:
-    name: Run QA Lab live Matrix lane
+  qa_live_release_checks:
+    name: Run QA Live Matrix profile
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
-    continue-on-error: true
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 60
     permissions:
       contents: read
       pull-requests: read
-    environment: qa-live-shared
-    env:
-      OPENCLAW_BUILD_PRIVATE_QA: "1"
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: false
-          ref: ${{ needs.resolve_target.outputs.revision }}
-          fetch-depth: 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-
-      - name: Build private QA runtime
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
-
-      - name: Run Matrix live lane
-        id: run_lane
-        shell: bash
-        env:
-          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS: "90000"
-          OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS: "3000"
-        run: |
-          set -euo pipefail
-
-          output_dir=".artifacts/qa-e2e/matrix-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
-
-          matrix_args=(
-            --repo-root . \
-            --provider-mode mock-openai \
-            --model mock-openai/gpt-5.6-luna \
-            --alt-model mock-openai/gpt-5.6-luna-alt \
-            --profile fast \
-            --fast
-          )
-          if pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"; then
-            matrix_args+=(--fail-fast)
-          fi
-
-          for attempt in 1 2; do
-            attempt_output_dir="${output_dir}/attempt-${attempt}"
-            if pnpm openclaw qa matrix --output-dir "${attempt_output_dir}" "${matrix_args[@]}"; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "2" ]]; then
-              exit 1
-            fi
-            echo "Matrix live lane failed on attempt ${attempt}; retrying once..." >&2
-            sleep 10
-          done
-
-      - name: Upload Matrix QA artifacts
-        id: upload_matrix_qa_artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: release-qa-live-matrix-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/qa-e2e/
-          retention-days: 14
-          if-no-files-found: error
-
-      - name: Record advisory status
-        if: always()
-        shell: bash
-        env:
-          RELEASE_CHECK_JOB: qa_live_matrix_release_checks
-          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
-          JOB_STATUS: ${{ job.status }}
-          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_matrix_qa_artifacts.outcome }}
-        run: *record_release_check_advisory_status
-
-      - name: Upload advisory status
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: release-check-status-qa-live-matrix-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/release-check-status/qa_live_matrix_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
-          retention-days: 14
-          if-no-files-found: error
+    uses: ./.github/workflows/qa-live-transports-convex.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.revision }}
+      expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      matrix_profile: release
+      matrix_provider_mode: mock-openai
+      matrix_primary_model: mock-openai/gpt-5.6-luna
+      matrix_alternate_model: mock-openai/gpt-5.6-luna-alt
+      matrix_attempts: 2
+      run_matrix: true
+      matrix_advisory: true
 
   # The dispatched child owns Telegram evidence/status artifacts; this blocking job
   # carries its exact conclusion into the parent summary without copying secrets or artifacts.
@@ -2022,7 +1942,7 @@ jobs:
       - qa_lab_parity_report_release_checks
       - qa_lab_runtime_parity_release_checks
       - runtime_tool_coverage_release_checks
-      - qa_live_matrix_release_checks
+      - qa_live_release_checks
       - qa_live_telegram_release_checks
       - qa_live_discord_release_checks
       - qa_live_whatsapp_release_checks
@@ -2057,7 +1977,7 @@ jobs:
           QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_parity_report_release_checks.result }}
           QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_runtime_parity_release_checks.result }}
           RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: ${{ needs.runtime_tool_coverage_release_checks.result }}
-          QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_matrix_release_checks.result }}
+          QA_LIVE_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_release_checks.result == 'skipped' && 'skipped' || needs.qa_live_release_checks.outputs.matrix_status || 'failure' }}
           QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_telegram_release_checks.result }}
           QA_LIVE_TELEGRAM_SELECTED: ${{ contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true' }}
           QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_discord_release_checks.result }}
@@ -2083,7 +2003,7 @@ jobs:
             "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
             "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
             "runtime_tool_coverage_release_checks=${RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT}"
-            "qa_live_matrix_release_checks=${QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT}"
+            "qa_live_release_checks=${QA_LIVE_RELEASE_CHECKS_RESULT}"
             "qa_live_telegram_release_checks=${QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT}"
             "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
             "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
@@ -2093,7 +2013,6 @@ jobs:
             "qa_lab_parity_lane_release_checks=${QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT}"
             "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
             "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
-            "qa_live_matrix_release_checks=${QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT}"
             "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
             "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
             "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
@@ -2247,7 +2166,7 @@ jobs:
           }
           advisory_status_override_allowed() {
             case "$1" in
-              qa_lab_parity_lane_release_checks|qa_lab_parity_report_release_checks|qa_lab_runtime_parity_release_checks|qa_live_matrix_release_checks|qa_live_discord_release_checks|qa_live_whatsapp_release_checks|qa_live_slack_release_checks)
+              qa_lab_parity_lane_release_checks|qa_lab_parity_report_release_checks|qa_lab_runtime_parity_release_checks|qa_live_discord_release_checks|qa_live_whatsapp_release_checks|qa_live_slack_release_checks)
                 return 0
                 ;;
               *)

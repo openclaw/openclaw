@@ -2,8 +2,6 @@
 // New entries fail CI. After deleting dead code, run `pnpm deadcode:exports:update`.
 // Do not add entries to avoid fixing new findings.
 export const KNIP_UNUSED_EXPORT_BASELINE = [
-  "src/acp/control-plane/active-turns.ts: resetAcpActiveTurnsForTests",
-  "src/acp/runtime/registry.ts: AcpRuntimeBackend",
   "src/agents/agent-hooks/compaction-safeguard.ts: testing",
   "src/agents/agent-tools.before-tool-call.ts: BeforeToolCallBlockedError",
   "src/agents/agent-tools.before-tool-call.ts: testing",
@@ -126,6 +124,7 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/agents/tools/image-tool.ts: resolveImageModelConfigForTool",
   "src/agents/tools/image-tool.ts: testing",
   "src/agents/tools/model-config.helpers.ts: hasDirectProviderApiKeyAuthForTool",
+  "src/agents/tools/openclaw-delegate-tool.ts: createOpenClawDelegateTool",
   "src/agents/tools/sessions-resolution.ts: testing",
   "src/agents/tools/sessions-send-tool.a2a.ts: testing",
   "src/agents/tools/sessions-spawn-visible-admission.ts: VisibleChildReservation",
@@ -190,10 +189,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/commitments/runtime.ts: resetCommitmentExtractionRuntimeForTests",
   "src/commitments/store.ts: loadCommitmentStore",
   "src/commitments/store.ts: saveCommitmentStore",
-  "src/context-engine/registry.ts: clearContextEngineRuntimeQuarantine",
-  "src/context-engine/registry.ts: ContextEngineRegistrationResult",
-  "src/context-engine/registry.ts: getContextEngineFactory",
-  "src/context-engine/registry.ts: listContextEngineIds",
   "src/cron/isolated-agent/delivery-dispatch.ts: getCompletedDirectCronDeliveriesCountForTests",
   "src/cron/isolated-agent/delivery-dispatch.ts: resetCompletedDirectCronDeliveriesForTests",
   "src/cron/schedule.ts: clearCronScheduleCacheForTest",
@@ -213,7 +208,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/entry.compile-cache.ts: shouldEnableOpenClawCompileCache",
   "src/flows/doctor-health-contributions.ts: createDoctorHealthContribution",
   "src/flows/doctor-health-contributions.ts: resolveDoctorHealthContributions",
-  "src/hooks/gmail-setup-utils.ts: resetGmailSetupUtilsCachesForTest",
   "src/logging/diagnostic-run-activity.ts: markDiagnosticModelStartedForTest",
   "src/logging/diagnostic-run-activity.ts: markDiagnosticRunProgressForTest",
   "src/logging/diagnostic-run-activity.ts: markDiagnosticToolStartedForTest",
@@ -224,8 +218,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/plugin-state/plugin-state-store.sqlite.ts: seedPluginStateDatabaseEntriesForTests",
   "src/plugin-state/plugin-state-store.sqlite.ts: setMaxPluginStateEntriesPerPluginForTests",
   "src/plugin-state/plugin-state-store.ts: clearPluginStateStoreForTests",
-  "src/proxy-capture/proxy-server.ts: assertDebugProxyDirectUpstreamAllowed",
-  "src/proxy-capture/proxy-server.ts: parseConnectTarget",
   "src/sessions/session-key-utils.ts: isCasePreservingPeer",
   "src/sessions/session-lifecycle-admission.ts: runExclusiveSessionLifecycle",
   "src/sessions/session-state-events.ts: pruneSessionStateEvents",
@@ -238,6 +230,8 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/skills/lifecycle/upload-store.ts: createSkillUploadStore",
   "src/skills/runtime/refresh.ts: resetSkillsRefreshForTest",
   "src/skills/runtime/remote-skills.ts: resetRemoteNodeSkillsForTests",
+  "src/state/openclaw-state-db-operator-approval-migration.ts: hasCanonicalOperatorApprovalKinds",
+  "src/state/openclaw-state-db-operator-approval-migration.ts: repairOperatorApprovalKinds (operatorApprovalMigration)",
   "src/system-agent/agent-turn.ts: runSystemAgentTurnWithDeps",
   "src/tasks/detached-task-runtime.ts: resetDetachedTaskLifecycleRuntimeForTests",
   "src/tasks/detached-task-runtime.ts: setDetachedTaskLifecycleRuntime",
@@ -251,6 +245,9 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/tasks/task-registry.ts: resetTaskRegistryForTests",
   "src/tasks/task-registry.ts: setTaskRegistryControlRuntimeForTests",
   "src/tasks/task-registry.ts: setTaskRegistryDeliveryRuntimeForTests",
+  "ui/src/app/exec-approval.ts: parseExecApprovalRequested",
+  "ui/src/app/exec-approval.ts: parsePluginApprovalRequested",
+  "ui/src/app/exec-approval.ts: parseSystemAgentApprovalRequested",
 ];
 
 // Platform-variant findings. Allowed when present; never required.

@@ -31,6 +31,7 @@ type QaRuntimeGatewayClient = {
 
 export type QaSuiteRuntimeEnv = {
   gateway: QaRuntimeGatewayClient;
+  outputDir: string;
   transport: QaTransportAdapter;
   repoRoot: string;
   providerMode: QaProviderMode;

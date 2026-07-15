@@ -298,10 +298,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## OpenClaw Control");
-    expect(prompt).toContain("prefer `gateway`");
-    expect(prompt).toContain("CLI lifecycle only explicit");
-    expect(prompt).toContain("openclaw gateway status|restart|start|stop");
-    expect(prompt).toContain("`restart`, not stop+start");
+    expect(prompt).toContain("Config read: `gateway`");
+    expect(prompt).not.toContain("openclaw gateway status|restart|start|stop");
     expect(prompt).toContain("Do not invent commands");
   });
 
@@ -733,20 +731,43 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 
-  it("adds ClaudeBot self-update guidance when gateway tool is available", () => {
+  it("keeps gateway guidance read-only", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["gateway", "exec"],
     });
 
-    expect(prompt).toContain("## OpenClaw Self-Update");
-    expect(prompt).toContain("config.schema.lookup");
-    expect(prompt).toContain("config.apply");
-    expect(prompt).toContain("config.patch");
-    expect(prompt).toContain("Hot-reload when possible");
-    expect(prompt).toContain("update.run");
+    expect(prompt).toContain(
+      "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
+    );
+    expect(prompt).not.toContain("config.patch");
+    expect(prompt).not.toContain("config.apply");
+    expect(prompt).not.toContain("`config.schema.lookup|get|patch|apply`, `restart`");
+    expect(prompt).not.toContain("update.run");
     expect(prompt).not.toContain("Use config.schema to");
     expect(prompt).not.toContain("config.schema, config.apply");
+  });
+
+  it("delegates system changes when openclaw tool is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["openclaw", "sessions_spawn"],
+    });
+
+    expect(prompt).toContain(
+      "Config, channels, plugins, new agents, model/provider, updates: ask `openclaw`.",
+    );
+    expect(prompt).toContain("Never write own config; OpenClaw is system expert.");
+    expect(prompt).toContain("`visible:true` only web/app user or asked.");
+  });
+
+  it("omits openclaw delegation guidance without the tool", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["gateway"],
+    });
+
+    expect(prompt).not.toContain("ask `openclaw`");
   });
 
   it("includes skills guidance when skills prompt is present", () => {

@@ -83,7 +83,7 @@ describe("qa suite", () => {
     expect(startLab).not.toHaveBeenCalled();
   });
 
-  it("keeps metadata-only live channel drivers on the canonical QA transport", async () => {
+  it("keeps metadata-only live channel drivers on the shared QA transport", async () => {
     const create = vi.fn();
 
     await expect(
@@ -97,6 +97,44 @@ describe("qa suite", () => {
     ).resolves.toMatchObject({ adapter: { id: "qa-channel" } });
 
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("records live transport preparation as the first shared flow step", async () => {
+    const prepareFlow = vi.fn(async () => {
+      throw new Error("setup failed");
+    });
+    const scenario = makeQaSuiteTestScenario("matrix-preparation-failure", {
+      channel: "matrix",
+      config: { expected: "value" },
+    });
+    if (scenario.execution.kind !== "flow") {
+      throw new Error("expected flow scenario");
+    }
+    scenario.execution.timeoutMs = 45_000;
+    const env = {
+      gateway: { baseUrl: "http://127.0.0.1:18789" },
+      outputDir: "/tmp/qa-output",
+      transport: { label: "Matrix live", prepareFlow },
+    } as unknown as Parameters<typeof qaSuiteProgressTesting.createScenarioStepRunner>[0];
+    const run = qaSuiteProgressTesting.createScenarioStepRunner(env, scenario, {});
+    const scenarioStep = vi.fn(async () => "not reached");
+
+    await expect(
+      run("Matrix preparation", [{ name: "Scenario", run: scenarioStep }]),
+    ).resolves.toEqual({
+      name: "Matrix preparation",
+      status: "fail",
+      steps: [{ name: "Prepare Matrix live", status: "fail", details: "setup failed" }],
+      details: "setup failed",
+    });
+
+    expect(prepareFlow).toHaveBeenCalledWith({
+      config: { expected: "value" },
+      gateway: env.gateway,
+      outputDir: "/tmp/qa-output",
+      timeoutMs: 45_000,
+    });
+    expect(scenarioStep).not.toHaveBeenCalled();
   });
 
   it("uses a contributed live adapter when its channel is selected", async () => {

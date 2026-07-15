@@ -451,11 +451,13 @@ describe("runGatewayUpdate", () => {
       : expected(normalizedArgv);
   };
 
-  const npmGlobalInstallCommand = (spec: string, extraArgs: string[] = []) =>
-    [
+  const npmGlobalInstallCommand = (spec: string, extraArgs: string[] = []) => {
+    const allowScriptsIdentity = spec.toLowerCase().startsWith("openclaw@") ? "openclaw" : spec;
+    return [
       "npm",
       "i",
       "-g",
+      `--allow-scripts=${allowScriptsIdentity}`,
       spec,
       ...extraArgs,
       "--no-fund",
@@ -463,6 +465,7 @@ describe("runGatewayUpdate", () => {
       "--loglevel=error",
       npmFreshnessArg,
     ].join(" ");
+  };
 
   function createGlobalNpmUpdateRunner(params: {
     pkgRoot: string;
@@ -2708,8 +2711,9 @@ describe("runGatewayUpdate", () => {
         argv[0] === "npm" &&
         argv[1] === "i" &&
         argv[2] === "-g" &&
-        path.basename(argv[3] ?? "") === "openclaw-2.0.0.tgz" &&
-        argv.slice(4).join(" ") === "--no-fund --no-audit --loglevel=error --min-release-age=0",
+        argv[3] === "--allow-scripts=./openclaw-2.0.0.tgz" &&
+        path.basename(argv[4] ?? "") === "openclaw-2.0.0.tgz" &&
+        argv.slice(5).join(" ") === "--no-fund --no-audit --loglevel=error --min-release-age=0",
       tag: "main",
     });
 
@@ -3059,7 +3063,7 @@ describe("runGatewayUpdate", () => {
     expect(result.mode).toBe("pnpm");
     expect(result.after?.version).toBe("2.0.0");
     const npmPrefixedGlobalInstallCalls = calls.filter((call) =>
-      call.startsWith("npm i -g --prefix "),
+      call.startsWith("npm i -g --allow-scripts=openclaw --prefix "),
     );
     const pnpmAddGlobalCalls = calls.filter((call) => call.startsWith("pnpm add -g"));
     expect(npmPrefixedGlobalInstallCalls.length).toBeGreaterThan(0);
