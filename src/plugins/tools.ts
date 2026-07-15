@@ -1048,18 +1048,30 @@ function resolvePluginToolRegistry(params: {
     return composeSelectedRegistries();
   }
 
-  const activeRegistry = getLoadedRuntimePluginRegistry({
-    env: params.loadOptions.env,
-    workspaceDir: params.loadOptions.workspaceDir,
-    requiredPluginIds,
-    surface: "active",
-  });
+  let activeRegistry: PluginRegistry | undefined;
+  if (requiredPluginIds === undefined) {
+    activeRegistry = getLoadedRuntimePluginRegistry({
+      env: params.loadOptions.env,
+      workspaceDir: params.loadOptions.workspaceDir,
+      surface: "active",
+    });
+  } else {
+    for (const pluginId of requiredPluginIds) {
+      activeRegistry = getLoadedRuntimePluginRegistry({
+        env: params.loadOptions.env,
+        workspaceDir: params.loadOptions.workspaceDir,
+        requiredPluginIds: [pluginId],
+        surface: "active",
+      });
+      if (activeRegistry) {
+        break;
+      }
+    }
+  }
   if (requestedPluginIds === undefined && registryHasScopedPluginTools(activeRegistry, undefined)) {
     return activeRegistry;
   }
-  if (registryHasScopedPluginTools(activeRegistry, requiredPluginIds)) {
-    addRegistry(activeRegistry);
-  }
+  addRegistry(activeRegistry);
   requiredPluginIds = missingPluginIds();
   if (requiredPluginIds?.length === 0) {
     return composeSelectedRegistries();
@@ -1071,16 +1083,14 @@ function resolvePluginToolRegistry(params: {
   ) {
     return params.retainedRegistry;
   }
-  if (registryHasScopedPluginTools(params.retainedRegistry, requiredPluginIds)) {
-    addRegistry(params.retainedRegistry);
-  }
+  addRegistry(params.retainedRegistry);
   requiredPluginIds = missingPluginIds();
   if (requiredPluginIds?.length === 0) {
     return composeSelectedRegistries();
   }
-  // An incomplete active/retained registry must still force a fresh load;
-  // otherwise the standalone loader accepts its loaded plugin records even
-  // when the requested executable tool registrations are absent.
+  // Partial active/retained registries contribute their matching owners, but
+  // missing requested owners still force a fresh load. Plugin records alone
+  // do not prove that the executable tool registrations are available.
   const forceStandaloneLoad = Boolean(gatewayRegistry || activeRegistry || params.retainedRegistry);
   const shouldRetainColdLoadedToolRegistry =
     forceStandaloneLoad &&

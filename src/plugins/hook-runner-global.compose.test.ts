@@ -30,6 +30,17 @@ function runner() {
   return value;
 }
 
+function addToolOwner(registry: PluginRegistry, pluginId: string, toolName: string) {
+  registry.tools.push({
+    pluginId,
+    factory: () => [],
+    names: [toolName],
+    declaredNames: [toolName],
+    optional: false,
+    source: "test",
+  });
+}
+
 afterEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
@@ -45,6 +56,8 @@ describe("global hook runner composition (#91918, #107933)", () => {
     const active = createMockPluginRegistry([
       { hookName: "before_tool_call", handler: activeHook, pluginId: "stateful" },
     ]);
+    addToolOwner(gateway, "stateful", "stateful_tool");
+    addToolOwner(active, "stateful", "stateful_tool");
 
     setActivePluginRegistry(gateway);
     pinActivePluginChannelRegistry(gateway);
@@ -66,6 +79,54 @@ describe("global hook runner composition (#91918, #107933)", () => {
     // registry. Hooks for that plugin must use the same registration closure.
     expect(gatewayHook).toHaveBeenCalledOnce();
     expect(activeHook).not.toHaveBeenCalled();
+  });
+
+  it("uses the active hook when the pinned registry has no matching tool owner", async () => {
+    const gatewayHook = vi.fn();
+    const activeHook = vi.fn();
+    const gateway = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: gatewayHook, pluginId: "conditional" },
+    ]);
+    const active = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: activeHook, pluginId: "conditional" },
+    ]);
+    addToolOwner(active, "conditional", "conditional_tool");
+
+    setActivePluginRegistry(gateway);
+    pinActivePluginChannelRegistry(gateway);
+    initializeGlobalHookRunner(gateway);
+    setActivePluginRegistry(active);
+    initializeGlobalHookRunner(active);
+
+    await runner().runBeforeToolCall(
+      { toolName: "conditional_tool", params: {} },
+      {
+        agentId: "test-agent",
+        sessionKey: "test-session",
+        toolCallId: "test-call",
+        toolName: "conditional_tool",
+      },
+    );
+
+    expect(activeHook).toHaveBeenCalledOnce();
+    expect(gatewayHook).not.toHaveBeenCalled();
+  });
+
+  it("does not borrow a pinned hook when the active tool owner registered none", () => {
+    const gateway = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: vi.fn(), pluginId: "conditional" },
+    ]);
+    const active = createMockPluginRegistry([]);
+    expectDefined(active.plugins[0], "active.plugins[0] test invariant").id = "conditional";
+    addToolOwner(active, "conditional", "conditional_tool");
+
+    setActivePluginRegistry(gateway);
+    pinActivePluginChannelRegistry(gateway);
+    initializeGlobalHookRunner(gateway);
+    setActivePluginRegistry(active);
+    initializeGlobalHookRunner(active);
+
+    expect(runner().hasHooks("before_tool_call")).toBe(false);
   });
 
   it("prefers a loaded registration over a failed scoped reload of the same plugin", () => {
