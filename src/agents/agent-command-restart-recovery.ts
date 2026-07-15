@@ -43,18 +43,37 @@ export function constrainRestartRecoveryDeliveryPayloads(
   mediaUrls: string[],
   suppressText = false,
 ): ReplyPayload[] {
-  const constrained: ReplyPayload[] = (payloads ?? [])
-    .map((payload) => ({
-      ...(!suppressText && typeof payload.text === "string" ? { text: payload.text } : {}),
-      ...(payload.isError === true ? { isError: true as const } : {}),
-      ...(payload.isReasoning === true ? { isReasoning: true as const } : {}),
-      ...(payload.isCommentary === true ? { isCommentary: true as const } : {}),
-      ...(payload.isReasoningSnapshot === true ? { isReasoningSnapshot: true as const } : {}),
-      ...(payload.isCompactionNotice === true ? { isCompactionNotice: true as const } : {}),
-      ...(payload.isFallbackNotice === true ? { isFallbackNotice: true as const } : {}),
-      ...(payload.isStatusNotice === true ? { isStatusNotice: true as const } : {}),
-    }))
-    .filter((payload) => Object.keys(payload).length > 0);
+  const constrained: ReplyPayload[] = [];
+  for (const payload of payloads ?? []) {
+    const constrainedPayload: ReplyPayload = {};
+    if (!suppressText && typeof payload.text === "string") {
+      constrainedPayload.text = payload.text;
+    }
+    if (payload.isError === true) {
+      constrainedPayload.isError = true;
+    }
+    if (payload.isReasoning === true) {
+      constrainedPayload.isReasoning = true;
+    }
+    if (payload.isCommentary === true) {
+      constrainedPayload.isCommentary = true;
+    }
+    if (payload.isReasoningSnapshot === true) {
+      constrainedPayload.isReasoningSnapshot = true;
+    }
+    if (payload.isCompactionNotice === true) {
+      constrainedPayload.isCompactionNotice = true;
+    }
+    if (payload.isFallbackNotice === true) {
+      constrainedPayload.isFallbackNotice = true;
+    }
+    if (payload.isStatusNotice === true) {
+      constrainedPayload.isStatusNotice = true;
+    }
+    if (Object.keys(constrainedPayload).length > 0) {
+      constrained.push(constrainedPayload);
+    }
+  }
   const exactMediaUrls = Array.from(
     new Set(mediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
   );
