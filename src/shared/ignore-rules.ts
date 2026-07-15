@@ -21,7 +21,17 @@ export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()) {
     try {
       const content = readFileSync(ignorePath, "utf-8");
       ig.add(content.split(/\r?\n/).map((line) => prefixIgnorePattern(line, prefix)));
-    } catch {}
+    } catch (error) {
+      // Ignore ENOENT (file removed between existsSync and readFileSync).
+      // Re-throw other errors like EACCES so permission issues are not silently swallowed.
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code !== "ENOENT"
+      ) {
+        throw error;
+      }
+    }
   }
   return ig;
 }
