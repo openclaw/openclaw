@@ -743,16 +743,22 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
       await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("main");
 
+      // Picking a Gateway repo keeps the cloud selection: that folder is what
+      // the managed worktree checks out and dispatch syncs to the worker.
       await page.locator("#new-session-folder-trigger").click();
       await page
         .locator(".new-session-page__browser-list")
         .getByRole("button", { name: "Gateway" })
         .click();
+      await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
       await page.getByRole("button", { name: "Use this folder" }).click();
-      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBeNull();
-      await page.locator("#new-session-where-trigger").click();
-      await where.getByRole("button", { name: "Cloud · aws" }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      await page.locator("#new-session-where-trigger").click();
+      await expect
+        .poll(() => where.locator(".new-session-page__menu-note").textContent())
+        .toContain("Syncs target-repo to the cloud worker");
+      await page.keyboard.press("Escape");
 
       const message = "fix the cloud-only failure";
       const composer = page.locator(".new-session-page__message");
@@ -788,6 +794,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         message: "",
         worktree: true,
         worktreeBaseRef: "main",
+        cwd: TARGET_REPO,
       });
       expect(create.params).not.toHaveProperty("attachments");
       await gateway.waitForRequest("sessions.dispatch");
@@ -940,9 +947,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toBe(true);
       await page.keyboard.press("Escape");
 
-      const agentSelect = page.locator("wa-select.new-session-page__agent-select");
-      await agentSelect.click();
-      await agentSelect.getByRole("option", { name: "Local" }).click();
+      await page.locator("#new-session-agent-trigger").click();
+      await page
+        .locator("wa-popover.new-session-page__agent-popover")
+        .getByRole("button", { name: "Local" })
+        .click();
       await page.getByRole("heading", { name: "Local" }).waitFor();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBeNull();
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("false");
@@ -1811,9 +1820,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}new`);
       await page.getByRole("heading", { name: "Main" }).waitFor();
       await gateway.waitForRequest("worktrees.branches");
-      const agentSelect = page.locator("wa-select.new-session-page__agent-select");
-      await agentSelect.click();
-      await agentSelect.getByRole("option", { name: "Research" }).click();
+      await page.locator("#new-session-agent-trigger").click();
+      await page
+        .locator("wa-popover.new-session-page__agent-popover")
+        .getByRole("button", { name: "Research" })
+        .click();
       await page.getByRole("heading", { name: "Research" }).waitFor();
 
       const message = page.locator(".new-session-page__message");
