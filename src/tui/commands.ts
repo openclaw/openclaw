@@ -172,6 +172,10 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       description: "Set group activation",
       getArgumentCompletions: activationCompletions,
     },
+    {
+      name: "loop",
+      description: "Run an autonomous loop to complete a task. Usage: /loop <task> [--max-iterations N] [--budget N]",
+    },
     { name: "abort", description: "Abort active run" },
     { name: "new", description: "Spawn a new isolated session" },
     { name: "reset", description: "Reset the current session" },
@@ -234,6 +238,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
     "/activation <mention|always>",
+    "/loop <task> [--max-iterations N] [--budget N]",
     "/new or /reset",
     "/abort",
     "/settings",

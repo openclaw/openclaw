@@ -570,6 +570,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let dynamicSlashCommandsRequestId = 0;
   let dynamicSlashCommandsReady = false;
   let dynamicSlashCommandsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let loopState: TuiStateAccess["loopState"] = null;
+  let onRunEnd: TuiStateAccess["_onRunEnd"] = null;
   let lastCtrlCAt = 0;
   let exitRequested = false;
   let exitResult: TuiResult = { exitReason: "exit" };
@@ -704,6 +706,18 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     },
     set lastCtrlCAt(value) {
       lastCtrlCAt = value;
+    },
+    get loopState() {
+      return loopState;
+    },
+    set loopState(value) {
+      loopState = value;
+    },
+    get _onRunEnd() {
+      return onRunEnd;
+    },
+    set _onRunEnd(value) {
+      onRunEnd = value;
     },
   };
 

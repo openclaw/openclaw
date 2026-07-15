@@ -283,6 +283,23 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
+      key: "loop",
+      nativeName: "loop",
+      description: "Run an autonomous loop to complete a task.",
+      textAlias: "/loop",
+      category: "status",
+      tier: "standard",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "task",
+          description: "Task for the agent to work on autonomously",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "diagnostics",
       nativeName: "diagnostics",
       description: "Explain Gateway diagnostics and Codex feedback upload options.",

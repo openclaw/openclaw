@@ -54,6 +54,12 @@ import {
   createUpdateGoalTool,
 } from "./tools/goal-tools.js";
 import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
+import {
+  createLoopCompleteTool,
+  createLoopPhaseTool,
+  createLoopStatusTool,
+  createLoopUpdateTool,
+} from "./tools/loop-tools.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
@@ -542,6 +548,10 @@ export function createOpenClawTools(
           }),
         ]),
     ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
+    createLoopStatusTool(),
+    createLoopCompleteTool(),
+    createLoopPhaseTool(),
+    createLoopUpdateTool(),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
