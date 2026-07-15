@@ -2,6 +2,8 @@
 // publishing and importing the relay profile, plus validation-error parsing.
 import type { NostrProfile } from "../../api/types.ts";
 
+const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
+
 export function parseValidationErrors(details: unknown): Record<string, string> {
   if (!Array.isArray(details)) {
     return {};
@@ -33,41 +35,61 @@ export async function putNostrProfile(params: {
   headers: Record<string, string>;
   values: NostrProfile;
 }) {
-  const response = await fetch(buildNostrProfileUrl(params.accountId), {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      ...params.headers,
-    },
-    body: JSON.stringify(params.values),
-  });
-  const data = (await response.json().catch(() => null)) as {
-    ok?: boolean;
-    error?: string;
-    details?: unknown;
-    persisted?: boolean;
-  } | null;
-  return { data, response };
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException("nostr profile publish timed out", "TimeoutError")),
+    NOSTR_PROFILE_REQUEST_TIMEOUT_MS,
+  );
+  try {
+    const response = await fetch(buildNostrProfileUrl(params.accountId), {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...params.headers,
+      },
+      body: JSON.stringify(params.values),
+      signal: controller.signal,
+    });
+    const data = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      details?: unknown;
+      persisted?: boolean;
+    } | null;
+    return { data, response };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function importNostrProfile(params: {
   accountId: string;
   headers: Record<string, string>;
 }) {
-  const response = await fetch(buildNostrProfileUrl(params.accountId, "/import"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...params.headers,
-    },
-    body: JSON.stringify({ autoMerge: true }),
-  });
-  const data = (await response.json().catch(() => null)) as {
-    ok?: boolean;
-    error?: string;
-    imported?: NostrProfile;
-    merged?: NostrProfile;
-    saved?: boolean;
-  } | null;
-  return { data, response };
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException("nostr profile import timed out", "TimeoutError")),
+    NOSTR_PROFILE_REQUEST_TIMEOUT_MS,
+  );
+  try {
+    const response = await fetch(buildNostrProfileUrl(params.accountId, "/import"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...params.headers,
+      },
+      body: JSON.stringify({ autoMerge: true }),
+      signal: controller.signal,
+    });
+    const data = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      imported?: NostrProfile;
+      merged?: NostrProfile;
+      saved?: boolean;
+    } | null;
+    return { data, response };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
