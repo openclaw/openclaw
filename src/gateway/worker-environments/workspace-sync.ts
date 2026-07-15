@@ -555,7 +555,9 @@ export function createWorkerWorkspaceActions(
             REMOTE_WORKSPACE_MANIFEST_JS,
             request.remoteWorkspaceDir,
             base.baseCommit ?? "",
-            ...(base.baseCommit ? ["eligible", expectedDigest] : []),
+            // The accepted result omits deleted paths. Seed both manifests so a
+            // deleted path recreated under a new ignore rule still invalidates the fence.
+            ...(base.baseCommit ? ["eligible", expectedDigest, baseDigest] : []),
           ],
         });
         if (!success(verified)) {

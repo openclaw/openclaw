@@ -1055,20 +1055,36 @@ describe("worker turn launcher", () => {
       ...unusedEnvironments(),
       get: vi.fn(() => attachedEnvironment()),
     };
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const enteredWorkspaceQueue = createDeferred<void>();
+    const releaseWorkspaceQueue = createDeferred<void>();
+    const workspaceOperations: NonNullable<WorkerTurnLauncherOptions["workspaceOperations"]> = {
+      async run(environmentId, operation) {
+        expect(environmentId).toBe(ENVIRONMENT_ID);
+        enteredWorkspaceQueue.resolve();
+        await releaseWorkspaceQueue.promise;
+        return await operation();
+      },
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      workspaceOperations,
+    });
 
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-blocked-journal",
-        },
-        turn("run-blocked-journal"),
-        async () => ({ meta: { durationMs: 1 } }),
-      ),
-    ).rejects.toThrow("workspace recovery could not complete");
+    const attempt = provider.executeTurn(
+      {
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        runId: "run-blocked-journal",
+      },
+      turn("run-blocked-journal"),
+      async () => ({ meta: { durationMs: 1 } }),
+    );
+    await enteredWorkspaceQueue.promise;
+    expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+    releaseWorkspaceQueue.resolve();
+    await expect(attempt).rejects.toThrow("workspace recovery could not complete");
 
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
     expect(placements.listWorkspaceReconciliationOwners()).toEqual([owner]);

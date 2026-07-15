@@ -185,6 +185,85 @@ describe("remote workspace quiescence scripts", () => {
 });
 
 describe("remote workspace manifest script", () => {
+  it("keeps base tombstones in the final ignored-path verification", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manifest-tombstone-test-"));
+    roots.push(root);
+    const home = path.join(root, "home");
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(home);
+    await fs.mkdir(workspace);
+    await fs.writeFile(path.join(workspace, ".gitignore"), "");
+    for (const args of [
+      ["init", "--quiet"],
+      ["add", ".gitignore"],
+      [
+        "-c",
+        "user.name=OpenClaw Test",
+        "-c",
+        "user.email=test@openclaw.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "base",
+      ],
+    ]) {
+      const result = await runCommandWithTimeout(["git", "-C", workspace, ...args], {
+        timeoutMs: 10_000,
+      });
+      expect(result.code).toBe(0);
+    }
+    const baseCommit = (
+      await runCommandWithTimeout(["git", "-C", workspace, "rev-parse", "HEAD"], {
+        timeoutMs: 10_000,
+      })
+    ).stdout.trim();
+    const env = { ...process.env, HOME: home };
+    await fs.writeFile(path.join(workspace, "artifact.txt"), "base artifact\n");
+    const base = await runCommandWithTimeout(
+      [process.execPath, "-e", REMOTE_WORKSPACE_MANIFEST_JS, workspace, baseCommit, "eligible"],
+      { timeoutMs: 10_000, baseEnv: env },
+    );
+    expect(base.code).toBe(0);
+    const baseDigest = base.stdout.trim().slice("sha256:".length);
+
+    await Promise.all([
+      fs.writeFile(path.join(workspace, ".gitignore"), "artifact.txt\n"),
+      fs.rm(path.join(workspace, "artifact.txt")),
+    ]);
+    const current = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        REMOTE_WORKSPACE_MANIFEST_JS,
+        workspace,
+        baseCommit,
+        "eligible",
+        baseDigest,
+      ],
+      { timeoutMs: 10_000, baseEnv: env },
+    );
+    expect(current.code).toBe(0);
+    const currentRef = current.stdout.trim();
+    const currentDigest = currentRef.slice("sha256:".length);
+
+    await fs.writeFile(path.join(workspace, "artifact.txt"), "late recreated artifact\n");
+    const verified = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        REMOTE_WORKSPACE_MANIFEST_JS,
+        workspace,
+        baseCommit,
+        "eligible",
+        currentDigest,
+        baseDigest,
+      ],
+      { timeoutMs: 10_000, baseEnv: env },
+    );
+    expect(verified.code).toBe(0);
+    expect(verified.stdout.trim()).not.toBe(currentRef);
+  });
+
   it("drops stale descendants when a tracked directory becomes a file", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manifest-test-"));
     roots.push(root);

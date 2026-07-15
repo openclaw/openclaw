@@ -250,11 +250,16 @@ async function executeWorkerTurn(params: {
     abort: () => params.placements.abortWorkspaceReconciliation(journalOwner),
   };
   try {
-    const pending = journal.load();
-    if (pending) {
-      await recoverWorkerWorkspaceReconciliation({ root: turn.workspaceDir, journal: pending });
-      journal.abort();
-    }
+    await params.workspaceOperations.run(placement.environmentId, async () => {
+      if (!params.placements.validateTurnClaim(params.turnClaim)) {
+        throw new Error("Cloud worker workspace recovery lost its turn claim");
+      }
+      const pending = journal.load();
+      if (pending) {
+        await recoverWorkerWorkspaceReconciliation({ root: turn.workspaceDir, journal: pending });
+        journal.abort();
+      }
+    });
   } catch (error) {
     throw new WorkerWorkspaceReconciliationError(
       `Cloud worker workspace recovery could not complete: ${recoveryError(error)}`,

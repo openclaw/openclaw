@@ -497,7 +497,7 @@ const path = require("node:path");
 const root = fs.realpathSync(process.argv[1]);
 const requestedBaseCommit = process.argv[2] || null;
 const eligibleOnly = process.argv[3] === "eligible";
-const priorManifestDigest = process.argv[4] || "";
+const priorManifestDigests = [...new Set(process.argv.slice(4).filter(Boolean))];
 const entriesByPath = new Map();
 function fail(message) {
   throw new Error(message);
@@ -607,7 +607,7 @@ function eligiblePaths() {
       if (ignored.has(candidate)) selected.add(candidate);
     }
   }
-  if (priorManifestDigest) {
+  for (const priorManifestDigest of priorManifestDigests) {
     if (!/^[a-f0-9]{64}$/.test(priorManifestDigest)) fail("invalid prior workspace manifest digest");
     const priorPath = path.join(process.env.HOME, ".openclaw-worker", "manifests", priorManifestDigest + ".json");
     const priorRaw = fs.readFileSync(priorPath, "utf8");
