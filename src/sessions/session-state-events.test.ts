@@ -243,6 +243,20 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
+  it("notifies watchers when an upstream session disappears", () => {
+    const database = createDatabaseOptions();
+    seedChild(database);
+    resetSystemEventsForTest();
+
+    const event = recordSessionStateEvent(
+      eventInput({ kind: "upstream_missing", actorType: "system" }),
+      database,
+    );
+
+    expect(event).toMatchObject({ kind: "upstream_missing", actorType: "system" });
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
+  });
+
   it("returns the existing row for a duplicate dedupe key", () => {
     const database = createDatabaseOptions();
     const input = eventInput({

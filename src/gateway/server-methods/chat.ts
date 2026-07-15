@@ -1698,3 +1698,4 @@ export const chatHandlers: GatewayRequestHandlers = {
     respond(true, { ok: true, messageId: appended.messageId });
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

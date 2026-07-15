@@ -22,6 +22,21 @@ import {
   runApprovalThreadTargetScenario,
 } from "./scenario-runtime-approval.js";
 import {
+  runMatrixQaE2eeCliAccountAddEnableE2eeScenario,
+  runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario,
+  runMatrixQaE2eeCliEncryptionSetupIdempotentScenario,
+  runMatrixQaE2eeCliEncryptionSetupScenario,
+} from "./scenario-runtime-e2ee-cli-account.js";
+import {
+  runMatrixQaE2eeCliEncryptionSetupMultiAccountScenario,
+  runMatrixQaE2eeCliSetupThenGatewayReplyScenario,
+} from "./scenario-runtime-e2ee-cli-gateway.js";
+import {
+  runMatrixQaE2eeCliRecoveryKeyInvalidScenario,
+  runMatrixQaE2eeCliRecoveryKeySetupScenario,
+} from "./scenario-runtime-e2ee-cli-recovery.js";
+import { runMatrixQaE2eeCliSelfVerificationScenario } from "./scenario-runtime-e2ee-cli-verification.js";
+import {
   runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario,
   runMatrixQaE2eeHistoryExistsBackupEmptyScenario,
   runMatrixQaE2eeServerBackupDeletedLocalStateIntactScenario,
@@ -38,29 +53,24 @@ import {
 import {
   runMatrixQaE2eeArtifactRedactionScenario,
   runMatrixQaE2eeBasicReplyScenario,
-  runMatrixQaE2eeBootstrapSuccessScenario,
-  runMatrixQaE2eeCliAccountAddEnableE2eeScenario,
-  runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario,
-  runMatrixQaE2eeCliEncryptionSetupIdempotentScenario,
-  runMatrixQaE2eeCliEncryptionSetupMultiAccountScenario,
-  runMatrixQaE2eeCliEncryptionSetupScenario,
-  runMatrixQaE2eeCliRecoveryKeyInvalidScenario,
-  runMatrixQaE2eeCliRecoveryKeySetupScenario,
-  runMatrixQaE2eeCliSetupThenGatewayReplyScenario,
-  runMatrixQaE2eeCliSelfVerificationScenario,
-  runMatrixQaE2eeDeviceSasVerificationScenario,
-  runMatrixQaE2eeDmSasVerificationScenario,
-  runMatrixQaE2eeKeyBootstrapFailureScenario,
   runMatrixQaE2eeMediaImageScenario,
-  runMatrixQaE2eeQrVerificationScenario,
-  runMatrixQaE2eeRecoveryKeyLifecycleScenario,
-  runMatrixQaE2eeRecoveryOwnerVerificationRequiredScenario,
   runMatrixQaE2eeRestartResumeScenario,
   runMatrixQaE2eeStateAfterMissingEncryptionScenario,
-  runMatrixQaE2eeStaleDeviceHygieneScenario,
   runMatrixQaE2eeThreadFollowUpScenario,
   runMatrixQaE2eeVerificationNoticeNoTriggerScenario,
-} from "./scenario-runtime-e2ee.js";
+} from "./scenario-runtime-e2ee-messages.js";
+import {
+  runMatrixQaE2eeBootstrapSuccessScenario,
+  runMatrixQaE2eeKeyBootstrapFailureScenario,
+  runMatrixQaE2eeRecoveryKeyLifecycleScenario,
+  runMatrixQaE2eeRecoveryOwnerVerificationRequiredScenario,
+} from "./scenario-runtime-e2ee-recovery.js";
+import {
+  runMatrixQaE2eeDeviceSasVerificationScenario,
+  runMatrixQaE2eeDmSasVerificationScenario,
+  runMatrixQaE2eeQrVerificationScenario,
+  runMatrixQaE2eeStaleDeviceHygieneScenario,
+} from "./scenario-runtime-e2ee-verification.js";
 import {
   runInboundEditIgnoredScenario,
   runInboundEditNoDuplicateTriggerScenario,
@@ -102,17 +112,14 @@ import {
 import {
   buildExactMarkerPrompt,
   buildMatrixQaToken,
-  buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
-  buildMentionPrompt,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
-export { buildMatrixReplyArtifact, buildMatrixReplyDetails, buildMentionPrompt, runMatrixQaCanary };
-export type { MatrixQaScenarioContext };
+export { buildMatrixReplyDetails, runMatrixQaCanary };
 
 async function runDriverTopologyScopedScenario(params: {
   context: MatrixQaScenarioContext;

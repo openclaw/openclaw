@@ -189,9 +189,9 @@ describe("image custom provider auth regression", () => {
     });
   });
 
-  it("executes deferred image tool discovery with config-backed auth and runtime key resolution", async () => {
-    // This covers the production deferred-discovery path: registration can
-    // avoid auth work, but execution still resolves the config-backed key.
+  it("executes deferred fallback discovery with config-backed auth and runtime key resolution", async () => {
+    // This covers the text-only fallback path: registration can avoid auth work,
+    // but execution still resolves the config-backed image-model key.
     await withEmptyAgentDir(async (agentDir) => {
       const cfg = createUserReportedConfig();
       const auth = await getApiKeyForModel({
@@ -217,7 +217,7 @@ describe("image custom provider auth regression", () => {
         config: cfg,
         agentDir,
         deferAutoModelResolution: true,
-        modelHasVision: true,
+        modelHasVision: false,
       });
       expect(typeof tool?.execute).toBe("function");
 
@@ -234,7 +234,7 @@ describe("image custom provider auth regression", () => {
     });
   });
 
-  it("still rejects the same config when apiKey is missing", async () => {
+  it("still rejects the same fallback config when apiKey is missing", async () => {
     await withEmptyAgentDir(async (agentDir) => {
       const cfg = createUserReportedConfig({ includeApiKey: false });
       expect(hasUsableCustomProviderApiKey(cfg, USER_PROVIDER)).toBe(false);
@@ -245,7 +245,7 @@ describe("image custom provider auth regression", () => {
         config: cfg,
         agentDir,
         deferAutoModelResolution: true,
-        modelHasVision: true,
+        modelHasVision: false,
       });
       await expect(
         tool!.execute("regression-2", {

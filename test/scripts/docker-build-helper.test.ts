@@ -60,8 +60,8 @@ const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
   "scripts/e2e/bundled-plugin-install-uninstall-docker.sh";
 const AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH = "scripts/e2e/agent-bundle-mcp-tools-docker.sh";
 const COMMITMENTS_SAFETY_DOCKER_E2E_PATH = "scripts/e2e/commitments-safety-docker.sh";
-const CRESTODIAN_FIRST_RUN_DOCKER_E2E_PATH = "scripts/e2e/crestodian-first-run-docker.sh";
-const CRESTODIAN_RESCUE_DOCKER_E2E_PATH = "scripts/e2e/crestodian-rescue-docker.sh";
+const SYSTEM_AGENT_FIRST_RUN_DOCKER_E2E_PATH = "scripts/e2e/system-agent-first-run-docker.sh";
+const SYSTEM_AGENT_RESCUE_DOCKER_E2E_PATH = "scripts/e2e/system-agent-rescue-docker.sh";
 const SESSION_RUNTIME_CONTEXT_DOCKER_E2E_PATH = "scripts/e2e/session-runtime-context-docker.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH =
   "scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh";
@@ -2168,6 +2168,7 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
           'PLUGIN_INSTALL_LOG="$LOG_DIR/plugin-install.log"',
           'AGENT_LOG="$LOG_DIR/agent.log"',
           'plugin_dir="$(mktemp -d "$scenario_tmp/plugin.XXXXXX")"',
+          'plugins install "$plugin_dir" --force',
         ],
         removed: [
           "/tmp/openclaw-release-upgrade-user-journey-openai.jsonl",
@@ -3468,8 +3469,8 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     for (const path of [
       AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH,
       COMMITMENTS_SAFETY_DOCKER_E2E_PATH,
-      CRESTODIAN_FIRST_RUN_DOCKER_E2E_PATH,
-      CRESTODIAN_RESCUE_DOCKER_E2E_PATH,
+      SYSTEM_AGENT_FIRST_RUN_DOCKER_E2E_PATH,
+      SYSTEM_AGENT_RESCUE_DOCKER_E2E_PATH,
       PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH,
       SESSION_RUNTIME_CONTEXT_DOCKER_E2E_PATH,
     ]) {
@@ -4472,19 +4473,19 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
       expect(unboundedPluginCliLines, path).toEqual([]);
     }
 
-    expect(sweep).toContain('plugins install "$dir_plugin"');
+    expect(sweep).toContain('plugins install "$dir_plugin" --force');
     expect(sweep).toContain("plugins update demo-plugin-dir");
     expect(assertions).toContain('Skipping "demo-plugin-dir" (source: path).');
 
     expect(sweep).toContain("start_npm_fixture_registry");
-    expect(sweep).toContain('plugins install "npm:@openclaw/demo-plugin-npm@0.0.1"');
+    expect(sweep).toContain('plugins install "npm:@openclaw/demo-plugin-npm@0.0.1" --force');
     expect(sweep).toContain("plugins update demo-plugin-npm");
     expect(assertions).toContain("demo-plugin-npm is up to date (0.0.1).");
     expect(npmRegistry).toContain('"dist-tags": { latest: entry.latestVersion }');
     expect(npmRegistry).toContain("existing.latestVersion = version");
     expect(npmRegistry).toContain("packageArgs.length % 3");
 
-    expect(sweep).toContain('plugins install "git:$git_update_repo_url@main"');
+    expect(sweep).toContain('plugins install "git:$git_update_repo_url@main" --force');
     expect(sweep).toContain("plugins update demo-plugin-git-update");
     expect(assertions).toContain("demo.git.update.v2");
 

@@ -184,8 +184,8 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       compact: true,
     });
 
-    expect(compact).toHaveLength(15);
-    expect(compact.filter((shard) => !shard.requiresDist)).toHaveLength(14);
+    expect(compact).toHaveLength(16);
+    expect(compact.filter((shard) => !shard.requiresDist)).toHaveLength(15);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
     expect(
@@ -873,6 +873,14 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-core-runtime",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-isolated",
+        configs: ["test/vitest/vitest.agents-core-isolated.config.ts"],
+        includePatterns: agentShards[6]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-isolated",
       },
       {
         checkName: "checks-node-agentic-agents-embedded",

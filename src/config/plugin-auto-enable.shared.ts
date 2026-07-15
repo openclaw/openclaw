@@ -1152,3 +1152,4 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
 
   return { config: next, changes, autoEnabledReasons: autoEnabledReasonRecord };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

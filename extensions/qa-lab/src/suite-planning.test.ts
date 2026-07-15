@@ -693,6 +693,47 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["qa-channel-only"]);
   });
 
+  it("requires an external lane matching a channel-specific scenario", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("matrix-transport", {
+        channel: "matrix",
+      }),
+    ];
+
+    expect(() =>
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["matrix-transport"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }),
+    ).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: matrix-transport (channel=matrix)",
+    );
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["matrix-transport"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        channelDriver: "crabline",
+        channel: "matrix",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["matrix-transport"]);
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["matrix-transport"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        channelDriver: "live",
+        channel: "matrix",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["matrix-transport"]);
+  });
+
   it("keeps live-only runtime parity scenarios out of implicit mock selections", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),

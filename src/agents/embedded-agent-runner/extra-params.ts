@@ -42,7 +42,7 @@ import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
 import { log } from "./logger.js";
-import { resolveCacheRetention } from "./prompt-cache-retention.js";
+import { parseCacheRetention, resolveCacheRetention } from "./prompt-cache-retention.js";
 import type { ProviderThinkLevel } from "./utils.js";
 
 const defaultProviderRuntimeDeps = {
@@ -450,6 +450,15 @@ function createStreamFnWithExtraParams(
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
+  }
+
+  if (
+    Object.hasOwn(extraParams, "cacheRetention") &&
+    parseCacheRetention(extraParams.cacheRetention) === undefined
+  ) {
+    // Provider params stay open-ended, so validate this shared knob at its consumer boundary.
+    // Never echo the authored value: model params can contain sensitive custom data.
+    log.warn('ignoring invalid cacheRetention param; expected "none", "short", or "long"');
   }
 
   const streamParams: CacheRetentionStreamOptions = {};
@@ -1157,3 +1166,4 @@ export function applyExtraParamsToAgent(
 
   return { effectiveExtraParams };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

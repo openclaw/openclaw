@@ -1005,3 +1005,4 @@ export function closePluginStateDatabase(): void {
   cachedDatabase = null;
   closeOpenClawStateDatabase();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

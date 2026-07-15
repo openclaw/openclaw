@@ -67,7 +67,7 @@ function parseWorkspaceGrid(value: string): WorkspaceGrid {
   return { x, y, w, h };
 }
 
-export function parseWorkspaceBindingShorthand(value: string): [string, WorkspaceBinding] {
+function parseWorkspaceBindingShorthand(value: string): [string, WorkspaceBinding] {
   const eqIndex = value.indexOf("=");
   if (eqIndex <= 0) {
     throw new Error("binding must be id=file:<path>, id=rpc:<method>, or id=static:<json>");

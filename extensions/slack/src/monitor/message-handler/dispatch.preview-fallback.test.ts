@@ -101,6 +101,7 @@ let capturedReplyOptions:
         summary?: string;
       }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
+      onQueuedFollowupAdmitted?: () => Promise<void> | void;
     }
   | undefined;
 let capturedStatusReactionOptions: { enabled?: boolean; initialEmoji?: string } | undefined;
@@ -3286,6 +3287,24 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("starts a new draft delivery target when a queued followup is admitted", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "replace";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [{ kind: "partial", text: "first reply" }];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
+    await capturedReplyOptions?.onQueuedFollowupAdmitted?.();
+
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("can hide raw Slack command progress text by config", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
@@ -4417,3 +4436,4 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(postMessageMock).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

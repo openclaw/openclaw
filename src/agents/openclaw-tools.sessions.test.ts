@@ -2268,3 +2268,4 @@ describe("sessions tools", () => {
     expect(sendParams.threadId).toBe("99");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

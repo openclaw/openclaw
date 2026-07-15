@@ -4,11 +4,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  enqueueCommandInLane,
-  resetCommandQueueStateForTest,
-  setCommandLaneConcurrency,
-} from "../process/command-queue.js";
+import { enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { CommandLane } from "../process/lanes.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";

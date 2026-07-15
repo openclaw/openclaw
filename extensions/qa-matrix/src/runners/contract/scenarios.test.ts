@@ -53,21 +53,45 @@ vi.mock("./scenario-runtime-cli.js", () => ({
 }));
 
 import {
+  collectLiveTransportStandardScenarioCoverage,
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
-} from "../../shared/live-transport-scenarios.js";
+} from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
+import {
+  MATRIX_QA_DRIVER_DM_ROOM_KEY,
+  MATRIX_QA_MEDIA_ROOM_KEY,
+  buildMatrixQaE2eeScenarioRoomKey,
+  buildMatrixQaTopologyForScenarios,
+  findMatrixQaScenarios,
+  resolveMatrixQaScenarioRoomId,
+} from "./scenario-catalog.js";
 import {
   MATRIX_QA_MEDIA_TYPE_COVERAGE_CASES,
   MATRIX_QA_VOICE_PREFLIGHT_FILENAME,
   MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER,
 } from "./scenario-media-fixtures.js";
-import {
-  testing as scenarioTesting,
-  MATRIX_QA_SCENARIOS,
-  runMatrixQaScenario,
-  type MatrixQaScenarioContext,
-} from "./scenarios.js";
+import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
+import { buildMatrixReplyArtifact, buildMentionPrompt } from "./scenario-runtime-shared.js";
+import { MATRIX_QA_SCENARIOS, runMatrixQaScenario } from "./scenarios.js";
+
+const MATRIX_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
+  alwaysOnStandardScenarioIds: ["canary"],
+  scenarios: MATRIX_QA_SCENARIOS,
+});
+
+const scenarioTesting = {
+  MATRIX_QA_DRIVER_DM_ROOM_KEY,
+  MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY: "driver-dm-shared",
+  MATRIX_QA_MEDIA_ROOM_KEY,
+  MATRIX_QA_STANDARD_SCENARIO_IDS,
+  buildMatrixQaE2eeScenarioRoomKey,
+  buildMatrixQaTopologyForScenarios,
+  buildMatrixReplyArtifact,
+  buildMentionPrompt,
+  findMatrixQaScenarios,
+  resolveMatrixQaScenarioRoomId,
+};
 
 function sha256Hex32(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 32);
@@ -5656,7 +5680,7 @@ describe("matrix live qa scenarios", () => {
         userId: "@cli-recovery:matrix-qa.test",
       });
       let initialAccountConfig: Record<string, unknown> | null = null;
-      runMatrixQaOpenClawCli.mockImplementation(async ({ args, env }) => {
+      runMatrixQaOpenClawCli.mockImplementation(async ({ args, env, stdin }) => {
         if (!initialAccountConfig && env.OPENCLAW_CONFIG_PATH) {
           const initialConfig = JSON.parse(
             await readFile(String(env.OPENCLAW_CONFIG_PATH), "utf8"),
@@ -5673,8 +5697,9 @@ describe("matrix live qa scenarios", () => {
         const joined = args.join(" ");
         if (
           joined ===
-          "matrix encryption setup --account cli-recovery-key-setup --recovery-key encoded-recovery-key --json"
+          "matrix encryption setup --account cli-recovery-key-setup --recovery-key-stdin --json"
         ) {
+          expect(stdin).toBe("encoded-recovery-key\n");
           return {
             args,
             exitCode: 0,
@@ -5759,8 +5784,7 @@ describe("matrix live qa scenarios", () => {
           "setup",
           "--account",
           "cli-recovery-key-setup",
-          "--recovery-key",
-          "encoded-recovery-key",
+          "--recovery-key-stdin",
           "--json",
         ],
       ]);
@@ -5839,6 +5863,8 @@ describe("matrix live qa scenarios", () => {
         .fn()
         .mockRejectedValue(new Error("openclaw matrix encryption setup exited 1"));
       const kill = vi.fn();
+      const endStdin = vi.fn();
+      const writeStdin = vi.fn().mockResolvedValue(undefined);
       startMatrixQaOpenClawCli.mockReturnValue({
         args: [
           "matrix",
@@ -5846,15 +5872,15 @@ describe("matrix live qa scenarios", () => {
           "setup",
           "--account",
           "cli-invalid-recovery-key",
-          "--recovery-key",
-          "not-a-valid-matrix-recovery-key",
+          "--recovery-key-stdin",
           "--json",
         ],
+        endStdin,
         kill,
         output,
         wait,
         waitForOutput: vi.fn(),
-        writeStdin: vi.fn(),
+        writeStdin,
       });
 
       const scenario = requireMatrixQaScenario("matrix-e2ee-cli-recovery-key-invalid");
@@ -5895,10 +5921,11 @@ describe("matrix live qa scenarios", () => {
         "setup",
         "--account",
         "cli-invalid-recovery-key",
-        "--recovery-key",
-        "not-a-valid-matrix-recovery-key",
+        "--recovery-key-stdin",
         "--json",
       ]);
+      expect(writeStdin).toHaveBeenCalledWith("not-a-valid-matrix-recovery-key\n");
+      expect(endStdin).toHaveBeenCalledTimes(1);
       expect(output).toHaveBeenCalledTimes(1);
       expect(wait).toHaveBeenCalledTimes(1);
       expect(kill).toHaveBeenCalledTimes(1);
@@ -6455,3 +6482,4 @@ describe("matrix live qa scenarios", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

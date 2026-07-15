@@ -15,7 +15,7 @@ message once real work starts, edits it as the agent reads, plans, calls
 tools, or waits for approval, then turns it into the final answer.
 
 ```text
-Shelling...
+Working...
 📖 from docs/concepts/progress-drafts.md
 🔎 Web Search: for "discord edit message"
 🛠️ Bash: run tests
@@ -58,7 +58,7 @@ migration, see [Streaming and chunking](/concepts/streaming).
 | Part            | Purpose                                                                           |
 | --------------- | --------------------------------------------------------------------------------- |
 | Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler.       |
-| Label           | Optional starter/status line such as `Working` or `Shelling`.                     |
+| Label           | Optional starter/status line such as `Working`.                                   |
 | Progress lines  | Compact run updates using the same tool icons and detail formatter as `/verbose`. |
 
 For raw tool progress, the label appears once the agent starts meaningful work
@@ -94,14 +94,12 @@ block-reply delivery — use `streaming.block.enabled` for that.
 ## Configure labels
 
 Progress labels live under `channels.<channel>.streaming.progress`. The default
-raw tool-line label is `"auto"`, which picks from OpenClaw's built-in
-single-word label pool. A status headline hides that implicit label; set
+raw tool-line label is `"auto"`, which uses the plain built-in `Working`
+label. A status headline hides that implicit label; set
 `label: "auto"` explicitly if you want a label above it too:
 
 ```text
-Working, Shelling, Scuttling, Clawing, Pinching, Molting, Bubbling, Tiding,
-Reefing, Cracking, Sifting, Brining, Nautiling, Krilling, Barnacling,
-Lobstering, Tidepooling, Pearling, Snapping, Surfacing
+Working
 ```
 
 Use a fixed label:

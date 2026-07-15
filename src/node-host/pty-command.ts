@@ -131,11 +131,18 @@ export async function runNodePtyCommand(
     kill();
   }
   io.onInput((payloadJSON) => {
+    if (settled || io.signal.aborted) {
+      return;
+    }
     const input = decodePtyInput(payloadJSON);
-    if (input?.kind === "data") {
-      pty.write(input.data);
-    } else if (input?.kind === "resize") {
-      pty.resize(input.cols, input.rows);
+    try {
+      if (input?.kind === "data") {
+        pty.write(input.data);
+      } else if (input?.kind === "resize") {
+        pty.resize(input.cols, input.rows);
+      }
+    } catch {
+      // Exit resolution owns teardown; input can race a dying native PTY.
     }
   });
   pty.onData((chunk) => {

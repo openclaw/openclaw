@@ -1679,6 +1679,37 @@ describe("worker environment service", () => {
     expect(bootstrapWorker).toHaveBeenCalledTimes(1);
   });
 
+  it("tears down an attached worker whose admitted bundle is stale", async () => {
+    const environmentId = "worker-attached-stale";
+    seedBootstrapping(environmentId);
+    const ready = store.transition({
+      environmentId,
+      from: "bootstrapping",
+      to: "ready",
+      patch: readyPatch(environmentId, {
+        ...BOOTSTRAP_RECEIPT,
+        bundleHash: "b".repeat(64),
+      }),
+    });
+    store.transition({
+      environmentId,
+      from: ready.state,
+      to: "attached",
+      patch: attachedPatch(environmentId, "session-1"),
+    });
+    const destroy = vi.fn(async () => {});
+
+    await createService(createProvider({ destroy })).reconcileOnce();
+
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      attachedSessionIds: [],
+      lastError: "Attached worker build no longer matches the Gateway",
+    });
+  });
+
   it("does not resolve npm while an admitted receipt matches the local bundle", async () => {
     const environmentId = "worker-current-npm";
     seedReady(environmentId, "npm");
@@ -2419,3 +2450,4 @@ describe("worker environment service", () => {
     } satisfies Partial<WorkerEnvironmentServiceError>);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

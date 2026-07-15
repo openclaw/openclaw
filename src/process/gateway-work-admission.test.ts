@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   beginGatewayRestartSignalAdmission,
+  beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -9,6 +10,7 @@ import {
   markGatewayRestartDraining,
   retainGatewayRootWorkAdmissionContinuation,
   resetGatewayWorkAdmission,
+  rollbackGatewayRestartSignalFence,
   runWithGatewayIndependentRootWorkContinuation,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -176,23 +178,60 @@ it("does not let a stale suspension release clear restart drain", () => {
 
 it("blocks suspension while restart signal handling is pending", () => {
   const pendingSignal = beginGatewayRestartSignalAdmission();
+  expect(pendingSignal).not.toBeNull();
 
   expect(isGatewayWorkAdmissionClosed()).toBe(true);
   expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
   expect(tryBeginGatewaySuspendAdmission(() => {})).toBeNull();
-  expect(pendingSignal.rollback()).toBe(true);
+  expect(beginGatewayRestartSignalAdmission()).toBeNull();
+  expect(pendingSignal?.rollback()).toBe(true);
   expect(isGatewayWorkAdmissionClosed()).toBe(false);
   expect(tryBeginGatewaySuspendAdmission(() => {})?.rollback()).toBe(true);
 });
 
 it("promotes a pending restart signal to one-way drain", () => {
   const pendingSignal = beginGatewayRestartSignalAdmission();
+  expect(pendingSignal).not.toBeNull();
 
   markGatewayRestartDraining();
 
-  expect(pendingSignal.rollback()).toBe(false);
+  expect(pendingSignal?.rollback()).toBe(false);
   expect(isGatewayWorkAdmissionClosed()).toBe(true);
   expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+});
+
+it("force-rolls back an orphan restart-signal fence without a live lease", () => {
+  const pendingSignal = beginGatewayRestartSignalAdmission();
+  expect(pendingSignal).not.toBeNull();
+  expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+  // Drop the lease the way a concurrent emission overwrite used to: the fence
+  // stays closed with no handle that can reopen it.
+  expect(rollbackGatewayRestartSignalFence()).toBe(true);
+  expect(pendingSignal?.rollback()).toBe(false);
+  expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  const root = tryBeginGatewayRootWorkAdmission();
+  expect(root).not.toBeNull();
+  root?.release();
+});
+
+it("wakes beginGatewayRootWorkAdmissionWhenOpen waiters when the signal fence rolls back", async () => {
+  const pendingSignal = beginGatewayRestartSignalAdmission();
+  expect(pendingSignal).not.toBeNull();
+
+  const waiting = beginGatewayRootWorkAdmissionWhenOpen();
+  let resolved = false;
+  void waiting.then(() => {
+    resolved = true;
+  });
+  await Promise.resolve();
+  expect(resolved).toBe(false);
+
+  expect(pendingSignal?.rollback()).toBe(true);
+  const admission = await waiting;
+  expect(resolved).toBe(true);
+  expect(admission.ownsRoot).toBe(true);
+  admission.release();
 });
 
 it("defers required internal root work until suspension reopens", async () => {

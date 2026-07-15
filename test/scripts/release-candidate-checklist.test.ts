@@ -1,5 +1,6 @@
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
@@ -20,6 +21,7 @@ import {
   validateCandidateCheckout,
   validateCandidateReleaseNotes,
   validateFullManifest,
+  validateNpmPreflightRunSource,
   validatePreflightManifest,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
@@ -96,6 +98,16 @@ describe("release candidate checklist", () => {
     expect(output).toHaveLength(2 * 1024 * 1024);
   });
 
+  it("passes scoped environment overrides to release child commands", () => {
+    const output = run(
+      process.execPath,
+      ["-e", "process.stdout.write(process.env.OPENCLAW_RELEASE_TEST_VALUE ?? '')"],
+      { capture: true, env: { OPENCLAW_RELEASE_TEST_VALUE: "passed" } },
+    );
+
+    expect(output).toBe("passed");
+  });
+
   it("keeps the frozen release target separate from clean trusted workflow tooling", () => {
     expect(
       validateCandidateCheckout({
@@ -159,6 +171,11 @@ describe("release candidate checklist", () => {
     ).toThrow("clean tracked tooling checkout");
     const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
     expect(source).toContain('const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url))');
+    expect(source).toContain('mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"))');
+    expect(source).toContain(
+      '["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"]',
+    );
+    expect(source).toContain("cwd: TOOLING_ROOT");
     expect(source).toContain("`+refs/heads/${workflowRef}:${remoteRef}`");
     expect(source).toContain('"worktree", "add", "--detach", toolingRoot, trustedToolingSha');
     expect(source).toContain(
@@ -441,20 +458,20 @@ describe("release candidate checklist", () => {
   });
 
   it("runs Parallels against the exact prepared candidate tarball", () => {
-    expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz")).toEqual([
-      "test:parallels:npm-update",
-      "--",
+    expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [], "/trusted")).toEqual([
+      "exec",
+      "tsx",
+      "/trusted/scripts/e2e/parallels/npm-update-smoke.ts",
       "--target-tarball",
       ".artifacts/preflight/openclaw.tgz",
       "--json",
     ]);
-    expect(
-      candidateParallelsShellCommand(
-        ".artifacts/preflight/openclaw candidate.tgz",
-        "/opt/homebrew/bin/gtimeout",
-      ),
-    ).toContain(
-      "set -a; source \"$HOME/.profile\" >/dev/null 2>&1 || true; set +a; exec '/opt/homebrew/bin/gtimeout' --foreground 150m pnpm",
+    const command = candidateParallelsShellCommand(
+      ".artifacts/preflight/openclaw candidate.tgz",
+      "/opt/homebrew/bin/gtimeout",
+    );
+    expect(command).toContain(
+      `set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a; export PATH='${dirname(process.execPath)}':"$PATH"; exec '/opt/homebrew/bin/gtimeout' --foreground 150m pnpm`,
     );
     expect(
       candidateParallelsShellCommand(
@@ -464,12 +481,15 @@ describe("release candidate checklist", () => {
       ),
     ).toContain("'--target-tarball' '.artifacts/preflight/openclaw candidate.tgz'");
     expect(
-      candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [
-        ".artifacts/preflight/openclaw-ai.tgz",
-      ]),
+      candidateParallelsArgs(
+        ".artifacts/preflight/openclaw.tgz",
+        [".artifacts/preflight/openclaw-ai.tgz"],
+        "/trusted",
+      ),
     ).toEqual([
-      "test:parallels:npm-update",
-      "--",
+      "exec",
+      "tsx",
+      "/trusted/scripts/e2e/parallels/npm-update-smoke.ts",
       "--target-tarball",
       ".artifacts/preflight/openclaw.tgz",
       "--dependency-tarball",
@@ -518,6 +538,34 @@ describe("release candidate checklist", () => {
         params,
       ),
     ).toThrow("invalid dependency tarball metadata");
+  });
+
+  it("trusts the npm workflow SHA while binding the candidate through its manifest", () => {
+    const workflowSha = "a".repeat(40);
+    const isTrustedWorkflowAncestor = vi.fn(() => true);
+
+    expect(
+      validateNpmPreflightRunSource({
+        workflowRun: { headSha: workflowSha },
+        workflowRef: "main",
+        isTrustedWorkflowAncestor,
+      }),
+    ).toEqual({
+      status: "passed",
+      headSha: workflowSha,
+      workflowRef: "main",
+    });
+    expect(isTrustedWorkflowAncestor).toHaveBeenCalledWith(workflowSha, "refs/remotes/origin/main");
+  });
+
+  it("rejects npm preflight workflow code outside the trusted ref", () => {
+    expect(() =>
+      validateNpmPreflightRunSource({
+        workflowRun: { headSha: "a".repeat(40) },
+        workflowRef: "main",
+        isTrustedWorkflowAncestor: () => false,
+      }),
+    ).toThrow("is not reachable from trusted main");
   });
 
   it("requires run ids when dispatch is disabled", () => {
@@ -1038,4 +1086,28 @@ describe("release candidate checklist", () => {
       "GitHub API repos/openclaw/openclaw/actions/runs/123/jobs timed out after 5ms",
     );
   });
+});
+
+describe("GitHub API public fallback", () => {
+  it.each([403, 429])(
+    "retries anonymously after an authenticated rate limit response %s",
+    async (status) => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ message: "API rate limit exceeded" }), { status }),
+        )
+        .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      await expect(
+        githubApi("repos/openclaw/openclaw/actions/runs/123", {
+          token: "x",
+          fetchImpl,
+        }),
+      ).resolves.toEqual({ ok: true });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(fetchImpl.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer x" });
+      expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+    },
+  );
 });

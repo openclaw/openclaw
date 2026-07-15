@@ -152,13 +152,10 @@ import {
   endTelegramReplyFence,
   isTelegramReplyFenceSuperseded,
   releaseTelegramReplyFenceAbortController,
-  resetTelegramReplyFenceForTests,
   resolveTelegramReplyFenceKey,
   shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
-
-export { resetTelegramReplyFenceForTests };
 
 // Telegram sendChatAction can fail transiently; keep the tolerance scoped to this transport.
 const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
@@ -3107,3 +3104,4 @@ export const dispatchTelegramMessage = async ({
   }
   return { kind: "completed" };
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1871,3 +1871,4 @@ function rawDataToText(data: RawData): string {
   }
   return Buffer.from(data).toString("utf8");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

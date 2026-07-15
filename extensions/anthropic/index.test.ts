@@ -647,10 +647,7 @@ describe("anthropic provider replay hooks", () => {
         provider: "claude-cli",
         modelId: "claude-fable-5",
       } as never),
-    ).toEqual({
-      levels: [{ id: "off" }],
-      defaultLevel: "off",
-    });
+    ).toEqual(profile);
     expect(
       provider
         .resolveThinkingProfile?.({
@@ -1261,3 +1258,4 @@ describe("anthropic provider replay hooks", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

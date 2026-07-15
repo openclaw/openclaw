@@ -112,7 +112,12 @@ function createFixture() {
       getAfterTurnCheckpoint: vi.fn(() => 2),
       takePendingMidTurnPrecheckRequest: vi.fn(() => null),
     },
-    preparedUserTurnMessage: { timestamp: 100 },
+    preparedUserTurnMessage: {
+      role: "user",
+      content: "hello",
+      timestamp: 100,
+      __openclaw: { senderName: "Alice" },
+    },
     sessionManager,
     sessionPromptState,
     state: sessionRuntimeState,
@@ -268,6 +273,17 @@ describe("runEmbeddedAttemptSettledPhase", () => {
       expect.objectContaining({
         prePromptMessageCount: 4,
         promptCache: { cacheRead: 1 },
+      }),
+    );
+    expect(mocks.runPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          preparedUserTurnMessage: expect.objectContaining({
+            content: "hello",
+            timestamp: 100,
+            __openclaw: { senderName: "Alice" },
+          }),
+        }),
       }),
     );
     expect(mocks.completeResult).toHaveBeenCalledWith(

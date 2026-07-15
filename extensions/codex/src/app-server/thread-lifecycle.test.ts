@@ -39,19 +39,19 @@ type CodexThreadLifecycleTimingLogger = NonNullable<
 describe("Codex ring-zero thread config", () => {
   it("applies the restriction to both thread start and resume", () => {
     const params = createAttemptParams({ provider: "openai" });
-    params.toolsAllow = ["crestodian"];
+    params.toolsAllow = ["openclaw"];
     const appServer = createAppServerOptions() as never;
     const start = buildThreadStartParams(params, {
       appServer,
       cwd: "/repo",
       dynamicTools: [],
-      hostCrestodianActive: true,
+      hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
     });
     const resume = buildThreadResumeParams(params, {
       appServer,
       dynamicTools: [],
-      hostCrestodianActive: true,
+      hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
       threadId: "thread-1",
     });
@@ -78,7 +78,7 @@ describe("Codex ring-zero thread config", () => {
       appServer,
       cwd: "/repo",
       dynamicTools: [],
-      hostCrestodianActive: false,
+      hostSystemAgentActive: false,
     });
     expect(normal.baseInstructions).toBeUndefined();
   });
@@ -2995,3 +2995,4 @@ describe("native Codex Ultra turn mapping", () => {
     expect(request).not.toHaveProperty("multiAgentMode");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

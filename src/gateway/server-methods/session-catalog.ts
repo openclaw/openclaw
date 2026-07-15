@@ -18,6 +18,9 @@ import type {
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
 import { bindPluginSessionConversation } from "../../plugins/session-conversation-binding.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
+import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -263,6 +266,35 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           afterBind: result.afterConversationBound,
         });
       }
+      // Adopted sessions are created under the resolved default store agent, so the
+      // key-derived agent matches the owning agent. Provider-authoritative agent
+      // identity (a `SessionCatalogContinueProviderResult.agentId`) is a follow-up
+      // that would let adapters adopt under non-default agents; see issue tracker.
+      const agentId = resolveAgentIdFromSessionKey(result.sessionKey);
+      if (result.upstream) {
+        // Links exist only for adoptions made on this version: pre-upgrade adopted
+        // sessions are transient linkage with no shipped contract, and re-continuing
+        // from the catalog establishes the link. No doctor backfill by design.
+        upsertSessionUpstreamLink({
+          sessionKey: result.sessionKey,
+          agentId,
+          catalogId: request.catalogId,
+          hostId: request.hostId,
+          threadId: request.threadId,
+          upstreamKind: result.upstream.kind,
+          upstreamRef: result.upstream.ref,
+          marker: result.upstream.marker,
+        });
+      }
+      recordSessionStateEvent({
+        sessionKey: result.sessionKey,
+        agentId,
+        kind: "adopted",
+        actorType: "human",
+        dedupeKey: `adopted:${result.sessionKey}`,
+        summary: `adopted from ${request.catalogId}`,
+        payload: { catalogId: request.catalogId, hostId: request.hostId },
+      });
       respond(true, { sessionKey: result.sessionKey });
     } catch (error) {
       const details = catalogError(error);

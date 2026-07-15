@@ -1,4 +1,5 @@
 // Runs the changed-file check lanes selected by `scripts/changed-lanes.mjs`.
+import { execFileSync } from "node:child_process";
 import {
   accessSync,
   chmodSync,
@@ -26,7 +27,6 @@ import {
   resolveLocalHeavyCheckEnv,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
-import { isProductionTypeScriptFile } from "./lib/ts-loc-policy.mjs";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
 
 const SHRINKWRAP_POLICY_PATH_RE =
@@ -45,6 +45,8 @@ const PLUGIN_SDK_SURFACE_PATH_RE =
   /^(?:package\.json$|src\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mjs|sync-plugin-sdk-exports\.mjs|lib\/plugin-sdk-(?:declaration-budget\.mjs|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mjs|entrypoints\.json|private-local-only-subpaths\.json)))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
+const CONTROL_UI_I18N_VERIFY_PATH_RE =
+  /^(?:package\.json$|ui\/src\/|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
@@ -148,7 +150,16 @@ export function changedCheckLocalDependenciesReady(cwd = process.cwd()) {
 }
 
 export function changedCheckRequiresRemote(result) {
-  if (!result || result.paths.length === 0 || result.docsOnly) {
+  if (!result || result.paths.length === 0) {
+    return false;
+  }
+  if (
+    shouldRunSqliteSessionSchemaBaselineCheck(result.paths) ||
+    shouldRunPluginSdkApiBaselineCheck(result.paths)
+  ) {
+    return true;
+  }
+  if (result.docsOnly) {
     return false;
   }
   return Object.entries(result.lanes).some(
@@ -166,19 +177,39 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
   if (argv.includes("--dry-run")) {
     return false;
   }
-  if (!options.result) {
+  const result = options.result;
+  if (!result) {
     return true;
   }
-  if (options.result.paths.length === 0) {
+  if (result.paths.length === 0) {
     return false;
   }
   if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
     return true;
   }
+  // Release metadata plans diff the supplied commits after classification. A missing
+  // ref needs the hydrated remote checkout even when the explicit path itself is cheap.
+  if (result.lanes.releaseMetadata && options.diffRefsReady === false) {
+    return true;
+  }
   return (
-    changedCheckRequiresRemote(options.result) ||
+    changedCheckRequiresRemote(result) ||
     !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd())
   );
+}
+
+function changedCheckDiffRefsReady({ base, head, cwd = process.cwd() }) {
+  for (const ref of [base, head]) {
+    try {
+      execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+        cwd,
+        stdio: "ignore",
+      });
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
@@ -243,6 +274,12 @@ export function shouldRunPromptSnapshotCheck(paths) {
 
 export function shouldRunPromptSnapshotOwnerTest(paths) {
   return paths.some((changedPath) => PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE.test(changedPath));
+}
+
+export function shouldRunControlUiI18nVerify(paths) {
+  return paths.some((changedPath) =>
+    CONTROL_UI_I18N_VERIFY_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
 }
 
 export function shouldRunRuntimeSidecarBaselineCheck(paths) {
@@ -361,14 +398,18 @@ export function createChangedCheckPlan(result, options = {}) {
   };
 
   add("conflict markers", ["check:no-conflict-markers"]);
-  if (result.paths.some(isProductionTypeScriptFile)) {
-    // Deliberately omit --head here: local changed checks must inspect worktree and untracked
-    // content. Exact-tree CI calls check:loc directly with both refs.
-    add("TypeScript LOC ratchet", [
-      "check:loc",
-      ...(options.staged ? ["--staged"] : ["--base", options.base ?? "origin/main"]),
-      "--",
-      ...result.paths,
+  if (
+    result.paths.some((filePath) =>
+      /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mjs$)/u.test(
+        filePath,
+      ),
+    )
+  ) {
+    add("max-lines suppression ratchet", [
+      "check:max-lines-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.staged ? "HEAD" : (options.base ?? "origin/main"),
     ]);
   }
   add("changelog attributions", ["check:changelog-attributions"]);
@@ -484,6 +525,10 @@ export function createChangedCheckPlan(result, options = {}) {
       commands,
       summary: "all",
     };
+  }
+
+  if (shouldRunControlUiI18nVerify(result.paths)) {
+    addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
   }
 
   if (lanes.core) {
@@ -942,6 +987,13 @@ if (isDirectRun()) {
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {
           cwd: process.cwd(),
           result,
+          diffRefsReady: result.lanes.releaseMetadata
+            ? args.staged ||
+              changedCheckDiffRefsReady({
+                base: args.base,
+                head: args.head,
+              })
+            : undefined,
         })
       ) {
         process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);

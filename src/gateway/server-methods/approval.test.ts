@@ -1337,3 +1337,4 @@ describe("unified approval handlers", () => {
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

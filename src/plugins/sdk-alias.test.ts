@@ -2805,3 +2805,4 @@ describe("buildPluginLoaderJitiOptions", () => {
     expect(buildPluginLoaderJitiOptions({})).not.toHaveProperty("alias");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

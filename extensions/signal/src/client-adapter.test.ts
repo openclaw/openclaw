@@ -6,32 +6,45 @@ import {
   streamSignalEvents as streamSignalEventsImpl,
   type SignalApiMode,
 } from "./client-adapter.js";
-import * as containerClientModule from "./client-container.js";
-import * as nativeClientModule from "./client.js";
+const {
+  mockNativeCheck,
+  mockNativeRpcRequest,
+  mockNativeStreamEvents,
+  mockContainerCheck,
+  mockContainerRpcRequest,
+  mockStreamContainerEvents,
+} = vi.hoisted(() => ({
+  mockNativeCheck: vi.fn(),
+  mockNativeRpcRequest: vi.fn(),
+  mockNativeStreamEvents: vi.fn(),
+  mockContainerCheck: vi.fn(),
+  mockContainerRpcRequest: vi.fn(),
+  mockStreamContainerEvents: vi.fn(),
+}));
 
-const mockNativeCheck = vi.fn<typeof nativeClientModule.signalCheck>();
-const mockNativeRpcRequest = vi.fn<typeof nativeClientModule.signalRpcRequest>();
-const mockNativeStreamEvents = vi.fn<typeof nativeClientModule.streamSignalEvents>();
-const mockContainerCheck = vi.fn<typeof containerClientModule.containerCheck>();
-const mockContainerRpcRequest = vi.fn<typeof containerClientModule.containerRpcRequest>();
-const mockStreamContainerEvents = vi.fn<typeof containerClientModule.streamContainerEvents>();
-let currentApiMode: SignalApiMode = "auto";
-
-beforeEach(() => {
-  vi.spyOn(nativeClientModule, "signalCheck").mockImplementation(mockNativeCheck);
-  vi.spyOn(nativeClientModule, "signalRpcRequest").mockImplementation(mockNativeRpcRequest);
-  vi.spyOn(nativeClientModule, "streamSignalEvents").mockImplementation(mockNativeStreamEvents);
-  vi.spyOn(containerClientModule, "containerCheck").mockImplementation(mockContainerCheck);
-  vi.spyOn(containerClientModule, "containerRpcRequest").mockImplementation(
-    mockContainerRpcRequest,
-  );
-  vi.spyOn(containerClientModule, "streamContainerEvents").mockImplementation(
-    mockStreamContainerEvents,
-  );
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
+  return {
+    ...actual,
+    signalCheck: mockNativeCheck,
+    signalRpcRequest: mockNativeRpcRequest,
+    streamSignalEvents: mockNativeStreamEvents,
+  };
 });
 
+vi.mock("./client-container.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client-container.js")>();
+  return {
+    ...actual,
+    containerCheck: mockContainerCheck,
+    containerRpcRequest: mockContainerRpcRequest,
+    streamContainerEvents: mockStreamContainerEvents,
+  };
+});
+
+let currentApiMode: SignalApiMode = "auto";
+
 afterEach(() => {
-  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -146,7 +159,7 @@ describe("detectSignalApiMode", () => {
     mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
     mockContainerCheck.mockResolvedValue({ ok: false, status: 404 });
 
-    const result = await detectSignalApiMode("http://localhost:8080");
+    const result = await detectSignalApiMode("http://native-only.local:8080");
     expect(result).toBe("native");
   });
 
@@ -154,7 +167,7 @@ describe("detectSignalApiMode", () => {
     mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
     mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
 
-    const result = await detectSignalApiMode("http://localhost:8080");
+    const result = await detectSignalApiMode("http://container-only.local:8080");
     expect(result).toBe("container");
   });
 
@@ -162,7 +175,7 @@ describe("detectSignalApiMode", () => {
     mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
     mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
 
-    const result = await detectSignalApiMode("http://localhost:8080");
+    const result = await detectSignalApiMode("http://both-healthy.local:8080");
     expect(result).toBe("native");
   });
 
@@ -175,7 +188,7 @@ describe("detectSignalApiMode", () => {
     );
     mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
 
-    const result = await detectSignalApiMode("http://localhost:8080");
+    const result = await detectSignalApiMode("http://container-first.local:8080");
     expect(result).toBe("native");
   });
 
@@ -185,7 +198,7 @@ describe("detectSignalApiMode", () => {
       mockNativeCheck.mockImplementation(() => new Promise(() => {}));
       mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
 
-      const result = detectSignalApiMode("http://localhost:8080");
+      const result = detectSignalApiMode("http://native-stalled.local:8080");
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(50);
       await expect(result).resolves.toBe("container");
@@ -198,8 +211,8 @@ describe("detectSignalApiMode", () => {
     mockNativeCheck.mockResolvedValue({ ok: false, status: null, error: "Connection refused" });
     mockContainerCheck.mockResolvedValue({ ok: false, status: null, error: "Connection refused" });
 
-    await expect(detectSignalApiMode("http://localhost:8080")).rejects.toThrow(
-      "Signal API not reachable at http://localhost:8080",
+    await expect(detectSignalApiMode("http://neither-healthy.local:8080")).rejects.toThrow(
+      "Signal API not reachable at http://neither-healthy.local:8080",
     );
   });
 
@@ -207,7 +220,7 @@ describe("detectSignalApiMode", () => {
     mockNativeCheck.mockRejectedValue(new Error("Network error"));
     mockContainerCheck.mockRejectedValue(new Error("Network error"));
 
-    await expect(detectSignalApiMode("http://localhost:8080")).rejects.toThrow(
+    await expect(detectSignalApiMode("http://probe-errors.local:8080")).rejects.toThrow(
       "Signal API not reachable",
     );
   });
@@ -216,29 +229,33 @@ describe("detectSignalApiMode", () => {
     mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
     mockContainerCheck.mockResolvedValue({ ok: false });
 
-    await detectSignalApiMode("http://localhost:8080", 5000);
-    expect(mockNativeCheck).toHaveBeenCalledWith("http://localhost:8080", 5000);
-    expect(mockContainerCheck).toHaveBeenCalledWith("http://localhost:8080", 5000);
+    await detectSignalApiMode("http://custom-timeout.local:8080", 5000);
+    expect(mockNativeCheck).toHaveBeenCalledWith("http://custom-timeout.local:8080", 5000);
+    expect(mockContainerCheck).toHaveBeenCalledWith("http://custom-timeout.local:8080", 5000);
   });
 
   it("requires a working container receive WebSocket when requested", async () => {
     mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
     mockContainerCheck.mockResolvedValue({ ok: true, status: 101 });
 
-    const result = await detectSignalApiMode("http://localhost:8080", 5000, {
+    const result = await detectSignalApiMode("http://container-receive.local:8080", 5000, {
       account: "+14259798283",
       requireContainerReceive: true,
     });
 
     expect(result).toBe("container");
-    expect(mockContainerCheck).toHaveBeenCalledWith("http://localhost:8080", 5000, "+14259798283");
+    expect(mockContainerCheck).toHaveBeenCalledWith(
+      "http://container-receive.local:8080",
+      5000,
+      "+14259798283",
+    );
   });
 
   it("does not select container receive mode without an account", async () => {
     mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
 
     await expect(
-      detectSignalApiMode("http://localhost:8080", 5000, {
+      detectSignalApiMode("http://missing-account.local:8080", 5000, {
         requireContainerReceive: true,
       }),
     ).rejects.toThrow("Signal API not reachable");
