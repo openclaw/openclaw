@@ -1229,13 +1229,39 @@ describe("qa cli runtime", () => {
     });
   });
 
-  it.each(["0x3e9", "1e3", "1001.5"])(
-    "rejects non-decimal Telegram SUT uid %s before starting a gateway",
-    async (uid) => {
-      const candidateRoot = path.join(telegramArtifactsDir, `candidate-${uid}`);
-      const boundaryDir = path.join(telegramArtifactsDir, `boundary-${uid}`);
-      const launcherPath = path.join(telegramArtifactsDir, `launcher-${uid}`);
-      const runtimeRoot = path.join(telegramArtifactsDir, `runtime-${uid}`);
+  it.each([
+    {
+      envKey: "OPENCLAW_QA_TELEGRAM_SUT_UID",
+      badValue: "0x3e9",
+      label: "uid-hex",
+    },
+    {
+      envKey: "OPENCLAW_QA_TELEGRAM_SUT_UID",
+      badValue: "1e3",
+      label: "uid-exponent",
+    },
+    {
+      envKey: "OPENCLAW_QA_TELEGRAM_SUT_UID",
+      badValue: "1001.5",
+      label: "uid-fraction",
+    },
+    {
+      envKey: "OPENCLAW_QA_TELEGRAM_SUT_GID",
+      badValue: "0x3ea",
+      label: "gid-hex",
+    },
+    {
+      envKey: "OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS",
+      badValue: "0x3e8",
+      label: "cleanup-hex",
+    },
+  ])(
+    "rejects non-decimal Telegram SUT $label before starting a gateway",
+    async ({ envKey, badValue, label }) => {
+      const candidateRoot = path.join(telegramArtifactsDir, `candidate-${label}`);
+      const boundaryDir = path.join(telegramArtifactsDir, `boundary-${label}`);
+      const launcherPath = path.join(telegramArtifactsDir, `launcher-${label}`);
+      const runtimeRoot = path.join(telegramArtifactsDir, `runtime-${label}`);
       const runtimeTempParent = path.join(runtimeRoot, "tmp");
       const preloadPath = path.join(runtimeRoot, "openclaw-telegram-preentry.mjs");
       const runtimeEntryPath = path.join(candidateRoot, "dist", "index.js");
@@ -1252,14 +1278,15 @@ describe("qa cli runtime", () => {
       vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_PRELOAD_PATH", preloadPath);
       vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR", boundaryDir);
       vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_RUNTIME_EXECUTABLE", process.execPath);
-      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_UID", uid);
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_UID", "1001");
+      vi.stubEnv(envKey, badValue);
 
       await expect(
         runQaTelegramCommand({
           repoRoot: candidateRoot,
           scenarioIds: ["telegram-help-command"],
         }),
-      ).rejects.toThrow("OPENCLAW_QA_TELEGRAM_SUT_UID must be a positive integer.");
+      ).rejects.toThrow(`${envKey} must be a positive integer.`);
 
       expect(runCanonicalLiveScenarios).not.toHaveBeenCalled();
       expect(runTelegramQaLive).not.toHaveBeenCalled();
