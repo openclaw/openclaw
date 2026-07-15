@@ -17,6 +17,7 @@ import {
   type ClaudeAppServerClient,
   type ClaudeAppServerStartOptions,
 } from "./client.js";
+import { claudeAppServerPoolKey } from "./config.js";
 import { resolveManagedClaudeBridgeStartOptions } from "./managed-binary.js";
 
 const THREAD_NOT_FOUND_RPC_CODE = -32004;
@@ -94,7 +95,7 @@ export async function getCatalogClient(
     commandSource: "managed",
     ...overrides,
   });
-  const client = getSharedClaudeAppServerClient(startOptions);
+  const client = getSharedClaudeAppServerClient(claudeAppServerPoolKey(), startOptions);
   await client.start();
   return client;
 }

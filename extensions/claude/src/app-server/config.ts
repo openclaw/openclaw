@@ -31,6 +31,28 @@ import type { ApprovalPolicy, SandboxPolicy } from "./types.js";
 
 export const DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY: ApprovalPolicy = "never";
 export const DEFAULT_CLAUDE_APP_SERVER_SANDBOX: SandboxPolicy = { type: "dangerFullAccess" };
+// Provider identity stamped onto thread/start + thread/fork (modelProvider) and
+// persisted in the session binding. Defaults to real Anthropic; a second
+// bridge-backed extension pointed at an Anthropic-compatible endpoint (e.g. the
+// planned glm-bridge → Z.ai) sets appServer.modelProvider to its own provider id
+// so the server stamps the right provider instead of the hardcoded "anthropic".
+// The bridge server already accepts modelProvider per thread/start call (its own
+// ANTHROPIC_PROVIDER_ID is only a fallback), so this is purely our consumer-side
+// identity, not a bridge-package change.
+export const DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER = "anthropic";
+/**
+ * Shared-client pool key for a given provider identity. The pool
+ * (client.ts) keys each long-lived bridge process by this string, so a
+ * second bridge-backed extension pointed at a different provider (e.g.
+ * glm-bridge → Z.ai) gets its own concurrently-alive process. Both the
+ * per-turn client lookup (run-attempt.ts) and the harness dispose path
+ * (harness.ts) MUST derive the key through this one helper so "same
+ * provider" and "same pool slot" cannot drift apart (openclaw-91t).
+ */
+export function claudeAppServerPoolKey(modelProvider?: string): string {
+  const provider = modelProvider?.trim() || DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER;
+  return `claude-bridge:${provider}`;
+}
 // Hard per-turn ceiling enforced via setTimeout(() => ac.abort(), …) at the
 // top of run-attempt.ts. Independent of the heartbeat-protected idle
 // watchdog (turnIdleTimeoutMs) below: heartbeats keep the idle timer alive
@@ -103,6 +125,7 @@ export const CLAUDE_APP_SERVER_CONFIG_KEYS = [
   "command",
   "args",
   "env",
+  "modelProvider",
   "approvalPolicy",
   "sandbox",
   "turnTimeoutMs",
@@ -136,6 +159,7 @@ const appServerConfigSchema = z
     command: z.string().min(1).optional(),
     args: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),
+    modelProvider: z.string().min(1).optional(),
     approvalPolicy: approvalPolicySchema.optional(),
     sandbox: sandboxConfigSchema.optional(),
     turnTimeoutMs: positiveIntegerSchema.optional(),
@@ -165,6 +189,15 @@ export type ClaudeAppServerRuntimeConfig = {
   commandSource: ClaudeBridgeCommandSource;
   args?: string[];
   env?: Record<string, string>;
+  /**
+   * Provider identity forwarded as `modelProvider` on thread/start + thread/fork
+   * and persisted in the session binding. Optional on the type so pre-existing
+   * callers/fixtures may omit it; {@link resolveClaudeAppServerConfig} always
+   * populates it, defaulting to {@link DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER}
+   * ("anthropic"). Consumers that read it should still fall back to that default
+   * to stay correct when handed a hand-built config.
+   */
+  modelProvider?: string;
   approvalPolicy: ApprovalPolicy;
   sandbox: SandboxPolicy;
   turnTimeoutMs: number;
@@ -262,6 +295,8 @@ export function resolveClaudeAppServerConfig(
   const appServer: ClaudeAppServerRuntimeConfig = {
     command,
     commandSource,
+    modelProvider:
+      readNonEmptyString(parsed?.modelProvider) ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
     approvalPolicy: policy.approvalPolicy,
     sandbox: policy.sandbox,
     turnTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS,

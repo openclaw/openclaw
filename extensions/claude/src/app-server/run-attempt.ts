@@ -66,7 +66,12 @@ import { createAgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { getSharedClaudeAppServerClient, type ClaudeAppServerClient } from "./client.js";
-import { resolveClaudeAppServerConfig, type ResolvedClaudeAppServerConfig } from "./config.js";
+import {
+  claudeAppServerPoolKey,
+  DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
+  resolveClaudeAppServerConfig,
+  type ResolvedClaudeAppServerConfig,
+} from "./config.js";
 import { createClaudeDynamicToolBridge, type ClaudeDynamicToolBridge } from "./dynamic-tools.js";
 import {
   ClaudeAppServerEventProjector,
@@ -140,17 +145,34 @@ export async function runClaudeAppServerAttempt(
     // promptError with an actionable message, instead of throwing past this
     // attempt. An explicit appServer.command / OPENCLAW_CLAUDE_APP_SERVER_BIN
     // override is passed through unresolved by resolveManagedClaudeBridgeStartOptions.
+    const startEnv = resolveClaudeBridgeStartEnv({
+      configuredEnv: cfg.appServer.env,
+      resolvedApiKey: params.resolvedApiKey,
+      queryThreadTimeoutMs: cfg.appServer.queryThreadTimeoutMs,
+    });
+    // Fail fast (as a clean promptError, like the version floor above) when the
+    // bridge is pointed at a third-party endpoint but has no credentials —
+    // otherwise the spawn "succeeds" and the turn dies on an opaque upstream
+    // 401 surfaced through the idle/exit path. See assertClaudeBridgeCredentials.
+    assertClaudeBridgeCredentials({
+      env: startEnv,
+      resolvedApiKey: params.resolvedApiKey,
+      modelProvider: cfg.appServer.modelProvider,
+    });
     const startOptions = await resolveManagedClaudeBridgeStartOptions({
       command: cfg.appServer.command,
       commandSource: cfg.appServer.commandSource,
       args: cfg.appServer.args,
-      env: resolveClaudeBridgeStartEnv({
-        configuredEnv: cfg.appServer.env,
-        resolvedApiKey: params.resolvedApiKey,
-        queryThreadTimeoutMs: cfg.appServer.queryThreadTimeoutMs,
-      }),
+      env: startEnv,
     });
-    client = getSharedClaudeAppServerClient(startOptions);
+    // Pool key is the provider identity, not the spawn options — this is
+    // the same identity that already governs provider-owned session
+    // semantics (openclaw-pg9), so "same provider" and "same pool slot"
+    // stay the same question. A second bridge-backed extension pointed at a
+    // different provider (e.g. glm-bridge → Z.ai) resolves to a distinct
+    // key here and gets its own concurrently-running process (openclaw-7ss).
+    const poolKey = claudeAppServerPoolKey(cfg.appServer.modelProvider);
+    client = getSharedClaudeAppServerClient(poolKey, startOptions);
     await client.start();
     // 1. Resolve sandbox + effective workspace once so dynamic-tool
     //    materialization, thread/start cwd, and runTurn cwd all agree on
@@ -619,6 +641,49 @@ export function resolveClaudeBridgeStartEnv(params: {
     env.OPENCLAW_CLAUDE_BRIDGE_QUERY_THREAD_TIMEOUT_MS = String(params.queryThreadTimeoutMs);
   }
   return Object.keys(env).length > 0 ? env : undefined;
+}
+
+/**
+ * Fail fast — with an actionable message — when the bridge would spawn against
+ * a third-party Anthropic-compatible endpoint with no credentials to present.
+ *
+ * Stock Anthropic authenticates via the Claude subscription / OAuth credentials
+ * the bridge reads for itself, so a missing API key there is NOT fatal and must
+ * not be flagged. But when the bridge is pointed at a custom `ANTHROPIC_BASE_URL`
+ * (e.g. glm-bridge → Z.ai) there is no OAuth fallback — the endpoint only accepts
+ * an explicit key. Without this check the spawn "succeeds" and the turn dies on
+ * an opaque upstream 401 routed through the idle/exit path, rather than telling
+ * the operator what to configure. Gating on a custom base URL (rather than a
+ * hardcoded provider id) keeps this generic across the claude / glm-bridge /
+ * any-future bridge extensions while never false-positiving on stock Anthropic.
+ *
+ * Thrown inside runClaudeAppServerAttempt's try, so it surfaces as the turn's
+ * promptError exactly like the version-floor guard (assertSupportedBridgeVersion).
+ * Exported for unit coverage.
+ */
+export function assertClaudeBridgeCredentials(params: {
+  env?: Record<string, string>;
+  resolvedApiKey?: string;
+  modelProvider?: string;
+}): void {
+  const baseUrl = params.env?.ANTHROPIC_BASE_URL?.trim();
+  if (!baseUrl) {
+    return;
+  }
+  const hasCredential =
+    Boolean(params.env?.ANTHROPIC_API_KEY?.trim()) ||
+    Boolean(params.env?.ANTHROPIC_AUTH_TOKEN?.trim()) ||
+    Boolean(params.resolvedApiKey?.trim());
+  if (hasCredential) {
+    return;
+  }
+  const provider = params.modelProvider?.trim() || DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER;
+  throw new Error(
+    `No API key configured for the "${provider}" provider. The bridge is pointed at a custom endpoint ` +
+      `(ANTHROPIC_BASE_URL=${baseUrl}) that requires an explicit key, but none was resolved. ` +
+      `Configure a "${provider}" auth profile (e.g. \`openclaw auth login ${provider}\`) or set ` +
+      `appServer.env.ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) for this extension, then retry.`,
+  );
 }
 
 // ─── Tool materialization ───────────────────────────────────────────────────

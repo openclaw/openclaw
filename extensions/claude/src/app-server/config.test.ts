@@ -6,6 +6,7 @@ import {
   CLAUDE_APP_SERVER_CONFIG_KEYS,
   CLAUDE_DYNAMIC_TOOLS_CONFIG_KEYS,
   DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY,
+  DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
   DEFAULT_CLAUDE_APP_SERVER_PROGRESS_IDLE_TIMEOUT_MS,
   DEFAULT_CLAUDE_APP_SERVER_QUERY_THREAD_TIMEOUT_MS,
   DEFAULT_CLAUDE_APP_SERVER_SUBAGENT_PROGRESS_IDLE_TIMEOUT_MS,
@@ -28,6 +29,7 @@ describe("resolveClaudeAppServerConfig", () => {
       appServer: {
         command: DEFAULT_CLAUDE_BRIDGE_COMMAND,
         commandSource: "managed",
+        modelProvider: DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
         approvalPolicy: DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY,
         sandbox: { type: "dangerFullAccess" },
         turnTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS,
@@ -66,6 +68,7 @@ describe("resolveClaudeAppServerConfig", () => {
         commandSource: "config",
         args: ["server.js", "--debug"],
         env: { CLAUDE_CODE_ENABLE_TELEMETRY: "0" },
+        modelProvider: DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
         approvalPolicy: "on-request",
         sandbox: { type: "workspaceWrite" },
         turnTimeoutMs: 1234,
@@ -99,6 +102,7 @@ describe("resolveClaudeAppServerConfig", () => {
       appServer: {
         command: DEFAULT_CLAUDE_BRIDGE_COMMAND,
         commandSource: "managed",
+        modelProvider: DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
         approvalPolicy: DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY,
         sandbox: { type: "dangerFullAccess" },
         turnTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS,

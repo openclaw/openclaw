@@ -41,6 +41,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ClaudeAppServerClient } from "./client.js";
+import { DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER } from "./config.js";
 import type { ResolvedClaudeAppServerConfig } from "./config.js";
 import type { ClaudeDynamicToolBridge } from "./dynamic-tools.js";
 import { assertThreadStartResponse } from "./protocol-validators.js";
@@ -325,7 +326,7 @@ async function forkThreadOnCatalogDrift(args: {
     threadId: existing.threadId,
     cwd: effectiveWorkspace,
     model: params.modelId,
-    modelProvider: "anthropic",
+    modelProvider: cfg.appServer.modelProvider ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
     approvalPolicy: cfg.appServer.approvalPolicy,
     sandbox: cfg.appServer.sandbox,
     baseInstructions: developerInstructions,
@@ -342,7 +343,7 @@ async function forkThreadOnCatalogDrift(args: {
       threadId: newThreadId,
       cwd: effectiveWorkspace,
       model: params.modelId,
-      modelProvider: "anthropic",
+      modelProvider: cfg.appServer.modelProvider ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
       approvalPolicy: cfg.appServer.approvalPolicy,
       approvalsReviewer: "user",
       sandbox: cfg.appServer.sandbox,
@@ -385,7 +386,7 @@ async function startFreshThread(args: {
     // effectiveWorkspace passthrough.
     cwd: effectiveWorkspace,
     model: params.modelId,
-    modelProvider: "anthropic",
+    modelProvider: cfg.appServer.modelProvider ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
     approvalPolicy: cfg.appServer.approvalPolicy,
     approvalsReviewer: "user",
     sandbox: cfg.appServer.sandbox,
@@ -403,7 +404,7 @@ async function startFreshThread(args: {
       threadId,
       cwd: effectiveWorkspace,
       model: params.modelId,
-      modelProvider: "anthropic",
+      modelProvider: cfg.appServer.modelProvider ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
       approvalPolicy: cfg.appServer.approvalPolicy,
       approvalsReviewer: "user",
       sandbox: cfg.appServer.sandbox,
