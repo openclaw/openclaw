@@ -601,8 +601,12 @@ async function loadMarketplace(params: {
   }): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> => {
     let raw: string;
     try {
+      // Resolve symlinks so a marketplace.json that points to a regular file
+      // keeps working, while the bounded regular-file read still rejects
+      // directories, FIFOs, and oversized targets.
+      const resolvedManifestPath = await fs.realpath(paramsLocal.manifestPath);
       const { buffer } = await readRegularFile({
-        filePath: paramsLocal.manifestPath,
+        filePath: resolvedManifestPath,
         maxBytes: MAX_MARKETPLACE_MANIFEST_BYTES,
       });
       raw = buffer.toString("utf-8");

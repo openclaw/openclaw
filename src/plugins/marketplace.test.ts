@@ -320,7 +320,7 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it("reports a distinct error when the marketplace manifest is not a regular file", async () => {
+  it("follows a symlinked marketplace manifest to a regular file", async () => {
     if (process.platform === "win32") {
       // Symlink support in unit tests is not guaranteed on Windows CI runners.
       return;
@@ -329,16 +329,19 @@ describe("marketplace plugins", () => {
       const manifestPath = path.join(rootDir, ".claude-plugin", "marketplace.json");
       await fs.mkdir(path.dirname(manifestPath), { recursive: true });
       const targetPath = path.join(rootDir, "real-manifest.json");
-      await fs.writeFile(targetPath, "{}", "utf-8");
+      await fs.writeFile(
+        targetPath,
+        JSON.stringify({ plugins: [{ name: "symlinked-plugin", source: "." }] }),
+        "utf-8",
+      );
       await fs.symlink(targetPath, manifestPath);
 
       const result = await listMarketplacePlugins({ marketplace: rootDir });
 
-      expect(result.ok).toBe(false);
-      expect(result).toHaveProperty("error");
-      const error = (result as { ok: false; error: string }).error;
-      expect(error).toContain("Marketplace manifest unreadable");
-      expect(error).not.toContain("too large");
+      expect(result.ok).toBe(true);
+      expect(
+        (result as { ok: true; manifest: { plugins: unknown[] } }).manifest.plugins,
+      ).toHaveLength(1);
     });
   });
 
