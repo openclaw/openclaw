@@ -144,9 +144,18 @@ function readLegacyFrozenScenarioContract(assertionsFile) {
   return LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS.get(digest)?.split(" ");
 }
 
-function readFrozenScenarioContract(assertionsFile, targetRoot) {
-  // The selected ref is already trust-gated by the release workflow. Keep this
-  // command dependency-free because image planning runs before package install.
+function readFrozenScenarioContract(assertionsFile, targetRoot, allowExecutableContract) {
+  if (!allowExecutableContract) {
+    const inertScenarios = readLegacyFrozenScenarioContract(assertionsFile);
+    if (inertScenarios) {
+      return inertScenarios;
+    }
+    throw new Error(
+      `cannot read frozen upgrade-survivor scenarios from ${assertionsFile}: unrecognized scenario contract; require trusted workflow opt-in before executing target code`,
+    );
+  }
+  // Canonical frozen refs may expose a dependency-free catalog command. Run it
+  // only after the release workflow explicitly establishes the trust boundary.
   const result = spawnSync(process.execPath, [assertionsFile, "list-scenarios"], {
     cwd: targetRoot,
     encoding: "utf8",
@@ -190,7 +199,7 @@ function readFrozenScenarioContract(assertionsFile, targetRoot) {
   return parsed;
 }
 
-function filterUpgradeSurvivorScenariosForTarget(scenarios, targetRoot) {
+function filterUpgradeSurvivorScenariosForTarget(scenarios, targetRoot, allowExecutableContract) {
   if (!targetRoot) {
     return scenarios;
   }
@@ -198,7 +207,11 @@ function filterUpgradeSurvivorScenariosForTarget(scenarios, targetRoot) {
   if (!existsSync(assertionsFile)) {
     return [];
   }
-  const targetScenarios = readFrozenScenarioContract(assertionsFile, targetRoot);
+  const targetScenarios = readFrozenScenarioContract(
+    assertionsFile,
+    targetRoot,
+    allowExecutableContract,
+  );
   const supportedScenarios = new Set(targetScenarios);
   return scenarios.filter((scenario) => supportedScenarios.has(scenario));
 }
@@ -330,6 +343,7 @@ function expandUpgradeSurvivorBaselineLanes(
   rawBaselineSpecs,
   targetRoot,
   rawScenarios = "",
+  allowExecutableContract = false,
 ) {
   const hasUpgradeSurvivorLane = poolLanes.some(
     (poolLane) =>
@@ -347,6 +361,7 @@ function expandUpgradeSurvivorBaselineLanes(
   const supportedScenarios = filterUpgradeSurvivorScenariosForTarget(
     requestedScenarios,
     targetRoot,
+    allowExecutableContract,
   );
   const supportedScenarioSet = new Set(supportedScenarios);
   const unsupportedScenarios = targetRoot
@@ -606,6 +621,7 @@ export function resolveDockerE2ePlan(options) {
       upgradeSurvivorBaselines,
       options.upgradeSurvivorTargetRoot,
       upgradeSurvivorScenarios,
+      options.allowFrozenTargetScenarioOmissions,
     );
     for (const laneName of expansion.omittedLaneNames) {
       omittedUnsupportedLaneNames.add(laneName);
@@ -662,6 +678,7 @@ export function resolveDockerE2ePlan(options) {
               upgradeSurvivorBaselines,
               options.upgradeSurvivorTargetRoot,
               upgradeSurvivorScenarios,
+              options.allowFrozenTargetScenarioOmissions,
             );
             const supportedLane = targetExpansion.lanes.find(
               (poolLane) => poolLane.name === selectedName,

@@ -346,7 +346,16 @@ describe("scripts/test-docker-all scheduler", () => {
   it("rejects candidate-controlled survivor omissions without trusted opt-in", () => {
     const root = tempDirs.make("openclaw-docker-all-untrusted-filter-");
     try {
-      writeFrozenScenarioContract(root, ["unrelated"]);
+      const assertionsFile = writeFrozenScenarioContract(root, ["unrelated"]);
+      const executionMarker = path.join(root, "candidate-contract-executed");
+      writeFileSync(
+        assertionsFile,
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(executionMarker)}, "executed");`,
+          'process.stdout.write("[\\"unrelated\\"]\\n");',
+        ].join("\n"),
+      );
       const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -363,6 +372,7 @@ describe("scripts/test-docker-all scheduler", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("require trusted workflow opt-in");
       expect(result.stdout).not.toContain("Dry run complete");
+      expect(existsSync(executionMarker)).toBe(false);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

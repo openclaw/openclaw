@@ -40,6 +40,7 @@ function planFor(
   overrides: Partial<Parameters<typeof resolveDockerE2ePlan>[0]> = {},
 ): ReturnType<typeof resolveDockerE2ePlan>["plan"] {
   return resolveDockerE2ePlan({
+    allowFrozenTargetScenarioOmissions: true,
     includeOpenWebUI: false,
     liveMode: "all",
     liveRetries: DEFAULT_LIVE_RETRIES,
