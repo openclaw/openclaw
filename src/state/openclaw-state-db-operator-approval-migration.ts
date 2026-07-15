@@ -69,14 +69,12 @@ export function detectOperatorApprovalSchemaMigration(db: DatabaseSync, path: st
     : [{ kind: "operator-approvals-system-agent" as const, path }];
 }
 
-function hasExactColumns(db: DatabaseSync): boolean {
-  const names = (
-    db.prepare("PRAGMA table_info(operator_approvals)").all() as Array<{ name?: unknown }>
-  ).map((row) => row.name);
-  return names.length === COLUMNS.length && COLUMNS.every((column) => names.includes(column));
+function normalizeDdl(sql: string): string {
+  // sqlite_master stores the CREATE statement without a trailing semicolon.
+  return sql.replace(/\s+/g, " ").trim().replace(/;$/, "");
 }
 
-function canonicalCreateSql(): string {
+function canonicalOperatorApprovalCreateSql(): string {
   const marker = "CREATE TABLE IF NOT EXISTS operator_approvals (";
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker);
   const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
@@ -86,8 +84,34 @@ function canonicalCreateSql(): string {
   if (start < 0 || end < 0) {
     throw new Error("canonical operator approval schema is unavailable");
   }
-  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + 3).replace(
-    marker,
+  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + 3);
+}
+
+// The only legacy shape this repair may destructively replace is the exact
+// prior canonical table with the two-kind constraint (before 'system-agent').
+// Matching column names alone is not fail-closed: a table with the same names
+// but different constraints/defaults/types would get its rows copied under a
+// schema that silently discards those semantics.
+function hasExactLegacyOperatorApprovalSchema(db: DatabaseSync): boolean {
+  const live = tableSql(db);
+  if (!live) {
+    return false;
+  }
+  const expectedLegacy = normalizeDdl(
+    canonicalOperatorApprovalCreateSql()
+      // sqlite_master stores the CREATE statement without "IF NOT EXISTS".
+      .replace(
+        "CREATE TABLE IF NOT EXISTS operator_approvals (",
+        "CREATE TABLE operator_approvals (",
+      )
+      .replace(/'exec',\s*'plugin',\s*'system-agent'/, "'exec', 'plugin'"),
+  );
+  return normalizeDdl(live) === expectedLegacy;
+}
+
+function canonicalCreateSql(): string {
+  return canonicalOperatorApprovalCreateSql().replace(
+    "CREATE TABLE IF NOT EXISTS operator_approvals (",
     "CREATE TABLE operator_approvals_migration_new (",
   );
 }
@@ -96,7 +120,7 @@ export function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
   if (
     hasCanonicalOperatorApprovalKinds(db) ||
     tableExists(db, "operator_approvals_migration_new") ||
-    !hasExactColumns(db)
+    !hasExactLegacyOperatorApprovalSchema(db)
   ) {
     return false;
   }
