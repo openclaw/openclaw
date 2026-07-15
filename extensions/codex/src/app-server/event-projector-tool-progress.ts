@@ -119,7 +119,17 @@ export class CodexToolProgressProjection {
   }
 
   setLastToolError(error: EmbeddedRunAttemptResult["lastToolError"]): void {
-    this.lastNativeToolError = error;
+    if (!error) {
+      this.lastNativeToolError = undefined;
+      return;
+    }
+    // Native terminals and synthesized missing results share attempt-wide mutation truth
+    // with dynamic tools; merge here so later distinct outcomes cannot erase failures.
+    this.lastNativeToolError =
+      this.params.toolMutationRuntime?.mergeError(error, this.lastNativeToolError) ??
+      (this.lastNativeToolError?.mutatingAction && error.mutatingAction !== true
+        ? this.lastNativeToolError
+        : error);
   }
 
   recordDynamicToolResult(params: {
@@ -226,11 +236,22 @@ export class CodexToolProgressProjection {
       if (!this.lastNativeToolError) {
         return;
       }
+      const actionFingerprint = nativeToolActionFingerprint(params.item);
+      if (this.params.toolMutationRuntime) {
+        this.lastNativeToolError = this.params.toolMutationRuntime.resolveSuccess(
+          this.lastNativeToolError,
+          {
+            toolName: params.name,
+            ...(params.meta ? { meta: params.meta } : {}),
+            ...(actionFingerprint ? { actionFingerprint } : {}),
+          },
+        );
+        return;
+      }
       if (!this.lastNativeToolError.mutatingAction) {
         this.lastNativeToolError = undefined;
         return;
       }
-      const actionFingerprint = nativeToolActionFingerprint(params.item);
       if (
         this.lastNativeToolError.actionFingerprint &&
         actionFingerprint &&
@@ -242,13 +263,13 @@ export class CodexToolProgressProjection {
     }
     const error = itemToolError(params.item, params.status, this.output.textByItem);
     const actionFingerprint = nativeToolActionFingerprint(params.item);
-    this.lastNativeToolError = {
+    this.setLastToolError({
       toolName: params.name,
       ...(params.meta ? { meta: params.meta } : {}),
       ...(error ? { error } : {}),
       ...(isMutatingNativeToolItem(params.item) ? { mutatingAction: true } : {}),
       ...(actionFingerprint ? { actionFingerprint } : {}),
-    };
+    });
   }
 
   emitToolResultSummary(item: CodexThreadItem | undefined): void {

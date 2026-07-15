@@ -35,8 +35,21 @@ export function createCodexTestToolMutationRuntime(): NonNullable<
     },
     mergeError: (next, current) =>
       current?.mutatingAction && next.mutatingAction !== true ? current : next,
-    resolveSuccess: (current, success) =>
-      current?.toolName === success.toolName ? undefined : current,
+    resolveSuccess: (current, success) => {
+      if (current?.mutatingAction !== true) {
+        return undefined;
+      }
+      if (current.actionFingerprint || success.actionFingerprint) {
+        return current.actionFingerprint &&
+          success.actionFingerprint &&
+          current.actionFingerprint === success.actionFingerprint
+          ? undefined
+          : current;
+      }
+      return current.toolName === success.toolName && (current.meta ?? "") === (success.meta ?? "")
+        ? undefined
+        : current;
+    },
   };
 }
 

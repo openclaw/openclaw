@@ -4626,6 +4626,84 @@ describe("CodexAppServerEventProjector", () => {
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
   });
 
+  it("preserves distinct native mutation failures when only one action recovers", async () => {
+    const pending = new Map<
+      string,
+      Parameters<NonNullable<EmbeddedRunAttemptParams["toolMutationRuntime"]>["mergeError"]>[0]
+    >();
+    const actionKey = (action: { toolName: string; meta?: string; actionFingerprint?: string }) =>
+      action.actionFingerprint ?? `${action.toolName}:${action.meta ?? ""}`;
+    const toolMutationRuntime = createCodexTestToolMutationRuntime();
+    toolMutationRuntime.mergeError = vi.fn((next, current) => {
+      if (next.mutatingAction !== true) {
+        return current?.mutatingAction ? current : next;
+      }
+      pending.set(actionKey(next), next);
+      return [...pending.values()].at(-1) ?? next;
+    });
+    toolMutationRuntime.resolveSuccess = vi.fn((_current, success) => {
+      pending.delete(actionKey(success));
+      return [...pending.values()].at(-1);
+    });
+    const projector = await createProjector({
+      ...(await createParams()),
+      toolMutationRuntime,
+    });
+    const commandItem = (
+      id: string,
+      command: string,
+      status: "completed" | "failed",
+      output: string,
+      exitCode: number,
+    ) => ({
+      type: "commandExecution",
+      id,
+      command,
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status,
+      commandActions: [],
+      aggregatedOutput: output,
+      exitCode,
+      durationMs: 1,
+    });
+    const firstCommand = "node scripts/first.js --publish";
+    const secondCommand = "node scripts/second.js --publish";
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: commandItem("cmd-first-failed", firstCommand, "failed", "first failed", 1),
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: commandItem("cmd-second-failed", secondCommand, "failed", "second failed", 1),
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: commandItem("cmd-second-recovered", secondCommand, "completed", "ok", 0),
+      }),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "bash",
+      error: "first failed",
+      actionFingerprint: expect.stringContaining(firstCommand),
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: commandItem("cmd-first-recovered", firstCommand, "completed", "ok", 0),
+      }),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
+    expect(toolMutationRuntime.mergeError).toHaveBeenCalledTimes(2);
+    expect(toolMutationRuntime.resolveSuccess).toHaveBeenCalledTimes(2);
+  });
+
   it("does not clear a declined native tool error with a different action", async () => {
     const projector = await createProjector();
 
