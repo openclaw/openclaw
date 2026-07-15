@@ -447,7 +447,11 @@ export async function finalizeCodexAttempt(
         }
       : {
           phase: "end",
-          ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
+          ...buildLifecycleTerminalMeta({
+            aborted: finalAborted,
+            timedOut: effectiveTimedOut,
+            yielded: toolState.yieldDetected,
+          }),
         },
   );
   return {

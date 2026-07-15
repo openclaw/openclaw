@@ -1,11 +1,11 @@
 {
   "fallbackKeys": [],
-  "generatedAt": "2026-07-14T15:37:46.517Z",
+  "generatedAt": "2026-07-15T06:08:01.032Z",
   "locale": "nl",
-  "model": "claude-opus-4-6",
-  "provider": "anthropic",
-  "sourceHash": "778cf22166ab57460b9473fecf190f1b1eaf6b1fcf28d63d2c32e8e1086effe1",
-  "totalKeys": 3342,
-  "translatedKeys": 3342,
+  "model": "gpt-5.6-sol",
+  "provider": "openai",
+  "sourceHash": "e021e4e8cddefdb1ea2aa558092e0910775dd7a59a50374730a66a10099ad348",
+  "totalKeys": 3359,
+  "translatedKeys": 3359,
   "workflow": 1
 }

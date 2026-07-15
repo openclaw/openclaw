@@ -297,6 +297,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       });
     },
     onClose: (code, reason) => {
+      gatewayHelloReceived = false;
       activeRuntime.cancelAll();
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
@@ -306,6 +307,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     onInventoryChanged: (nextInventory) => {
       inventory = nextInventory;
       publishInventory();
+    },
+    onManifestChanged: (manifest) => {
+      gatewayHelloReceived = false;
+      client.updateNodeManifest(manifest);
     },
   });
 

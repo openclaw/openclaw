@@ -9,17 +9,12 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/ins
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
 import { asObjectRecord } from "./object.js";
+import {
+  filterRepairableStalePluginHits,
+  type StalePluginSurface,
+} from "./stale-plugin-repair-preservation.js";
 
 const CHANNEL_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
-
-type StalePluginSurface =
-  | "allow"
-  | "deny"
-  | "entries"
-  | "slot"
-  | "channel"
-  | "heartbeat"
-  | "modelByChannel";
 
 type StalePluginConfigHit = {
   pluginId: string;
@@ -307,14 +302,16 @@ export function collectStalePluginConfigWarnings(params: {
   hits: StalePluginConfigHit[];
   doctorFixCommand: string;
   autoRepairBlocked?: boolean;
+  surfacePreservePluginIds?: Partial<Record<StalePluginSurface, Iterable<string>>>;
 }): string[] {
-  if (params.hits.length === 0) {
+  const hits = filterRepairableStalePluginHits(params);
+  if (hits.length === 0) {
     return [];
   }
   const policyPluginIds = [
-    ...new Set(params.hits.filter(isPolicySurfaceHit).map((hit) => hit.pluginId)),
+    ...new Set(hits.filter(isPolicySurfaceHit).map((hit) => hit.pluginId)),
   ].toSorted((a, b) => a.localeCompare(b));
-  const lines = params.hits
+  const lines = hits
     .map((hit) => formatStalePluginHitWarning(hit))
     .filter((line): line is string => line !== null);
   if (policyPluginIds.length > 0) {
@@ -338,7 +335,10 @@ export function collectStalePluginConfigWarnings(params: {
 export function maybeRepairStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-  params?: { preservePluginIds?: Iterable<string> },
+  params?: {
+    preservePluginIds?: Iterable<string>;
+    surfacePreservePluginIds?: Partial<Record<StalePluginSurface, Iterable<string>>>;
+  },
 ): {
   config: OpenClawConfig;
   changes: string[];
@@ -352,14 +352,11 @@ export function maybeRepairStalePluginConfig(
     return { config: cfg, changes: [] };
   }
 
-  const preservePluginIds = new Set(
-    [...(params?.preservePluginIds ?? [])]
-      .map((pluginId) => normalizePluginId(pluginId))
-      .filter((pluginId): pluginId is string => Boolean(pluginId)),
-  );
-  const hits = scanStalePluginConfigWithState(cfg, registryState, environment).filter(
-    (hit) => !preservePluginIds.has(normalizePluginId(hit.pluginId)),
-  );
+  const hits = filterRepairableStalePluginHits({
+    hits: scanStalePluginConfigWithState(cfg, registryState, environment),
+    preservePluginIds: params?.preservePluginIds,
+    surfacePreservePluginIds: params?.surfacePreservePluginIds,
+  });
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
   }

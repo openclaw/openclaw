@@ -320,10 +320,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$ARTIFACT_NAME" == *"-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}" ]] || {
-            echo "Package Telegram artifact name does not bind the declared producer run attempt." >&2
-            exit 1
-          }
           artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
           jq -e \
             --arg digest "sha256:${ARTIFACT_DIGEST}" \
@@ -340,6 +336,7 @@ jobs:
             echo "Package Telegram artifact identity does not match the requested immutable tuple." >&2
             exit 1
           }
+          artifact_created_at="$(jq -er '.created_at | fromdateiso8601' <<< "$artifact_json")"
           attempt_json="$(
             gh api \
               "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
@@ -347,11 +344,20 @@ jobs:
           jq -e \
             --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
             --arg run_id "$ARTIFACT_RUN_ID" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
+            '(.id | tostring) == $run_id and
+             (.run_attempt | tostring) == $attempt and
+             .status == "completed" and
+             .conclusion == "success"' \
             <<< "$attempt_json" >/dev/null || {
             echo "Package Telegram artifact producer run attempt does not match the requested tuple." >&2
             exit 1
           }
+          attempt_started_at="$(jq -er '.run_started_at | fromdateiso8601' <<< "$attempt_json")"
+          attempt_completed_at="$(jq -er '.updated_at | fromdateiso8601' <<< "$attempt_json")"
+          if (( artifact_created_at <= attempt_started_at || artifact_created_at > attempt_completed_at )); then
+            echo "Package Telegram artifact creation time is outside the declared producer run attempt." >&2
+            exit 1
+          fi
 
       - name: Download package-under-test artifact
         if: inputs.package_artifact_name != '' && inputs.package_artifact_run_id == github.run_id

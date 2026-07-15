@@ -326,7 +326,9 @@ async function listPiHosts(
         }).then((page) =>
           setTerminalCapability(
             page,
-            resolveExecutableFromPathEnv("pi", process.env.PATH ?? "") !== undefined,
+            resolveExecutableFromPathEnv("pi", process.env.PATH ?? "", process.env, {
+              fallbackToLoginShell: true,
+            }) !== undefined,
           ),
         )),
       });
@@ -396,14 +398,18 @@ async function openPiTerminal(params: {
   const title = `pi --session ${params.threadId.slice(0, 12)}…`;
   if (params.hostId === LOCAL_HOST_ID) {
     const record = await requireLocalPiSession(params.threadId);
-    const executable = resolveExecutableFromPathEnv("pi", process.env.PATH ?? "");
-    if (!executable) {
+    const resolution = resolveExecutableFromPathEnv("pi", process.env.PATH ?? "", process.env, {
+      fallbackToLoginShell: true,
+      withPathEnv: true,
+    });
+    if (!resolution) {
       throw new Error("Pi CLI is unavailable");
     }
     return {
       kind: "local",
-      argv: [executable, "--session", params.threadId],
+      argv: [resolution.executable, "--session", params.threadId],
       ...(record.cwd ? { cwd: record.cwd } : {}),
+      ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
       title,
     };
   }

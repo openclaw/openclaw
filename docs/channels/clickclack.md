@@ -64,6 +64,7 @@ An account counts as configured only when `baseUrl`, `token`, and `workspace` ar
 | `agentId`               | route default       | Pin this account's inbound messages to one agent.                                       |
 | `toolsAllow`            | none                | Tool allowlist for agent replies from this account.                                     |
 | `model`, `systemPrompt` | none                | Used by `replyMode: "model"` completions.                                               |
+| `commandMenu`           | `true`              | Publish native commands to ClickClack composer autocomplete.                            |
 | `reconnectMs`           | `1500`              | Realtime reconnect delay (100 to 60000).                                                |
 
 If `plugins.allow` is a non-empty restrictive list, explicitly selecting
@@ -129,6 +130,46 @@ bit:
 
 Keep the trust bit off if you only use the default `agent` reply mode; it is
 not needed there.
+
+## Command menu
+
+At gateway startup, each configured account publishes OpenClaw's native
+commands to ClickClack. They appear in composer autocomplete labeled with the
+bot's handle. The published set is replaced wholesale on each startup,
+including clearing a stale menu when the native command catalog is empty.
+
+Command-menu sync is enabled by default. Set `commandMenu: false` on an account
+to opt out:
+
+```json5
+{
+  channels: {
+    clickclack: {
+      enabled: true,
+      token: { source: "env", provider: "default", id: "CLICKCLACK_BOT_TOKEN" },
+      workspace: "default",
+      commandMenu: false,
+    },
+  },
+}
+```
+
+The token needs `commands:write`. Current ClickClack `bot:write` and
+`bot:admin` bundles include that scope, and it can also be granted
+individually. Tokens created before command menus were introduced may need the
+scope added or a replacement token.
+
+Sync is best effort and runs once per gateway start. A missing scope or network
+failure logs a warning; an older ClickClack server without the endpoint logs at
+debug level. None of these failures block realtime startup. Menus remain
+available while the agent is offline and are removed when the bot leaves the
+workspace.
+
+This release publishes native command specs only. Aliases and
+skill-, plugin-, or custom-command catalogs are not added to the menu. If a
+name is also registered as an HTTP slash command, ClickClack dispatches that
+registration first; other menu commands continue through normal message
+delivery.
 
 Use `agent` mode for cross-service correlation evidence. For an authoritative
 ClickClack message id in its canonical `msg_<ulid>` shape, the channel derives
@@ -220,11 +261,12 @@ openclaw message send --channel clickclack --target thread:msg_123 --message "fo
 ClickClack token scopes are enforced by the ClickClack API.
 
 - `bot:read`: read workspace/channel/message/thread/DM/realtime/profile data.
-- `bot:write`: `bot:read` plus channel messages, thread replies, DMs, and uploads.
+- `bot:write`: `bot:read` plus channel messages, thread replies, DMs, uploads, and command-menu publishing.
 - `bot:admin`: `bot:write` plus channel creation.
+- `commands:write`: publish the bot's command menu. Included in current `bot:write` and `bot:admin` bundles and grantable individually.
 - `agent_activity:write`: durable agent activity rows (`agent_commentary` / `agent_tool`). Not inherited by `bot:write` or `bot:admin`; required only when `agentActivity: true` is set.
 
-OpenClaw only needs `bot:write` for normal agent chat. Add `agent_activity:write` when enabling [agent activity rows](#agent-activity-rows).
+OpenClaw only needs current `bot:write` for normal agent chat and command-menu sync. Add `agent_activity:write` when enabling [agent activity rows](#agent-activity-rows).
 
 ## Troubleshooting
 
@@ -232,3 +274,4 @@ OpenClaw only needs `bot:write` for normal agent chat. Add `agent_activity:write
 - `ClickClack workspace not found: <value>`: set `workspace` to the workspace id, slug, or name returned by ClickClack.
 - No inbound replies: confirm the token has realtime read access and note that the bot ignores its own messages and messages from other bots.
 - Channel sends fail: verify the bot is a member of the workspace and has `bot:write`.
+- No command menu: confirm `commandMenu` is not `false`, the ClickClack server supports `PUT /api/bots/self/commands`, and the token has `commands:write`.

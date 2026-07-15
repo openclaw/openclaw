@@ -12,12 +12,17 @@ const mocks = vi.hoisted(() => ({
   capturedGatewayClients: [] as Array<{
     request: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
+    updateNodeManifest: ReturnType<typeof vi.fn>;
   }>,
   mcpConfiguredServerCount: 0,
   mcpDescriptors: [] as Array<Record<string, unknown>>,
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
   runtimeSteps: [] as string[],
   useFakeRuntime: false,
+  nodeHostCommands: [] as string[],
+  nodeHostCaps: [] as string[],
+  availabilityOnWatch: undefined as { caps: string[]; commands: string[] } | undefined,
+  availabilityChanged: undefined as (() => void) | undefined,
   normalizedPath: null as string | null,
   resolvedExecutables: new Map<string, string>(),
   closeMcpManager: vi.fn(async () => undefined),
@@ -64,6 +69,7 @@ vi.mock("../gateway/client.js", () => ({
     const client = {
       request: vi.fn(async () => ({})),
       stop: vi.fn(),
+      updateNodeManifest: vi.fn(),
     };
     mocks.capturedGatewayClientOptions.push(opts);
     mocks.capturedGatewayClients.push(client);
@@ -110,8 +116,8 @@ vi.mock("./plugin-node-host.js", () => ({
   listRegisteredNodeHostCapsAndCommands: vi.fn((context: { env: NodeJS.ProcessEnv }) => {
     mocks.runtimeSteps.push(`commands:${context.env.PATH ?? ""}`);
     return {
-      caps: [],
-      commands: [],
+      commands: [...mocks.nodeHostCommands],
+      caps: [...mocks.nodeHostCaps],
       nodePluginTools: [
         {
           pluginId: "test-plugin",
@@ -121,6 +127,16 @@ vi.mock("./plugin-node-host.js", () => ({
           parameters: { type: "object", properties: {} },
         },
       ],
+    };
+  }),
+  watchRegisteredNodeHostCommandAvailability: vi.fn((_context: unknown, onChange: () => void) => {
+    mocks.availabilityChanged = onChange;
+    if (mocks.availabilityOnWatch) {
+      mocks.nodeHostCaps = [...mocks.availabilityOnWatch.caps];
+      mocks.nodeHostCommands = [...mocks.availabilityOnWatch.commands];
+    }
+    return () => {
+      mocks.availabilityChanged = undefined;
     };
   }),
 }));
@@ -171,6 +187,10 @@ describe("runNodeHost", () => {
     mocks.nodeSkillDescriptors = [];
     mocks.runtimeSteps = [];
     mocks.useFakeRuntime = false;
+    mocks.nodeHostCommands = [];
+    mocks.nodeHostCaps = [];
+    mocks.availabilityOnWatch = undefined;
+    mocks.availabilityChanged = undefined;
     mocks.normalizedPath = null;
     mocks.resolvedExecutables.clear();
     vi.clearAllMocks();
@@ -286,7 +306,58 @@ describe("runNodeHost", () => {
       process.env.PATH = originalPath;
     }
 
-    expect(mocks.runtimeSteps).toEqual(["path", "commands:/normalized/node/path"]);
+    expect(mocks.runtimeSteps).toEqual([
+      "path",
+      "commands:/normalized/node/path",
+      "commands:/normalized/node/path",
+    ]);
+  });
+
+  it("reconciles the manifest after watch attachment and on later changes", async () => {
+    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
+      ready: true,
+      aborted: false,
+      elapsedMs: 0,
+    });
+    mocks.availabilityOnWatch = {
+      caps: ["canvas"],
+      commands: ["canvas.present"],
+    };
+    const processOnceSpy = vi.spyOn(process, "once");
+    const previousExitCode = process.exitCode;
+    try {
+      const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
+      await vi.waitFor(() =>
+        expect(mocks.capturedGatewayClients[0]?.updateNodeManifest).toHaveBeenCalledWith(
+          expect.objectContaining({
+            caps: expect.arrayContaining(["canvas"]),
+            commands: expect.arrayContaining(["canvas.present"]),
+          }),
+        ),
+      );
+
+      mocks.nodeHostCaps = [];
+      mocks.nodeHostCommands = [];
+      mocks.availabilityChanged?.();
+      expect(mocks.capturedGatewayClients[0]?.updateNodeManifest).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          caps: expect.not.arrayContaining(["canvas"]),
+          commands: expect.not.arrayContaining(["canvas.present"]),
+        }),
+      );
+
+      const onSigterm = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+      onSigterm?.("SIGTERM");
+      await running;
+    } finally {
+      for (const [event, listener] of processOnceSpy.mock.calls) {
+        if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
+          process.off(event, listener);
+        }
+      }
+      process.exitCode = previousExitCode;
+      processOnceSpy.mockRestore();
+    }
   });
 
   it("keeps a ref'd lifetime handle until a ready foreground host stops", async () => {

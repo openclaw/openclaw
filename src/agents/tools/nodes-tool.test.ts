@@ -827,6 +827,26 @@ describe("createNodesTool screen_record duration guardrails", () => {
     ).rejects.toThrow('invokeCommand "system.run" is reserved for shell execution');
   });
 
+  it("forwards the owning agent session for generic node invokes", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool({ agentSessionKey: "agent:main:canvas" });
+
+    await tool.execute("call-1", {
+      action: "invoke",
+      node: "macbook",
+      invokeCommand: "device.status",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      expect.objectContaining({
+        command: "device.status",
+        sessionKey: "agent:main:canvas",
+      }),
+    );
+  });
+
   it("blocks raw computer.act so desktop input uses the dedicated safety contract", async () => {
     const tool = createNodesTool();
 

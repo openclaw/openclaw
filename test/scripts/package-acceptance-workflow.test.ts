@@ -2612,10 +2612,14 @@ describe("package artifact reuse", () => {
       ARTIFACT_RUN_ID: "${{ inputs.package_artifact_run_id }}",
     });
     expectTextToIncludeAll(identityStep.run, [
-      '[[ "$ARTIFACT_NAME" == *"-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}" ]]',
       "actions/artifacts/${ARTIFACT_ID}",
       '--arg digest "sha256:${ARTIFACT_DIGEST}"',
       "actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}",
+      '.status == "completed"',
+      '.conclusion == "success"',
+      "artifact_created_at <= attempt_started_at",
+      "artifact_created_at > attempt_completed_at",
+      "Package Telegram artifact creation time is outside the declared producer run attempt.",
       "Package Telegram artifact producer run attempt does not match the requested tuple.",
     ]);
     expect(runStep.env).toMatchObject({

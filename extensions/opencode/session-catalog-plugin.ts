@@ -1,6 +1,7 @@
 import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { resolveExecutableFromPathEnv } from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -317,7 +318,12 @@ async function listOpenCodeHosts(
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const searchTerm = query.search?.trim().slice(0, MAX_SEARCH_LENGTH) || undefined;
   const hosts: SessionCatalogHost[] = [];
-  if ((!requested || requested.has(LOCAL_HOST_ID)) && executableOnPath("opencode", process.env)) {
+  if (
+    (!requested || requested.has(LOCAL_HOST_ID)) &&
+    resolveExecutableFromPathEnv("opencode", process.env.PATH ?? "", process.env, {
+      fallbackToLoginShell: true,
+    })
+  ) {
     try {
       hosts.push({
         hostId: LOCAL_HOST_ID,
