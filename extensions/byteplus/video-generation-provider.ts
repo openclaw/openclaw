@@ -159,7 +159,7 @@ async function pollBytePlusTask(params: {
   baseUrl: string;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
-  dispatcherPolicy?: import("openclaw/plugin-sdk/provider-http").PinnedDispatcherPolicy;
+  dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
 }): Promise<BytePlusTaskResponse> {
   const deadline = createProviderOperationDeadline({
     timeoutMs: params.timeoutMs,
@@ -217,7 +217,7 @@ async function downloadBytePlusVideo(params: {
   fetchFn: typeof fetch;
   maxBytes: number;
   allowPrivateNetwork?: boolean;
-  dispatcherPolicy?: import("openclaw/plugin-sdk/provider-http").PinnedDispatcherPolicy;
+  dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
 }): Promise<GeneratedVideoAsset> {
   const guardedOptions =
     params.allowPrivateNetwork || params.dispatcherPolicy

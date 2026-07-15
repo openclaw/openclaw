@@ -275,7 +275,7 @@ async function pollRunwayTask(params: {
   baseUrl: string;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
-  dispatcherPolicy?: import("openclaw/plugin-sdk/provider-http").PinnedDispatcherPolicy;
+  dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
 }): Promise<RunwayTaskDetailResponse> {
   const guardedOptions =
     params.allowPrivateNetwork || params.dispatcherPolicy
@@ -335,7 +335,7 @@ async function downloadRunwayVideos(params: {
   fetchFn: typeof fetch;
   maxBytes: number;
   allowPrivateNetwork?: boolean;
-  dispatcherPolicy?: import("openclaw/plugin-sdk/provider-http").PinnedDispatcherPolicy;
+  dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
 }): Promise<GeneratedVideoAsset[]> {
   const guardedOptions =
     params.allowPrivateNetwork || params.dispatcherPolicy
