@@ -20,6 +20,7 @@ import type {
 } from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./configured-runtime-plugin-installs.js";
 import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
@@ -777,13 +778,15 @@ export async function collectDoctorPreviewNotes(params: {
     } = await import("./stale-plugin-config.js");
     const stalePluginHits = scanStalePluginConfig(params.cfg, env);
     if (stalePluginHits.length > 0) {
-      warnings.push(
-        collectStalePluginConfigWarnings({
-          hits: stalePluginHits,
-          doctorFixCommand: params.doctorFixCommand,
-          autoRepairBlocked: isStalePluginAutoRepairBlocked(params.cfg, env),
-        }).join("\n"),
-      );
+      const stalePluginWarnings = collectStalePluginConfigWarnings({
+        hits: stalePluginHits,
+        doctorFixCommand: params.doctorFixCommand,
+        autoRepairBlocked: isStalePluginAutoRepairBlocked(params.cfg, env),
+        surfacePreservePluginIds: VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE,
+      });
+      if (stalePluginWarnings.length > 0) {
+        warnings.push(stalePluginWarnings.join("\n"));
+      }
     }
   }
 

@@ -302,14 +302,16 @@ export function collectStalePluginConfigWarnings(params: {
   hits: StalePluginConfigHit[];
   doctorFixCommand: string;
   autoRepairBlocked?: boolean;
+  surfacePreservePluginIds?: Partial<Record<StalePluginSurface, Iterable<string>>>;
 }): string[] {
-  if (params.hits.length === 0) {
+  const hits = filterRepairableStalePluginHits(params);
+  if (hits.length === 0) {
     return [];
   }
   const policyPluginIds = [
-    ...new Set(params.hits.filter(isPolicySurfaceHit).map((hit) => hit.pluginId)),
+    ...new Set(hits.filter(isPolicySurfaceHit).map((hit) => hit.pluginId)),
   ].toSorted((a, b) => a.localeCompare(b));
-  const lines = params.hits
+  const lines = hits
     .map((hit) => formatStalePluginHitWarning(hit))
     .filter((line): line is string => line !== null);
   if (policyPluginIds.length > 0) {

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./configured-runtime-plugin-installs.js";
 import {
   collectStalePluginConfigWarnings,
   maybeRepairStalePluginConfig,
@@ -469,7 +470,7 @@ describe("doctor stale plugin config helpers", () => {
     expect(warnings.at(-1)).toContain("Auto-removal is paused");
   });
 
-  it("keeps an intentionally unavailable Codex plugin entry out of stale diagnostics", () => {
+  it("filters version-bound Codex policy from actionable stale warnings", () => {
     const cfg = {
       models: {
         providers: {
@@ -489,10 +490,8 @@ describe("doctor stale plugin config helpers", () => {
       },
     } as OpenClawConfig;
 
-    // scanStalePluginConfig flags codex in plugins.allow because it is not in
-    // knownIds. Protection happens at the repair-sequencing caller via
-    // preservePluginIds, not in the scanner.
-    expect(scanStalePluginConfig(cfg)).toEqual([
+    const hits = scanStalePluginConfig(cfg);
+    expect(hits).toEqual([
       {
         pluginId: "codex",
         pathLabel: "plugins.allow",
@@ -508,6 +507,16 @@ describe("doctor stale plugin config helpers", () => {
         pathLabel: "plugins.entries.acpx",
         surface: "entries",
       },
+    ]);
+    expect(
+      collectStalePluginConfigWarnings({
+        hits,
+        doctorFixCommand: "openclaw doctor --fix",
+        surfacePreservePluginIds: VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE,
+      }),
+    ).toEqual([
+      "- Stale plugin references (plugins.allow/deny/entries): acpx.",
+      '- Run "openclaw doctor --fix" to remove stale plugin ids and dangling channel references.',
     ]);
   });
 
