@@ -7,6 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as sessionStore from "../config/sessions.js";
+import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -2128,6 +2129,62 @@ describe("state migrations", () => {
     );
     await expectMissingPath(subscriptionsPath);
     await expectMissingPath(vapidKeysPath);
+  });
+
+  it("routes explicit Doctor repair through the node-host SQLite importer", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const sourcePath = path.join(stateDir, "node.json");
+    const fixtureDigest = ["fixture", "digest"].join("-");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        nodeId: "doctor-node",
+        token: "test-token-placeholder",
+        displayName: "Doctor Node",
+        gateway: {
+          host: "gateway.example",
+          port: 18443,
+          tls: true,
+          tlsFingerprint: fixtureDigest,
+          contextPath: "/doctor",
+        },
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.nodeHost.hasLegacy).toBe(true);
+    expect(detected.preview).toContain(
+      "- Node-host config: legacy node.json → shared SQLite state",
+    );
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated node-host config to shared SQLite state.");
+    await expect(loadNodeHostConfig(env)).resolves.toStrictEqual({
+      version: 1,
+      nodeId: "doctor-node",
+      displayName: "Doctor Node",
+      gateway: {
+        host: "gateway.example",
+        port: 18443,
+        tls: true,
+        tlsFingerprint: fixtureDigest,
+        contextPath: "/doctor",
+      },
+    });
+    await expectMissingPath(sourcePath);
   });
 
   it("migrates legacy update-check JSON into shared SQLite state", async () => {

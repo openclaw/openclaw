@@ -715,6 +715,7 @@ export interface NativeHookRelayBridges {
 export interface NodeHostConfig {
   config_key: string;
   display_name: string | null;
+  gateway_context_path: string | null;
   gateway_host: string | null;
   gateway_port: number | null;
   gateway_tls: number | null;
