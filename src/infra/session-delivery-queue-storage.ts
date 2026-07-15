@@ -4,7 +4,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
-  deleteDeliveryQueueEntry,
+  completeDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
@@ -108,10 +108,6 @@ export async function enqueueSessionDelivery(
 ): Promise<string> {
   const id = buildEntryId(params.idempotencyKey);
 
-  if (params.idempotencyKey && loadDeliveryQueueEntry(QUEUE_NAME, id, stateDir)) {
-    return id;
-  }
-
   const entry: QueuedSessionDelivery = {
     ...params,
     id,
@@ -123,6 +119,7 @@ export async function enqueueSessionDelivery(
     entry,
     metadata: queuedSessionDeliveryMetadata(entry),
     stateDir,
+    reviveFailedOrCorruptPending: Boolean(params.idempotencyKey),
   });
   return id;
 }
@@ -152,7 +149,7 @@ export async function enqueueClaimedSessionDelivery(
     stateDir,
     insertOnly: true,
   });
-  let status: "pending" | "failed" | undefined;
+  let status: "pending" | "failed" | "completed" | undefined;
   try {
     status = claimed ? "pending" : getDeliveryQueueEntryStatus(QUEUE_NAME, id, stateDir);
   } catch {
@@ -160,8 +157,8 @@ export async function enqueueClaimedSessionDelivery(
     // Preserve that ownership when diagnostics are temporarily unreadable.
     return { id, claimed, status: "unknown" };
   }
-  // A conflicting pending row can be acknowledged and deleted before this
-  // lookup. That means the competing owner completed the same idempotent work.
+  // Old databases may still delete an acknowledged row between the conflict
+  // and lookup. Treat that race like the explicit completed tombstone.
   return { id, claimed, status: status ?? "completed" };
 }
 
@@ -207,10 +204,10 @@ export async function advanceSessionDeliveryAgentRun(
 }
 
 /** Acknowledge a successfully delivered session entry. */
-export class SessionDeliveryAcknowledgementCleanupError extends Error {
+export class SessionDeliveryAcknowledgementFinalizeError extends Error {
   constructor(id: string, options?: ErrorOptions) {
-    super(`Acknowledged session delivery ${id} still needs queue cleanup`, options);
-    this.name = "SessionDeliveryAcknowledgementCleanupError";
+    super(`Acknowledged session delivery ${id} still needs tombstone finalization`, options);
+    this.name = "SessionDeliveryAcknowledgementFinalizeError";
   }
 }
 
@@ -219,16 +216,23 @@ export async function ackSessionDelivery(id: string, stateDir?: string): Promise
   if (!entry) {
     return;
   }
-  if (!entry.acknowledgedAt) {
-    updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (current) => ({
-      ...current,
-      acknowledgedAt: Date.now(),
-    }));
-  }
   try {
-    deleteDeliveryQueueEntry(QUEUE_NAME, id, stateDir);
+    if (!entry.acknowledgedAt) {
+      updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (current) => ({
+        ...current,
+        acknowledgedAt: Date.now(),
+      }));
+    }
+    completeDeliveryQueueEntry(QUEUE_NAME, id, stateDir);
   } catch (error) {
-    throw new SessionDeliveryAcknowledgementCleanupError(id, { cause: error });
+    try {
+      if (getDeliveryQueueEntryStatus(QUEUE_NAME, id, stateDir) === "completed") {
+        return;
+      }
+    } catch {
+      // Unprovable state remains acknowledgement finalization, never a delivery retry.
+    }
+    throw new SessionDeliveryAcknowledgementFinalizeError(id, { cause: error });
   }
 }
 

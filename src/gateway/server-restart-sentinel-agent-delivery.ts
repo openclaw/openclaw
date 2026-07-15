@@ -10,6 +10,7 @@ import {
   type AgentDeliveryEvidence,
 } from "../agents/embedded-agent-runner/delivery-evidence.js";
 import { formatGeneratedMediaDeliveryRetryForPrompt } from "../agents/internal-events.js";
+import { resolveDurableCompletionDeliveryMode } from "../auto-reply/reply/completion-delivery-policy.js";
 import {
   getRestartRecoveryTerminalDeliveryEvidence,
   hasRestartRecoveryTerminalRun,
@@ -263,6 +264,16 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   }
 
   const queuedRunId = resolveQueuedAgentRunId(params.entry);
+  const deliveryMode = resolveDurableCompletionDeliveryMode(params.entry.sourceReplyDeliveryMode);
+  if (deliveryMode === "host_owned" && route.channel === INTERNAL_MESSAGE_CHANNEL) {
+    return await deadLetterSessionDelivery(
+      params.entry.id,
+      "queued host-owned generated-media delivery requires an external route",
+    );
+  }
+  // `host_owned` is the explicit-send equivalent of message-tool-only policy.
+  // The queue owner fixes route/media and disables the model-facing message tool,
+  // so only this one system completion can use the normal final-delivery transport.
   const sourceReplyDeliveryMode = "automatic" as const;
   const cronLifecycleRevision = params.sessionEntry?.cronRunContinuation?.lifecycleRevision?.trim();
   const cronSessionId = cronLifecycleRevision ? params.sessionEntry?.sessionId?.trim() : undefined;

@@ -100,7 +100,74 @@ describe("session-delivery queue storage", () => {
     });
   });
 
-  it("persists retry metadata and removes acked entries", async () => {
+  it("lets an explicit enqueue revive a failed idempotency key", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const payload = {
+        kind: "systemEvent" as const,
+        sessionKey: "agent:main:main",
+        text: "restart complete",
+        idempotencyKey: "restart:revive-failed",
+      };
+      const id = await enqueueSessionDelivery(payload, tempDir);
+      await moveSessionDeliveryToFailed(id, tempDir);
+
+      expect(await enqueueSessionDelivery(payload, tempDir)).toBe(id);
+      expect(readSessionQueueStatus(tempDir, id)).toBe("pending");
+      expect(await loadPendingSessionDeliveries(tempDir)).toHaveLength(1);
+    });
+  });
+
+  it("reports a completed conflict after acknowledgement", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const payload = {
+        kind: "agentTurn" as const,
+        sessionKey: "agent:main:main",
+        message: "generated image ready",
+        messageId: "image:task-completed:agent-loop",
+        idempotencyKey: "image:task-completed:agent-loop",
+      };
+      const first = await enqueueClaimedSessionDelivery(payload, 60_000, tempDir);
+      await ackSessionDelivery(first.id, tempDir);
+
+      expect(await enqueueSessionDelivery(payload, tempDir)).toBe(first.id);
+      expect(readSessionQueueStatus(tempDir, first.id)).toBe("completed");
+
+      await expect(enqueueClaimedSessionDelivery(payload, 60_000, tempDir)).resolves.toEqual({
+        id: first.id,
+        claimed: false,
+        status: "completed",
+      });
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+      expect(readSessionQueueStatus(tempDir, first.id)).toBe("completed");
+    });
+  });
+
+  it("atomically repairs unreadable pending JSON for an idempotent enqueue", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const payload = {
+        kind: "systemEvent" as const,
+        sessionKey: "agent:main:main",
+        text: "restart complete",
+        idempotencyKey: "restart:repair-corrupt-pending",
+      };
+      const id = await enqueueSessionDelivery(payload, tempDir);
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+      });
+      db.prepare(
+        `UPDATE delivery_queue_entries
+            SET entry_json = '{corrupt'
+          WHERE queue_name = 'session' AND id = ?`,
+      ).run(id);
+
+      expect(await enqueueSessionDelivery(payload, tempDir)).toBe(id);
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
+        expect.objectContaining({ id, text: "restart complete" }),
+      ]);
+    });
+  });
+
+  it("persists retry metadata and retains acked idempotency tombstones", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
@@ -118,6 +185,7 @@ describe("session-delivery queue storage", () => {
 
       await ackSessionDelivery(id, tempDir);
       expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
+      expect(readSessionQueueStatus(tempDir, id)).toBe("completed");
     });
   });
 
@@ -198,7 +266,7 @@ describe("session-delivery queue storage", () => {
     });
   });
 
-  it("moves entries out of pending retry state", async () => {
+  it("moves entries into completed idempotency state", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
@@ -211,7 +279,7 @@ describe("session-delivery queue storage", () => {
 
       await ackSessionDelivery(id, tempDir);
 
-      expect(readSessionQueueStatus(tempDir, id)).toBeUndefined();
+      expect(readSessionQueueStatus(tempDir, id)).toBe("completed");
     });
   });
 });

@@ -18,7 +18,7 @@ import {
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
   moveSessionDeliveryToFailed,
-  SessionDeliveryAcknowledgementCleanupError,
+  SessionDeliveryAcknowledgementFinalizeError,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   type QueuedSessionDelivery,
@@ -128,8 +128,8 @@ async function drainQueuedEntry(opts: {
 }): Promise<"recovered" | "failed" | "deferred" | "moved-to-failed" | "already-gone"> {
   const { entry } = opts;
   try {
-    // Delivery acknowledgement is persisted before deletion. If cleanup failed
-    // previously, finish only the acknowledgement; never replay the side effect.
+    // Delivery acknowledgement is persisted before the completed tombstone.
+    // A crash between them must finalize state without replaying the side effect.
     if (!entry.acknowledgedAt) {
       await opts.deliver(entry);
     }
@@ -143,7 +143,7 @@ async function drainQueuedEntry(opts: {
     if (err instanceof SessionDeliveryDeferredError) {
       return "deferred";
     }
-    if (err instanceof SessionDeliveryAcknowledgementCleanupError) {
+    if (err instanceof SessionDeliveryAcknowledgementFinalizeError) {
       return "deferred";
     }
     const errMsg = formatErrorMessage(err);

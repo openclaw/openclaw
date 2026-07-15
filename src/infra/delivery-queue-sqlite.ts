@@ -9,8 +9,9 @@ import {
 
 // Generic durable delivery queue storage shared by session and outbound queues.
 // Queue-specific wrappers own payload shape; this layer owns SQLite state.
-type QueueStatus = "pending" | "failed";
+type QueueStatus = "pending" | "failed" | "completed";
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
+const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
 /** Indexed metadata extracted from queue payloads for diagnostics and recovery. */
 export type DeliveryQueueRowMetadata = {
@@ -109,6 +110,7 @@ export function upsertDeliveryQueueEntry(params: {
   status?: QueueStatus;
   stateDir?: string;
   insertOnly?: boolean;
+  reviveFailedOrCorruptPending?: boolean;
 }): boolean {
   const now = Date.now();
   const status = params.status ?? "pending";
@@ -136,8 +138,8 @@ export function upsertDeliveryQueueEntry(params: {
   });
   const query = params.insertOnly
     ? insert.onConflict((conflict) => conflict.columns(["queue_name", "id"]).doNothing())
-    : insert.onConflict((conflict) =>
-        conflict.columns(["queue_name", "id"]).doUpdateSet({
+    : insert.onConflict((conflict) => {
+        const update = conflict.columns(["queue_name", "id"]).doUpdateSet({
           status: (eb) => eb.ref("excluded.status"),
           entry_kind: (eb) => eb.ref("excluded.entry_kind"),
           session_key: (eb) => eb.ref("excluded.session_key"),
@@ -153,8 +155,22 @@ export function upsertDeliveryQueueEntry(params: {
           enqueued_at: (eb) => eb.ref("excluded.enqueued_at"),
           updated_at: (eb) => eb.ref("excluded.updated_at"),
           failed_at: (eb) => eb.ref("excluded.failed_at"),
-        }),
-      );
+        });
+        if (!params.reviveFailedOrCorruptPending) {
+          return update;
+        }
+        // Idempotent enqueue may revive an explicit failure or repair unreadable
+        // pending JSON, but it must never replace valid pending/completed ownership.
+        return update.where((eb) =>
+          eb.or([
+            eb("delivery_queue_entries.status", "=", "failed"),
+            eb.and([
+              eb("delivery_queue_entries.status", "=", "pending"),
+              eb(eb.fn("json_valid", ["delivery_queue_entries.entry_json"]), "=", 0),
+            ]),
+          ]),
+        );
+      });
   return executeSqliteQuerySync(database.db, query).numAffectedRows === 1n;
 }
 
@@ -246,6 +262,66 @@ export function deleteDeliveryQueueEntry(queueName: string, id: string, stateDir
       .where("queue_name", "=", queueName)
       .where("id", "=", id)
       .where("status", "=", "pending"),
+  );
+}
+
+/** Retain a delivered row as a durable idempotency tombstone. */
+export function completeDeliveryQueueEntry(queueName: string, id: string, stateDir?: string): void {
+  const current = loadDeliveryQueueEntry(queueName, id, stateDir);
+  if (!current) {
+    if (getDeliveryQueueEntryStatus(queueName, id, stateDir) === "completed") {
+      return;
+    }
+    throw enoent(queueName, id);
+  }
+  const now = Date.now();
+  const tombstone = {
+    id,
+    enqueuedAt: now,
+    retryCount: 0,
+    acknowledgedAt: current.acknowledgedAt ?? now,
+  };
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const result = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .updateTable("delivery_queue_entries")
+      .set({
+        status: "completed",
+        entry_kind: null,
+        session_key: null,
+        channel: null,
+        target: null,
+        account_id: null,
+        retry_count: 0,
+        last_attempt_at: null,
+        last_error: null,
+        recovery_state: null,
+        platform_send_started_at: null,
+        entry_json: JSON.stringify(tombstone),
+        enqueued_at: now,
+        updated_at: now,
+        failed_at: null,
+      })
+      .where("queue_name", "=", queueName)
+      .where("id", "=", id)
+      .where("status", "=", "pending"),
+  );
+  if (result.numAffectedRows !== 1n) {
+    if (getDeliveryQueueEntryStatus(queueName, id, stateDir) === "completed") {
+      return;
+    }
+    throw enoent(queueName, id);
+  }
+  // Thirty days covers delayed producer replays while bounding successful-row growth.
+  executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .deleteFrom("delivery_queue_entries")
+      .where("queue_name", "=", queueName)
+      .where("status", "=", "completed")
+      .where("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS),
   );
 }
 
