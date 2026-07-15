@@ -115,6 +115,26 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     });
   });
 
+  it("uses custom containerWorkdir when provided and workspaceAccess is none", () => {
+    expect(
+      resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          enabled: true,
+          workspaceAccess: "none",
+          skillsWorkspaceDir: "/host/sandbox/workspace",
+          containerWorkdir: "/my-custom-workspace",
+        },
+        effectiveWorkspace: "/host/sandbox/workspace",
+        skillsSnapshot: snapshot,
+      }),
+    ).toEqual({
+      skillsSnapshot: undefined,
+      skillsPromptWorkspaceDir: "/my-custom-workspace",
+      skillsWorkspaceDir: "/host/sandbox/workspace",
+      workspaceOnly: true,
+    });
+  });
+
   it("maps materialized read paths while preserving original file identities", () => {
     expect(
       mapSandboxSkillUsagePaths({

@@ -87,7 +87,6 @@ async function ensureSandboxWorkspaceLayout(params: {
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
   workspaceDir: string;
-  containerWorkdir: string;
 }> {
   const { cfg, rawSessionKey } = params;
   const { agentWorkspaceDir, sandboxWorkspaceDir, scopeKey, skillsWorkspaceDir, workspaceDir } =
@@ -96,15 +95,6 @@ async function ensureSandboxWorkspaceLayout(params: {
       rawSessionKey,
       workspaceDir: params.workspaceDir,
     });
-  const containerWorkdir =
-    resolveSandboxWorkspaceInfoWorkdir({
-      cfg,
-      rawSessionKey,
-      scopeKey,
-      workspaceDir,
-      agentWorkspaceDir,
-      skillsWorkspaceDir,
-    }) ?? DEFAULT_SANDBOX_WORKDIR;
 
   let syncedSkills: Awaited<ReturnType<typeof syncSandboxSkillsToWorkspace>>;
   if (cfg.workspaceAccess !== "rw") {
@@ -142,7 +132,6 @@ async function ensureSandboxWorkspaceLayout(params: {
     ...(syncedSkills.eligibility ? { skillsEligibility: syncedSkills.eligibility } : {}),
     ...(syncedSkills.skillUsagePaths ? { skillUsagePaths: syncedSkills.skillUsagePaths } : {}),
     workspaceDir,
-    containerWorkdir,
   };
 }
 
@@ -162,24 +151,6 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
 
   const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
   return { rawSessionKey, runtime, cfg };
-}
-
-function resolveSandboxWorkspaceInfoWorkdir(params: {
-  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
-  rawSessionKey: string;
-  scopeKey: string;
-  workspaceDir: string;
-  agentWorkspaceDir: string;
-  skillsWorkspaceDir: string;
-}): string | undefined {
-  return getSandboxBackendWorkdirResolver(params.cfg.backend)?.({
-    sessionKey: params.rawSessionKey,
-    scopeKey: params.scopeKey,
-    workspaceDir: params.workspaceDir,
-    agentWorkspaceDir: params.agentWorkspaceDir,
-    skillsWorkspaceDir: params.skillsWorkspaceDir,
-    cfg: params.cfg,
-  });
 }
 
 export async function resolveSandboxContext(params: {
@@ -205,7 +176,6 @@ export async function resolveSandboxContext(params: {
     skillUsagePaths,
     skillsWorkspaceDir,
     workspaceDir,
-    containerWorkdir,
   } = await ensureSandboxWorkspaceLayout({
     cfg,
     agentId: runtime.agentId,
@@ -214,6 +184,16 @@ export async function resolveSandboxContext(params: {
     execOverrides: params.execOverrides,
     workspaceDir: params.workspaceDir,
   });
+
+  const containerWorkdir =
+    getSandboxBackendWorkdirResolver(cfg.backend)?.({
+      sessionKey: rawSessionKey,
+      scopeKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      cfg,
+    }) ?? DEFAULT_SANDBOX_WORKDIR;
 
   const docker = await resolveSandboxDockerUser({
     docker: cfg.docker,
@@ -329,7 +309,6 @@ export async function ensureSandboxWorkspaceForSession(params: {
     skillUsagePaths,
     skillsWorkspaceDir,
     workspaceDir,
-    containerWorkdir,
   } = await ensureSandboxWorkspaceLayout({
     cfg,
     agentId: runtime.agentId,
@@ -337,6 +316,16 @@ export async function ensureSandboxWorkspaceForSession(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
+
+  const containerWorkdir =
+    getSandboxBackendWorkdirResolver(cfg.backend)?.({
+      sessionKey: rawSessionKey,
+      scopeKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      cfg,
+    }) ?? DEFAULT_SANDBOX_WORKDIR;
 
   return {
     workspaceDir,
