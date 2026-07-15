@@ -22,6 +22,8 @@ const spawnState = vi.hoisted(() => ({
   calls: [] as SpawnCall[],
   inspectRunning: true,
   labelHash: "",
+  podmanInfo: "true\tfalse\n",
+  podmanConnections: "[]\n",
 }));
 
 const registryMocks = vi.hoisted(() => ({
@@ -59,7 +61,7 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   let code = 0;
   let stdout = "";
   let stderr = "";
-  if (command !== "docker") {
+  if (command !== "docker" && command !== "podman") {
     code = 1;
     stderr = `unexpected command: ${command}`;
   } else if (args[0] === "inspect" && args[1] === "-f" && args[2] === "{{.State.Running}}") {
@@ -70,6 +72,10 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     args[2]?.includes('index .Config.Labels "openclaw.configHash"')
   ) {
     stdout = `${spawnState.labelHash}\n`;
+  } else if (command === "podman" && args[0] === "info") {
+    stdout = spawnState.podmanInfo;
+  } else if (command === "podman" && args[0] === "system") {
+    stdout = spawnState.podmanConnections;
   } else if (
     (args[0] === "rm" && args[1] === "-f") ||
     (args[0] === "image" && args[1] === "inspect") ||
@@ -97,6 +103,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 
 let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
 let resolveDockerEnvPolicyEpoch: typeof import("./docker.js").resolveDockerEnvPolicyEpoch;
+let PODMAN_SANDBOX_ENGINE: typeof import("./docker.js").PODMAN_SANDBOX_ENGINE;
 
 async function loadFreshDockerModuleForTest() {
   vi.resetModules();
@@ -108,7 +115,8 @@ async function loadFreshDockerModuleForTest() {
     ...(await importOriginal<typeof import("../../process/exec.js")>()),
     spawnCommand: spawnDockerProcess,
   }));
-  ({ ensureSandboxContainer, resolveDockerEnvPolicyEpoch } = await import("./docker.js"));
+  ({ ensureSandboxContainer, resolveDockerEnvPolicyEpoch, PODMAN_SANDBOX_ENGINE } =
+    await import("./docker.js"));
 }
 
 function createSandboxConfig(
@@ -123,6 +131,7 @@ function createSandboxConfig(
     scope: "shared",
     workspaceAccess,
     workspaceRoot: "~/.openclaw/sandboxes",
+    dockerTmpfsSource: "default",
     docker: {
       image: "openclaw-sandbox:test",
       containerPrefix: "oc-test-",
@@ -166,6 +175,7 @@ async function ensureSandboxCreateCallForTest(params: {
   cfg: SandboxConfig;
   workspaceDir?: string;
   sessionKey?: string;
+  engine?: import("./docker.js").SandboxContainerEngine;
 }): Promise<SpawnCall> {
   const workspaceDir = params.workspaceDir ?? "/tmp/workspace";
   await ensureSandboxContainer({
@@ -173,13 +183,14 @@ async function ensureSandboxCreateCallForTest(params: {
     workspaceDir,
     agentWorkspaceDir: workspaceDir,
     cfg: params.cfg,
+    ...(params.engine ? { engine: params.engine } : {}),
   });
 
   const createCall = spawnState.calls.find(
-    (call) => call.command === "docker" && call.args[0] === "create",
+    (call) => call.command === (params.engine?.command ?? "docker") && call.args[0] === "create",
   );
   if (!createCall) {
-    throw new Error("expected docker create call");
+    throw new Error(`expected ${params.engine?.command ?? "docker"} create call`);
   }
   return createCall;
 }
@@ -195,6 +206,8 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     spawnState.calls.length = 0;
     spawnState.inspectRunning = true;
     spawnState.labelHash = "";
+    spawnState.podmanInfo = "true\tfalse\n";
+    spawnState.podmanConnections = "[]\n";
     registryMocks.readRegistryEntry.mockClear();
     registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
@@ -524,5 +537,237 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(createCall.args).toContain(
       `openclaw.mountFormatVersion=${SANDBOX_MOUNT_FORMAT_VERSION}`,
     );
+  });
+
+  it("uses the shared lifecycle with Podman keep-id ownership", async () => {
+    const workspaceDir = "/tmp/workspace";
+    const cfg = createSandboxConfig([]);
+    cfg.docker.user = undefined;
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    const createCall = await ensureSandboxCreateCallForTest({
+      cfg,
+      workspaceDir,
+      engine: PODMAN_SANDBOX_ENGINE,
+    });
+
+    expect(createCall.command).toBe("podman");
+    expect(collectDockerFlagValues(createCall.args, "--userns")).toEqual(["keep-id"]);
+    expect(collectDockerFlagValues(createCall.args, "--user")).toEqual([]);
+    expect(createCall.args).toContain("--http-proxy=false");
+    expect(createCall.args).toContain("--init");
+    expect(createCall.args).toContain("--read-only-tmpfs=true");
+    expect(collectDockerFlagValues(createCall.args, "--tmpfs")).toEqual(["/tmp", "/var/tmp"]);
+    expect(collectDockerFlagValues(createCall.args, "-v")).toContain(
+      `${workspaceDir}:/workspace:z`,
+    );
+    expect(registryMocks.updateRegistry.mock.calls.at(-1)?.[0]?.backendId).toBe("podman");
+  });
+
+  it("preserves legacy Docker name truncation for a long container prefix", async () => {
+    const cfg = createSandboxConfig([]);
+    cfg.scope = "session";
+    cfg.docker.containerPrefix = "x".repeat(56);
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    const createCall = await ensureSandboxCreateCallForTest({
+      cfg,
+      sessionKey: "agent:first:session",
+    });
+    const containerName = collectDockerFlagValues(createCall.args, "--name")[0];
+
+    expect(containerName).toHaveLength(63);
+    expect(containerName?.startsWith(cfg.docker.containerPrefix)).toBe(true);
+  });
+
+  it("preserves distinct session suffixes with a long Podman container prefix", async () => {
+    const cfg = createSandboxConfig([]);
+    cfg.scope = "session";
+    cfg.docker.containerPrefix = "x".repeat(56);
+    cfg.docker.user = undefined;
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    const firstCreate = await ensureSandboxCreateCallForTest({
+      cfg,
+      sessionKey: "agent:first:session",
+      engine: PODMAN_SANDBOX_ENGINE,
+    });
+    const firstName = collectDockerFlagValues(firstCreate.args, "--name")[0];
+
+    spawnState.calls.length = 0;
+    const secondCreate = await ensureSandboxCreateCallForTest({
+      cfg,
+      sessionKey: "agent:second:session",
+      engine: PODMAN_SANDBOX_ENGINE,
+    });
+    const secondName = collectDockerFlagValues(secondCreate.args, "--name")[0];
+
+    expect(firstName).not.toBe(secondName);
+    expect(firstName?.length).toBeLessThanOrEqual(63);
+    expect(secondName?.length).toBeLessThanOrEqual(63);
+  });
+
+  it("uses Podman init when mounts leave podman-init visible", async () => {
+    const cfg = createSandboxConfig([]);
+    cfg.docker.tmpfs = ["/tmp", "/var/tmp"];
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    const createCall = await ensureSandboxCreateCallForTest({
+      cfg,
+      engine: PODMAN_SANDBOX_ENGINE,
+    });
+
+    expect(createCall.args).toContain("--init");
+  });
+
+  it("rejects a workdir whose managed workspace bind would cover Podman init", async () => {
+    const cfg = createSandboxConfig([]);
+    cfg.docker.workdir = "/run";
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    await expect(
+      ensureSandboxCreateCallForTest({ cfg, engine: PODMAN_SANDBOX_ENGINE }),
+    ).rejects.toThrow("would cover Podman's init path");
+  });
+
+  it("omits the default /run tmpfs for writable-root Podman sandboxes", async () => {
+    const cfg = createSandboxConfig([]);
+    cfg.docker.readOnlyRoot = false;
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    const createCall = await ensureSandboxCreateCallForTest({
+      cfg,
+      engine: PODMAN_SANDBOX_ENGINE,
+    });
+
+    expect(createCall.args).toContain("--init");
+    expect(createCall.args).not.toContain("--read-only-tmpfs=true");
+    expect(collectDockerFlagValues(createCall.args, "--tmpfs")).toEqual(["/tmp", "/var/tmp"]);
+  });
+
+  it("rejects an explicitly configured bare /run tmpfs", async () => {
+    const cfg = createSandboxConfig([]);
+    cfg.dockerTmpfsSource = "configured";
+    cfg.docker.readOnlyRoot = false;
+    cfg.docker.tmpfs = ["/run"];
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    await expect(
+      ensureSandboxCreateCallForTest({ cfg, engine: PODMAN_SANDBOX_ENGINE }),
+    ).rejects.toThrow("would cover Podman's init path");
+  });
+
+  it("invalidates a Podman container when the same tmpfs list becomes explicit", async () => {
+    const workspaceDir = makeTempDir();
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
+    const genericHash = computeSandboxConfigHash({
+      docker: cfg.docker,
+      dockerEnvPolicyEpoch: resolveDockerEnvPolicyEpoch(cfg.docker.env),
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+      readOnlyWorkspaceSkillMounts: [],
+    });
+    const oldHash = `${genericHash}:podman-runtime-v5:keep-id:default`;
+    cfg.dockerTmpfsSource = "configured";
+    spawnState.inspectRunning = false;
+    spawnState.labelHash = oldHash;
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-podman-shared",
+      sessionKey: "shared",
+      createdAtMs: 1,
+      lastUsedAtMs: 0,
+      image: cfg.docker.image,
+      configHash: oldHash,
+    });
+
+    await expect(
+      ensureSandboxContainer({
+        engine: PODMAN_SANDBOX_ENGINE,
+        sessionKey: "agent:main:session-1",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg,
+      }),
+    ).rejects.toThrow("would cover Podman's init path");
+
+    expect(
+      spawnState.calls.some(
+        (call) => call.command === "podman" && call.args[0] === "rm" && call.args[1] === "-f",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects customized /run tmpfs options instead of discarding them", async () => {
+    const cfg = createSandboxConfig([]);
+    cfg.dockerTmpfsSource = "configured";
+    cfg.docker.tmpfs = ["/run:size=64m,mode=0700"];
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    await expect(
+      ensureSandboxCreateCallForTest({ cfg, engine: PODMAN_SANDBOX_ENGINE }),
+    ).rejects.toThrow("would cover Podman's init path");
+  });
+
+  it("allows Podman Machine workspaces under the default home share", async () => {
+    const cfg = createSandboxConfig([]);
+    const workspaceDir = path.join(os.homedir(), "openclaw-podman-workspace");
+    cfg.docker.binds = [`${workspaceDir}:/workspace:rw`];
+    spawnState.podmanInfo = "true\ttrue\n";
+    spawnState.podmanConnections = JSON.stringify([
+      {
+        Name: "podman-machine-default",
+        URI: "ssh://core@127.0.0.1/run/user/501/podman/podman.sock",
+        IsMachine: true,
+        Default: true,
+      },
+    ]);
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    const createCall = await ensureSandboxCreateCallForTest({
+      cfg,
+      workspaceDir,
+      engine: PODMAN_SANDBOX_ENGINE,
+    });
+
+    expect(createCall.command).toBe("podman");
+  });
+
+  it("rejects Podman Machine bind sources outside the default home share", async () => {
+    const cfg = createSandboxConfig([]);
+    spawnState.podmanInfo = "true\ttrue\n";
+    spawnState.podmanConnections = JSON.stringify([
+      {
+        Name: "podman-machine-default",
+        URI: "ssh://core@127.0.0.1/run/user/501/podman/podman.sock",
+        IsMachine: true,
+        Default: true,
+      },
+    ]);
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    await expect(
+      ensureSandboxContainer({
+        engine: PODMAN_SANDBOX_ENGINE,
+        sessionKey: "agent:test:session",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg,
+      }),
+    ).rejects.toThrow(/outside the default host home share/u);
+
+    expect(spawnState.calls.some((call) => call.args[0] === "create")).toBe(false);
   });
 });

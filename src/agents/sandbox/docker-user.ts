@@ -3,6 +3,7 @@ import type { SandboxDockerConfig } from "./types.js";
 
 export async function resolveSandboxDockerUser(params: {
   backend: string;
+  podmanRootless?: boolean;
   docker: SandboxDockerConfig;
   workspaceDir: string;
   stat?: (workspaceDir: string) => Promise<{ uid: number; gid: number }>;
@@ -11,7 +12,8 @@ export async function resolveSandboxDockerUser(params: {
   if (configuredUser) {
     return params.docker;
   }
-  if (params.backend.trim().toLowerCase() !== "docker") {
+  const backend = params.backend.trim().toLowerCase();
+  if (backend !== "docker" && !(backend === "podman" && params.podmanRootless === false)) {
     return params.docker;
   }
   const stat = params.stat ?? ((workspaceDir: string) => fs.stat(workspaceDir));

@@ -92,9 +92,9 @@ The manual launcher reads only a small allowlist of Podman-related keys from `~/
 
 ## Agent sandbox backend
 
-This page covers running the Gateway itself in a Podman container. Agent sandboxing is separate: set `agents.defaults.sandbox.backend: "podman"` when you want OpenClaw to run sandboxed agent tools in local Podman containers.
+This page covers running the Gateway itself in a Podman container. Agent sandboxing is separate. Set `agents.defaults.sandbox.backend: "podman"` to select the native Podman CLI directly. The default `"docker"` backend remains Docker-only.
 
-The Podman sandbox backend ships as a bundled plugin. It reuses the same `agents.defaults.sandbox.docker.*` container settings as the Docker backend, but executes them through the `podman` CLI and optional Podman remote `connection` or `url` plugin config. Browser sandboxes and `sandbox.docker.gpus` remain Docker-only for now.
+Podman reuses the same `agents.defaults.sandbox.docker.*` container settings as Docker but executes them through the native `podman` CLI. Browser sandboxes remain Docker-only for now.
 
 See [Sandboxing](/gateway/sandboxing#podman-backend) for the config example and image-build command.
 

@@ -6907,14 +6907,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
-## plugins/reference/podman.md
-
-- Route: /plugins/reference/podman
-- Headings:
-  - H1: Podman plugin
-  - H2: Distribution
-  - H2: Surface
-
 ## plugins/reference/policy.md
 
 - Route: /plugins/reference/policy

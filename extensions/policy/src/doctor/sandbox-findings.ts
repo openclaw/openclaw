@@ -165,7 +165,7 @@ function scopedSandboxDefaultDisabledForAgent(
         candidate.kind === "backend" &&
         scopedAgentIdMatches(candidate.agentId, policyAgentId),
     );
-    if (typeof backend?.value === "string" && !isObservableContainerSandboxBackend(backend.value)) {
+    if (typeof backend?.value === "string" && backend.value.toLowerCase() !== "docker") {
       return true;
     }
   }
@@ -277,10 +277,7 @@ function sandboxContainerPostureUnobservableFindings(
   }
   return sandboxPostureEntries(evidence, "backend")
     .filter(evidenceFilter)
-    .filter(
-      (entry) =>
-        typeof entry.value === "string" && !isObservableContainerSandboxBackend(entry.value),
-    )
+    .filter((entry) => typeof entry.value === "string" && entry.value.toLowerCase() !== "docker")
     .flatMap((entry) =>
       enabledRules.map((rule) =>
         sandboxPostureFinding(entry, {
@@ -292,11 +289,6 @@ function sandboxContainerPostureUnobservableFindings(
         }),
       ),
     );
-}
-
-function isObservableContainerSandboxBackend(value: string): boolean {
-  const backend = value.toLowerCase();
-  return backend === "docker" || backend === "podman";
 }
 
 function sandboxContainerHostNetworkFindings(

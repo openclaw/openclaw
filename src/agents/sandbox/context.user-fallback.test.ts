@@ -55,6 +55,17 @@ describe("resolveSandboxDockerUser", () => {
     expect(resolved.user).toBeUndefined();
   });
 
+  it("applies workspace ownership fallback for rootful Podman", async () => {
+    const resolved = await resolveSandboxDockerUser({
+      backend: "podman",
+      podmanRootless: false,
+      docker: baseDocker,
+      workspaceDir: "/tmp/workspace",
+      stat: async () => ({ uid: 1001, gid: 1002 }),
+    });
+    expect(resolved.user).toBe("1001:1002");
+  });
+
   it("leaves docker.user unset when workspace stat fails", async () => {
     const resolved = await resolveSandboxDockerUser({
       backend: "docker",

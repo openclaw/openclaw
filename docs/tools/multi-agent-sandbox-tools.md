@@ -191,7 +191,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 ```
 
 <Note>
-`agents.list[].sandbox.{docker,browser,prune}.*` overrides `agents.defaults.sandbox.{docker,browser,prune}.*` for that agent (ignored when sandbox scope resolves to `"shared"`). The `docker` block configures Docker-compatible container settings used by Docker and Podman backends.
+`agents.list[].sandbox.{docker,browser,prune}.*` overrides `agents.defaults.sandbox.{docker,browser,prune}.*` for that agent (ignored when sandbox scope resolves to `"shared"`). The `docker` block configures both built-in container backends.
 </Note>
 
 ### Tool restrictions

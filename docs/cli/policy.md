@@ -273,11 +273,15 @@ more restrictive; a weaker duplicate claim is rejected (allow-lists are
 subsets, deny-lists are supersets, required booleans are fixed).
 
 Container posture rules (`sandbox.containers.*`) are checked only against
-evidence the matched agent's sandbox backend can expose. Docker and Podman
-container sandboxes expose the shared container posture settings. If a backend cannot
-observe a rule you enabled for it, policy reports
+evidence the matched agent's sandbox backend can expose. The Docker and Podman
+backends expose the same `sandbox.docker.*` container posture settings. If a
+backend cannot observe a rule you enabled for it, policy reports
 `policy/sandbox-container-posture-unobservable` instead of passing; scope
 container rules to the agent groups that use a backend which can expose them.
+
+Backend authorization uses the configured identity. `backend: "docker"`
+requires `allowBackends: ["docker"]`, while `backend: "podman"` requires
+`allowBackends: ["podman"]`.
 
 Top-level `ingress.session.requireDmScope` stays global; `session.dmScope` is
 not channel-attributable evidence, so it cannot be scoped by `channelIds`.

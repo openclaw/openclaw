@@ -19,21 +19,7 @@ export {
   requireSandboxBackendFactory,
 } from "./sandbox/backend.js";
 
-export {
-  buildSandboxCreateArgs,
-  isDockerDaemonUnavailable,
-  resolveDockerEnvPolicyEpoch,
-} from "./sandbox/docker.js";
-export { computeSandboxConfigHash } from "./sandbox/config-hash.js";
-export {
-  appendReadOnlyWorkspaceSkillMountArgs,
-  appendWorkspaceMountArgs,
-  formatReadOnlyWorkspaceSkillMountHashState,
-  resolveReadOnlyWorkspaceSkillMounts,
-  SANDBOX_MOUNT_FORMAT_VERSION,
-  type ReadOnlyWorkspaceSkillMount,
-} from "./sandbox/workspace-mounts.js";
-export { resolveSandboxScopeKey, slugifySessionKey } from "./sandbox/shared.js";
+export { isDockerDaemonUnavailable } from "./sandbox/docker.js";
 export {
   listSandboxBrowsers,
   listSandboxContainers,
@@ -60,8 +46,6 @@ export {
   uploadDirectoryToSshTarget,
 } from "./sandbox/ssh.js";
 export { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
-export { buildDockerExecArgs } from "./bash-tools.shared.js";
-export { readRegistryEntry as readSandboxRegistryEntry } from "./sandbox/registry.js";
 export { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
 export { createWritableRenameTargetResolver } from "./sandbox/fs-bridge-rename-targets.js";
 export { resolveWritableRenameTargets } from "./sandbox/fs-bridge-rename-targets.js";

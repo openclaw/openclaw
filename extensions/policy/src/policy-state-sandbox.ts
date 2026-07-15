@@ -87,14 +87,10 @@ function pushSandboxPostureEvidence(
     inherited: localBackend === undefined && inheritedBackend !== undefined,
   });
 
-  if (isObservableContainerSandboxBackend(effectiveBackend)) {
+  if (effectiveBackend === "docker" || effectiveBackend === "podman") {
     pushSandboxDockerPosture(entries, effectiveParams);
   }
   pushSandboxBrowserPosture(entries, effectiveParams);
-}
-
-function isObservableContainerSandboxBackend(backend: string): boolean {
-  return backend === "docker" || backend === "podman";
 }
 
 function pushSandboxDockerPosture(
@@ -245,7 +241,7 @@ function pushSandboxBrowserPosture(
       sourceSuffix: "browser/binds",
       surface: "browser",
     });
-  } else if (params.effectiveBackend !== "docker") {
+  } else if (params.effectiveBackend !== "docker" && params.effectiveBackend !== "podman") {
     const localDocker =
       !params.sharedSandboxScope && isRecord(params.sandbox.docker) ? params.sandbox.docker : {};
     const inheritedDocker = isRecord(params.inheritedSandbox.docker)
