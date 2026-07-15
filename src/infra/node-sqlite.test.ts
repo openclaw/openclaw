@@ -39,10 +39,33 @@ async function withNodeSharedSqliteValue(value: unknown, run: () => Promise<void
   }
 }
 
+async function withEnvValue(
+  key: string,
+  value: string | undefined,
+  run: () => Promise<void>,
+): Promise<void> {
+  const original = process.env[key];
+  try {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+    await run();
+  } finally {
+    if (original === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = original;
+    }
+  }
+}
+
 function expectedUnsafeSqliteError(version: string, shared: boolean): string {
   const wording = shared ? "uses shared system" : "embeds";
   const remediation = shared
-    ? "Upgrade the system SQLite library to one of those safe versions, or use a Node build embedding a safe version."
+    ? "Upgrade the system SQLite library to one of those safe versions, use a Node build embedding a safe version, " +
+      "or set OPENCLAW_ASSUME_SYSTEM_SQLITE_WAL_RESET_SAFE=1 only after verifying your distribution backported the WAL-reset fix."
     : "Upgrade to Node 22.22.3+, 24.15.0+, or 25.9.0+ before retrying.";
   return (
     "SQLite support is unavailable or unsafe in this Node runtime. " +
@@ -80,12 +103,35 @@ describe("node SQLite safety", () => {
   it.each([true, "true"])(
     "rejects vulnerable shared SQLite with system-library remediation (%j)",
     async (nodeSharedSqlite) => {
-      await withNodeSharedSqliteValue(nodeSharedSqlite, async () => {
-        const { requireNodeSqlite } = await loadNodeSqliteWithVersion("3.51.2");
-        expect(() => requireNodeSqlite()).toThrow(expectedUnsafeSqliteError("3.51.2", true));
+      await withEnvValue("OPENCLAW_ASSUME_SYSTEM_SQLITE_WAL_RESET_SAFE", undefined, async () => {
+        await withNodeSharedSqliteValue(nodeSharedSqlite, async () => {
+          const { requireNodeSqlite } = await loadNodeSqliteWithVersion("3.51.2");
+          expect(() => requireNodeSqlite()).toThrow(expectedUnsafeSqliteError("3.51.2", true));
+        });
       });
     },
   );
+
+  it.each([true, "true"])(
+    "accepts vulnerable shared SQLite when the distro backport is explicitly verified (%j)",
+    async (nodeSharedSqlite) => {
+      await withEnvValue("OPENCLAW_ASSUME_SYSTEM_SQLITE_WAL_RESET_SAFE", "1", async () => {
+        await withNodeSharedSqliteValue(nodeSharedSqlite, async () => {
+          const { requireNodeSqlite } = await loadNodeSqliteWithVersion("3.46.1");
+          expect(() => requireNodeSqlite()).not.toThrow();
+        });
+      });
+    },
+  );
+
+  it("ignores the shared SQLite verification override for embedded SQLite", async () => {
+    await withEnvValue("OPENCLAW_ASSUME_SYSTEM_SQLITE_WAL_RESET_SAFE", "1", async () => {
+      await withNodeSharedSqliteValue(false, async () => {
+        const { requireNodeSqlite } = await loadNodeSqliteWithVersion("3.46.1");
+        expect(() => requireNodeSqlite()).toThrow(expectedUnsafeSqliteError("3.46.1", false));
+      });
+    });
+  });
 
   it.each([false, "false"])(
     "rejects vulnerable embedded SQLite with Node-upgrade remediation (%j)",

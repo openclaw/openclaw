@@ -5,6 +5,7 @@ import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
+const VERIFIED_SHARED_SQLITE_WAL_RESET_ENV = "OPENCLAW_ASSUME_SYSTEM_SQLITE_WAL_RESET_SAFE";
 let validatedSqliteModule: typeof import("node:sqlite") | undefined;
 
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
@@ -15,9 +16,12 @@ function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): 
     ?.variables;
   const isShared =
     variables?.node_shared_sqlite === true || variables?.node_shared_sqlite === "true";
+  if (isShared && process.env[VERIFIED_SHARED_SQLITE_WAL_RESET_ENV] === "1") {
+    return;
+  }
   const wording = isShared ? "uses shared system" : "embeds";
   const remediation = isShared
-    ? "Upgrade the system SQLite library to one of those safe versions, or use a Node build embedding a safe version."
+    ? `Upgrade the system SQLite library to one of those safe versions, use a Node build embedding a safe version, or set ${VERIFIED_SHARED_SQLITE_WAL_RESET_ENV}=1 only after verifying your distribution backported the WAL-reset fix.`
     : "Upgrade to Node 22.22.3+, 24.15.0+, or 25.9.0+ before retrying.";
   throw new Error(
     `OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x for WAL safety; ` +
