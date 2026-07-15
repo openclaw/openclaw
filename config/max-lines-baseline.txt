@@ -1130,7 +1130,6 @@ ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
 ui/src/components/app-sidebar.test.ts
-ui/src/components/app-sidebar.ts
 ui/src/components/browser/browser-panel.ts
 ui/src/components/config-form.node.ts
 ui/src/components/lobster-pet.ts
