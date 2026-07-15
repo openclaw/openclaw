@@ -63,4 +63,43 @@ describe("control-plane-rate-limit", () => {
     // the internal map solely for tests.
     expect(consume("oldest")).toMatchObject({ allowed: true, remaining: 2 });
   });
+
+  test("preserves a recently-reset entry through saturated eviction", () => {
+    // Fills the map to capacity, then advances the clock so "survivor"'s
+    // window expires.  Window reset repositions "survivor" to the end of
+    // insertion order.  After eviction of the front entry (which has the
+    // oldest window), "survivor" must still have its fresh budget.
+    const baseMs = 4_000_000;
+    const consume = (id: string, ms = baseMs) =>
+      consumeControlPlaneWriteBudget({
+        client: {
+          connect: { device: { id } },
+          clientIp: "1.2.3.4",
+        } as never,
+        nowMs: ms,
+      });
+
+    // Fill a budget slot for the survivor so it has a bucket.
+    expect(consume("survivor").allowed).toBe(true);
+
+    // Fill the map to capacity.
+    for (let index = 0; index < 9_999; index += 1) {
+      consume(`filler-${index}`);
+    }
+    // Map has 10,000 entries. "survivor" was inserted first.
+
+    // Advance the clock past the window so "survivor"'s window expires.
+    // The window reset repositions it to the end of insertion order.
+    const later = baseMs + 70_000;
+    expect(consume("survivor", later).allowed).toBe(true);
+
+    // Trigger eviction by inserting one more key.
+    consume("trigger", later);
+
+    // "survivor" survived: its bucket was repositioned before eviction.
+    expect(consume("survivor", later)).toMatchObject({
+      allowed: true,
+      remaining: 1, // two budget units consumed (reset + this call)
+    });
+  });
 });
