@@ -607,6 +607,10 @@ describe("session cost usage", () => {
     expect(ranged?.dailyBreakdown).toEqual([{ date: "2026-02-05", tokens: 20, cost: 0.02 }]);
     expect(ranged?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
 
+    const upperBounded = await loadSessionCostSummary({ sessionFile, endMs: rangeEndMs });
+    expect(upperBounded?.totalTokens).toBe(30);
+    expect(upperBounded?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(false);
+
     const allRange = await loadSessionCostSummary({
       sessionFile,
       startMs: 0,
@@ -711,11 +715,11 @@ describe("session cost usage", () => {
     });
   });
 
-  it("rebuilds version 7 caches and preserves the untimestamped marker on append", async () => {
-    const root = await makeSessionCostRoot("cost-cache-v7-untimestamped-upgrade");
+  it("rebuilds version 8 caches and preserves the untimestamped marker on append", async () => {
+    const root = await makeSessionCostRoot("cost-cache-v8-untimestamped-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "sess-v7-upgrade.jsonl");
+    const sessionFile = path.join(sessionsDir, "sess-v8-upgrade.jsonl");
     const assistantEntry = (timestamp: string | undefined, totalTokens: number) => ({
       type: "message",
       timestamp,
@@ -741,7 +745,7 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const session = { sessionId: "sess-v7-upgrade", sessionFile };
+      const session = { sessionId: "sess-v8-upgrade", sessionFile };
       await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
       await vi.waitFor(async () => {
         const current = await loadSessionCostSummariesFromCache({
@@ -766,7 +770,7 @@ describe("session cost usage", () => {
           }
         >;
       };
-      currentCache.version = 7;
+      currentCache.version = 8;
       const legacyEntry = requireValue(currentCache.files[sessionFile], "expected cached session");
       delete legacyEntry.hasUntimestampedTranscriptEntry;
       legacyEntry.totals.totalTokens = 9_999;
@@ -822,7 +826,7 @@ describe("session cost usage", () => {
         version: number;
         files: Record<string, { hasUntimestampedTranscriptEntry?: boolean }>;
       };
-      expect(appendedCache.version).toBe(8);
+      expect(appendedCache.version).toBe(9);
       expect(appendedCache.files[sessionFile]?.hasUntimestampedTranscriptEntry).toBe(true);
 
       const allTime = await loadSessionCostSummariesFromCache({

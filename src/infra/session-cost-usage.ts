@@ -104,7 +104,7 @@ export type {
 
 // Bump when the durable cache schema or the meaning of cached totals changes, so
 // older builds are rebuilt instead of served stale.
-const USAGE_COST_CACHE_VERSION = 8;
+const USAGE_COST_CACHE_VERSION = 9;
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 // Checkpoint policy for refreshCostUsageCache: bound the cost of full cache
 // serialization when scanning thousands of session files. Smaller of the two
@@ -538,12 +538,12 @@ function hasUntimestampedCachedTranscriptEntry(
 
 function rangeRequiresTimestampedTranscriptEntries(params: {
   startMs?: number;
+  endMs?: number;
   includeUntimestamped?: boolean;
 }): boolean {
   return (
     params.includeUntimestamped !== true &&
-    params.startMs !== undefined &&
-    Number.isFinite(params.startMs)
+    (Number.isFinite(params.startMs) || Number.isFinite(params.endMs))
   );
 }
 
