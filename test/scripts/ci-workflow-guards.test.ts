@@ -1585,6 +1585,7 @@ describe("ci workflow guards", () => {
     );
     expect(bindStep.run).toContain('sudo mount --bind "$sticky_modules" "$workspace_modules"');
     expect(bindStep.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$sticky_store"');
+    expect(bindStep.run).toContain('echo "OPENCLAW_BUILD_ALL_NO_PNPM=1"');
     expect(bindStep.run).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(bindStep.run).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
     expect(installStep.env).toMatchObject({

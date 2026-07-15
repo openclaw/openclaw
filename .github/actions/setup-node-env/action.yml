@@ -118,6 +118,9 @@ runs:
         findmnt --target "$workspace_modules"
         # zizmor: ignore[github-env] static trusted path defined in this composite action.
         echo "PNPM_CONFIG_STORE_DIR=$sticky_store" >> "$GITHUB_ENV"
+        # pnpm exec may reconcile a restored workspace before nested builds.
+        # Sticky jobs already have every build tool, so invoke their Node entrypoints directly.
+        echo "OPENCLAW_BUILD_ALL_NO_PNPM=1" >> "$GITHUB_ENV"
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
