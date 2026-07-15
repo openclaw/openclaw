@@ -197,8 +197,8 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
 
   resetGatewaySession(): void {
     this.gatewayGeneration += 1;
-    // Discord replays every member's presence after a (re)connect. Hold emission for the
-    // configured window so the re-observation burst cannot wake the agent per member.
+    // A READY event starts a new Gateway session and rebuilds guild presence state. Hold emission
+    // during that rebuild so the re-observation burst cannot wake the agent per member.
     this.emissionGate.noteGatewaySessionReset(this.params.nowMs?.() ?? Date.now());
     this.presenceBaseline.clear();
     this.guildPresenceState.clear();
@@ -274,12 +274,13 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       return;
     }
 
-    const gate = this.emissionGate.evaluate(nowMs, resolveDiscordPresenceGateOptions(config));
-    if (!gate.allowed) {
-      if (gate.shouldLog) {
+    const gateOptions = resolveDiscordPresenceGateOptions(config);
+    const reconnectGate = this.emissionGate.evaluateReconnectWindow(nowMs, gateOptions);
+    if (!reconnectGate.allowed) {
+      if (reconnectGate.shouldLog) {
         const logger = this.params.logger ?? discordEventQueueLog;
         logger.info("Discord presence events suppressed", {
-          reason: gate.reason,
+          reason: reconnectGate.reason,
           accountId: this.params.accountId,
           guildId: data.guild_id,
         });
@@ -306,6 +307,23 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       guildId: data.guild_id,
       peer: { kind: "channel", id: presenceEvent.channelId },
     });
+    // Reserve only after fallible user lookup and routing. Release the slot unless an event is
+    // actually queued; rejected attempts must remain retryable and must not crowd out humans.
+    const burstNowMs = this.params.nowMs?.() ?? Date.now();
+    const burstGate = this.emissionGate.reserveBurst(burstNowMs, gateOptions);
+    if (!burstGate.allowed) {
+      if (burstGate.shouldLog) {
+        const logger = this.params.logger ?? discordEventQueueLog;
+        logger.info("Discord presence events suppressed", {
+          reason: burstGate.reason,
+          accountId: this.params.accountId,
+          guildId: data.guild_id,
+        });
+      }
+      this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+      return;
+    }
+    const burstReservation = burstGate.reservation;
     try {
       // Reserve only after fallible Discord lookups. Rejecting at capacity preserves every live
       // cooldown; skipping this wake is safer than allowing a duplicate greeting.
@@ -313,12 +331,14 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         ttlMs: resolveDiscordPresenceCooldownMs(config),
       });
       if (!reserved) {
+        this.emissionGate.releaseBurst(burstReservation);
         // Another live listener won the durable claim while this one awaited Discord. Treat the
         // member as online locally so overlapping provider generations cannot retry the greeting.
         this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
         return;
       }
     } catch (err) {
+      this.emissionGate.releaseBurst(burstReservation);
       const logger = this.params.logger ?? discordEventQueueLog;
       logger.warn(danger(`discord presence cooldown persistence failed: ${String(err)}`));
       return;
@@ -335,12 +355,14 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         },
       });
     } catch (err) {
+      this.emissionGate.releaseBurst(burstReservation);
       if (this.cooldownStore.lookup(presenceKey) === nowMs) {
         this.cooldownStore.delete(presenceKey);
       }
       throw err;
     }
     if (!queued) {
+      this.emissionGate.releaseBurst(burstReservation);
       if (this.cooldownStore.lookup(presenceKey) === nowMs) {
         this.cooldownStore.delete(presenceKey);
       }

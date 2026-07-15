@@ -322,11 +322,11 @@ export const discordChannelConfigUiHints = {
   },
   "guilds.*.presenceEvents.reconnectSuppressSeconds": {
     label: "Discord Online Presence Reconnect Suppression",
-    help: "Suppress online-presence events for this many seconds after a gateway (re)connect while Discord replays every member's presence. 0 disables. Default: 300.",
+    help: "Suppress online-presence events for this many seconds after a new Gateway session while guild presence state is rebuilt. Resumed sessions are unaffected. 0 disables. Default: 300.",
   },
   "guilds.*.presenceEvents.burstLimit": {
     label: "Discord Online Presence Burst Limit",
-    help: "Maximum online-presence events emitted per burst window; the rest are suppressed and logged once. Default: 8.",
+    help: "Maximum successfully queued online-presence events per burst window; the rest are suppressed and logged once. Default: 8.",
   },
   "guilds.*.presenceEvents.burstWindowSeconds": {
     label: "Discord Online Presence Burst Window",

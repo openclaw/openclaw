@@ -144,7 +144,7 @@ describe("DiscordPresenceListener", () => {
       cfg: {} as OpenClawConfig,
       accountId: "molty",
       guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
+        "guild-1": { presenceEvents: { channelId: "channel-1", burstLimit: 1 } },
       },
       cooldownStore: store,
       nowMs: () => nowMs,
@@ -480,15 +480,15 @@ describe("DiscordPresenceListener", () => {
     );
   });
 
-  it("keeps transition state per guild and rejects bots from partial payloads", async () => {
+  it("keeps transition state per guild and does not charge partial bots to the burst limit", async () => {
     let nowMs = 0;
     const store = cooldownStore();
-    const register = vi.spyOn(store, "register");
+    const registerIfAbsent = vi.spyOn(store, "registerIfAbsent");
     const listener = new DiscordPresenceListener({
       cfg: {} as OpenClawConfig,
       accountId: "molty",
       guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
+        "guild-1": { presenceEvents: { channelId: "channel-1", burstLimit: 1 } },
       },
       cooldownStore: store,
       nowMs: () => nowMs,
@@ -502,11 +502,19 @@ describe("DiscordPresenceListener", () => {
     await listener.handle(presence("offline"), botClient);
     nowMs += 1000;
     await listener.handle(presence("online"), botClient);
+    nowMs += 1000;
+    await listener.handle(presence("offline", "human-1"), client());
+    nowMs += 1000;
+    await listener.handle(presence("online", "human-1"), client());
 
     expect(fetchUser).toHaveBeenCalledWith("user-1");
-    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
-    expect(register).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining('user_id="human-1"'),
+      expect.anything(),
+    );
+    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
+    expect(registerIfAbsent).toHaveBeenCalledTimes(1);
   });
 
   it("does not let another guild's status suppress the configured guild", async () => {
@@ -629,6 +637,45 @@ describe("DiscordPresenceListener", () => {
     expect(info).toHaveBeenCalledWith(
       "Discord presence events suppressed",
       expect.objectContaining({ reason: "burst" }),
+    );
+  });
+
+  it("starts the burst window after a delayed user lookup", async () => {
+    let nowMs = 30_000;
+    let resolveUser!: (value: { bot: boolean }) => void;
+    const fetchUser = vi.fn(
+      () =>
+        new Promise<{ bot: boolean }>((resolve) => {
+          resolveUser = resolve;
+        }),
+    );
+    const listener = new DiscordPresenceListener({
+      cfg: {} as OpenClawConfig,
+      accountId: "molty",
+      guildEntries: {
+        "guild-1": {
+          presenceEvents: { channelId: "channel-1", burstLimit: 1, burstWindowSeconds: 60 },
+        },
+      },
+      cooldownStore: cooldownStore(),
+      nowMs: () => nowMs,
+    });
+
+    listener.seedGuildSnapshot(guildSnapshot([]));
+    const delayed = listener.handle({ ...presence("online", "delayed"), user: { id: "delayed" } }, {
+      fetchUser,
+    } as unknown as Client);
+    await vi.waitFor(() => expect(fetchUser).toHaveBeenCalledTimes(1));
+    nowMs += 61_000;
+    resolveUser({ bot: false });
+    await delayed;
+    nowMs += 1;
+    await listener.handle(presence("online", "next"), client());
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining('user_id="delayed"'),
+      expect.anything(),
     );
   });
 
