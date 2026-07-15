@@ -61,6 +61,48 @@ describe("restart recovery terminal delivery receipt", () => {
     await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("blocked");
   });
 
+  it("does not arm a receipt for a live turn without a recovery claim", async () => {
+    await replaceSessionEntry(
+      { sessionKey, storePath: fixture.storePath() },
+      {
+        sessionId: "session-1",
+        status: "running",
+        updatedAt: 1,
+      },
+    );
+
+    await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("not-applicable");
+    expect(
+      loadSessionEntry({ sessionKey, storePath: fixture.storePath() })
+        ?.restartRecoveryDeliveryReceiptState,
+    ).toBeUndefined();
+  });
+
+  it("fails closed for an inactive session without a recovery claim", async () => {
+    await replaceSessionEntry(
+      { sessionKey, storePath: fixture.storePath() },
+      {
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+    );
+
+    await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("stale");
+  });
+
+  it("blocks a completed source after its active recovery claim is cleared", async () => {
+    await replaceSessionEntry(
+      { sessionKey, storePath: fixture.storePath() },
+      {
+        sessionId: "session-1",
+        restartRecoveryTerminalRunIds: ["source-1"],
+        updatedAt: 1,
+      },
+    );
+
+    await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("blocked");
+  });
+
   it("clears pending only after a proven non-delivery", async () => {
     await seedClaim();
     await beginRestartRecoveryTerminalDelivery(scope());

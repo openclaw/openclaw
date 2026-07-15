@@ -191,6 +191,9 @@ export async function beginTerminalSourceReplyDelivery(
     return undefined;
   }
   const result = await beginRestartRecoveryTerminalDelivery(receipt);
+  if (result === "not-applicable") {
+    return undefined;
+  }
   if (result === "blocked") {
     throw new Error("terminal source reply already has a durable delivery outcome");
   }

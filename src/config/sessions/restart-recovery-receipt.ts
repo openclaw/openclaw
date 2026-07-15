@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasRestartRecoveryTerminalRun } from "./restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "./session-accessor.js";
 import type { SessionEntry } from "./types.js";
 
@@ -9,6 +10,12 @@ export type RestartRecoveryTerminalDeliveryScope = {
   storePath: string;
   toolCallId: string;
 };
+
+export type RestartRecoveryTerminalDeliveryStart =
+  | "started"
+  | "blocked"
+  | "stale"
+  | "not-applicable";
 
 function hasActiveClaim(
   entry: SessionEntry | null | undefined,
@@ -31,6 +38,20 @@ function hasExactDeliveryClaim(
   );
 }
 
+function hasNoDeliveryClaim(
+  entry: SessionEntry | null | undefined,
+  scope: RestartRecoveryTerminalDeliveryScope,
+): entry is SessionEntry {
+  return (
+    entry?.sessionId === scope.sessionId &&
+    entry.status === "running" &&
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === undefined &&
+    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) === undefined &&
+    entry.restartRecoveryDeliveryReceiptState === undefined &&
+    normalizeOptionalString(entry.restartRecoveryDeliveryToolCallId) === undefined
+  );
+}
+
 function loadCurrent(scope: RestartRecoveryTerminalDeliveryScope): SessionEntry | undefined {
   return loadSessionEntry({
     sessionKey: scope.sessionKey,
@@ -42,7 +63,7 @@ function loadCurrent(scope: RestartRecoveryTerminalDeliveryScope): SessionEntry 
 /** Persists ambiguity before a terminal external send is allowed to start. */
 export async function beginRestartRecoveryTerminalDelivery(
   scope: RestartRecoveryTerminalDeliveryScope,
-): Promise<"started" | "blocked" | "stale"> {
+): Promise<RestartRecoveryTerminalDeliveryStart> {
   let started = false;
   const updated = await updateSessionEntry(
     { sessionKey: scope.sessionKey, storePath: scope.storePath },
@@ -71,6 +92,17 @@ export async function beginRestartRecoveryTerminalDelivery(
     return "started";
   }
   const current = loadCurrent(scope);
+  // A terminal tombstone means the source already finished even though active claim fields are gone.
+  if (
+    current?.sessionId === scope.sessionId &&
+    hasRestartRecoveryTerminalRun(current, scope.sourceTurnId)
+  ) {
+    return "blocked";
+  }
+  // Normal live turns may carry source correlation without arming restart recovery.
+  if (hasNoDeliveryClaim(current, scope)) {
+    return "not-applicable";
+  }
   if (!hasActiveClaim(current, scope)) {
     return "stale";
   }

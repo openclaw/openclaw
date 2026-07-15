@@ -25,9 +25,9 @@ const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
     async () => ({ ok: true, sessionFile: "x", messageId: "message-x" }),
   ),
-  beginRestartRecoveryTerminalDelivery: vi.fn<() => Promise<"started" | "blocked" | "stale">>(
-    async () => "started",
-  ),
+  beginRestartRecoveryTerminalDelivery: vi.fn<
+    () => Promise<"started" | "blocked" | "stale" | "not-applicable">
+  >(async () => "started"),
   cancelRestartRecoveryTerminalDelivery: vi.fn(async () => "cleared" as const),
   completeRestartRecoveryTerminalDelivery: vi.fn(async () => "recorded" as const),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
@@ -2455,6 +2455,51 @@ describe("gateway send mirroring", () => {
 
     expect(firstRespondCall(respond)[0]).toBe(false);
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("sends a terminal source reply when the live turn has no recovery claim", async () => {
+    mocks.beginRestartRecoveryTerminalDelivery.mockResolvedValueOnce("not-applicable");
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-live-unclaimed" }),
+    );
+    const sessionKey = "agent:main:telegram:direct:chat-123";
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: { to: "chat-123", message: "live terminal" },
+        sessionKey,
+        sessionId: "session-live-unclaimed",
+        agentId: "main",
+        idempotencyKey: "idem-live-unclaimed",
+      },
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              sessionId: "session-live-unclaimed",
+              sourceReplyFinal: true,
+              sourceReplyToolCallId: "message-call-live-unclaimed",
+              toolContext: {
+                currentChannelProvider: "telegram",
+                currentChannelId: "chat-123",
+                currentSourceTurnId: "channel-user:v1:live-unclaimed",
+              },
+            },
+          },
+        },
+      },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledOnce();
+    expect(mocks.completeRestartRecoveryTerminalDelivery).not.toHaveBeenCalled();
+    expect(mocks.cancelRestartRecoveryTerminalDelivery).not.toHaveBeenCalled();
   });
 
   it("keeps the provider receipt durable when transcript mirroring is rejected", async () => {
