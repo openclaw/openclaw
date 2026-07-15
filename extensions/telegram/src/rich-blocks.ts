@@ -10,7 +10,8 @@ import {
   type MarkdownTableCell,
   type MarkdownTableMeta,
 } from "openclaw/plugin-sdk/text-chunking";
-// Runtime-safe: rich-plain-fallback's reverse import of this module is type-only.
+// Runtime-safe: rich-blocks-html and rich-plain-fallback import only types back.
+import { findTelegramHtmlIslands, parseInlineHtmlIslands } from "./rich-blocks-html.js";
 import { splitTelegramPlainTextChunks, surrogateSafeChunkEnd } from "./rich-plain-fallback.js";
 
 export type TelegramRichBlocksDegradationReason = "table-ascii";
@@ -19,13 +20,36 @@ export type RichText =
   | string
   | RichText[]
   | {
-      type: "bold" | "italic" | "strikethrough" | "code" | "spoiler";
+      type:
+        | "bold"
+        | "italic"
+        | "underline"
+        | "strikethrough"
+        | "code"
+        | "spoiler"
+        | "marked"
+        | "subscript"
+        | "superscript";
       text: RichText;
     }
   | {
       type: "url";
       text: RichText;
       url: string;
+    }
+  | {
+      type: "anchor_link";
+      text: RichText;
+      anchor_name: string;
+    }
+  | {
+      type: "mathematical_expression";
+      expression: string;
+    }
+  | {
+      type: "custom_emoji";
+      custom_emoji_id: string;
+      alternative_text: string;
     };
 
 export type RichBlockTableCellAlign = "left" | "center" | "right";
@@ -59,6 +83,7 @@ export type InputRichBlockPre = {
 export type InputRichBlockBlockquote = {
   type: "blockquote";
   blocks: InputRichBlock[];
+  credit?: RichText;
 };
 
 export type InputRichBlockTable = {
@@ -66,14 +91,52 @@ export type InputRichBlockTable = {
   cells: RichBlockTableCell[][];
   is_bordered?: true;
   is_striped?: true;
+  caption?: RichText;
 };
+
+export type RichBlockCaption = {
+  text: RichText;
+  credit?: RichText;
+};
+
+export type InputRichBlockListItem = {
+  blocks: InputRichBlock[];
+  has_checkbox?: true;
+  is_checked?: true;
+  value?: number;
+  type?: "a" | "A" | "i" | "I" | "1";
+};
+
+type InputMediaUrl<K extends string> = { type: K; media: string };
 
 export type InputRichBlock =
   | InputRichBlockParagraph
   | InputRichBlockHeading
   | InputRichBlockPre
   | InputRichBlockBlockquote
-  | InputRichBlockTable;
+  | InputRichBlockTable
+  | { type: "divider" }
+  | { type: "anchor"; name: string }
+  | { type: "footer"; text: RichText }
+  | { type: "pullquote"; text: RichText; credit?: RichText }
+  | { type: "mathematical_expression"; expression: string }
+  | { type: "details"; summary: RichText; blocks: InputRichBlock[]; is_open?: true }
+  | { type: "list"; items: InputRichBlockListItem[] }
+  | { type: "photo"; photo: InputMediaUrl<"photo">; caption?: RichBlockCaption }
+  | { type: "video"; video: InputMediaUrl<"video">; caption?: RichBlockCaption }
+  | { type: "audio"; audio: InputMediaUrl<"audio">; caption?: RichBlockCaption }
+  | { type: "animation"; animation: InputMediaUrl<"animation">; caption?: RichBlockCaption }
+  | { type: "voice_note"; voice_note: InputMediaUrl<"voice_note">; caption?: RichBlockCaption }
+  | { type: "collage"; blocks: InputRichBlock[]; caption?: RichBlockCaption }
+  | { type: "slideshow"; blocks: InputRichBlock[]; caption?: RichBlockCaption }
+  | {
+      type: "map";
+      location: { latitude: number; longitude: number };
+      zoom: number;
+      width: number;
+      height: number;
+      caption?: RichBlockCaption;
+    };
 
 export type TelegramRichBlocksResult = {
   blocks: InputRichBlock[];
@@ -91,7 +154,7 @@ const INLINE_STYLE_RANK: Record<string, number> = {
   code: 4,
 };
 
-const TELEGRAM_RICH_LINK_HREF_RE = /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i;
+const TELEGRAM_RICH_LINK_HREF_RE = /^(?:https?:\/\/|tg:\/\/|mailto:|tel:)/i;
 
 type InlineStyleKind = "bold" | "italic" | "strikethrough" | "code" | "spoiler";
 
@@ -159,6 +222,9 @@ function normalizeRichText(value: RichText): RichText {
     }
     return flattened;
   }
+  if (value.type === "mathematical_expression" || value.type === "custom_emoji") {
+    return value;
+  }
   return { ...value, text: normalizeRichText(value.text) };
 }
 
@@ -166,7 +232,10 @@ function wrapStyle(kind: InlineStyleKind, text: RichText): RichText {
   return { type: kind, text };
 }
 
-type TelegramLinkAction = { kind: "url"; href: string } | { kind: "code" };
+type TelegramLinkAction =
+  | { kind: "url"; href: string }
+  | { kind: "anchor"; name: string }
+  | { kind: "code" };
 
 function resolveTelegramLinkAction(
   link: MarkdownLinkSpan,
@@ -182,6 +251,10 @@ function resolveTelegramLinkAction(
     // Telegram's server-side entity detection would otherwise re-linkify them
     // and show spurious domain previews for TLD-like extensions.
     return { kind: "code" };
+  }
+  if (href.startsWith("#")) {
+    // In-message fragments are RichTextAnchorLink, not RichTextUrl.
+    return { kind: "anchor", name: href.slice(1) };
   }
   if (!isTelegramRichLinkHref(href)) {
     return null;
@@ -241,7 +314,11 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   type Active =
     | { kind: "style"; style: InlineStyleKind; end: number }
     | { kind: "annotation"; end: number }
-    | { kind: "link"; href: string; end: number };
+    | {
+        kind: "link";
+        target: { kind: "url"; href: string } | { kind: "anchor"; name: string };
+        end: number;
+      };
 
   const stack: Active[] = [];
   const root: RichText[] = [];
@@ -265,10 +342,17 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
     frameStack.push(container);
   };
 
-  const openLinkNode = (href: string, end: number) => {
+  const openLinkNode = (
+    target: { kind: "url"; href: string } | { kind: "anchor"; name: string },
+    end: number,
+  ) => {
     const container: RichText[] = [];
-    pushNode({ type: "url", text: container, url: href });
-    stack.push({ kind: "link", href, end });
+    pushNode(
+      target.kind === "url"
+        ? { type: "url", text: container, url: target.href }
+        : { type: "anchor_link", text: container, anchor_name: target.name },
+    );
+    stack.push({ kind: "link", target, end });
     frameStack.push(container);
   };
 
@@ -290,8 +374,8 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
       if (link.start !== start) {
         continue;
       }
-      if (link.action.kind === "url") {
-        opening.push({ kind: "link", href: link.action.href, end: link.end });
+      if (link.action.kind === "url" || link.action.kind === "anchor") {
+        opening.push({ kind: "link", target: link.action, end: link.end });
       } else {
         opening.push({ kind: "style", style: "code", end: link.end });
       }
@@ -329,7 +413,7 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
         openAnnotationNode(item.end);
       } else if (item.kind === "link") {
         if (!inCode && !stack.some((entry) => entry.kind === "link")) {
-          openLinkNode(item.href, item.end);
+          openLinkNode(item.target, item.end);
         }
       } else if (!inCode || item.style === "code") {
         if (!(item.style === "code" && inCode)) {
@@ -350,7 +434,26 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
     frameStack.pop();
   }
 
-  return normalizeRichText(root);
+  return normalizeRichText(applyInlineHtmlIslands(root));
+}
+
+// Inline islands (<sup>, <tg-math>, <tg-emoji>, …) live in plain string leaves;
+// code spans keep their content literal.
+function applyInlineHtmlIslands(node: RichText): RichText {
+  if (typeof node === "string") {
+    return parseInlineHtmlIslands(node);
+  }
+  if (Array.isArray(node)) {
+    return node.map(applyInlineHtmlIslands);
+  }
+  if (
+    node.type === "code" ||
+    node.type === "mathematical_expression" ||
+    node.type === "custom_emoji"
+  ) {
+    return node;
+  }
+  return { ...node, text: applyInlineHtmlIslands(node.text) };
 }
 
 function pushParagraph(
@@ -369,7 +472,12 @@ function pushParagraph(
   if (absEnd <= absStart) {
     return;
   }
-  paragraphs.push({ type: "paragraph", text: irRangeToRichText(ir, absStart, absEnd) });
+  const text = irRangeToRichText(ir, absStart, absEnd);
+  // Inline island conversion can normalize a leaf to nothing (e.g. an anchor
+  // with empty label); an empty paragraph is invalid wire content.
+  if (text !== "") {
+    paragraphs.push({ type: "paragraph", text });
+  }
 }
 
 function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichBlockParagraph[] {
@@ -387,6 +495,41 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
   }
   pushParagraph(paragraphs, ir, start + last, end);
   return paragraphs;
+}
+
+// Gap emitter: agent-authored block HTML islands (details/lists/media/math/…)
+// become typed blocks; the text around them stays on the paragraph path.
+function emitGapBlocks(ir: MarkdownIR, start: number, end: number): InputRichBlock[] {
+  if (end <= start) {
+    return [];
+  }
+  // Code-formatted ranges keep their tags literal: `<hr/>` inside a code span
+  // is an example, not a divider. Only the island's opening tag position
+  // matters — code content nested inside an island body must not reject it.
+  const codeRanges = ir.styles.filter(
+    (span) =>
+      (span.style === "code" || span.style === "code_block") &&
+      span.end > start &&
+      span.start < end,
+  );
+  const islands = findTelegramHtmlIslands(ir.text.slice(start, end)).filter(
+    (island) =>
+      !codeRanges.some(
+        (range) => start + island.start >= range.start && start + island.start < range.end,
+      ),
+  );
+  if (islands.length === 0) {
+    return splitParagraphs(ir, start, end);
+  }
+  const blocks: InputRichBlock[] = [];
+  let cursor = start;
+  for (const island of islands) {
+    blocks.push(...splitParagraphs(ir, cursor, start + island.start));
+    blocks.push(...island.blocks);
+    cursor = start + island.end;
+  }
+  blocks.push(...splitParagraphs(ir, cursor, end));
+  return blocks;
 }
 
 function renderAsciiTableGrid(table: MarkdownTableMeta): string {
@@ -511,7 +654,7 @@ function emitSegments(
       break;
     }
     if (segment.start > cursor) {
-      blocks.push(...splitParagraphs(ir, cursor, segment.start));
+      blocks.push(...emitGapBlocks(ir, cursor, segment.start));
     }
     // Segments nested inside this one (fences/headings/tables in a blockquote)
     // belong to it; consuming them here prevents a second top-level emission.
@@ -557,7 +700,7 @@ function emitSegments(
     index = next;
   }
   if (cursor < rangeEnd) {
-    blocks.push(...splitParagraphs(ir, cursor, rangeEnd));
+    blocks.push(...emitGapBlocks(ir, cursor, rangeEnd));
   }
   return blocks;
 }
@@ -569,25 +712,104 @@ export function countRichTextChars(text: RichText): number {
   if (Array.isArray(text)) {
     return text.reduce((total, part) => total + countRichTextChars(part), 0);
   }
+  if (text.type === "mathematical_expression") {
+    return text.expression.length;
+  }
+  if (text.type === "custom_emoji") {
+    return text.alternative_text.length;
+  }
   return countRichTextChars(text.text);
 }
 
+function countCaptionChars(caption: RichBlockCaption | undefined): number {
+  if (!caption) {
+    return 0;
+  }
+  return countRichTextChars(caption.text) + countRichTextChars(caption.credit ?? "");
+}
+
 export function countInputRichBlockChars(block: InputRichBlock): number {
-  if (block.type === "paragraph" || block.type === "heading") {
-    return countRichTextChars(block.text);
+  switch (block.type) {
+    case "paragraph":
+    case "heading":
+    case "footer":
+      return countRichTextChars(block.text);
+    case "pre":
+      return block.text.length;
+    case "mathematical_expression":
+      return block.expression.length;
+    case "pullquote":
+      return countRichTextChars(block.text) + countRichTextChars(block.credit ?? "");
+    case "blockquote":
+      return (
+        block.blocks.reduce((total, item) => total + countInputRichBlockChars(item), 0) +
+        countRichTextChars(block.credit ?? "")
+      );
+    case "collage":
+    case "slideshow":
+      return (
+        block.blocks.reduce((total, item) => total + countInputRichBlockChars(item), 0) +
+        countCaptionChars(block.caption)
+      );
+    case "details":
+      return (
+        countRichTextChars(block.summary) +
+        block.blocks.reduce((total, item) => total + countInputRichBlockChars(item), 0)
+      );
+    case "list":
+      return block.items.reduce(
+        (total, item) =>
+          total + item.blocks.reduce((inner, child) => inner + countInputRichBlockChars(child), 0),
+        0,
+      );
+    case "table":
+      return (
+        countRichTextChars(block.caption ?? "") +
+        block.cells.reduce(
+          (rowTotal, row) =>
+            rowTotal +
+            row.reduce((cellTotal, cell) => cellTotal + countRichTextChars(cell.text ?? ""), 0),
+          0,
+        )
+      );
+    case "photo":
+    case "video":
+    case "audio":
+    case "animation":
+    case "voice_note":
+    case "map":
+      return countCaptionChars(block.caption);
+    // divider and anchor carry no text.
+    default:
+      return 0;
   }
-  if (block.type === "pre") {
-    return block.text.length;
+}
+
+/** Media elements per block, for the wire's 50-media message cap. */
+export function countInputRichBlockMedia(block: InputRichBlock): number {
+  switch (block.type) {
+    // Maps are excluded: 51 maps in one message were accepted live, so they
+    // do not consume the 50-attachment budget.
+    case "photo":
+    case "video":
+    case "audio":
+    case "animation":
+    case "voice_note":
+      return 1;
+    case "collage":
+    case "slideshow":
+    case "blockquote":
+    case "details":
+      return block.blocks.reduce((total, item) => total + countInputRichBlockMedia(item), 0);
+    case "list":
+      return block.items.reduce(
+        (total, item) =>
+          total + item.blocks.reduce((inner, child) => inner + countInputRichBlockMedia(child), 0),
+        0,
+      );
+    default:
+      return 0;
   }
-  if (block.type === "blockquote") {
-    return block.blocks.reduce((total, item) => total + countInputRichBlockChars(item), 0);
-  }
-  return block.cells.reduce(
-    (rowTotal, row) =>
-      rowTotal +
-      row.reduce((cellTotal, cell) => cellTotal + countRichTextChars(cell.text ?? ""), 0),
-    0,
-  );
 }
 
 export function markdownToTelegramRichBlocks(
@@ -595,10 +817,10 @@ export function markdownToTelegramRichBlocks(
   options: { tableMode?: MarkdownTableMode; skipEntityDetection?: boolean } = {},
 ): TelegramRichBlocksResult {
   const tableMode = options.tableMode ?? "block";
-  // Parity scope: lists stay IR-flattened, media blocks out of scope (image alt
-  // text only), and `---` keeps the IR's ─── text — the old rich path never
-  // emitted <hr> for markdown either. Native list/media/divider blocks are a
-  // follow-up contract.
+  // Markdown-native lists stay IR-flattened and `---` keeps the IR's ─── text
+  // (the old rich path did the same); native list/media/details/math blocks
+  // come from the documented HTML-island contract (rich-blocks-html.ts), which
+  // the agent system prompt advertises when rich messages are enabled.
   const { ir, tables } = markdownToIRWithMeta(markdown ?? "", {
     assistantTranscriptRoleHeaders: true,
     linkify: options.skipEntityDetection !== true,
@@ -625,7 +847,20 @@ export function markdownToTelegramRichBlocks(
   };
 }
 
-type RichTextWrapper = { type: InlineStyleKind } | { type: "url"; url: string };
+type RichTextStyleWrap =
+  | "bold"
+  | "italic"
+  | "underline"
+  | "strikethrough"
+  | "code"
+  | "spoiler"
+  | "marked"
+  | "subscript"
+  | "superscript";
+type RichTextWrapper =
+  | { type: RichTextStyleWrap }
+  | { type: "url"; url: string }
+  | { type: "anchor_link"; anchor_name: string };
 
 function wrapRichTextFragment(fragment: RichText, wrappers: readonly RichTextWrapper[]): RichText {
   let node = fragment;
@@ -637,7 +872,9 @@ function wrapRichTextFragment(fragment: RichText, wrappers: readonly RichTextWra
     node =
       wrapper.type === "url"
         ? { type: "url", text: node, url: wrapper.url }
-        : { type: wrapper.type, text: node };
+        : wrapper.type === "anchor_link"
+          ? { type: "anchor_link", text: node, anchor_name: wrapper.anchor_name }
+          : { type: wrapper.type, text: node };
   }
   return node;
 }
@@ -677,8 +914,22 @@ function splitRichTextByChars(text: RichText, limit: number): RichText[] {
       }
       return;
     }
+    if (node.type === "mathematical_expression" || node.type === "custom_emoji") {
+      // Atomic leaves: never sliced, only placed whole into the current piece.
+      const atomicChars = countRichTextChars(node);
+      if (chars > 0 && chars + atomicChars > limit) {
+        flush();
+      }
+      current.push(wrapRichTextFragment(node, wrappers));
+      chars += atomicChars;
+      return;
+    }
     const wrapper: RichTextWrapper =
-      node.type === "url" ? { type: "url", url: node.url } : { type: node.type };
+      node.type === "url"
+        ? { type: "url", url: node.url }
+        : node.type === "anchor_link"
+          ? { type: "anchor_link", anchor_name: node.anchor_name }
+          : { type: node.type };
     visit(node.text, [...wrappers, wrapper]);
   };
   visit(text, []);
@@ -704,30 +955,80 @@ function splitOversizedRichBlock(block: InputRichBlock, textLimit: number): Inpu
     );
   }
   if (block.type === "blockquote") {
-    return splitTelegramRichBlocks(block.blocks, { textLimit }).map((inner) => ({
-      type: "blockquote",
-      blocks: inner,
-    }));
+    // Reserve the credit's chars while splitting the body, then attach the
+    // credit to the final piece only (attribution belongs at the quote's end).
+    const creditChars = countRichTextChars(block.credit ?? "");
+    const innerLimit = Math.max(1, textLimit - creditChars);
+    const pieces = splitTelegramRichBlocks(block.blocks, { textLimit: innerLimit });
+    return pieces.map((inner, index) =>
+      index === pieces.length - 1 && block.credit !== undefined
+        ? { type: "blockquote", blocks: inner, credit: block.credit }
+        : { type: "blockquote", blocks: inner },
+    );
   }
-  const pieces: InputRichBlock[] = [];
-  let rows: RichBlockTableCell[][] = [];
-  let chars = 0;
-  for (const row of block.cells) {
-    const rowChars = row.reduce((total, cell) => total + countRichTextChars(cell.text ?? ""), 0);
-    if (rows.length > 0 && chars + rowChars > textLimit) {
-      pieces.push({ ...block, cells: rows });
-      rows = [];
-      chars = 0;
+  if (block.type === "table") {
+    // Row-splitting a table with rowspans would strand spans across messages;
+    // such tables stay atomic and degrade via the TEXT_TOO_LONG fallback.
+    if (block.cells.some((row) => row.some((cell) => (cell.rowspan ?? 1) > 1))) {
+      return [block];
     }
-    rows.push(row);
-    chars += rowChars;
+    const { caption, ...tableRest } = block;
+    const pieces: InputRichBlock[] = [];
+    const pushPiece = (pieceRows: RichBlockTableCell[][]) => {
+      // The caption rides only the first piece.
+      pieces.push(
+        pieces.length === 0 && caption !== undefined
+          ? { ...tableRest, cells: pieceRows, caption }
+          : { ...tableRest, cells: pieceRows },
+      );
+    };
+    let rows: RichBlockTableCell[][] = [];
+    let chars = countRichTextChars(caption ?? "");
+    for (const row of block.cells) {
+      const rowChars = row.reduce((total, cell) => total + countRichTextChars(cell.text ?? ""), 0);
+      if (rows.length > 0 && chars + rowChars > textLimit) {
+        pushPiece(rows);
+        rows = [];
+        chars = 0;
+      }
+      rows.push(row);
+      chars += rowChars;
+    }
+    if (rows.length > 0) {
+      pushPiece(rows);
+    }
+    return pieces;
   }
-  if (rows.length > 0) {
-    pieces.push({ ...block, cells: rows });
+  if (block.type === "list") {
+    const pieces: InputRichBlock[] = [];
+    let items: InputRichBlockListItem[] = [];
+    let chars = 0;
+    for (const item of block.items) {
+      const itemChars = item.blocks.reduce(
+        (total, child) => total + countInputRichBlockChars(child),
+        0,
+      );
+      if (items.length > 0 && chars + itemChars > textLimit) {
+        pieces.push({ type: "list", items });
+        items = [];
+        chars = 0;
+      }
+      items.push(item);
+      chars += itemChars;
+    }
+    if (items.length > 0) {
+      pieces.push({ type: "list", items });
+    }
+    return pieces;
   }
-  return pieces;
+  // Details, media, and remaining container blocks stay atomic; a genuinely
+  // oversized one degrades via the RICH_MESSAGE_TEXT_TOO_LONG plain fallback.
+  return [block];
 }
 
+// Chunking is locality-blind for anchors: an anchor_link whose target lands in
+// an earlier chunk renders as an inert link. Accepted trade-off — it needs a
+// >32k message with cross-chunk fragment links, and delivery is unaffected.
 export function splitTelegramRichBlocks(
   blocks: readonly InputRichBlock[],
   options: { blockLimit?: number; textLimit?: number } = {},
@@ -741,24 +1042,30 @@ export function splitTelegramRichBlocks(
   const chunks: InputRichBlock[][] = [];
   let current: InputRichBlock[] = [];
   let currentChars = 0;
+  // Live-verified message cap: >50 media elements → RICH_MESSAGE_MEDIA_TOO_MANY.
+  const mediaLimit = 50;
+  let currentMedia = 0;
 
   const flush = () => {
     if (current.length > 0) {
       chunks.push(current);
       current = [];
       currentChars = 0;
+      currentMedia = 0;
     }
   };
-
   for (const block of expanded) {
     const chars = countInputRichBlockChars(block);
+    const media = countInputRichBlockMedia(block);
     const wouldExceedBlocks = current.length >= blockLimit;
     const wouldExceedChars = current.length > 0 && currentChars + chars > textLimit;
-    if (wouldExceedBlocks || wouldExceedChars) {
+    const wouldExceedMedia = current.length > 0 && currentMedia + media > mediaLimit;
+    if (wouldExceedBlocks || wouldExceedChars || wouldExceedMedia) {
       flush();
     }
     current.push(block);
     currentChars += chars;
+    currentMedia += media;
   }
   flush();
   return chunks;
@@ -771,27 +1078,109 @@ export function richTextToPlainString(text: RichText): string {
   if (Array.isArray(text)) {
     return text.map(richTextToPlainString).join("");
   }
+  if (text.type === "mathematical_expression") {
+    return text.expression;
+  }
+  if (text.type === "custom_emoji") {
+    return text.alternative_text;
+  }
   return richTextToPlainString(text.text);
+}
+
+function captionToPlainText(caption: RichBlockCaption | undefined): string {
+  if (!caption) {
+    return "";
+  }
+  const credit = caption.credit ? ` — ${richTextToPlainString(caption.credit)}` : "";
+  return `${richTextToPlainString(caption.text)}${credit}`.trim();
 }
 
 export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): string {
   const parts: string[] = [];
+  const push = (value: string) => {
+    if (value) {
+      parts.push(value);
+    }
+  };
   for (const block of blocks) {
     switch (block.type) {
       case "paragraph":
       case "heading":
-        parts.push(richTextToPlainString(block.text));
+      case "footer":
+        push(richTextToPlainString(block.text));
         break;
       case "pre":
-        parts.push(block.text);
+        push(block.text);
+        break;
+      case "mathematical_expression":
+        push(block.expression);
+        break;
+      case "pullquote":
+        push(
+          block.credit
+            ? `${richTextToPlainString(block.text)} — ${richTextToPlainString(block.credit)}`
+            : richTextToPlainString(block.text),
+        );
         break;
       case "blockquote":
-        parts.push(inputRichBlocksToPlainText(block.blocks));
+        push(inputRichBlocksToPlainText(block.blocks));
+        if (block.credit) {
+          push(`— ${richTextToPlainString(block.credit)}`);
+        }
+        break;
+      case "collage":
+      case "slideshow":
+        push(inputRichBlocksToPlainText(block.blocks));
+        push(captionToPlainText(block.caption));
+        break;
+      case "details":
+        push(richTextToPlainString(block.summary));
+        push(inputRichBlocksToPlainText(block.blocks));
+        break;
+      case "list":
+        for (const item of block.items) {
+          const marker = item.has_checkbox
+            ? item.is_checked
+              ? "[x] "
+              : "[ ] "
+            : item.value !== undefined
+              ? `${item.value}. `
+              : "• ";
+          push(`${marker}${inputRichBlocksToPlainText(item.blocks)}`);
+        }
         break;
       case "table":
-        for (const row of block.cells) {
-          parts.push(row.map((cell) => richTextToPlainString(cell.text ?? "")).join(" | "));
+        if (block.caption !== undefined) {
+          push(richTextToPlainString(block.caption));
         }
+        for (const row of block.cells) {
+          push(row.map((cell) => richTextToPlainString(cell.text ?? "")).join(" | "));
+        }
+        break;
+      // Fallback text keeps BOTH caption and source so a degraded delivery
+      // still lets the user reach the media.
+      case "photo":
+        push(`${captionToPlainText(block.caption)} ${block.photo.media}`.trim());
+        break;
+      case "video":
+        push(`${captionToPlainText(block.caption)} ${block.video.media}`.trim());
+        break;
+      case "audio":
+        push(`${captionToPlainText(block.caption)} ${block.audio.media}`.trim());
+        break;
+      case "animation":
+        push(`${captionToPlainText(block.caption)} ${block.animation.media}`.trim());
+        break;
+      case "voice_note":
+        push(`${captionToPlainText(block.caption)} ${block.voice_note.media}`.trim());
+        break;
+      case "map":
+        push(
+          `${captionToPlainText(block.caption)} ${block.location.latitude},${block.location.longitude}`.trim(),
+        );
+        break;
+      case "divider":
+      case "anchor":
         break;
     }
   }

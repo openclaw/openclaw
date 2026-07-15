@@ -3,14 +3,17 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { TelegramRichBlocksDegradationReason } from "./rich-blocks.js";
 
-const RICH_ENTITY_INVALID_RE =
-  /RICH_MESSAGE_(?:EMAIL|URL|MENTION|HASHTAG|CASHTAG|BOT_COMMAND|PHONE|BANK_CARD)_INVALID/i;
+// Any RICH_MESSAGE_*_INVALID rejection (entities, media, depth) degrades to
+// plain text; media content validity (e.g. AUDIO_INVALID for a non-decodable
+// file, live-verified) is only knowable server-side.
+const RICH_ENTITY_INVALID_RE = /RICH_MESSAGE_[A-Z_]+_INVALID/i;
 const RICH_CONTENT_REQUIRED_RE = /RICH_MESSAGE_CONTENT_REQUIRED/i;
 // Structural-limit rejections, live-verified against Bot API 10.2 (2026-07-15):
-// >500 top-level blocks, >16 block depth, oversized text bodies, >50 media.
+// >500 top-level blocks, >16 depth, oversized text, >50 media, >20 table cols.
 const RICH_STRUCTURE_INVALID_RE =
-  /RICH_MESSAGE_(?:BLOCKS_TOO_MANY|DEPTH_INVALID|TEXT_TOO_LONG|MEDIA_TOO_MANY)/i;
-const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
+  /RICH_MESSAGE_(?:BLOCKS_TOO_MANY|DEPTH_INVALID|TEXT_TOO_LONG|MEDIA_TOO_MANY|TABLE_COLS_TOO_MANY)/i;
+const PARSE_ERR_RE =
+  /can't parse entities|parse entities|find end of the entity|can't parse InputRichBlock/i;
 
 type TelegramPlainFallbackTrigger =
   | "rich-entity-invalid"
