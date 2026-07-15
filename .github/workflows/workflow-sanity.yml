@@ -162,24 +162,24 @@ jobs:
       - name: Install pre-commit
         run: python -m pip install --disable-pip-version-check pre-commit==4.2.0
 
+      - name: Setup Go for actionlint
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: "1.25.12"
+          cache: false
+
       - name: Install actionlint
         shell: bash
+        env:
+          # Unreleased upstream fix for stdin deadlock on run blocks larger than 64 KiB.
+          ACTIONLINT_COMMIT: fd33e9f582a01a02885c93ae3775e1190cf63653
         run: |
           set -euo pipefail
-          ACTIONLINT_VERSION="1.7.11"
-          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          base_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
-          # GitHub release downloads occasionally return transient 5xx responses.
-          # Retry all curl errors here so workflow-sanity does not fail closed on
-          # a one-off release edge outage.
-          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o "${archive}" "${base_url}/${archive}"
-          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
-          grep " ${archive}\$" checksums.txt | sha256sum -c -
-          tar -xzf "${archive}" actionlint
-          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_COMMIT}"
+          actionlint -version | grep -F "${ACTIONLINT_COMMIT:0:12}"
 
       - name: Lint workflows
-        run: actionlint -shellcheck=
+        run: actionlint
 
       - name: Audit all workflows with zizmor
         shell: bash

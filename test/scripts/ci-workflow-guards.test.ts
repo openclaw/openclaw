@@ -1618,6 +1618,18 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("pins actionlint after its large-run-block deadlock fix", () => {
+    const workflow = readFileSync(".github/workflows/workflow-sanity.yml", "utf8");
+
+    expect(workflow).toContain('go-version: "1.25.12"');
+    expect(workflow).toContain("ACTIONLINT_COMMIT: fd33e9f582a01a02885c93ae3775e1190cf63653");
+    expect(workflow).toContain(
+      'go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_COMMIT}"',
+    );
+    expect(workflow).toContain("run: actionlint\n");
+    expect(workflow).not.toContain("actionlint -shellcheck=");
+  });
+
   it("bounds shared base commit fetches", () => {
     const action = readFileSync(".github/actions/ensure-base-commit/action.yml", "utf8");
     const exactFetch = action.indexOf('fetch_base_ref --no-tags --depth=1 origin "$BASE_SHA"');
