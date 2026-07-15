@@ -224,8 +224,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/plugin-state/plugin-state-store.sqlite.ts: seedPluginStateDatabaseEntriesForTests",
   "src/plugin-state/plugin-state-store.sqlite.ts: setMaxPluginStateEntriesPerPluginForTests",
   "src/plugin-state/plugin-state-store.ts: clearPluginStateStoreForTests",
-  "src/proxy-capture/proxy-server.ts: assertDebugProxyDirectUpstreamAllowed",
-  "src/proxy-capture/proxy-server.ts: parseConnectTarget",
   "src/sessions/session-key-utils.ts: isCasePreservingPeer",
   "src/sessions/session-lifecycle-admission.ts: runExclusiveSessionLifecycle",
   "src/sessions/session-state-events.ts: pruneSessionStateEvents",
