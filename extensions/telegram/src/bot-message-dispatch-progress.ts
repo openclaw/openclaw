@@ -70,6 +70,7 @@ export function createTelegramProgressController(params: {
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
     commentaryItalics: false,
+    renderLinesWithPreamble: true,
     update: async (streamText, options) => {
       draftEverRendered = true;
       await params.draft.prepareAnswerLaneForToolProgress();

@@ -389,6 +389,26 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenCalledWith("Reading the workspace.", { flush: true, lines: [] });
   });
 
+  it("publishes rolling tool-line changes beneath a stable preamble headline", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { maxLines: 8 } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      renderLinesWithPreamble: true,
+      update,
+    });
+
+    await progress.pushPreambleHeadline("Reading the workspace.");
+    await progress.pushToolProgress("🛠️ Exec one", { startImmediately: true });
+    await progress.pushToolProgress("🛠️ Exec two", { startImmediately: true });
+
+    expect(update).toHaveBeenLastCalledWith("Reading the workspace.", {
+      lines: ["🛠️ Exec one", "🛠️ Exec two"],
+    });
+  });
+
   it("rejects control-only preambles without clobbering a valid headline", async () => {
     let nowMs = 0;
     const update = vi.fn();

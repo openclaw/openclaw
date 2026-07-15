@@ -56,8 +56,8 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
 
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
       telegramProgressPreview(
-        "Shelling\n\nChecking recent context",
-        "<b>Shelling</b>\nChecking recent context",
+        "Shelling\n\nChecking recent context\n🛠️ Exec",
+        "<b>Shelling</b>\nChecking recent context\n<b>🛠️ Exec</b>",
       ),
     );
   });

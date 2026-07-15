@@ -1,5 +1,10 @@
+import { createAgentRunEventHandler } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { dispatchReplyWithBufferedBlockDispatcher as dispatchReplyThroughRuntime } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { expect, it } from "vitest";
 import {
+  type DispatchReplyWithBufferedBlockDispatcherArgs,
+  type TelegramBotDeps,
+  type TelegramMessageContext,
   describeTelegramDispatch,
   createContext,
   createReasoningStreamContext,
@@ -19,6 +24,7 @@ import {
   recordOutboundMessageForPromptContext,
   setupDraftStreams,
   telegramProgressPreview,
+  telegramDepsForTest,
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
@@ -253,6 +259,95 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
     expect(draftStream.flush).toHaveBeenCalled();
+  });
+
+  it("keeps eight rolling Codex tool rows beneath a preamble with verbose off", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    const deps = {
+      ...telegramDepsForTest,
+      dispatchReplyWithBufferedBlockDispatcher: async (
+        params: DispatchReplyWithBufferedBlockDispatcherArgs,
+      ) =>
+        await dispatchReplyThroughRuntime({
+          ...params,
+          replyResolver: async (_ctx, opts) => {
+            const onAgentEvent = createAgentRunEventHandler({
+              turn: {
+                sessionCtx: { MessageSid: "456" },
+                opts,
+                typingSignals: { signalToolStart: async () => undefined },
+                toolProgressDetail: "raw",
+                applyReplyToMode: (payload: unknown) => payload,
+                sessionKey: "telegram-progress-test",
+              } as Parameters<typeof createAgentRunEventHandler>[0]["turn"],
+              lifecycleBackstop: {
+                emit: () => undefined,
+                getDeferredError: () => undefined,
+                note: () => undefined,
+              },
+              notifyAgentRunStart: () => undefined,
+              sourceRepliesAreToolOnly: false,
+              provider: "openai",
+              model: "gpt-test",
+              notifyUserAboutCompaction: false,
+              onCompactionCompleted: () => 0,
+              messageToolDeliveryState: { toolCallIds: new Set(), completed: false },
+            });
+            await onAgentEvent({
+              stream: "assistant",
+              data: {
+                phase: "commentary",
+                itemId: "preamble-1",
+                text: "I'll make exactly 10 harmless, read-only tool calls.",
+              },
+            });
+            for (let index = 1; index <= 10; index += 1) {
+              await onAgentEvent({
+                stream: "tool",
+                data: {
+                  phase: "start",
+                  name: "exec",
+                  toolCallId: `exec-${index}`,
+                  args: { command: `command-${index}` },
+                },
+              });
+            }
+            return { text: "Done" };
+          },
+        }),
+    } satisfies TelegramBotDeps;
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "telegram-progress-test",
+          ChatType: "direct",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: { agents: { defaults: { verboseDefault: "off" } } },
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { commandText: "raw", maxLines: 8, toolProgress: true },
+        },
+      },
+      telegramDeps: deps,
+    });
+
+    const rollingPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(rollingPreview?.text).toContain("I'll make exactly 10 harmless, read-only tool calls.");
+    expect(rollingPreview?.text).not.toContain("<code>command-1</code>");
+    expect(rollingPreview?.text).not.toContain("<code>command-2</code>");
+    for (let index = 3; index <= 10; index += 1) {
+      expect(rollingPreview?.text).toContain(`command-${index}`);
+    }
+    expectDeliveredReply(0, { text: "Done" });
+    const collapsePreview = draftStream.finalizeToPreview.mock.calls.at(-1)?.[0] as
+      | { text?: string }
+      | undefined;
+    expect(collapsePreview?.text).toMatch(/^🛠️ 10 tool calls · ⏱️ \d+s$/u);
   });
 
   it("renders command status without command output in Telegram progress draft previews", async () => {
@@ -561,8 +656,8 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
 
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview(
-        "Shelling\n\nChecking recent context",
-        "<b>Shelling</b>\nChecking recent context",
+        "Shelling\n\nChecking recent context\n🛠️ Exec",
+        "<b>Shelling</b>\nChecking recent context\n<b>🛠️ Exec</b>",
       ),
     );
   });

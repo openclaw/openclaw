@@ -21,6 +21,7 @@ export {
 } from "../infra/diagnostic-events.js";
 export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
+export { createAgentRunEventHandler } from "../auto-reply/reply/agent-runner-event-handler.js";
 export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {
   initializeGlobalHookRunner,
