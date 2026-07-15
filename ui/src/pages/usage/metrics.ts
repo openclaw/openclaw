@@ -58,8 +58,6 @@ function forEachSessionHourSlice(
 
   const startMs = Math.min(start, end);
   const endMs = Math.max(start, end);
-  const durationMs = Math.max(endMs - startMs, 1);
-  const totalMinutes = durationMs / 60000;
 
   if (startMs === endMs) {
     const date = new Date(startMs);
@@ -72,6 +70,7 @@ function forEachSessionHourSlice(
     return true;
   }
 
+  const totalMinutes = (endMs - startMs) / 60000;
   let cursor = startMs;
   while (cursor < endMs) {
     const date = new Date(cursor);
