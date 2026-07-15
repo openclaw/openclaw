@@ -821,6 +821,7 @@ private struct PostUpdateView: View {
                 Button("Retry") { PostUpdateController.shared.retry() }
                     .buttonStyle(.borderedProminent)
             }
+        // External means the Gateway was intentionally left unchanged, so no recovery action is needed.
         case .complete, .external:
             HStack {
                 Spacer()
