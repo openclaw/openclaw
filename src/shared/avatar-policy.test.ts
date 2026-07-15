@@ -48,4 +48,18 @@ describe("avatar policy", () => {
     expect(resolveAvatarMime("A.PNG")).toBe("image/png");
     expect(resolveAvatarMime("a.bin")).toBe("application/octet-stream");
   });
+
+  it("isAllowedAvatarMimeType accepts registered avatar MIME types", () => {
+    expect(isAllowedAvatarMimeType("image/png")).toBe(true);
+    expect(isAllowedAvatarMimeType("image/jpeg")).toBe(true);
+    expect(isAllowedAvatarMimeType("image/gif")).toBe(true);
+    expect(isAllowedAvatarMimeType("image/webp")).toBe(true);
+    expect(isAllowedAvatarMimeType("image/svg+xml")).toBe(true);
+    expect(isAllowedAvatarMimeType("image/x-icon")).toBe(true);
+    expect(isAllowedAvatarMimeType("image/tiff")).toBe(true);
+    expect(isAllowedAvatarMimeType("image/bmp")).toBe(true);
+    expect(isAllowedAvatarMimeType("image/unknown")).toBe(false);
+    expect(isAllowedAvatarMimeType("application/octet-stream")).toBe(false);
+    expect(isAllowedAvatarMimeType("text/plain")).toBe(false);
+  });
 });

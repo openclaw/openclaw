@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isPathInside } from "../infra/path-guards.js";
 export { AVATAR_MAX_BYTES } from "./avatar-limits.js";
+export { isAllowedAvatarMimeType } from "./avatar-limits.js";
 
 /**
  * Shared avatar source policy for config validation, agent identity loading,
