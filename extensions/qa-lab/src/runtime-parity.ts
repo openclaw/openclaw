@@ -115,7 +115,7 @@ type QaGatewayLike = {
 
 type QaSuiteScenarioLike = {
   details?: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
   steps?: Array<{ details?: string; status?: "pass" | "fail" | "skip" }>;
 };
 
@@ -1106,9 +1106,9 @@ export async function captureRuntimeParityCell(
   // Retry passes retain first-attempt diagnostics; only terminal failures may
   // classify that historical text as the cell's runtime error.
   const scenarioErrorClass =
-    params.scenarioResult.status === "fail"
-      ? classifyScenarioError(params.scenarioResult.details)
-      : undefined;
+    params.scenarioResult.status === "pass"
+      ? undefined
+      : classifyScenarioError(params.scenarioResult.details);
   const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
   const terminalImageResultProven = hasProvenTerminalImageResult(params.scenarioResult);
   return {

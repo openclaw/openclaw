@@ -23,8 +23,12 @@ export const WHATSAPP_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardSce
   scenarios: WHATSAPP_QA_SCENARIOS,
 });
 
-export function listWhatsAppQaScenarioCatalog() {
-  return WHATSAPP_QA_SCENARIOS.map((scenario) => ({ id: scenario.id }));
+export function getWhatsAppQaScenarioDefinition(id: string) {
+  const scenario = WHATSAPP_QA_SCENARIOS.find((candidate) => candidate.id === id);
+  if (!scenario) {
+    throw new Error(`unknown WhatsApp QA scenario id: ${id}`);
+  }
+  return scenario;
 }
 
 function shouldRunWhatsAppScenarioByDefault(

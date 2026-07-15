@@ -574,13 +574,11 @@ Required env when `--credential-source env`:
 
 Optional:
 
-- `OPENCLAW_QA_DISCORD_CAPTURE_CONTENT=1` keeps message bodies in
-  observed-message artifacts.
 - `OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID` selects the voice/stage channel for
   `discord-voice-autojoin`; without it, the scenario picks the first visible
   voice/stage channel for the SUT bot.
 
-Scenarios (`extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts:36`):
+Discord YAML module scenarios (`qa/scenarios/channels/discord-*.yaml`):
 
 - `discord-canary`
 - `discord-mention-gating`
@@ -589,7 +587,7 @@ Scenarios (`extensions/qa-lab/src/live-transports/discord/discord-live.runtime.t
   `channels.discord.voice.autoJoin`, and verifies the SUT bot's current
   Discord voice state is the target voice/stage channel. Convex Discord
   credentials may include optional `voiceChannelId`; otherwise the runner
-  discovers the first visible voice/stage channel in the guild.
+  adapter discovers the first visible voice/stage channel in the guild.
 - `discord-status-reactions-tool-only` - opt-in Mantis scenario. Runs by
   itself because it switches the SUT to always-on, tool-only guild replies
   with `messages.statusReactions.enabled=true`, then captures a REST
@@ -620,10 +618,9 @@ pnpm openclaw qa discord \
 
 Output artifacts:
 
-- `discord-qa-report.md`
+- `qa-suite-report.md`
+- `qa-suite-summary.json`
 - `qa-evidence.json` - evidence entries for the live transport checks.
-- `discord-qa-observed-messages.json` - bodies redacted unless
-  `OPENCLAW_QA_DISCORD_CAPTURE_CONTENT=1`.
 - `discord-qa-reaction-timelines.json` and
   `discord-status-reactions-tool-only-timeline.png` when the status-reaction
   scenario runs.
@@ -647,10 +644,8 @@ Required env when `--credential-source env`:
 
 Optional:
 
-- `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1` keeps message bodies in
-  observed-message artifacts.
 - `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR` enables visual approval
-  checkpoints for Mantis. The runner writes `<scenario>.pending.json` and
+  checkpoints for Mantis. The adapter writes `<scenario>.pending.json` and
   `<scenario>.resolved.json`, then waits for matching `.ack.json` files.
 - `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS` overrides the checkpoint
   acknowledgement timeout. The default is `120000`.
@@ -660,7 +655,7 @@ Canonical YAML scenarios exposed through the Slack live adapter:
 - `thread-follow-up`
 - `thread-isolation`
 
-Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
+Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
 
 - `slack-canary`
 - `slack-mention-gating`
@@ -686,9 +681,8 @@ Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-l
   plus its header through the
   production Slack send path, proves Slack itself returns `invalid_blocks`,
   and verifies the stored formatting-disabled fallback is complete and has no
-  native data block. The report keeps only safe error-code, count, and boolean
-  evidence; raw synthetic table text follows
-  `OPENCLAW_QA_SLACK_CAPTURE_CONTENT`.
+  native data block. Scenario details keep only safe error-code, count, and
+  boolean evidence.
 - `slack-approval-exec-native` - opt-in native Slack exec approval scenario.
   Requests an exec approval through the gateway, verifies the Slack message
   has native approval buttons, resolves it, and verifies the resolved Slack
@@ -711,16 +705,15 @@ Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-l
 
 The Codex approval scenarios require an `openai/*` or `codex/*` `--model`, the
 normal live model credentials, and Codex auth or API-key auth accepted by the Codex plugin.
-The Slack report includes the Codex app-server method, selected Codex model key,
-final Codex turn status, and operation-marker verification alongside the
+The scenario details include the Codex app-server method, selected Codex model
+key, final Codex turn status, and operation-marker verification alongside the
 redacted Slack approval metadata.
 
 Output artifacts:
 
-- `slack-qa-report.md`
+- `qa-suite-report.md`
+- `qa-suite-summary.json`
 - `qa-evidence.json` - evidence entries for the live transport checks.
-- `slack-qa-observed-messages.json` - bodies redacted unless
-  `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1`.
 - `approval-checkpoints/` - only when Mantis sets
   `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR`; contains checkpoint JSON,
   acknowledgement JSON, and pending/resolved screenshots.
@@ -925,7 +918,7 @@ pnpm openclaw qa slack \
   --output-dir .artifacts/qa-e2e/slack-local
 ```
 
-A green run completes in well under 30 seconds and `slack-qa-report.md`
+A green run completes in well under 30 seconds and `qa-suite-report.md`
 shows both `slack-canary` and `slack-mention-gating` at status `pass`. If the
 lane hangs for ~90 seconds and exits with `Convex credential pool exhausted
 for kind "slack"`, either the pool is empty or every row is leased - `qa
@@ -955,10 +948,8 @@ Optional:
   `whatsapp-broadcast-group-fanout`, `whatsapp-group-activation-always`,
   `whatsapp-group-reply-to-bot-triggers`, group action/media/poll scenarios,
   and `whatsapp-group-allowlist-block`.
-- `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1` keeps message bodies in
-  observed-message artifacts.
 
-Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts`):
+WhatsApp YAML scenarios (`qa/scenarios/channels/whatsapp-*.yaml`):
 
 - Baseline and group gating: `whatsapp-canary`, `whatsapp-pairing-block`,
   `whatsapp-mention-gating`, `whatsapp-group-pending-history-context`,
@@ -1013,8 +1004,8 @@ Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.
   `whatsapp-status-reaction-lifecycle`.
 
 The catalog currently contains 52 scenarios. The `live-frontier` default lane
-is kept small at 10 scenarios for fast smoke coverage. The `mock-openai`
-default lane runs 45 scenarios deterministically through the real WhatsApp
+is kept small at 8 scenarios for fast smoke coverage. The `mock-openai`
+default lane runs 39 scenarios deterministically through the real WhatsApp
 transport while mocking only model output; approval scenarios and a few
 heavier/blocking checks remain explicit by scenario id.
 
@@ -1031,16 +1022,15 @@ agent choose the same action. User-path action proof comes from scenarios
 such as `whatsapp-agent-message-action-react` and
 `whatsapp-group-agent-message-action-react`, where the driver sends a normal
 WhatsApp message and QA Lab observes the resulting native WhatsApp artifact.
-WhatsApp reports include each scenario's posture (`user-path`,
+WhatsApp scenario details include each scenario's posture (`user-path`,
 `direct-gateway`, or `native-approval`) so evidence cannot be mistaken for a
 stronger contract than it actually proves.
 
 Output artifacts:
 
-- `whatsapp-qa-report.md`
+- `qa-suite-report.md`
+- `qa-suite-summary.json`
 - `qa-evidence.json` - evidence entries for the live transport checks.
-- `whatsapp-qa-observed-messages.json` - bodies redacted unless
-  `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1`.
 
 ### Convex credential pool
 

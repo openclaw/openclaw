@@ -397,6 +397,14 @@ export function listSlackQaScenarioCatalog() {
   return SLACK_QA_SCENARIOS.map((scenario) => ({ id: scenario.id }));
 }
 
+export function getSlackQaScenarioDefinition(id: string) {
+  const scenario = SLACK_QA_SCENARIOS.find((candidate) => candidate.id === id);
+  if (!scenario) {
+    throw new Error(`unknown Slack QA scenario id: ${id}`);
+  }
+  return scenario;
+}
+
 export function findScenario(ids?: string[]) {
   const selected = selectLiveTransportScenarios({
     ids,

@@ -16,7 +16,6 @@ import {
   whatsappDefaultCanonicalScenarioIds,
   runCanonicalLiveScenarios,
 } from "./canonical-scenarios.js";
-import { loadNonYamlScenarioRefs } from "./live-transport-scenarios.js";
 
 describe("canonical live-transport scenarios", () => {
   it("loads every migrated routing, command, and session-context scenario from YAML", () => {
@@ -87,11 +86,4 @@ describe("canonical live-transport scenarios", () => {
     );
   });
 
-  it("removes migrated ids from non-YAML scenario ownership", async () => {
-    const nonYamlIds = new Set((await loadNonYamlScenarioRefs()).map(({ id }) => id));
-
-    for (const scenarioId of WHATSAPP_CANONICAL_SCENARIO_IDS) {
-      expect(nonYamlIds.has(scenarioId), scenarioId).toBe(false);
-    }
-  });
 });

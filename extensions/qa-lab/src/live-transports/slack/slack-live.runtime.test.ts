@@ -1,10 +1,6 @@
 // Qa Lab tests cover slack live plugin behavior.
-import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "../../evidence-summary.js";
-import { __testing as testing, runSlackQaLive } from "./slack-live.runtime.js";
+import { __testing as testing } from "./slack-live.runtime.js";
 
 function renderExpectedSlackChartAccessibleText(summaryText: string) {
   return [
@@ -165,20 +161,6 @@ describe("Slack live QA runtime helpers", () => {
     expect(() =>
       testing.assertSlackCodexApprovalModelSupported("anthropic/claude-sonnet-4-6"),
     ).toThrow(
-      'Slack Codex approval scenarios require an openai/* or codex/* model; received "anthropic/claude-sonnet-4-6".',
-    );
-  });
-
-  it("rejects an incompatible Codex approval model before credential acquisition", async () => {
-    const outputDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-slack-codex-model-"));
-    await expect(
-      runSlackQaLive({
-        credentialSource: "convex",
-        outputDir,
-        primaryModel: "anthropic/claude-sonnet-4-6",
-        scenarioIds: ["slack-codex-approval-exec-native"],
-      }),
-    ).rejects.toThrow(
       'Slack Codex approval scenarios require an openai/* or codex/* model; received "anthropic/claude-sonnet-4-6".',
     );
   });
@@ -1488,124 +1470,6 @@ describe("Slack live QA runtime helpers", () => {
     );
   });
 
-  it("preserves sanitized gateway debug artifacts on scenario failure", async () => {
-    const cleanupIssues: string[] = [];
-    const stop = vi.fn(async () => {});
-
-    await testing.preserveSlackGatewayDebugArtifacts({
-      cleanupIssues,
-      gatewayDebugDirPath: ".artifacts/qa-e2e/slack-live-test/gateway-debug",
-      gatewayHarness: { stop } as never,
-    });
-
-    expect(stop).toHaveBeenCalledWith({
-      preserveToDir: ".artifacts/qa-e2e/slack-live-test/gateway-debug",
-    });
-    expect(cleanupIssues).toEqual([]);
-  });
-
-  it("redacts approval artifact content and Slack metadata in summary-shaped results", () => {
-    expect(
-      testing.toSlackQaScenarioArtifactResults({
-        includeContent: false,
-        redactMetadata: true,
-        scenarios: [
-          {
-            approval: {
-              approvalId: "plugin:abc",
-              approvalKind: "plugin",
-              channelId: "C123456789",
-              decision: "allow-once",
-              pendingActionValues: [
-                'openclaw:approval:v1:{"approvalId":"plugin:abc","approvalKind":"plugin","decision":"allow-once"}',
-              ],
-              pendingMessageTs: "1.000000",
-              pendingText: "Plugin approval required",
-              resolvedActionValues: [],
-              resolvedMessageTs: "1.000000",
-              resolvedText: "Plugin approval: Allowed once",
-              threadTs: "1.000000",
-            },
-            details: "plugin approval resolved",
-            id: "slack-approval-plugin-native",
-            status: "pass",
-            title: "Slack native plugin approval prompt resolves with exec approvals enabled",
-          },
-        ],
-      })[0]?.approval,
-    ).toEqual({
-      approvalId: "<redacted>",
-      approvalKind: "plugin",
-      appServerMethod: undefined,
-      channelId: undefined,
-      codexModelKey: undefined,
-      decision: "allow-once",
-      finalCodexTurnStatus: undefined,
-      operationVerified: undefined,
-      pendingActionValues: undefined,
-      pendingCheckpointPath: undefined,
-      pendingMessageTs: undefined,
-      pendingScreenshotPath: undefined,
-      pendingText: undefined,
-      resolvedActionValues: undefined,
-      resolvedCheckpointPath: undefined,
-      resolvedMessageTs: undefined,
-      resolvedScreenshotPath: undefined,
-      resolvedText: undefined,
-      threadTs: undefined,
-    });
-  });
-
-  it("keeps Codex approval route metadata while redacting Slack metadata", () => {
-    expect(
-      testing.toSlackQaScenarioArtifactResults({
-        includeContent: false,
-        redactMetadata: true,
-        scenarios: [
-          {
-            approval: {
-              approvalId: "plugin:abc",
-              approvalKind: "plugin",
-              appServerMethod: "item/fileChange/requestApproval",
-              channelId: "C123456789",
-              codexModelKey: "openai/gpt-5.6-luna",
-              decision: "allow-once",
-              finalCodexTurnStatus: "ok",
-              operationVerified: true,
-              pendingActionValues: [
-                'openclaw:approval:v1:{"approvalId":"plugin:abc","approvalKind":"plugin","decision":"allow-once"}',
-              ],
-              pendingMessageTs: "1.000000",
-              pendingText: "Plugin approval required",
-              resolvedActionValues: [],
-              resolvedMessageTs: "1.000000",
-              resolvedText: "Plugin approval: Allowed once",
-              threadTs: "1.000000",
-            },
-            details: "codex plugin approval resolved",
-            id: "slack-codex-approval-plugin-native",
-            status: "pass",
-            title: "Slack native Codex file approval prompt resolves",
-          },
-        ],
-      })[0]?.approval,
-    ).toMatchObject({
-      approvalId: "<redacted>",
-      appServerMethod: "item/fileChange/requestApproval",
-      channelId: undefined,
-      codexModelKey: "openai/gpt-5.6-luna",
-      finalCodexTurnStatus: "ok",
-      operationVerified: true,
-      pendingActionValues: undefined,
-      pendingMessageTs: undefined,
-      pendingText: undefined,
-      resolvedActionValues: undefined,
-      resolvedMessageTs: undefined,
-      resolvedText: undefined,
-      threadTs: undefined,
-    });
-  });
-
   it("ignores delayed unrelated SUT replies during mention-gating", async () => {
     const observedMessages: Array<unknown> = [];
     await expect(
@@ -1672,41 +1536,6 @@ describe("Slack live QA runtime helpers", () => {
         timeoutMs: 1_000,
       }),
     ).rejects.toThrow("unexpected Slack SUT reply observed");
-  });
-
-  it("writes artifacts when Convex credential acquisition fails", async () => {
-    const outputDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-slack-qa-"));
-    const result = await runSlackQaLive({
-      credentialRole: "ci",
-      credentialSource: "convex",
-      outputDir,
-    });
-
-    expect(result.scenarios).toHaveLength(1);
-    expect(result.scenarios[0]?.id).toBe("slack-canary");
-    expect(result.scenarios[0]?.status).toBe("fail");
-    expect(result.scenarios[0]?.details).toContain("Missing OPENCLAW_QA_CONVEX_SITE_URL");
-    await expect(fs.stat(result.reportPath).then((stats) => stats.isFile())).resolves.toBe(true);
-    expect(path.basename(result.summaryPath)).toBe(QA_EVIDENCE_FILENAME);
-    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      entries: Array<{
-        result: { failure?: { reason?: string }; status: string };
-        test: { id: string };
-      }>;
-      kind: string;
-    };
-    expect(summary.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
-    expect(summary.entries[0]).toMatchObject({
-      test: {
-        id: "slack-canary",
-      },
-      result: {
-        status: "fail",
-        failure: {
-          reason: expect.stringContaining("Missing OPENCLAW_QA_CONVEX_SITE_URL"),
-        },
-      },
-    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

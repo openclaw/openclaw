@@ -7,10 +7,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { startQaGatewayChild } from "../../gateway-child.js";
 import type { QaProviderMode } from "../../run-config.js";
-import type {
-  acquireQaCredentialLease,
-  startQaCredentialLeaseHeartbeat,
-} from "../shared/credential-lease.runtime.js";
 import type { LiveTransportScenarioDefinition } from "../shared/live-transport-scenarios.js";
 
 export type WhatsAppQaRuntimeEnv = {
@@ -249,7 +245,7 @@ export type WhatsAppQaApprovalScenarioRun = {
   token: string;
 };
 
-type WhatsAppQaScenarioRun = WhatsAppQaApprovalScenarioRun | WhatsAppQaMessageScenarioRun;
+export type WhatsAppQaScenarioRun = WhatsAppQaApprovalScenarioRun | WhatsAppQaMessageScenarioRun;
 
 export type WhatsAppQaConfigOverrides = {
   actions?: boolean;
@@ -343,28 +339,6 @@ export function buildWhatsAppQaScenarioResultBase(scenario: WhatsAppQaScenarioDe
   };
 }
 
-export function toWhatsAppLiveTransportEvidenceChecks(
-  scenarioResults: readonly WhatsAppQaScenarioResult[],
-) {
-  return scenarioResults.map(({ standardId, ...check }) => ({
-    ...check,
-    coverageIds: standardId ? [`channels.whatsapp.${standardId}`] : undefined,
-  }));
-}
-
-export type WhatsAppQaRunResult = {
-  gatewayDebugDirPath?: string;
-  observedMessagesPath: string;
-  outputDir: string;
-  reportPath: string;
-  scenarios: WhatsAppQaScenarioResult[];
-  summaryPath: string;
-};
-
-export type WhatsAppCredentialLease = Awaited<
-  ReturnType<typeof acquireQaCredentialLease<WhatsAppQaRuntimeEnv>>
->;
-export type WhatsAppCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeartbeat>;
 export type WhatsAppQaPreScenarioPhase =
   | "auth archive unpack"
   | "credential heartbeat start"

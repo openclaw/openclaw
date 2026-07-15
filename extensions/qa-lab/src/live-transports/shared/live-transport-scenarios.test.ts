@@ -6,26 +6,13 @@ import {
   findMissingLiveTransportStandardScenarios,
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 import { describe, expect, it } from "vitest";
-import { discordQaLiveRuntime } from "../discord/discord-live.runtime.js";
-import { __testing as slackTesting } from "../slack/slack-live.runtime.js";
-import { __testing as whatsAppTesting } from "../whatsapp/whatsapp-live.runtime.js";
 import {
   buildLiveTransportCoverageLaneSummaries,
   collectLiveTransportStandardScenarioCoverage,
-  loadNonYamlScenarioRefs,
   selectLiveTransportScenarios,
 } from "./live-transport-scenarios.js";
 
-const discordTesting = discordQaLiveRuntime.testing;
-
 describe("live transport scenario helpers", () => {
-  it("loads every non-YAML scenario id exactly once", async () => {
-    const refs = await loadNonYamlScenarioRefs();
-
-    expect(refs.length).toBeGreaterThan(0);
-    expect(new Set(refs.map((ref) => ref.id)).size).toBe(refs.length);
-  });
-
   it("uses the public live transport scenario SDK seam", () => {
     const source = fs.readFileSync(
       fileURLToPath(new URL("./live-transport-scenarios.ts", import.meta.url)),
@@ -136,7 +123,7 @@ describe("live transport scenario helpers", () => {
     ).toEqual([]);
   });
 
-  it("keeps runtime standard coverage represented in mixed-owner lanes", () => {
+  it("keeps Telegram runtime coverage represented in its mixed-owner lane", () => {
     const lanes = new Map(
       buildLiveTransportCoverageLaneSummaries().map((lane) => [
         lane.transportId,
@@ -144,20 +131,8 @@ describe("live transport scenario helpers", () => {
       ]),
     );
 
-    expect(lanes.get("discord")).toEqual(
-      expect.arrayContaining(discordTesting.DISCORD_QA_STANDARD_SCENARIO_IDS),
-    );
-    expect(lanes.get("slack")).toEqual(
-      expect.arrayContaining(slackTesting.SLACK_QA_STANDARD_SCENARIO_IDS),
-    );
     expect(lanes.get("telegram")).toEqual(
       expect.arrayContaining(["canary", "help-command", "mention-gating"]),
-    );
-    expect(lanes.get("whatsapp")).toEqual(
-      expect.arrayContaining([
-        "help-command",
-        ...whatsAppTesting.WHATSAPP_QA_STANDARD_SCENARIO_IDS,
-      ]),
     );
   });
 });

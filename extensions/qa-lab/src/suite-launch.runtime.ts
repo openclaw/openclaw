@@ -549,6 +549,15 @@ async function runUnifiedQaSuite(params: {
       const isolatedFlowScenarios = channelGroup.scenarios.filter(
         scenarioRequiresIsolatedQaSuiteWorker,
       );
+      const runtimeFlowScenarios = isolatedFlowScenarios.flatMap((scenario) =>
+        scenario.execution.kind === "flow" && scenario.execution.runtime
+          ? [{ runtime: scenario.execution.runtime, scenario }]
+          : [],
+      );
+      const runtimeScenarioSet = new Set(runtimeFlowScenarios.map(({ scenario }) => scenario));
+      const ordinaryIsolatedFlowScenarios = isolatedFlowScenarios.filter(
+        (scenario) => !runtimeScenarioSet.has(scenario),
+      );
       const sharedFlowPartitions = partitionSharedFlowScenarios(sharedFlowScenarios, concurrency);
       // Channel-driver flow workers each launch a gateway plus transport harness.
       // Serializing their isolated workers keeps state-mutating smoke checks from
@@ -562,11 +571,11 @@ async function runUnifiedQaSuite(params: {
       const isolatedFlowConcurrency = Math.min(
         concurrency,
         isolatedFlowConcurrencyLimit,
-        isolatedFlowScenarios.length,
+        ordinaryIsolatedFlowScenarios.length,
       );
       const isolatedFlowPartitions =
-        isolatedFlowConcurrency === 1 && isolatedFlowScenarios.length > 1
-          ? isolatedFlowScenarios.map((scenario, index) => ({
+        isolatedFlowConcurrency === 1 && ordinaryIsolatedFlowScenarios.length > 1
+          ? ordinaryIsolatedFlowScenarios.map((scenario, index) => ({
               kind: `isolated-${index + 1}`,
               scenarios: [scenario],
               concurrency: 1,
@@ -574,7 +583,7 @@ async function runUnifiedQaSuite(params: {
           : [
               {
                 kind: "isolated",
-                scenarios: isolatedFlowScenarios,
+                scenarios: ordinaryIsolatedFlowScenarios,
                 concurrency: isolatedFlowConcurrency,
               },
             ];
@@ -585,6 +594,11 @@ async function runUnifiedQaSuite(params: {
           concurrency: 1,
         })),
         ...isolatedFlowPartitions,
+        ...runtimeFlowScenarios.map(({ runtime, scenario }, index) => ({
+          kind: `runtime-${runtime}-${index + 1}`,
+          scenarios: [scenario],
+          concurrency: 1,
+        })),
       ].filter((partition) => partition.scenarios.length > 0);
       for (const partition of flowPartitions) {
         const isolatedPartition =
@@ -611,6 +625,11 @@ async function runUnifiedQaSuite(params: {
               primaryModel,
               alternateModel,
               fastMode,
+              forcedRuntime:
+                partition.scenarios.length === 1 &&
+                partition.scenarios[0]?.execution.kind === "flow"
+                  ? (partition.scenarios[0].execution.runtime ?? params.runParams?.forcedRuntime)
+                  : params.runParams?.forcedRuntime,
               concurrency: partition.concurrency,
               channelDriverSelection: channelGroup.channelDriverSelection,
               workerStartStaggerMs: isolatedPartition

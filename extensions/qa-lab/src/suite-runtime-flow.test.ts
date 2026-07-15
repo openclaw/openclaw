@@ -168,10 +168,37 @@ vi.mock("./gateway-log-sentinel.js", () => ({
   assertNoGatewayLogSentinels,
 }));
 
-import { runQaSuiteScenarioDefinition } from "./suite-runtime-flow.js";
+import { QaSuiteScenarioSkipError } from "./errors.js";
+import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 describe("qa suite runtime flow", () => {
+  it("records intentional scenario skips without running later steps", async () => {
+    const laterStep = vi.fn();
+    const result = await runQaSuiteScenarioSteps("requires group credentials", [
+      {
+        name: "Prepare WhatsApp",
+        run: async () => {
+          throw new QaSuiteScenarioSkipError("requires groupJid in the credential payload");
+        },
+      },
+      { name: "Run scenario", run: laterStep },
+    ]);
+
+    expect(result).toMatchObject({
+      status: "skip",
+      details: "requires groupJid in the credential payload",
+      steps: [
+        {
+          name: "Prepare WhatsApp",
+          status: "skip",
+          details: "requires groupJid in the credential payload",
+        },
+      ],
+    });
+    expect(laterStep).not.toHaveBeenCalled();
+  });
+
   it("wires the split suite runtime deps into the scenario runtime api", async () => {
     const env = {
       lab: { baseUrl: "http://127.0.0.1:4444" },

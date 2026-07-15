@@ -6,10 +6,6 @@ import { z } from "zod";
 import type { startQaGatewayChild } from "../../gateway-child.js";
 import { splitQaModelRef } from "../../model-selection.js";
 import type { RuntimeId } from "../../runtime-parity.js";
-import type {
-  acquireQaCredentialLease,
-  startQaCredentialLeaseHeartbeat,
-} from "../shared/credential-lease.runtime.js";
 import type { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import type { LiveTransportScenarioDefinition } from "../shared/live-transport-scenarios.js";
 
@@ -158,7 +154,7 @@ export type SlackQaMessageScenarioRun = {
   afterReply?: (message: SlackMessage, context: SlackQaScenarioContext) => Promise<string | void>;
 };
 
-type SlackQaDirectTransportScenarioRun = {
+export type SlackQaDirectTransportScenarioRun = {
   kind: "direct-transport";
   execute: (
     context: SlackQaDirectTransportScenarioContext,
@@ -195,13 +191,13 @@ export type SlackQaCodexApprovalScenarioRun = {
   token: string;
 };
 
-type SlackQaScenarioRun =
+export type SlackQaScenarioRun =
   | SlackQaApprovalScenarioRun
   | SlackQaCodexApprovalScenarioRun
   | SlackQaDirectTransportScenarioRun
   | SlackQaMessageScenarioRun;
 
-type SlackQaBeforeRunResult =
+export type SlackQaBeforeRunResult =
   | string
   | void
   | {
@@ -336,21 +332,6 @@ export type SlackQaScenarioResult = {
   title: string;
 };
 
-export type SlackQaRunResult = {
-  gatewayDebugDirPath?: string;
-  observedMessagesPath: string;
-  outputDir: string;
-  reportPath: string;
-  scenarios: SlackQaScenarioResult[];
-  summaryPath: string;
-};
-
-export type SlackCredentialLease = Awaited<
-  ReturnType<typeof acquireQaCredentialLease<SlackQaRuntimeEnv>>
->;
-export type SlackCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeartbeat>;
-
-export const SLACK_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_SLACK_CAPTURE_CONTENT";
 export const SLACK_QA_APPROVAL_CHECKPOINT_DIR_ENV = "OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR";
 export const SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV =
   "OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS";
