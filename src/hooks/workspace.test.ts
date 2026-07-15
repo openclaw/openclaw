@@ -2,9 +2,27 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
+
+const { warnMock } = vi.hoisted(() => ({ warnMock: vi.fn() }));
+
+vi.mock("../logging/subsystem.js", () => {
+  const makeLogger = () => ({
+    subsystem: "hooks/workspace",
+    isEnabled: () => true,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: warnMock,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: () => makeLogger(),
+  });
+  return { createSubsystemLogger: () => makeLogger() };
+});
 
 function writeHookPackageManifest(pkgDir: string, hooks: string[]): void {
   fs.writeFileSync(
@@ -62,7 +80,30 @@ function loadWorkspaceEntriesFromHooksRoot(hooksRoot: string) {
   });
 }
 
+const METADATA_MAX_BYTES = 1024 * 1024;
+
+function oversizedMetadataWarnings(filePath: string): string[] {
+  return warnMock.mock.calls
+    .map(([message]) => String(message))
+    .filter((message) => message.includes(filePath) && message.includes(`${METADATA_MAX_BYTES}`));
+}
+
+function padToExactBytes(content: string, targetBytes: number): string {
+  const padding = targetBytes - Buffer.byteLength(content, "utf8");
+  return padding > 0 ? content + " ".repeat(padding) : content;
+}
+
+function exactSizeHookPackageManifest(targetBytes: number): string {
+  const base = { name: "pkg", [MANIFEST_KEY]: { hooks: ["./nested"] }, pad: "" };
+  const baseBytes = Buffer.byteLength(JSON.stringify(base), "utf8");
+  return JSON.stringify({ ...base, pad: "x".repeat(targetBytes - baseBytes) });
+}
+
 describe("hooks workspace", () => {
+  beforeEach(() => {
+    warnMock.mockClear();
+  });
+
   it("ignores package.json hook paths that traverse outside package directory", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-"));
     const hooksRoot = path.join(root, "hooks");
@@ -100,31 +141,96 @@ describe("hooks workspace", () => {
     expect(hookNames(entries)).toContain("nested");
   });
 
-  it("ignores hook packages with an oversized package.json", () => {
+  it("warns and skips hook packages with an oversized package.json", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-oversized-manifest-"));
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
     const pkgDir = path.join(hooksRoot, "pkg");
     fs.mkdirSync(pkgDir, { recursive: true });
-    fs.writeFileSync(path.join(pkgDir, "package.json"), "x".repeat(1024 * 1024 + 1), "utf8");
+    const manifestPath = path.join(pkgDir, "package.json");
+    fs.writeFileSync(manifestPath, "x".repeat(METADATA_MAX_BYTES + 1), "utf8");
 
     const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
     expect(hookNames(entries)).toHaveLength(0);
+    expect(oversizedMetadataWarnings(manifestPath)).toHaveLength(1);
   });
 
-  it("ignores hooks with an oversized HOOK.md", () => {
+  it("warns and skips hooks with an oversized HOOK.md", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-oversized-md-"));
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
     const hookDir = path.join(hooksRoot, "big-hook");
     fs.mkdirSync(hookDir, { recursive: true });
-    fs.writeFileSync(path.join(hookDir, "HOOK.md"), "x".repeat(1024 * 1024 + 1), "utf8");
+    const hookMdPath = path.join(hookDir, "HOOK.md");
+    fs.writeFileSync(hookMdPath, "x".repeat(METADATA_MAX_BYTES + 1), "utf8");
     fs.writeFileSync(path.join(hookDir, "handler.js"), "export default async () => {};\n");
 
     const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
     expect(hookNames(entries)).toHaveLength(0);
+    expect(oversizedMetadataWarnings(hookMdPath)).toHaveLength(1);
+  });
+
+  it("continues discovering other hooks after skipping oversized metadata", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-oversized-mixed-"));
+    const hooksRoot = path.join(root, "hooks");
+    fs.mkdirSync(hooksRoot, { recursive: true });
+
+    const bigHookDir = path.join(hooksRoot, "big-hook");
+    fs.mkdirSync(bigHookDir, { recursive: true });
+    const bigHookMdPath = path.join(bigHookDir, "HOOK.md");
+    fs.writeFileSync(bigHookMdPath, "x".repeat(METADATA_MAX_BYTES + 1), "utf8");
+    fs.writeFileSync(path.join(bigHookDir, "handler.js"), "export default async () => {};\n");
+
+    const smallHookDir = path.join(hooksRoot, "small-hook");
+    fs.mkdirSync(smallHookDir, { recursive: true });
+    fs.writeFileSync(path.join(smallHookDir, "HOOK.md"), "---\nname: small-hook\n---\n");
+    fs.writeFileSync(path.join(smallHookDir, "handler.js"), "export default async () => {};\n");
+
+    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
+    expect(hookNames(entries)).toEqual(["small-hook"]);
+    expect(oversizedMetadataWarnings(bigHookMdPath)).toHaveLength(1);
+  });
+
+  it("loads hooks whose metadata sits exactly at the byte limit", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-exact-limit-"));
+    const hooksRoot = path.join(root, "hooks");
+    fs.mkdirSync(hooksRoot, { recursive: true });
+
+    const pkgDir = path.join(hooksRoot, "pkg");
+    const nested = path.join(pkgDir, "nested");
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      exactSizeHookPackageManifest(METADATA_MAX_BYTES),
+    );
+    fs.writeFileSync(
+      path.join(nested, "HOOK.md"),
+      padToExactBytes("---\nname: exact-limit\n---\n", METADATA_MAX_BYTES),
+    );
+    fs.writeFileSync(path.join(nested, "handler.js"), "export default async () => {};\n");
+
+    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
+    expect(hookNames(entries)).toContain("exact-limit");
+    expect(warnMock).not.toHaveBeenCalled();
+  });
+
+  it("still loads a plain hook when its package.json is oversized", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-oversized-compat-"));
+    const hooksRoot = path.join(root, "hooks");
+    fs.mkdirSync(hooksRoot, { recursive: true });
+
+    const hookDir = path.join(hooksRoot, "compat-hook");
+    fs.mkdirSync(hookDir, { recursive: true });
+    const manifestPath = path.join(hookDir, "package.json");
+    fs.writeFileSync(manifestPath, "x".repeat(METADATA_MAX_BYTES + 1), "utf8");
+    fs.writeFileSync(path.join(hookDir, "HOOK.md"), "---\nname: compat-hook\n---\n");
+    fs.writeFileSync(path.join(hookDir, "handler.js"), "export default async () => {};\n");
+
+    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
+    expect(hookNames(entries)).toContain("compat-hook");
+    expect(oversizedMetadataWarnings(manifestPath)).toHaveLength(1);
   });
 
   it("ignores package.json hook paths that escape via symlink", () => {

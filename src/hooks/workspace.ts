@@ -305,12 +305,19 @@ function readRootFileUtf8(params: {
 }): string | null {
   return withOpenedRootFileSync(params, (opened) => {
     try {
-      // Read through the already-validated file descriptor so a parent-directory
-      // symlink swap cannot redirect the read outside the hook root. Enforce the
-      // byte cap while reading so a file that grows after open-time validation
-      // cannot be buffered past the intended limit.
+      // Read through the already-validated descriptor so a parent-directory
+      // symlink swap cannot redirect the read outside the hook root. The shared
+      // bounded reader owns the byte cap, so a file that grows after the
+      // open-time checks still cannot be buffered past the limit.
       return readFileDescriptorBoundedSync(opened.fd, params.maxBytes).toString("utf-8");
-    } catch {
+    } catch (err) {
+      // Warn-and-skip contract: one actionable warning per oversized metadata
+      // file while discovery continues for the remaining hooks.
+      if (err instanceof RangeError) {
+        log.warn(
+          `Ignoring oversized hook metadata ${params.absolutePath}: file exceeds the ${params.maxBytes}-byte limit`,
+        );
+      }
       return null;
     }
   });
@@ -321,7 +328,6 @@ function withOpenedRootFileSync<T>(
     absolutePath: string;
     rootPath: string;
     boundaryLabel: string;
-    maxBytes?: number;
   },
   read: (opened: { fd: number; path: string }) => T,
 ): T | null {
@@ -329,7 +335,6 @@ function withOpenedRootFileSync<T>(
     absolutePath: params.absolutePath,
     rootPath: params.rootPath,
     boundaryLabel: params.boundaryLabel,
-    maxBytes: params.maxBytes,
   });
   if (!opened.ok) {
     return null;
