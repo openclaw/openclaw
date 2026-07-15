@@ -32,7 +32,11 @@ import {
 } from "./composer-persistence.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
-import { readChatMessagesFromCache } from "./session-message-cache.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatMessagesFromCache,
+  type ChatMessageCache,
+} from "./session-message-cache.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = Omit<ChatHost, "settings"> & {
@@ -49,6 +53,26 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   pendingSettingsPatches?: Record<string, Promise<boolean>>;
   settings?: Partial<UiSettings>;
 };
+
+function requireChatMessageCache(host: ChatHost): ChatMessageCache {
+  if (!host.chatMessagesBySession) {
+    throw new Error("Expected chat message cache");
+  }
+  return host.chatMessagesBySession;
+}
+
+function cacheChatMessages(
+  cache: ChatMessageCache,
+  host: Parameters<typeof cacheChatSessionSnapshot>[1],
+  target: Parameters<typeof cacheChatSessionSnapshot>[2],
+  messages: unknown[],
+): void {
+  cacheChatSessionSnapshot(cache, host, target, {
+    messages,
+    pagination: { hasMore: false },
+    sessionId: null,
+  });
+}
 
 const executeSlashCommandMock = vi.hoisted(() => vi.fn());
 
@@ -317,7 +341,6 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
     chatScrollCommitCleanup: null,
     chatScrollFrame: null,
     chatScrollGuardFrame: null,
-    chatScrollTimeout: null,
     chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
@@ -3894,7 +3917,7 @@ describe("handleSendChat", () => {
     });
     for (const host of [visible, inactive]) {
       Object.assign(host, {
-        chatMessagesBySession: new Map<string, unknown[]>(),
+        chatMessagesBySession: new Map(),
         connectionEpoch: 1,
         pendingSessionMessageReloadSessionKey: null,
         requestUpdate: vi.fn(),
@@ -3991,7 +4014,7 @@ describe("handleSendChat", () => {
     });
     for (const host of [visible, inactive]) {
       Object.assign(host, {
-        chatMessagesBySession: new Map<string, unknown[]>(),
+        chatMessagesBySession: new Map(),
         connectionEpoch: 1,
         pendingSessionMessageReloadSessionKey: null,
         requestUpdate: vi.fn(),
@@ -6413,11 +6436,15 @@ describe("handleSendChat", () => {
       agentsList: { defaultId: "main" },
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
-      chatMessagesBySession: new Map([
-        ["agent:work:main", [{ role: "assistant", content: "work history" }]],
-        ["agent:main:main", [{ role: "assistant", content: "main history" }]],
-      ]),
+      chatMessagesBySession: new Map(),
     });
+    const cache = requireChatMessageCache(host);
+    cacheChatMessages(cache, host, { sessionKey: "global", agentId: "work" }, [
+      { role: "assistant", content: "work history" },
+    ]);
+    cacheChatMessages(cache, host, { sessionKey: "global", agentId: "main" }, [
+      { role: "assistant", content: "main history" },
+    ]);
 
     await handleSendChat(host);
 
@@ -6449,13 +6476,17 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "source history" }],
-      chatMessagesBySession: new Map([
-        [sourceSessionKey, [{ role: "user", content: "source history" }]],
-        [visibleSessionKey, [{ role: "user", content: "visible history" }]],
-      ]),
+      chatMessagesBySession: new Map(),
       chatRunId: null,
       sessionKey: sourceSessionKey,
     });
+    const cache = requireChatMessageCache(host);
+    cacheChatMessages(cache, host, { sessionKey: sourceSessionKey }, [
+      { role: "user", content: "source history" },
+    ]);
+    cacheChatMessages(cache, host, { sessionKey: visibleSessionKey }, [
+      { role: "user", content: "visible history" },
+    ]);
 
     const clearing = handleSendChat(host);
     await vi.waitFor(() =>
@@ -6472,9 +6503,11 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toEqual([{ role: "user", content: "visible history" }]);
     expect(host.chatRunId).toBe("visible-run");
     expect(host.chatMessagesBySession?.has(sourceSessionKey)).toBe(false);
-    expect(host.chatMessagesBySession?.get(visibleSessionKey)).toEqual([
-      { role: "user", content: "visible history" },
-    ]);
+    expect(
+      readChatMessagesFromCache(host.chatMessagesBySession ?? new Map(), host, {
+        sessionKey: visibleSessionKey,
+      }),
+    ).toEqual([{ role: "user", content: "visible history" }]);
     expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
@@ -6493,12 +6526,16 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "source history" }],
-      chatMessagesBySession: new Map([
-        [sourceSessionKey, [{ role: "user", content: "cached source history" }]],
-        [visibleSessionKey, [{ role: "user", content: "cached visible history" }]],
-      ]),
+      chatMessagesBySession: new Map(),
       sessionKey: sourceSessionKey,
     });
+    const cache = requireChatMessageCache(host);
+    cacheChatMessages(cache, host, { sessionKey: sourceSessionKey }, [
+      { role: "user", content: "cached source history" },
+    ]);
+    cacheChatMessages(cache, host, { sessionKey: visibleSessionKey }, [
+      { role: "user", content: "cached visible history" },
+    ]);
 
     const clearing = handleSendChat(host);
     await vi.waitFor(() =>
@@ -6512,9 +6549,11 @@ describe("handleSendChat", () => {
     await clearing;
 
     expect(host.chatMessagesBySession?.has(sourceSessionKey)).toBe(false);
-    expect(host.chatMessagesBySession?.get(visibleSessionKey)).toEqual([
-      { role: "user", content: "cached visible history" },
-    ]);
+    expect(
+      readChatMessagesFromCache(host.chatMessagesBySession ?? new Map(), host, {
+        sessionKey: visibleSessionKey,
+      }),
+    ).toEqual([{ role: "user", content: "cached visible history" }]);
     expect(host.chatMessages).toEqual([{ role: "user", content: "visible history" }]);
     expect(host.lastError).toContain("clear request may have completed");
     expect(host.lastError).toContain("could not be refreshed");

@@ -46,6 +46,8 @@ export type TerminalOpenRequest = {
   cols: number;
   rows: number;
   env: Record<string, string>;
+  /** Request-scoped cancellation; a late backend is killed before registration. */
+  signal?: AbortSignal;
   createBackend?: () => Promise<TerminalBackend>;
   stageUpload?: (file: TerminalUploadFile) => Promise<TerminalUploadResult>;
 };
@@ -55,4 +57,8 @@ export type TerminalOpenOutcome =
   | { ok: false; code: "limit" | "spawn_failed" | "closed"; message: string };
 
 /** Abort state shared between a pending open and lifecycle/policy teardown. */
-export type TerminalPendingOpen = { agentId: string; abortMessage?: string };
+export type TerminalPendingOpen = {
+  agentId: string;
+  abortMessage?: string;
+  abort(message: string): void;
+};

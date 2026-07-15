@@ -1593,6 +1593,8 @@ export const th: TranslationMap = {
     attachSession: "เชื่อมต่อเซสชัน",
     attachFailed: "ไม่สามารถเชื่อมต่อเซสชันเทอร์มินัลได้",
     starting: "Starting terminal…",
+    connecting: "กำลังเชื่อมต่อกับเซสชัน…",
+    connectionTimedOut: "ไม่สามารถเชื่อมต่อเซสชันได้ภายใน 30 วินาที",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

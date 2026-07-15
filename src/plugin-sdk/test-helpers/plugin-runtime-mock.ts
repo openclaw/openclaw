@@ -344,11 +344,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       Surface: params.surface ?? params.provider ?? params.channel,
       OriginatingChannel: params.channel,
       OriginatingTo: params.reply.originatingTo,
-      CommandAuthorized: params.access?.commands
-        ? (params.access.commands.authorized ??
-          params.access.commands.authorizers?.some((entry) => entry.allowed) ??
-          false)
-        : false,
+      CommandAuthorized: params.access?.commands?.authorized ?? false,
       ...params.extra,
       UntrustedStructuredContext: untrustedStructuredContext,
     } as Awaited<BuildContextResult>;

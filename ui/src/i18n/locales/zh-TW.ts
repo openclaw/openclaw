@@ -1584,6 +1584,8 @@ export const zh_TW: TranslationMap = {
     attachSession: "連接工作階段",
     attachFailed: "無法連接終端機工作階段",
     starting: "Starting terminal…",
+    connecting: "正在連線至工作階段…",
+    connectionTimedOut: "工作階段未能在 30 秒內連線。",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

@@ -1611,6 +1611,8 @@ export const fa: TranslationMap = {
     attachSession: "اتصال به نشست",
     attachFailed: "اتصال به نشست ترمینال ممکن نشد",
     starting: "Starting terminal…",
+    connecting: "در حال اتصال به نشست…",
+    connectionTimedOut: "اتصال به نشست ظرف ۳۰ ثانیه برقرار نشد.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

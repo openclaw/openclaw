@@ -1602,6 +1602,8 @@ export const ar: TranslationMap = {
     attachSession: "الاتصال بالجلسة",
     attachFailed: "تعذّر الاتصال بجلسة الطرفية",
     starting: "Starting terminal…",
+    connecting: "جارٍ الاتصال بالجلسة…",
+    connectionTimedOut: "تعذّر الاتصال بالجلسة خلال 30 ثانية.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",
