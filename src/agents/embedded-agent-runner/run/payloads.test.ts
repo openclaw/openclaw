@@ -565,6 +565,49 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("uses 'blocked' verb instead of 'failed' for declined/blocked tool errors", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "bash",
+        error: "command blocked by security policy",
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Bash blocked");
+    expect(payloads[0]?.text).not.toContain("Bash failed");
+  });
+
+  it("uses 'blocked' verb for declined tool with explicit denied message", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        error: "access denied: command not in allowlist",
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Exec blocked");
+    expect(payloads[0]?.text).not.toContain("Exec failed");
+  });
+
+  it("uses 'failed' verb for normal exec failures (not blocked)", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "bash",
+        error: "command failed with exit code 1",
+        meta: "ls /nonexistent",
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Bash failed");
+    expect(payloads[0]?.text).not.toContain("Bash blocked");
+  });
+
   it("surfaces exec tool errors for cron sessions even when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: {
