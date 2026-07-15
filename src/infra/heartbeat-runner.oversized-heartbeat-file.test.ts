@@ -10,6 +10,51 @@ import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runn
 installHeartbeatRunnerTestRuntime({ includeSlack: true });
 
 describe("runHeartbeatOnce oversized HEARTBEAT.md", () => {
+  it("follows a symlinked HEARTBEAT.md to a regular file", async () => {
+    if (process.platform === "win32") {
+      // Symlink support in unit tests is not guaranteed on Windows CI runners.
+      return;
+    }
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "slack", to: "channel:C123" },
+          },
+        },
+        channels: { slack: { heartbeat: { showOk: false } } },
+        session: { store: storePath },
+      };
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "slack",
+        lastProvider: "slack",
+        lastTo: "channel:C123",
+      });
+      const heartbeatPath = path.join(tmpDir, "HEARTBEAT.md");
+      const targetPath = path.join(tmpDir, "real-HEARTBEAT.md");
+      await fs.writeFile(targetPath, "- Check status\n", "utf-8");
+      await fs.rm(heartbeatPath, { force: true });
+      await fs.symlink(targetPath, heartbeatPath);
+
+      replySpy.mockResolvedValue({ text: "ok" });
+      const sendSlack = vi.fn().mockResolvedValue({ messageId: "m1", channelId: "C123" });
+
+      const res = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getReplyFromConfig: replySpy,
+          slack: sendSlack,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(res.status).toBe("ran");
+      expect(sendSlack).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("treats an oversized HEARTBEAT.md like a missing file and continues the run", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
