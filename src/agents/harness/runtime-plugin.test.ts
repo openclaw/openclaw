@@ -1,9 +1,13 @@
 // Verifies plugin loading needed before agent harness selection.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { getActiveRuntimePluginRegistry } from "../../plugins/active-runtime-registry.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 
 const mocks = vi.hoisted(() => ({
-  ensurePluginRegistryLoaded: vi.fn(),
+  ensureScopedPluginsLoadedPreservingActive: vi.fn(),
   resolveActivatableProviderOwnerPluginIds: vi.fn(),
   resolveBundledProviderCompatPluginIds: vi.fn(),
   resolveManifestActivationPlan: vi.fn(),
@@ -11,7 +15,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/runtime/runtime-registry-loader.js", () => ({
-  ensurePluginRegistryLoaded: mocks.ensurePluginRegistryLoaded,
+  ensureScopedPluginsLoadedPreservingActive: mocks.ensureScopedPluginsLoadedPreservingActive,
 }));
 
 vi.mock("../../plugins/providers.js", () => ({
@@ -34,7 +38,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
   });
 
   beforeEach(() => {
-    mocks.ensurePluginRegistryLoaded.mockReset();
+    mocks.ensureScopedPluginsLoadedPreservingActive.mockReset();
     mocks.resolveActivatableProviderOwnerPluginIds.mockReset();
     mocks.resolveBundledProviderCompatPluginIds.mockReset();
     mocks.resolveManifestActivationPlan.mockReset();
@@ -92,9 +96,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).toHaveBeenCalledWith(
       expect.objectContaining({
-        scope: "all",
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["codex", "openai", "memory-core"],
       }),
@@ -115,9 +118,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
       requireExplicitManifestOwnerTrust: true,
     });
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).toHaveBeenCalledWith(
       expect.objectContaining({
-        scope: "all",
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: expect.arrayContaining(["codex"]),
       }),
@@ -141,9 +143,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).toHaveBeenCalledWith(
       expect.objectContaining({
-        scope: "all",
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["codex", "openai", "memory-core"],
       }),
@@ -169,9 +170,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     });
 
     expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).toHaveBeenCalledWith(
       expect.objectContaining({
-        scope: "all",
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["copilot", "memory-core"],
         config: expect.objectContaining({
@@ -211,9 +211,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
       requireExplicitManifestOwnerTrust: true,
     });
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).toHaveBeenCalledWith(
       expect.objectContaining({
-        scope: "all",
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["custom-harness-plugin", "memory-core"],
       }),
@@ -238,7 +237,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
       requireExplicitManifestOwnerTrust: true,
     });
-    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).not.toHaveBeenCalled();
   });
 
   it("does not bypass a restrictive allowlist that omits a configured Copilot harness", async () => {
@@ -267,7 +266,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).not.toHaveBeenCalled();
   });
 
   it("widens a scoped harness allowlist with the provider owner for openai models", async () => {
@@ -285,9 +284,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).toHaveBeenCalledWith(
       expect.objectContaining({
-        scope: "all",
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["codex", "openai"],
         config: expect.objectContaining({
@@ -319,9 +317,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).toHaveBeenCalledWith(
       expect.objectContaining({
-        scope: "all",
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["codex", "openai", "memory-core"],
         config: expect.objectContaining({
@@ -358,9 +355,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     expect(mocks.resolveActivatableProviderOwnerPluginIds).not.toHaveBeenCalledWith(
       expect.objectContaining({ pluginIds: ["workspace-memory"] }),
     );
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).toHaveBeenCalledWith(
       expect.objectContaining({
-        scope: "all",
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["codex", "openai"],
         config: expect.objectContaining({
@@ -405,9 +401,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       config: expect.any(Object),
       workspaceDir: "/tmp/workspace",
     });
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).toHaveBeenCalledWith(
       expect.objectContaining({
-        scope: "all",
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["codex", "openai"],
       }),
@@ -432,7 +427,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
     expect(mocks.resolveBundledProviderCompatPluginIds).not.toHaveBeenCalled();
     expect(mocks.resolveActivatableProviderOwnerPluginIds).not.toHaveBeenCalled();
-    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).not.toHaveBeenCalled();
   });
 
   it("keeps real bundled memory-core in a Codex scoped load when the provider has no owner plugin", async () => {
@@ -447,9 +442,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
 
     expect(mocks.resolveBundledProviderCompatPluginIds).not.toHaveBeenCalled();
     expect(mocks.resolveActivatableProviderOwnerPluginIds).not.toHaveBeenCalled();
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).toHaveBeenCalledWith(
       expect.objectContaining({
-        scope: "all",
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["codex", "memory-core"],
       }),
@@ -473,7 +467,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).not.toHaveBeenCalled();
     expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });
 
@@ -495,7 +489,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).not.toHaveBeenCalled();
     expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });
 
@@ -517,8 +511,86 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(mocks.ensureScopedPluginsLoadedPreservingActive).not.toHaveBeenCalled();
     expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
     expect(mocks.resolveManifestActivationPlan).not.toHaveBeenCalled();
+  });
+
+  describe("scoped load eviction (openclaw/openclaw#107408)", () => {
+    function createRegistryWithLoadedPlugin(pluginId: string) {
+      const registry = createEmptyPluginRegistry();
+      registry.plugins = [{ id: pluginId, status: "loaded", format: "bundle" } as never];
+      registry.cliBackends = [
+        { pluginId, backend: { id: pluginId } as never, source: pluginId } as never,
+      ];
+      return registry;
+    }
+
+    afterEach(() => {
+      resetAgentEventsForTest();
+      resetPluginRuntimeStateForTest();
+    });
+
+    it("delegates to ensureScopedPluginsLoadedPreservingActive with only the harness-owned ids, never widening onlyPluginIds with already-active plugin ids", async () => {
+      // Regression for #107408: the original fix widened onlyPluginIds with
+      // every currently-active plugin id so a scoped-load swap wouldn't evict
+      // them — but that meant a load miss re-ran register() for every one of
+      // them (duplicate service/hook init, see issue #52031). Preserving
+      // already-active plugins is now ensureScopedPluginsLoadedPreservingActive's
+      // job (it loads only the ids missing from the active registry and merges
+      // them in without re-registering anything already there — see
+      // registry-scoped-merge.ts and its stateful-lifecycle coverage in
+      // runtime-registry-loader.merge.test.ts). ensureSelectedAgentHarnessPlugin
+      // itself must stay decoupled from what else happens to be active.
+      const activeRegistry = createRegistryWithLoadedPlugin("unrelated-plugin");
+      setActivePluginRegistry(activeRegistry);
+
+      await ensureSelectedAgentHarnessPlugin({
+        provider: "custom-provider",
+        modelId: "gpt-5.5",
+        agentHarnessRuntimeOverride: "codex",
+        workspaceDir: "/tmp/workspace",
+      });
+
+      expect(mocks.ensureScopedPluginsLoadedPreservingActive).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceDir: "/tmp/workspace",
+          onlyPluginIds: ["codex", "memory-core"],
+        }),
+      );
+      // ensureSelectedAgentHarnessPlugin itself never touches the active
+      // registry directly — preservation is entirely
+      // ensureScopedPluginsLoadedPreservingActive's responsibility.
+      expect(getActiveRuntimePluginRegistry()).toBe(activeRegistry);
+      expect(
+        getActiveRuntimePluginRegistry()?.cliBackends.map((entry) => entry.pluginId),
+      ).toContain("unrelated-plugin");
+    });
+
+    it("keeps onlyPluginIds narrow even under a restrictive allowlist and an unrelated active plugin", async () => {
+      const activeRegistry = createRegistryWithLoadedPlugin("unrelated-plugin");
+      setActivePluginRegistry(activeRegistry);
+
+      await ensureSelectedAgentHarnessPlugin({
+        provider: "custom-provider",
+        modelId: "gpt-5.5",
+        agentHarnessRuntimeOverride: "codex",
+        config: {
+          plugins: {
+            allow: ["codex", "memory-core"],
+            entries: {
+              codex: { enabled: true },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp/workspace",
+      });
+
+      expect(mocks.ensureScopedPluginsLoadedPreservingActive).toHaveBeenCalledWith(
+        expect.objectContaining({
+          onlyPluginIds: ["codex", "memory-core"],
+        }),
+      );
+    });
   });
 });

@@ -11,13 +11,22 @@ import {
   resolveDiscoverableScopedChannelPluginIds,
 } from "../channel-plugin-ids.js";
 import { resolveEffectivePluginIds } from "../effective-plugin-ids.js";
+import { initializeGlobalHookRunner } from "../hook-runner-global.js";
 import { loadOpenClawPlugins } from "../loader.js";
 import {
   hasExplicitPluginIdScope,
   hasNonEmptyPluginIdScope,
   normalizePluginIdScope,
 } from "../plugin-scope.js";
-import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "../runtime.js";
+import { mergeMissingPluginRegistryInto } from "../registry-scoped-merge.js";
+import type { PluginRegistry } from "../registry-types.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  getActivePluginRegistryWorkspaceDir,
+  getActivePluginRuntimeSubagentMode,
+  setActivePluginRegistry,
+} from "../runtime.js";
 import {
   buildPluginRuntimeLoadOptionsFromValues,
   resolvePluginRuntimeLoadContext,
@@ -226,6 +235,74 @@ export function ensurePluginRegistryLoaded(options?: {
   if (!scopedLoad) {
     pluginRegistryLoaded = scope;
   }
+}
+
+/**
+ * Ensures every id in `onlyPluginIds` is loaded, without letting a scoped
+ * load evict (and retire the live state of) whatever else is already active.
+ *
+ * `ensurePluginRegistryLoaded({ scope: "all", onlyPluginIds })` is a cache
+ * hit-or-replace: if the active registry already satisfies onlyPluginIds it's
+ * a no-op, but on a miss it calls loadOpenClawPlugins with exactly
+ * onlyPluginIds, which activates a brand-new registry containing only that
+ * scope — evicting (and, per cleanupReplacedPluginHostRegistry, tearing down
+ * the live session/runtime state of) every other already-active plugin not
+ * in onlyPluginIds (openclaw/openclaw#107408).
+ *
+ * This loads only the ids missing from the active registry (`publish:false`,
+ * so the standalone result never becomes the live registry and never runs
+ * clearActivatedPluginRuntimeState — see PluginLoadOptions.publish), then
+ * merges those registrations into the active registry in place. Because the
+ * active registry object is mutated rather than replaced, re-publishing it
+ * via setActivePluginRegistry is a same-reference no-op for the
+ * retire/cleanup path (previousRegistry === registry), so already-active
+ * plugins are neither re-registered nor torn down.
+ */
+export function ensureScopedPluginsLoadedPreservingActive(params: {
+  config?: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  workspaceDir: string;
+  onlyPluginIds: string[];
+}): void {
+  const active: PluginRegistry | null = getActivePluginRegistry();
+  if (!active) {
+    // No active registry to preserve yet (first load in this process or
+    // workspace) — an ordinary scoped load can't evict anything.
+    loadOpenClawPlugins({
+      config: params.config,
+      activationSourceConfig: params.activationSourceConfig,
+      workspaceDir: params.workspaceDir,
+      onlyPluginIds: params.onlyPluginIds,
+    });
+    return;
+  }
+
+  const missingPluginIds = params.onlyPluginIds.filter(
+    (pluginId) => !registryContainsRuntimePluginIds(active, [pluginId]),
+  );
+  if (missingPluginIds.length === 0) {
+    return;
+  }
+
+  const missingRegistry = loadOpenClawPlugins({
+    config: params.config,
+    activationSourceConfig: params.activationSourceConfig,
+    workspaceDir: params.workspaceDir,
+    onlyPluginIds: missingPluginIds,
+    activate: true,
+    publish: false,
+    cache: false,
+  });
+
+  mergeMissingPluginRegistryInto(active, missingRegistry, missingPluginIds);
+
+  setActivePluginRegistry(
+    active,
+    getActivePluginRegistryKey() ?? undefined,
+    getActivePluginRuntimeSubagentMode(),
+    getActivePluginRegistryWorkspaceDir(),
+  );
+  initializeGlobalHookRunner(active);
 }
 
 export const testing = {

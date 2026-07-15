@@ -187,6 +187,21 @@ export type PluginLoadOptions = {
   preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;
   activate?: boolean;
+  /**
+   * Set false to run a full (`activate: true`) registration pass — real
+   * registrar side effects (activateGlobalSideEffects stays tied to
+   * `activate`) — without publishing the result as the live active registry:
+   * skips clearActivatedPluginRuntimeState() and the final
+   * activatePluginRegistry() call that would otherwise swap
+   * getActivePluginRegistry() to this result and retire whatever was active
+   * before it. Used by scoped-load callers that build a standalone registry
+   * for a plugin id subset and merge its registrations into the already
+   * active registry themselves, instead of letting a scoped load silently
+   * replace (and retire/cleanup) it — see
+   * ensureScopedPluginsLoadedPreservingActive in
+   * runtime/runtime-registry-loader.ts. Defaults to true.
+   */
+  publish?: boolean;
   loadModules?: boolean;
   throwOnLoadError?: boolean;
   manifestRegistry?: PluginManifestRegistry;
@@ -1459,7 +1474,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
   if (requestedOnlyPluginIdSet && requestedOnlyPluginIdSet.size === 0) {
     const emptyRegistry = createEmptyPluginRegistry();
-    if (options.activate !== false) {
+    if (options.activate !== false && options.publish !== false) {
       clearActivatedPluginRuntimeState();
       activatePluginRegistry(
         emptyRegistry,
@@ -1504,7 +1519,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       options,
     });
     if (cached) {
-      if (shouldActivate) {
+      if (shouldActivate && options.publish !== false) {
         restorePluginProcessGlobalState(cached.state.processGlobalState);
         activatePluginRegistry(
           cached.state.registry,
@@ -1520,7 +1535,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   try {
     // Clear previously registered plugin state before reloading.
     // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
-    if (shouldActivate) {
+    // Also skip for publish:false loads (a standalone registry built to be merged
+    // into the active one by the caller — see PluginLoadOptions.publish) so a
+    // scoped merge-load never wipes other plugins' global singleton state
+    // (agent harnesses, plugin commands, etc.) out from under the still-active
+    // registry it is being merged into.
+    if (shouldActivate && options.publish !== false) {
       clearActivatedPluginRuntimeState();
     }
 
@@ -2561,7 +2581,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         onlyPluginIds,
       );
     }
-    if (shouldActivate) {
+    if (shouldActivate && options.publish !== false) {
       activatePluginRegistry(registry, cacheKey, runtimeSubagentMode, options.workspaceDir);
     }
     return registry;
