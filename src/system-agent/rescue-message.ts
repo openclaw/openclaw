@@ -314,7 +314,7 @@ export async function runSystemAgentRescueMessage(
       nowMs === undefined
         ? undefined
         : resolveExpiresAtMsFromDurationMs(policy.pendingTtlMinutes * 60_000, { nowMs });
-    if (expiresAtMs === undefined) {
+    if (nowMs === undefined || expiresAtMs === undefined) {
       return "OpenClaw rescue could not create a pending approval because the expiry clock is invalid.";
     }
     const ttlMs = expiresAtMs - nowMs;
