@@ -551,7 +551,6 @@ src/agents/session-transcript-repair.test.ts
 src/agents/session-transcript-repair.ts
 src/agents/session-write-lock.test.ts
 src/agents/session-write-lock.ts
-src/agents/sessions/agent-session.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts

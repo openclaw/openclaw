@@ -1229,6 +1229,40 @@ if (isPrlctl) {
     }
   });
 
+  it("rejects Parallels macOS guest session false-success output", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-session-unavailable-"));
+    tempDirs.push(tempDir);
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+printf '%s\n' 'Unable to open new session in this virtual machine.' >&2
+exit 0
+`,
+      "",
+    );
+
+    withEnv(fakePrlctlEnv(tempDir), () => {
+      const phases = {
+        append: () => undefined,
+        remainingTimeoutMs: (fallbackMs?: number) => fallbackMs ?? 30_000,
+      };
+      const macos = new MacosGuest(
+        {
+          getTransport: () => "current-user",
+          getUser: () => "runner",
+          path: "/usr/bin:/bin",
+          resolveDesktopHome: () => "/Users/runner",
+          vmName: "macOS VM",
+        },
+        phases as unknown as PhaseRunner,
+      );
+
+      expect(() => macos.exec(["true"])).toThrow(
+        "macOS guest command failed: Parallels guest session unavailable",
+      );
+    });
+  });
+
   it("streams full phase logs to disk while bounding the failure tail", async () => {
     const runDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-phase-"));
     const phaseRunner = new PhaseRunner(runDir, 128);
@@ -1303,6 +1337,14 @@ if (isPrlctl) {
     expect(macos.match(/curl -fsSL --connect-timeout 10 --max-time 120 --retry 2/g)).toHaveLength(
       2,
     );
+  });
+
+  it("retries failed aggregate fresh lanes once from a restored snapshot", () => {
+    const script = readFileSync(TS_PATHS.npmUpdate, "utf8");
+
+    expect(script).toContain("retrying once from restored snapshot");
+    expect(script).toContain('attempt === 1 ? "" : `-retry-${attempt}`');
+    expect(script).toContain("failed after retry");
   });
 
   it("provisions portable Git before Windows dev update lanes", () => {
