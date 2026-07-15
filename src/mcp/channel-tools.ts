@@ -10,6 +10,8 @@ import {
   toText,
 } from "./channel-shared.js";
 
+const COORD_MESSAGE_MAX_CHARS = 16_384;
+
 /**
  * MCP tool registration for channel conversation access.
  *
@@ -159,6 +161,22 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
     async ({ session_key, text }) => {
       const result = await bridge.sendMessage({ sessionKey: session_key, text });
+      return {
+        content: [{ type: "text", text: "sent" }],
+        structuredContent: { result },
+      };
+    },
+  );
+
+  server.tool(
+    "coord_messages_send",
+    "Send a control-plane note to an allowlisted internal OpenClaw coordination session.",
+    {
+      session_key: z.enum(["agent:main:codex-coord", "agent:main:claude-coord"]),
+      text: z.string().min(1).max(COORD_MESSAGE_MAX_CHARS),
+    },
+    async ({ session_key, text }) => {
+      const result = await bridge.sendCoordMessage({ sessionKey: session_key, text });
       return {
         content: [{ type: "text", text: "sent" }],
         structuredContent: { result },

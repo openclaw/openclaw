@@ -83,6 +83,18 @@ function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: str
   return call;
 }
 
+function firstToolText(result: unknown): string | undefined {
+  const content =
+    typeof result === "object" && result !== null && "content" in result
+      ? result.content
+      : undefined;
+  const first = Array.isArray(content) ? content[0] : undefined;
+  if (typeof first !== "object" || first === null || !("text" in first)) {
+    return undefined;
+  }
+  return typeof first.text === "string" ? first.text : undefined;
+}
+
 describe("openclaw channel mcp server", () => {
   describe("gateway-backed flows", () => {
     describe("gateway integration", () => {
@@ -422,6 +434,155 @@ describe("openclaw channel mcp server", () => {
       expect(sendPayload.sessionKey).toBe("agent:main:main");
       expect(sendPayload.message).toBe("reply from mcp");
     });
+
+    test("sendCoordMessage dispatches only to allowlisted internal coordination sessions", async () => {
+      const bridge = new OpenClawChannelBridge({} as never, {
+        claudeChannelMode: "off",
+        verbose: false,
+      });
+      const gatewayRequest = vi.fn().mockResolvedValue({ status: "ok", runId: "run-1" });
+
+      attachReadyGateway(bridge, gatewayRequest);
+
+      await bridge.sendCoordMessage({
+        sessionKey: "agent:main:codex-coord",
+        text: "coord note",
+      });
+
+      expect(gatewayRequest).toHaveBeenCalledTimes(1);
+      const [method, payload] = requireFirstMockCall(gatewayRequest, "gateway request");
+      expect(method).toBe("coord.messages.send");
+      expect(payload).toMatchObject({
+        sessionKey: "agent:main:codex-coord",
+        message: "coord note",
+      });
+      expect((payload as Record<string, unknown>).idempotencyKey).toEqual(expect.any(String));
+    });
+
+    test("coord_messages_send calls the MCP tool path for both coordination sessions", async () => {
+      const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+      try {
+        const gatewayRequest = vi.fn().mockResolvedValue({ status: "accepted", runId: "run-1" });
+        attachReadyGateway(mcp.bridge, gatewayRequest);
+
+        const codexResult = await mcp.client.callTool({
+          name: "coord_messages_send",
+          arguments: { session_key: "agent:main:codex-coord", text: "codex note" },
+        });
+        const claudeResult = await mcp.client.callTool({
+          name: "coord_messages_send",
+          arguments: { session_key: "agent:main:claude-coord", text: "claude note" },
+        });
+
+        expect(firstToolText(codexResult)).toBe("sent");
+        expect(firstToolText(claudeResult)).toBe("sent");
+        expect(gatewayRequest).toHaveBeenCalledTimes(2);
+        expect(gatewayRequest.mock.calls[0]?.[0]).toBe("coord.messages.send");
+        expect(gatewayRequest.mock.calls[0]?.[1]).toMatchObject({
+          sessionKey: "agent:main:codex-coord",
+          message: "codex note",
+        });
+        expect(gatewayRequest.mock.calls[1]?.[0]).toBe("coord.messages.send");
+        expect(gatewayRequest.mock.calls[1]?.[1]).toMatchObject({
+          sessionKey: "agent:main:claude-coord",
+          message: "claude note",
+        });
+      } finally {
+        await mcp.close();
+      }
+    });
+
+    test("coord_messages_send rejects whitespace-only text before gateway dispatch", async () => {
+      const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+      try {
+        const gatewayRequest = vi.fn().mockResolvedValue({ status: "accepted" });
+        attachReadyGateway(mcp.bridge, gatewayRequest);
+
+        const result = await mcp.client.callTool({
+          name: "coord_messages_send",
+          arguments: { session_key: "agent:main:codex-coord", text: "   " },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(firstToolText(result)).toBe("Coord message cannot be empty");
+        expect(gatewayRequest).not.toHaveBeenCalled();
+      } finally {
+        await mcp.close();
+      }
+    });
+
+    test("coord_messages_send rejects overlong text before gateway dispatch", async () => {
+      const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+      try {
+        const gatewayRequest = vi.fn().mockResolvedValue({ status: "accepted" });
+        attachReadyGateway(mcp.bridge, gatewayRequest);
+
+        const result = await mcp.client.callTool({
+          name: "coord_messages_send",
+          arguments: { session_key: "agent:main:codex-coord", text: "x".repeat(16_385) },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(firstToolText(result)).toContain(
+          "Too big: expected string to have <=16384 characters",
+        );
+        expect(gatewayRequest).not.toHaveBeenCalled();
+      } finally {
+        await mcp.close();
+      }
+    });
+
+    test.each([
+      "agent:main:explicit:codex-coord",
+      "agent:main:main",
+      "agent:main:telegram",
+      "agent:developer:codex-coord",
+    ])(
+      "coord_messages_send rejects non-coordination session %s before gateway dispatch",
+      async (sessionKey) => {
+        const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+        try {
+          const gatewayRequest = vi.fn().mockResolvedValue({ status: "accepted" });
+          attachReadyGateway(mcp.bridge, gatewayRequest);
+
+          const result = await mcp.client.callTool({
+            name: "coord_messages_send",
+            arguments: { session_key: sessionKey, text: "do not send" },
+          });
+
+          expect(result.isError).toBe(true);
+          expect(gatewayRequest).not.toHaveBeenCalled();
+        } finally {
+          await mcp.close();
+        }
+      },
+    );
+
+    test.each([
+      "agent:main:explicit:codex-coord",
+      "agent:main:main",
+      "agent:main:telegram",
+      "agent:developer:codex-coord",
+    ])(
+      "sendCoordMessage rejects non-coordination session %s before gateway dispatch",
+      async (sessionKey) => {
+        const bridge = new OpenClawChannelBridge({} as never, {
+          claudeChannelMode: "off",
+          verbose: false,
+        });
+        const gatewayRequest = vi.fn().mockResolvedValue({ status: "ok" });
+
+        attachReadyGateway(bridge, gatewayRequest);
+
+        await expect(
+          bridge.sendCoordMessage({
+            sessionKey,
+            text: "do not send",
+          }),
+        ).rejects.toThrow("Coord session is not allowed");
+        expect(gatewayRequest).not.toHaveBeenCalled();
+      },
+    );
 
     test("gets one conversation through sessions.describe without broad listing", async () => {
       const bridge = new OpenClawChannelBridge({} as never, {

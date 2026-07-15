@@ -251,6 +251,7 @@ enum class GatewayMethod(
   SessionsCompactionBranch("sessions.compaction.branch"),
   SessionsCompactionRestore("sessions.compaction.restore"),
   SessionsCreate("sessions.create"),
+  CoordMessagesSend("coord.messages.send"),
   SessionsSend("sessions.send"),
   SessionsAbort("sessions.abort"),
   SessionsPatch("sessions.patch"),
