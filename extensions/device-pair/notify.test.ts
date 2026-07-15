@@ -82,7 +82,7 @@ describe("device-pair notify persistence", () => {
     });
   }
 
-  it("skips interval ticks while a notify poll is pending and resumes after it settles", async () => {
+  it("keeps one notify poll in flight across service recreation", async () => {
     vi.useFakeTimers();
     const firstPoll = createDeferred<Awaited<ReturnType<typeof listDevicePairingMock>>>();
     const failedPoll = createDeferred<Awaited<ReturnType<typeof listDevicePairingMock>>>();
@@ -92,7 +92,7 @@ describe("device-pair notify persistence", () => {
       .mockImplementationOnce(() => failedPoll.promise)
       .mockResolvedValue({ pending: [] });
     const api = createApi();
-    const service = createPairingNotifierService(api);
+    let service = createPairingNotifierService(api);
 
     await service.start({} as never);
     expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
@@ -103,6 +103,7 @@ describe("device-pair notify persistence", () => {
     expect(listDevicePairingMock).toHaveBeenCalledTimes(2);
 
     await service.stop?.({} as never);
+    service = createPairingNotifierService(createApi());
     await service.start({} as never);
     expect(listDevicePairingMock).toHaveBeenCalledTimes(2);
 

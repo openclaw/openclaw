@@ -20,6 +20,10 @@ import {
 
 const NOTIFY_POLL_INTERVAL_MS = 10_000;
 
+// Config reload recreates plugin services before an uncancellable delivery may settle.
+// Keep one module-owned poll so the replacement service cannot race state or delivery.
+let notifyPollInFlight: Promise<void> | null = null;
+
 type NotifyStateFile = {
   subscribers: NotifySubscription[];
   notifiedRequestIds: Record<string, number>;
@@ -344,6 +348,18 @@ async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }):
   }
 }
 
+async function runNotifyPoll(api: OpenClawPluginApi): Promise<void> {
+  if (notifyPollInFlight) {
+    return;
+  }
+  notifyPollInFlight = notifyPendingPairingRequests({ api });
+  try {
+    await notifyPollInFlight;
+  } finally {
+    notifyPollInFlight = null;
+  }
+}
+
 export async function armPairNotifyOnce(params: {
   api: OpenClawPluginApi;
   ctx: {
@@ -456,24 +472,12 @@ export async function handleNotifyCommand(params: {
 
 export function createPairingNotifierService(api: OpenClawPluginApi): OpenClawPluginService {
   let notifyInterval: ReturnType<typeof setInterval> | null = null;
-  // stop() cannot cancel an active delivery, so keep this guard across restarts
-  // until that poll settles rather than overlapping it with a new initial poll.
-  let notifyPollInFlight = false;
 
   return {
     id: "device-pair-notifier",
     start: async () => {
       const tick = async () => {
-        // Keep slow polls from racing notification state reads and delivery.
-        if (notifyPollInFlight) {
-          return;
-        }
-        notifyPollInFlight = true;
-        try {
-          await notifyPendingPairingRequests({ api });
-        } finally {
-          notifyPollInFlight = false;
-        }
+        await runNotifyPoll(api);
       };
 
       await tick().catch((err: unknown) => {
