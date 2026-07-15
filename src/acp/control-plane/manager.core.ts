@@ -614,4 +614,8 @@ export class AcpSessionManager {
     }
     throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP operation aborted.");
   }
+
+  evictSessionHandle(sessionKey: string): void {
+    this.runtimeHandles.clear(sessionKey);
+  }
 }

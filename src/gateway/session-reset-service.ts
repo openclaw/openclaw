@@ -463,11 +463,15 @@ async function closeAcpRuntimeForSession(params: {
     return undefined;
   }
   params.assertCurrent?.();
+  let acpCancelTimedOut = false;
   if (cancelOutcome.status === "timeout") {
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      `Session ${params.sessionKey} is still active; try again in a moment.`,
+    logVerbose(
+      `sessions.${params.reason}: ACP cancel timed out for ${params.sessionKey}; evicting runtime handle`,
     );
+    acpManager.evictSessionHandle(acpSessionKey);
+    // Cancel may still own the session actor, so skip closeSession and go
+    // straight to ACP meta reset so the next message creates a fresh session.
+    acpCancelTimedOut = true;
   }
   if (cancelOutcome.status === "error") {
     logVerbose(
@@ -475,36 +479,41 @@ async function closeAcpRuntimeForSession(params: {
     );
   }
 
-  if (params.shouldCleanup && !params.shouldCleanup()) {
-    return undefined;
-  }
-  params.assertCurrent?.();
-  const closeOutcome = await runAcpCleanupStep({
-    op: async () => {
-      await acpManager.closeSession({
-        cfg: params.cfg,
-        sessionKey: acpSessionKey,
-        reason: params.reason,
-        discardPersistentState: true,
-        requireAcpSession: false,
-        allowBackendUnavailable: true,
-      });
-    },
-  });
-  if (params.shouldCleanup && !params.shouldCleanup()) {
-    return undefined;
-  }
-  params.assertCurrent?.();
-  if (closeOutcome.status === "timeout") {
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      `Session ${params.sessionKey} is still active; try again in a moment.`,
-    );
-  }
-  if (closeOutcome.status === "error") {
-    logVerbose(
-      `sessions.${params.reason}: ACP runtime close failed for ${params.sessionKey}: ${String(closeOutcome.error)}`,
-    );
+  if (!acpCancelTimedOut) {
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      return undefined;
+    }
+    params.assertCurrent?.();
+    const closeOutcome = await runAcpCleanupStep({
+      op: async () => {
+        await acpManager.closeSession({
+          cfg: params.cfg,
+          sessionKey: acpSessionKey,
+          reason: params.reason,
+          discardPersistentState: true,
+          requireAcpSession: false,
+          allowBackendUnavailable: true,
+        });
+      },
+    });
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      return undefined;
+    }
+    params.assertCurrent?.();
+    if (closeOutcome.status === "timeout") {
+      logVerbose(
+        `sessions.${params.reason}: ACP close timed out for ${params.sessionKey}; evicting runtime handle`,
+      );
+      acpManager.evictSessionHandle(acpSessionKey);
+      // Close timed out while the manager was waiting for runtime.close().
+      // The timed-out operation may still own the session actor, so evict
+      // the cached handle immediately and continue to meta reset below.
+    }
+    if (closeOutcome.status === "error") {
+      logVerbose(
+        `sessions.${params.reason}: ACP runtime close failed for ${params.sessionKey}: ${String(closeOutcome.error)}`,
+      );
+    }
   }
   if (params.reason === "session-delete") {
     params.assertCurrent?.();
