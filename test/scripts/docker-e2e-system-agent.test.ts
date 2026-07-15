@@ -51,8 +51,11 @@ describe("OpenClaw Docker E2E scripts", () => {
     expect(source).toContain("runSystemAgentRescueMessage({");
     expect(source).toContain("sandboxing is active");
     expect(source).toContain("cannot open the local TUI");
+    expect(source).toContain("fresh rescue command did not revoke the older pending change");
     expect(source).toContain("[openclaw] done: gateway.restart");
-    expect(source).toContain("[openclaw] done: doctor.fix");
+    expect(source).toContain("remote doctor fix did not point to the local repair command");
+    expect(source).toContain("remote rescue must not invoke doctor repair");
+    expect(source).not.toContain("[openclaw] done: doctor.fix");
     expect(source).toContain("OpenClaw rescue Docker E2E passed");
   });
 });
