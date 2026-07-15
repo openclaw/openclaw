@@ -9,7 +9,6 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -273,6 +272,7 @@ export function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
+    env: options.env ? { ...process.env, ...options.env } : process.env,
     maxBuffer: COMMAND_CAPTURE_MAX_BUFFER_BYTES,
     stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
@@ -516,13 +516,11 @@ function runFromTrustedTooling(argv, { targetRoot, workflowRef }) {
       cwd: targetRoot,
     });
     worktreeAdded = true;
-    const targetNodeModules = join(targetRoot, "node_modules");
-    if (!existsSync(targetNodeModules)) {
-      throw new Error("release candidate validation requires target checkout node_modules");
-    }
-    // Trusted release tooling executes from an isolated worktree, while dependency
-    // bytes stay pinned to the prepared target checkout used by local preflight.
-    symlinkSync(targetNodeModules, join(toolingRoot, "node_modules"), "dir");
+    // Build an isolated trusted dependency tree. Lifecycle scripts stay disabled;
+    // the frozen lockfile and prefer-offline store keep setup deterministic.
+    run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
+      cwd: toolingRoot,
+    });
     const result = spawnSync(
       process.execPath,
       [join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv],
