@@ -9,11 +9,7 @@ import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-r
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
-import type {
-  GatewayApprovalEventPublisher,
-  GatewayInstanceRuntime,
-  GatewayRecoveryRuntime,
-} from "./server-instance-runtime.types.js";
+import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
