@@ -2123,6 +2123,7 @@ public struct NodeInvokeParams: Codable, Sendable {
     public let params: AnyCodable?
     public let timeoutms: Int?
     public let idempotencykey: String
+    public let sessionkey: String?
     public let turnsourcechannel: String?
     public let turnsourceto: String?
     public let turnsourceaccountid: String?
@@ -2134,6 +2135,7 @@ public struct NodeInvokeParams: Codable, Sendable {
         params: AnyCodable? = nil,
         timeoutms: Int? = nil,
         idempotencykey: String,
+        sessionkey: String? = nil,
         turnsourcechannel: String? = nil,
         turnsourceto: String? = nil,
         turnsourceaccountid: String? = nil,
@@ -2144,6 +2146,7 @@ public struct NodeInvokeParams: Codable, Sendable {
         self.params = params
         self.timeoutms = timeoutms
         self.idempotencykey = idempotencykey
+        self.sessionkey = sessionkey
         self.turnsourcechannel = turnsourcechannel
         self.turnsourceto = turnsourceto
         self.turnsourceaccountid = turnsourceaccountid
@@ -2156,6 +2159,7 @@ public struct NodeInvokeParams: Codable, Sendable {
         case params
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
+        case sessionkey = "sessionKey"
         case turnsourcechannel = "turnSourceChannel"
         case turnsourceto = "turnSourceTo"
         case turnsourceaccountid = "turnSourceAccountId"
@@ -2643,6 +2647,8 @@ public struct SessionsListParams: Codable, Sendable {
     public let limit: Int?
     public let offset: Int?
     public let activeminutes: Int?
+    public let requirelastinteraction: Bool?
+    public let sortby: AnyCodable?
     public let includeglobal: Bool?
     public let includeunknown: Bool?
     public let configuredagentsonly: Bool?
@@ -2658,6 +2664,8 @@ public struct SessionsListParams: Codable, Sendable {
         limit: Int? = nil,
         offset: Int? = nil,
         activeminutes: Int? = nil,
+        requirelastinteraction: Bool? = nil,
+        sortby: AnyCodable? = nil,
         includeglobal: Bool? = nil,
         includeunknown: Bool? = nil,
         configuredagentsonly: Bool? = nil,
@@ -2672,6 +2680,8 @@ public struct SessionsListParams: Codable, Sendable {
         self.limit = limit
         self.offset = offset
         self.activeminutes = activeminutes
+        self.requirelastinteraction = requirelastinteraction
+        self.sortby = sortby
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
         self.configuredagentsonly = configuredagentsonly
@@ -2688,6 +2698,8 @@ public struct SessionsListParams: Codable, Sendable {
         case limit
         case offset
         case activeminutes = "activeMinutes"
+        case requirelastinteraction = "requireLastInteraction"
+        case sortby = "sortBy"
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
         case configuredagentsonly = "configuredAgentsOnly"
@@ -13218,6 +13230,7 @@ public struct ChatFinalEvent: Codable, Sendable {
     public let message: AnyCodable?
     public let usage: AnyCodable?
     public let stopreason: String?
+    public let yielded: Bool?
 
     public init(
         runid: String,
@@ -13228,7 +13241,8 @@ public struct ChatFinalEvent: Codable, Sendable {
         state: String,
         message: AnyCodable? = nil,
         usage: AnyCodable? = nil,
-        stopreason: String? = nil)
+        stopreason: String? = nil,
+        yielded: Bool? = nil)
     {
         self.runid = runid
         self.sessionkey = sessionkey
@@ -13239,6 +13253,7 @@ public struct ChatFinalEvent: Codable, Sendable {
         self.message = message
         self.usage = usage
         self.stopreason = stopreason
+        self.yielded = yielded
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -13251,6 +13266,7 @@ public struct ChatFinalEvent: Codable, Sendable {
         case message
         case usage
         case stopreason = "stopReason"
+        case yielded
     }
 }
 

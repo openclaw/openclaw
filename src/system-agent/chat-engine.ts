@@ -7,6 +7,7 @@ import {
   createSystemAgentSession,
   runSystemAgentTurn,
   type SystemAgentSession,
+  type SystemAgentTurnDirective,
   type SystemAgentTurnRunner,
 } from "./agent-turn.js";
 import {
@@ -655,7 +656,7 @@ export class SystemAgentChatEngine {
 
   private async applyAgentTurnReply(loopReply: {
     text: string;
-    directive?: import("./agent-turn.js").SystemAgentTurnDirective;
+    directive?: SystemAgentTurnDirective;
   }): Promise<SystemAgentChatReply> {
     // Recheck after the model turn: the route may have changed while inference
     // was running, and its stale directive must never cross that boundary.

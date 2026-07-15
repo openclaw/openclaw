@@ -106,6 +106,9 @@ export const terminalPanelStyles = css`
   .tp-tab.is-exited::part(base) {
     opacity: 0.55;
   }
+  .tp-tab.is-connecting .tp-tab__icon {
+    animation: tp-pulse 1.2s ease-in-out infinite;
+  }
   .tp-tab__icon {
     display: inline-flex;
     color: var(--accent, #4ec9a8);
@@ -124,20 +127,23 @@ export const terminalPanelStyles = css`
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
+    align-self: center;
+    flex: 0 0 26px;
+    width: 26px;
+    height: 26px;
     opacity: 0;
     border: none;
     background: transparent;
-    color: inherit;
-    border-radius: 4px;
+    color: var(--muted, #8a919e);
+    border-radius: 6px;
     padding: 0;
   }
-  .tp-tab:hover + .tp-tab__close,
-  .tp-tab[active] + .tp-tab__close,
+  :where(.tp-tab:hover, .tp-tab[active]) + .tp-tab__close {
+    opacity: 0.7;
+  }
   .tp-tab__close:hover,
   .tp-tab__close:focus-visible {
-    opacity: 0.7;
+    opacity: 1;
   }
   .tp-new,
   .tp-icon {
@@ -264,8 +270,30 @@ export const terminalPanelStyles = css`
   .tp-host {
     position: absolute;
     inset: 0;
+    z-index: 0;
     padding: 6px 8px;
     caret-color: transparent;
+  }
+  .tp-connecting {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--muted, #8a919e);
+    background: color-mix(in srgb, var(--bg, #0e1015) 88%, transparent);
+    font-size: 12px;
+    pointer-events: none;
+  }
+  .tp-connecting__spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid color-mix(in srgb, var(--accent, #ff5c5c) 24%, transparent);
+    border-top-color: var(--accent, #ff5c5c);
+    border-radius: 50%;
+    animation: tp-spin 0.8s linear infinite;
   }
   .tp-empty,
   .tp-error {
@@ -275,5 +303,21 @@ export const terminalPanelStyles = css`
   }
   .tp-error {
     color: var(--danger, #ff6b6b);
+  }
+  @keyframes tp-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes tp-pulse {
+    50% {
+      opacity: 0.35;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tp-connecting__spinner,
+    .tp-tab.is-connecting .tp-tab__icon {
+      animation: none;
+    }
   }
 `;

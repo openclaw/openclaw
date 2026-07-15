@@ -6,11 +6,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
 
 const approvalResolutionFailure = vi.hoisted(() => ({ error: null as Error | null }));
 type ExecApprovalsUpdate = Parameters<
@@ -150,6 +156,41 @@ describe("node host invoke", () => {
     execApprovalsStoreMock.hasUpdateResult = false;
     execApprovalsStoreMock.updateCalls = 0;
     execApprovalsStoreMock.updateParams = undefined;
+  });
+
+  it("passes the owning agent session to plugin node commands", async () => {
+    const handle = vi.fn(async () => '{"ok":true}');
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "canvas",
+        pluginName: "Canvas",
+        command: { command: "canvas.present", cap: "canvas", handle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+    const sendNodeEvent = vi.fn(async () => undefined);
+
+    await handleInvoke(
+      {
+        id: "invoke-canvas",
+        nodeId: "node-1",
+        command: "canvas.present",
+        paramsJSON: "{}",
+        sessionKey: "agent:main:canvas",
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+      undefined,
+      { pluginCommandContext: { sendNodeEvent } },
+    );
+
+    expect(handle).toHaveBeenCalledWith("{}", undefined, {
+      sendNodeEvent,
+      sessionKey: "agent:main:canvas",
+    });
   });
 
   it("lists node-host directories for the folder browser", async () => {

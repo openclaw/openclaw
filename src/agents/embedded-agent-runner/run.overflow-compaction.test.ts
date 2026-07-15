@@ -3678,17 +3678,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }));
 
     mockedCompactDirect
-      .mockResolvedValueOnce(
-        makeCompactionSuccess({
-          summary: "Compacted 1",
-          firstKeptEntryId: "entry-3",
-          tokensBefore: 180000,
-        }),
-      )
+      .mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason: "nothing to compact",
+      })
       .mockResolvedValueOnce(
         makeCompactionSuccess({
           summary: "Compacted 2",
@@ -3714,7 +3711,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(3);
     expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(5);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
     expect(result.meta.error?.kind).toBe("context_overflow");
   });
 

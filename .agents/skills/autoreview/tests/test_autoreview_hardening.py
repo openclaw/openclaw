@@ -1859,6 +1859,671 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
         )
 
+    def test_secret_detector_allows_typescript_object_secret_references(self) -> None:
+        content = (
+            "async function configure(context: RuntimeContext) {\n"
+            "  const cliDevice = await login();\n"
+            "  const driverPassword = readPassword();\n"
+            "  return {\n"
+            "    access"
+            + "Token"
+            + ": cliDevice.access"
+            + "Token,\n"
+            + "    pass"
+            + "word: driverPass"
+            + "word,\n"
+            + "    ...(context.driverPass"
+            + "word ? { pass"
+            + "word: context.driverPass"
+            + "word } : {}),\n"
+            + "  };\n"
+            + "}"
+        )
+        yaml_literal = "pass" + "word: actualProductionSecret,"
+        yaml_reference = "pass" + "word: context.driverPass" + "word"
+        yaml_flow_reference = (
+            "{ pass" + "word: context.driverPass" + "word, enabled: true }"
+        )
+        sut_reference = (
+            "const pass"
+            + "word = context.sutPass"
+            + "word;"
+        )
+        literal_value = "actual-production-" + "secret"
+        source_literal = (
+            "function configure() { return { pass"
+            + 'word: "'
+            + literal_value
+            + '" }; }'
+        )
+        jwt_like = "eyJhbGciOiJIUzI1NiJ9" + ".payload." + "signature"
+        undeclared_member = (
+            "const config = { pass"
+            + "word: "
+            + jwt_like
+            + " };"
+        )
+        jwt_root = jwt_like.split(".", 1)[0]
+        declared_member = (
+            f"const {jwt_root} = {{}};\n"
+            + "const config = { pass"
+            + "word: "
+            + jwt_like
+            + " };"
+        )
+        prefixed_member = (
+            "const session = {};\n"
+            + "const config = { pass"
+            + "word: session."
+            + jwt_like
+            + " };"
+        )
+        declared_identifier = "CorrectHorseBattery" + "Staple123"
+        declared_identifier_value = (
+            f"const {declared_identifier} = 0;\n"
+            + "const config = { pass"
+            + "word: "
+            + declared_identifier
+            + " };"
+        )
+        suffixed_reference = (
+            "const config = { pass"
+            + "word: context.driverPass"
+            + "wordExtra };"
+        )
+        prefixed_reference = (
+            "const config = { pass"
+            + "word: xcontext.driverPass"
+            + "word };"
+        )
+        final_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word }; }"
+        )
+        inline_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word, enabled: true }; }"
+        )
+        asserted_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word! }; }"
+        )
+        cast_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word as string }; }"
+        )
+        union_cast_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word as string | undefined }; }"
+        )
+        next_statement = (
+            "function configure(context: RuntimeContext) {\n"
+            + "  const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + "  return consume();\n"
+            + "}"
+        )
+        line_comment = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word // supplied by CI\n"
+            + "consume();"
+        )
+        block_comment = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word /* supplied by CI */;"
+        )
+        concatenated_literal = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + 'word + "'
+            + literal_value
+            + '" }; }'
+        )
+        continued_literal = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word\n"
+            + '  + "'
+            + literal_value
+            + '" }; }'
+        )
+        fallback_literal = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + 'word ?? "'
+            + literal_value
+            + '" }; }'
+        )
+        assigned_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + '  = "'
+            + literal_value
+            + '";'
+        )
+        newline_cast_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + "  as string + \""
+            + literal_value
+            + '";'
+        )
+        commented_continuation = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word // supplied by CI\n"
+            + '  + "'
+            + literal_value
+            + '";'
+        )
+        unicode_comment_continuation = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word // supplied by CI"
+            + chr(0x2028)
+            + '  + "'
+            + literal_value
+            + '";'
+        )
+        unicode_space_continuation = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + chr(0x00A0)
+            + '+ "'
+            + literal_value
+            + '";'
+        )
+        multiline_cast_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word as string\n"
+            + '+ "'
+            + literal_value
+            + '";'
+        )
+        leading_comma_statement = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + ', username = "'
+            + literal_value
+            + '";'
+        )
+        unary_statement = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + '!audit("'
+            + literal_value
+            + '");'
+        )
+        inequality_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + '!== "'
+            + literal_value
+            + '";'
+        )
+        member_call_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + 'word["concat"]("safe", "'
+            + literal_value
+            + '");'
+        )
+        continued_then_unary_statement = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word + suffix\n"
+            + '!audit("'
+            + literal_value
+            + '");'
+        )
+        trailing_operator_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word + suffix +\n"
+            + '  "'
+            + literal_value
+            + '";'
+        )
+        plain_javascript_as_statement = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + 'as("'
+            + literal_value
+            + '");'
+        )
+        typescript_dollar_identifier = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + 'as$logger("'
+            + literal_value
+            + '");'
+        )
+
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                content,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                sut_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertTrue(self.helper["secret_text_risk"](sut_reference))
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                plain_javascript_as_statement,
+                javascript_dialect="javascript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                typescript_dollar_identifier,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                final_property,
+                javascript_dialect="typescript",
+            )
+        )
+        for source_reference in (
+            inline_property,
+            asserted_property,
+            cast_property,
+            union_cast_property,
+            next_statement,
+            line_comment,
+            block_comment,
+            leading_comma_statement,
+            unary_statement,
+            continued_then_unary_statement,
+        ):
+            with self.subTest(source_reference=source_reference):
+                self.assertFalse(
+                    self.helper["secret_text_risk"](
+                        source_reference,
+                        javascript_dialect="typescript",
+                    )
+                )
+        for unsafe_source_reference in (
+            concatenated_literal,
+            continued_literal,
+            fallback_literal,
+            assigned_literal,
+            newline_cast_literal,
+            commented_continuation,
+            unicode_comment_continuation,
+            unicode_space_continuation,
+            multiline_cast_literal,
+            inequality_literal,
+            member_call_literal,
+            trailing_operator_literal,
+        ):
+            with self.subTest(unsafe_source_reference=unsafe_source_reference):
+                self.assertTrue(
+                    self.helper["secret_text_risk"](
+                        unsafe_source_reference,
+                        javascript_dialect="typescript",
+                    )
+                )
+        self.assertTrue(self.helper["secret_text_risk"](yaml_literal))
+        self.assertTrue(self.helper["secret_text_risk"](yaml_reference))
+        self.assertTrue(self.helper["secret_text_risk"](yaml_flow_reference))
+        self.assertTrue(self.helper["secret_text_risk"](source_literal))
+        self.assertTrue(self.helper["secret_text_risk"](undeclared_member))
+        self.assertTrue(self.helper["secret_text_risk"](declared_member))
+        self.assertTrue(self.helper["secret_text_risk"](prefixed_member))
+        self.assertTrue(
+            self.helper["secret_text_risk"](declared_identifier_value)
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                suffixed_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                prefixed_reference,
+                javascript_dialect="typescript",
+            )
+        )
+
+    def test_secret_detector_allows_lifecycle_named_typescript_references(self) -> None:
+        key_term = "Api" + "Key"
+        key_field = key_term[0].lower() + key_term[1:]
+        credential_term = "Cred" + "ential"
+        source = (
+            f"const resolvedStream{key_term} = resolveAttemptDispatch{key_term}({{\n"
+            f"  {key_field}Info,\n"
+            "  runtimeAuthState,\n"
+            "});\n"
+            f"const successful{credential_term} = successfulProfileId\n"
+            "  ? attemptAuthProfileStore.profiles[successfulProfileId]\n"
+            "  : undefined;\n"
+            f"const successful{key_term}Info = get{key_term}Info();\n"
+            f"const {key_field} = successful{key_term}Info?.{key_field};\n"
+            f"const resolved{key_term} = resolveSecretSentinel({key_field});\n"
+            "return {\n"
+            f"  resolved{key_term}: resolvedStream{key_term},\n"
+            f"  {credential_term.lower()}: successful{credential_term},\n"
+            f"  {key_field}: resolved{key_term},\n"
+            "};\n"
+        )
+        literal_value = "actual-production-" + "secret"
+        unsafe_sources = (
+            f'const resolved{key_term} = "' + literal_value + '";',
+            "const config = { pass"
+            + "word: resolved"
+            + key_term
+            + ' + "'
+            + literal_value
+            + "\" };",
+            "const config = { pass"
+            + "word: Abcdefghijklmnop.Qrstuvwxyzabcdef };",
+        )
+
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                source,
+                javascript_dialect="typescript",
+            )
+        )
+        for unsafe_source in unsafe_sources:
+            with self.subTest(unsafe_source=unsafe_source):
+                self.assertTrue(
+                    self.helper["secret_text_risk"](
+                        unsafe_source,
+                        javascript_dialect="typescript",
+                    )
+                )
+
+        store_reference = (
+            "const cred"
+            + "ential = attemptAuthProfileStore.profiles[successfulProfileId];"
+        )
+        optional_store_reference = (
+            "const cred"
+            + "ential = attemptAuthProfileStore?.[successfulProfileId];"
+        )
+        quoted_store_reference = (
+            "const cred"
+            + 'ential = attemptAuthProfileStore["profiles"][successfulProfileId];'
+        )
+        yaml_store_literal = (
+            "pass"
+            + 'word: attemptAuthProfileStore["'
+            + literal_value
+            + '"]'
+        )
+        quoted_secret_key = "N7xQ2mP9vK4r" + "T8wZ"
+        typescript_store_literal = (
+            "const pass"
+            + 'word = attemptAuthProfileStore["'
+            + quoted_secret_key
+            + '"];'
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                store_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                optional_store_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                quoted_store_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertTrue(self.helper["secret_text_risk"](yaml_store_literal))
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                typescript_store_literal,
+                javascript_dialect="typescript",
+            )
+        )
+
+    def test_lifecycle_reference_scan_is_bounded_for_non_matching_identifier(self) -> None:
+        source = "const value = resolved" + "A" * 100_000 + "X;"
+
+        started = time.monotonic()
+        spans = self.helper["javascript_reference_spans"](source)
+
+        self.assertEqual(spans, frozenset())
+        self.assertLess(time.monotonic() - started, 5.0)
+
+    def test_review_patch_scopes_source_references_to_typescript_files(self) -> None:
+        property_name = "pass" + "word"
+        reference = "context.driverPass" + "word"
+        source_patch = (
+            "diff --git a/src/runtime.ts b/src/runtime.ts\n"
+            "--- a/src/runtime.ts\n"
+            "+++ b/src/runtime.ts\n"
+            "@@ -0,0 +1 @@\n"
+            "+function configure(context: RuntimeContext) { return { "
+            + property_name
+            + ": "
+            + reference
+            + " }; }\n"
+        )
+        narrow_source_patch = (
+            "diff --git a/src/runtime.ts b/src/runtime.ts\n"
+            "--- a/src/runtime.ts\n"
+            "+++ b/src/runtime.ts\n"
+            "@@ -40,2 +40,3 @@ function configure(context: RuntimeContext) {\n"
+            "   return {\n"
+            "+    "
+            + property_name
+            + ": "
+            + reference
+            + ",\n"
+            "   };\n"
+        )
+        config_patch = (
+            "diff --git a/config.yml b/config.yml\n"
+            "--- a/config.yml\n"
+            "+++ b/config.yml\n"
+            "@@ -0,0 +1 @@\n"
+            "+"
+            + property_name
+            + ": "
+            + reference
+            + "\n"
+        )
+
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["src/runtime.ts"],
+                source_patch,
+            ),
+            source_patch,
+        )
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["src/runtime.ts"],
+                narrow_source_patch,
+            ),
+            narrow_source_patch,
+        )
+        with self.assertRaisesRegex(SystemExit, "secret-like content"):
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["src/runtime.ts", "config.yml"],
+                source_patch + config_patch,
+            )
+        with self.assertRaisesRegex(SystemExit, "secret-like content"):
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["config.yml", "src/runtime.ts"],
+                source_patch + config_patch,
+            )
+
+    def test_review_patch_scans_rename_sides_with_their_own_file_types(self) -> None:
+        property_name = "pass" + "word"
+        reference = "context.driverPass" + "word"
+        patch = (
+            "diff --git a/src/runtime.ts b/config.yml\n"
+            "similarity index 80%\n"
+            "rename from src/runtime.ts\n"
+            "rename to config.yml\n"
+            "--- a/src/runtime.ts\n"
+            "+++ b/config.yml\n"
+            "@@ -1 +1 @@\n"
+            "-function configure(context: RuntimeContext) { return { "
+            + property_name
+            + ": "
+            + reference
+            + " }; }\n"
+            "+"
+            + property_name
+            + ": "
+            + reference
+            + "\n"
+        )
+
+        with self.assertRaisesRegex(SystemExit, "secret-like content"):
+            self.helper["validate_review_patch"](
+                "branch diff",
+                ["src/runtime.ts", "config.yml"],
+                patch,
+            )
+
+    def test_review_patch_decodes_git_quoted_source_paths(self) -> None:
+        property_name = "pass" + "word"
+        reference = "context.driverPass" + "word"
+        patch = (
+            'diff --git "a/\\303\\251.ts" "b/\\303\\251.ts"\n'
+            '--- "a/\\303\\251.ts"\n'
+            '+++ "b/\\303\\251.ts"\n'
+            "@@ -40,2 +40,3 @@ function configure(context: RuntimeContext) {\n"
+            "   return {\n"
+            "+    "
+            + property_name
+            + ": "
+            + reference
+            + ",\n"
+            "   };\n"
+        )
+
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["é.ts"],
+                patch,
+            ),
+            patch,
+        )
+        self.assertEqual(
+            self.helper["javascript_review_dialect"]("module.mts"),
+            "typescript",
+        )
+        self.assertEqual(
+            self.helper["javascript_review_dialect"]("module.cts"),
+            "typescript",
+        )
+
+    def test_secret_detector_allows_generated_fixture_credentials(self) -> None:
+        property_name = "pass" + "word"
+        variable_name = "to" + "ken"
+        access_property = "access" + "Token"
+        generated_fixture = (
+            f"function register() {{ return {{ {property_name}: "
+            + "`matrix-qa-${randomUUID()}` }; }"
+        )
+        generated_marker = (
+            f"const {variable_name} = "
+            + 'buildMatrixQaToken("MATRIX_QA_E2EE_THREAD");'
+        )
+        decoy_fixture = (
+            f"const config = {{ {access_property}: "
+            + 'decoy-'
+            + 'token" };'
+        )
+        invalid_recovery_fixture = (
+            'const recoveryKey = "not-'
+            + 'a-valid-matrix-recovery-key";'
+        )
+        literal_value = "actual-production-" + "secret"
+        fixture_shaped_literal = "PROD_TEST_ACTUAL_" + "SECRET_0123456789"
+        adversarial_label = "TEST_Q7WX9M2NK4PV8R6DH3JC"
+        unsafe_template = (
+            f"const {property_name} = "
+            + "`prod-live-secret-${randomUUID()}`;"
+        )
+        unsafe_string_template = (
+            f"const {property_name} = "
+            + "`prod-test-live-secret-${String()}`;"
+        )
+        unsafe_suffix_template = (
+            f"const {property_name} = "
+            + "`prod-live-secret-test-${randomUUID()}`;"
+        )
+        unsafe_call = (
+            f"const {variable_name} = "
+            + f'buildToken("{literal_value}");'
+        )
+        unsafe_fixture_label = (
+            f"const {property_name} = "
+            + f'"{fixture_shaped_literal}";'
+        )
+        unsafe_generator_label = (
+            f"const {variable_name} = "
+            + f'buildMatrixQaToken("{fixture_shaped_literal}");'
+        )
+        unsafe_identity_call = (
+            f"const {variable_name} = "
+            + f'buildTestToken("{adversarial_label}");'
+        )
+
+        for content in (
+            generated_fixture,
+            generated_marker,
+            decoy_fixture,
+            invalid_recovery_fixture,
+        ):
+            with self.subTest(content=content):
+                self.assertFalse(self.helper["secret_text_risk"](content))
+        for content in (
+            unsafe_template,
+            unsafe_string_template,
+            unsafe_suffix_template,
+            unsafe_call,
+            unsafe_fixture_label,
+            unsafe_generator_label,
+            unsafe_identity_call,
+        ):
+            with self.subTest(content=content):
+                self.assertTrue(self.helper["secret_text_risk"](content))
+
     def test_fallback_self_test_ignores_ambient_model_overrides(self) -> None:
         with mock.patch.dict(
             os.environ,

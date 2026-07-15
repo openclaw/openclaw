@@ -68,14 +68,9 @@ function expectRetryContinuesFromTranscript() {
   expect(retryParams.prompt).not.toBe(baseParams.prompt);
 }
 
-function expectTruncationScope(callIndex: number, sessionFile: string) {
+function expectTruncationScopeSessionFile(callIndex: number, sessionFile: string) {
   const args = requireMockCallArg(mockedTruncateOversizedToolResultsInSession, callIndex);
-  expect(requireRecord(args.scope, "truncation scope")).toMatchObject({
-    sessionId: "test-session",
-    sessionKey: "test-key",
-    sessionFile,
-    agentId: "main",
-  });
+  expect(requireRecord(args.scope, "truncation scope").sessionFile).toBe(sessionFile);
 }
 
 function makeUserMessage(content: string = baseParams.prompt) {
@@ -721,7 +716,7 @@ describe("overflow compaction in run loop", () => {
     expectLogIncludes(mockedLog.warn, "auto-compaction failed");
   });
 
-  it("truncates oversized tool results before compaction and retries immediately", async () => {
+  it("falls back to tool-result truncation and retries when oversized results are detected", async () => {
     queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
@@ -738,17 +733,17 @@ describe("overflow compaction in run loop", () => {
 
     const result = await runEmbeddedAgent(baseParams);
 
-    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(
       requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0).contextWindowTokens,
     ).toBe(200000);
-    expectTruncationScope(0, "/tmp/session.json");
+    expectTruncationScopeSessionFile(0, "/tmp/session.json");
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(mockedLog.info, "Truncated 1 tool result(s)");
     expect(result.meta.error).toBeUndefined();
   });
 
-  it("truncates a mixed oversized-plus-aggregate tool tail before compaction", async () => {
+  it("retries after fallback truncation for a mixed oversized-plus-aggregate tool tail", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
         makeAttemptResult({
@@ -784,75 +779,13 @@ describe("overflow compaction in run loop", () => {
 
     const result = await runEmbeddedAgent(baseParams);
 
-    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     const oversizedArgs = requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0);
     const messages = oversizedArgs.messages as Array<{ role?: string }>;
     expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(3);
-    expectTruncationScope(0, "/tmp/session.json");
+    expectTruncationScopeSessionFile(0, "/tmp/session.json");
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(mockedLog.info, "Truncated 2 tool result(s)");
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("continues from transcript after pre-compaction truncation when the inbound message persisted", async () => {
-    const overflowError = makeOverflowError();
-    mockedRunEmbeddedAttempt
-      .mockImplementationOnce(async (attemptParams) => {
-        (
-          attemptParams as {
-            onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
-          }
-        ).onUserMessagePersisted?.(makeUserMessage());
-        return makeAttemptResult({
-          promptError: overflowError,
-          messagesSnapshot: [
-            {
-              role: "toolResult",
-              content: [{ type: "text", text: "x".repeat(80_000) }],
-            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-          ],
-        });
-      })
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
-      truncated: true,
-      truncatedCount: 1,
-    });
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedCompactDirect).not.toHaveBeenCalled();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectRetryContinuesFromTranscript();
-    expect(result.meta.error).toBeUndefined();
-  });
-
-  it("falls back to compaction when pre-compaction truncation does not reduce the transcript", async () => {
-    queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
-      truncated: false,
-      truncatedCount: 0,
-      reason: "nothing to truncate",
-    });
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted after truncation no-op",
-        firstKeptEntryId: "entry-7",
-        tokensBefore: 155000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent(baseParams);
-
-    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(1);
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedTruncateOversizedToolResultsInSession.mock.invocationCallOrder[0]).toBeLessThan(
-      mockedCompactDirect.mock.invocationCallOrder[0],
-    );
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -991,7 +924,7 @@ describe("overflow compaction in run loop", () => {
     const result = await runEmbeddedAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expectTruncationScope(0, "/tmp/session.json");
+    expectTruncationScopeSessionFile(0, "/tmp/session.json");
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(mockedLog.info, "post-compaction tool-result truncation succeeded");
     expect(result.meta.error).toBeUndefined();

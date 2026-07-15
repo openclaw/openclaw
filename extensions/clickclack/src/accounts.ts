@@ -147,6 +147,9 @@ export function resolveClickClackAccount(params: {
     // the ClickClack side, so this stays a per-account opt-in (default off),
     // matching the streaming-progress commentary opt-in precedent.
     agentActivity: merged.agentActivity === true,
+    // Command-menu sync is best effort and current bot:write tokens include
+    // commands:write, so resolved accounts default on unless explicitly disabled.
+    commandMenu: merged.commandMenu !== false,
     config: {
       ...merged,
       allowFrom: merged.allowFrom ?? ["*"],

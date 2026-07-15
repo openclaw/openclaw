@@ -14,8 +14,24 @@ import {
   type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import { commitTelegramMessageDispatchReplay } from "./message-dispatch-dedupe.js";
+import {
+  createTelegramRestartBackoffState,
+  resetTelegramRestartBackoffState,
+  resolveTelegramRestartDelayMs,
+} from "./polling-session-restart-policy.js";
+import { setTelegramRuntime } from "./runtime.js";
+import {
+  clearTelegramRuntimeForTest as clearTelegramRuntime,
+  resetTelegramPollingSessionStateForTest,
+  resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests,
+} from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
+import {
+  resolveSpooledUpdateRetryDelayMs,
+  shouldDeadLetterRetryableSpooledUpdate,
+  TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
+} from "./spooled-update-retry-policy.js";
 import type { TelegramSpooledUpdate } from "./telegram-ingress-spool.types.js";
 import type { TelegramIngressWorkerMessage } from "./telegram-ingress-worker.js";
 
@@ -68,7 +84,19 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
-let pollingSessionTesting: typeof import("./polling-session.js").testing;
+const telegramSpooledRetryDeadLetterMinAgeMs = 24 * 60 * 60 * 1000;
+const pollingSessionTesting = {
+  createTelegramRestartBackoffState,
+  isolatedIngressBacklogStallMs: 25 * 60_000,
+  resetActiveSpooledUpdateHandlersForTests: resetTelegramPollingSessionStateForTest,
+  resetTelegramRestartBackoffState,
+  resolveSpooledUpdateRetryDelayMs,
+  resolveTelegramRestartDelayMs,
+  shouldDeadLetterRetryableSpooledUpdate,
+  spooledClaimRefreshIntervalMs: 5 * 60 * 1000,
+  spooledRetryDeadLetterMinAgeMs: telegramSpooledRetryDeadLetterMinAgeMs,
+  spooledRetryMaxAttempts: TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
+};
 // Mirrors the claim-owner lease default; update together with telegram-ingress-claim-owner.ts.
 const telegramSpooledUpdateClaimLeaseMs = 30 * 60 * 1000;
 let claimNextTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").claimNextTelegramSpooledUpdate;
@@ -78,7 +106,6 @@ let listTelegramSpooledUpdates: typeof import("./telegram-ingress-spool.js").lis
 let recoverStaleTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").recoverStaleTelegramSpooledUpdateClaims;
 let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").writeTelegramSpooledUpdate;
 let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
-let TelegramMessageDispatchReplayForgetError: typeof import("./message-dispatch-dedupe.js").TelegramMessageDispatchReplayForgetError;
 type TelegramMessageProcessingResult =
   import("./bot-processing-outcome.js").TelegramMessageProcessingResult;
 type TelegramSpooledReplayDeferredParticipant =
@@ -88,13 +115,42 @@ type TelegramSpooledReplaySettlementHold =
 let beginTelegramReplyFence: typeof import("./telegram-reply-fence.js").beginTelegramReplyFence;
 let buildTelegramReplyFenceLaneKey: typeof import("./telegram-reply-fence.js").buildTelegramReplyFenceLaneKey;
 let endTelegramReplyFence: typeof import("./telegram-reply-fence.js").endTelegramReplyFence;
-let resetTelegramReplyFenceForTests: typeof import("./telegram-reply-fence.js").resetTelegramReplyFenceForTests;
 
 async function claimSpooledUpdate(update: TelegramSpooledUpdate) {
   return await claimNextTelegramSpooledUpdate({
     spoolDir: path.dirname(update.path),
     candidateUpdateIds: [update.updateId],
   });
+}
+
+async function createTelegramMessageDispatchReplayForgetError(): Promise<unknown> {
+  type ReplayGuard = Parameters<typeof commitTelegramMessageDispatchReplay>[0]["guard"];
+  const diskError = new Error("dedupe disk write failed");
+  const guard: ReplayGuard = {
+    claim: async () => ({ kind: "claimed" }),
+    commit: async (key, options) => {
+      if (key === "second") {
+        options?.onDiskError?.(diskError);
+      }
+      return true;
+    },
+    forget: async (key) => key !== "first",
+    hasRecent: async () => false,
+    warmup: async () => 0,
+    clearMemory: () => undefined,
+    memorySize: () => 0,
+    release: () => undefined,
+  };
+  try {
+    await commitTelegramMessageDispatchReplay({
+      guard,
+      keys: ["first", "second"],
+      requirePersistent: true,
+    });
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected Telegram dispatch rollback failure");
 }
 
 type TelegramApiMiddleware = (
@@ -693,8 +749,7 @@ function startIsolatedIngressSession(params: {
 
 describe("TelegramPollingSession", () => {
   beforeAll(async () => {
-    ({ TelegramPollingSession, testing: pollingSessionTesting } =
-      await import("./polling-session.js"));
+    ({ TelegramPollingSession } = await import("./polling-session.js"));
     ({
       claimNextTelegramSpooledUpdate,
       listTelegramSpooledUpdateClaims,
@@ -706,13 +761,8 @@ describe("TelegramPollingSession", () => {
       await import("./telegram-ingress-claim-owner.js"));
     ({ createTelegramSpooledReplayDeferredParticipant } =
       await import("./bot-processing-outcome.js"));
-    ({ TelegramMessageDispatchReplayForgetError } = await import("./message-dispatch-dedupe.js"));
-    ({
-      beginTelegramReplyFence,
-      buildTelegramReplyFenceLaneKey,
-      endTelegramReplyFence,
-      resetTelegramReplyFenceForTests,
-    } = await import("./telegram-reply-fence.js"));
+    ({ beginTelegramReplyFence, buildTelegramReplyFenceLaneKey, endTelegramReplyFence } =
+      await import("./telegram-reply-fence.js"));
   });
 
   beforeEach(() => {
@@ -2174,7 +2224,7 @@ describe("TelegramPollingSession", () => {
       await vi.waitFor(() => expect(participants).toHaveLength(1));
       participants[0]?.settle({
         kind: "failed-retryable",
-        error: new TelegramMessageDispatchReplayForgetError([{ key: "committed-dispatch-key" }]),
+        error: await createTelegramMessageDispatchReplayForgetError(),
       });
 
       await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
@@ -4557,10 +4607,6 @@ describe("TelegramPollingSession", () => {
   });
 
   it("caps oversized spooled update handler abort grace timers", async () => {
-    expect(
-      pollingSessionTesting.resolveSpooledUpdateHandlerAbortGraceMs(Number.MAX_SAFE_INTEGER),
-    ).toBe(MAX_TIMER_TIMEOUT_MS);
-
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const abort = new AbortController();

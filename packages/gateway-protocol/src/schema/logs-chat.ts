@@ -160,6 +160,7 @@ export const ChatFinalEventSchema = closedObject({
   message: Type.Optional(Type.Unknown()),
   usage: Type.Optional(Type.Unknown()),
   stopReason: Type.Optional(Type.String()),
+  yielded: Type.Optional(Type.Literal(true)),
 });
 
 /** Terminal event for user-initiated or coordinator-initiated cancellation. */

@@ -18,10 +18,8 @@ import {
   runLogbookAnalysisNow,
   setLogbookCapturePaused,
   shiftDay,
-  type LogbookCardPayload,
-  type LogbookStatusPayload,
-  type LogbookUiState,
 } from "./logbook-controller.ts";
+import type { LogbookCardPayload, LogbookStatusPayload, LogbookUiState } from "./logbook-types.ts";
 
 type LogbookProps = {
   host: object;

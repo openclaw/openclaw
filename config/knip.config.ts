@@ -24,6 +24,8 @@ const rootEntries = [
   "src/plugins/runtime/index.ts!",
   "src/plugins/source-display.ts!",
   "src/mcp/codex-supervision-tools-serve.ts!",
+  // Spawned by generated system-agent MCP configs; this stdio entry is not statically imported.
+  "src/mcp/openclaw-tools-serve.ts!",
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),

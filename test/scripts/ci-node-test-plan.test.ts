@@ -875,6 +875,14 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "agentic-agents-core-runtime",
       },
       {
+        checkName: "checks-node-agentic-agents-core-isolated",
+        configs: ["test/vitest/vitest.agents-core-isolated.config.ts"],
+        includePatterns: agentShards[6]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-isolated",
+      },
+      {
         checkName: "checks-node-agentic-agents-embedded",
         configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
         requiresDist: false,

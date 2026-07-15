@@ -89,7 +89,6 @@ extensions/device-pair/index.test.ts
 extensions/device-pair/index.ts
 extensions/diagnostics-otel/src/service.test.ts
 extensions/diagnostics-prometheus/src/service.ts
-extensions/discord/src/actions/runtime.guild.ts
 extensions/discord/src/actions/runtime.test.ts
 extensions/discord/src/channel.ts
 extensions/discord/src/monitor.test.ts
@@ -273,10 +272,8 @@ extensions/qa-matrix/src/runners/contract/runtime.ts
 extensions/qa-matrix/src/runners/contract/scenario-catalog.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-approval.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts
-extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-room.ts
 extensions/qa-matrix/src/runners/contract/scenarios.test.ts
-extensions/qa-matrix/src/substrate/client.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.ts
 extensions/qqbot/src/engine/messaging/outbound-deliver.ts
@@ -478,7 +475,6 @@ src/agents/embedded-agent-runner/run.incomplete-turn.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.test.ts
-src/agents/embedded-agent-runner/run.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts
 src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts
@@ -555,14 +551,12 @@ src/agents/session-transcript-repair.test.ts
 src/agents/session-transcript-repair.ts
 src/agents/session-write-lock.test.ts
 src/agents/session-write-lock.ts
-src/agents/sessions/agent-session.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
 src/agents/sessions/package-manager.ts
 src/agents/sessions/resource-loader.ts
 src/agents/sessions/session-manager.test.ts
-src/agents/sessions/session-manager.ts
 src/agents/sessions/settings-manager.ts
 src/agents/subagent-announce-delivery.test.ts
 src/agents/subagent-announce-delivery.ts
@@ -613,7 +607,6 @@ src/auto-reply/commands-registry.shared.ts
 src/auto-reply/inbound.test.ts
 src/auto-reply/reply/abort.test.ts
 src/auto-reply/reply/agent-runner-execution.test.ts
-src/auto-reply/reply/agent-runner-execution.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
 src/auto-reply/reply/agent-runner-memory.ts
 src/auto-reply/reply/agent-runner-payloads.test.ts
@@ -737,7 +730,6 @@ src/commands/doctor/cron/index.test.ts
 src/commands/doctor/repair-sequencing.test.ts
 src/commands/doctor/shared/channel-plugin-blockers.test.ts
 src/commands/doctor/shared/codex-route-warnings.test.ts
-src/commands/doctor/shared/codex-route-warnings.ts
 src/commands/doctor/shared/legacy-config-core-normalizers.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
@@ -767,7 +759,6 @@ src/config/config.plugin-validation.test.ts
 src/config/env-preserve.ts
 src/config/io.observe-recovery.test.ts
 src/config/io.observe-recovery.ts
-src/config/io.ts
 src/config/io.write-config.test.ts
 src/config/io.write-prepare.test.ts
 src/config/io.write-prepare.ts
@@ -784,7 +775,6 @@ src/config/schema.test.ts
 src/config/schema.ts
 src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
-src/config/sessions/session-accessor.sqlite.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/session-accessor.ts
 src/config/sessions/sessions.test.ts
@@ -1053,7 +1043,6 @@ src/plugins/install-security-scan.runtime.ts
 src/plugins/install.npm-spec.e2e.test.ts
 src/plugins/install.npm-spec.test.ts
 src/plugins/install.test.ts
-src/plugins/install.ts
 src/plugins/installed-plugin-index.test.ts
 src/plugins/loader.activation.test-utils.ts
 src/plugins/loader.base.test-utils.ts

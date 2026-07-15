@@ -560,7 +560,7 @@ export function createCodexDynamicToolBridge(params: {
           toolResultHookContext.runId,
         );
         const telemetryRawResult = sanitizeToolResult(rawResult);
-        const rawIsError = isCodexToolResultError(rawResult);
+        const rawIsError = isToolResultError(rawResult);
         const rawResultFailureKind = resolveToolResultFailureKind(rawResult);
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
@@ -579,7 +579,7 @@ export function createCodexDynamicToolBridge(params: {
           args: structuredClone(executedArgs),
           result: middlewareResult,
         });
-        const resultIsError = rawIsError || isCodexToolResultError(result);
+        const resultIsError = rawIsError || isToolResultError(result);
         const finalResultFailureKind = resolveToolResultFailureKind(result);
         const resultFailureKind = rawResultFailureKind ?? finalResultFailureKind;
         const observerResult =
@@ -1254,45 +1254,6 @@ function extractInternalSourceReplyPayload(
   return text || mediaUrls.length > 0 || payload.presentation || payload.interactive
     ? payload
     : undefined;
-}
-function isCodexToolResultError(result: AgentToolResult<unknown>): boolean {
-  if (isToolResultError(result)) {
-    return true;
-  }
-  const details = result.details;
-  if (!isRecord(details)) {
-    return false;
-  }
-  if (details.ok === true || details.success === true) {
-    return false;
-  }
-  if (details.timedOut === true) {
-    return true;
-  }
-  if (typeof details.exitCode === "number" && details.exitCode !== 0) {
-    return true;
-  }
-  if (typeof details.status !== "string") {
-    return false;
-  }
-  const status = details.status.trim().toLowerCase();
-  return (
-    status !== "" &&
-    status !== "0" &&
-    status !== "ok" &&
-    status !== "success" &&
-    status !== "completed" &&
-    status !== "recorded" &&
-    status !== "created" &&
-    status !== "updated" &&
-    status !== "accepted" &&
-    status !== "found" &&
-    status !== "missing" &&
-    status !== "pending" &&
-    status !== "started" &&
-    status !== "running" &&
-    status !== "yielded"
-  );
 }
 function isToolResultYield(result: AgentToolResult<unknown>): boolean {
   const details = result.details;

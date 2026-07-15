@@ -11,12 +11,11 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "../auth-profiles.js";
-import {
-  PLUGIN_MODEL_CATALOG_FILE,
-  PLUGIN_MODEL_CATALOG_GENERATED_BY,
-} from "../plugin-model-catalog.js";
+import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
 import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
+
+const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
 const resolveBundledProviderStaticCatalogModelMock = vi.hoisted(() => vi.fn());

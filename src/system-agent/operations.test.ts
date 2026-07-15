@@ -908,6 +908,22 @@ describe("parseSystemAgentOperation", () => {
     expect(mockConfig.readConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
+  it("rejects arbitrary plugin sources before proposing or installing them", async () => {
+    const { runtime } = createSystemAgentTestRuntime();
+    const runPluginInstall = vi.fn();
+
+    // Untrusted spec must be rejected on the unapproved path too, so a
+    // formatted "plan" never surfaces an arbitrary source for approval.
+    await expect(
+      executeSystemAgentOperation(
+        { kind: "plugin-install", spec: "npm:@example/plugin" },
+        runtime,
+        { deps: { runPluginInstall } },
+      ),
+    ).rejects.toThrow("trusted shell");
+    expect(runPluginInstall).not.toHaveBeenCalled();
+  });
+
   it("refuses plugin uninstall because it cannot prove inference survives", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     const runPluginUninstall = vi.fn();
