@@ -205,7 +205,7 @@ function readSessionEntry(sessionId) {
 }
 
 function configure() {
-  const modelRef = process.argv[3] || "codex/gpt-5.4";
+  const modelRef = process.argv[3] || "openai/gpt-5.4";
   const state = stateDir();
   const cfgPath = configPath();
   const cfg = fs.existsSync(cfgPath) ? readJson(cfgPath) : {};

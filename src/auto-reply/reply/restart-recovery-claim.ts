@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   buildRestartRecoveryClaimCleanupPatch,
-  hasActiveRestartRecoverySourceClaim,
+  hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
   sameRestartRecoveryTerminalRunIds,
 } from "../../config/sessions/restart-recovery-state.js";
@@ -22,7 +22,7 @@ type ReplyRestartRecoveryClaimController = {
     recorder?: UserTurnTranscriptRecorder,
   ) => Promise<"admitted" | "duplicate-source">;
   checkpointBeforeAgentReply: (params: {
-    state: Exclude<RestartRecoveryBeforeAgentReplyState, "pending">;
+    state: Exclude<RestartRecoveryBeforeAgentReplyState, "admitted" | "pending">;
     pendingFinalDelivery?: {
       context?: DeliveryContext;
       intentId: string;
@@ -32,6 +32,38 @@ type ReplyRestartRecoveryClaimController = {
   clear: () => Promise<void>;
   isArmed: () => boolean;
 };
+
+export async function retireTerminalRestartRecoverySourceClaim(params: {
+  sessionId: string;
+  sessionKey: string;
+  sourceTurnId: string;
+  storePath: string;
+}): Promise<SessionEntry | undefined> {
+  let didRetire = false;
+  const retired = await updateSessionEntry(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    (current) => {
+      if (
+        current.sessionId !== params.sessionId ||
+        current.status === "running" ||
+        !hasRestartRecoverySourceClaim(current, params.sourceTurnId)
+      ) {
+        return null;
+      }
+      didRetire = true;
+      return {
+        ...buildRestartRecoveryClaimCleanupPatch({
+          entry: current,
+          recordTerminalSource: true,
+          terminalSourceRunId: params.sourceTurnId,
+        }),
+        updatedAt: Date.now(),
+      };
+    },
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
+  return didRetire ? (retired ?? undefined) : undefined;
+}
 
 function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnExpectedState {
   return {
@@ -171,12 +203,24 @@ export function createReplyRestartRecoveryClaimController(params: {
     }
     const admissionRunId = normalizeOptionalString(params.admissionRunId);
     const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
-    if (
-      sourceTurnId &&
-      (hasRestartRecoveryTerminalRun(entry, sourceTurnId) ||
-        hasActiveRestartRecoverySourceClaim(entry, sourceTurnId))
-    ) {
-      return "duplicate-source";
+    if (sourceTurnId) {
+      if (hasRestartRecoveryTerminalRun(entry, sourceTurnId)) {
+        return "duplicate-source";
+      }
+      if (hasRestartRecoverySourceClaim(entry, sourceTurnId)) {
+        if (entry.status !== "running") {
+          const retired = await retireTerminalRestartRecoverySourceClaim({
+            sessionId,
+            sessionKey: params.sessionKey,
+            sourceTurnId,
+            storePath: params.storePath,
+          });
+          if (retired) {
+            params.setEntry(retired);
+          }
+        }
+        return "duplicate-source";
+      }
     }
     const activeClaimRunId = normalizeOptionalString(entry?.restartRecoveryDeliveryRunId);
     const isTranscriptOnlyClaim =
@@ -303,6 +347,9 @@ export function createReplyRestartRecoveryClaimController(params: {
                       pendingFinalDeliveryIntentId: pendingFinalDelivery.intentId,
                       pendingFinalDeliveryContext: pendingFinalDelivery.context,
                       pendingFinalDeliveryCreatedAt: updatedAt,
+                      // Hook-owned replies are already terminal. A restart may only deliver this
+                      // checkpoint; it must never resume the model or broader tool surface.
+                      restartRecoveryForceSafeTools: true,
                     }
                   : {}),
                 updatedAt,
@@ -322,18 +369,35 @@ export function createReplyRestartRecoveryClaimController(params: {
     }
     const persisted = await updateSessionEntry(
       { storePath: params.storePath, sessionKey: params.sessionKey },
-      (current) =>
-        current.sessionId === params.getSessionId() &&
-        current.restartRecoveryDeliveryRunId === recoveryRunId
-          ? {
-              ...buildRestartRecoveryClaimCleanupPatch({
-                entry: current,
-                recordTerminalSource: true,
-                terminalSourceRunId: recoverySourceRunId,
-              }),
-              updatedAt: Date.now(),
-            }
-          : null,
+      (current) => {
+        if (
+          current.sessionId !== params.getSessionId() ||
+          current.restartRecoveryDeliveryRunId !== recoveryRunId
+        ) {
+          return null;
+        }
+        const preservesHookPendingFinal =
+          current.restartRecoveryBeforeAgentReplyState === "handled-reply" &&
+          (current.pendingFinalDelivery === true ||
+            normalizeOptionalString(current.pendingFinalDeliveryText) !== undefined);
+        return {
+          ...buildRestartRecoveryClaimCleanupPatch({
+            entry: current,
+            recordTerminalSource: true,
+            terminalSourceRunId: recoverySourceRunId,
+          }),
+          // Transport settlement owns this final checkpoint. Keep enough provenance for a
+          // restart to enforce hook safety until that exact pending intent is resolved.
+          ...(preservesHookPendingFinal
+            ? {
+                restartRecoveryBeforeAgentReplyState: "handled-reply" as const,
+                restartRecoverySourceIngress: current.restartRecoverySourceIngress,
+                restartRecoveryForceSafeTools: true as const,
+              }
+            : {}),
+          updatedAt: Date.now(),
+        };
+      },
     );
     if (persisted) {
       params.setEntry(persisted);

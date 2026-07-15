@@ -15,6 +15,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
+import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
@@ -53,6 +54,7 @@ import {
   isValidAgentHarnessSessionStoreEntry,
   resolveAgentHarnessSessionContextError,
 } from "../sessions/agent-harness-session-key.js";
+import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import {
   applyModelOverrideToSessionEntry,
@@ -89,6 +91,8 @@ import {
 } from "../utils/message-channel.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
+  buildRestartRecoveryTerminalDeliveryEvidence,
+  constrainRestartRecoveryDeliveryPayloads,
   buildCurrentRunRestartRecoveryClaim,
   shouldPersistCurrentRunSessionCleanup,
   shouldPersistRestartRecoveryCleanup,
@@ -474,6 +478,9 @@ function clearPendingFinalDeliveryFields(entry: SessionEntry, updatedAt: number)
     pendingFinalDeliveryContext: undefined,
     pendingFinalDeliveryIntentId: undefined,
     restartRecoveryForceSafeTools: undefined,
+    restartRecoveryDeliveryMediaUrls: undefined,
+    restartRecoveryDisableMessageTool: undefined,
+    restartRecoverySuppressTextDelivery: undefined,
     updatedAt,
   };
 }
@@ -959,10 +966,39 @@ async function agentCommandInternal(
     initialOpts.preserveUserFacingSessionModelState === true;
   const prepared = await prepareAgentCommandExecution(initialOpts, runtime);
   const lifecycleAbortController = new AbortController();
+  const storedDeliveryMediaUrls =
+    prepared.sessionEntry?.restartRecoveryDeliveryRunId === prepared.runId &&
+    Array.isArray(prepared.sessionEntry.restartRecoveryDeliveryMediaUrls)
+      ? prepared.sessionEntry.restartRecoveryDeliveryMediaUrls
+      : undefined;
+  const preparedOpts =
+    storedDeliveryMediaUrls !== undefined
+      ? {
+          ...prepared.opts,
+          internalDeliveryMediaUrls: [...storedDeliveryMediaUrls],
+          internalDeliverySuppressText: prepared.sessionEntry?.restartRecoverySuppressTextDelivery,
+          sourceReplyDeliveryMode: prepared.sessionEntry?.restartRecoverySourceReplyDeliveryMode,
+          disableMessageTool: prepared.sessionEntry?.restartRecoveryDisableMessageTool,
+          forceRestartSafeTools: prepared.sessionEntry?.restartRecoveryForceSafeTools,
+        }
+      : prepared.opts;
+  if (
+    (preparedOpts.internalDeliverySuppressText === true &&
+      preparedOpts.internalDeliveryMediaUrls === undefined) ||
+    ((preparedOpts.internalDeliveryMediaUrls !== undefined ||
+      preparedOpts.internalDeliverySuppressText === true) &&
+      (preparedOpts.forceRestartSafeTools !== true ||
+        preparedOpts.disableMessageTool !== true ||
+        preparedOpts.sourceReplyDeliveryMode !== "automatic"))
+  ) {
+    throw new Error(
+      "internal delivery media constraints require automatic delivery with restart-safe tools and no message tool",
+    );
+  }
   const opts = {
-    ...prepared.opts,
-    abortSignal: prepared.opts.abortSignal
-      ? AbortSignal.any([prepared.opts.abortSignal, lifecycleAbortController.signal])
+    ...preparedOpts,
+    abortSignal: preparedOpts.abortSignal
+      ? AbortSignal.any([preparedOpts.abortSignal, lifecycleAbortController.signal])
       : lifecycleAbortController.signal,
   };
   const {
@@ -1014,6 +1050,9 @@ async function agentCommandInternal(
   let sessionReboundDuringRun = false;
   let trackedRestartRecoveryDeliveryClaim = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
+  let restartRecoveryTerminalDeliveryEvidence:
+    | RestartRecoveryTerminalDeliveryEvidenceResult
+    | undefined;
   const preparedSessionId = sessionEntry?.sessionId;
   const internalModelRunTargets =
     initialOpts.modelRun === true && suppressVisibleSessionEffects
@@ -1118,6 +1157,12 @@ async function agentCommandInternal(
           opts,
           sessionEntry: entry,
         });
+        const generatedMediaSourceRunId =
+          opts.internalDeliveryMediaUrls !== undefined &&
+          opts.inputProvenance?.kind === "inter_session" &&
+          isAgentMediatedCompletionSourceTool(opts.inputProvenance.sourceTool)
+            ? runId
+            : undefined;
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         const next: SessionEntry = {
           ...entry,
@@ -1127,8 +1172,15 @@ async function agentCommandInternal(
           lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
           ...buildCurrentRunRestartRecoveryClaim({
             deliveryContext: currentRunDeliveryContext,
+            deliveryMediaUrls: opts.internalDeliveryMediaUrls,
+            disableMessageTool: opts.disableMessageTool,
             entry,
+            forceRestartSafeTools: opts.forceRestartSafeTools,
             runId,
+            sourceIngress: generatedMediaSourceRunId ? "internal" : undefined,
+            sourceRunId: generatedMediaSourceRunId,
+            sourceReplyDeliveryMode: opts.sourceReplyDeliveryMode,
+            suppressTextDelivery: opts.internalDeliverySuppressText,
           }),
         };
         const persisted = await persistSessionEntry({
@@ -2581,6 +2633,18 @@ async function agentCommandInternal(
       }
       try {
         await fallbackTrajectoryRecorder?.flush();
+        if (opts.internalDeliveryMediaUrls !== undefined) {
+          result = {
+            ...result,
+            payloads: constrainRestartRecoveryDeliveryPayloads(
+              result.payloads,
+              opts.internalDeliveryMediaUrls,
+              opts.internalDeliverySuppressText === true,
+            ),
+          };
+        }
+        restartRecoveryTerminalDeliveryEvidence =
+          buildRestartRecoveryTerminalDeliveryEvidence(result);
 
         const rotatedSessionFile = result.meta.agentMeta?.sessionFile;
         const effectiveSessionId = rotatedSessionFile
@@ -2764,6 +2828,14 @@ async function agentCommandInternal(
           payloads,
           assertDeliveryCurrent: () =>
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
+          onDeliveryResult: (
+            deliveryResult: Parameters<
+              NonNullable<Parameters<typeof deliverAgentCommandResult>[0]["onDeliveryResult"]>
+            >[0],
+          ) => {
+            restartRecoveryTerminalDeliveryEvidence =
+              buildRestartRecoveryTerminalDeliveryEvidence(deliveryResult);
+          },
         };
         const deliveryResult = await deliverAgentCommandResult(
           resolveFreshSessionEntryForDelivery
@@ -2853,6 +2925,7 @@ async function agentCommandInternal(
             ...buildRestartRecoveryClaimCleanupPatch({
               entry,
               recordTerminalSource: true,
+              terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
             }),
             updatedAt: Date.now(),
           };

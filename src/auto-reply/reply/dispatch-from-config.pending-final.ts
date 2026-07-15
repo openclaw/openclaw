@@ -21,6 +21,27 @@ type PendingFinalDeliveryIdentity = {
   text?: string;
 };
 
+function buildPendingFinalDeliveryCleanupPatch(entry: SessionEntry): Partial<SessionEntry> {
+  const clearsHookRecoveryProof = entry.restartRecoveryBeforeAgentReplyState === "handled-reply";
+  return {
+    pendingFinalDelivery: undefined,
+    pendingFinalDeliveryText: undefined,
+    pendingFinalDeliveryCreatedAt: undefined,
+    pendingFinalDeliveryLastAttemptAt: undefined,
+    pendingFinalDeliveryAttemptCount: undefined,
+    pendingFinalDeliveryLastError: undefined,
+    pendingFinalDeliveryContext: undefined,
+    pendingFinalDeliveryIntentId: undefined,
+    ...(clearsHookRecoveryProof
+      ? {
+          restartRecoveryBeforeAgentReplyState: undefined,
+          restartRecoverySourceIngress: undefined,
+          restartRecoveryForceSafeTools: undefined,
+        }
+      : {}),
+  };
+}
+
 function matchesPendingFinalDeliveryIdentity(
   entry: SessionEntry,
   expected: PendingFinalDeliveryIdentity,
@@ -57,14 +78,7 @@ export async function clearPendingFinalDeliveryAfterSuccess(params: {
         return null;
       }
       return {
-        pendingFinalDelivery: undefined,
-        pendingFinalDeliveryText: undefined,
-        pendingFinalDeliveryCreatedAt: undefined,
-        pendingFinalDeliveryLastAttemptAt: undefined,
-        pendingFinalDeliveryAttemptCount: undefined,
-        pendingFinalDeliveryLastError: undefined,
-        pendingFinalDeliveryContext: undefined,
-        pendingFinalDeliveryIntentId: undefined,
+        ...buildPendingFinalDeliveryCleanupPatch(entry),
         updatedAt: Date.now(),
       };
     },
@@ -213,14 +227,7 @@ export async function reconcilePendingFinalDeliveryAfterSettlement(params: {
         }
       }
       return {
-        pendingFinalDelivery: undefined,
-        pendingFinalDeliveryText: undefined,
-        pendingFinalDeliveryCreatedAt: undefined,
-        pendingFinalDeliveryLastAttemptAt: undefined,
-        pendingFinalDeliveryAttemptCount: undefined,
-        pendingFinalDeliveryLastError: undefined,
-        pendingFinalDeliveryContext: undefined,
-        pendingFinalDeliveryIntentId: undefined,
+        ...buildPendingFinalDeliveryCleanupPatch(entry),
         updatedAt: Date.now(),
       };
     },

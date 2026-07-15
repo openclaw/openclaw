@@ -35,7 +35,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import {
-  hasActiveRestartRecoverySourceClaim,
+  hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
 } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -150,7 +150,10 @@ import {
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
-import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
+import {
+  createReplyRestartRecoveryClaimController,
+  retireTerminalRestartRecoverySourceClaim,
+} from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
@@ -1277,10 +1280,29 @@ export async function runReplyAgent(params: {
   if (
     restartRecoverySourceTurnId &&
     (hasRestartRecoveryTerminalRun(restartRecoveryEntry, restartRecoverySourceTurnId) ||
-      hasActiveRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId))
+      hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId))
   ) {
-    // Terminal tombstones and active source ownership both identify provider redelivery.
-    // Stop before hooks or queues; the active owner retains its recovery claim.
+    // Durable source ownership identifies provider redelivery even if the run
+    // became terminal before its claim cleanup committed.
+    if (
+      restartRecoveryEntry?.status !== "running" &&
+      sessionKey &&
+      storePath &&
+      hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId)
+    ) {
+      const retired = await retireTerminalRestartRecoverySourceClaim({
+        sessionId: restartRecoveryEntry.sessionId,
+        sessionKey,
+        sourceTurnId: restartRecoverySourceTurnId,
+        storePath,
+      });
+      if (retired) {
+        activeSessionEntry = retired;
+        if (activeSessionStore) {
+          activeSessionStore[sessionKey] = retired;
+        }
+      }
+    }
     typing.cleanup();
     return undefined;
   }
@@ -1604,8 +1626,8 @@ export async function runReplyAgent(params: {
     isArmed: isRestartRecoveryArmed,
   } = createReplyRestartRecoveryClaimController({
     admissionRunId:
-      normalizeOptionalString(sessionCtx.MessageSidFull) ??
-      normalizeOptionalString(sessionCtx.MessageSid),
+      normalizeOptionalString(sessionCtx.MessageSid) ??
+      normalizeOptionalString(sessionCtx.MessageSidFull),
     getEntry: () =>
       sessionKey ? (activeSessionStore?.[sessionKey] ?? activeSessionEntry) : activeSessionEntry,
     getSessionId: () => replyOperation.sessionId,

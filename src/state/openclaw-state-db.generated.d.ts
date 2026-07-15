@@ -897,6 +897,13 @@ export interface SkillLifecycle {
   state_changed_at_ms: number;
 }
 
+export interface SkillUploadChunks {
+  byte_offset: number;
+  chunk_blob: Uint8Array;
+  size_bytes: number;
+  upload_id: string;
+}
+
 export interface SkillUploads {
   actual_sha256: string | null;
   archive_blob: Uint8Array;
@@ -1185,6 +1192,31 @@ export interface WorkerTranscriptCommits {
   updated_at_ms: number;
 }
 
+export interface WorkerWorkspacePendingResults {
+  claim_id: string;
+  created_at_ms: number;
+  environment_id: string;
+  gateway_instance_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  recovery_requested_at_ms: number | null;
+  run_id: string;
+  session_id: string;
+  workspace_accepted_at_ms: number | null;
+}
+
+export interface WorkerWorkspaceReconciliations {
+  base_manifest_ref: string;
+  base_pack: Uint8Array;
+  created_at_ms: number;
+  current_manifest_ref: string;
+  environment_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  plan_json: string;
+  session_id: string;
+}
+
 export interface WorkspaceSetupState {
   bootstrap_seeded_at: string | null;
   setup_completed_at: string | null;
@@ -1273,6 +1305,7 @@ export interface DB {
   session_watch_cursors: SessionWatchCursors;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
+  skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
   state_leases: StateLeases;
@@ -1292,6 +1325,8 @@ export interface DB {
   worker_session_placements: WorkerSessionPlacements;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
   worker_transcript_commits: WorkerTranscriptCommits;
+  worker_workspace_pending_results: WorkerWorkspacePendingResults;
+  worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
   workspace_setup_state: WorkspaceSetupState;
   worktrees: Worktrees;
 }

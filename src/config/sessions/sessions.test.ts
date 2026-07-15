@@ -457,6 +457,9 @@ describe("session store writer queue", () => {
           to: [],
         },
         restartRecoveryBeforeAgentReplyState: "maybe",
+        restartRecoveryDeliveryMediaUrls: "not-an-array",
+        restartRecoveryDisableMessageTool: "yes",
+        restartRecoverySuppressTextDelivery: "yes",
         restartRecoveryDeliveryRunId: 123,
         restartRecoveryDeliverySourceRunId: 123,
         restartRecoveryRequesterAccountId: 123,
@@ -464,6 +467,7 @@ describe("session store writer queue", () => {
         restartRecoverySameChannelThreadRequired: "yes",
         restartRecoverySourceIngress: "web",
         restartRecoverySourceReplyDeliveryMode: "sometimes",
+        restartRecoveryTerminalDeliveryEvidence: [{ runId: 123, payloads: "bad" }],
         restartRecoveryTerminalRunIds: [123, "", {}],
       },
       "agent:main:good-pending": {
@@ -488,7 +492,10 @@ describe("session store writer queue", () => {
           accountId: "Main",
           threadId: "reply-1",
         },
-        restartRecoveryBeforeAgentReplyState: "continue",
+        restartRecoveryBeforeAgentReplyState: "admitted",
+        restartRecoveryDeliveryMediaUrls: [" /tmp/proof.png ", "", "/tmp/proof.png"],
+        restartRecoveryDisableMessageTool: true,
+        restartRecoverySuppressTextDelivery: true,
         restartRecoveryDeliveryRunId: "run-1",
         restartRecoveryDeliverySourceRunId: "source-run-1",
         restartRecoveryRequesterAccountId: " work ",
@@ -496,6 +503,34 @@ describe("session store writer queue", () => {
         restartRecoverySameChannelThreadRequired: true,
         restartRecoverySourceIngress: "channel",
         restartRecoverySourceReplyDeliveryMode: "message_tool_only",
+        restartRecoveryTerminalDeliveryEvidence: [
+          {
+            runId: " terminal-1 ",
+            captured: true,
+            payloads: [{ visible: false }, { visible: true, mediaUrls: [" /tmp/proof.png "] }],
+            deliveryStatus: {
+              status: "partial_failed",
+              payloadOutcomes: [{ index: 1, status: "failed", sentBeforeError: false }],
+            },
+            messagingToolSentTargets: [
+              {
+                provider: " Discord ",
+                to: " channel:123 ",
+                threadId: 42,
+                mediaUrls: [" /tmp/proof.png "],
+                visible: true,
+              },
+              {
+                provider: " Discord ",
+                to: " channel:empty ",
+                visible: false,
+              },
+            ],
+            messagingToolSentTargetsTruncated: true,
+            messagingToolAggregateEvidenceUnaccounted: true,
+            restartUnsafeSideEffectsDetected: true,
+          },
+        ],
         restartRecoveryTerminalRunIds: [" terminal-1 ", "terminal-2", "terminal-1", null],
       },
     } as unknown as Record<string, SessionEntry>);
@@ -518,6 +553,9 @@ describe("session store writer queue", () => {
     expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryContext).toBeUndefined();
     expect(bad?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
+    expect(bad?.restartRecoveryDeliveryMediaUrls).toBeUndefined();
+    expect(bad?.restartRecoveryDisableMessageTool).toBeUndefined();
+    expect(bad?.restartRecoverySuppressTextDelivery).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(bad?.restartRecoveryDeliverySourceRunId).toBeUndefined();
     expect(bad?.restartRecoveryRequesterAccountId).toBeUndefined();
@@ -525,6 +563,7 @@ describe("session store writer queue", () => {
     expect(bad?.restartRecoverySameChannelThreadRequired).toBeUndefined();
     expect(bad?.restartRecoverySourceIngress).toBeUndefined();
     expect(bad?.restartRecoverySourceReplyDeliveryMode).toBeUndefined();
+    expect(bad?.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
     expect(bad?.restartRecoveryTerminalRunIds).toBeUndefined();
 
     expect(good).toMatchObject({
@@ -547,7 +586,10 @@ describe("session store writer queue", () => {
         accountId: "main",
         threadId: "reply-1",
       },
-      restartRecoveryBeforeAgentReplyState: "continue",
+      restartRecoveryBeforeAgentReplyState: "admitted",
+      restartRecoveryDeliveryMediaUrls: ["/tmp/proof.png"],
+      restartRecoveryDisableMessageTool: true,
+      restartRecoverySuppressTextDelivery: true,
       restartRecoveryDeliveryRunId: "run-1",
       restartRecoveryDeliverySourceRunId: "source-run-1",
       restartRecoveryRequesterAccountId: "work",
@@ -555,6 +597,34 @@ describe("session store writer queue", () => {
       restartRecoverySameChannelThreadRequired: true,
       restartRecoverySourceIngress: "channel",
       restartRecoverySourceReplyDeliveryMode: "message_tool_only",
+      restartRecoveryTerminalDeliveryEvidence: [
+        {
+          runId: "terminal-1",
+          captured: true,
+          payloads: [{ visible: false }, { visible: true, mediaUrls: ["/tmp/proof.png"] }],
+          deliveryStatus: {
+            status: "partial_failed",
+            payloadOutcomes: [{ index: 1, status: "failed", sentBeforeError: false }],
+          },
+          messagingToolSentTargets: [
+            {
+              provider: "Discord",
+              to: "channel:123",
+              threadId: "42",
+              mediaUrls: ["/tmp/proof.png"],
+              visible: true,
+            },
+            {
+              provider: "Discord",
+              to: "channel:empty",
+              visible: false,
+            },
+          ],
+          messagingToolSentTargetsTruncated: true,
+          messagingToolAggregateEvidenceUnaccounted: true,
+          restartUnsafeSideEffectsDetected: true,
+        },
+      ],
       restartRecoveryTerminalRunIds: ["terminal-2", "terminal-1"],
     });
   });

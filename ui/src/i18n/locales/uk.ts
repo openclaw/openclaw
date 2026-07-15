@@ -656,6 +656,8 @@ export const uk: TranslationMap = {
     archiveSession: "Архівувати сеанс",
     archiveSessionCount: "Архівувати {count}",
     restoreSession: "Відновити сеанс",
+    stopCloudWorker: "Зупинити хмарний воркер…",
+    stopCloudWorkerConfirm: "Зупинити хмарний воркер для «{session}»?",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Видалити {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

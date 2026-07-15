@@ -18,6 +18,7 @@ export type DockerE2ePlanLane = {
 };
 
 export type DockerE2ePlanOptions = {
+  allowFrozenTargetScenarioOmissions?: boolean;
   includeOpenWebUI: boolean;
   liveMode: "all" | "only" | "skip";
   liveRetries: number;

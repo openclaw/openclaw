@@ -389,6 +389,7 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   sessionId?: string;
   sourceReplyFinal?: boolean;
   sourceReplyToolCallId?: string;
+  callerOwnsTerminalReceipt?: boolean;
 }): Promise<string | undefined> {
   const terminalSourceReply = params.sourceReplyFinal === true;
   const sourceReplyToolCallId = normalizeOptionalString(params.sourceReplyToolCallId);
@@ -404,10 +405,9 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   }
   const hasGatewayUrlOverride = trimToUndefined(params.opts.gatewayUrl) !== undefined;
   const hasGatewayTokenOverride = trimToUndefined(params.opts.gatewayToken) !== undefined;
-  if (hasGatewayUrlOverride || hasGatewayTokenOverride || params.target !== "local") {
-    if (terminalSourceReply) {
-      throw new Error("terminal source reply requires the trusted local gateway context");
-    }
+  const usesUntrustedGatewayContext =
+    hasGatewayUrlOverride || hasGatewayTokenOverride || params.target !== "local";
+  if (usesUntrustedGatewayContext && !terminalSourceReply) {
     return undefined;
   }
   const messageActionContext = resolveMessageActionTurnCapability({
@@ -428,6 +428,14 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
     !normalizeOptionalString(messageActionContext.toolContext?.currentSourceTurnId)
   ) {
     throw new Error("terminal source reply requires source-turn correlation");
+  }
+  if (usesUntrustedGatewayContext) {
+    if (params.callerOwnsTerminalReceipt !== true) {
+      throw new Error("terminal source reply requires the trusted local gateway context");
+    }
+    // Remote gateways cannot trust caller-supplied turn metadata. The agent
+    // process owns the durable receipt and sends no source authority over RPC.
+    return undefined;
   }
   const resolvedMessageActionContext = terminalSourceReply
     ? {

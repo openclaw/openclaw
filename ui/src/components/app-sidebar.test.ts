@@ -166,6 +166,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
       preservedWorktrees: [] as Array<{ id: string; branch: string; path: string }>,
     }),
   );
+  const refresh = vi.fn(() => Promise.resolve());
   const sessions = {
     get state() {
       return state;
@@ -186,7 +187,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     patch,
     delete: deleteSession,
     deleteMany,
-    refresh: () => Promise.resolve(),
+    refresh,
   } as unknown as SessionCapability;
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
@@ -203,6 +204,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     patch,
     deleteSession,
     deleteMany,
+    refresh,
     publish,
     publishList(statePatch: Partial<SessionState>) {
       canonicalListRevision += 1;
@@ -2103,6 +2105,50 @@ describe("AppSidebar session mutation feedback", () => {
     }
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
   }
+
+  it("reconciles and stops an idle active cloud worker through its session", async () => {
+    const request = vi.fn(() => Promise.resolve({ ok: true }));
+    const { gateway, harness, sidebar } = await mountMutationHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
+    gateway.publish({
+      hello: { features: { methods: ["sessions.reclaim"] } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
+    const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
+    if (!row) {
+      throw new Error("expected cloud session row");
+    }
+    row.placement = {
+      state: "active",
+      generation: 1,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      stateChangedAtMs: 1,
+      environmentId: "environment-1",
+      activeOwnerEpoch: 1,
+      workerBundleHash: "0".repeat(64),
+      workspaceBaseManifestRef: "base-ref",
+      remoteWorkspaceDir: "/workspace",
+    };
+    harness.publishList({ result: state.result, agentId: state.agentId });
+    await sidebar.updateComplete;
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const menu = await openSessionMenu(sidebar, row.key);
+    menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(confirm).toHaveBeenCalledWith('Stop the cloud worker for "a"?');
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: "agent:main:a", agentId: "main" },
+      { timeoutMs: 10 * 60_000 },
+    );
+    await vi.waitFor(() =>
+      expect(harness.refresh).toHaveBeenCalledWith({ agentId: "main", force: true }),
+    );
+  });
 
   it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
     const { harness, sidebar } = await mountMutationHarness();

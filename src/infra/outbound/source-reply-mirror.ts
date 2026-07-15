@@ -218,12 +218,16 @@ export async function cancelTerminalSourceReplyDelivery(
 export async function reconcileTerminalSourceReplyDelivery(params: {
   deliveredPayload: unknown;
   mirror: SourceReplyTranscriptMirrorParams;
+  preservePendingOnExplicitFailure?: boolean;
   receipt: TerminalSourceReplyDeliveryReceipt | undefined;
-}): Promise<"delivered" | "not-delivered" | "not-source" | "not-applicable"> {
+}): Promise<"delivered" | "not-delivered" | "not-source" | "not-applicable" | "pending"> {
   if (!params.receipt) {
     return "not-applicable";
   }
   if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+    if (params.preservePendingOnExplicitFailure) {
+      return "pending";
+    }
     await cancelRestartRecoveryTerminalDelivery(params.receipt);
     return "not-delivered";
   }

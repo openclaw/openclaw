@@ -416,6 +416,10 @@ The branch already has a real shared SQLite base:
   excludes heartbeat sessions. `openclaw doctor --fix` strictly validates the
   old TUI JSON file, keeps newer SQLite rows, verifies the canonical result,
   and removes the unchanged legacy file instead of leaving an archive.
+- Discord command deployment hashes now live in the shared plugin-state SQLite
+  store. Runtime reads and writes exact application-scoped keys only. Doctor
+  deletes the rebuildable legacy `discord/command-deploy-cache.json` file
+  without importing it, so the next startup performs one canonical reconcile.
 - Default TTS prefs now live in shared plugin-state SQLite rows keyed under the
   `speech-core` plugin. The old `settings/tts.json` file is doctor migration
   input only; runtime no longer reads or writes TTS prefs JSON files, and the
@@ -1099,6 +1103,16 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   the complete legacy `commitments.json`, keeps newer SQLite rows, verifies the
   result, and only then removes the unchanged source. Runtime never reads or
   writes the retired file.
+- Web Push subscriptions and the generated VAPID identity now use typed shared
+  `web_push_subscriptions` and `web_push_vapid_keys` rows. Runtime registration,
+  expiry cleanup, and first-use key generation use row-level SQLite
+  transactions. Explicit Doctor repair validates both retired JSON stores,
+  claims them before the SQLite write, imports them atomically, rejects
+  conflicting VAPID identities, verifies the result, and only then removes the
+  claims. Doctor holds the state-directory maintenance lock for the complete
+  import so an older Gateway cannot recreate the retired files. Registration,
+  delivery, deletion, and key resolution fail closed until Doctor resolves
+  pending legacy sources or interrupted claims.
 - Cron job definitions, schedule state, and run history no longer have runtime
   JSON writers or readers. Runtime uses `cron_jobs` rows with typed schedule,
   payload, delivery, failure-alert, session, status, and runtime-state columns plus
@@ -1184,10 +1198,12 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   files. Install, doctor, update, and release smoke paths use generated
   completion output or profile sourcing instead of durable completion cache
   files.
-- Gateway skill-upload staging now uses shared `skill_uploads` rows. Upload
-  metadata, idempotency keys, and archive bytes live in SQLite; the installer
-  only receives a temporary materialized archive path while an install is
-  running.
+- Gateway skill-upload staging now uses shared `skill_uploads` and
+  `skill_upload_chunks` rows. Chunks stay individually transactional during
+  upload, then commit assembles one verified archive BLOB and removes the chunk
+  rows. The installer only receives a temporary materialized archive path while
+  an install is running. Doctor discards the retired one-hour filesystem
+  staging tree instead of importing transient uploads.
 - Subagent inline attachments no longer materialize under workspace
   `.openclaw/attachments/*`. The spawn path prepares SQLite VFS seed entries,
   inline runs seed those entries into the per-agent runtime scratch namespace,
@@ -1462,6 +1478,7 @@ plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, ex
 plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
 media_blobs(subdir, id, content_type, size_bytes, blob, created_at, updated_at)
 skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, received_bytes, archive_blob, created_at, expires_at, committed, committed_at, idempotency_key_hash)
+skill_upload_chunks(upload_id, byte_offset, size_bytes, chunk_blob)
 web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, created_at_ms, updated_at_ms)
 web_push_vapid_keys(key_id, public_key, private_key, subject, updated_at_ms)
 apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, topic, environment, distribution, token_debug_suffix, updated_at_ms)
@@ -2174,8 +2191,8 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `nodes/pending.json` / `nodes/paired.json` (retired 2026.7: folded into paired device records at gateway startup)
 - `identity/device.json`
 - `identity/device-auth.json`
-- `push/web-push-subscriptions.json`
-- `push/vapid-keys.json`
+- `push/web-push-subscriptions.json` (retired; Doctor-only import into `web_push_subscriptions`)
+- `push/vapid-keys.json` (retired; Doctor-only import into `web_push_vapid_keys`)
 - `push/apns-registrations.json`
 - `process-leases.json`
 - `gateway-instance-id`

@@ -234,6 +234,9 @@ type DispatchGatewayMethodInProcessOptions = {
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
+  internalDeliveryMediaUrls?: string[];
+  internalDeliverySuppressText?: boolean;
+  onAccepted?: (payload: unknown) => void;
   pluginRuntimeOwnerId?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   requireScopedClient?: boolean;
@@ -347,6 +350,8 @@ export async function dispatchGatewayMethodInProcessRaw(
     allowModelOverride: options?.allowSyntheticModelOverride === true,
     agentRunTracking: options?.agentRunTracking,
     cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
+    internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,
+    internalDeliverySuppressText: options?.internalDeliverySuppressText,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     ...(options?.runtimePluginToolGrant
       ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
@@ -414,6 +419,7 @@ export async function dispatchGatewayMethodInProcessRaw(
   if (options?.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;
   }
+  options.onAccepted?.(firstResponse.payload);
   if (postFirstResponseError) {
     throw postFirstResponseError;
   }

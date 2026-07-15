@@ -34,11 +34,8 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import {
-  createReplyOperation,
-  testing as replyRunTesting,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -1194,6 +1191,62 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
   });
 
+  it("tombstones a redelivered source whose recovery claim is already terminal", async () => {
+    const sessionCtx = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:24680",
+      MessageSid: "redelivered-terminal-message",
+    } as const;
+    const sourceTurnId = requireBuiltChannelSourceTurnId({
+      provider: "discord",
+      conversationId: "channel:24680",
+      messageId: "redelivered-terminal-message",
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      status: "done",
+      restartRecoveryDeliveryRunId: "terminal-recovery-run",
+      restartRecoveryDeliverySourceRunId: sourceTurnId,
+      restartRecoveryDeliveryContext: {
+        channel: "discord",
+        to: "channel:24680",
+      },
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const beforeAgentReply = vi.fn(async () => undefined);
+    const onTurnAdopted = vi.fn();
+    const duplicate = createMinimalRun({
+      beforeAgentReply,
+      isActive: true,
+      shouldSteer: true,
+      opts: { onTurnAdopted },
+      sessionCtx,
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await expect(duplicate.run()).resolves.toBeUndefined();
+
+    expect(duplicate.sourceTurnId).toBe(sourceTurnId);
+    expect(beforeAgentReply).not.toHaveBeenCalled();
+    expect(onTurnAdopted).not.toHaveBeenCalled();
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    const stored = await readStoredMainSession(storePath);
+    expect(stored).toMatchObject({
+      status: "done",
+      restartRecoveryTerminalRunIds: [sourceTurnId],
+    });
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+  });
+
   it("atomically replaces a terminal stale recovery claim for the next run", async () => {
     const sessionEntry: SessionEntry = {
       abortedLastRun: false,
@@ -1336,9 +1389,11 @@ describe("runReplyAgent pending final delivery capture", () => {
   it("adopts and clears a transcript-only restart recovery claim", async () => {
     const sessionEntry: SessionEntry = {
       abortedLastRun: false,
+      restartRecoveryBeforeAgentReplyState: "admitted",
       restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
+      restartRecoverySourceIngress: "control-ui",
       sessionId: "session",
       status: "running",
       updatedAt: Date.now(),
@@ -1347,10 +1402,12 @@ describe("runReplyAgent pending final delivery capture", () => {
     const storePath = await createSessionStoreFile(sessionEntry);
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       const storedDuringRun = await readStoredMainSession(storePath);
+      expect(storedDuringRun.restartRecoveryBeforeAgentReplyState).toBeUndefined();
       expect(storedDuringRun.restartRecoveryDeliveryContext).toBeUndefined();
       expect(storedDuringRun.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
       expect(typeof storedDuringRun.restartRecoveryDeliveryRunId).toBe("string");
       expect(storedDuringRun.restartRecoveryDeliverySourceRunId).toBe("control-ui-run");
+      expect(storedDuringRun.restartRecoverySourceIngress).toBe("control-ui");
       return {
         payloads: [{ text: "visible final" }],
         meta: {},
@@ -1376,13 +1433,68 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(sessionStore.main.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
     const stored = await readStoredMainSession(storePath);
     expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored.restartRecoveryBeforeAgentReplyState).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored.restartRecoverySourceIngress).toBeUndefined();
     expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
   });
 
-  it("adopts a transcript-only claim when the full message id is blank", async () => {
+  it("advances a transcript-only admission to pending before running a discovered hook", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryBeforeAgentReplyState: "admitted",
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      restartRecoverySourceIngress: "control-ui",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const beforeAgentReply = vi.fn(async () => {
+      expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
+        "pending",
+      );
+      expect((await readStoredMainSession(storePath)).restartRecoverySourceIngress).toBe(
+        "control-ui",
+      );
+      return undefined;
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
+        "continue",
+      );
+      return {
+        payloads: [{ text: "visible final" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      beforeAgentReply,
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+      },
+      sourceTurnId: "channel-user:v1:different-from-gateway-run",
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    expect(beforeAgentReply).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("adopts a transcript-only claim by its short id when the full id differs", async () => {
     const sessionEntry: SessionEntry = {
       abortedLastRun: false,
       restartRecoveryDeliveryRunId: "msg",
@@ -1396,7 +1508,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const { run } = createMinimalRun({
       sessionCtx: {
         MessageSid: "msg",
-        MessageSidFull: "  ",
+        MessageSidFull: "provider-full-msg",
         OriginatingChannel: "webchat",
         Provider: "webchat",
       },
@@ -1726,6 +1838,9 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(await readStoredMainSession(storePath)).toMatchObject({
       pendingFinalDelivery: true,
       pendingFinalDeliveryText: "hook reply",
+      restartRecoveryBeforeAgentReplyState: "handled-reply",
+      restartRecoveryForceSafeTools: true,
+      restartRecoverySourceIngress: "channel",
     });
   });
 

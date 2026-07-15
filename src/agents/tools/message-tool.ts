@@ -1584,6 +1584,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       const gatewayResolved = resolveGatewayOptions(gatewayOpts);
+      const callerOwnsTerminalReceipt =
+        gatewayResolved.target === "remote" ||
+        normalizeOptionalString(gatewayOpts.gatewayUrl) !== undefined ||
+        normalizeOptionalString(gatewayOpts.gatewayToken) !== undefined;
       // Direct tool invocations already execute inside the authenticated
       // Gateway request. Keep their authority operation-local by dispatching
       // channel actions in-process instead of laundering it through a new
@@ -1598,6 +1602,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
               clientDisplayName: "agent",
               mode: GATEWAY_CLIENT_MODES.BACKEND,
+              ...(callerOwnsTerminalReceipt
+                ? { terminalSourceReplyReceiptOwner: "caller" as const }
+                : {}),
               resolveAgentRuntimeIdentityToken: (context) =>
                 resolveMessageActionAgentRuntimeIdentityToken({
                   opts: gatewayOpts,
@@ -1607,6 +1614,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
                   sessionId: options?.sessionId,
                   sourceReplyFinal: context?.sourceReplyFinal,
                   sourceReplyToolCallId: context?.sourceReplyToolCallId,
+                  callerOwnsTerminalReceipt,
                 }),
             };
       const hasCurrentMessageId =

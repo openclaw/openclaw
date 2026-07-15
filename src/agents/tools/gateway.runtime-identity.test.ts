@@ -143,6 +143,14 @@ describe("gateway tool runtime identity", () => {
           }),
         ).rejects.toThrow("terminal source reply requires the trusted local gateway context");
         await expect(
+          resolveMessageActionAgentRuntimeIdentityToken({
+            ...terminalParams,
+            target: "remote",
+            turnCapability,
+            callerOwnsTerminalReceipt: true,
+          }),
+        ).resolves.toBeUndefined();
+        await expect(
           resolveMessageActionAgentRuntimeIdentityToken({ opts: {}, target: "local" }),
         ).resolves.toBeUndefined();
       },

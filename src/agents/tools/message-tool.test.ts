@@ -140,6 +140,11 @@ type RunMessageActionInput = {
   defaultAccountId?: string;
   gateway?: {
     timeoutMs?: unknown;
+    terminalSourceReplyReceiptOwner?: "caller";
+    resolveAgentRuntimeIdentityToken?: (context?: {
+      sourceReplyFinal?: boolean;
+      sourceReplyToolCallId?: string;
+    }) => Promise<string | undefined>;
   };
   params?: Record<string, unknown>;
   requesterAccountId?: string;
@@ -152,6 +157,8 @@ type RunMessageActionInput = {
   sandboxRoot?: string;
   sessionKey?: string;
   sourceReplyDeliveryMode?: string;
+  sourceReplyFinal?: boolean;
+  sourceReplyToolCallId?: string;
   inboundAudio?: boolean;
   toolContext?: {
     currentChannelId?: string;
@@ -979,6 +986,50 @@ describe("message tool secret scoping", () => {
     expect(terminal?.sourceReplyToolCallId).toBe("message_terminal");
     expect(progress?.params).not.toHaveProperty("final");
     expect(terminal?.params).not.toHaveProperty("final");
+  });
+
+  it("assigns remote terminal source-reply receipts to the caller", async () => {
+    mockSendResult();
+    mocks.getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://gateway.example" },
+      },
+    });
+    const sessionKey = "agent:main:telegram:direct:123";
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-remote-source-reply",
+      sessionId: "session-remote-source-reply",
+      sessionKey,
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "123",
+        currentSourceTurnId: "source-turn-remote",
+      },
+    });
+    mintedTurnCapabilities.push(turnCapability);
+    const tool = createMessageTool({
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      runMessageAction: mocks.runMessageAction as never,
+      agentId: "main",
+      agentSessionKey: sessionKey,
+      runId: "run-remote-source-reply",
+      sessionId: "session-remote-source-reply",
+      messageActionTurnCapability: turnCapability,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await tool.execute("message_terminal_remote", {
+      action: "send",
+      message: "done",
+      to: "123",
+    });
+
+    const terminal = firstRunMessageActionInput();
+    expect(terminal?.sourceReplyFinal).toBe(true);
+    expect(terminal?.gateway?.terminalSourceReplyReceiptOwner).toBe("caller");
+    expect(terminal?.gateway?.resolveAgentRuntimeIdentityToken).toEqual(expect.any(Function));
   });
 
   it("keeps source-less message-tool-only sends outside terminal reconciliation", async () => {

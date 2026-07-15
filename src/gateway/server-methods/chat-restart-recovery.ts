@@ -20,7 +20,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOrCreateProcessDeviceIdentity } from "../../infra/device-identity.js";
-import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import { findRestartRecoveryUnsafeReplyHook } from "../../plugins/restart-recovery-hook-safety.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
@@ -29,13 +29,6 @@ import type { GatewayRequestContext } from "./types.js";
 
 export { hasRestartRecoveryTerminalRun };
 
-const RESTART_SAFE_CHAT_UNSAFE_HOOKS = [
-  "before_dispatch",
-  "before_agent_reply",
-  "before_agent_run",
-  "before_message_write",
-  "reply_dispatch",
-] as const;
 const RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN = "openclaw.chat.restart-retry.v1";
 
 type RestartSafeChatRequest = {
@@ -245,7 +238,7 @@ function hasRestartUnsafeChatWork(params: {
   sessionKey: string;
 }): boolean {
   if (
-    RESTART_SAFE_CHAT_UNSAFE_HOOKS.some((hookName) => hasGlobalHooks(hookName)) ||
+    findRestartRecoveryUnsafeReplyHook() !== undefined ||
     listActiveEmbeddedRunSessionIds().includes(params.sessionId) ||
     replyRunRegistry.isActive(params.sessionKey)
   ) {
@@ -346,7 +339,9 @@ export function buildRestartSafeChatTranscriptState(params: {
       ? { expectedSessionState: params.admission.retryExpectedState }
       : {}),
     sessionLifecyclePatch: {
-      restartRecoveryBeforeAgentReplyState: undefined,
+      // Admission precedes runtime plugin loading. The runner atomically turns
+      // this into `pending` before a hook; recovery reloads hooks before resume.
+      restartRecoveryBeforeAgentReplyState: "admitted",
       restartRecoveryDeliveryReceiptState: undefined,
       restartRecoveryDeliveryToolCallId: undefined,
       status: "running",
@@ -359,7 +354,9 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryRequesterAccountId: undefined,
       restartRecoveryRequesterSenderId: undefined,
       restartRecoverySameChannelThreadRequired: undefined,
-      restartRecoverySourceIngress: undefined,
+      // This survives runner adoption after the retry fingerprint is cleared.
+      // Recovery uses it to recheck hooks before Gateway agent dispatch.
+      restartRecoverySourceIngress: "control-ui",
       restartRecoverySourceReplyDeliveryMode: undefined,
       ...(params.admission.priorTerminalSourceRunId
         ? { restartRecoveryTerminalRunIds: [params.admission.priorTerminalSourceRunId] }

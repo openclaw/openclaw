@@ -423,7 +423,7 @@ jobs:
 
           append_telegram_summary() {
             local status=$?
-            local report="${output_dir}/telegram-qa-report.md"
+            local report="${output_dir}/qa-suite-report.md"
             if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -f "${report}" ]]; then
               {
                 echo "## Package Telegram E2E"

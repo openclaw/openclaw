@@ -11,7 +11,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isTrustedMessageActionTurnIngress } from "../gateway/message-action-turn-capability.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { findRestartRecoveryUnsafeReplyHook } from "../plugins/restart-recovery-hook-safety.js";
 import { CommandLane } from "../process/lanes.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import {
   deliveryContextFromSession,
@@ -19,6 +21,8 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 const RESTART_RECOVERY_RESUME_MESSAGE =
@@ -38,6 +42,50 @@ export function hasRestartRecoveryMessageActionAuthority(entry: SessionEntry): b
   return (
     authority !== undefined && isTrustedMessageActionTurnIngress(authority.deliveryContext.channel)
   );
+}
+
+/** Internal continuations never inherit channel authority; every other message-tool recovery must. */
+export function requiresRestartRecoveryMessageActionAuthority(entry: SessionEntry): boolean {
+  return (
+    entry.restartRecoverySourceReplyDeliveryMode === "message_tool_only" &&
+    entry.restartRecoverySourceIngress !== "internal"
+  );
+}
+
+export function resolveRestartRecoveryResumeBlockReason(params: {
+  cfg?: OpenClawConfig;
+  entry: SessionEntry;
+  sessionKey: string;
+}): string | undefined {
+  const beforeAgentReplyState = params.entry.restartRecoveryBeforeAgentReplyState;
+  const requiresHookSafetyProof =
+    beforeAgentReplyState === "admitted" ||
+    beforeAgentReplyState === "handled-reply" ||
+    params.entry.restartRecoverySourceIngress === "channel" ||
+    params.entry.restartRecoverySourceIngress === "control-ui";
+  if (!requiresHookSafetyProof) {
+    return undefined;
+  }
+  if (!params.cfg) {
+    return "pre-hook recovery runtime config is unavailable";
+  }
+  try {
+    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+    ensureRuntimePluginsLoaded({
+      config: params.cfg,
+      workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
+      allowGatewaySubagentBinding: true,
+    });
+  } catch {
+    return "pre-hook recovery runtime plugins could not be loaded";
+  }
+  const unsafeHook = findRestartRecoveryUnsafeReplyHook({
+    // Both states prove before_agent_reply completed. Every other reply hook
+    // remains unsafe to bypass or repeat during Gateway agent dispatch.
+    allowBeforeAgentReply:
+      beforeAgentReplyState === "continue" || beforeAgentReplyState === "handled-reply",
+  });
+  return unsafeHook ? `pre-hook recovery cannot bypass the active ${unsafeHook} hook` : undefined;
 }
 
 function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
@@ -214,7 +262,7 @@ export async function resumeMainSession(params: {
   const claimedRunId = normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId);
   const sourceRunId = normalizeOptionalString(params.entry.restartRecoveryDeliverySourceRunId);
   if (
-    params.entry.restartRecoverySourceReplyDeliveryMode === "message_tool_only" &&
+    requiresRestartRecoveryMessageActionAuthority(params.entry) &&
     !hasRestartRecoveryMessageActionAuthority(params.entry)
   ) {
     log.warn(`refusing message-tool-only recovery without channel authority: ${params.sessionKey}`);
@@ -269,10 +317,10 @@ export async function resumeMainSession(params: {
         Boolean(deliveryContext) &&
         params.entry.restartRecoverySourceReplyDeliveryMode !== "message_tool_only",
       lane: CommandLane.Main,
-      ...(params.forceRestartSafeTools ? { forceRestartSafeTools: true } : {}),
       ...(params.entry.restartRecoverySourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode }
         : {}),
+      ...(params.forceRestartSafeTools ? { forceRestartSafeTools: true } : {}),
     };
     if (deliveryContext) {
       agentParams.channel = deliveryContext.channel;
