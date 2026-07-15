@@ -1553,8 +1553,6 @@ export async function attachWebInboxToSocket(
     const debounceKey = buildInboundDebounceKey(inboundMessage);
     if (debounceKey) {
       inboundMessage.debounceKey = debounceKey;
-      pendingDebounceKeys.set(debounceKey, (pendingDebounceKeys.get(debounceKey) ?? 0) + 1);
-      publishPendingWorkState();
     }
     if (inboundMessage.event.id) {
       const admission = requireWhatsAppInboundAdmission(inboundMessage);
@@ -1572,6 +1570,10 @@ export async function attachWebInboxToSocket(
           fromMe: inboundMessage.platform.fromMe,
         },
       );
+    }
+    if (debounceKey) {
+      pendingDebounceKeys.set(debounceKey, (pendingDebounceKeys.get(debounceKey) ?? 0) + 1);
+      publishPendingWorkState();
     }
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
@@ -1600,6 +1602,15 @@ export async function attachWebInboxToSocket(
         },
       );
     } catch (err) {
+      if (debounceKey) {
+        const remaining = (pendingDebounceKeys.get(debounceKey) ?? 1) - 1;
+        if (remaining > 0) {
+          pendingDebounceKeys.set(debounceKey, remaining);
+        } else {
+          pendingDebounceKeys.delete(debounceKey);
+        }
+        publishPendingWorkState();
+      }
       inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
       inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
     }

@@ -302,9 +302,12 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
             await runQueuedFlush(key, generation, [item]);
           });
           const flushTask = flushKey(key);
-          reservedTask.release();
           markApplied();
-          await flushTask;
+          try {
+            await flushTask;
+          } finally {
+            reservedTask.release();
+          }
           await reservedTask.task;
           return;
         }
