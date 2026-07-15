@@ -106,6 +106,59 @@ describe("ReefTransportClient device authentication", () => {
     ).toBe(true);
   });
 
+  it("rejects oversized relay success responses before buffering the full body", async () => {
+    const hugeBody = JSON.stringify({ data: "x".repeat(2 * 1024 * 1024) });
+    const fetcher: typeof fetch = async () =>
+      new Response(hugeBody, {
+        headers: { "content-type": "application/json" },
+      });
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      fetcher,
+      () => ts,
+    );
+
+    await expect(client.listFriends()).rejects.toThrow("exceeds");
+  });
+
+  it("rejects oversized relay error responses without leaking the body", async () => {
+    const hugeError = JSON.stringify({
+      error: "x".repeat(128 * 1024),
+    });
+    const fetcher: typeof fetch = async () =>
+      new Response(hugeError, {
+        status: 502,
+        headers: { "content-type": "application/json" },
+      });
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      fetcher,
+      () => ts,
+    );
+
+    await expect(client.listFriends()).rejects.toThrow("relay HTTP 502");
+  });
+
+  it("parses normal-sized relay responses unchanged", async () => {
+    const fetcher: typeof fetch = async () =>
+      Response.json({ friendships: [{ peer: "bob", status: "accepted" }] });
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      fetcher,
+      () => ts,
+    );
+
+    await expect(client.listFriends()).resolves.toEqual({
+      friendships: [{ peer: "bob", status: "accepted" }],
+    });
+  });
+
   it("bumps ts monotonically so identical same-second requests never share a replay key", async () => {
     const seenTs: string[] = [];
     const fetcher: typeof fetch = async (_input, init) => {

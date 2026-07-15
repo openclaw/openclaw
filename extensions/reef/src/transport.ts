@@ -1,8 +1,12 @@
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
 import type { Envelope, SignedReceipt } from "../protocol/index.js";
 import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
 
 type FetchLike = typeof fetch;
+
+const REEF_TRANSPORT_ERROR_BODY_MAX_BYTES = 64 * 1024;
+const REEF_TRANSPORT_RESPONSE_MAX_BYTES = 1024 * 1024;
 
 export class ReefRelayError extends Error {
   constructor(
@@ -144,17 +148,31 @@ export class ReefTransportClient {
     if (!response.ok) {
       let message = `relay HTTP ${response.status}`;
       try {
-        const parsed = (await response.json()) as { error?: string };
+        const errorBody = await readResponseWithLimit(
+          response,
+          REEF_TRANSPORT_ERROR_BODY_MAX_BYTES,
+          {
+            onOverflow: ({ maxBytes }) =>
+              new Error(`Reef relay error response exceeds ${maxBytes} bytes`),
+          },
+        );
+        const parsed = JSON.parse(errorBody.toString()) as { error?: string };
         if (parsed.error) {
           message = parsed.error;
         }
-      } catch {}
+      } catch {
+        // Use the status-based message when body read fails (overflow, invalid
+        // JSON, or network error). The parsed error string is best-effort.
+      }
       throw new ReefRelayError(response.status, message);
     }
     if (response.status === 204) {
       return undefined as T;
     }
-    return (await response.json()) as T;
+    const body = await readResponseWithLimit(response, REEF_TRANSPORT_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ maxBytes }) => new Error(`Reef relay response exceeds ${maxBytes} bytes`),
+    });
+    return JSON.parse(body.toString()) as T;
   }
 }
 
