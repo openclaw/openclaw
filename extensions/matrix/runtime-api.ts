@@ -51,6 +51,7 @@ export type {
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
 export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 
@@ -58,11 +59,11 @@ export function chunkTextForOutbound(text: string, limit: number): string[] {
   const chunks: string[] = [];
   let remaining = text;
   while (remaining.length > limit) {
-    const window = remaining.slice(0, limit);
+    const window = sliceUtf16Safe(remaining, 0, limit);
     const splitAt = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(" "));
     const breakAt = splitAt > 0 ? splitAt : limit;
-    chunks.push(remaining.slice(0, breakAt).trimEnd());
-    remaining = remaining.slice(breakAt).trimStart();
+    chunks.push(sliceUtf16Safe(remaining, 0, breakAt).trimEnd());
+    remaining = sliceUtf16Safe(remaining, breakAt).trimStart();
   }
   if (remaining.length > 0 || text.length === 0) {
     chunks.push(remaining);
