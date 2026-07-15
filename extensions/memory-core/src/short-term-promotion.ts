@@ -18,7 +18,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import pLimit from "p-limit";
 import {
   deriveConceptTags,
@@ -415,7 +415,7 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   // The composite detector below still requires the full signal combination, so widening
   // the lead check to anywhere in the first 200 chars closes the leak without creating
   // false positives for ordinary durable notes that merely mention the word in prose.
-  const head = withoutPrefix.slice(0, 200);
+  const head = truncateUtf16Safe(withoutPrefix, 200);
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
@@ -2106,7 +2106,7 @@ function targetSnippetHasHeadingContext(targetSnippet: string, bodySnippet: stri
   if (bodyIndex <= 0) {
     return false;
   }
-  return targetSnippet.slice(0, bodyIndex).trimEnd().endsWith(":");
+  return sliceUtf16Safe(targetSnippet, 0, bodyIndex).trimEnd().endsWith(":");
 }
 
 function extractTargetHeadingBodySnippet(
