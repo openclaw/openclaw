@@ -21,7 +21,7 @@ describe("addIgnoreRules", () => {
     fs.writeFileSync(path.join(tempDir, ".gitignore"), "node_modules/\ndist/\n", "utf-8");
 
     const ig = ignore();
-    addIgnoreRules(ig, tempDir, tempDir);
+    addIgnoreRules(tempDir, tempDir, ig);
 
     expect(ig.ignores("node_modules/foo")).toBe(true);
     expect(ig.ignores("dist/bar.js")).toBe(true);
@@ -33,7 +33,7 @@ describe("addIgnoreRules", () => {
     fs.writeFileSync(path.join(tempDir, ".gitignore"), huge, "utf-8");
 
     const ig = ignore();
-    addIgnoreRules(ig, tempDir, tempDir);
+    addIgnoreRules(tempDir, tempDir, ig);
 
     expect(ig.ignores("ignored-file")).toBe(true);
   });
@@ -43,7 +43,7 @@ describe("addIgnoreRules", () => {
     fs.writeFileSync(path.join(tempDir, ".gitignore"), oversized, "utf-8");
 
     const ig = ignore();
-    addIgnoreRules(ig, tempDir, tempDir);
+    addIgnoreRules(tempDir, tempDir, ig);
 
     expect(ig.ignores("ignored-file")).toBe(false);
   });
@@ -55,7 +55,7 @@ describe("addIgnoreRules", () => {
       fs.symlinkSync(path.join(realDir, "real.gitignore"), path.join(tempDir, ".gitignore"));
 
       const ig = ignore();
-      addIgnoreRules(ig, tempDir, tempDir);
+      addIgnoreRules(tempDir, tempDir, ig);
 
       expect(ig.ignores("node_modules/foo")).toBe(true);
     } finally {
@@ -74,7 +74,7 @@ describe("addIgnoreRules", () => {
       fs.symlinkSync(linkB, path.join(tempDir, ".gitignore"));
 
       const ig = ignore();
-      addIgnoreRules(ig, tempDir, tempDir);
+      addIgnoreRules(tempDir, tempDir, ig);
 
       expect(ig.ignores("node_modules/foo")).toBe(true);
     } finally {

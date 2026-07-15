@@ -56,7 +56,6 @@ function readIgnoreFileContent(ignorePath: string): string | null {
   } catch {
     return null;
   }
-  return ig;
 }
 
 function prefixIgnorePattern(line: string, prefix: string): string {
