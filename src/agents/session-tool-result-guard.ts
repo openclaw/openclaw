@@ -942,3 +942,4 @@ export function installSessionToolResultGuard(
     getPendingIds: pendingState.getPendingIds,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

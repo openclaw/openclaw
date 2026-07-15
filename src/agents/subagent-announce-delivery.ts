@@ -173,21 +173,6 @@ function resolveBoundConversationOrigin(params: {
   const parentConversationId = conversation.parentConversationId?.trim() ?? "";
   const requesterConversationId = params.requesterConversation?.conversationId?.trim() ?? "";
   const requesterTo = params.requesterOrigin?.to?.trim();
-  if (
-    conversation.channel === "matrix" &&
-    parentConversationId &&
-    requesterConversationId &&
-    parentConversationId === requesterConversationId &&
-    requesterTo
-  ) {
-    return {
-      channel: conversation.channel,
-      accountId: conversation.accountId,
-      to: requesterTo,
-      ...(conversationId ? { threadId: conversationId } : {}),
-    };
-  }
-
   const boundTarget = routeToDeliveryFields(routeFromConversationRef(conversation));
   const inferredThreadId =
     boundTarget.threadId ??
@@ -1948,7 +1933,7 @@ export async function deliverSubagentAnnouncement(params: {
   });
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(
     overrides?: Partial<SubagentAnnounceDeliveryDeps> & {
       callGateway?: typeof callGateway;
@@ -1980,3 +1965,9 @@ export const testing = {
   hasSessionFileChangedAnnounceError,
   isSessionFileChangedAnnounceError,
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.subagentAnnounceDeliveryTestApi")
+  ] = testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

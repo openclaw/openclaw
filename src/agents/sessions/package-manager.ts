@@ -7,7 +7,6 @@ import { createHash } from "node:crypto";
 import { existsSync, globSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 import { CONFIG_DIR_NAME } from "../config.js";
@@ -168,8 +167,7 @@ function collectFiles(
   }
 
   const root = rootDir ?? dir;
-  const ig = ignoreMatcher ?? ignore();
-  addIgnoreRules(ig, dir, root);
+  const ig = addIgnoreRules(dir, root, ignoreMatcher);
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -228,8 +226,7 @@ function collectSkillEntries(
   }
 
   const root = rootDir ?? dir;
-  const ig = ignoreMatcher ?? ignore();
-  addIgnoreRules(ig, dir, root);
+  const ig = addIgnoreRules(dir, root, ignoreMatcher);
 
   try {
     const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -360,8 +357,7 @@ function collectTopLevelAutoResourceEntries(
     return entries;
   }
 
-  const ig = ignore();
-  addIgnoreRules(ig, dir, dir);
+  const ig = addIgnoreRules(dir, dir);
 
   try {
     const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -455,8 +451,7 @@ function collectAutoExtensionEntries(dir: string): string[] {
   }
 
   // Otherwise, discover extensions from directory contents
-  const ig = ignore();
-  addIgnoreRules(ig, dir, dir);
+  const ig = addIgnoreRules(dir, dir);
 
   try {
     const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -1467,3 +1462,4 @@ export class DefaultPackageManager implements PackageManager {
     };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -8,7 +8,7 @@ import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
-} from "../../agents/subagent-registry.js";
+} from "../../agents/subagent-registry.test-helpers.js";
 import {
   getDetachedTaskLifecycleRuntime,
   setDetachedTaskLifecycleRuntime,
@@ -2048,3 +2048,4 @@ describe("gateway agent handler", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

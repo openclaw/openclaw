@@ -1,6 +1,8 @@
 // Docker E2E scheduler planning helpers.
 // This module turns the scenario catalog plus env-driven inputs into a concrete
 // lane plan. It intentionally does not define scenario commands.
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
   DEFAULT_LIVE_RETRIES,
@@ -90,6 +92,18 @@ const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
   ["reported-issues", UPGRADE_SURVIVOR_SCENARIOS],
   ["far-reaching", UPGRADE_SURVIVOR_SCENARIOS],
 ]);
+
+function filterUpgradeSurvivorScenariosForTarget(scenarios, targetRoot) {
+  if (!targetRoot) {
+    return scenarios;
+  }
+  const assertionsFile = resolve(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+  if (!existsSync(assertionsFile)) {
+    return [];
+  }
+  const assertionsSource = readFileSync(assertionsFile, "utf8");
+  return scenarios.filter((scenario) => assertionsSource.includes(JSON.stringify(scenario)));
+}
 
 export function normalizeUpgradeSurvivorBaselineSpec(raw) {
   const value = String(raw ?? "").trim();
@@ -195,9 +209,15 @@ function supportsUpgradeSurvivorAcpToolsBridge(baselineSpec) {
   return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 22 }) >= 0;
 }
 
-function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {
+function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios, targetRoot) {
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
-  const scenarios = parseUpgradeSurvivorScenarios(rawScenarios);
+  // Trusted-current planners may know scenarios that a frozen target's Docker
+  // harness cannot seed or assert. Filter by the selected tree's concrete
+  // harness contract so validation never schedules an impossible target lane.
+  const scenarios = filterUpgradeSurvivorScenariosForTarget(
+    parseUpgradeSurvivorScenarios(rawScenarios),
+    targetRoot,
+  );
   if (baselineSpecs.length === 0 && scenarios.length === 0) {
     return poolLanes;
   }
@@ -434,6 +454,7 @@ export function resolveDockerE2ePlan(options) {
       unexpandedSelectableLanes,
       upgradeSurvivorBaselines,
       upgradeSurvivorScenarios,
+      options.upgradeSurvivorTargetRoot,
     ),
   );
   const releaseLanes =
@@ -443,6 +464,7 @@ export function resolveDockerE2ePlan(options) {
             allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI, releaseProfile }),
             upgradeSurvivorBaselines,
             upgradeSurvivorScenarios,
+            options.upgradeSurvivorTargetRoot,
           )
         : expandUpgradeSurvivorBaselineLanes(
             releasePathChunkLanes(options.releaseChunk, {
@@ -451,6 +473,7 @@ export function resolveDockerE2ePlan(options) {
             }),
             upgradeSurvivorBaselines,
             upgradeSurvivorScenarios,
+            options.upgradeSurvivorTargetRoot,
           )
       : undefined;
   const selectedLanes =
@@ -468,6 +491,7 @@ export function resolveDockerE2ePlan(options) {
               [unexpandedLane],
               upgradeSurvivorBaselines,
               upgradeSurvivorScenarios,
+              options.upgradeSurvivorTargetRoot,
             );
           }
           selectNamedLanes(selectableLanes, [selectedName], "OPENCLAW_DOCKER_ALL_LANES");

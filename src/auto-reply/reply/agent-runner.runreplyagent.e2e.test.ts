@@ -3334,3 +3334,4 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

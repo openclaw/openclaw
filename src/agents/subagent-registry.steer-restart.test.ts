@@ -177,13 +177,13 @@ vi.mock("./internal-session-effects.js", () => ({
 }));
 
 describe("subagent registry steer restarts", () => {
-  let mod: typeof import("./subagent-registry.js");
+  let mod: typeof import("./subagent-registry.test-helpers.js");
   type RegisterSubagentRunInput = Parameters<typeof mod.registerSubagentRun>[0];
   const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
   const MAIN_REQUESTER_DISPLAY_KEY = "main";
 
   beforeAll(async () => {
-    mod = await import("./subagent-registry.js");
+    mod = await import("./subagent-registry.test-helpers.js");
   });
 
   beforeEach(() => {
@@ -1162,3 +1162,4 @@ describe("subagent registry steer restarts", () => {
     expect(parent?.cleanupHandled).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

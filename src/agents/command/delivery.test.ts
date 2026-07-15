@@ -2066,3 +2066,4 @@ describe("deliverAgentCommandResult payload normalization", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

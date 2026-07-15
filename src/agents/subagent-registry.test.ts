@@ -262,10 +262,10 @@ vi.mock("./internal-session-effects.js", () => ({
 }));
 
 describe("subagent registry seam flow", () => {
-  let mod: typeof import("./subagent-registry.js");
+  let mod: typeof import("./subagent-registry.test-helpers.js");
 
   beforeAll(async () => {
-    mod = await import("./subagent-registry.js");
+    mod = await import("./subagent-registry.test-helpers.js");
   });
 
   beforeEach(() => {
@@ -6069,3 +6069,4 @@ describe("subagent registry seam flow", () => {
     await expect(mod.testing.runSweeperTickForTests()).resolves.toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

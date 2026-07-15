@@ -350,6 +350,27 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it("includes current exec overrides in the queued runner prompt", async () => {
+    await runPreparedReply(
+      baseParams({
+        execOverrides: {
+          host: "gateway",
+          security: "full",
+          ask: "always",
+          node: "worker-1",
+        },
+        resolvedElevatedLevel: "off",
+      }),
+    );
+
+    const prompt = requireRunReplyAgentCall().followupRun.run.extraSystemPromptStatic;
+    expect(prompt).toContain(
+      "Current session exec defaults: host=gateway security=full ask=always node=worker-1.",
+    );
+    expect(prompt).toContain("Current elevated level: off.");
+    expect(prompt).toContain("Do not assume a prior denial still applies");
+  });
+
   it("preserves parent session provenance in queued runs", async () => {
     const spawnedBy = "agent:main:telegram:group:parent";
 
@@ -773,6 +794,38 @@ describe("runPreparedReply media-only handling", () => {
     });
     expect(call?.followupRun.run.messageProvider).toBe(channel);
     expect(call?.followupRun.originatingChannel).toBe(channel);
+  });
+
+  it("prefers a one-turn queue override over the stored session mode", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockImplementationOnce((params) => ({
+      mode: params.inlineMode ?? params.sessionEntry?.queueMode ?? "steer",
+    }));
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
+
+    await runPreparedReply(
+      baseParams({
+        sessionEntry: {
+          sessionId: "active-session",
+          updatedAt: Date.now(),
+          queueMode: "followup",
+        },
+        opts: { queueModeOverride: "steer" },
+      }),
+    );
+
+    expect(queueSettings.resolveQueueSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ inlineMode: "steer" }),
+    );
+    expect(requireLastRunReplyAgentCall()).toMatchObject({
+      shouldSteer: true,
+      resolvedQueue: { mode: "steer" },
+    });
   });
 
   it("keeps thread history context on follow-up turns", async () => {
@@ -3646,3 +3699,4 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).toContain("low steer this conversation");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

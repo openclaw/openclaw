@@ -70,6 +70,7 @@ import {
   resolveAgentLifecycleTerminalMetadata,
   type AgentLifecycleTerminalBackstop,
 } from "./agent-lifecycle-terminal.js";
+import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import {
   clearDroppedCliSessionBinding,
   createCliReasoningStreamBridge,
@@ -77,13 +78,12 @@ import {
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
+import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import {
   buildEmptyInteractiveReplyPayload,
-  buildTerminalAgentRunFailureReplyPayload,
-  buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
-  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
-} from "./agent-runner-execution.js";
+  buildTerminalAgentRunFailureReplyPayload,
+} from "./agent-runner-failure-reply.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import {
@@ -696,7 +696,7 @@ export function createFollowupRunner(params: {
         resetTriggered: false,
         routeThreadId: queued.originatingThreadId,
         upstreamAbortSignal: resolveFollowupAbortSignal(queued),
-        onFollowupAdmissionWaitChange: effectiveQueued.onFollowupAdmissionWaitChange,
+        onReplyAdmissionWaitChange: effectiveQueued.onReplyAdmissionWaitChange,
       });
       if (admission.status === "skipped") {
         if (admission.reason === "active-run") {
@@ -717,6 +717,9 @@ export function createFollowupRunner(params: {
       if (isFollowupRunAborted(effectiveQueued)) {
         return;
       }
+      // Channel delivery state belongs to one admitted run. Give the active
+      // dispatcher a boundary before callbacks from this followup can reuse it.
+      await opts?.onQueuedFollowupAdmitted?.();
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
@@ -2067,3 +2070,4 @@ export function createFollowupRunner(params: {
   };
   return runFollowupTurn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

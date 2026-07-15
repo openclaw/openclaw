@@ -1184,3 +1184,4 @@ function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoExcept
   error.code = code;
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

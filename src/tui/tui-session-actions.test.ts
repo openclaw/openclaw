@@ -1,5 +1,6 @@
 // Covers TUI session action routing and backend calls.
 import { describe, expect, it, vi } from "vitest";
+import type { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
@@ -24,6 +25,31 @@ describe("tui session actions", () => {
     clear: vi.fn(),
     showResult: vi.fn(),
   });
+  const createDeferred = <T>() => {
+    let resolve: (value: T) => void = () => {};
+    let reject: (reason?: unknown) => void = () => {};
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+  };
+  const createHistoryChatLog = () => {
+    const addSystem = vi.fn();
+    const addUser = vi.fn();
+    const chatLog = {
+      addSystem,
+      clearAll: vi.fn(),
+      clearPendingUsers: vi.fn(),
+      addUser,
+      finalizeAssistant: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restorePendingUsers: vi.fn(),
+      updateAssistant: vi.fn(),
+      startTool: vi.fn(),
+    } as unknown as ChatLog;
+    return { chatLog, addSystem, addUser };
+  };
 
   const createBaseState = (overrides: Partial<TuiStateAccess> = {}): TuiStateAccess => ({
     agentDefaultId: "main",
@@ -688,6 +714,201 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
   });
 
+  it("keeps the newer session when an earlier switch's history resolves last", async () => {
+    const historyA = createDeferred<unknown>();
+    const historyB = createDeferred<unknown>();
+    const loadHistory = vi
+      .fn()
+      .mockImplementationOnce(() => historyA.promise)
+      .mockImplementationOnce(() => historyB.promise);
+    const { chatLog, addUser } = createHistoryChatLog();
+    const state = createBaseState({ currentSessionKey: "agent:main:home" });
+    const setActivityStatus = vi.fn();
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog,
+      state,
+      setActivityStatus,
+    });
+
+    const firstSwitch = setSession("agent:main:A");
+    const secondSwitch = setSession("agent:main:B");
+
+    historyB.resolve({
+      sessionId: "session-b",
+      sessionInfo: { key: "agent:main:B", sessionId: "session-b", updatedAt: 20 },
+      messages: [{ role: "user", content: "message from B" }],
+    });
+    historyA.resolve({
+      sessionId: "session-a",
+      sessionInfo: { key: "agent:main:A", sessionId: "session-a", updatedAt: 10 },
+      messages: [{ role: "user", content: "message from A" }],
+      inFlightRun: { runId: "run-a", text: "stale A run" },
+    });
+
+    await Promise.all([firstSwitch, secondSwitch]);
+
+    expect(state.currentSessionKey).toBe("agent:main:B");
+    expect(state.currentSessionId).toBe("session-b");
+    expect(state.activeChatRunId).toBeNull();
+    const renderedUsers = addUser.mock.calls.map((call) => call[0]);
+    expect(renderedUsers).toContain("message from B");
+    expect(renderedUsers).not.toContain("message from A");
+  });
+
+  it("ignores a superseded switch whose history request rejects", async () => {
+    const historyA = createDeferred<unknown>();
+    const historyB = createDeferred<unknown>();
+    const loadHistory = vi
+      .fn()
+      .mockImplementationOnce(() => historyA.promise)
+      .mockImplementationOnce(() => historyB.promise);
+    const { chatLog, addSystem, addUser } = createHistoryChatLog();
+    const state = createBaseState({ currentSessionKey: "agent:main:home" });
+    const setActivityStatus = vi.fn();
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog,
+      state,
+      setActivityStatus,
+    });
+
+    const firstSwitch = setSession("agent:main:A");
+    const secondSwitch = setSession("agent:main:B");
+
+    historyB.resolve({
+      sessionId: "session-b",
+      sessionInfo: { key: "agent:main:B", sessionId: "session-b", updatedAt: 20 },
+      messages: [{ role: "user", content: "message from B" }],
+    });
+    historyA.reject(new Error("history rpc aborted"));
+
+    await Promise.all([firstSwitch, secondSwitch]);
+
+    expect(state.currentSessionKey).toBe("agent:main:B");
+    expect(state.currentSessionId).toBe("session-b");
+    expect(state.activeChatRunId).toBeNull();
+    const systemMessages = addSystem.mock.calls.map((call) => String(call[0]));
+    expect(systemMessages.some((message) => message.includes("history failed"))).toBe(false);
+    const renderedUsers = addUser.mock.calls.map((call) => call[0]);
+    expect(renderedUsers).toContain("message from B");
+  });
+
+  it("keeps the newer session when an earlier history load awaits session info", async () => {
+    const historyA = createDeferred<unknown>();
+    const historyB = createDeferred<unknown>();
+    const sessionInfoA = createDeferred<unknown>();
+    const sessionInfoB = createDeferred<unknown>();
+    const loadHistory = vi
+      .fn()
+      .mockImplementationOnce(() => historyA.promise)
+      .mockImplementationOnce(() => historyB.promise);
+    const listSessions = vi
+      .fn()
+      .mockImplementationOnce(() => sessionInfoA.promise)
+      .mockImplementationOnce(() => sessionInfoB.promise);
+    const { chatLog, addSystem, addUser } = createHistoryChatLog();
+    const state = createBaseState({ currentSessionKey: "agent:main:home" });
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions, loadHistory } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    const firstSwitch = setSession("agent:main:A");
+    historyA.resolve({
+      sessionId: "session-a",
+      messages: [{ role: "user", content: "message from A" }],
+    });
+    await vi.waitFor(() => expect(listSessions).toHaveBeenCalledTimes(1));
+
+    const secondSwitch = setSession("agent:main:B");
+    historyB.resolve({
+      sessionId: "session-b",
+      messages: [{ role: "user", content: "message from B" }],
+    });
+
+    sessionInfoA.resolve({
+      defaults: {},
+      sessions: [{ key: "agent:main:A", sessionId: "session-a", updatedAt: 10 }],
+    });
+    await vi.waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2));
+    sessionInfoB.resolve({
+      defaults: {},
+      sessions: [{ key: "agent:main:B", sessionId: "session-b", updatedAt: 20 }],
+    });
+    await Promise.all([firstSwitch, secondSwitch]);
+
+    expect(state.currentSessionKey).toBe("agent:main:B");
+    expect(state.currentSessionId).toBe("session-b");
+    const renderedUsers = addUser.mock.calls.map((call) => call[0]);
+    expect(renderedUsers).toContain("message from B");
+    expect(renderedUsers).not.toContain("message from A");
+    expect(addSystem).not.toHaveBeenCalledWith(expect.stringContaining("sessions list failed"));
+  });
+
+  it("ignores stale session info after switching away and back to the same key", async () => {
+    const firstHistoryA = createDeferred<unknown>();
+    const historyB = createDeferred<unknown>();
+    const secondHistoryA = createDeferred<unknown>();
+    const firstSessionInfoA = createDeferred<unknown>();
+    const loadHistory = vi
+      .fn()
+      .mockImplementationOnce(() => firstHistoryA.promise)
+      .mockImplementationOnce(() => historyB.promise)
+      .mockImplementationOnce(() => secondHistoryA.promise);
+    const listSessions = vi.fn(() => firstSessionInfoA.promise);
+    const state = createBaseState({ currentSessionKey: "agent:main:home" });
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions, loadHistory } as unknown as TuiBackend,
+      state,
+    });
+
+    const firstSwitchA = setSession("agent:main:A");
+    firstHistoryA.resolve({ sessionId: "session-a-old", messages: [] });
+    await vi.waitFor(() => expect(listSessions).toHaveBeenCalledTimes(1));
+
+    const switchB = setSession("agent:main:B");
+    historyB.resolve({
+      sessionInfo: { key: "agent:main:B", sessionId: "session-b", updatedAt: 20 },
+      messages: [],
+    });
+    await switchB;
+
+    const secondSwitchA = setSession("agent:main:A");
+    secondHistoryA.resolve({
+      sessionInfo: {
+        key: "agent:main:A",
+        sessionId: "session-a-new",
+        model: "new-model",
+        updatedAt: 30,
+      },
+      messages: [],
+    });
+    await secondSwitchA;
+
+    firstSessionInfoA.resolve({
+      defaults: {},
+      sessions: [
+        {
+          key: "agent:main:A",
+          sessionId: "session-a-old",
+          model: "old-model",
+          updatedAt: 10,
+        },
+      ],
+    });
+    await firstSwitchA;
+
+    expect(state.currentSessionKey).toBe("agent:main:A");
+    expect(state.currentSessionId).toBe("session-a-new");
+    expect(state.sessionInfo.model).toBe("new-model");
+  });
+
   it("applies default model info when the current session has no persisted entry yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
@@ -1248,7 +1469,7 @@ describe("tui session actions", () => {
       messages: [],
     });
     const rememberSessionKey = vi.fn();
-    const state = createBaseState();
+    const state = createBaseState({ currentSessionKey: "main" });
 
     const { loadHistory: runLoadHistory } = createTestSessionActions({
       client: {
@@ -1262,6 +1483,7 @@ describe("tui session actions", () => {
     await runLoadHistory();
 
     expect(state.currentSessionId).toBe("session-main");
+    expect(state.currentSessionKey).toBe("agent:main:main");
     expect(rememberSessionKey).toHaveBeenCalledWith("agent:main:main");
   });
 
@@ -1482,3 +1704,4 @@ describe("tui session actions", () => {
     expect(state.currentSessionId).toBe("session-work-global");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2227,3 +2227,4 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("then: /acp doctor");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

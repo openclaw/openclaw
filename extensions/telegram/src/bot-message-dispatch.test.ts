@@ -24,7 +24,11 @@ import {
   recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual,
   registerTelegramOutboundGroupHistoryRecorder,
 } from "./outbound-message-context.js";
-import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import { setTelegramRuntime } from "./runtime.js";
+import {
+  clearTelegramRuntimeForTest as clearTelegramRuntime,
+  resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests,
+} from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
@@ -189,7 +193,6 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
-let resetTelegramReplyFenceForTests: typeof import("./bot-message-dispatch.js").resetTelegramReplyFenceForTests;
 
 function installTelegramStateRuntimeForTest(): void {
   setTelegramRuntime({
@@ -243,8 +246,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
   const trailingFinalStatusText = "Post-final plugin status";
 
   beforeAll(async () => {
-    ({ dispatchTelegramMessage, resetTelegramReplyFenceForTests } =
-      await import("./bot-message-dispatch.js"));
+    ({ dispatchTelegramMessage } = await import("./bot-message-dispatch.js"));
   });
 
   beforeEach(() => {
@@ -561,13 +563,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
     onTurnDeferred?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnDeferred"];
     onTurnAbandoned?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnAbandoned"];
     turnAbortSignal?: Parameters<typeof dispatchTelegramMessage>[0]["turnAbortSignal"];
+    runtime?: Parameters<typeof dispatchTelegramMessage>[0]["runtime"];
   }) {
     const bot = params.bot ?? createBot();
     return await dispatchTelegramMessage({
       context: params.context,
       bot,
       cfg: params.cfg ?? {},
-      runtime: createRuntime(),
+      runtime: params.runtime ?? createRuntime(),
       replyToMode: params.replyToMode ?? "first",
       streamMode: params.streamMode ?? "partial",
       textLimit: params.textLimit ?? 4096,
@@ -767,7 +770,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const preview = renderText?.("| A | B |\n| --- | --- |\n| 1 | 2 |");
     expect(preview?.richMessage).toEqual(
       expect.objectContaining({
-        html: expect.stringContaining("<table bordered striped>"),
+        blocks: [expect.objectContaining({ type: "table", is_bordered: true, is_striped: true })],
       }),
     );
   });
@@ -7054,6 +7057,68 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await sidePromise;
   });
 
+  it("does not acquire reply-fence ownership when draft initialization fails", async () => {
+    const sessionKey = "agent:main:telegram:direct:draft-init-failure";
+    createTelegramDraftStream.mockImplementationOnce(() => {
+      throw new Error("draft initialization failed");
+    });
+
+    await expect(
+      dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: sessionKey,
+            ChatType: "direct",
+          } as TelegramMessageContext["ctxPayload"],
+        }),
+      }),
+    ).rejects.toThrow("draft initialization failed");
+
+    const { supersedeTelegramReplyFence } = await import("./telegram-reply-fence.js");
+    expect(supersedeTelegramReplyFence(sessionKey)).toBe(false);
+  });
+
+  it("cleans delivery correlation when reply-pipeline initialization fails", async () => {
+    const sessionKey = "agent:main:telegram:direct:pipeline-init-failure";
+    const statusReactionController = createStatusReactionController();
+    const reactionApi = vi.fn(async () => undefined);
+    const runtime = createRuntime();
+    runtime.error = vi.fn(() => {
+      notifyTelegramInboundEventOutboundSuccess({
+        sessionKey,
+        to: "123",
+        accountId: "default",
+      });
+    });
+    createChannelMessageReplyPipeline.mockImplementationOnce(() => {
+      throw new Error("pipeline initialization failed");
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: sessionKey,
+          ChatType: "direct",
+        } as TelegramMessageContext["ctxPayload"],
+        statusReactionController: statusReactionController as never,
+        reactionApi,
+        removeAckAfterReply: true,
+      }),
+      cfg: {
+        messages: {
+          statusReactions: {
+            timing: { errorHoldMs: 0 },
+          },
+        },
+      },
+      runtime,
+      suppressFailureFallback: true,
+    });
+
+    await vi.waitFor(() => expect(statusReactionController.restoreInitial).toHaveBeenCalled());
+    expect(reactionApi).not.toHaveBeenCalled();
+  });
+
   it("releases fence abort authority at turn adoption", async () => {
     const historyKey = "telegram:group:-100123";
     const groupHistories = new Map([[historyKey, []]]);
@@ -8403,3 +8468,4 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

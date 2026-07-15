@@ -25,9 +25,9 @@ import {
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
+  buildProviderReplayFamilyHooks,
   cloneFirstTemplateModel,
   modelCostsEqual,
-  NATIVE_ANTHROPIC_REPLAY_HOOKS,
   type ProviderPlugin,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
@@ -60,6 +60,18 @@ import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "anthropic";
+
+// Anthropic-native error descriptors stay with the Anthropic provider hook.
+function classifyAnthropicFailoverDescriptor(value: string | undefined) {
+  switch (value?.trim().toUpperCase()) {
+    case "RATE_LIMIT_ERROR":
+      return "rate_limit" as const;
+    case "API_ERROR":
+      return "server_error" as const;
+    default:
+      return undefined;
+  }
+}
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-8";
 const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
@@ -884,15 +896,17 @@ export function buildAnthropicProvider(): ProviderPlugin {
         : undefined,
     // Publish Claude CLI rows through the provider catalog hook.
     augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
-    ...NATIVE_ANTHROPIC_REPLAY_HOOKS,
+    ...buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }),
     isModernModelRef: ({ provider, modelId }) =>
       matchesAnthropicModernModel(modelId) &&
       (!isAnthropicMandatoryClaude5Model(modelId) ||
         normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID),
     resolveReasoningOutputMode: () => "native",
+    classifyFailoverReason: ({ code, errorType }) =>
+      classifyAnthropicFailoverDescriptor(errorType) ?? classifyAnthropicFailoverDescriptor(code),
     resolveThinkingProfile: ({ provider, modelId, params }) => {
       const contractModelId = resolveClaudeModelIdentity({ id: modelId, params });
-      return isAnthropicMandatoryClaude5Model(contractModelId) &&
+      return isAnthropicMythos5Model(contractModelId) &&
         normalizeLowercaseStringOrEmpty(provider) !== PROVIDER_ID
         ? CLAUDE_CLI_OFF_THINKING_PROFILE
         : resolveClaudeThinkingProfile(contractModelId, undefined, {
@@ -924,3 +938,4 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     api.registerNodeInvokePolicy(policy);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

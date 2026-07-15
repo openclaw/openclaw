@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS,
   getSuspensionVisibleCronTaskRunCount,
   resetActiveCronTaskRunsForTests,
   retireActiveCronTaskRunTracking,
@@ -8,6 +7,8 @@ import {
   trackActiveCronTaskRunSettlement,
   waitForActiveCronTaskRuns,
 } from "./active-run-cancellation.js";
+
+const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
 
 describe("cron task cancellation tracking", () => {
   it("retires restart tracking while keeping an unsettled core suspension-visible", async () => {
