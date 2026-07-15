@@ -523,6 +523,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     ctx.prompter.repairMode.canPrompt || ctx.prompter.shouldRepair;
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
+    doctorOnlyStateMigrations: true,
     crossStateDirImports:
       ctx.options.crossStateDirImports === true && operatorCanApproveCrossStateDirImports,
   });

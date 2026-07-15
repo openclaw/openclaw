@@ -170,7 +170,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/commands/backup-shared.ts: resolveBackupPlanFromPaths",
   "src/commands/doctor-auth-oauth-sidecar.ts: testing",
   "src/commands/doctor-auth.ts: legacyCodexProviderOverrideToHealthFinding",
-  "src/commands/doctor-heartbeat-main-session-repair.ts: clearTuiLastSessionPointers",
   "src/commands/doctor-heartbeat-main-session-repair.ts: moveHeartbeatMainSessionEntry",
   "src/commands/doctor-heartbeat-main-session-repair.ts: resolveHeartbeatMainSessionRepairCandidate",
   "src/commands/doctor-sandbox.ts: resolveSandboxScript",
