@@ -59,6 +59,7 @@ const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
 const COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT = "0";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG = `--allow-build=${PRIMARY_PACKAGE_NAME}`;
+const BUN_OPENCLAW_TRUST_FLAG = "--trust";
 const FIRST_PACKAGED_DIST_INVENTORY_VERSION = { major: 2026, minor: 4, patch: 15 };
 const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
   "dist/extensions/qa-channel",
@@ -104,23 +105,6 @@ function isExplicitPackageInstallSpec(value: string): boolean {
     trimmed.includes("://") ||
     trimmed.includes("#") ||
     /^(?:file|github|git\+ssh|git\+https|git\+http|git\+file|npm):/i.test(trimmed)
-  );
-}
-
-function stripPrimaryPackageAlias(spec: string): string {
-  const normalized = normalizePackageTarget(spec);
-  const prefix = `${PRIMARY_PACKAGE_NAME}@`;
-  return normalized.toLowerCase().startsWith(prefix)
-    ? normalized.slice(prefix.length).trim()
-    : normalized;
-}
-
-function isPnpmOpenClawSourceInstallSpec(spec: string): boolean {
-  const target = stripPrimaryPackageAlias(spec);
-  return (
-    /^github:/i.test(target) ||
-    /^git\+(?:ssh|https|http|file):/i.test(target) ||
-    /^git:/i.test(target)
   );
 }
 
@@ -914,7 +898,7 @@ export async function detectGlobalInstallManagerByPresence(
 
 /**
  * Builds the primary package-manager argv for a global OpenClaw install.
- * npm receives quiet/freshness-bypass flags; pnpm source installs allow builds.
+ * npm receives quiet/freshness-bypass flags; pnpm and Bun approve OpenClaw's lifecycle.
  */
 export function globalInstallArgs(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
@@ -929,12 +913,12 @@ export function globalInstallArgs(
       "add",
       "-g",
       ...(installPrefix ? ["--global-dir", installPrefix] : []),
-      ...(isPnpmOpenClawSourceInstallSpec(spec) ? [PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG] : []),
+      PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG,
       spec,
     ];
   }
   if (resolved.manager === "bun") {
-    return [resolved.command, "add", "-g", spec];
+    return [resolved.command, "add", "-g", BUN_OPENCLAW_TRUST_FLAG, spec];
   }
   return [
     resolved.command,
