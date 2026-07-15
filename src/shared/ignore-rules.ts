@@ -49,9 +49,7 @@ export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()): Ign
   return ig;
 }
 
-function readIgnoreFileContent(
-  ignorePath: string,
-): string | null | typeof OVERSIZED_IGNORE_FILE {
+function readIgnoreFileContent(ignorePath: string): string | null | typeof OVERSIZED_IGNORE_FILE {
   // readRegularFileSync rejects symlink final paths, but legacy ignore-file
   // loading followed symlinks. Resolve any symlink chain to the final regular
   // target so the bounded read still honors the original semantics.
