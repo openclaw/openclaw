@@ -3484,6 +3484,10 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain('packageName: "@openclaw/ai"');
     expect(npmWorkflow).toContain("AI_TARBALL_SHA256");
     expect(npmWorkflow).toContain("does not match openclaw");
+    expect(npmWorkflow).toContain("Frozen target does not depend on @openclaw/ai");
+    expect(npmWorkflow).toContain("dependencyTarballs: process.env.AI_TARBALL_NAME");
+    expect(npmWorkflow).toContain('verify_args=("$TARBALL_PATH" "$PACKAGE_VERSION")');
+    expect(npmWorkflow).toContain("Frozen target without an @openclaw/ai dependency");
     const npmTelegramWorkflow = readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8");
     expect(npmTelegramWorkflow).toContain("preflight-manifest.json");
     expect(npmTelegramWorkflow).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR");
