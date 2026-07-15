@@ -89,6 +89,32 @@ describe("MatrixAuthedHttpClient", () => {
     expect(result).toEqual({ ok: true });
   });
 
+  it.each(["application/json-seq", 'text/plain; profile="application/json"'])(
+    "does not parse a non-JSON media type containing application/json (%s)",
+    async (contentType) => {
+      performMatrixRequestMock.mockResolvedValue({
+        response: new Response('{"ok":true}', {
+          status: 200,
+          headers: { "content-type": contentType },
+        }),
+        text: '{"ok":true}',
+        buffer: Buffer.from('{"ok":true}', "utf8"),
+      });
+
+      const client = new MatrixAuthedHttpClient({
+        homeserver: "https://matrix.example.org",
+        accessToken: "token",
+      });
+      const result = await client.requestJson({
+        method: "GET",
+        endpoint: "/_matrix/client/v3/account/whoami",
+        timeoutMs: 5000,
+      });
+
+      expect(result).toBe('{"ok":true}');
+    },
+  );
+
   it("returns plain text when response is not JSON", async () => {
     performMatrixRequestMock.mockResolvedValue({
       response: new Response("pong", {
