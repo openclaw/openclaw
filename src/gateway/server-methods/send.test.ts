@@ -2296,6 +2296,9 @@ describe("gateway send mirroring", () => {
             expiresAtMs: Date.now() + 60_000,
             sessionId: "session-shared-key",
             sourceReplyFinal,
+            sourceReplyToolCallId: sourceReplyFinal
+              ? "message-call-shared-terminal"
+              : "message-call-shared-progress",
             toolContext: {
               currentChannelProvider: "telegram",
               currentChannelId: "chat-123",
@@ -2323,6 +2326,49 @@ describe("gateway send mirroring", () => {
     expect(appendTranscriptCall(1)?.idempotencyKey).toBe(
       "idem-shared-source-message-action:terminal-receipt:channel-user:v1:shared-key",
     );
+  });
+
+  it("rejects a terminal source send without tool-call correlation before dispatch", async () => {
+    const sessionKey = "agent:main:telegram:direct:chat-123";
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: { to: "chat-123", message: "uncorrelated terminal" },
+        sessionKey,
+        sessionId: "session-uncorrelated-terminal",
+        agentId: "main",
+        idempotencyKey: "idem-uncorrelated-terminal",
+      },
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              sessionId: "session-uncorrelated-terminal",
+              sourceReplyFinal: true,
+              toolContext: {
+                currentChannelProvider: "telegram",
+                currentChannelId: "chat-123",
+                currentSourceTurnId: "channel-user:v1:uncorrelated-terminal",
+              },
+            },
+          },
+        },
+      },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(firstRespondCall(respond)[2]?.message).toContain(
+      "terminal source reply requires tool-call correlation",
+    );
+    expect(mocks.beginRestartRecoveryTerminalDelivery).not.toHaveBeenCalled();
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
   it("does not retry a delivered terminal reply when receipt finalization fails", async () => {

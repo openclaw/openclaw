@@ -409,17 +409,25 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   if (!messageActionContext) {
     return undefined;
   }
+  const sourceReplyToolCallId = normalizeOptionalString(params.sourceReplyToolCallId);
+  if (params.sourceReplyFinal === true && !sourceReplyToolCallId) {
+    throw new Error("terminal source reply requires tool-call correlation");
+  }
+  const resolvedMessageActionContext =
+    params.sourceReplyFinal === true
+      ? {
+          ...messageActionContext,
+          sourceReplyFinal: true as const,
+          sourceReplyToolCallId: sourceReplyToolCallId!,
+        }
+      : {
+          ...messageActionContext,
+          ...(params.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
+          ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
+        };
   return await mintAgentRuntimeIdentityToken({
     ...identity,
-    messageActionContext: {
-      ...messageActionContext,
-      ...(params.sourceReplyFinal !== undefined
-        ? { sourceReplyFinal: params.sourceReplyFinal }
-        : {}),
-      ...(params.sourceReplyToolCallId
-        ? { sourceReplyToolCallId: params.sourceReplyToolCallId }
-        : {}),
-    },
+    messageActionContext: resolvedMessageActionContext,
   });
 }
 

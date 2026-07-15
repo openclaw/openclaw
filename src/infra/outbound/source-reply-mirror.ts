@@ -158,12 +158,14 @@ function resolveCurrentSourceTurnId(
 function resolveTerminalSourceReplyDeliveryReceipt(
   params: SourceReplyTranscriptMirrorParams,
 ): TerminalSourceReplyDeliveryReceipt | undefined {
-  if (
-    params.sourceReplyFinal !== true ||
-    !params.sessionId ||
-    !normalizeOptionalString(params.toolCallId) ||
-    !isCurrentSourceConversation(params)
-  ) {
+  const toolCallId = normalizeOptionalString(params.toolCallId);
+  if (params.sourceReplyFinal !== true) {
+    return undefined;
+  }
+  if (!toolCallId) {
+    throw new Error("terminal source reply requires tool-call correlation");
+  }
+  if (!params.sessionId || !isCurrentSourceConversation(params)) {
     return undefined;
   }
   const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
@@ -176,7 +178,7 @@ function resolveTerminalSourceReplyDeliveryReceipt(
     sessionKey: params.sessionKey,
     sourceTurnId,
     storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
-    toolCallId: normalizeOptionalString(params.toolCallId)!,
+    toolCallId,
   };
 }
 

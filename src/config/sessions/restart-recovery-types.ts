@@ -1,4 +1,3 @@
-import type { SourceReplyDeliveryMode } from "../../auto-reply/source-reply-delivery-mode.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
 export type RestartRecoveryBeforeAgentReplyState =
@@ -23,6 +22,6 @@ export type SessionRestartRecoveryState = {
   restartRecoveryRequesterSenderId?: string;
   restartRecoverySameChannelThreadRequired?: true;
   restartRecoverySourceIngress?: "channel";
-  restartRecoverySourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  restartRecoverySourceReplyDeliveryMode?: "automatic" | "message_tool_only";
   restartRecoveryTerminalRunIds?: string[];
 };

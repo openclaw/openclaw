@@ -13,15 +13,25 @@ const MAX_ACTIVE_CAPABILITIES = 4096;
 const RUN_LIFETIME_EXPIRES_AT_MS = Number.MAX_SAFE_INTEGER;
 const CAPABILITY_COMPLETION_GRACE_MS = 60_000;
 
-export type AgentRuntimeMessageActionContext = {
+type AgentRuntimeMessageActionContextBase = {
   expiresAtMs: number;
-  sourceReplyFinal?: boolean;
-  sourceReplyToolCallId?: string;
   sessionId?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
   toolContext?: InternalChannelThreadingToolContext;
 };
+
+export type AgentRuntimeMessageActionContext = AgentRuntimeMessageActionContextBase &
+  (
+    | {
+        sourceReplyFinal: true;
+        sourceReplyToolCallId: string;
+      }
+    | {
+        sourceReplyFinal?: false;
+        sourceReplyToolCallId?: string;
+      }
+  );
 
 type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
   agentId: string;

@@ -130,14 +130,23 @@ function decodeMessageActionContext(
         skipCrossContextDecoration: readOptionalBoolean("skipCrossContextDecoration"),
       } satisfies InternalChannelThreadingToolContext)
     : undefined;
-  return {
+  const context = {
     expiresAtMs: value.expiresAtMs,
-    sourceReplyFinal,
-    sourceReplyToolCallId,
     sessionId: normalizeOptionalString(value.sessionId),
     requesterAccountId: normalizeOptionalString(value.requesterAccountId),
     requesterSenderId: normalizeOptionalString(value.requesterSenderId),
     toolContext,
+  };
+  if (sourceReplyFinal === true) {
+    if (!sourceReplyToolCallId) {
+      return undefined;
+    }
+    return { ...context, sourceReplyFinal: true, sourceReplyToolCallId };
+  }
+  return {
+    ...context,
+    ...(sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
+    ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
   };
 }
 
@@ -189,6 +198,12 @@ export async function mintAgentRuntimeIdentityToken(params: {
   sessionKey: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
 }): Promise<string> {
+  if (
+    params.messageActionContext?.sourceReplyFinal === true &&
+    !normalizeOptionalString(params.messageActionContext.sourceReplyToolCallId)
+  ) {
+    throw new Error("terminal source reply requires tool-call correlation");
+  }
   const messageActionContext = params.messageActionContext
     ? {
         ...params.messageActionContext,

@@ -526,6 +526,16 @@ describe("gateway tool defaults", () => {
             },
           },
         });
+        await expect(
+          resolveMessageActionAgentRuntimeIdentityToken({
+            opts: {},
+            target: "local",
+            turnCapability,
+            runId: "run-1",
+            sessionId: "session-1",
+            sourceReplyFinal: true,
+          }),
+        ).rejects.toThrow("terminal source reply requires tool-call correlation");
         expect(
           await resolveMessageActionAgentRuntimeIdentityToken({
             opts: {},
