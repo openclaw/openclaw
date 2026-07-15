@@ -14,7 +14,7 @@ import {
   removeTelegramNativeQuoteParam,
 } from "../reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "../retry-after.js";
-import type { TelegramRichBlocksDegradationReason } from "../rich-blocks.js";
+import type { TelegramRichBlocksDegradationReason } from "../rich-block-model.js";
 import {
   buildTelegramRichMarkdownPlan,
   getTelegramRichRawApi,

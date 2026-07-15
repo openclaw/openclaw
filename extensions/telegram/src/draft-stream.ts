@@ -26,9 +26,9 @@ import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 import {
   inputRichBlocksToPlainText,
-  splitTelegramRichBlocks,
   type TelegramRichBlocksDegradationReason,
-} from "./rich-blocks.js";
+} from "./rich-block-model.js";
+import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import {
   buildTelegramRichBlocksPlan,
   buildTelegramRichMarkdownPlan,

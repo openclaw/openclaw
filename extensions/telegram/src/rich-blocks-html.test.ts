@@ -1,12 +1,9 @@
 // HTML-island → typed block mapping tests: this is the agent authoring contract
 // the core system prompt advertises for rich-enabled Telegram accounts.
 import { describe, expect, it } from "vitest";
-import {
-  countInputRichBlockChars,
-  markdownToTelegramRichBlocks,
-  splitTelegramRichBlocks,
-  type InputRichBlock,
-} from "./rich-blocks.js";
+import { countInputRichBlockChars, type InputRichBlock } from "./rich-block-model.js";
+import { splitTelegramRichBlocks } from "./rich-block-split.js";
+import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 
 function blocksFor(markdown: string): InputRichBlock[] {
   return markdownToTelegramRichBlocks(markdown).blocks;

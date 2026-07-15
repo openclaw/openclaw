@@ -16,7 +16,7 @@ import {
   resolveTelegramMessageCacheScope,
 } from "./message-cache.js";
 import { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
-import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-blocks.js";
+import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,

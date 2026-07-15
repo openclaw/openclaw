@@ -1,7 +1,7 @@
 // Telegram rich/plain fallback policy is shared by durable sends, final replies,
 // and draft previews. A second copy reintroduces silent drift in parse failures.
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import type { TelegramRichBlocksDegradationReason } from "./rich-blocks.js";
+import type { TelegramRichBlocksDegradationReason } from "./rich-block-model.js";
 
 // Any RICH_MESSAGE_*_INVALID rejection (entities, media, depth) degrades to
 // plain text; media content validity (e.g. AUDIO_INVALID for a non-decodable
