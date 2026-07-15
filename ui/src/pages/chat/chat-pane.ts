@@ -63,6 +63,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   applyChatAgentsList,
   clearChatHistory,
@@ -70,7 +71,6 @@ import {
   loadOlderChatHistoryPage,
   resolveChatHistoryPagination,
   syncSelectedSessionMessageSubscription,
-  type ChatHistoryPagination,
 } from "./chat-history.ts";
 import { dismissChatError, resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
