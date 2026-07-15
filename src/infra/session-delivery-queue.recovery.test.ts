@@ -694,6 +694,111 @@ describe("session-delivery queue recovery", () => {
     });
   });
 
+  it.each(["runtime", "startup"] as const)(
+    "reconciles an accepted agent turn before %s retry exhaustion",
+    async (mode) => {
+      if (mode === "startup") {
+        vi.useFakeTimers();
+      }
+      try {
+        await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+          const id = await enqueueSessionDelivery(
+            {
+              kind: "agentTurn",
+              sessionKey: "agent:main:main",
+              message: "generated image ready",
+              messageId: `image:task-exhausted-${mode}:agent-loop`,
+              maxRetries: 1,
+            },
+            tempDir,
+          );
+          const entry = await loadPendingSessionDeliveries(tempDir).then((entries) => entries[0]);
+          if (!entry) {
+            throw new Error("Expected pending session delivery");
+          }
+          await markSessionDeliveryAttemptStarted(entry, tempDir);
+          await failSessionDelivery(id, "final response lost", tempDir);
+
+          const deliver = vi.fn(async () => undefined);
+          if (mode === "startup") {
+            vi.setSystemTime(new Date(Date.now() + 60_000));
+          }
+          if (mode === "runtime") {
+            await drainPendingSessionDeliveries({
+              drainKey: `test-started-exhausted-${mode}`,
+              logLabel: "test started reconciliation",
+              deliver,
+              stateDir: tempDir,
+              log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+              selectEntry: (candidate) => ({ match: candidate.id === id, bypassBackoff: true }),
+            });
+          } else {
+            const summary = await recoverPendingSessionDeliveries({
+              deliver,
+              stateDir: tempDir,
+              log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+            });
+            expect(summary.skippedMaxRetries).toBe(0);
+          }
+
+          expect(deliver).toHaveBeenCalledWith(
+            expect.objectContaining({ id, deliveryStartedAt: expect.any(Number) }),
+            { stateDir: tempDir },
+          );
+          expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+        });
+      } finally {
+        if (mode === "startup") {
+          vi.useRealTimers();
+        }
+      }
+    },
+  );
+
+  it("dead-letters a started agent turn after its bounded reconciliation fails", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-reconciliation-failed:agent-loop",
+          maxRetries: 1,
+        },
+        tempDir,
+      );
+      const [entry] = await loadPendingSessionDeliveries(tempDir);
+      if (!entry) {
+        throw new Error("Expected pending session delivery");
+      }
+      await markSessionDeliveryAttemptStarted(entry, tempDir);
+      await failSessionDelivery(id, "final response lost", tempDir);
+
+      const deliver = vi.fn(async () => {
+        throw new Error("terminal evidence unavailable");
+      });
+      const drain = async () =>
+        await drainPendingSessionDeliveries({
+          drainKey: "test-started-reconciliation-failed",
+          logLabel: "test started reconciliation",
+          deliver,
+          stateDir: tempDir,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          selectEntry: (candidate) => ({ match: candidate.id === id, bypassBackoff: true }),
+        });
+
+      await drain();
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
+        expect.objectContaining({ id, retryCount: 2, deliveryStartedAt: expect.any(Number) }),
+      ]);
+
+      await drain();
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+    });
+  });
+
   it("skips entries queued after the startup recovery cutoff", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));

@@ -126,6 +126,14 @@ function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number 
   return entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
 }
 
+function canReconcileStartedAgentAttemptAtRetryLimit(entry: QueuedSessionDelivery): boolean {
+  return (
+    entry.kind === "agentTurn" &&
+    entry.deliveryStartedAt !== undefined &&
+    entry.retryCount === resolveSessionDeliveryMaxRetries(entry)
+  );
+}
+
 function resolveSessionDeliveryRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
   const durationMs = resolveNonNegativeIntegerOption(maxRecoveryMs, 60_000);
   if (durationMs <= 0) {
@@ -256,6 +264,7 @@ export async function drainPendingSessionDeliveries(opts: {
         const pendingSettlementOutcome = resolvePendingSettlementOutcome(currentEntry);
         if (
           !pendingSettlementOutcome &&
+          !canReconcileStartedAgentAttemptAtRetryLimit(currentEntry) &&
           currentEntry.retryCount >= resolveSessionDeliveryMaxRetries(currentEntry)
         ) {
           await markSessionDeliverySettlement(currentEntry, "moved-to-failed", opts.stateDir);
@@ -350,6 +359,7 @@ export async function recoverPendingSessionDeliveries(opts: {
       const pendingSettlementOutcome = resolvePendingSettlementOutcome(currentEntry);
       if (
         !pendingSettlementOutcome &&
+        !canReconcileStartedAgentAttemptAtRetryLimit(currentEntry) &&
         currentEntry.retryCount >= resolveSessionDeliveryMaxRetries(currentEntry)
       ) {
         summary.skippedMaxRetries += 1;
