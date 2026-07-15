@@ -52,5 +52,6 @@ export type WorkerPlacementDispatchContract = {
   reclaim?(
     request: WorkerPlacementReclaimRequest,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>>;
+  forceDestroyEnvironment?(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   reconcileActive?(environmentId?: string): Promise<void>;
 };

@@ -13,6 +13,8 @@ import type {
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import { type WorkerEnvironmentService, workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 
 type WorkerLocalDispatchBarrier = (params: {
@@ -35,6 +37,7 @@ type WorkerPlacementDispatchOptions = {
   runLocalBarrier: WorkerLocalDispatchBarrier;
   runActivationBarrier: WorkerActivationBarrier;
   runReclaimBarrier: WorkerPlacementReclaimBarrier;
+  workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspacePath: (params: {
     sessionId: string;
     sessionKey: string;
@@ -69,6 +72,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     placements,
     runActivationBarrier: options.runActivationBarrier,
     resolveWorkspacePath: options.resolveWorkspacePath,
+    workspaceOperations: options.workspaceOperations,
   });
 
   const dispatch = async (
@@ -237,29 +241,38 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           environmentId: current.environmentId,
           ownerEpoch: current.activeOwnerEpoch,
         });
-        const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
-        let destroyed = false;
-        let reconciliation: Awaited<ReturnType<typeof tunnel.reconcileWorkspace>>;
-        try {
-          reconciliation = await tunnel.reconcileWorkspace({
-            localPath,
-            remoteWorkspaceDir: current.remoteWorkspaceDir,
-            baseManifestRef: current.workspaceBaseManifestRef,
-            journal,
-          });
-          if (!accepted) {
-            throw new Error("Cloud worker stop did not commit its reconciled workspace");
+        await options.workspaceOperations.run(current.environmentId, async () => {
+          const owned = placements.get(current.sessionId);
+          if (
+            owned?.state !== "active" ||
+            owned.generation !== current.generation ||
+            owned.environmentId !== current.environmentId ||
+            owned.activeOwnerEpoch !== current.activeOwnerEpoch ||
+            owned.turnClaim
+          ) {
+            throw new Error("Cloud worker stop lost its placement owner before reconciliation");
           }
-          await reconciliation.verifyLocalStable();
-          await reconciliation.verifyStable();
-          await quiescence.assertActive();
-          await environments.destroy(current.environmentId);
-          destroyed = true;
-        } finally {
-          if (!destroyed) {
-            await quiescence.resume();
+          const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
+          let destroyed = false;
+          try {
+            const reconciliation = await tunnel.reconcileWorkspace({
+              localPath,
+              remoteWorkspaceDir: current.remoteWorkspaceDir,
+              baseManifestRef: current.workspaceBaseManifestRef,
+              journal,
+            });
+            if (!accepted) {
+              throw new Error("Cloud worker stop did not commit its reconciled workspace");
+            }
+            await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+            await environments.destroy(current.environmentId);
+            destroyed = true;
+          } finally {
+            if (!destroyed) {
+              await quiescence.resume();
+            }
           }
-        }
+        });
         try {
           await environments.stopTunnel(current.environmentId, current.activeOwnerEpoch);
         } catch {
@@ -305,8 +318,15 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
 
   return {
     dispatch,
-    forceAbandonEnvironment: (environmentId: string) =>
-      forceAbandonWorkerEnvironment(placements, environmentId),
+    forceDestroyEnvironment: (environmentId: string) =>
+      options.workspaceOperations.run(environmentId, async () => {
+        await forceAbandonWorkerEnvironment({
+          placements,
+          environmentId,
+          resolveWorkspacePath: options.resolveWorkspacePath,
+        });
+        return await environments.destroy(environmentId);
+      }),
     reclaim,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,

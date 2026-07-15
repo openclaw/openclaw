@@ -20,6 +20,7 @@ import {
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/workspace-reconcile.js";
 
 const WORKER_PLACEMENT_RECONCILE_INTERVAL_MS = 60_000;
@@ -80,6 +81,26 @@ function coordinateWorkerPlacementDispatch(
     void current.then(clearCurrent, clearCurrent);
     return current;
   };
+  const runExclusivePlacementOperation = <T>(operation: () => Promise<T>): Promise<T> => {
+    const current = (async () => {
+      const pendingReconciliation = reconciliation;
+      if (pendingReconciliation) {
+        await pendingReconciliation.catch(() => undefined);
+      }
+      await waitForDispatchIdle();
+      return await operation();
+    })();
+    const barrier = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    reconciliation = barrier;
+    return current.finally(() => {
+      if (reconciliation === barrier) {
+        reconciliation = undefined;
+      }
+    });
+  };
   const runPlacementOperation = async <T>(operation: () => Promise<T>): Promise<T> => {
     for (;;) {
       const pendingReconciliation = reconciliation;
@@ -104,6 +125,8 @@ function coordinateWorkerPlacementDispatch(
   };
   return {
     dispatch: async (request) => await runPlacementOperation(() => service.dispatch(request)),
+    forceDestroyEnvironment: (environmentId) =>
+      runExclusivePlacementOperation(() => service.forceDestroyEnvironment(environmentId)),
     reclaim: async (request) => await runPlacementOperation(() => service.reclaim(request)),
     reconcile: () => runReconciliation(service.reconcile),
     reconcileActive: () => runReconciliation(service.reconcileActive),
@@ -123,6 +146,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
 export type GatewayWorkerPlacementRuntime = ReturnType<typeof createGatewayWorkerPlacementRuntime>;
 
 export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlacementRuntimeParams) {
+  const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const resolveWorkspacePath = async ({
     sessionId,
     sessionKey,
@@ -428,12 +452,14 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         return reclaimedPlacement;
       },
       resolveWorkspacePath,
+      workspaceOperations,
     }),
   );
   const admissionProvider = createWorkerSessionTurnPlacementProvider({
     environments: params.environments,
     placements: params.placements,
     admitNewPlacements: params.admitNewPlacements,
+    workspaceOperations,
   });
   const recoverPendingWorkspaceReconciliations = async (): Promise<void> => {
     for (const owner of params.placements.listWorkspaceReconciliationOwners()) {

@@ -1,18 +1,40 @@
 import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
+import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 
-export function forceAbandonWorkerEnvironment(
-  placements: WorkerDispatchPlacementStore,
-  environmentId: string,
-): void {
+export async function forceAbandonWorkerEnvironment(params: {
+  placements: WorkerDispatchPlacementStore;
+  environmentId: string;
+  resolveWorkspacePath: (placement: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }) => Promise<string>;
+}): Promise<void> {
+  const { environmentId, placements } = params;
   const recoveryError = "Cloud worker result abandoned by forced operator teardown";
+  for (const owner of placements.listWorkspaceReconciliationOwners()) {
+    if (owner.environmentId !== environmentId) {
+      continue;
+    }
+    const placement = placements.get(owner.sessionId);
+    if (
+      (placement?.state !== "active" && placement?.state !== "draining") ||
+      placement.environmentId !== owner.environmentId ||
+      placement.activeOwnerEpoch !== owner.ownerEpoch ||
+      placement.generation !== owner.placementGeneration
+    ) {
+      throw new Error(`Forced teardown found a stale workspace journal: ${owner.sessionId}`);
+    }
+    const journal = placements.loadWorkspaceReconciliation(owner);
+    if (journal) {
+      const root = await params.resolveWorkspacePath(placement);
+      await recoverWorkerWorkspaceReconciliation({ root, journal });
+      placements.abortWorkspaceReconciliation(owner);
+    }
+  }
   for (const pending of placements.listPendingWorkspaceResults()) {
     if (pending.environmentId === environmentId) {
       placements.abandonWorkspaceResult(pending);
-    }
-  }
-  for (const owner of placements.listWorkspaceReconciliationOwners()) {
-    if (owner.environmentId === environmentId) {
-      placements.abortWorkspaceReconciliation(owner);
     }
   }
   for (const placement of placements.listForReconcile()) {

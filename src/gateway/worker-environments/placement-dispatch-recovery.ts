@@ -11,6 +11,8 @@ import {
   type WorkerStartingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 function sameActiveEnvironment(
   placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
@@ -47,6 +49,7 @@ export function createPlacementRecoveryActions(deps: {
   environments: WorkerDispatchEnvironmentService;
   runActivationBarrier: WorkerActivationBarrier;
   failure: PlacementFailureActions;
+  workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspacePath: (params: {
     sessionId: string;
     sessionKey: string;
@@ -150,47 +153,60 @@ export function createPlacementRecoveryActions(deps: {
           environmentId: placement.environmentId,
           ownerEpoch: placement.activeOwnerEpoch,
         });
-        const quiescence = await tunnel.quiesceWorkspace(placement.remoteWorkspaceDir);
-        let quiescenceHandled = false;
-        try {
-          const reconciliation = await tunnel.reconcileWorkspace({
-            localPath,
-            remoteWorkspaceDir: placement.remoteWorkspaceDir,
-            baseManifestRef: placement.workspaceBaseManifestRef,
-            journal: {
-              load: () => placements.loadWorkspaceReconciliation(owner),
-              begin: (journal) => placements.beginWorkspaceReconciliation(owner, journal),
-              commit: (manifestRef) =>
-                placements.updateWorkspaceBaseManifest({ claim: turnClaim, manifestRef }),
-              abort: () => placements.abortWorkspaceReconciliation(owner),
-            },
-          });
-          await reconciliation.verifyLocalStable();
-          await reconciliation.verifyStable();
-          await quiescence.assertActive();
-          placements.acceptWorkspaceResult(turnClaim);
-          if (sameGatewayInstance) {
-            await quiescence.resume();
-            quiescenceHandled = true;
-            placements.completeWorkspaceResultAndReleaseTurn(turnClaim);
-          } else {
-            await environments.destroy(placement.environmentId);
-            quiescenceHandled = true;
-            const reclaimed = placements.completeWorkspaceResultAndReleaseTurn(turnClaim, {
-              reclaim: true,
+        await deps.workspaceOperations.run(placement.environmentId, async () => {
+          const owned = placements.get(placement.sessionId);
+          const ownedClaim = owned?.turnClaim;
+          if (
+            (owned?.state !== "active" && owned?.state !== "draining") ||
+            owned.generation !== placement.generation ||
+            owned.environmentId !== placement.environmentId ||
+            owned.activeOwnerEpoch !== placement.activeOwnerEpoch ||
+            ownedClaim?.owner !== "worker" ||
+            ownedClaim.claimId !== claim.claimId ||
+            ownedClaim.runId !== claim.runId
+          ) {
+            throw new Error("Recovered workspace result lost its placement owner");
+          }
+          const quiescence = await tunnel.quiesceWorkspace(placement.remoteWorkspaceDir);
+          let quiescenceHandled = false;
+          try {
+            const reconciliation = await tunnel.reconcileWorkspace({
+              localPath,
+              remoteWorkspaceDir: placement.remoteWorkspaceDir,
+              baseManifestRef: placement.workspaceBaseManifestRef,
+              journal: {
+                load: () => placements.loadWorkspaceReconciliation(owner),
+                begin: (journal) => placements.beginWorkspaceReconciliation(owner, journal),
+                commit: (manifestRef) =>
+                  placements.updateWorkspaceBaseManifest({ claim: turnClaim, manifestRef }),
+                abort: () => placements.abortWorkspaceReconciliation(owner),
+              },
             });
-            if (reclaimed.state !== "reclaimed") {
-              throw new Error("Recovered worker result did not reclaim its stale environment");
+            await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+            placements.acceptWorkspaceResult(turnClaim);
+            if (sameGatewayInstance) {
+              await quiescence.resume();
+              quiescenceHandled = true;
+              placements.completeWorkspaceResultAndReleaseTurn(turnClaim);
+            } else {
+              await environments.destroy(placement.environmentId);
+              quiescenceHandled = true;
+              const reclaimed = placements.completeWorkspaceResultAndReleaseTurn(turnClaim, {
+                reclaim: true,
+              });
+              if (reclaimed.state !== "reclaimed") {
+                throw new Error("Recovered worker result did not reclaim its stale environment");
+              }
+              await environments
+                .stopTunnel(placement.environmentId, placement.activeOwnerEpoch)
+                .catch(() => undefined);
             }
-            await environments
-              .stopTunnel(placement.environmentId, placement.activeOwnerEpoch)
-              .catch(() => undefined);
+          } finally {
+            if (!quiescenceHandled) {
+              await quiescence.resume();
+            }
           }
-        } finally {
-          if (!quiescenceHandled) {
-            await quiescence.resume();
-          }
-        }
+        });
       } catch {
         // Keep the result, claim, and environment fenced. The next sweep retries.
       }

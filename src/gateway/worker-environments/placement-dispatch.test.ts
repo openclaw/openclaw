@@ -26,6 +26,7 @@ import {
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 function createHarness(
   placementStore: PlacementStore,
@@ -232,6 +233,7 @@ function createHarness(
   const service = createWorkerPlacementDispatchService({
     placements,
     environments,
+    workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => {
       log.push("barrier");
       const placement = startDispatch();
@@ -347,13 +349,14 @@ describe("worker placement dispatch", () => {
       workspaceBaseManifestRef: harness.reconciledManifestRef,
     });
 
-    expect(harness.log.slice(-9)).toEqual([
+    expect(harness.log.slice(-10)).toEqual([
       "tunnel:attached",
       "workspace:quiesce",
       "workspace:reconcile",
-      "workspace:verify-local",
       "workspace:verify",
+      "workspace:verify-local",
       "workspace:lease",
+      "workspace:verify-local",
       "teardown:destroy",
       "teardown:stop",
       "placement:reclaimed",

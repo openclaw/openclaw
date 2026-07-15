@@ -25,6 +25,11 @@ import {
   parseRuntimeResult,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import {
+  createWorkerWorkspaceOperationCoordinator,
+  type WorkerWorkspaceOperationCoordinator,
+} from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 
 const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker';
@@ -46,6 +51,7 @@ type WorkerTurnLauncherOptions = {
   admitNewPlacements?: boolean;
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
+  workspaceOperations?: WorkerWorkspaceOperationCoordinator;
   redispatchReclaimed?: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
 };
 
@@ -206,6 +212,7 @@ async function executeWorkerTurn(params: {
   onHandoff: () => void;
   placement: ActiveWorkerPlacement;
   placements: WorkerSessionPlacementStore;
+  workspaceOperations: WorkerWorkspaceOperationCoordinator;
   turn: SessionPlacementTurnParams;
   turnClaim: WorkerSessionTurnClaim;
 }) {
@@ -442,30 +449,33 @@ async function executeWorkerTurn(params: {
     placementGeneration: currentPlacement.generation,
   };
   try {
-    const quiescence = await tunnel.quiesceWorkspace(currentPlacement.remoteWorkspaceDir);
-    let resumed = false;
-    try {
-      const reconciliation = await tunnel.reconcileWorkspace({
-        localPath: turn.workspaceDir,
-        remoteWorkspaceDir: currentPlacement.remoteWorkspaceDir,
-        baseManifestRef: currentPlacement.workspaceBaseManifestRef,
-        journal,
-      });
-      if (!manifestAccepted) {
-        throw new Error("Cloud worker workspace reconciliation was not durably accepted");
+    await params.workspaceOperations.run(currentPlacement.environmentId, async () => {
+      if (!params.placements.validateTurnClaim(params.turnClaim)) {
+        throw new Error("Cloud worker workspace result lost its turn claim");
       }
-      await reconciliation.verifyLocalStable();
-      await reconciliation.verifyStable();
-      await quiescence.assertActive();
-      params.placements.acceptWorkspaceResult(params.turnClaim);
-      await quiescence.resume();
-      resumed = true;
-      params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
-    } finally {
-      if (!resumed) {
+      const quiescence = await tunnel.quiesceWorkspace(currentPlacement.remoteWorkspaceDir);
+      let resumed = false;
+      try {
+        const reconciliation = await tunnel.reconcileWorkspace({
+          localPath: turn.workspaceDir,
+          remoteWorkspaceDir: currentPlacement.remoteWorkspaceDir,
+          baseManifestRef: currentPlacement.workspaceBaseManifestRef,
+          journal,
+        });
+        if (!manifestAccepted) {
+          throw new Error("Cloud worker workspace reconciliation was not durably accepted");
+        }
+        await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+        params.placements.acceptWorkspaceResult(params.turnClaim);
         await quiescence.resume();
+        resumed = true;
+        params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
+      } finally {
+        if (!resumed) {
+          await quiescence.resume();
+        }
       }
-    }
+    });
   } catch (error) {
     throw new WorkerWorkspaceReconciliationError(
       `Cloud worker finished, but its workspace result could not be reconciled: ${recoveryError(error)}`,
@@ -489,6 +499,8 @@ async function executeWorkerTurn(params: {
 export function createWorkerSessionTurnPlacementProvider(
   options: WorkerTurnLauncherOptions,
 ): SessionPlacementAdmissionProvider {
+  const workspaceOperations =
+    options.workspaceOperations ?? createWorkerWorkspaceOperationCoordinator();
   return {
     async executeLocalTurn<T>(claim: LocalTurnPlacementClaim, runLocal: () => Promise<T>) {
       if (!options.placements.get(claim.sessionId) && options.admitNewPlacements === false) {
@@ -536,6 +548,7 @@ export function createWorkerSessionTurnPlacementProvider(
           },
           placement,
           placements: options.placements,
+          workspaceOperations,
           turn,
           turnClaim,
         });

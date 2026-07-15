@@ -29,7 +29,7 @@ describe("forced worker environment abandonment", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("records result loss and releases a pending worker claim before teardown", () => {
+  it("records result loss and releases a pending worker claim before teardown", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const { environmentId } = createDispatchEnvironmentFixtures();
     const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
@@ -44,7 +44,11 @@ describe("forced worker environment abandonment", () => {
     });
     store.markWorkspaceResultPending(claim);
 
-    forceAbandonWorkerEnvironment(store, environmentId);
+    await forceAbandonWorkerEnvironment({
+      placements: store,
+      environmentId,
+      resolveWorkspacePath: async () => root,
+    });
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",

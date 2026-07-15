@@ -32,7 +32,9 @@ type TestWorkerService = {
 function mockContext(
   workerEnvironmentService?: TestWorkerService,
   reconcileActive: (environmentId?: string) => Promise<void> = vi.fn(async () => {}),
-  forceAbandonEnvironment: (environmentId: string) => void = vi.fn(),
+  forceDestroyEnvironment: (environmentId: string) => Promise<TestWorkerRecord> = vi.fn(async () =>
+    workerRecord({ state: "destroyed" }),
+  ),
 ) {
   return {
     logGateway: {
@@ -56,7 +58,7 @@ function mockContext(
       ? {
           workerPlacementDispatchService: {
             dispatch: vi.fn(),
-            forceAbandonEnvironment,
+            forceDestroyEnvironment,
             reconcileActive,
           },
           getRuntimeConfig: () => ({
@@ -120,14 +122,14 @@ async function callEnvironmentMethod(
   options: {
     service?: TestWorkerService;
     reconcileActive?: (environmentId?: string) => Promise<void>;
-    forceAbandonEnvironment?: (environmentId: string) => void;
+    forceDestroyEnvironment?: (environmentId: string) => Promise<TestWorkerRecord>;
   } = {},
 ) {
   const respond = vi.fn();
   await environmentsHandlers[method]?.({
     params: params as Record<string, unknown>,
     respond,
-    context: mockContext(options.service, options.reconcileActive, options.forceAbandonEnvironment),
+    context: mockContext(options.service, options.reconcileActive, options.forceDestroyEnvironment),
   } as never);
   const call = respond.mock.calls.at(0);
   if (call === undefined) {
@@ -459,18 +461,20 @@ describe("environment gateway methods", () => {
 
   it("durably abandons placement ownership before forced destruction", async () => {
     const service = workerService();
-    const forceAbandonEnvironment = vi.fn();
+    const forceDestroyEnvironment = vi.fn(
+      async (environmentId: string) => await service.destroy(environmentId),
+    );
 
     const [ok, payload] = await callEnvironmentMethod(
       "environments.destroy",
       { environmentId: "worker-1", force: true },
-      { service, forceAbandonEnvironment },
+      { service, forceDestroyEnvironment },
     );
 
     expect(ok).toBe(true);
     expect(payload).toMatchObject({ worker: { state: "destroyed" } });
-    expect(forceAbandonEnvironment).toHaveBeenCalledExactlyOnceWith("worker-1");
-    expect(forceAbandonEnvironment).toHaveBeenCalledBefore(service.destroy);
+    expect(forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith("worker-1");
+    expect(service.destroy).toHaveBeenCalledExactlyOnceWith("worker-1");
     expect(service.destroyUnattached).not.toHaveBeenCalled();
   });
 
