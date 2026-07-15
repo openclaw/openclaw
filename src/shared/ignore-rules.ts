@@ -14,7 +14,7 @@ export type IgnoreMatcher = ReturnType<typeof ignore>;
 export const toPosixPath = (pathValue: string) => pathValue.split(sep).join("/");
 
 /** Adds nested ignore-file rules to a matcher using paths relative to the scan root. */
-export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()) {
+export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()): IgnoreMatcher {
   const relativeDir = relative(rootDir, dir);
   const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
 
@@ -35,6 +35,7 @@ export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()) {
       ig.add(patterns);
     }
   }
+  return ig;
 }
 
 function readIgnoreFileContent(ignorePath: string): string | null {
