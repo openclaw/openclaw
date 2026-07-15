@@ -94,12 +94,12 @@ describe("behavior-policy", () => {
     });
 
     it("builds enforce block for a single rule", () => {
-      const rules: ResolvedBehaviorRule[] = [
+      const rules = [
         {
           id: "r1",
           description: "desc",
           enforce: "Do the thing",
-          mode: "enforce",
+          mode: "enforce" as const,
         },
       ];
       const prompt = buildBehaviorPolicyPrompt(rules);
@@ -109,18 +109,16 @@ describe("behavior-policy", () => {
     });
 
     it("uses guide tag for guide-mode rules", () => {
-      const rules: ResolvedBehaviorRule[] = [
-        { id: "r2", description: "", enforce: "Be polite", mode: "guide" },
-      ];
+      const rules = [{ id: "r2", description: "", enforce: "Be polite", mode: "guide" as const }];
       const prompt = buildBehaviorPolicyPrompt(rules);
       expect(prompt).toContain('<guide id="r2">');
       expect(prompt).toContain("Be polite");
     });
 
     it("includes multiple rules", () => {
-      const rules: ResolvedBehaviorRule[] = [
-        { id: "a", description: "", enforce: "Rule A", mode: "enforce" },
-        { id: "b", description: "", enforce: "Rule B", mode: "guide" },
+      const rules = [
+        { id: "a", description: "", enforce: "Rule A", mode: "enforce" as const },
+        { id: "b", description: "", enforce: "Rule B", mode: "guide" as const },
       ];
       const prompt = buildBehaviorPolicyPrompt(rules);
       expect(prompt).toContain("Rule A");
@@ -128,12 +126,12 @@ describe("behavior-policy", () => {
     });
 
     it("escapes XML in rule content", () => {
-      const rules: ResolvedBehaviorRule[] = [
+      const rules = [
         {
           id: "xss",
           description: "",
           enforce: "Never use <script> tags",
-          mode: "enforce",
+          mode: "enforce" as const,
         },
       ];
       const prompt = buildBehaviorPolicyPrompt(rules);
