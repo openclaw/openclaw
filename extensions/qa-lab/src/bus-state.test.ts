@@ -178,6 +178,7 @@ describe("qa-bus state", () => {
         })
         .map((message) => message.id),
     ).toEqual([direct.id]);
+    expect(state.searchMessages({ conversationId: "", limit: 2 })).toEqual([]);
   });
 
   it("waits for a text match and rejects on timeout", async () => {

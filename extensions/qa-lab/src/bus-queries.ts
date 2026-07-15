@@ -140,7 +140,9 @@ export function searchQaBusMessages(params: {
   return Array.from(params.messages.values())
     .filter((message) => message.accountId === accountId)
     .filter((message) =>
-      params.input.conversationId ? message.conversation.id === params.input.conversationId : true,
+      params.input.conversationId !== undefined
+        ? message.conversation.id === params.input.conversationId
+        : true,
     )
     .filter((message) =>
       params.input.conversationKind

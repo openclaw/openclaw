@@ -168,6 +168,29 @@ describe("qa-bus client", () => {
     ).toBe("group:ops-room");
   });
 
+  it("parses canonical target prefixes consistently and rejects empty ids", () => {
+    expect(parseQaTarget("CHANNEL:CaseSensitiveId")).toEqual({
+      chatType: "channel",
+      conversationId: "CaseSensitiveId",
+    });
+    expect(parseQaTarget("DM:Alice")).toEqual({
+      chatType: "direct",
+      conversationId: "Alice",
+    });
+    expect(parseQaTarget("THREAD:Room/Topic")).toEqual({
+      chatType: "channel",
+      conversationId: "Room",
+      threadId: "Topic",
+    });
+    expect(parseQaTarget("plain-id", { defaultChatType: "channel" })).toEqual({
+      chatType: "channel",
+      conversationId: "plain-id",
+    });
+    for (const target of ["channel:", "GROUP:  ", "dm:", "thread:/topic", "THREAD:room/"]) {
+      expect(() => parseQaTarget(target)).toThrow("invalid qa-channel");
+    }
+  });
+
   it("rejects malformed JSON responses instead of throwing from the stream callback", async () => {
     const server = await startJsonServer(() => ({
       body: '{"cursor":1,"events":[',

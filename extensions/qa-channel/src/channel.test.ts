@@ -756,6 +756,7 @@ describe("qa-channel plugin", () => {
       };
 
       await expect(runSearch({ channelId: "allowed" })).resolves.toEqual([allowedRoot.id]);
+      await expect(runSearch({ channelId: "CHANNEL:allowed" })).resolves.toEqual([allowedRoot.id]);
       await expect(runSearch({ channelId: "thread:allowed/thread-1" })).resolves.toEqual([
         allowedThread.id,
       ]);
@@ -770,6 +771,9 @@ describe("qa-channel plugin", () => {
       ]);
       await expect(runSearch({ threadId: "thread-1" })).rejects.toThrow(
         "qa-channel search requires channelId when threadId is provided",
+      );
+      await expect(runSearch({ channelId: "channel:" })).rejects.toThrow(
+        "invalid qa-channel channel target",
       );
 
       const unchanged = state.readMessage({ accountId: "default", messageId: foreignRoot.id });
