@@ -78,20 +78,37 @@ describe("SessionSchema maintenance extensions", () => {
     ).toThrow(/maxDiskBytes|size/i);
   });
 
-  it.each(["0h", "0d", "0ms", "0", "0s", "0m"])(
-    "rejects zero-value pruneAfter: %s",
-    (pruneAfter) => {
+  it.each([
+    ["pruneAfter", "0h"],
+    ["pruneAfter", "0ms"],
+    ["pruneAfter", "0.0h"],
+    ["pruneAfter", "0h0m"],
+    ["pruneAfter", 0],
+    ["resetArchiveRetention", "0h"],
+    ["resetArchiveRetention", "0ms"],
+    ["resetArchiveRetention", "0.0h"],
+    ["resetArchiveRetention", "0h0m"],
+    ["resetArchiveRetention", 0],
+  ] as const)("rejects zero-value %s: %s", (field, value) => {
       const result = SessionSchema.safeParse({
-        maintenance: { pruneAfter },
+        maintenance: { [field]: value },
       });
       expect(result.success).toBe(false);
-      expect(result.error?.issues[0]?.path).toContain("pruneAfter");
+      expect(result.error?.issues[0]?.path).toContain(field);
+  });
+
+  it.each(["pruneAfter", "resetArchiveRetention"] as const)(
+    "accepts positive %s values",
+    (field) => {
+      expect(SessionSchema.safeParse({ maintenance: { [field]: "30d" } }).success).toBe(true);
+      expect(SessionSchema.safeParse({ maintenance: { [field]: "500ms" } }).success).toBe(true);
+      expect(SessionSchema.safeParse({ maintenance: { [field]: 30 } }).success).toBe(true);
     },
   );
 
-  it("accepts positive pruneAfter values", () => {
-    expect(SessionSchema.safeParse({ maintenance: { pruneAfter: "30d" } }).success).toBe(true);
-    expect(SessionSchema.safeParse({ maintenance: { pruneAfter: "24h" } }).success).toBe(true);
-    expect(SessionSchema.safeParse({ maintenance: { pruneAfter: "500ms" } }).success).toBe(true);
+  it("still accepts false resetArchiveRetention", () => {
+    expect(
+      SessionSchema.safeParse({ maintenance: { resetArchiveRetention: false } }).success,
+    ).toBe(true);
   });
 });

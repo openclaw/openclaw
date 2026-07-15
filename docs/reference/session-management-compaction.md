@@ -47,9 +47,9 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 | Key                     | Default               | Notes                                                                                       |
 | ----------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
 | `mode`                  | `"enforce"`           | or `"warn"` (report only, no mutation)                                                      |
-| `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                      |
+| `pruneAfter`            | `"30d"`               | positive stale-entry age cutoff                                                             |
 | `maxEntries`            | `500`                 | cap on session entries                                                                      |
-| `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion |
+| `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a positive duration opts into deletion |
 | `maxDiskBytes`          | `2gb`                 | per-agent sessions disk budget; `false` disables                                            |
 | `highWaterBytes`        | 80% of `maxDiskBytes` | target after budget cleanup                                                                 |
 

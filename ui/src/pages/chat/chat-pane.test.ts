@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render, type TemplateResult } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
@@ -22,6 +22,10 @@ import { createBackgroundTasksProps } from "./components/chat-background-tasks.t
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
@@ -744,11 +748,19 @@ describe("chat pane catalog session lifecycle", () => {
     pane.hasOlderMessages = vi.fn(() => true);
     pane.loadOlderMessages = vi.fn(async () => undefined);
     vi.stubGlobal("IntersectionObserver", undefined);
+    class TestTouchEvent extends Event {
+      readonly touches: Array<{ clientY: number }>;
+
+      constructor(type: string, clientY: number) {
+        super(type);
+        this.touches = [{ clientY }];
+      }
+    }
+    vi.stubGlobal("TouchEvent", TestTouchEvent);
     const thread = document.createElement("div");
     const touchEvent = (type: string, clientY: number) => {
-      const event = new TouchEvent(type);
+      const event = new TestTouchEvent(type, clientY);
       Object.defineProperty(event, "currentTarget", { value: thread });
-      Object.defineProperty(event, "touches", { value: [{ clientY }] });
       return event;
     };
 

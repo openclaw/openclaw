@@ -1,157 +1,86 @@
-// Session migration tests cover doctor legacy config migration for zero-duration pruneAfter.
 import { describe, expect, it } from "vitest";
-import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION } from "./legacy-config-migrations.runtime.session.js";
+import { findLegacyConfigIssues } from "../../../config/legacy.js";
+import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 
-describe("session.maintenance.pruneAfter zero-duration migration", () => {
-  const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION.find(
-    (m) => m.id === "session.maintenance.pruneAfter-zero",
+const ZERO_DURATIONS = ["0", "0ms", "0h", "0d", "0.0h", "0h0m", 0] as const;
+const POSITIVE_DURATIONS = ["1ms", "12h", "30d", 30] as const;
+
+function getMaintenance(raw: Record<string, unknown> | null): Record<string, unknown> {
+  const session = raw?.session as Record<string, unknown> | undefined;
+  return (session?.maintenance as Record<string, unknown> | undefined) ?? {};
+}
+
+describe("session maintenance zero-duration migrations", () => {
+  it.each(ZERO_DURATIONS)("detects and removes pruneAfter %s", (pruneAfter) => {
+    const raw = { session: { maintenance: { pruneAfter } } };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([
+      expect.objectContaining({
+        path: "session.maintenance",
+        message: expect.stringContaining("pruneAfter"),
+      }),
+    ]);
+
+    const result = applyLegacyDoctorMigrations(raw);
+    expect(getMaintenance(result.next)).not.toHaveProperty("pruneAfter");
+    expect(result.changes).toEqual([
+      expect.stringContaining("documented 30d default applies"),
+    ]);
+    expect(applyLegacyDoctorMigrations(result.next)).toEqual({ next: null, changes: [] });
+  });
+
+  it.each(ZERO_DURATIONS)(
+    "detects and replaces resetArchiveRetention %s",
+    (resetArchiveRetention) => {
+      const raw = { session: { maintenance: { resetArchiveRetention } } };
+
+      expect(findLegacyConfigIssues(raw)).toEqual([
+        expect.objectContaining({
+          path: "session.maintenance",
+          message: expect.stringContaining("resetArchiveRetention"),
+        }),
+      ]);
+
+      const result = applyLegacyDoctorMigrations(raw);
+      expect(getMaintenance(result.next)).toHaveProperty("resetArchiveRetention", false);
+      expect(result.changes).toEqual([expect.stringContaining("archives are kept")]);
+      expect(applyLegacyDoctorMigrations(result.next)).toEqual({ next: null, changes: [] });
+    },
   );
-  if (!migration) {
-    throw new Error("session.maintenance.pruneAfter-zero migration not found");
-  }
-  const rule = migration.legacyRules?.[0];
-  if (!rule) {
-    throw new Error("session.maintenance.pruneAfter-zero rule not found");
-  }
 
-  // ── Rule match (doctor detection): parser-backed ────────────
+  it.each(POSITIVE_DURATIONS)("preserves positive durations %s", (duration) => {
+    const raw = {
+      session: {
+        maintenance: { pruneAfter: duration, resetArchiveRetention: duration },
+      },
+    };
 
-  it("detects literal zero strings", () => {
-    expect(rule.match?.({ pruneAfter: "0h" }, {} as Record<string, unknown>)).toBe(true);
-    expect(rule.match?.({ pruneAfter: "0d" }, {} as Record<string, unknown>)).toBe(true);
-    expect(rule.match?.({ pruneAfter: "0ms" }, {} as Record<string, unknown>)).toBe(true);
+    expect(findLegacyConfigIssues(raw)).toEqual([]);
+    expect(applyLegacyDoctorMigrations(raw)).toEqual({ next: null, changes: [] });
   });
 
-  it("detects bare-number zero", () => {
-    expect(rule.match?.({ pruneAfter: "0" }, {} as Record<string, unknown>)).toBe(true);
+  it("leaves invalid values for schema diagnostics", () => {
+    const raw = {
+      session: {
+        maintenance: { pruneAfter: "soon", resetArchiveRetention: "later" },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([]);
+    expect(applyLegacyDoctorMigrations(raw)).toEqual({ next: null, changes: [] });
   });
 
-  it("detects zero in other units", () => {
-    expect(rule.match?.({ pruneAfter: "0s" }, {} as Record<string, unknown>)).toBe(true);
-    expect(rule.match?.({ pruneAfter: "0m" }, {} as Record<string, unknown>)).toBe(true);
-  });
+  it("repairs both fields in one pass and preserves explicit false", () => {
+    const result = applyLegacyDoctorMigrations({
+      session: { maintenance: { pruneAfter: "0h", resetArchiveRetention: "0d" } },
+    });
 
-  it("detects decimal zero", () => {
-    expect(rule.match?.({ pruneAfter: "0.0h" }, {} as Record<string, unknown>)).toBe(true);
-  });
-
-  it("detects composite zero", () => {
-    expect(rule.match?.({ pruneAfter: "0h0m" }, {} as Record<string, unknown>)).toBe(true);
-    expect(rule.match?.({ pruneAfter: "0h0m0s" }, {} as Record<string, unknown>)).toBe(true);
-  });
-
-  it("does not match positive durations", () => {
-    expect(rule.match?.({ pruneAfter: "30d" }, {} as Record<string, unknown>)).toBe(false);
-    expect(rule.match?.({ pruneAfter: "24h" }, {} as Record<string, unknown>)).toBe(false);
-    expect(rule.match?.({ pruneAfter: "7d" }, {} as Record<string, unknown>)).toBe(false);
-    expect(rule.match?.({ pruneAfter: "500ms" }, {} as Record<string, unknown>)).toBe(false);
-  });
-
-  it("does not match missing maintenance config", () => {
-    expect(rule.match?.({}, {} as Record<string, unknown>)).toBe(false);
-  });
-
-  it("does not match unparseable values (leave for schema diagnostic)", () => {
-    expect(rule.match?.({ pruneAfter: "abc" }, {} as Record<string, unknown>)).toBe(false);
-    expect(rule.match?.({ pruneAfter: "" }, {} as Record<string, unknown>)).toBe(false);
-  });
-
-  // ── Numeric rule match ─────────────────────────────────────
-
-  it("detects numeric zero", () => {
-    expect(rule.match?.({ pruneAfter: 0 }, {} as Record<string, unknown>)).toBe(true);
-  });
-
-  it("does not match numeric positive durations", () => {
-    expect(rule.match?.({ pruneAfter: 30 }, {} as Record<string, unknown>)).toBe(false);
-    expect(rule.match?.({ pruneAfter: 7 }, {} as Record<string, unknown>)).toBe(false);
-  });
-
-  // ── Migration apply (doctor --fix): parser-backed ───────────
-
-  it("removes zero-duration strings and reports change", () => {
-    for (const val of ["0h", "0d", "0ms", "0", "0s", "0m", "0.0h", "0h0m"]) {
-      const changes: string[] = [];
-      const raw = { session: { maintenance: { pruneAfter: val } } };
-      migration.apply(raw, changes);
-
-      expect(raw.session?.maintenance).not.toHaveProperty("pruneAfter");
-      expect(changes).toHaveLength(1);
-      expect(changes[0]).toContain(val);
-    }
-  });
-
-  it("preserves positive durations", () => {
-    for (const val of ["30d", "24h", "7d", "500ms"]) {
-      const changes: string[] = [];
-      const raw = { session: { maintenance: { pruneAfter: val } } };
-      migration.apply(raw, changes);
-
-      expect((raw.session as Record<string, unknown>)?.maintenance).toEqual({
-        pruneAfter: val,
-      });
-      expect(changes).toHaveLength(0);
-    }
-  });
-
-  it("removes numeric zero and reports change", () => {
-    const changes: string[] = [];
-    const raw = { session: { maintenance: { pruneAfter: 0 } } };
-    migration.apply(raw, changes);
-
-    expect(raw.session?.maintenance).not.toHaveProperty("pruneAfter");
-    expect(changes).toHaveLength(1);
-    expect(changes[0]).toContain("0");
-  });
-
-  it("preserves numeric positive values", () => {
-    for (const val of [30, 7]) {
-      const changes: string[] = [];
-      const raw = { session: { maintenance: { pruneAfter: val } } };
-      migration.apply(raw, changes);
-
-      expect((raw.session as Record<string, unknown>)?.maintenance).toEqual({
-        pruneAfter: val,
-      });
-      expect(changes).toHaveLength(0);
-    }
-  });
-
-  it("handles empty maintenance section", () => {
-    const changes: string[] = [];
-    const raw = { session: { maintenance: {} } };
-    migration.apply(raw, changes);
-
-    expect((raw.session as Record<string, unknown>)?.maintenance).toEqual({});
-    expect(changes).toHaveLength(0);
-  });
-
-  it("does nothing when session is not an object", () => {
-    const changes: string[] = [];
-    const raw = { session: "not-an-object" };
-    migration.apply(raw, changes);
-
-    expect(raw.session).toBe("not-an-object");
-    expect(changes).toHaveLength(0);
-  });
-
-  it("does nothing when maintenance is not an object", () => {
-    const changes: string[] = [];
-    const raw = { session: { maintenance: "not-an-object" } };
-    migration.apply(raw, changes);
-
-    expect((raw.session as Record<string, unknown>).maintenance).toBe("not-an-object");
-    expect(changes).toHaveLength(0);
-  });
-
-  // ── Rule re-applies after migration ──────────────────────────
-
-  it("rule no longer matches after migration removed the zero value", () => {
-    const raw = { session: { maintenance: { pruneAfter: "0h" } } };
-    expect(rule.match?.(raw.session.maintenance, raw)).toBe(true);
-
-    migration.apply(raw, []);
-
-    expect(rule.match?.(raw.session?.maintenance, raw)).toBe(false);
+    expect(getMaintenance(result.next)).toEqual({ resetArchiveRetention: false });
+    expect(result.changes).toHaveLength(2);
+    expect(
+      applyLegacyDoctorMigrations({
+        session: { maintenance: { pruneAfter: "30d", resetArchiveRetention: false } },
+      }),
+    ).toEqual({ next: null, changes: [] });
   });
 });

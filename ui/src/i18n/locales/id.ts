@@ -1612,6 +1612,8 @@ export const id: TranslationMap = {
     attachSession: "Hubungkan sesi",
     attachFailed: "Tidak dapat menghubungkan sesi terminal",
     starting: "Starting terminal…",
+    connecting: "Menghubungkan ke sesi…",
+    connectionTimedOut: "Sesi tidak terhubung dalam waktu 30 detik.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",

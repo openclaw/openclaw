@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Locator } from "playwright";
+import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -131,6 +131,47 @@ function expectStableVirtualRowPrepend(
   ).toBe(true);
 }
 
+function resumableClaudeCatalog() {
+  return {
+    catalogs: [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: { continueSession: true, archive: false },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Local Mac",
+            kind: "local",
+            connected: true,
+            sessions: [
+              {
+                threadId: "claude-terminal-session",
+                name: "Native Claude terminal",
+                status: "stored",
+                source: "claude-cli",
+                archived: false,
+                canContinue: true,
+                canArchive: false,
+                canOpenTerminal: true,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+async function openClaudeCatalogTerminal(page: Page) {
+  await page.goto(`${server.baseUrl}chat`);
+  const row = page.locator('[data-session-key^="catalog:"]').filter({
+    hasText: "Native Claude terminal",
+  });
+  await row.click({ button: "right" });
+  await page.locator('wa-dropdown-item[value="terminal"]').click();
+}
+
 suite("Claude native session catalog", () => {
   beforeAll(async () => {
     if (!available) {
@@ -143,6 +184,118 @@ suite("Claude native session catalog", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("shows catalog connection progress until the first terminal output", async () => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["terminal.open"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.catalog.list",
+        "sessions.catalog.read",
+        "terminal.open",
+      ],
+      methodResponses: {
+        "sessions.catalog.list": resumableClaudeCatalog(),
+        "sessions.catalog.read": {
+          hostId: "gateway:local",
+          threadId: "claude-terminal-session",
+          items: [{ type: "userMessage", text: "Continue the native session" }],
+        },
+        "terminal.list": { sessions: [] },
+      },
+      terminalEnabled: true,
+    });
+
+    try {
+      await openClaudeCatalogTerminal(page);
+      const open = await gateway.waitForRequest("terminal.open");
+      expect(open.params).toMatchObject({
+        catalog: {
+          catalogId: "claude",
+          hostId: "gateway:local",
+          threadId: "claude-terminal-session",
+        },
+      });
+      const connecting = page.getByRole("status").filter({ hasText: "Connecting to session" });
+      await connecting.waitFor();
+      expect(await page.locator(".tp-tab.is-connecting").count()).toBe(1);
+
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await fs.mkdir(artifactDir, { recursive: true });
+        await page.screenshot({ path: path.join(artifactDir, "claude-terminal-connecting.png") });
+      }
+
+      await gateway.resolveDeferred("terminal.open", {
+        agentId: "main",
+        confined: false,
+        cwd: "/workspace",
+        sessionId: "claude-terminal-e2e",
+        shell: "/bin/zsh",
+        title: "claude --resume claude-termi…",
+      });
+      await expect.poll(() => connecting.count()).toBe(1);
+      await gateway.emitGatewayEvent("terminal.data", {
+        sessionId: "claude-terminal-e2e",
+        seq: 17,
+        data: "Claude Code ready\r\n",
+      });
+      await expect.poll(() => connecting.count()).toBe(0);
+      expect(await page.locator(".tp-tab.is-live").count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("closes a catalog terminal that produces no output before the deadline", async () => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.catalog.list",
+        "sessions.catalog.read",
+        "terminal.open",
+      ],
+      methodResponses: {
+        "sessions.catalog.list": resumableClaudeCatalog(),
+        "sessions.catalog.read": {
+          hostId: "gateway:local",
+          threadId: "claude-terminal-session",
+          items: [],
+        },
+        "terminal.list": { sessions: [] },
+        "terminal.open": {
+          agentId: "main",
+          confined: false,
+          cwd: "/workspace",
+          sessionId: "claude-terminal-timeout",
+          shell: "/bin/zsh",
+          title: "claude --resume claude-termi…",
+        },
+      },
+      terminalEnabled: true,
+    });
+
+    try {
+      await page.clock.install();
+      await openClaudeCatalogTerminal(page);
+      await gateway.waitForRequest("terminal.open");
+      await page.getByRole("status").filter({ hasText: "Connecting to session" }).waitFor();
+      await page.clock.runFor(30_001);
+
+      await page.getByText("Session did not connect within 30 seconds.", { exact: true }).waitFor();
+      const close = await gateway.waitForRequest("terminal.close");
+      expect(close.params).toEqual({ sessionId: "claude-terminal-timeout" });
+      expect(await page.locator(".tp-tab").count()).toBe(0);
+    } finally {
+      await context.close();
+    }
   });
 
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {

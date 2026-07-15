@@ -259,7 +259,7 @@ export type SessionMaintenanceMode = "enforce" | "warn";
 export type SessionMaintenanceConfig = {
   /** Whether to enforce maintenance or warn only. Default: "warn". */
   mode?: SessionMaintenanceMode;
-  /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
+  /** Remove session entries older than this positive duration (e.g. "30d", "12h"). Default: "30d". */
   pruneAfter?: string | number;
   /** @deprecated Use pruneAfter instead. */
   pruneDays?: number;
@@ -268,7 +268,7 @@ export type SessionMaintenanceConfig = {
   /**
    * Age-based retention for archived transcripts (`*.reset.<timestamp>` and
    * `*.deleted.<timestamp>`). Default and `false`: keep archives until the
-   * disk budget evicts them oldest-first; a duration opts into deletion.
+   * disk budget evicts them oldest-first; a positive duration opts into deletion.
    */
   resetArchiveRetention?: string | number | false;
   /**

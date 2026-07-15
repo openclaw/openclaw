@@ -1624,6 +1624,9 @@ export const de: TranslationMap = {
     attachSession: "Sitzung verbinden",
     attachFailed: "Terminalsitzung konnte nicht verbunden werden",
     starting: "Starting terminal…",
+    connecting: "Verbindung zur Sitzung wird hergestellt…",
+    connectionTimedOut:
+      "Die Verbindung zur Sitzung wurde nicht innerhalb von 30 Sekunden hergestellt.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",
