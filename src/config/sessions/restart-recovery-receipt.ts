@@ -30,13 +30,12 @@ function hasExactDeliveryClaim(
   );
 }
 
-function hasNoDeliveryClaim(
+function hasClaimlessLiveDeliveryState(
   entry: SessionEntry,
   scope: RestartRecoveryTerminalDeliveryScope,
 ): boolean {
   return (
     entry.sessionId === scope.sessionId &&
-    entry.status === "running" &&
     normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === undefined &&
     normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) === undefined &&
     entry.restartRecoveryDeliveryReceiptState === undefined &&
@@ -92,8 +91,10 @@ export async function beginRestartRecoveryTerminalDelivery(
   ) {
     return "blocked";
   }
-  // Normal live turns may carry source correlation without arming restart recovery.
-  if (current && hasNoDeliveryClaim(current, scope)) {
+  // The gateway already verified a short-lived current-turn capability. Room
+  // events intentionally persist no running recovery state, so only durable
+  // claim/receipt/tombstone fields can decide whether this live send is stale.
+  if (current && hasClaimlessLiveDeliveryState(current, scope)) {
     return "not-applicable";
   }
   if (!current || !hasActiveClaim(current, scope)) {

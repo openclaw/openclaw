@@ -229,7 +229,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       return "admitted";
     }
     const updatedAt = Date.now();
-    if (entry.abortedLastRun === true || (activeClaimRunId && entry.status === "running")) {
+    if (activeClaimRunId && (entry.abortedLastRun === true || entry.status === "running")) {
       throw new Error("restart recovery claim changed before agent adoption");
     }
     const retiredClaim = activeClaimRunId

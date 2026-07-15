@@ -61,28 +61,31 @@ describe("restart recovery terminal delivery receipt", () => {
     await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("blocked");
   });
 
-  it("does not arm a receipt for a live turn without a recovery claim", async () => {
+  it.each([undefined, "done" as const])(
+    "does not arm a receipt for a live claimless turn with status %s",
+    async (status) => {
+      await replaceSessionEntry(
+        { sessionKey, storePath: fixture.storePath() },
+        {
+          sessionId: "session-1",
+          status,
+          updatedAt: 1,
+        },
+      );
+
+      await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("not-applicable");
+      expect(
+        loadSessionEntry({ sessionKey, storePath: fixture.storePath() })
+          ?.restartRecoveryDeliveryReceiptState,
+      ).toBeUndefined();
+    },
+  );
+
+  it("fails closed when the claimless live capability names a replaced session", async () => {
     await replaceSessionEntry(
       { sessionKey, storePath: fixture.storePath() },
       {
-        sessionId: "session-1",
-        status: "running",
-        updatedAt: 1,
-      },
-    );
-
-    await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("not-applicable");
-    expect(
-      loadSessionEntry({ sessionKey, storePath: fixture.storePath() })
-        ?.restartRecoveryDeliveryReceiptState,
-    ).toBeUndefined();
-  });
-
-  it("fails closed for an inactive session without a recovery claim", async () => {
-    await replaceSessionEntry(
-      { sessionKey, storePath: fixture.storePath() },
-      {
-        sessionId: "session-1",
+        sessionId: "session-2",
         updatedAt: 1,
       },
     );

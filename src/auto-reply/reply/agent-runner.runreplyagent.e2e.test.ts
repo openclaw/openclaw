@@ -1270,6 +1270,69 @@ describe("runReplyAgent pending final delivery capture", () => {
     ]);
   });
 
+  it("admits the next channel turn after a failed recovery became terminal", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: true,
+      restartRecoveryTerminalRunIds: ["failed-source-turn"],
+      sessionId: "session",
+      status: "failed",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
+      provider: "discord",
+      accountId: "work",
+      conversationId: "channel:24680",
+      messageId: "1503645939964055593",
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      expect(await readStoredMainSession(storePath)).toMatchObject({
+        abortedLastRun: false,
+        restartRecoveryDeliverySourceRunId: expectedSourceTurnId,
+        restartRecoveryTerminalRunIds: ["failed-source-turn"],
+        status: "running",
+      });
+      return {
+        payloads: [{ text: "visible final" }],
+        meta: {},
+      };
+    });
+
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        AccountId: "work",
+        MessageSid: "1503645939964055593",
+        MessageThreadId: "1503645939964055593",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "request after failed recovery",
+    });
+
+    await run();
+
+    expect(sourceTurnId).toBe(expectedSourceTurnId);
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(await readStoredMainSession(storePath)).toMatchObject({
+      abortedLastRun: false,
+      restartRecoveryTerminalRunIds: ["failed-source-turn", expectedSourceTurnId],
+    });
+  });
+
   it("adopts and clears a transcript-only restart recovery claim", async () => {
     const sessionEntry: SessionEntry = {
       abortedLastRun: false,
