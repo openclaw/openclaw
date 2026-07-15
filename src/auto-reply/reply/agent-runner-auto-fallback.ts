@@ -103,12 +103,12 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
   if (!activeSessionEntry || !entryMatchesAutoFallbackPrimaryProbe(activeSessionEntry, probe)) {
     return;
   }
-  clearAutoFallbackPrimaryProbeSelection(activeSessionEntry);
-  params.activeSessionStore[params.sessionKey] = activeSessionEntry;
   if (!params.storePath) {
+    clearAutoFallbackPrimaryProbeSelection(activeSessionEntry);
+    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
     return;
   }
-  await updateSessionEntry(
+  const updatedEntry = await updateSessionEntry(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     (persistedEntry) => {
       if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
@@ -139,4 +139,9 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
       };
     },
   );
+  if (updatedEntry) {
+    // The persisted comparison owns selection freshness; only publish its
+    // result after the conditional update accepts this probe.
+    params.activeSessionStore[params.sessionKey] = updatedEntry;
+  }
 }
