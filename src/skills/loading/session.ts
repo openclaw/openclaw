@@ -417,7 +417,10 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
       } else if (stats.isFile() && resolvedPath.endsWith(".md")) {
         const result = loadSkillFromFile(resolvedPath, source);
         if (result.skill) {
-          addSkills({ skills: [result.skill], diagnostics: result.diagnostics });
+          addSkills({
+            skills: [result.skill],
+            diagnostics: result.diagnostics,
+          });
         } else {
           allDiagnostics.push(...result.diagnostics);
         }

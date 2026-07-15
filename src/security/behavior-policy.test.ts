@@ -1,7 +1,7 @@
 // Unit tests for agent-behavior governance policy.
 
-import { describe, it, assert } from "../test-utils/testing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { describe, it, assert } from "../test-utils/testing.js";
 import {
   type BehaviorPolicyRule,
   type ResolvedBehaviorRule,
@@ -24,10 +24,7 @@ const SAMPLE_RULE_GUIDE: BehaviorPolicyRule = {
   mode: "guide",
 };
 
-function makeConfig(
-  rules?: BehaviorPolicyRule[],
-  exec?: Record<string, unknown>,
-): OpenClawConfig {
+function makeConfig(rules?: BehaviorPolicyRule[], exec?: Record<string, unknown>): OpenClawConfig {
   return {
     security: {
       behaviorPolicy: {
@@ -50,7 +47,9 @@ describe("behavior-policy", () => {
     });
 
     it("returns undefined when behaviorPolicy is not enabled", () => {
-      const cfg = { security: { behaviorPolicy: { enabled: false } } } as unknown as OpenClawConfig;
+      const cfg = {
+        security: { behaviorPolicy: { enabled: false } },
+      } as unknown as OpenClawConfig;
       assert.strictEqual(resolveBehaviorPolicy(cfg), undefined);
     });
 
@@ -68,7 +67,9 @@ describe("behavior-policy", () => {
     });
 
     it("returns undefined when no rules are defined", () => {
-      const cfg = { security: { behaviorPolicy: { enabled: true } } } as unknown as OpenClawConfig;
+      const cfg = {
+        security: { behaviorPolicy: { enabled: true } },
+      } as unknown as OpenClawConfig;
       assert.strictEqual(resolveBehaviorRules(cfg), undefined);
     });
 
@@ -95,10 +96,15 @@ describe("behavior-policy", () => {
 
     it("builds enforce block for a single rule", () => {
       const rules: ResolvedBehaviorRule[] = [
-        { id: "r1", description: "desc", enforce: "Do the thing", mode: "enforce" },
+        {
+          id: "r1",
+          description: "desc",
+          enforce: "Do the thing",
+          mode: "enforce",
+        },
       ];
       const prompt = buildBehaviorPolicyPrompt(rules);
-      assert.ok(prompt.includes("<enforce id=\"r1\">"));
+      assert.ok(prompt.includes('<enforce id="r1">'));
       assert.ok(prompt.includes("Do the thing"));
       assert.ok(prompt.includes("MUST comply"));
     });
@@ -108,7 +114,7 @@ describe("behavior-policy", () => {
         { id: "r2", description: "", enforce: "Be polite", mode: "guide" },
       ];
       const prompt = buildBehaviorPolicyPrompt(rules);
-      assert.ok(prompt.includes("<guide id=\"r2\">"));
+      assert.ok(prompt.includes('<guide id="r2">'));
       assert.ok(prompt.includes("Be polite"));
     });
 
@@ -124,7 +130,12 @@ describe("behavior-policy", () => {
 
     it("escapes XML in rule content", () => {
       const rules: ResolvedBehaviorRule[] = [
-        { id: "xss", description: "", enforce: "Never use <script> tags", mode: "enforce" },
+        {
+          id: "xss",
+          description: "",
+          enforce: "Never use <script> tags",
+          mode: "enforce",
+        },
       ];
       const prompt = buildBehaviorPolicyPrompt(rules);
       assert.ok(prompt.includes("&lt;script&gt;"));
@@ -134,26 +145,45 @@ describe("behavior-policy", () => {
 
   describe("validateBehaviorOutput", () => {
     it("returns pass when no rules are active", async () => {
-      const result = await validateBehaviorOutput({ rules: undefined, output: "hello" });
+      const result = await validateBehaviorOutput({
+        rules: undefined,
+        output: "hello",
+      });
       assert.strictEqual(result.kind, "pass");
     });
 
     it("returns pass when rules are empty", async () => {
-      const result = await validateBehaviorOutput({ rules: [], output: "hello" });
+      const result = await validateBehaviorOutput({
+        rules: [],
+        output: "hello",
+      });
       assert.strictEqual(result.kind, "pass");
     });
 
     it("returns pass for clean output with enforce rules", async () => {
       const rules: ResolvedBehaviorRule[] = [
-        { id: "no-secrets", description: "", enforce: "Never disclose API keys", mode: "enforce" },
+        {
+          id: "no-secrets",
+          description: "",
+          enforce: "Never disclose API keys",
+          mode: "enforce",
+        },
       ];
-      const result = await validateBehaviorOutput({ rules, output: "Here is some general help." });
+      const result = await validateBehaviorOutput({
+        rules,
+        output: "Here is some general help.",
+      });
       assert.strictEqual(result.kind, "pass");
     });
 
     it("returns pass with violations suggestion for potential rule conflicts", async () => {
       const rules: ResolvedBehaviorRule[] = [
-        { id: "no-secrets", description: "", enforce: "Never disclose API keys", mode: "enforce" },
+        {
+          id: "no-secrets",
+          description: "",
+          enforce: "Never disclose API keys",
+          mode: "enforce",
+        },
       ];
       const result = await validateBehaviorOutput({
         rules,
@@ -167,7 +197,12 @@ describe("behavior-policy", () => {
 
     it("skips heuristic check for guide-mode rules", async () => {
       const rules: ResolvedBehaviorRule[] = [
-        { id: "polite", description: "", enforce: "Never be rude", mode: "guide" },
+        {
+          id: "polite",
+          description: "",
+          enforce: "Never be rude",
+          mode: "guide",
+        },
       ];
       const result = await validateBehaviorOutput({
         rules,

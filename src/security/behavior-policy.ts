@@ -352,7 +352,10 @@ async function validateViaExternalCommand(params: {
 
 function parsePolicyResponse(
   stdout: string,
-  logger?: { debug?: (message: string) => void; warn?: (message: string) => void },
+  logger?: {
+    debug?: (message: string) => void;
+    warn?: (message: string) => void;
+  },
 ): BehaviorPolicyOutputResult {
   const trimmed = stdout.trim();
   if (!trimmed) {

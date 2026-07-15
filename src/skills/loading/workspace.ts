@@ -380,7 +380,10 @@ function containsDiscoverableSkill(
       if (candidate.depth === 0 && childDir === opts.skipTopLevelDirName) {
         continue;
       }
-      queue.push({ dir: path.join(candidate.dir, childDir), depth: candidate.depth + 1 });
+      queue.push({
+        dir: path.join(candidate.dir, childDir),
+        depth: candidate.depth + 1,
+      });
     }
   }
   return false;
@@ -575,7 +578,10 @@ function resolveNestedSkillsRoot(
       continue;
     }
     if (hasLoadableSkillFrontmatter(nested, candidate.dir, opts?.maxSkillFileBytes)) {
-      return { baseDir: nested, note: `Detected nested skills root at ${nested}` };
+      return {
+        baseDir: nested,
+        note: `Detected nested skills root at ${nested}`,
+      };
     }
     if (candidate.depth >= MAX_GROUPED_SKILL_SCAN_DEPTH) {
       continue;
@@ -585,7 +591,10 @@ function resolveNestedSkillsRoot(
       maxCandidateDirs: scanLimit,
     }).dirs;
     for (const childDir of childDirs.toSorted().slice(0, scanLimit)) {
-      queue.push({ dir: path.join(candidate.dir, childDir), depth: candidate.depth + 1 });
+      queue.push({
+        dir: path.join(candidate.dir, childDir),
+        depth: candidate.depth + 1,
+      });
     }
   }
   return { baseDir: dir };
@@ -1265,7 +1274,10 @@ function loadSkillEntries(
       const entry: SkillEntry = {
         skill,
         frontmatter,
-        metadata: resolveSkillEntryMetadata({ frontmatter, skillDir: skill.baseDir }),
+        metadata: resolveSkillEntryMetadata({
+          frontmatter,
+          skillDir: skill.baseDir,
+        }),
         invocation,
         exposure: {
           includeInRuntimeRegistry: true,
@@ -1475,7 +1487,10 @@ function applySkillsPromptLimits(params: {
       }
       descriptionMaxChars = lo;
     }
-    return { skillsForPrompt, format: { kind: "compact", descriptionMaxChars } };
+    return {
+      skillsForPrompt,
+      format: { kind: "compact", descriptionMaxChars },
+    };
   }
 
   return { skillsForPrompt, format: { kind: "full" } };
@@ -1716,7 +1731,10 @@ async function prepareSyncedSkillsDirectory(targetSkillsDir: string): Promise<vo
   }
 
   for (const entry of await fsp.readdir(targetSkillsDir)) {
-    await fsp.rm(path.join(targetSkillsDir, entry), { recursive: true, force: true });
+    await fsp.rm(path.join(targetSkillsDir, entry), {
+      recursive: true,
+      force: true,
+    });
   }
 }
 
