@@ -8,6 +8,7 @@ import {
 } from "./presence-emission-gate.js";
 
 const options = resolveDiscordPresenceGateOptions(undefined);
+const guildId = "guild-1";
 
 describe("resolveDiscordPresenceGateOptions", () => {
   it("defaults to a five-minute reconnect window and bounded burst", () => {
@@ -74,22 +75,22 @@ describe("DiscordPresenceEmissionGate", () => {
     const gate = new DiscordPresenceEmissionGate();
     const burstOptions = { ...options, burstLimit: 2, burstWindowMs: 10_000 };
 
-    expect(gate.reserveBurst(1_000, burstOptions)).toMatchObject({ allowed: true });
-    expect(gate.reserveBurst(2_000, burstOptions)).toMatchObject({ allowed: true });
-    expect(gate.reserveBurst(3_000, burstOptions)).toEqual({
+    expect(gate.reserveBurst(guildId, 1_000, burstOptions)).toMatchObject({ allowed: true });
+    expect(gate.reserveBurst(guildId, 2_000, burstOptions)).toMatchObject({ allowed: true });
+    expect(gate.reserveBurst(guildId, 3_000, burstOptions)).toEqual({
       allowed: false,
       reason: "burst",
       shouldLog: true,
     });
-    expect(gate.reserveBurst(4_000, burstOptions)).toEqual({
+    expect(gate.reserveBurst(guildId, 4_000, burstOptions)).toEqual({
       allowed: false,
       reason: "burst",
       shouldLog: false,
     });
     // The window drains as old emissions age out; logging re-arms for the next burst.
-    expect(gate.reserveBurst(12_500, burstOptions)).toMatchObject({ allowed: true });
-    expect(gate.reserveBurst(12_600, burstOptions)).toMatchObject({ allowed: true });
-    expect(gate.reserveBurst(12_700, burstOptions)).toEqual({
+    expect(gate.reserveBurst(guildId, 12_500, burstOptions)).toMatchObject({ allowed: true });
+    expect(gate.reserveBurst(guildId, 12_600, burstOptions)).toMatchObject({ allowed: true });
+    expect(gate.reserveBurst(guildId, 12_700, burstOptions)).toEqual({
       allowed: false,
       reason: "burst",
       shouldLog: true,
@@ -99,25 +100,45 @@ describe("DiscordPresenceEmissionGate", () => {
   it("releases failed attempts without spending burst capacity", () => {
     const gate = new DiscordPresenceEmissionGate();
     const burstOptions = { ...options, burstLimit: 1 };
-    const first = gate.reserveBurst(1_000, burstOptions);
+    const first = gate.reserveBurst(guildId, 1_000, burstOptions);
 
     expect(first.allowed).toBe(true);
     if (!first.allowed) {
       throw new Error("expected burst reservation");
     }
-    gate.releaseBurst(first.reservation);
+    gate.releaseBurst(guildId, first.reservation);
 
-    expect(gate.reserveBurst(1_001, burstOptions)).toMatchObject({ allowed: true });
+    expect(gate.reserveBurst(guildId, 1_001, burstOptions)).toMatchObject({ allowed: true });
+  });
+
+  it("keeps burst limits and logging independent per guild", () => {
+    const gate = new DiscordPresenceEmissionGate();
+    const strict = { ...options, burstLimit: 1, burstWindowMs: 10_000 };
+    const loose = { ...options, burstLimit: 2, burstWindowMs: 60_000 };
+
+    expect(gate.reserveBurst("guild-a", 1_000, strict)).toMatchObject({ allowed: true });
+    expect(gate.reserveBurst("guild-b", 1_000, loose)).toMatchObject({ allowed: true });
+    expect(gate.reserveBurst("guild-a", 2_000, strict)).toEqual({
+      allowed: false,
+      reason: "burst",
+      shouldLog: true,
+    });
+    expect(gate.reserveBurst("guild-b", 2_000, loose)).toMatchObject({ allowed: true });
+    expect(gate.reserveBurst("guild-b", 3_000, loose)).toEqual({
+      allowed: false,
+      reason: "burst",
+      shouldLog: true,
+    });
   });
 
   it("preserves the sliding burst window across gateway resets", () => {
     const gate = new DiscordPresenceEmissionGate();
     const burstOptions = { ...options, reconnectSuppressMs: 0, burstLimit: 1 };
 
-    expect(gate.reserveBurst(1_000, burstOptions)).toMatchObject({ allowed: true });
+    expect(gate.reserveBurst(guildId, 1_000, burstOptions)).toMatchObject({ allowed: true });
     gate.noteGatewaySessionReset(1_001);
 
-    expect(gate.reserveBurst(1_002, burstOptions)).toEqual({
+    expect(gate.reserveBurst(guildId, 1_002, burstOptions)).toEqual({
       allowed: false,
       reason: "burst",
       shouldLog: true,

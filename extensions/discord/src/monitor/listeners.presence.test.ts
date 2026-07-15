@@ -640,6 +640,43 @@ describe("DiscordPresenceListener", () => {
     );
   });
 
+  it("keeps burst limits independent per guild", async () => {
+    let nowMs = 30_000;
+    const listener = new DiscordPresenceListener({
+      cfg: {} as OpenClawConfig,
+      accountId: "molty",
+      guildEntries: {
+        "guild-1": { presenceEvents: { channelId: "channel-1", burstLimit: 1 } },
+        "guild-2": { presenceEvents: { channelId: "channel-2", burstLimit: 1 } },
+      },
+      cooldownStore: cooldownStore(),
+      nowMs: () => nowMs,
+    });
+    const humanClient = client();
+
+    listener.seedGuildSnapshot(guildSnapshot([]));
+    listener.seedGuildSnapshot({ ...guildSnapshot([]), id: "guild-2" });
+    for (const [guildId, userId] of [
+      ["guild-1", "guild-1-first"],
+      ["guild-2", "guild-2-first"],
+      ["guild-1", "guild-1-overflow"],
+      ["guild-2", "guild-2-overflow"],
+    ] as const) {
+      nowMs += 1;
+      await listener.handle({ ...presence("online", userId), guild_id: guildId }, humanClient);
+    }
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(2);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining('user_id="guild-1-first"'),
+      expect.anything(),
+    );
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining('user_id="guild-2-first"'),
+      expect.anything(),
+    );
+  });
+
   it("starts the burst window after a delayed user lookup", async () => {
     let nowMs = 30_000;
     let resolveUser!: (value: { bot: boolean }) => void;
@@ -677,67 +714,6 @@ describe("DiscordPresenceListener", () => {
       expect.stringContaining('user_id="delayed"'),
       expect.anything(),
     );
-  });
-
-  it("applies a configured per-user cooldown to re-emission", async () => {
-    let nowMs = 0;
-    // TTL-aware store: the configured cooldown must expire entries, unlike the
-    // simplified helper above which never expires.
-    const values = new Map<string, { value: number; expiresAtMs: number }>();
-    const live = (key: string) => {
-      const entry = values.get(key);
-      return entry && entry.expiresAtMs > nowMs ? entry : undefined;
-    };
-    const ttlStore = {
-      register: (key: string, value: number, opts?: { ttlMs?: number }) =>
-        void values.set(key, { value, expiresAtMs: nowMs + (opts?.ttlMs ?? Infinity) }),
-      registerIfAbsent: (key: string, value: number, opts?: { ttlMs?: number }) => {
-        if (live(key)) {
-          return false;
-        }
-        values.set(key, { value, expiresAtMs: nowMs + (opts?.ttlMs ?? Infinity) });
-        return true;
-      },
-      lookup: (key: string) => live(key)?.value,
-      consume: (key: string) => {
-        const value = live(key)?.value;
-        values.delete(key);
-        return value;
-      },
-      delete: (key: string) => values.delete(key),
-      entries: () => [...values].map(([key, entry]) => ({ key, value: entry.value })),
-      clear: () => values.clear(),
-    } as unknown as PluginStateSyncKeyedStore<number>;
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": {
-          presenceEvents: { channelId: "channel-1", cooldownSeconds: 60 },
-        },
-      },
-      cooldownStore: ttlStore,
-      nowMs: () => nowMs,
-    });
-    const humanClient = client();
-
-    nowMs = 30_000;
-    await listener.handle(presence("offline"), humanClient);
-    nowMs += 1000;
-    await listener.handle(presence("online"), humanClient);
-    nowMs += 1000;
-    await listener.handle(presence("offline"), humanClient);
-    nowMs += 1000;
-    await listener.handle(presence("online"), humanClient);
-
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
-
-    nowMs += 60_000;
-    await listener.handle(presence("offline"), humanClient);
-    nowMs += 1000;
-    await listener.handle(presence("online"), humanClient);
-
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(2);
   });
 
   it("drops offline baselines when the gateway session resets", async () => {

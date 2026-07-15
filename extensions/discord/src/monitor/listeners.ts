@@ -25,10 +25,10 @@ import {
   resolveDiscordPresenceGateOptions,
 } from "./presence-emission-gate.js";
 import {
+  DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
   isDiscordOfflineStatus,
   isDiscordOnlineStatus,
   resolveDiscordOnlinePresenceEvent,
-  resolveDiscordPresenceCooldownMs,
 } from "./presence-events.js";
 import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
@@ -310,7 +310,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     // Reserve only after fallible user lookup and routing. Release the slot unless an event is
     // actually queued; rejected attempts must remain retryable and must not crowd out humans.
     const burstNowMs = this.params.nowMs?.() ?? Date.now();
-    const burstGate = this.emissionGate.reserveBurst(burstNowMs, gateOptions);
+    const burstGate = this.emissionGate.reserveBurst(data.guild_id, burstNowMs, gateOptions);
     if (!burstGate.allowed) {
       if (burstGate.shouldLog) {
         const logger = this.params.logger ?? discordEventQueueLog;
@@ -328,17 +328,17 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       // Reserve only after fallible Discord lookups. Rejecting at capacity preserves every live
       // cooldown; skipping this wake is safer than allowing a duplicate greeting.
       const reserved = this.cooldownStore.registerIfAbsent(presenceKey, nowMs, {
-        ttlMs: resolveDiscordPresenceCooldownMs(config),
+        ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
       });
       if (!reserved) {
-        this.emissionGate.releaseBurst(burstReservation);
+        this.emissionGate.releaseBurst(data.guild_id, burstReservation);
         // Another live listener won the durable claim while this one awaited Discord. Treat the
         // member as online locally so overlapping provider generations cannot retry the greeting.
         this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
         return;
       }
     } catch (err) {
-      this.emissionGate.releaseBurst(burstReservation);
+      this.emissionGate.releaseBurst(data.guild_id, burstReservation);
       const logger = this.params.logger ?? discordEventQueueLog;
       logger.warn(danger(`discord presence cooldown persistence failed: ${String(err)}`));
       return;
@@ -355,14 +355,14 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         },
       });
     } catch (err) {
-      this.emissionGate.releaseBurst(burstReservation);
+      this.emissionGate.releaseBurst(data.guild_id, burstReservation);
       if (this.cooldownStore.lookup(presenceKey) === nowMs) {
         this.cooldownStore.delete(presenceKey);
       }
       throw err;
     }
     if (!queued) {
-      this.emissionGate.releaseBurst(burstReservation);
+      this.emissionGate.releaseBurst(data.guild_id, burstReservation);
       if (this.cooldownStore.lookup(presenceKey) === nowMs) {
         this.cooldownStore.delete(presenceKey);
       }

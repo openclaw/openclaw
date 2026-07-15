@@ -316,17 +316,13 @@ export const discordChannelConfigUiHints = {
     label: "Discord Online Presence User IDs",
     help: "Optional immutable Discord user ID allowlist. Omit to include all human members in the guild.",
   },
-  "guilds.*.presenceEvents.cooldownSeconds": {
-    label: "Discord Online Presence Cooldown",
-    help: "Per-user greeting cooldown in seconds. The same member does not re-trigger an online event within this window. Default: 28800 (8 hours).",
-  },
   "guilds.*.presenceEvents.reconnectSuppressSeconds": {
     label: "Discord Online Presence Reconnect Suppression",
     help: "Suppress online-presence events for this many seconds after a new Gateway session while guild presence state is rebuilt. Resumed sessions are unaffected. 0 disables. Default: 300.",
   },
   "guilds.*.presenceEvents.burstLimit": {
     label: "Discord Online Presence Burst Limit",
-    help: "Maximum successfully queued online-presence events per burst window; the rest are suppressed and logged once. Default: 8.",
+    help: "Maximum successfully queued online-presence events for this guild per burst window; the rest are suppressed and logged once. Default: 8.",
   },
   "guilds.*.presenceEvents.burstWindowSeconds": {
     label: "Discord Online Presence Burst Window",

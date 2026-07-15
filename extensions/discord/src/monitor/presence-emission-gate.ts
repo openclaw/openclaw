@@ -31,13 +31,18 @@ export function resolveDiscordPresenceGateOptions(
   };
 }
 
-export type DiscordPresenceGateDecision =
+export type DiscordPresenceReconnectDecision =
   | { allowed: true }
-  | { allowed: false; reason: "reconnect-window" | "burst"; shouldLog: boolean };
+  | { allowed: false; reason: "reconnect-window"; shouldLog: boolean };
 
 type DiscordPresenceBurstEntry = {
   id: number;
   atMs: number;
+};
+
+type DiscordPresenceBurstState = {
+  reservations: DiscordPresenceBurstEntry[];
+  logged: boolean;
 };
 
 export type DiscordPresenceBurstReservation = number;
@@ -47,16 +52,16 @@ export type DiscordPresenceBurstDecision =
   | { allowed: false; reason: "burst"; shouldLog: boolean };
 
 /**
- * Per-account emission gate for online-presence events. A new Gateway session rebuilds guild
- * state, so a plain offline/online baseline can emit one event per member; this gate absorbs
- * that burst instead of waking the agent for each one.
+ * Per-account lifecycle gate for online-presence events. Reconnect state belongs to the Gateway
+ * session, while burst state follows the guild-owned configuration that supplies its limits.
  */
 export class DiscordPresenceEmissionGate {
   private lastSessionResetAtMs?: number;
   private reconnectLogged = false;
-  private burstReservations: DiscordPresenceBurstEntry[] = [];
+  // Sharing this history across guilds lets one guild's settings prune or consume another's
+  // window. Keep each configured guild's rate-limit state and logging episode independent.
+  private readonly burstByGuild = new Map<string, DiscordPresenceBurstState>();
   private nextReservationId = 0;
-  private burstLogged = false;
 
   noteGatewaySessionReset(nowMs: number): void {
     this.lastSessionResetAtMs = nowMs;
@@ -66,7 +71,7 @@ export class DiscordPresenceEmissionGate {
   evaluateReconnectWindow(
     nowMs: number,
     options: DiscordPresenceGateOptions,
-  ): DiscordPresenceGateDecision {
+  ): DiscordPresenceReconnectDecision {
     if (
       this.lastSessionResetAtMs !== undefined &&
       options.reconnectSuppressMs > 0 &&
@@ -79,24 +84,35 @@ export class DiscordPresenceEmissionGate {
     return { allowed: true };
   }
 
-  reserveBurst(nowMs: number, options: DiscordPresenceGateOptions): DiscordPresenceBurstDecision {
-    this.burstReservations = this.burstReservations.filter(
+  reserveBurst(
+    guildId: string,
+    nowMs: number,
+    options: DiscordPresenceGateOptions,
+  ): DiscordPresenceBurstDecision {
+    const state = this.burstByGuild.get(guildId) ?? { reservations: [], logged: false };
+    state.reservations = state.reservations.filter(
       (reservation) => nowMs - reservation.atMs < options.burstWindowMs,
     );
-    if (this.burstReservations.length >= options.burstLimit) {
-      const shouldLog = !this.burstLogged;
-      this.burstLogged = true;
+    this.burstByGuild.set(guildId, state);
+    if (state.reservations.length >= options.burstLimit) {
+      const shouldLog = !state.logged;
+      state.logged = true;
       return { allowed: false, reason: "burst", shouldLog };
     }
-    this.burstLogged = false;
+    state.logged = false;
     const reservation = { id: this.nextReservationId++, atMs: nowMs };
-    this.burstReservations.push(reservation);
+    state.reservations.push(reservation);
     return { allowed: true, reservation: reservation.id };
   }
 
-  releaseBurst(reservation: DiscordPresenceBurstReservation): void {
-    this.burstReservations = this.burstReservations.filter(
-      (candidate) => candidate.id !== reservation,
-    );
+  releaseBurst(guildId: string, reservation: DiscordPresenceBurstReservation): void {
+    const state = this.burstByGuild.get(guildId);
+    if (!state) {
+      return;
+    }
+    state.reservations = state.reservations.filter((candidate) => candidate.id !== reservation);
+    if (state.reservations.length === 0 && !state.logged) {
+      this.burstByGuild.delete(guildId);
+    }
   }
 }

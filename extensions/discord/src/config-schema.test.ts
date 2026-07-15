@@ -402,7 +402,6 @@ describe("discord config schema", () => {
         "123456789012345678": {
           presenceEvents: {
             channelId: "234567890123456789",
-            cooldownSeconds: 3600,
             reconnectSuppressSeconds: 0,
             burstLimit: 4,
             burstWindowSeconds: 30,
@@ -414,13 +413,12 @@ describe("discord config schema", () => {
     expect(cfg.guilds?.["123456789012345678"]?.presenceEvents?.burstLimit).toBe(4);
   });
 
-  it("rejects non-positive online-presence throttling values", () => {
+  it("rejects invalid online-presence throttling values", () => {
     const issues = expectInvalidDiscordConfig({
       guilds: {
         "123456789012345678": {
           presenceEvents: {
             channelId: "234567890123456789",
-            cooldownSeconds: 0,
             reconnectSuppressSeconds: -1,
             burstLimit: 0,
             burstWindowSeconds: 0,
@@ -429,12 +427,7 @@ describe("discord config schema", () => {
       },
     });
 
-    for (const field of [
-      "cooldownSeconds",
-      "reconnectSuppressSeconds",
-      "burstLimit",
-      "burstWindowSeconds",
-    ]) {
+    for (const field of ["reconnectSuppressSeconds", "burstLimit", "burstWindowSeconds"]) {
       expect(issues.some((issue) => issue.path.join(".").endsWith(field))).toBe(true);
     }
   });
