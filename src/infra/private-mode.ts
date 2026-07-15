@@ -4,6 +4,7 @@ import { chmodSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const CHMOD_UNSUPPORTED_CODES = new Set(["ENOTSUP", "EOPNOTSUPP", "EINVAL"]);
+const CHMOD_AMBIGUOUS_CODES = new Set(["EPERM", "EROFS"]);
 const PRIVATE_PROBE_FILE_MODE = 0o600;
 
 function hasRestrictivePermissions(target: string): boolean {
@@ -27,7 +28,7 @@ function filesystemRejectsChmod(target: string): boolean {
     chmodSync(probePath, PRIVATE_PROBE_FILE_MODE);
     return false;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+    return CHMOD_AMBIGUOUS_CODES.has((err as NodeJS.ErrnoException).code ?? "");
   } finally {
     try {
       unlinkSync(probePath);
@@ -41,10 +42,10 @@ function canIgnorePrivateChmodError(target: string, code: string | undefined): b
   if (code && CHMOD_UNSUPPORTED_CODES.has(code)) {
     return true;
   }
-  if (code !== "EPERM") {
+  if (!code || !CHMOD_AMBIGUOUS_CODES.has(code)) {
     return false;
   }
-  // EPERM is ambiguous: keep restrictive targets usable, otherwise prove the
+  // EPERM/EROFS are ambiguous: keep restrictive targets usable, otherwise prove the
   // containing filesystem also rejects chmod before weakening fail-closed behavior.
   return hasRestrictivePermissions(target) || filesystemRejectsChmod(target);
 }
