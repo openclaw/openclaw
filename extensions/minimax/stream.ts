@@ -77,21 +77,25 @@ function replaceTextEnd(event: TextEndEvent, content: string): TextEndEvent {
       };
 }
 
-function hidePendingTails(
+function hidePendingTail(
   event: AssistantMessageEvent,
-  pending: Iterable<PendingText>,
+  pending: PendingText | undefined,
 ): AssistantMessageEvent {
-  if (!("partial" in event) || !event.partial) {
+  if (!pending || !("partial" in event) || !event.partial) {
     return event;
   }
-  let partial = event.partial;
-  for (const state of pending) {
-    const block = partial.content[state.contentIndex];
-    if (block?.type === "text" && block.text.endsWith(state.value)) {
-      partial = replaceText(partial, state.contentIndex, block.text.slice(0, -state.value.length));
-    }
+  const block = event.partial.content[pending.contentIndex];
+  if (block?.type !== "text" || !block.text.endsWith(pending.value)) {
+    return event;
   }
-  return partial === event.partial ? event : { ...event, partial };
+  return {
+    ...event,
+    partial: replaceText(
+      event.partial,
+      pending.contentIndex,
+      block.text.slice(0, -pending.value.length),
+    ),
+  };
 }
 
 function terminalTextIndex(event: TerminalEvent): number | undefined {
@@ -107,151 +111,89 @@ function eventContentIndex(event: AssistantMessageEvent): number | undefined {
 async function* transformEvents(
   source: AsyncIterable<AssistantMessageEvent>,
 ): AsyncGenerator<AssistantMessageEvent> {
-  const pendingByContentIndex = new Map<number, PendingText>();
-  let highestContentIndex = -1;
+  let pending: PendingText | undefined;
 
   const replayLiteral = (state: PendingText): AssistantMessageEvent[] => [
     replayPendingText(state.contentIndex, state.value),
-    ...(state.deferredTextEnd
-      ? [hidePendingTails(state.deferredTextEnd, pendingByContentIndex.values()) as TextEndEvent]
-      : []),
+    ...(state.deferredTextEnd ? [state.deferredTextEnd] : []),
   ];
-
-  const flushLiteral = (contentIndex: number): AssistantMessageEvent[] => {
-    const state = pendingByContentIndex.get(contentIndex);
-    if (!state) {
-      return [];
-    }
-    pendingByContentIndex.delete(contentIndex);
-    return replayLiteral(state);
+  const flushLiteral = (): AssistantMessageEvent[] => {
+    const state = pending;
+    pending = undefined;
+    return state ? replayLiteral(state) : [];
   };
-  // A later block proves an earlier tail literal; earlier blocks may still end
-  // interleaved while the final text block awaits the terminal event.
-  const flushBefore = (contentIndex: number): AssistantMessageEvent[] =>
-    [...pendingByContentIndex.values()]
-      .filter((state) => state.contentIndex < contentIndex)
-      .sort((left, right) => left.contentIndex - right.contentIndex)
-      .flatMap((state) => flushLiteral(state.contentIndex));
-  const flushAll = (): AssistantMessageEvent[] =>
-    [...pendingByContentIndex.values()]
-      .sort((left, right) => left.contentIndex - right.contentIndex)
-      .flatMap((state) => flushLiteral(state.contentIndex));
 
-  const iterator = source[Symbol.asyncIterator]();
-  let sourceExhausted = false;
-  let sourceFailed = false;
-  try {
-    while (true) {
-      let next: IteratorResult<AssistantMessageEvent>;
-      try {
-        next = await iterator.next();
-      } catch (error) {
-        sourceFailed = true;
-        // A thrown source has no terminal event to classify the held suffix.
-        // Replay it as literal text before preserving the transport error.
-        yield* flushAll();
-        throw error;
-      }
-      if (next.done) {
-        sourceExhausted = true;
-        break;
-      }
-      const event = next.value;
-      if (event.type === "done" || event.type === "error") {
-        const contentIndex = terminalTextIndex(event);
-        const message = event.type === "done" ? event.message : event.error;
-        const cleaned = trimFinalMessage(message);
-        const removesTerminalMarker = cleaned !== message;
+  // StreamFn encodes provider failures as terminal error events. A thrown
+  // iterator violates the agent-core contract and is not normalized here.
+  for await (const event of source) {
+    if (event.type === "done" || event.type === "error") {
+      const contentIndex = terminalTextIndex(event);
+      const message = event.type === "done" ? event.message : event.error;
+      const cleaned = trimFinalMessage(message);
+      const state = pending;
+      pending = undefined;
+
+      if (state && cleaned !== message && state.contentIndex === contentIndex) {
+        const whitespace = state.value.slice(MESSAGE_END_MARKER.length);
+        if (whitespace) {
+          yield replayPendingText(state.contentIndex, whitespace);
+        }
         const terminalBlock =
           contentIndex === undefined ? undefined : cleaned.content[contentIndex];
-        const terminalText = terminalBlock?.type === "text" ? terminalBlock.text : undefined;
-
-        for (const state of [...pendingByContentIndex.values()].sort(
-          (left, right) => left.contentIndex - right.contentIndex,
-        )) {
-          pendingByContentIndex.delete(state.contentIndex);
-          if (removesTerminalMarker && state.contentIndex === contentIndex) {
-            const whitespace = state.value.slice(MESSAGE_END_MARKER.length);
-            if (whitespace) {
-              yield replayPendingText(state.contentIndex, whitespace);
-            }
-            if (state.deferredTextEnd && terminalText !== undefined) {
-              yield replaceTextEnd(state.deferredTextEnd, terminalText);
-            }
-          } else {
-            yield* replayLiteral(state);
-          }
+        if (state.deferredTextEnd && terminalBlock?.type === "text") {
+          yield replaceTextEnd(state.deferredTextEnd, terminalBlock.text);
         }
-        yield event.type === "done" ? { ...event, message: cleaned } : { ...event, error: cleaned };
-        return;
+      } else if (state) {
+        yield* replayLiteral(state);
       }
 
-      const contentIndex = eventContentIndex(event);
-      const isEarlierContentBlock =
-        contentIndex !== undefined && contentIndex < highestContentIndex;
-      if (contentIndex !== undefined && contentIndex > highestContentIndex) {
-        yield* flushBefore(contentIndex);
-        highestContentIndex = contentIndex;
-      }
-
-      if (event.type === "text_delta") {
-        if (isEarlierContentBlock) {
-          yield hidePendingTails(event, pendingByContentIndex.values());
-          continue;
-        }
-        if (pendingByContentIndex.get(event.contentIndex)?.deferredTextEnd) {
-          yield* flushLiteral(event.contentIndex);
-        }
-        const previous = pendingByContentIndex.get(event.contentIndex);
-        const candidate = splitTrailingCandidate((previous?.value ?? "") + event.delta);
-        if (candidate.pending) {
-          pendingByContentIndex.set(event.contentIndex, {
-            contentIndex: event.contentIndex,
-            value: candidate.pending,
-          });
-        } else {
-          pendingByContentIndex.delete(event.contentIndex);
-        }
-        if (candidate.visible) {
-          yield hidePendingTails(
-            { ...event, delta: candidate.visible },
-            pendingByContentIndex.values(),
-          ) as TextDeltaEvent;
-        }
-        continue;
-      }
-
-      if (event.type === "text_end") {
-        if (isEarlierContentBlock) {
-          yield hidePendingTails(event, pendingByContentIndex.values());
-          continue;
-        }
-        if (pendingByContentIndex.get(event.contentIndex)?.deferredTextEnd) {
-          yield* flushLiteral(event.contentIndex);
-        }
-        const trailing = splitTrailingCandidate(event.content).pending;
-        if (trailing) {
-          pendingByContentIndex.set(event.contentIndex, {
-            contentIndex: event.contentIndex,
-            value: trailing,
-            deferredTextEnd: event,
-          });
-        } else {
-          yield* flushLiteral(event.contentIndex);
-          yield hidePendingTails(event, pendingByContentIndex.values());
-        }
-        continue;
-      }
-
-      yield hidePendingTails(event, pendingByContentIndex.values());
+      yield event.type === "done" ? { ...event, message: cleaned } : { ...event, error: cleaned };
+      return;
     }
-  } finally {
-    if (!sourceExhausted && !sourceFailed) {
-      await iterator.return?.();
+
+    const contentIndex = eventContentIndex(event);
+    // Anthropic-compatible streams finish one content block before the next.
+    // A different block therefore proves a held marker candidate is literal.
+    if (pending && contentIndex !== undefined && contentIndex !== pending.contentIndex) {
+      yield* flushLiteral();
     }
+
+    if (event.type === "text_delta") {
+      if (pending?.deferredTextEnd) {
+        yield* flushLiteral();
+      }
+      const candidate = splitTrailingCandidate((pending?.value ?? "") + event.delta);
+      pending = candidate.pending
+        ? { contentIndex: event.contentIndex, value: candidate.pending }
+        : undefined;
+      if (candidate.visible) {
+        yield hidePendingTail({ ...event, delta: candidate.visible }, pending) as TextDeltaEvent;
+      }
+      continue;
+    }
+
+    if (event.type === "text_end") {
+      if (pending?.deferredTextEnd) {
+        yield* flushLiteral();
+      }
+      const trailing = splitTrailingCandidate(event.content).pending;
+      if (trailing) {
+        pending = {
+          contentIndex: event.contentIndex,
+          value: trailing,
+          deferredTextEnd: event,
+        };
+      } else {
+        yield* flushLiteral();
+        yield event;
+      }
+      continue;
+    }
+
+    yield hidePendingTail(event, pending);
   }
 
-  yield* flushAll();
+  yield* flushLiteral();
 }
 
 function wrapStream(stream: AssistantStream): AssistantStream {

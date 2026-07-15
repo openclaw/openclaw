@@ -50,6 +50,13 @@ function createThinkingAndTextMessage(thinking: string, text: string): Assistant
   };
 }
 
+function createThinkingMessage(thinking: string): AssistantMessage {
+  return {
+    ...createAssistantMessage(""),
+    content: [{ type: "thinking", thinking }],
+  };
+}
+
 function createTextPairMessage(first: string, second: string): AssistantMessage {
   return {
     ...createAssistantMessage(second),
@@ -62,7 +69,6 @@ function createTextPairMessage(first: string, second: string): AssistantMessage 
 
 function createEventStream(
   events: AssistantMessageEvent[],
-  streamError?: Error,
   onIteratorClose?: () => void,
 ): StreamFn {
   return (() => {
@@ -78,9 +84,6 @@ function createEventStream(
       async *[Symbol.asyncIterator]() {
         try {
           yield* events;
-          if (streamError) {
-            throw streamError;
-          }
         } finally {
           onIteratorClose?.();
         }
@@ -99,11 +102,10 @@ async function collectEvents(stream: ReturnType<StreamFn>): Promise<AssistantMes
 
 function runWrapper(
   events: AssistantMessageEvent[],
-  streamError?: Error,
   onIteratorClose?: () => void,
 ) {
   const wrapped = createMinimaxMessageEndMarkerWrapper(
-    createEventStream(events, streamError, onIteratorClose),
+    createEventStream(events, onIteratorClose),
   );
   return wrapped(
     {
@@ -209,19 +211,33 @@ describe("MiniMax message-end stream wrapper", () => {
     expect(done?.type === "done" ? done.message.content : undefined).toEqual(toolUse.content);
   });
 
-  it("holds a split marker across interleaved thinking events", async () => {
+  it("cleans a terminal marker after a preceding thinking block", async () => {
     const text = "Done[e~[";
     const beforeMarker = createThinkingAndTextMessage("reasoning", "Done[e");
     const fullMessage = createThinkingAndTextMessage("reasoning", text);
     const stream = runWrapper([
-      { type: "start", partial: createThinkingAndTextMessage("", "") },
-      { type: "thinking_start", contentIndex: 0, partial: createThinkingAndTextMessage("", "") },
-      { type: "text_start", contentIndex: 1, partial: createThinkingAndTextMessage("", "") },
+      { type: "start", partial: createAssistantMessage("") },
+      { type: "thinking_start", contentIndex: 0, partial: createThinkingMessage("") },
+      {
+        type: "thinking_delta",
+        contentIndex: 0,
+        delta: "reasoning",
+        partial: createThinkingMessage("reasoning"),
+      },
+      {
+        type: "thinking_end",
+        contentIndex: 0,
+        content: "reasoning",
+        partial: createThinkingMessage("reasoning"),
+      },
+      {
+        type: "text_start",
+        contentIndex: 1,
+        partial: createThinkingAndTextMessage("reasoning", ""),
+      },
       { type: "text_delta", contentIndex: 1, delta: "Done[e", partial: beforeMarker },
-      { type: "thinking_delta", contentIndex: 0, delta: "reasoning", partial: beforeMarker },
       { type: "text_delta", contentIndex: 1, delta: "~[", partial: fullMessage },
       { type: "text_end", contentIndex: 1, content: text, partial: fullMessage },
-      { type: "thinking_end", contentIndex: 0, content: "reasoning", partial: fullMessage },
       { type: "done", reason: "stop", message: fullMessage },
     ]);
 
@@ -243,17 +259,26 @@ describe("MiniMax message-end stream wrapper", () => {
   it("preserves an earlier text marker while cleaning the terminal text block", async () => {
     const leadingText = "Leading[e~[";
     const terminalText = "Final[e~[";
-    const leadingMessage = createTextPairMessage(leadingText, "");
+    const leadingMessage = createAssistantMessage(leadingText);
     const fullMessage = createTextPairMessage(leadingText, terminalText);
     const output = await collectEvents(
       runWrapper([
-        { type: "start", partial: createTextPairMessage("", "") },
-        { type: "text_start", contentIndex: 0, partial: createTextPairMessage("", "") },
-        { type: "text_start", contentIndex: 1, partial: createTextPairMessage("", "") },
+        { type: "start", partial: createAssistantMessage("") },
+        { type: "text_start", contentIndex: 0, partial: createAssistantMessage("") },
         { type: "text_delta", contentIndex: 0, delta: leadingText, partial: leadingMessage },
+        {
+          type: "text_end",
+          contentIndex: 0,
+          content: leadingText,
+          partial: leadingMessage,
+        },
+        {
+          type: "text_start",
+          contentIndex: 1,
+          partial: createTextPairMessage(leadingText, ""),
+        },
         { type: "text_delta", contentIndex: 1, delta: terminalText, partial: fullMessage },
         { type: "text_end", contentIndex: 1, content: terminalText, partial: fullMessage },
-        { type: "text_end", contentIndex: 0, content: leadingText, partial: fullMessage },
         { type: "done", reason: "stop", message: fullMessage },
       ]),
     );
@@ -272,7 +297,7 @@ describe("MiniMax message-end stream wrapper", () => {
     );
     const done = output.find((event) => event.type === "done");
 
-    expect(leadingDeltas.map((event) => event.delta)).toEqual([leadingText]);
+    expect(leadingDeltas.map((event) => event.delta).join("")).toBe(leadingText);
     expect(leadingTextEnd).toMatchObject({ content: leadingText });
     expect(terminalTextEnd).toMatchObject({ content: "Final" });
     for (const event of output) {
@@ -315,39 +340,6 @@ describe("MiniMax message-end stream wrapper", () => {
     });
   });
 
-  it("replays a deferred marker and text end before rethrowing a source error", async () => {
-    const text = "Interrupted[e~[";
-    const sourceError = new Error("transport closed");
-    const stream = runWrapper(
-      [
-        { type: "start", partial: createAssistantMessage("") },
-        { type: "text_start", contentIndex: 0, partial: createAssistantMessage("") },
-        {
-          type: "text_delta",
-          contentIndex: 0,
-          delta: text,
-          partial: createAssistantMessage(text),
-        },
-        { type: "text_end", contentIndex: 0, content: text, partial: createAssistantMessage(text) },
-      ],
-      sourceError,
-    );
-    const output: AssistantMessageEvent[] = [];
-
-    await expect(
-      (async () => {
-        for await (const event of stream as AsyncIterable<AssistantMessageEvent>) {
-          output.push(event);
-        }
-      })(),
-    ).rejects.toBe(sourceError);
-
-    const textDeltas = output.filter((event) => event.type === "text_delta");
-    const textEnd = output.find((event) => event.type === "text_end");
-    expect(textDeltas.map((event) => event.delta).join("")).toBe(text);
-    expect(textEnd).toMatchObject({ content: text });
-  });
-
   it("forwards early iterator cancellation to the source stream", async () => {
     let sourceClosed = false;
     const stream = runWrapper(
@@ -355,7 +347,6 @@ describe("MiniMax message-end stream wrapper", () => {
         { type: "start", partial: createAssistantMessage("") },
         { type: "text_start", contentIndex: 0, partial: createAssistantMessage("") },
       ],
-      undefined,
       () => {
         sourceClosed = true;
       },
@@ -379,7 +370,6 @@ describe("MiniMax message-end stream wrapper", () => {
         { type: "text_end", contentIndex: 0, content: text, partial: createAssistantMessage(text) },
         { type: "done", reason: "stop", message: createAssistantMessage(text) },
       ],
-      undefined,
       () => {
         sourceClosed = true;
       },
