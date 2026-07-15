@@ -376,6 +376,79 @@ describe("buildOpenAISpeechProvider", () => {
     }
   });
 
+  it("does not treat a whitespace OPENAI_API_KEY as configured", () => {
+    const previousKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "   ";
+    try {
+      const provider = buildOpenAISpeechProvider();
+
+      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30_000 })).toBe(false);
+    } finally {
+      if (previousKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousKey;
+      }
+    }
+  });
+
+  it("rejects whitespace OPENAI_API_KEY before speech synthesis", async () => {
+    const previousKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "   ";
+    const provider = buildOpenAISpeechProvider();
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await expect(
+        provider.synthesize({
+          text: "hello",
+          cfg: {} as never,
+          providerConfig: {
+            model: "gpt-4o-mini-tts",
+            voice: "alloy",
+          },
+          target: "audio-file",
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toThrow("OpenAI API key missing");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      if (previousKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousKey;
+      }
+    }
+  });
+
+  it("rejects whitespace OPENAI_API_KEY before telephony synthesis", async () => {
+    const previousKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "   ";
+    const provider = buildOpenAISpeechProvider();
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await expect(
+        provider.synthesizeTelephony?.({
+          text: "hello",
+          cfg: {} as never,
+          providerConfig: {
+            model: "gpt-4o-mini-tts",
+            voice: "alloy",
+          },
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toThrow("OpenAI API key missing");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      if (previousKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousKey;
+      }
+    }
+  });
+
   it("preserves talk responseFormat overrides", () => {
     const provider = buildOpenAISpeechProvider();
 
