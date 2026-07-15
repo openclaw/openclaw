@@ -81,6 +81,18 @@ function normalizePackageTarget(value: string): string {
   return value.trim();
 }
 
+/** Reads the command value after package-manager warnings printed on stdout. */
+export function readPackageManagerProbeValue(stdout: string): string {
+  const lines = stdout.split(/\r?\n/u);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const value = lines[index]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
 function normalizePackageVersionForComparison(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -973,7 +985,7 @@ async function resolveGlobalRoot(
   if (!res || res.code !== 0) {
     return null;
   }
-  const root = res.stdout.trim();
+  const root = readPackageManagerProbeValue(res.stdout);
   return root || null;
 }
 
@@ -1117,7 +1129,7 @@ export async function detectGlobalInstallManagerForRoot(
     if (!res || res.code !== 0) {
       continue;
     }
-    const globalRoot = res.stdout.trim();
+    const globalRoot = readPackageManagerProbeValue(res.stdout);
     if (!globalRoot) {
       continue;
     }

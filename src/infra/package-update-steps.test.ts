@@ -783,18 +783,19 @@ describe("runGlobalPackageUpdateSteps", () => {
       );
       await fs.symlink(path.join(globalRoot, "old"), path.join(globalRoot, "hash-openclaw"), "dir");
 
+      const pnpmWarning = "[WARN] Using --global skips the package manager check for this project";
       const runCommand: CommandRunner = async (argv, options) => {
         const command = argv.join(" ");
         if (command === "pnpm root -g") {
-          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+          return { stdout: `${pnpmWarning}\n${globalRoot}\n`, stderr: "", code: 0 };
         }
         if (command === "pnpm bin -g") {
           expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
-          return { stdout: `${ownerBinDir}\n`, stderr: "", code: 0 };
+          return { stdout: `${pnpmWarning}\n${ownerBinDir}\n`, stderr: "", code: 0 };
         }
         if (command === "pnpm --version") {
           expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
-          return { stdout: "11.4.0\n", stderr: "", code: 0 };
+          return { stdout: `${pnpmWarning}\n11.4.0\n`, stderr: "", code: 0 };
         }
         throw new Error(`unexpected command: ${command}`);
       };

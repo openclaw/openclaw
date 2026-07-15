@@ -690,7 +690,11 @@ describe("update global helpers", () => {
           return { stdout: `${npmRoot}\n`, stderr: "", code: 0 };
         }
         if (command === "pnpm root -g") {
-          return { stdout: `${pnpmGlobalRoot}\n`, stderr: "", code: 0 };
+          return {
+            stdout: `[WARN] Using --global skips the package manager check for this project\n${pnpmGlobalRoot}\n`,
+            stderr: "",
+            code: 0,
+          };
         }
         throw new Error(`unexpected command: ${command}`);
       };

@@ -20,6 +20,7 @@ import {
   globalInstallArgs,
   globalInstallFallbackArgs,
   listActivePnpmIsolatedGlobalPackages,
+  readPackageManagerProbeValue,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
   resolvePnpmGlobalDirFromGlobalRoot,
@@ -204,7 +205,7 @@ async function validatePnpmIsolatedUpdate(params: {
       failedStep: rootProbe.failedStep,
     };
   }
-  const reportedGlobalRoot = rootProbe.result.stdout.trim();
+  const reportedGlobalRoot = readPackageManagerProbeValue(rootProbe.result.stdout);
   const expectedGlobalRoot = params.installTarget.globalRoot;
   if (
     !reportedGlobalRoot ||
@@ -227,7 +228,9 @@ async function validatePnpmIsolatedUpdate(params: {
   }
 
   const binProbe = await runPnpmPreflightProbe({ ...params, args: ["bin", "-g"] });
-  const globalBinDir = binProbe.result?.stdout.trim() || null;
+  const globalBinDir = binProbe.result
+    ? readPackageManagerProbeValue(binProbe.result.stdout) || null
+    : null;
   if (binProbe.failedStep || !globalBinDir) {
     return {
       globalBinDir: null,
@@ -250,9 +253,9 @@ async function validatePnpmIsolatedUpdate(params: {
       failedStep: versionProbe.failedStep,
     };
   }
-  const version = parseSemver(versionProbe.result.stdout);
+  const reportedVersion = readPackageManagerProbeValue(versionProbe.result.stdout);
+  const version = parseSemver(reportedVersion);
   if (version?.major !== owner.layoutVersion) {
-    const reportedVersion = versionProbe.result.stdout.trim() || "unknown";
     return {
       globalBinDir: null,
       failedStep: {
@@ -262,7 +265,7 @@ async function validatePnpmIsolatedUpdate(params: {
         durationMs: 0,
         exitCode: 1,
         stdoutTail: versionProbe.result.stdout || null,
-        stderrTail: `OpenClaw belongs to pnpm isolated layout v${owner.layoutVersion}, but the update command reports pnpm ${reportedVersion}. Use pnpm ${owner.layoutVersion} for this install or update it manually.`,
+        stderrTail: `OpenClaw belongs to pnpm isolated layout v${owner.layoutVersion}, but the update command reports pnpm ${reportedVersion || "unknown"}. Use pnpm ${owner.layoutVersion} for this install or update it manually.`,
       },
     };
   }
