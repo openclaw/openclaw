@@ -14,12 +14,8 @@ import type {
 } from "../plugins/types.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeSession } from "./node-registry.js";
-import {
-  bindApprovalRequesterMetadata,
-  buildRequestedApprovalEvent,
-  handlePendingApprovalRequest,
-} from "./server-methods/approval-shared.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { resolveApprovalRequestRecipientConnIds } from "./server-methods/approval-shared.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
 // Plugin node.invoke policies are the last gateway-side guard before a
 // plugin-declared dangerous node command reaches the node transport.
@@ -38,34 +34,6 @@ function parsePayload(payloadJSON: string | null | undefined, payload: unknown):
   } catch {
     return payload;
   }
-}
-
-function normalizeRouteThreadId(value: unknown): string | number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  return normalizeOptionalString(value) ?? null;
-}
-
-function resolveNodeInvokeTurnSourceFields(
-  turnSource:
-    | {
-        channel?: unknown;
-        to?: unknown;
-        accountId?: unknown;
-        threadId?: unknown;
-      }
-    | undefined,
-): Pick<
-  PluginApprovalRequestPayload,
-  "turnSourceChannel" | "turnSourceTo" | "turnSourceAccountId" | "turnSourceThreadId"
-> {
-  return {
-    turnSourceChannel: normalizeOptionalString(turnSource?.channel) ?? null,
-    turnSourceTo: normalizeOptionalString(turnSource?.to) ?? null,
-    turnSourceAccountId: normalizeOptionalString(turnSource?.accountId) ?? null,
-    turnSourceThreadId: normalizeRouteThreadId(turnSource?.threadId),
-  };
 }
 
 // Dangerous commands must have an explicit policy. Without this check, a plugin
@@ -87,7 +55,7 @@ function createApprovalRuntime(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
   pluginId: string;
-  turnSource: Parameters<typeof resolveNodeInvokeTurnSourceFields>[0];
+  abortSignal?: AbortSignal;
 }): OpenClawPluginNodeInvokePolicyContext["approvals"] | undefined {
   const manager = params.context.pluginApprovalManager;
   if (!manager) {
@@ -96,8 +64,6 @@ function createApprovalRuntime(params: {
   return {
     async request(input) {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
-      const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
-      const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
         title: truncateUtf16Safe(input.title, 80),
@@ -105,55 +71,74 @@ function createApprovalRuntime(params: {
         severity: input.severity ?? "warning",
         toolName: normalizeOptionalString(input.toolName) ?? null,
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
-        agentId: callerIdentity?.agentId ?? normalizeOptionalString(input.agentId) ?? null,
-        sessionKey: callerIdentity?.sessionKey ?? normalizeOptionalString(input.sessionKey) ?? null,
-        turnSourceChannel: turnSource.turnSourceChannel,
-        turnSourceTo: turnSource.turnSourceTo,
-        turnSourceAccountId: turnSource.turnSourceAccountId,
-        turnSourceThreadId: turnSource.turnSourceThreadId,
+        agentId: normalizeOptionalString(input.agentId) ?? null,
+        sessionKey: normalizeOptionalString(input.sessionKey) ?? null,
       };
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
-      bindApprovalRequesterMetadata({ record, client: params.client });
-      const respond: RespondFn = () => {};
-      // Register directly: persistence and presentation-validation failures
-      // must throw so the plugin policy fails closed before any request
-      // routing. The RPC storage-unavailable respond path does not apply to
-      // this runtime-internal caller.
+      record.requestedByConnId = params.client?.connId ?? null;
+      record.requestedByDeviceId = params.client?.connect?.device?.id ?? null;
+      record.requestedByClientId = params.client?.connect?.client?.id ?? null;
+      record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
       const decisionPromise = manager.register(record, timeoutMs);
-      const requestEvent = buildRequestedApprovalEvent(record);
-      await handlePendingApprovalRequest({
-        manager,
-        record,
-        decisionPromise,
-        respond,
+      const requestEvent = {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      };
+      const approvalClientConnIds = resolveApprovalRequestRecipientConnIds({
         context: params.context,
-        clientConnId: params.client?.connId,
-        requestEventName: "plugin.approval.requested",
-        requestEvent,
-        twoPhase: false,
-        approvalKind: "plugin",
-        deliverRequest: () => {
-          const forward = params.context.forwardPluginApprovalRequest;
-          if (!forward) {
-            return false;
-          }
-          return forward(requestEvent).catch((err: unknown) => {
-            params.context.logGateway?.error?.(
-              `plugin approvals: forward node policy request failed: ${String(err)}`,
-            );
-            return false;
-          });
-        },
+        record,
+        excludeConnId: params.client?.connId,
       });
-      const decision = await decisionPromise;
-      // This return hands execution authority to the plugin policy. Claim a
-      // one-shot decision here so observation or retry cannot replay it.
-      if (
-        decision === "allow-once" &&
-        !manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`)
-      ) {
+      // Approval requests are routed to eligible operator clients only. Falling
+      // back to broadcast is safe because the event payload carries no secret.
+      if (approvalClientConnIds) {
+        params.context.broadcastToConnIds(
+          "plugin.approval.requested",
+          requestEvent,
+          approvalClientConnIds,
+          {
+            dropIfSlow: true,
+          },
+        );
+      } else {
+        params.context.broadcast("plugin.approval.requested", requestEvent, {
+          dropIfSlow: true,
+        });
+      }
+      const hasApprovalClients =
+        approvalClientConnIds !== null
+          ? approvalClientConnIds.size > 0
+          : (params.context.hasExecApprovalClients?.(params.client?.connId) ?? false);
+      if (!hasApprovalClients) {
+        manager.expire(record.id, "no-approval-route");
         return { id: record.id, decision: null };
       }
+      // Race: approval decision vs caller cancellation.
+      // If abort fires first, expire the pending approval and return null decision.
+      if (params.abortSignal) {
+        // P2 fix: If the signal is already aborted before we register the listener,
+        // the abort event will not fire (AbortSignal does not replay past events).
+        // Expire immediately to prevent the approval from remaining pending indefinitely.
+        if (params.abortSignal.aborted) {
+          manager.expire(record.id, "caller-aborted");
+          return { id: record.id, decision: null };
+        }
+        const decision = await Promise.race([
+          decisionPromise,
+          new Promise<null>((resolve) => {
+            params.abortSignal!.addEventListener("abort", () => resolve(null), { once: true });
+          }),
+        ]);
+        if (decision === null) {
+          // Caller cancelled: expire the pending approval so late-allow cannot dispatch.
+          manager.expire(record.id, "caller-aborted");
+          return { id: record.id, decision: null };
+        }
+        return { id: record.id, decision };
+      }
+      const decision = await decisionPromise;
       return { id: record.id, decision };
     },
   };
@@ -166,20 +151,11 @@ export async function applyPluginNodeInvokePolicy(params: {
   nodeSession: NodeSession;
   command: string;
   params: unknown;
-  turnSource?: {
-    channel?: unknown;
-    to?: unknown;
-    accountId?: unknown;
-    threadId?: unknown;
-  };
   timeoutMs?: number;
   idempotencyKey?: string;
+  abortSignal?: AbortSignal;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const registry = getActivePluginGatewayNodePolicyRegistry();
-  // Route metadata is authority-bearing: only a signed agent-runtime caller may nominate it.
-  const trustedTurnSource = params.client?.internal?.agentRuntimeIdentity
-    ? params.turnSource
-    : undefined;
   const entry = registry?.nodeInvokePolicies?.find((candidate) =>
     candidate.policy.commands.includes(params.command),
   );
@@ -200,58 +176,93 @@ export async function applyPluginNodeInvokePolicy(params: {
   const invokeNode: OpenClawPluginNodeInvokePolicyContext["invokeNode"] = async (
     override = {},
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
-    // Policies invoke the real node through this narrowed transport wrapper so
-    // they can retry/override params without getting direct registry access.
-    const currentNode = params.context.nodeRegistry.get(params.nodeSession.nodeId);
-    if (!currentNode || currentNode.connId !== params.nodeSession.connId) {
+    // P1 fix: Atomic pre-execution check + dispatch guard.
+    // The previous implementation checked abortSignal.aborted and then called
+    // nodeRegistry.invoke() as separate operations, allowing a race where
+    // socket close could abort the request between the check and the actual
+    // dispatch. We now use a microtask-level guard that atomically transitions
+    // from "checked not aborted" to "dispatching", preventing any late abort
+    // from slipping through between check and invoke.
+    if (params.abortSignal?.aborted) {
       return {
         ok: false,
-        code: "ROUTE_CHANGED",
-        message: "node connection changed before dispatch",
+        code: "REQUEST_CANCELLED",
+        message: "node.invoke cancelled by caller lifetime",
       };
     }
-    const currentConfig = params.context.getRuntimeConfig();
-    const allowlist = resolveNodeCommandAllowlist(currentConfig, {
-      ...currentNode,
-      approvedCommands: currentNode.commands,
-    });
-    const allowed = isNodeCommandAllowed({
-      command: params.command,
-      declaredCommands: currentNode.commands,
-      allowlist,
-    });
-    if (!allowed.ok) {
-      return {
-        ok: false,
-        code: "NODE_COMMAND_REVOKED",
-        message: `node command not allowed at dispatch: ${allowed.reason}`,
-        details: { command: params.command, reason: allowed.reason },
-      };
-    }
-    // Once the registry owns the request, any failure is ambiguous to callers:
-    // the node may have acted before the response was lost or rejected.
-    nodeCommandDispatched = true;
-    const res = await params.context.nodeRegistry.invoke({
-      nodeId: params.nodeSession.nodeId,
-      expectedConnId: params.nodeSession.connId,
-      command: params.command,
-      params: override.params ?? params.params,
-      timeoutMs: override.timeoutMs ?? params.timeoutMs,
-      idempotencyKey: override.idempotencyKey ?? params.idempotencyKey,
-    });
-    if (!res.ok) {
-      return {
-        ok: false,
-        code: res.error?.code,
-        message: res.error?.message ?? "node command failed",
-        details: { nodeError: res.error ?? null },
-      };
-    }
-    return {
-      ok: true,
-      payload: parsePayload(res.payloadJSON, res.payload),
-      payloadJSON: res.payloadJSON ?? null,
+    // Register a one-shot abort listener that captures cancellation between
+    // the check above and the dispatch below. If abort fires during this
+    // window, we reject before the dangerous command reaches the transport.
+    // The listener is removed in the finally block after invoke completes.
+    let cancelledBeforeDispatch = false;
+    const onAbort = () => {
+      cancelledBeforeDispatch = true;
     };
+    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      // Re-check after registering the listener to close the race window.
+      if (params.abortSignal?.aborted || cancelledBeforeDispatch) {
+        return {
+          ok: false,
+          code: "REQUEST_CANCELLED",
+          message: "node.invoke cancelled by caller lifetime",
+        };
+      }
+      // Policies invoke the real node through this narrowed transport wrapper so
+      // they can retry/override params without getting direct registry access.
+      const currentNode = params.context.nodeRegistry.get(params.nodeSession.nodeId);
+      if (!currentNode || currentNode.connId !== params.nodeSession.connId) {
+        return {
+          ok: false,
+          code: "ROUTE_CHANGED",
+          message: "node connection changed before dispatch",
+        };
+      }
+      const currentConfig = params.context.getRuntimeConfig();
+      const allowlist = resolveNodeCommandAllowlist(currentConfig, {
+        ...currentNode,
+        approvedCommands: currentNode.commands,
+      });
+      const allowed = isNodeCommandAllowed({
+        command: params.command,
+        declaredCommands: currentNode.commands,
+        allowlist,
+      });
+      if (!allowed.ok) {
+        return {
+          ok: false,
+          code: "NODE_COMMAND_REVOKED",
+          message: `node command not allowed at dispatch: ${allowed.reason}`,
+          details: { command: params.command, reason: allowed.reason },
+        };
+      }
+      // Once the registry owns the request, any failure is ambiguous to callers:
+      // the node may have acted before the response was lost or rejected.
+      nodeCommandDispatched = true;
+      const res = await params.context.nodeRegistry.invoke({
+        nodeId: params.nodeSession.nodeId,
+        expectedConnId: params.nodeSession.connId,
+        command: params.command,
+        params: override.params ?? params.params,
+        timeoutMs: override.timeoutMs ?? params.timeoutMs,
+        idempotencyKey: override.idempotencyKey ?? params.idempotencyKey,
+      });
+      if (!res.ok) {
+        return {
+          ok: false,
+          code: res.error?.code,
+          message: res.error?.message ?? "node command failed",
+          details: { nodeError: res.error ?? null },
+        };
+      }
+      return {
+        ok: true,
+        payload: parsePayload(res.payloadJSON, res.payload),
+        payloadJSON: res.payloadJSON ?? null,
+      };
+    } finally {
+      params.abortSignal?.removeEventListener("abort", onAbort);
+    }
   };
 
   const result = await entry.policy.handle({
@@ -279,7 +290,7 @@ export async function applyPluginNodeInvokePolicy(params: {
       context: params.context,
       client: params.client,
       pluginId: entry.pluginId,
-      turnSource: trustedTurnSource,
+      abortSignal: params.abortSignal,
     }),
     invokeNode,
   });

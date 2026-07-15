@@ -1,5 +1,6 @@
-import type { EventFrame, ResponseFrame } from "./schema/frames.js";
+import type { CancelFrame, EventFrame, ResponseFrame } from "./schema/frames.js";
 export type {
+  CancelFrame,
   ConnectParams,
   ErrorShape,
   EventFrame,
@@ -41,6 +42,13 @@ export function isGatewayEventFrame(value: unknown): value is EventFrame {
     return false;
   }
   return value.seq === undefined || isNonNegativeInteger(value.seq);
+}
+
+export function isGatewayCancelFrame(value: unknown): value is CancelFrame {
+  if (!isRecord(value) || value.type !== "cancel" || !isNonEmptyString(value.id)) {
+    return false;
+  }
+  return true;
 }
 
 export function isGatewayResponseFrame(value: unknown): value is ResponseFrame {
