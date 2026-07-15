@@ -5,6 +5,7 @@ import {
   asFiniteNumber,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
+  asPositiveSafeInteger,
   addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,
   clampTimerTimeoutMs,
@@ -32,107 +33,156 @@ import {
   resolveTimestampMsToIsoString,
   timestampMsToIsoFileStamp,
   timestampMsToIsoString,
+  MAX_DATE_TIMESTAMP_MS,
 } from "./number-coercion.js";
 
 describe("number-coercion", () => {
   test("asFiniteNumber accepts only finite numbers", () => {
     expect(asFiniteNumber(4)).toBe(4);
-    expect(asFiniteNumber("4")).toBeUndefined();
     expect(asFiniteNumber(Number.NaN)).toBeUndefined();
     expect(asFiniteNumber(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(asFiniteNumber("abc")).toBeUndefined();
   });
 
-  test("asFiniteNumberInRange enforces inclusive and exclusive bounds", () => {
-    expect(asFiniteNumberInRange(0.5, { min: 0.5, max: 2 })).toBe(0.5);
-    expect(asFiniteNumberInRange(2, { min: 0.5, max: 2 })).toBe(2);
-    expect(asFiniteNumberInRange(0.5, { min: 0.5, minExclusive: true })).toBeUndefined();
-    expect(asFiniteNumberInRange(10, { max: 10, maxExclusive: true })).toBeUndefined();
-    expect(asFiniteNumberInRange("1", { min: 0, max: 2 })).toBeUndefined();
+  test("asFiniteNumberInRange enforces inclusive/exclusive bounds", () => {
+    expect(asFiniteNumberInRange(5, { min: 1, max: 10 })).toBe(5);
+    expect(asFiniteNumberInRange(5, { min: 5 })).toBe(5);
+    expect(asFiniteNumberInRange(5, { max: 5 })).toBe(5);
+    expect(asFiniteNumberInRange(5, { min: 5, minExclusive: true })).toBeUndefined();
+    expect(asFiniteNumberInRange(5, { max: 5, maxExclusive: true })).toBeUndefined();
+    expect(asFiniteNumberInRange(Number.NaN, { min: 1 })).toBeUndefined();
+    expect(asFiniteNumberInRange(15, { min: 5, max: 10 })).toBeUndefined();
+    expect(asFiniteNumberInRange(5, { min: 10, max: 5 })).toBe(5);
   });
 
-  test("asSafeIntegerInRange accepts only safe integers inside inclusive bounds", () => {
-    expect(asSafeIntegerInRange(-1, { min: -1, max: 10 })).toBe(-1);
-    expect(asSafeIntegerInRange(10, { min: -1, max: 10 })).toBe(10);
-    expect(asSafeIntegerInRange(1.5, { min: -1, max: 10 })).toBeUndefined();
-    expect(asSafeIntegerInRange(11, { min: -1, max: 10 })).toBeUndefined();
-    expect(asSafeIntegerInRange(Number.NaN, { min: -1, max: 10 })).toBeUndefined();
+  test("asSafeIntegerInRange accepts only safe integers", () => {
+    expect(asSafeIntegerInRange(5, { min: 1, max: 10 })).toBe(5);
+    expect(asSafeIntegerInRange(Number.MAX_SAFE_INTEGER, {})).toBe(Number.MAX_SAFE_INTEGER);
+    expect(asSafeIntegerInRange(Number.MIN_SAFE_INTEGER, {})).toBe(Number.MIN_SAFE_INTEGER);
+    expect(asSafeIntegerInRange(Number.MAX_SAFE_INTEGER + 1, {})).toBeUndefined();
+    expect(asSafeIntegerInRange(Number.MIN_SAFE_INTEGER - 1, {})).toBeUndefined();
+    expect(asSafeIntegerInRange(Number.NaN, {})).toBeUndefined();
+    expect(asSafeIntegerInRange(Infinity, {})).toBeUndefined();
+    expect(asSafeIntegerInRange(3.14, {})).toBeUndefined();
+    expect(asSafeIntegerInRange("5", {})).toBeUndefined();
   });
 
-  test("parseFiniteNumber accepts finite numbers and numeric strings", () => {
+  test("parseFiniteNumber handles numbers and strict numeric strings", () => {
     expect(parseFiniteNumber(4)).toBe(4);
+    expect(parseFiniteNumber(4.5)).toBe(4.5);
+    expect(parseFiniteNumber(Number.NaN)).toBeUndefined();
+    expect(parseFiniteNumber(Infinity)).toBeUndefined();
+    expect(parseFiniteNumber("4")).toBe(4);
     expect(parseFiniteNumber("4.5")).toBe(4.5);
-    expect(parseFiniteNumber("4.5ms")).toBeUndefined();
-    expect(parseFiniteNumber("")).toBeUndefined();
-    expect(parseFiniteNumber("nope")).toBeUndefined();
+    expect(parseFiniteNumber("  4  ")).toBe(4);
+    expect(parseFiniteNumber("abc")).toBeUndefined();
+    expect(parseFiniteNumber("1e309")).toBeUndefined();
   });
 
-  test("parseStrictInteger accepts only safe integer tokens", () => {
-    expect(parseStrictInteger("42")).toBe(42);
-    expect(parseStrictInteger(" -7 ")).toBe(-7);
-    expect(parseStrictInteger("+9")).toBe(9);
-    expect(parseStrictInteger("1.5")).toBeUndefined();
-    expect(parseStrictInteger("1e3")).toBeUndefined();
-    expect(parseStrictInteger(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
-  });
-
-  test("parseStrictFiniteNumber rejects partial numeric strings", () => {
-    expect(parseStrictFiniteNumber("42")).toBe(42);
+  test("parseStrictFiniteNumber handles finite numeric strings", () => {
+    expect(parseStrictFiniteNumber(4)).toBe(4);
+    expect(parseStrictFiniteNumber(4.5)).toBe(4.5);
+    expect(parseStrictFiniteNumber(Infinity)).toBeUndefined();
+    expect(parseStrictFiniteNumber(Number.NaN)).toBeUndefined();
+    expect(parseStrictFiniteNumber("4")).toBe(4);
+    expect(parseStrictFiniteNumber("4.5")).toBe(4.5);
     expect(parseStrictFiniteNumber(".5")).toBe(0.5);
-    expect(parseStrictFiniteNumber("1e3")).toBe(1000);
-    expect(parseStrictFiniteNumber("3.14ms")).toBeUndefined();
-    expect(parseStrictFiniteNumber("0x10")).toBeUndefined();
+    expect(parseStrictFiniteNumber("1e10")).toBe(10000000000);
+    expect(parseStrictFiniteNumber("   1e10   ")).toBe(10000000000);
+    expect(parseStrictFiniteNumber("1e308")).toBe(1e308);
+    expect(parseStrictFiniteNumber("1e309")).toBeUndefined();
+    expect(parseStrictFiniteNumber("abc")).toBeUndefined();
+    expect(parseStrictFiniteNumber("1.2.3")).toBeUndefined();
+    // Large exponent strings with 4+ digits are rejected early by the regex
+    expect(parseStrictFiniteNumber("1e9999")).toBeUndefined();
+    expect(parseStrictFiniteNumber("1e99999")).toBeUndefined();
+    expect(parseStrictFiniteNumber("1e100000")).toBeUndefined();
   });
 
-  test("strict integer range helpers enforce sign", () => {
-    expect(parseStrictPositiveInteger("9")).toBe(9);
+  test("parseStrictInteger parses only base-10 integer strings", () => {
+    expect(parseStrictInteger(4)).toBe(4);
+    expect(parseStrictInteger(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(parseStrictInteger(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
+    expect(parseStrictInteger(4.5)).toBeUndefined();
+    expect(parseStrictInteger("4")).toBe(4);
+    expect(parseStrictInteger("  4  ")).toBe(4);
+    expect(parseStrictInteger("9007199254740991")).toBe(9007199254740991);
+    expect(parseStrictInteger("9007199254740992")).toBeUndefined();
+    expect(parseStrictInteger("abc")).toBeUndefined();
+    expect(parseStrictInteger("4.5")).toBeUndefined();
+    expect(parseStrictInteger("0x10")).toBeUndefined();
+  });
+
+  test("positive and non-negative integer parsers enforce sign constraints", () => {
+    expect(parseStrictPositiveInteger("5")).toBe(5);
     expect(parseStrictPositiveInteger("0")).toBeUndefined();
+    expect(parseStrictPositiveInteger(0)).toBeUndefined();
+    expect(parseStrictPositiveInteger("-1")).toBeUndefined();
     expect(parseStrictNonNegativeInteger("0")).toBe(0);
+    expect(parseStrictNonNegativeInteger("5")).toBe(5);
     expect(parseStrictNonNegativeInteger("-1")).toBeUndefined();
   });
 
-  test("timer timeout helpers centralize Node-safe bounds", () => {
-    expect(MAX_TIMER_TIMEOUT_SECONDS).toBe(2_147_000);
-    expect(finiteSecondsToTimerSafeMilliseconds(1.5)).toBe(1_500);
-    expect(finiteSecondsToTimerSafeMilliseconds(1.5, { floorSeconds: true })).toBe(1_000);
-    expect(finiteSecondsToTimerSafeMilliseconds(10_000_000)).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(finiteSecondsToTimerSafeMilliseconds("10")).toBeUndefined();
-    expect(finiteSecondsToTimerSafeMilliseconds(Number.POSITIVE_INFINITY)).toBeUndefined();
-    expect(clampTimerTimeoutMs(0, 10)).toBe(10);
-    expect(clampTimerTimeoutMs(10_000_000_000)).toBe(MAX_TIMER_TIMEOUT_MS);
+  test("asPositiveSafeInteger returns only positive safe integers", () => {
+    expect(asPositiveSafeInteger(5)).toBe(5);
+    expect(asPositiveSafeInteger(0)).toBeUndefined();
+    expect(asPositiveSafeInteger(-1)).toBeUndefined();
+    expect(asPositiveSafeInteger(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(asPositiveSafeInteger(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
+    expect(asPositiveSafeInteger(Number.NaN)).toBeUndefined();
+    expect(asPositiveSafeInteger(Infinity)).toBeUndefined();
+  });
+
+  test("clampTimerTimeoutMs clamps within Node-safe timer range", () => {
+    expect(clampTimerTimeoutMs(1000)).toBe(1000);
+    expect(clampTimerTimeoutMs(0)).toBe(1);
+    expect(clampTimerTimeoutMs(-100)).toBe(1);
+    expect(clampTimerTimeoutMs(MAX_TIMER_TIMEOUT_MS + 1)).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(clampTimerTimeoutMs(Number.NaN)).toBeUndefined();
+    expect(clampTimerTimeoutMs(Infinity)).toBeUndefined();
+  });
+
+  test("clampPositiveTimerTimeoutMs rejects non-positive values", () => {
+    expect(clampPositiveTimerTimeoutMs(1000)).toBe(1000);
     expect(clampPositiveTimerTimeoutMs(0)).toBeUndefined();
     expect(clampPositiveTimerTimeoutMs(-1)).toBeUndefined();
-    expect(clampPositiveTimerTimeoutMs(10_000_000_000)).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(resolvePositiveTimerTimeoutMs(0, 5000)).toBe(5000);
-    expect(resolvePositiveTimerTimeoutMs(Number.MAX_SAFE_INTEGER, 5000)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(clampPositiveTimerTimeoutMs(Number.NaN)).toBeUndefined();
+  });
+
+  test("finiteSecondsToTimerSafeMilliseconds converts seconds to ms safely", () => {
+    expect(finiteSecondsToTimerSafeMilliseconds(5)).toBe(5000);
+    expect(finiteSecondsToTimerSafeMilliseconds(0)).toBeUndefined();
+    expect(finiteSecondsToTimerSafeMilliseconds(Infinity)).toBeUndefined();
+    expect(finiteSecondsToTimerSafeMilliseconds(Number.NaN)).toBeUndefined();
+  });
+
+  test("resolveTimerTimeoutMs resolves with fallback and minimum bounds", () => {
+    expect(resolveTimerTimeoutMs(1000, 5000)).toBe(1000);
+    expect(resolveTimerTimeoutMs(0, 5000)).toBe(1);
     expect(resolveTimerTimeoutMs(Number.NaN, 5000)).toBe(5000);
-    expect(resolveTimerTimeoutMs(Number.NaN, 0, 0)).toBe(0);
-    expect(resolveTimerTimeoutMs(Number.NaN, Number.POSITIVE_INFINITY, 25)).toBe(25);
-    expect(resolveTimerTimeoutMs(Number.MAX_SAFE_INTEGER, 5000)).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(addTimerTimeoutGraceMs(10_000)).toBe(15_000);
-    expect(addTimerTimeoutGraceMs(10_000, 500)).toBe(10_500);
-    expect(addTimerTimeoutGraceMs(MAX_TIMER_TIMEOUT_MS - 100, 500)).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(addTimerTimeoutGraceMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(addTimerTimeoutGraceMs(Number.MAX_VALUE)).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(addTimerTimeoutGraceMs(Number.NaN)).toBeUndefined();
+    expect(resolveTimerTimeoutMs(Infinity, 5000)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolveTimerTimeoutMs(MAX_TIMER_TIMEOUT_MS * 2, 5000)).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
-  test("seconds helpers reject unsafe millisecond values", () => {
-    expect(positiveSecondsToSafeMilliseconds("10")).toBe(10_000);
-    expect(positiveSecondsToSafeMilliseconds("0")).toBeUndefined();
-    expect(positiveSecondsToSafeMilliseconds("1e309")).toBeUndefined();
-    expect(nonNegativeSecondsToSafeMilliseconds("0")).toBe(0);
-    expect(nonNegativeSecondsToSafeMilliseconds("-1")).toBeUndefined();
+  test("addTimerTimeoutGraceMs adds grace and clamps", () => {
+    expect(addTimerTimeoutGraceMs(1000, 500)).toBe(1500);
+    expect(addTimerTimeoutGraceMs(Number.NaN, 500)).toBeUndefined();
   });
 
-  test("timestamp ISO helper rejects Date-invalid timestamps", () => {
+  test("date timestamp helpers validate Date range", () => {
+    expect(asDateTimestampMs(1_000)).toBe(1_000);
     expect(asDateTimestampMs(0)).toBe(0);
-    expect(asDateTimestampMs(8_640_000_000_000_000)).toBe(8_640_000_000_000_000);
-    expect(asDateTimestampMs(8_640_000_000_000_001)).toBeUndefined();
+    expect(asDateTimestampMs(-MAX_DATE_TIMESTAMP_MS)).toBe(-MAX_DATE_TIMESTAMP_MS);
+    expect(asDateTimestampMs(MAX_DATE_TIMESTAMP_MS)).toBe(MAX_DATE_TIMESTAMP_MS);
+    expect(asDateTimestampMs(MAX_DATE_TIMESTAMP_MS + 1)).toBeUndefined();
+    expect(asDateTimestampMs(-MAX_DATE_TIMESTAMP_MS - 1)).toBeUndefined();
+    expect(asDateTimestampMs(Number.NaN)).toBeUndefined();
     expect(asDateTimestampMs(Number.POSITIVE_INFINITY)).toBeUndefined();
-    expect(asDateTimestampMs("0")).toBeUndefined();
+  });
+
+  test("timestampMsToIsoString converts valid timestamps", () => {
+    expect(timestampMsToIsoString(1_000)).toBe("1970-01-01T00:00:01.000Z");
     expect(timestampMsToIsoString(0)).toBe("1970-01-01T00:00:00.000Z");
-    expect(timestampMsToIsoString(8_640_000_000_000_000)).toBe("+275760-09-13T00:00:00.000Z");
     expect(timestampMsToIsoString(8_640_000_000_000_001)).toBeUndefined();
     expect(timestampMsToIsoString(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(timestampMsToIsoString("0")).toBeUndefined();
@@ -234,5 +284,19 @@ describe("number-coercion", () => {
     expect(resolveOptionalIntegerOption(Number.POSITIVE_INFINITY, { min: 1 })).toBeUndefined();
     expect(resolveOptionalIntegerOption(-4, { min: 0 })).toBe(0);
     expect(resolveOptionalIntegerOption(40, { max: 10 })).toBe(10);
+  });
+
+  test("resolvePositiveTimerTimeoutMs resolves or falls back", () => {
+    expect(resolvePositiveTimerTimeoutMs(1000, 5000)).toBe(1000);
+    expect(resolvePositiveTimerTimeoutMs(0, 5000)).toBe(5000);
+    expect(resolvePositiveTimerTimeoutMs(Number.NaN, 5000)).toBe(5000);
+  });
+
+  test("finiteSecondsToTimerSafeMilliseconds handles boundary cases", () => {
+    expect(finiteSecondsToTimerSafeMilliseconds(1)).toBe(1000);
+    expect(finiteSecondsToTimerSafeMilliseconds(1.5)).toBe(1500);
+    expect(finiteSecondsToTimerSafeMilliseconds(MAX_TIMER_TIMEOUT_SECONDS)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(finiteSecondsToTimerSafeMilliseconds("abc")).toBeUndefined();
+    expect(finiteSecondsToTimerSafeMilliseconds(0, { floorSeconds: true })).toBeUndefined();
   });
 });

@@ -33,10 +33,7 @@ export function asFiniteNumberInRange(
 /** Returns a safe integer only when it satisfies the supplied inclusive bounds. */
 export function asSafeIntegerInRange(
   value: unknown,
-  range: {
-    min?: number;
-    max?: number;
-  },
+  range: { min?: number; max?: number },
 ): number | undefined {
   if (typeof value !== "number" || !Number.isSafeInteger(value)) {
     return undefined;
@@ -79,6 +76,9 @@ export function parseStrictInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
+/** Maximum digits in the exponent part of a numeric string to reject clearly overflowing values early. */
+const MAX_EXPONENT_DIGITS = 3;
+
 /** Parses only finite decimal/scientific string tokens, rejecting partial numbers. */
 export function parseStrictFiniteNumber(value: unknown): number | undefined {
   if (typeof value === "number") {
@@ -88,7 +88,10 @@ export function parseStrictFiniteNumber(value: unknown): number | undefined {
     return undefined;
   }
   const normalized = normalizeNumericString(value);
-  if (!normalized || !/^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(normalized)) {
+  if (
+    !normalized ||
+    !/^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d{1,3})?$/i.test(normalized)
+  ) {
     return undefined;
   }
   const parsed = Number(normalized);
@@ -102,10 +105,13 @@ export function asPositiveSafeInteger(value: unknown): number | undefined {
 
 /** Conservative upper bound for Node timer delays. */
 export const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+
 /** Timer bound expressed in whole seconds for env/config inputs. */
 export const MAX_TIMER_TIMEOUT_SECONDS = Math.floor(MAX_TIMER_TIMEOUT_MS / 1000);
+
 /** Largest timestamp accepted by JavaScript Date. */
 export const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
+
 /** Fallback ISO value for invalid timestamp inputs. */
 export const UNIX_EPOCH_ISO_STRING = "1970-01-01T00:00:00.000Z";
 
@@ -147,7 +153,9 @@ export function resolveTimestampMsToIsoString(
   fallbackValue: unknown = Date.now(),
 ): string {
   return (
-    timestampMsToIsoString(value) ?? timestampMsToIsoString(fallbackValue) ?? UNIX_EPOCH_ISO_STRING
+    timestampMsToIsoString(value) ??
+    timestampMsToIsoString(fallbackValue) ??
+    UNIX_EPOCH_ISO_STRING
   );
 }
 
@@ -160,7 +168,10 @@ export function timestampMsToIsoFileStamp(
 }
 
 /** Clamps finite millisecond values into the Node-safe timer range. */
-export function clampTimerTimeoutMs(valueMs: unknown, minMs = 1): number | undefined {
+export function clampTimerTimeoutMs(
+  valueMs: unknown,
+  minMs = 1,
+): number | undefined {
   const value = asFiniteNumber(valueMs);
   if (value === undefined) {
     return undefined;
@@ -179,12 +190,19 @@ export function clampPositiveTimerTimeoutMs(valueMs: unknown): number | undefine
 }
 
 /** Resolves a positive timer timeout or falls back through safe timer clamping. */
-export function resolvePositiveTimerTimeoutMs(valueMs: unknown, fallbackMs: number): number {
+export function resolvePositiveTimerTimeoutMs(
+  valueMs: unknown,
+  fallbackMs: number,
+): number {
   return clampPositiveTimerTimeoutMs(valueMs) ?? resolveTimerTimeoutMs(fallbackMs, 1);
 }
 
 /** Resolves arbitrary timeout input with fallback and minimum timer bounds. */
-export function resolveTimerTimeoutMs(valueMs: unknown, fallbackMs: number, minMs = 1): number {
+export function resolveTimerTimeoutMs(
+  valueMs: unknown,
+  fallbackMs: number,
+  minMs = 1,
+): number {
   const value = asFiniteNumber(valueMs) ?? asFiniteNumber(fallbackMs);
   const min = Math.max(0, Math.floor(minMs));
   if (value === undefined) {
@@ -194,7 +212,10 @@ export function resolveTimerTimeoutMs(valueMs: unknown, fallbackMs: number, minM
 }
 
 /** Adds grace time to a finite timeout and clamps the result to Node-safe bounds. */
-export function addTimerTimeoutGraceMs(timeoutMs: unknown, graceMs = 5_000): number | undefined {
+export function addTimerTimeoutGraceMs(
+  timeoutMs: unknown,
+  graceMs = 5_000,
+): number | undefined {
   const timeout = asFiniteNumber(timeoutMs);
   const grace = asFiniteNumber(graceMs);
   if (timeout === undefined || grace === undefined) {
@@ -225,24 +246,20 @@ export function finiteSecondsToTimerSafeMilliseconds(
 export function resolveIntegerOption(
   value: unknown,
   fallback: number,
-  range: {
-    min?: number;
-    max?: number;
-  } = {},
+  range: { min?: number; max?: number } = {},
 ): number {
-  const candidate = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  const candidate =
+    typeof value === "number" && Number.isFinite(value) ? value : fallback;
   const floored = Math.floor(candidate);
-  const minBounded = range.min === undefined ? floored : Math.max(range.min, floored);
+  const minBounded =
+    range.min === undefined ? floored : Math.max(range.min, floored);
   return range.max === undefined ? minBounded : Math.min(range.max, minBounded);
 }
 
 /** Resolves an optional integer option, returning undefined for non-finite input. */
 export function resolveOptionalIntegerOption(
   value: unknown,
-  range: {
-    min?: number;
-    max?: number;
-  } = {},
+  range: { min?: number; max?: number } = {},
 ): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
@@ -251,7 +268,10 @@ export function resolveOptionalIntegerOption(
 }
 
 /** Resolves an integer option with a non-negative lower bound. */
-export function resolveNonNegativeIntegerOption(value: unknown, fallback: number): number {
+export function resolveNonNegativeIntegerOption(
+  value: unknown,
+  fallback: number,
+): number {
   return resolveIntegerOption(value, fallback, { min: 0 });
 }
 
