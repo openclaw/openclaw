@@ -306,6 +306,9 @@ export async function applyOutboundDeliveryPolicy(params: {
           const original = allowed[outcome.index];
           return remapOutcome(outcome, original?.index ?? outcome.index);
         };
+        // Recovery intentionally retains its queue identity on every sub-send.
+        // skipQueue prevents child acknowledgement; the recovery owner records
+        // aggregate evidence and finalizes the row only after this plan settles.
         const { renderedBatchPlan: _renderedBatchPlan, ...allowedDelivery } = delivery;
         void _renderedBatchPlan;
         results.push(

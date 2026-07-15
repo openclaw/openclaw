@@ -423,6 +423,35 @@ describe("runMessageAction plugin dispatch", () => {
     expect(actionParams).not.toHaveProperty("channelData");
   });
 
+  it("removes raw attachment params when policy removes their media reference", () => {
+    const bufferedMediaUrl = "buffer://message-send/attachment";
+    const actionParams: Record<string, unknown> = {
+      message: "original",
+      media: bufferedMediaUrl,
+      mediaUrl: bufferedMediaUrl,
+      mediaUrls: [bufferedMediaUrl],
+      buffer: Buffer.from("secret attachment").toString("base64"),
+      filename: "secret.txt",
+      contentType: "text/plain",
+    };
+
+    applySendPayloadPartsToActionParams(actionParams, {
+      message: "redacted",
+      payload: { text: "redacted" },
+      asVoice: false,
+      gifPlayback: false,
+      forceDocument: false,
+    });
+
+    expect(actionParams).toMatchObject({ message: "redacted" });
+    expect(actionParams).not.toHaveProperty("media");
+    expect(actionParams).not.toHaveProperty("mediaUrl");
+    expect(actionParams).not.toHaveProperty("mediaUrls");
+    expect(actionParams).not.toHaveProperty("buffer");
+    expect(actionParams).not.toHaveProperty("filename");
+    expect(actionParams).not.toHaveProperty("contentType");
+  });
+
   it("applies outbound delivery policy before plugin send dispatch", async () => {
     const handleAction = vi.fn(async ({ channel, params }: ChannelMessageActionContext) =>
       jsonResult({ ok: true, channel, to: params.to, message: params.message }),

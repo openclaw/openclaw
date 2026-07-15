@@ -63,6 +63,29 @@ describe("buildReplyPromptEnvelope", () => {
     });
   });
 
+  it("preserves transcript text when source policy hides the model-visible body", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "sensitive source text",
+      BodyStripped: "sensitive source text",
+      Provider: "imessage",
+      ChatType: "direct",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "",
+      transcriptBody: "sensitive source text",
+      hasUserBody: true,
+      inboundUserContext: "Current message:\nchat_id=source-chat",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    expect(envelope.prefixedCommandBody).toBe("");
+    expect(envelope.transcriptCommandBody).toBe("sensitive source text");
+  });
+
   it("adds one message-tool delivery hint to user-request runtime context only", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "@bot what changed?",

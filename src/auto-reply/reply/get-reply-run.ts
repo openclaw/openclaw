@@ -768,6 +768,7 @@ export async function runPreparedReply(
       : undefined;
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
+    (transcriptBaseBodyFinal?.trim().length ?? 0) > 0 ||
     softResetTail.length > 0 ||
     hasInboundHistoryBody(sessionCtx) ||
     hasCurrentReplyTargetContext;

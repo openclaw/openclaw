@@ -597,6 +597,38 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((result) => result.messageId)).toEqual(["reroute first", "allow second"]);
   });
 
+  it("leaves recovered queue finalization to the outer recovery owner", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "outbound_delivery_policy",
+    );
+    hookMocks.runner.runOutboundDeliveryPolicy.mockImplementation(async (event) => {
+      const policyEvent = event as { payload: { text?: string }; destination: { to: string } };
+      return policyEvent.payload.text === "reroute" && policyEvent.destination.to === "!blocked"
+        ? { decision: "reroute", destination: { channel: "matrix", to: "!relay" } }
+        : { payload: policyEvent.payload };
+    });
+    const sendMatrix = vi.fn(async (to: string, text: string) => ({
+      messageId: text,
+      roomId: to,
+    }));
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!blocked",
+      payloads: [{ text: "allow" }, { text: "reroute" }],
+      deps: { matrix: sendMatrix },
+      skipQueue: true,
+      deliveryQueueId: "recovered-queue-id",
+      deferCommitHooks: true,
+    });
+
+    expect(results.map((result) => result.messageId)).toEqual(["allow", "reroute"]);
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
   it("clears source routing metadata from unchanged rerouted payloads", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "outbound_delivery_policy",

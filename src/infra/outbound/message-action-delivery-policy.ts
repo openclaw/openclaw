@@ -77,6 +77,13 @@ export function applySendPayloadPartsToActionParams(
   actionParams: Record<string, unknown>,
   parts: SendPayloadParts,
 ): void {
+  const bufferedMediaUrl =
+    typeof actionParams.buffer === "string" && typeof actionParams.mediaUrl === "string"
+      ? actionParams.mediaUrl
+      : undefined;
+  const retainsBufferedMedia =
+    bufferedMediaUrl !== undefined &&
+    (parts.mediaUrl === bufferedMediaUrl || parts.mediaUrls?.includes(bufferedMediaUrl) === true);
   const applyOptional = (key: string, value: unknown) => {
     if (value === undefined) {
       delete actionParams[key];
@@ -101,6 +108,11 @@ export function applySendPayloadPartsToActionParams(
   applyOptional("interactive", parts.payload.interactive);
   applyOptional("delivery", parts.payload.delivery);
   applyOptional("channelData", parts.payload.channelData);
+  if (bufferedMediaUrl && !retainsBufferedMedia) {
+    delete actionParams.buffer;
+    delete actionParams.filename;
+    delete actionParams.contentType;
+  }
 }
 
 /** Undo source-only finalization before preparing a policy reroute destination. */
