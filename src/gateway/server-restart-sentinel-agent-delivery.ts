@@ -20,7 +20,6 @@ import {
   advanceSessionDeliveryAgentRun,
   deferSessionDelivery,
   failSessionDelivery,
-  moveSessionDeliveryToFailed,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   SessionDeliveryRetryChargedError,
@@ -38,7 +37,7 @@ const AGENT_DELIVERY_OWNERSHIP_RETRY_MS = 1_000;
 type QueuedAgentTurnSessionDelivery = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>;
 
 async function deadLetterSessionDelivery(id: string, reason: string): Promise<never> {
-  await moveSessionDeliveryToFailed(id);
+  log.warn("queued session delivery requires durable dead-letter settlement", { queueId: id });
   throw new SessionDeliveryDeadLetteredError(reason);
 }
 

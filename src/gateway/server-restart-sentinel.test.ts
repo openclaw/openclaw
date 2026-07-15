@@ -912,9 +912,7 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     ).rejects.toThrow("dead-lettered without durable terminal evidence");
 
-    expect(mocks.moveSessionDeliveryToFailed).toHaveBeenCalledWith(
-      "session-delivery-media-terminal",
-    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
   });
 
   it("retries a captured empty terminal result instead of dead-lettering it", async () => {
@@ -1583,9 +1581,7 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     ).rejects.toThrow("dead-lettered after ambiguous side effects");
 
-    expect(mocks.moveSessionDeliveryToFailed).toHaveBeenCalledWith(
-      "session-delivery-media-partial-unclassified",
-    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
     expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
   });
 
@@ -1622,9 +1618,7 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     ).rejects.toThrow("dead-lettered after truncated evidence");
 
-    expect(mocks.moveSessionDeliveryToFailed).toHaveBeenCalledWith(
-      "session-delivery-media-truncated",
-    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
     expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
   });
 
@@ -1666,9 +1660,7 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
 
-    expect(mocks.moveSessionDeliveryToFailed).toHaveBeenCalledWith(
-      "session-delivery-media-tool-targets-truncated",
-    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
     expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
   });
 
@@ -1704,9 +1696,7 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
 
-    expect(mocks.moveSessionDeliveryToFailed).toHaveBeenCalledWith(
-      "session-delivery-media-tool-aggregate-only",
-    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
     expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
   });
 
@@ -1749,9 +1739,7 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
 
-    expect(mocks.moveSessionDeliveryToFailed).toHaveBeenCalledWith(
-      "session-delivery-media-tool-mixed-aggregate",
-    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
     expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
   });
 
@@ -1793,9 +1781,7 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
 
-    expect(mocks.moveSessionDeliveryToFailed).toHaveBeenCalledWith(
-      "session-delivery-media-wrong-target",
-    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
     expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
   });
 
@@ -1831,9 +1817,7 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
 
-    expect(mocks.moveSessionDeliveryToFailed).toHaveBeenCalledWith(
-      "session-delivery-unsafe-side-effect",
-    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
     expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
   });
 
@@ -1873,9 +1857,7 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     ).rejects.toThrow("dead-lettered after ambiguous side effects");
 
-    expect(mocks.moveSessionDeliveryToFailed).toHaveBeenCalledWith(
-      "session-delivery-media-partial",
-    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
   });
 
   it("dispatches agentTurn continuation for a completed run entry", async () => {

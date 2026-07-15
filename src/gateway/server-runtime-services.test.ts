@@ -341,11 +341,15 @@ describe("server-runtime-services", () => {
       log: sessionDeliveryLog,
     });
     const runtimeParams = hoisted.startSessionDeliveryRuntime.mock.calls[0]?.[0] as
-      | { onSettled?: (entry: { sessionKey: string }) => Promise<void> }
+      | { onSettled?: (entry: { id: string; sessionKey: string }) => Promise<void> }
       | undefined;
-    await runtimeParams?.onSettled?.({ sessionKey: "agent:main:cron:job:run:run-1" });
+    await runtimeParams?.onSettled?.({
+      id: "settled-delivery-1",
+      sessionKey: "agent:main:cron:job:run:run-1",
+    });
     expect(hoisted.removeCronRunContinuationSessionIfIdle).toHaveBeenCalledWith(
       "agent:main:cron:job:run:run-1",
+      "settled-delivery-1",
     );
     expect(hoisted.schedulePendingSessionDeliveries).toHaveBeenCalledTimes(1);
   });

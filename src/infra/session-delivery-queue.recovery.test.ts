@@ -8,7 +8,6 @@ import {
   deferSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDeliveries,
-  moveSessionDeliveryToFailed,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   SessionDeliveryRetryChargedError,
@@ -48,6 +47,94 @@ describe("session-delivery queue recovery", () => {
       expect(onSettled).toHaveBeenCalledWith(expect.any(Object), "recovered");
       expect(summary.recovered).toBe(1);
       expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
+    });
+  });
+
+  it("retries settlement cleanup without replaying a delivered side effect", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-settlement-retry:agent-loop",
+        },
+        tempDir,
+      );
+      const deliver = vi.fn(async () => undefined);
+      let failCleanup = true;
+      const onSettled = vi.fn(async () => {
+        if (failCleanup) {
+          failCleanup = false;
+          throw new Error("cleanup interrupted");
+        }
+      });
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      const first = await recoverPendingSessionDeliveries({
+        deliver,
+        onSettled,
+        stateDir: tempDir,
+        log,
+      });
+
+      expect(first.recovered).toBe(0);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
+        expect.objectContaining({
+          id,
+          acknowledgedAt: expect.any(Number),
+          settlementOutcome: "recovered",
+        }),
+      ]);
+
+      const second = await recoverPendingSessionDeliveries({
+        deliver,
+        onSettled,
+        stateDir: tempDir,
+        log,
+      });
+
+      expect(second.recovered).toBe(1);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(onSettled).toHaveBeenCalledTimes(2);
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+    });
+  });
+
+  it("retries dead-letter cleanup without replaying an ambiguous agent turn", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-dead-letter-cleanup:agent-loop",
+        },
+        tempDir,
+      );
+      const deliver = vi.fn(async () => {
+        throw new SessionDeliveryDeadLetteredError("ambiguous side effects");
+      });
+      let failCleanup = true;
+      const onSettled = vi.fn(async () => {
+        if (failCleanup) {
+          failCleanup = false;
+          throw new Error("cleanup interrupted");
+        }
+      });
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      await recoverPendingSessionDeliveries({ deliver, onSettled, stateDir: tempDir, log });
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
+        expect.objectContaining({ id, settlementOutcome: "moved-to-failed" }),
+      ]);
+
+      await recoverPendingSessionDeliveries({ deliver, onSettled, stateDir: tempDir, log });
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(onSettled).toHaveBeenCalledTimes(2);
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
     });
   });
 
@@ -403,7 +490,6 @@ describe("session-delivery queue recovery", () => {
       const onSettled = vi.fn(async () => undefined);
       const summary = await recoverPendingSessionDeliveries({
         deliver: vi.fn(async () => {
-          await moveSessionDeliveryToFailed(id, tempDir);
           throw new SessionDeliveryDeadLetteredError("ambiguous side effects");
         }),
         onSettled,

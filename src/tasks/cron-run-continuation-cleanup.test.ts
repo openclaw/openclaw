@@ -90,4 +90,29 @@ describe("removeCronRunContinuationSessionIfIdle", () => {
     expect(mocks.loadEntry).not.toHaveBeenCalled();
     expect(mocks.deleteEntry).not.toHaveBeenCalled();
   });
+
+  it("removes a continuation while finalizing its settled delivery row", async () => {
+    mocks.loadPendingSessionDeliveries.mockResolvedValueOnce([
+      {
+        id: "settled-media",
+        kind: "agentTurn",
+        sessionKey,
+        message: "generated image ready",
+        messageId: "image:task-1:agent-loop",
+        enqueuedAt: 1,
+        retryCount: 0,
+        settlementOutcome: "recovered",
+      },
+    ] as never);
+    mocks.loadEntry.mockReturnValue({
+      sessionId: "run-123",
+      updatedAt: 123,
+      lifecycleRevision: "revision-1",
+      cronRunContinuation: marker(),
+    });
+
+    await removeCronRunContinuationSessionIfIdle(sessionKey, "settled-media");
+
+    expect(mocks.deleteEntry).toHaveBeenCalledTimes(1);
+  });
 });

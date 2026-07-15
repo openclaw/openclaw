@@ -39,6 +39,8 @@ export type SessionDeliveryRoute = {
   chatType: ChatType;
 };
 
+export type SessionDeliverySettledOutcome = "recovered" | "moved-to-failed";
+
 /** Payload variants that can be replayed by session delivery recovery. */
 export type QueuedSessionDeliveryPayload =
   | ({
@@ -72,6 +74,7 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   lastAttemptAt?: number;
   lastError?: string;
   acknowledgedAt?: number;
+  settlementOutcome?: SessionDeliverySettledOutcome;
   availableAt?: number;
 };
 
@@ -209,26 +212,54 @@ export async function advanceSessionDeliveryAgentRun(
   });
 }
 
-/** Acknowledge a successfully delivered session entry. */
+/** Signals that a delivered result still needs durable settlement finalization. */
 export class SessionDeliveryAcknowledgementFinalizeError extends Error {
   constructor(id: string, options?: ErrorOptions) {
-    super(`Acknowledged session delivery ${id} still needs tombstone finalization`, options);
+    super(`Session delivery ${id} still needs settlement finalization`, options);
     this.name = "SessionDeliveryAcknowledgementFinalizeError";
   }
 }
 
-export async function ackSessionDelivery(id: string, stateDir?: string): Promise<void> {
-  const entry = loadDeliveryQueueEntry(QUEUE_NAME, id, stateDir) as QueuedSessionDelivery | null;
-  if (!entry) {
-    return;
-  }
+/** Persist terminal delivery state while retaining settlement cleanup metadata. */
+export async function markSessionDeliverySettlement(
+  entry: QueuedSessionDelivery,
+  outcome: SessionDeliverySettledOutcome,
+  stateDir?: string,
+): Promise<void> {
   try {
-    if (!entry.acknowledgedAt) {
-      updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (current) => ({
-        ...current,
-        acknowledgedAt: Date.now(),
-      }));
+    const settled = upsertDeliveryQueueEntry({
+      queueName: QUEUE_NAME,
+      entry: {
+        ...entry,
+        settlementOutcome: outcome,
+        ...(outcome === "recovered" ? { acknowledgedAt: entry.acknowledgedAt ?? Date.now() } : {}),
+      },
+      metadata: queuedSessionDeliveryMetadata(entry),
+      stateDir,
+      updatePendingOnly: true,
+    });
+    if (settled) {
+      return;
     }
+    if (getDeliveryQueueEntryStatus(QUEUE_NAME, entry.id, stateDir) === "completed") {
+      return;
+    }
+    throw new Error(`Session delivery ${entry.id} is no longer pending`);
+  } catch (error) {
+    try {
+      if (getDeliveryQueueEntryStatus(QUEUE_NAME, entry.id, stateDir) === "completed") {
+        return;
+      }
+    } catch {
+      // Unprovable state remains settlement finalization, never a delivery retry.
+    }
+    throw new SessionDeliveryAcknowledgementFinalizeError(entry.id, { cause: error });
+  }
+}
+
+/** Replace a settled pending row with its completed idempotency tombstone. */
+export async function completeSessionDelivery(id: string, stateDir?: string): Promise<void> {
+  try {
     completeDeliveryQueueEntry(QUEUE_NAME, id, stateDir);
   } catch (error) {
     try {
@@ -236,7 +267,7 @@ export async function ackSessionDelivery(id: string, stateDir?: string): Promise
         return;
       }
     } catch {
-      // Unprovable state remains acknowledgement finalization, never a delivery retry.
+      // Unprovable state remains settlement finalization, never a delivery retry.
     }
     throw new SessionDeliveryAcknowledgementFinalizeError(id, { cause: error });
   }
@@ -279,5 +310,16 @@ export async function loadPendingSessionDeliveries(
 
 /** Move an exhausted session delivery out of the pending queue. */
 export async function moveSessionDeliveryToFailed(id: string, stateDir?: string): Promise<void> {
-  moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
+  try {
+    moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
+  } catch (error) {
+    try {
+      if (getDeliveryQueueEntryStatus(QUEUE_NAME, id, stateDir) === "failed") {
+        return;
+      }
+    } catch {
+      // Preserve the original transition failure when durable state is unreadable.
+    }
+    throw error;
+  }
 }

@@ -13,16 +13,18 @@ import {
 } from "./delivery-recovery.shared.js";
 import { formatErrorMessage } from "./errors.js";
 import {
-  ackSessionDelivery,
+  completeSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
+  markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
   SessionDeliveryAcknowledgementFinalizeError,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   SessionDeliveryRetryChargedError,
   type QueuedSessionDelivery,
+  type SessionDeliverySettledOutcome,
 } from "./session-delivery-queue-storage.js";
 
 // Session delivery recovery replays persisted messages after crashes while
@@ -35,7 +37,6 @@ type SessionDeliveryRecoverySummary = {
 };
 
 export type DeliverSessionDeliveryFn = (entry: QueuedSessionDelivery) => Promise<void>;
-export type SessionDeliverySettledOutcome = "recovered" | "moved-to-failed";
 export type SettleSessionDeliveryFn = (
   entry: QueuedSessionDelivery,
   outcome: SessionDeliverySettledOutcome,
@@ -63,14 +64,48 @@ async function notifySessionDeliverySettled(params: {
   log: SessionDeliveryRecoveryLogger;
   onSettled?: SettleSessionDeliveryFn;
   outcome: SessionDeliverySettledOutcome;
-}): Promise<void> {
+}): Promise<boolean> {
   try {
     await params.onSettled?.(params.entry, params.outcome);
+    return true;
   } catch (error) {
     params.log.error(
       `session delivery: settled callback failed for ${params.entry.id}: ${String(error)}`,
     );
+    return false;
   }
+}
+
+async function finalizeSessionDeliverySettlement(params: {
+  entry: QueuedSessionDelivery;
+  log: SessionDeliveryRecoveryLogger;
+  onSettled?: SettleSessionDeliveryFn;
+  outcome: SessionDeliverySettledOutcome;
+  stateDir?: string;
+}): Promise<boolean> {
+  const callbackSettled = await notifySessionDeliverySettled(params);
+  if (!callbackSettled) {
+    return false;
+  }
+  try {
+    if (params.outcome === "recovered") {
+      await completeSessionDelivery(params.entry.id, params.stateDir);
+    } else {
+      await moveSessionDeliveryToFailed(params.entry.id, params.stateDir);
+    }
+    return true;
+  } catch (error) {
+    params.log.error(
+      `session delivery: ${params.outcome} finalization failed for ${params.entry.id}: ${String(error)}`,
+    );
+    return false;
+  }
+}
+
+function resolvePendingSettlementOutcome(
+  entry: QueuedSessionDelivery,
+): SessionDeliverySettledOutcome | undefined {
+  return entry.settlementOutcome ?? (entry.acknowledgedAt !== undefined ? "recovered" : undefined);
 }
 
 function createEmptyRecoverySummary(): SessionDeliveryRecoverySummary {
@@ -124,21 +159,29 @@ async function drainQueuedEntry(opts: {
   entry: QueuedSessionDelivery;
   deliver: DeliverSessionDeliveryFn;
   stateDir?: string;
-  onRecovered?: (entry: QueuedSessionDelivery) => void;
   onFailed?: (entry: QueuedSessionDelivery, errMsg: string) => void;
 }): Promise<"recovered" | "failed" | "deferred" | "moved-to-failed" | "already-gone"> {
   const { entry } = opts;
   try {
-    // Delivery acknowledgement is persisted before the completed tombstone.
-    // A crash between them must finalize state without replaying the side effect.
-    if (!entry.acknowledgedAt) {
-      await opts.deliver(entry);
+    const pendingOutcome = resolvePendingSettlementOutcome(entry);
+    if (pendingOutcome) {
+      return pendingOutcome;
     }
-    await ackSessionDelivery(entry.id, opts.stateDir);
-    opts.onRecovered?.(entry);
+    await opts.deliver(entry);
+    // Keep route/session metadata pending until owner cleanup succeeds. Recovery
+    // sees this marker and finalizes without replaying the external side effect.
+    await markSessionDeliverySettlement(entry, "recovered", opts.stateDir);
     return "recovered";
   } catch (err) {
     if (err instanceof SessionDeliveryDeadLetteredError) {
+      try {
+        await markSessionDeliverySettlement(entry, "moved-to-failed", opts.stateDir);
+      } catch (markError) {
+        if (markError instanceof SessionDeliveryAcknowledgementFinalizeError) {
+          return "deferred";
+        }
+        throw markError;
+      }
       return "moved-to-failed";
     }
     if (err instanceof SessionDeliveryDeferredError) {
@@ -200,31 +243,28 @@ export async function drainPendingSessionDeliveries(opts: {
         if (!currentDecision.match) {
           continue;
         }
-        const isAcknowledgedTombstone = currentEntry.acknowledgedAt !== undefined;
+        const pendingSettlementOutcome = resolvePendingSettlementOutcome(currentEntry);
         if (
-          !isAcknowledgedTombstone &&
+          !pendingSettlementOutcome &&
           currentEntry.retryCount >= resolveSessionDeliveryMaxRetries(currentEntry)
         ) {
-          try {
-            await moveSessionDeliveryToFailed(currentEntry.id, opts.stateDir);
-          } catch (err) {
-            if (getErrnoCode(err) !== "ENOENT") {
-              throw err;
-            }
-          }
-          opts.log.warn(
-            `${opts.logLabel}: entry ${currentEntry.id} exceeded max retries and was moved to failed/`,
-          );
-          await notifySessionDeliverySettled({
+          await markSessionDeliverySettlement(currentEntry, "moved-to-failed", opts.stateDir);
+          const finalized = await finalizeSessionDeliverySettlement({
             entry: currentEntry,
             log: opts.log,
             onSettled: opts.onSettled,
             outcome: "moved-to-failed",
+            stateDir: opts.stateDir,
           });
+          if (finalized) {
+            opts.log.warn(
+              `${opts.logLabel}: entry ${currentEntry.id} exceeded max retries and was moved to failed`,
+            );
+          }
           continue;
         }
 
-        if (!isAcknowledgedTombstone && !currentDecision.bypassBackoff) {
+        if (!pendingSettlementOutcome && !currentDecision.bypassBackoff) {
           const retryEligibility = isSessionDeliveryEligibleForRetry(currentEntry, Date.now());
           if (!retryEligibility.eligible) {
             opts.log.info(
@@ -243,11 +283,12 @@ export async function drainPendingSessionDeliveries(opts: {
           },
         });
         if (result === "recovered" || result === "moved-to-failed") {
-          await notifySessionDeliverySettled({
+          await finalizeSessionDeliverySettlement({
             entry: currentEntry,
             log: opts.log,
             onSettled: opts.onSettled,
             outcome: result,
+            stateDir: opts.stateDir,
           });
         }
       } finally {
@@ -296,29 +337,24 @@ export async function recoverPendingSessionDeliveries(opts: {
       if (opts.maxEnqueuedAt != null && currentEntry.enqueuedAt > opts.maxEnqueuedAt) {
         continue;
       }
-      const isAcknowledgedTombstone = currentEntry.acknowledgedAt !== undefined;
+      const pendingSettlementOutcome = resolvePendingSettlementOutcome(currentEntry);
       if (
-        !isAcknowledgedTombstone &&
+        !pendingSettlementOutcome &&
         currentEntry.retryCount >= resolveSessionDeliveryMaxRetries(currentEntry)
       ) {
         summary.skippedMaxRetries += 1;
-        try {
-          await moveSessionDeliveryToFailed(currentEntry.id, opts.stateDir);
-        } catch (err) {
-          if (getErrnoCode(err) !== "ENOENT") {
-            throw err;
-          }
-        }
-        await notifySessionDeliverySettled({
+        await markSessionDeliverySettlement(currentEntry, "moved-to-failed", opts.stateDir);
+        await finalizeSessionDeliverySettlement({
           entry: currentEntry,
           log: opts.log,
           onSettled: opts.onSettled,
           outcome: "moved-to-failed",
+          stateDir: opts.stateDir,
         });
         continue;
       }
 
-      if (!isAcknowledgedTombstone) {
+      if (!pendingSettlementOutcome) {
         const retryEligibility = isSessionDeliveryEligibleForRetry(currentEntry, Date.now());
         if (!retryEligibility.eligible) {
           summary.deferredBackoff += 1;
@@ -338,24 +374,23 @@ export async function recoverPendingSessionDeliveries(opts: {
         entry: currentEntry,
         deliver: opts.deliver,
         stateDir: opts.stateDir,
-        onRecovered: () => {
-          summary.recovered += 1;
-        },
         onFailed: (_failedEntry, errMsg) => {
           summary.failed += 1;
           opts.log.warn(`Session delivery retry failed: ${errMsg}`);
         },
       });
-      if (result === "recovered") {
-        opts.log.info(`Recovered session delivery ${currentEntry.id}`);
-      }
       if (result === "recovered" || result === "moved-to-failed") {
-        await notifySessionDeliverySettled({
+        const finalized = await finalizeSessionDeliverySettlement({
           entry: currentEntry,
           log: opts.log,
           onSettled: opts.onSettled,
           outcome: result,
+          stateDir: opts.stateDir,
         });
+        if (finalized && result === "recovered") {
+          summary.recovered += 1;
+          opts.log.info(`Recovered session delivery ${currentEntry.id}`);
+        }
       }
     } finally {
       releaseSharedRecoveryEntry(entriesInProgress, entry.id);

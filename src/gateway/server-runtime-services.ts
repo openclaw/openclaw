@@ -269,7 +269,7 @@ function startPendingSessionDeliveryRuntime(params: {
       stopRuntime = startSessionDeliveryRuntime({
         deliver: (entry) => deliverQueuedSessionDelivery({ deps: params.deps, entry }),
         log: logRecovery,
-        onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey),
+        onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id),
       });
       try {
         await recoverPendingRestartContinuationDeliveries({

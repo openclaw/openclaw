@@ -422,7 +422,7 @@ async function drainRestartContinuationQueue(params: {
       logLabel: "restart continuation",
       log: params.log,
       deliver: (entry) => deliverQueuedSessionDelivery({ deps: params.deps, entry }),
-      onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey),
+      onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id),
       selectEntry: (entry) => ({
         match: entry.id === params.entryId,
         bypassBackoff: true,
@@ -452,7 +452,7 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
     deliver: (entry) => deliverQueuedSessionDelivery({ deps: params.deps, entry }),
     log: params.log ?? log,
     maxEnqueuedAt: params.maxEnqueuedAt,
-    onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey),
+    onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id),
   });
 }
 

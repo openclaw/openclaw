@@ -3,12 +3,13 @@ import { describe, expect, it } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
-  ackSessionDelivery,
   advanceSessionDeliveryAgentRun,
+  completeSessionDelivery,
   deferSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
+  markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
 } from "./session-delivery-queue-storage.js";
 import {
@@ -18,6 +19,15 @@ import {
 } from "./session-delivery-queue.js";
 
 describe("session-delivery queue storage", () => {
+  async function settleSessionDelivery(id: string, stateDir: string): Promise<void> {
+    const entry = await loadPendingSessionDelivery(id, stateDir);
+    if (!entry) {
+      throw new Error(`Expected pending session delivery ${id}`);
+    }
+    await markSessionDeliverySettlement(entry, "recovered", stateDir);
+    await completeSessionDelivery(id, stateDir);
+  }
+
   function readSessionQueueStatus(tempDir: string, id: string): string | undefined {
     const { db } = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
@@ -128,7 +138,7 @@ describe("session-delivery queue storage", () => {
         idempotencyKey: "image:task-completed:agent-loop",
       };
       const first = await enqueueClaimedSessionDelivery(payload, 60_000, tempDir);
-      await ackSessionDelivery(first.id, tempDir);
+      await settleSessionDelivery(first.id, tempDir);
 
       expect(await enqueueSessionDelivery(payload, tempDir)).toBe(first.id);
       expect(readSessionQueueStatus(tempDir, first.id)).toBe("completed");
@@ -184,7 +194,7 @@ describe("session-delivery queue storage", () => {
       expect(failedEntry?.retryCount).toBe(1);
       expect(failedEntry?.lastError).toBe("dispatch failed");
 
-      await ackSessionDelivery(id, tempDir);
+      await settleSessionDelivery(id, tempDir);
       expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
       expect(readSessionQueueStatus(tempDir, id)).toBe("completed");
     });
@@ -306,7 +316,7 @@ describe("session-delivery queue storage", () => {
         tempDir,
       );
 
-      await ackSessionDelivery(id, tempDir);
+      await settleSessionDelivery(id, tempDir);
 
       expect(readSessionQueueStatus(tempDir, id)).toBe("completed");
     });

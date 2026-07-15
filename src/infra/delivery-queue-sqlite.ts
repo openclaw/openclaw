@@ -111,6 +111,8 @@ export function upsertDeliveryQueueEntry(params: {
   stateDir?: string;
   insertOnly?: boolean;
   reviveFailedOrCorruptPending?: boolean;
+  updatePendingOnly?: boolean;
+  completeExisting?: boolean;
 }): boolean {
   const now = Date.now();
   const status = params.status ?? "pending";
@@ -157,6 +159,12 @@ export function upsertDeliveryQueueEntry(params: {
           failed_at: (eb) => eb.ref("excluded.failed_at"),
         });
         if (!params.reviveFailedOrCorruptPending) {
+          if (params.updatePendingOnly) {
+            return update.where("delivery_queue_entries.status", "=", "pending");
+          }
+          if (params.completeExisting) {
+            return update.where("delivery_queue_entries.status", "in", ["pending", "failed"]);
+          }
           return update;
         }
         // Idempotent enqueue may revive an explicit failure or repair unreadable
@@ -267,54 +275,30 @@ export function deleteDeliveryQueueEntry(queueName: string, id: string, stateDir
 
 /** Retain a delivered row as a durable idempotency tombstone. */
 export function completeDeliveryQueueEntry(queueName: string, id: string, stateDir?: string): void {
-  const current = loadDeliveryQueueEntry(queueName, id, stateDir);
-  if (!current) {
-    if (getDeliveryQueueEntryStatus(queueName, id, stateDir) === "completed") {
-      return;
-    }
-    throw enoent(queueName, id);
-  }
   const now = Date.now();
   const tombstone = {
     id,
     enqueuedAt: now,
     retryCount: 0,
-    acknowledgedAt: current.acknowledgedAt ?? now,
+    acknowledgedAt: now,
   };
-  const database = openStateDatabase(stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  const result = executeSqliteQuerySync(
-    database.db,
-    queueDb
-      .updateTable("delivery_queue_entries")
-      .set({
-        status: "completed",
-        entry_kind: null,
-        session_key: null,
-        channel: null,
-        target: null,
-        account_id: null,
-        retry_count: 0,
-        last_attempt_at: null,
-        last_error: null,
-        recovery_state: null,
-        platform_send_started_at: null,
-        entry_json: JSON.stringify(tombstone),
-        enqueued_at: now,
-        updated_at: now,
-        failed_at: null,
-      })
-      .where("queue_name", "=", queueName)
-      .where("id", "=", id)
-      .where("status", "=", "pending"),
-  );
-  if (result.numAffectedRows !== 1n) {
+  const completed = upsertDeliveryQueueEntry({
+    queueName,
+    entry: tombstone,
+    metadata: {},
+    status: "completed",
+    stateDir,
+    completeExisting: true,
+  });
+  if (!completed) {
     if (getDeliveryQueueEntryStatus(queueName, id, stateDir) === "completed") {
       return;
     }
     throw enoent(queueName, id);
   }
   // Thirty days covers delayed producer replays while bounding successful-row growth.
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   executeSqliteQuerySync(
     database.db,
     queueDb

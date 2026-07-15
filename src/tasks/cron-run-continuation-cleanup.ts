@@ -30,7 +30,10 @@ function canRemoveCronRunContinuation(marker: SessionEntry["cronRunContinuation"
   );
 }
 
-export async function removeCronRunContinuationSessionIfIdle(sessionKey: string): Promise<void> {
+export async function removeCronRunContinuationSessionIfIdle(
+  sessionKey: string,
+  settledDeliveryId?: string,
+): Promise<void> {
   if (
     !parseCronRunScopeSuffix(sessionKey).runId ||
     hasPendingGeneratedMediaTaskForSessionKey(sessionKey)
@@ -38,7 +41,15 @@ export async function removeCronRunContinuationSessionIfIdle(sessionKey: string)
     return;
   }
   const pendingSessionDeliveries = await loadPendingSessionDeliveries();
-  if (pendingSessionDeliveries.some((entry) => entry.sessionKey === sessionKey)) {
+  if (
+    pendingSessionDeliveries.some(
+      (entry) =>
+        entry.sessionKey === sessionKey &&
+        entry.id !== settledDeliveryId &&
+        entry.settlementOutcome === undefined &&
+        entry.acknowledgedAt === undefined,
+    )
+  ) {
     return;
   }
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
