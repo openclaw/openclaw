@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import reefChannelEntry from "../index.js";
-import { generateIdentity } from "../protocol/index.js";
-import { autonomyBudget, ReefChannelConfigSchema } from "./config-schema.js";
+import { autonomyBudget, parseReefRelayUrl, ReefChannelConfigSchema } from "./config-schema.js";
 import { setActiveReef } from "./runtime.js";
 
 describe("Reef configuration boundary", () => {
@@ -9,8 +8,7 @@ describe("Reef configuration boundary", () => {
     expect(ReefChannelConfigSchema.parse({}).relayUrl).toBe("https://reefwire.ai");
   });
 
-  it("validates owner-controlled relay, guard model/policy/key reference, and pinned friend keys", () => {
-    const friend = generateIdentity();
+  it("validates owner-controlled relay, guard model, policy, and key reference", () => {
     const result = ReefChannelConfigSchema.safeParse({
       relayUrl: "https://relay.owner.example",
       handle: "owner",
@@ -23,14 +21,6 @@ describe("Reef configuration boundary", () => {
         timeoutMs: 5_000,
       },
       requestPolicy: "friends-of-friends",
-      friends: {
-        peer: {
-          autonomy: "extended",
-          ed25519PublicKey: friend.signing.publicKey,
-          x25519PublicKey: friend.encryption.publicKey,
-          keyEpoch: 2,
-        },
-      },
     });
 
     expect(result.success).toBe(true);
@@ -45,8 +35,26 @@ describe("Reef configuration boundary", () => {
         apiKeyEnv: "REEF_GUARD_API_KEY",
         policyVersion: "owner-policy-v2",
       },
-      friends: { peer: { keyEpoch: 2 } },
     });
+  });
+
+  it("rejects the retired config-backed friendship and allowlist fields", () => {
+    for (const retired of [{ friends: {} }, { allowFrom: [] }, { dmPolicy: "pairing" }]) {
+      expect(ReefChannelConfigSchema.safeParse(retired).success).toBe(false);
+    }
+  });
+
+  it("accepts only origin-wide HTTP(S) relay endpoints", () => {
+    expect(parseReefRelayUrl("https://relay.example/")).toBe("https://relay.example");
+    for (const relayUrl of [
+      "https://relay.example/tenant",
+      "https://relay.example\\tenant",
+      "https://relay.example/?tenant=a",
+      "https://user@relay.example/",
+      "ftp://relay.example/",
+    ]) {
+      expect(ReefChannelConfigSchema.safeParse({ relayUrl }).success).toBe(false);
+    }
   });
 
   it("keeps config mutation off the agent message surface and gates owner commands", async () => {
@@ -65,8 +73,7 @@ describe("Reef configuration boundary", () => {
         request: vi.fn(),
         list: vi.fn(),
         remove: vi.fn(),
-        config: { friends: {} },
-        transport: { respondFriend: vi.fn() },
+        setAutonomy: vi.fn(),
       },
       reviews: { list: vi.fn(), decide: vi.fn() },
     } as never);
