@@ -29,7 +29,7 @@ import {
 import { isDiagnosticsEnabled, emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
-  resolveAgentDeliveryPlan,
+  resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentExplicitRecipientSession,
   resolveAgentOutboundTarget,
 } from "../infra/outbound/agent-delivery.js";
@@ -481,25 +481,35 @@ function clearPendingFinalDeliveryFields(entry: SessionEntry, updatedAt: number)
 async function resolveCurrentRunDeliveryContext(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
+  agentId: string;
+  currentSessionKey?: string;
   sessionEntry?: SessionEntry;
 }): Promise<DeliveryContext | undefined> {
   const { cfg, opts, sessionEntry } = params;
   if (opts.deliver !== true) {
     return undefined;
   }
-  // Restart recovery only needs durable route fields; final delivery resolves plugin-specific routes.
-  const deliveryPlan = resolveAgentDeliveryPlan({
-    sessionEntry,
-    requestedChannel: opts.replyChannel ?? opts.channel,
-    explicitTo: opts.replyTo ?? opts.to,
-    explicitThreadId: opts.threadId,
-    accountId: opts.replyAccountId ?? opts.accountId,
-    wantsDelivery: true,
-    turnSourceChannel: opts.runContext?.messageChannel ?? opts.messageChannel,
-    turnSourceTo: opts.runContext?.currentChannelId ?? opts.to,
-    turnSourceAccountId: opts.runContext?.accountId ?? opts.accountId,
-    turnSourceThreadId: opts.runContext?.currentThreadTs ?? opts.threadId,
-  });
+  let deliveryPlan: Awaited<ReturnType<typeof resolveAgentDeliveryPlanWithSessionRoute>>;
+  try {
+    deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg,
+      agentId: params.agentId,
+      currentSessionKey: params.currentSessionKey,
+      sessionEntry,
+      requestedChannel: opts.replyChannel ?? opts.channel,
+      explicitTo: opts.replyTo ?? opts.to,
+      explicitThreadId: opts.threadId,
+      accountId: opts.replyAccountId ?? opts.accountId,
+      wantsDelivery: true,
+      turnSourceChannel: opts.runContext?.messageChannel ?? opts.messageChannel,
+      turnSourceTo: opts.runContext?.currentChannelId ?? opts.to,
+      turnSourceAccountId: opts.runContext?.accountId ?? opts.accountId,
+      turnSourceThreadId: opts.runContext?.currentThreadTs ?? opts.threadId,
+    });
+  } catch {
+    // Recovery metadata is best-effort; transient directory failures must not block the agent run.
+    return undefined;
+  }
   const explicitChannelHint = normalizeOptionalString(opts.replyChannel ?? opts.channel);
   const explicitThreadId =
     opts.threadId != null && opts.threadId !== "" ? opts.threadId : undefined;
@@ -507,11 +517,22 @@ async function resolveCurrentRunDeliveryContext(params: {
   if (deliveryPlan.resolvedChannel === INTERNAL_MESSAGE_CHANNEL && !explicitChannelHint) {
     try {
       const selection = await resolveMessageChannelSelection({ cfg });
-      effectivePlan = {
-        ...deliveryPlan,
-        resolvedChannel: selection.channel,
-        deliveryTargetMode: deliveryPlan.deliveryTargetMode ?? "implicit",
-      };
+      deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
+        cfg,
+        agentId: params.agentId,
+        currentSessionKey: params.currentSessionKey,
+        sessionEntry,
+        requestedChannel: selection.channel,
+        explicitTo: opts.replyTo ?? opts.to,
+        explicitThreadId: opts.threadId,
+        accountId: opts.replyAccountId ?? opts.accountId,
+        wantsDelivery: true,
+        turnSourceChannel: opts.runContext?.messageChannel ?? opts.messageChannel,
+        turnSourceTo: opts.runContext?.currentChannelId ?? opts.to,
+        turnSourceAccountId: opts.runContext?.accountId ?? opts.accountId,
+        turnSourceThreadId: opts.runContext?.currentThreadTs ?? opts.threadId,
+      });
+      effectivePlan = deliveryPlan;
     } catch {
       return undefined;
     }
@@ -1116,6 +1137,8 @@ async function agentCommandInternal(
         currentRunDeliveryContext = await resolveCurrentRunDeliveryContext({
           cfg,
           opts,
+          agentId: sessionAgentId ?? resolveDefaultAgentId(cfg),
+          currentSessionKey: sessionKey,
           sessionEntry: entry,
         });
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);

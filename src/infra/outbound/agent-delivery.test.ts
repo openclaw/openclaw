@@ -4,10 +4,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn<() => unknown>(() => null),
-  resolveChannelTarget: vi.fn<() => Promise<unknown>>(async () => ({
+  resolveChannelTarget: vi.fn<(params: { input: string }) => Promise<unknown>>(async (params) => ({
     ok: true,
     target: {
-      to: "+1999",
+      to: params.input,
       kind: "group",
       source: "normalized",
       resolutionSource: "normalized",
@@ -132,15 +132,15 @@ beforeEach(() => {
   mocks.resolveOutboundChannelPlugin.mockReset();
   mocks.resolveOutboundChannelPlugin.mockReturnValue(null);
   mocks.resolveChannelTarget.mockReset();
-  mocks.resolveChannelTarget.mockResolvedValue({
+  mocks.resolveChannelTarget.mockImplementation(async (params: { input: string }) => ({
     ok: true,
     target: {
-      to: "+1999",
+      to: params.input,
       kind: "group",
       source: "normalized",
       resolutionSource: "normalized",
     },
-  });
+  }));
   mocks.resolveOutboundTarget.mockReset();
   mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "+1999" });
   mocks.resolveOutboundSessionRoute.mockReset();
@@ -727,13 +727,14 @@ describe("agent delivery helpers", () => {
     expect(result.sessionKey).toBe("agent:ops:whatsapp:work:direct:+15551234567");
   });
 
-  it("does not session-route explicit targets before outbound normalization succeeds", async () => {
+  it("preserves outbound validation errors when directory resolution falls back to normalization", async () => {
+    const targetError = new Error("ambiguous target");
     mocks.resolveOutboundChannelPlugin.mockReturnValue({
       messaging: { resolveOutboundSessionRoute: vi.fn() },
     });
     mocks.resolveOutboundTarget.mockReturnValueOnce({
       ok: false,
-      error: new Error("ambiguous target"),
+      error: targetError,
     });
 
     const plan = await resolveAgentDeliveryPlanWithSessionRoute({
@@ -748,6 +749,7 @@ describe("agent delivery helpers", () => {
 
     expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
     expect(plan.resolvedTo).toBe("1470130713209602050");
+    expect(plan.targetResolutionError).toBe(targetError);
   });
 
   it("resolves reserved explicit targets through directory-capable resolution before session routing", async () => {
@@ -816,6 +818,45 @@ describe("agent delivery helpers", () => {
       threadId: undefined,
     });
     expect(plan.resolvedTo).toBe("telegram:-1002458651455");
+    expect(plan.targetResolutionError).toBeUndefined();
+  });
+
+  it("resolves normalized channel names through the shared directory resolver", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      messaging: { resolveOutboundSessionRoute: vi.fn(), targetResolver: {} },
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: "channel:general" });
+    mocks.resolveChannelTarget.mockResolvedValueOnce({
+      ok: true,
+      target: {
+        to: "channel:1524410080953634829",
+        kind: "channel",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main",
+      requestedChannel: "workspace",
+      explicitTo: "channel:general",
+      wantsDelivery: true,
+    });
+
+    expect(mocks.resolveChannelTarget).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "workspace",
+      input: "channel:general",
+      accountId: undefined,
+      unknownTargetMode: "normalized",
+      plugin: {
+        messaging: { resolveOutboundSessionRoute: expect.any(Function), targetResolver: {} },
+      },
+    });
+    expect(plan.resolvedTo).toBe("channel:1524410080953634829");
     expect(plan.targetResolutionError).toBeUndefined();
   });
 
