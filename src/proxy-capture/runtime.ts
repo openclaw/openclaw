@@ -581,7 +581,7 @@ export function captureHttpExchange(
       ? params.response.headers.get("content-length")
       : undefined,
   );
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_CAPTURED_RESPONSE_BODY_BYTES) {
+  if (declaredLength !== undefined && declaredLength > MAX_CAPTURED_RESPONSE_BODY_BYTES) {
     recordResponseMetadataOnly("too-large");
     return;
   }
