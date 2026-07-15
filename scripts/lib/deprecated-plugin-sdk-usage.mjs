@@ -38,6 +38,7 @@ export const BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES = [
   {
     modulePath: "src/plugin-sdk/channel-message",
     canonical: "openclaw/plugin-sdk/channel-outbound",
+    allowedImporters: ["src/plugin-sdk/channel-message-runtime.ts"],
   },
   {
     modulePath: "src/plugin-sdk/channel-message-runtime",
