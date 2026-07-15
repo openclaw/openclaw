@@ -56,7 +56,7 @@ describe("handleDirFetch — fs errors", () => {
 });
 
 describe("handleDirFetch — happy path", () => {
-  it("preflights directory entries without returning a tarball", async () => {
+  it.runIf(HAS_TAR)("preflights directory entries without returning a tarball", async () => {
     await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
     await fs.mkdir(path.join(tmpRoot, ".ssh"));
     await fs.writeFile(path.join(tmpRoot, ".ssh", "id_rsa"), "secret\n");
@@ -77,7 +77,7 @@ describe("handleDirFetch — happy path", () => {
     expect(r.fileCount).toBe(r.entries?.length);
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.runIf(HAS_TAR && process.platform !== "win32")(
     "preflights symlinks without following their targets",
     async () => {
       await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
@@ -131,7 +131,7 @@ describe("handleDirFetch — happy path", () => {
 });
 
 describe("handleDirFetch — size cap", () => {
-  it("returns TREE_TOO_LARGE for oversized preflight-only directories", async () => {
+  it.runIf(HAS_TAR)("returns TREE_TOO_LARGE for oversized preflight-only directories", async () => {
     const largePath = path.join(tmpRoot, "large.bin");
     await fs.writeFile(largePath, crypto.randomBytes(1024 * 1024));
 
