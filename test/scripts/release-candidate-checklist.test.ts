@@ -1068,3 +1068,27 @@ describe("release candidate checklist", () => {
     );
   });
 });
+
+describe("GitHub API public fallback", () => {
+  it.each([403, 429])(
+    "retries anonymously after an authenticated rate limit response %s",
+    async (status) => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ message: "API rate limit exceeded" }), { status }),
+        )
+        .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      await expect(
+        githubApi("repos/openclaw/openclaw/actions/runs/123", {
+          token: "x",
+          fetchImpl,
+        }),
+      ).resolves.toEqual({ ok: true });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(fetchImpl.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer x" });
+      expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+    },
+  );
+});

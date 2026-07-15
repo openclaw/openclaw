@@ -391,6 +391,16 @@ export async function githubApi(path, options = {}) {
   const timeoutMs = options.timeoutMs ?? githubApiTimeoutMs();
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_GITHUB_API_RESPONSE_BODY_MAX_BYTES;
   const controller = new AbortController();
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const request = (requestToken) =>
+    fetchImpl(`https://api.github.com/${path}`, {
+      signal: controller.signal,
+      headers: {
+        Accept: "application/vnd.github+json",
+        ...(requestToken ? { Authorization: `Bearer ${requestToken}` } : {}),
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
   let timeout;
   const timeoutPromise = new Promise((_, reject) => {
     timeout = setTimeout(() => {
@@ -400,21 +410,24 @@ export async function githubApi(path, options = {}) {
     timeout.unref?.();
   });
   try {
-    const response = await Promise.race([
-      (options.fetchImpl ?? fetch)(`https://api.github.com/${path}`, {
-        signal: controller.signal,
-        headers: {
-          Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${token}`,
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
-      }),
-      timeoutPromise,
-    ]);
-    const text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
+    let response = await Promise.race([request(token), timeoutPromise]);
+    let text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
       signal: controller.signal,
       timeoutPromise,
     });
+    const primaryRateLimitExhausted =
+      (response.status === 403 || response.status === 429) &&
+      (/API rate limit exceeded/iu.test(text) ||
+        response.headers.get("x-ratelimit-remaining") === "0");
+    if (primaryRateLimitExhausted) {
+      // Public release evidence remains readable without auth when one maintainer
+      // token is exhausted. Mutating gh commands keep their authenticated path.
+      response = await Promise.race([request(""), timeoutPromise]);
+      text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
+        signal: controller.signal,
+        timeoutPromise,
+      });
+    }
     if (!response.ok) {
       throw new Error(`GitHub API ${path} failed with ${response.status}: ${text}`);
     }
