@@ -1486,6 +1486,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               sessionId: options.sessionId,
             })
           : undefined;
+      if (normalizeOptionalString(options?.messageActionTurnCapability) && !trustedTurnContext) {
+        throw new Error("message action turn capability is no longer active");
+      }
       if (
         suppressedVisiblePayloadReason &&
         action === "send" &&

@@ -1437,9 +1437,9 @@ export async function runPreparedReply(
     // Surface can carry relayed metadata while Provider owns reply routing.
     provider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
   });
-  const sourceMessageId = normalizeOptionalString(
-    sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-  );
+  const sourceMessageId =
+    normalizeOptionalString(sessionCtx.MessageSidFull) ??
+    normalizeOptionalString(sessionCtx.MessageSid);
   const sourceTurnId = buildChannelSourceTurnId({
     provider: messageProvider,
     accountId: replyRoute.accountId,

@@ -2376,6 +2376,7 @@ describe("runPreparedReply media-only handling", () => {
           InboundEventKind: "room_event",
           MediaType: "audio/ogg",
           MessageSid: "35676",
+          MessageSidFull: "  ",
           SenderName: "Keśava",
           AmbientTranscriptWatermarkKey: '["telegram","","-100123",""]',
           AmbientTranscriptMessageId: "35676",

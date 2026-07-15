@@ -9,6 +9,7 @@ import {
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import { isTrustedMessageActionTurnIngress } from "../gateway/message-action-turn-capability.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -32,7 +33,11 @@ function normalizeFiniteTimestamp(value: unknown): number | undefined {
 }
 
 export function hasRestartRecoveryMessageActionAuthority(entry: SessionEntry): boolean {
-  return resolveRestartRecoveryChannelAuthority(entry) !== undefined;
+  const authority = resolveRestartRecoveryChannelAuthority(entry);
+  // Keep the pre-dispatch gate identical to recovered capability minting.
+  return (
+    authority !== undefined && isTrustedMessageActionTurnIngress(authority.deliveryContext.channel)
+  );
 }
 
 function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {

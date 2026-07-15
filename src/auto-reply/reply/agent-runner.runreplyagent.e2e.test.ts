@@ -1382,6 +1382,40 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
   });
 
+  it("adopts a transcript-only claim when the full message id is blank", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        MessageSid: "msg",
+        MessageSidFull: "  ",
+        OriginatingChannel: "webchat",
+        Provider: "webchat",
+      },
+      sourceTurnId: "channel-user:v1:control-ui-run",
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "final" }));
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+  });
+
   it("rejects a transcript-only claim already aborted for restart", async () => {
     const sessionEntry: SessionEntry = {
       abortedLastRun: true,

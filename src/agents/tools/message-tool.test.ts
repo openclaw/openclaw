@@ -1025,6 +1025,41 @@ describe("message tool secret scoping", () => {
     }
   });
 
+  it("rejects a supplied turn capability after revocation", async () => {
+    const sessionKey = "agent:main:telegram:direct:revoked";
+    const revokedCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-revoked",
+      sessionId: "session-revoked",
+      sessionKey,
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "revoked",
+        currentSourceTurnId: "channel-user:v1:revoked",
+      },
+    });
+    revokeMessageActionTurnCapability(revokedCapability);
+    const tool = createMessageTool({
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      runMessageAction: mocks.runMessageAction as never,
+      agentId: "main",
+      agentSessionKey: sessionKey,
+      runId: "run-revoked",
+      sessionId: "session-revoked",
+      messageActionTurnCapability: revokedCapability,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await expect(
+      tool.execute("message-revoked", {
+        action: "send",
+        message: "must not send",
+        to: "revoked",
+      }),
+    ).rejects.toThrow("message action turn capability is no longer active");
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
   it("uses delivery params to avoid collisions across distinct sends", async () => {
     mockSendResult();
 

@@ -1603,7 +1603,9 @@ export async function runReplyAgent(params: {
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
   } = createReplyRestartRecoveryClaimController({
-    admissionRunId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+    admissionRunId:
+      normalizeOptionalString(sessionCtx.MessageSidFull) ??
+      normalizeOptionalString(sessionCtx.MessageSid),
     getEntry: () =>
       sessionKey ? (activeSessionStore?.[sessionKey] ?? activeSessionEntry) : activeSessionEntry,
     getSessionId: () => replyOperation.sessionId,
