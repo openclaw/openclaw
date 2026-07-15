@@ -16,7 +16,6 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { resolveClickClackAccount } from "./accounts.js";
 import {
   CLICKCLACK_CHANNEL_ID,
   clickClackConfigAdapter,
@@ -30,6 +29,7 @@ import {
   sendClickClackMedia,
   sendClickClackText,
 } from "./outbound.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { clickClackSetupAdapter } from "./setup-core.js";
 import { clickClackSetupWizard } from "./setup-surface.js";
 import {
@@ -129,6 +129,10 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     config: clickClackConfigAdapter,
     setup: clickClackSetupAdapter,
     setupWizard: clickClackSetupWizard,
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
+    },
     messaging: {
       targetPrefixes: ["clickclack", "cc"],
       normalizeTarget: normalizeClickClackTarget,
