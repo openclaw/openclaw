@@ -20,4 +20,4 @@ channels: matrix
 
 ## Related docs
 
-- [matrix](/channels/matrix)
+- [Matrix](/channels/matrix)

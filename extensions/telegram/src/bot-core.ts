@@ -1,7 +1,8 @@
 // Telegram plugin module implements bot core behavior.
 import {
+  buildChannelGroupsScopeTree,
   resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
+  resolveScopeRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -329,11 +330,9 @@ export function createTelegramBotCore(
     return undefined;
   };
   const resolveGroupRequireMention = (chatId: string | number, turnCfg: OpenClawConfig) =>
-    resolveChannelGroupRequireMention({
-      cfg: turnCfg,
-      channel: "telegram",
-      accountId: account.accountId,
-      groupId: String(chatId),
+    resolveScopeRequireMention({
+      tree: buildChannelGroupsScopeTree(turnCfg, "telegram", account.accountId),
+      path: [String(chatId)],
       requireMentionOverride: opts.requireMention,
       overrideOrder: "after-config",
     });

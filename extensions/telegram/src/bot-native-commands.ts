@@ -219,7 +219,6 @@ const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(
 export const testing = {
   loadNativeCommandRuntime: loadTelegramNativeCommandRuntime,
 };
-export { testing as __testing };
 
 type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
 

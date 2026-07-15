@@ -1027,36 +1027,4 @@ export async function monitorZalouserProvider(
   return { stop };
 }
 
-const testing = {
-  processMessage: async (params: {
-    message: ZaloInboundMessage;
-    account: ResolvedZalouserAccount;
-    config: OpenClawConfig;
-    runtime: RuntimeEnv;
-    historyState?: {
-      historyLimit?: number;
-      groupHistories?: Map<string, HistoryEntry[]>;
-    };
-    statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  }) => {
-    const historyLimit = Math.max(
-      0,
-      params.historyState?.historyLimit ??
-        params.account.config.historyLimit ??
-        params.config.messages?.groupChat?.historyLimit ??
-        DEFAULT_GROUP_HISTORY_LIMIT,
-    );
-    const groupHistories = params.historyState?.groupHistories ?? new Map<string, HistoryEntry[]>();
-    await processMessage(
-      params.message,
-      params.account,
-      params.config,
-      getZalouserRuntime(),
-      params.runtime,
-      { historyLimit, groupHistories },
-      params.statusSink,
-    );
-  },
-};
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

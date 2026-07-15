@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1911,16 +1912,19 @@ func TestTranslateDocBodyChunkedStripsUppercaseBodyWrapper(t *testing.T) {
 	}
 }
 
-func TestTranslateDocBodyChunkedRejectsListCorruptionAcrossSanitizedChunkBoundary(t *testing.T) {
+func TestTranslateDocBodyChunkedPreservesListStructureAcrossSanitizedChunkBoundary(t *testing.T) {
 	body := "Intro paragraph.\n\n1. First item\n2. Second item\n\n"
 
 	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "20")
-	_, err := translateDocBodyChunked(context.Background(), boundaryWrapperTranslator{}, "example.md", body, "en", "de")
-	if err == nil {
-		t.Fatal("expected final-document list corruption across chunk boundaries to be rejected")
+	translated, err := translateDocBodyChunked(context.Background(), boundaryWrapperTranslator{}, "example.md", body, "en", "de")
+	if err != nil {
+		t.Fatalf("expected chunk-boundary whitespace to be restored, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "final document validation: list structure mismatch") {
-		t.Fatalf("expected final list structure mismatch, got %v", err)
+	if !slices.Equal(extractMarkdownListShapes(body), extractMarkdownListShapes(translated)) {
+		t.Fatalf("expected list structure to survive chunk assembly:\n%s", translated)
+	}
+	if !strings.Contains(translated, "Einleitung\n\n1. Erster Eintrag") {
+		t.Fatalf("expected paragraph/list boundary to survive chunk assembly:\n%s", translated)
 	}
 }
 
@@ -2325,8 +2329,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 26") {
-		t.Fatalf("expected prompt version 26 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 28") {
+		t.Fatalf("expected prompt version 28 in output metadata:\n%s", text)
 	}
 }
 
@@ -2381,6 +2385,7 @@ func TestValidateDocChunkTranslationRejectsChangedCompositeLiteral(t *testing.T)
 
 	tests := [][2]string{
 		{"Supports 1:1 conversations.\n", "आमने-सामने की बातचीत को सपोर्ट करता है।\n"},
+		{"Available 24/7.\n", "Available around the clock.\n"},
 		{"Use mask 0xFF.\n", "Use mask 0xAA.\n"},
 		{"Use 1e-3.\n", "Use 1e -3.\n"},
 	}
@@ -2395,21 +2400,30 @@ func TestValidateDocChunkTranslationRejectsChangedCompositeLiteral(t *testing.T)
 func TestValidateDocBodyRejectsChangedCompositeLiteral(t *testing.T) {
 	t.Parallel()
 
-	err := validateDocBodyFencedLiterals("Supports 1:1 conversations.\n", "आमने-सामने की बातचीत को सपोर्ट करता है।\n")
-	if err == nil || !strings.Contains(err.Error(), "numeric value mismatch") {
-		t.Fatalf("expected final-document numeric mismatch, got %v", err)
+	tests := [][2]string{
+		{"Supports 1:1 conversations.\n", "आमने-सामने की बातचीत को सपोर्ट करता है।\n"},
+		{"Available 24/7.\n", "चौबीसों घंटे उपलब्ध।\n"},
+	}
+	for _, pair := range tests {
+		err := validateDocBodyFencedLiterals(pair[0], pair[1])
+		if err == nil || !strings.Contains(err.Error(), "numeric value mismatch") {
+			t.Fatalf("expected final-document numeric mismatch, got %v", err)
+		}
 	}
 }
 
 func TestExtractNumericValuesKeepsLowAmbiguityComposites(t *testing.T) {
 	t.Parallel()
 
-	got := strings.Join(extractNumericValues("0xFF 0b101 0o755 1.5:1 1e-3 v1.2.3"), ",")
-	if want := "0xFF,0b101,0o755,1.5:1,1e-3"; got != want {
+	got := strings.Join(extractNumericValues("0xFF 0b101 0o755 1.5:1 24/7 1e-3 v1.2.3 v24/7 24/7z"), ",")
+	if want := "0xFF,0b101,0o755,1.5:1,24/7,1e-3"; got != want {
 		t.Fatalf("unexpected composite literals: got=%q want=%q", got, want)
 	}
 	if err := validateDocChunkTranslation("Supports 1:1 conversations.\n", "Unterstützt 1:1-Unterhaltungen.\n"); err != nil {
 		t.Fatalf("expected locale compound after exact ratio to pass: %v", err)
+	}
+	if err := validateDocChunkTranslation("Available 24/7.\n", "24/7 उपलब्ध।\n"); err != nil {
+		t.Fatalf("expected translated prose around exact slash ratio to pass: %v", err)
 	}
 }
 

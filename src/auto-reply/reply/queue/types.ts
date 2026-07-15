@@ -74,7 +74,7 @@ export type FollowupRun = {
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   queuedLifecycle?: QueuedReplyLifecycle;
   /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
-  onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
+  onReplyAdmissionWaitChange?: (waiting: boolean) => void;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;

@@ -216,6 +216,22 @@
         },
         "thinking": {
           "type": "string"
+        },
+        "visible": {
+          "description": "visible: user sees session in UI. Use when user asked or talks via web/app.",
+          "type": "boolean"
+        },
+        "worktree": {
+          "description": "Visible session worktree",
+          "type": "boolean"
+        },
+        "worktreeBaseRef": {
+          "description": "Worktree base ref",
+          "type": "string"
+        },
+        "worktreeName": {
+          "description": "Worktree name",
+          "type": "string"
         }
       },
       "required": ["task"],
@@ -1375,16 +1391,20 @@
       },
       {
         "deferLoading": true,
-        "description": "List requester-session active/recent subagents. If available, wait via sessions_yield; never poll-loop.",
+        "description": "Background work: subagents, media gen, cron runs. list/cancel.",
         "inputSchema": {
           "properties": {
             "action": {
-              "enum": ["list"],
+              "enum": ["list", "cancel"],
               "type": "string"
             },
             "recentMinutes": {
               "minimum": 1,
               "type": "integer"
+            },
+            "taskId": {
+              "description": "Task id",
+              "type": "string"
             }
           },
           "type": "object"

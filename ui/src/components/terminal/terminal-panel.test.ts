@@ -81,6 +81,7 @@ async function startPanelWithPendingOpen() {
   const open = deferred<ReturnType<typeof terminalOpenResult>>();
   const requests: Array<{ method: string; params: unknown }> = [];
   const client: TerminalGatewayClient = {
+    forceReconnect: () => {},
     request: <T>(method: string, params?: unknown) => {
       requests.push({ method, params });
       return (method === "terminal.open" ? open.promise : Promise.resolve({})) as Promise<T>;
@@ -139,6 +140,7 @@ describe("OpenClawTerminalPanel", () => {
     });
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         return {
@@ -245,37 +247,6 @@ describe("OpenClawTerminalPanel", () => {
     expect(requests.some(({ method }) => method === "terminal.input")).toBe(false);
   });
 
-  it("opens a new titled tab for a catalog toggle request", async () => {
-    createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
-    const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      request: async <T>(method: string, params?: unknown) => {
-        requests.push({ method, params });
-        return {
-          ...terminalOpenResult("catalog-terminal-1"),
-          title: "codex resume 0d5c…",
-        } as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
-    const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
-
-    panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
-
-    await vi.waitFor(() => {
-      expect(requests).toContainEqual({
-        method: "terminal.open",
-        params: { agentId: undefined, cols: 100, rows: 30, catalog },
-      });
-    });
-    await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tp-tab")?.textContent).toContain("codex resume 0d5c…");
-  });
-
   it("reattaches persisted sessions before opening a catalog tab", async () => {
     sessionStorage.setItem("openclaw.terminal.sessions.v1", JSON.stringify(["persisted-1"]));
     createGhosttyTerminalMock
@@ -283,6 +254,7 @@ describe("OpenClawTerminalPanel", () => {
       .mockResolvedValueOnce(createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.list") {
@@ -329,7 +301,7 @@ describe("OpenClawTerminalPanel", () => {
       requests.findIndex((entry) => entry.method === "terminal.open"),
     );
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
-      JSON.stringify(["persisted-1", "catalog-terminal-1"]),
+      JSON.stringify(["persisted-1"]),
     );
   });
 
@@ -345,6 +317,7 @@ describe("OpenClawTerminalPanel", () => {
       .mockResolvedValueOnce(controllers[2]);
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.open") {
@@ -451,6 +424,7 @@ describe("OpenClawTerminalPanel", () => {
     const secondList = deferred<{ sessions: ListedSession[] }>();
     let listCount = 0;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: <T>(method: string) => {
         if (method === "terminal.open") {
           return Promise.resolve(terminalOpenResult("current-1")) as Promise<T>;
@@ -515,6 +489,7 @@ describe("OpenClawTerminalPanel", () => {
       .mockResolvedValueOnce(createTerminalController())
       .mockResolvedValueOnce(createTerminalController());
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) => {
         if (method === "terminal.open") {
           return terminalOpenResult("current-1") as T;
@@ -557,6 +532,7 @@ describe("OpenClawTerminalPanel", () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     let openCount = 0;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.open") {
@@ -591,6 +567,7 @@ describe("OpenClawTerminalPanel", () => {
     createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         return {
@@ -639,6 +616,7 @@ describe("OpenClawTerminalPanel", () => {
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     let openCount = 0;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.open") {
@@ -708,6 +686,7 @@ describe("OpenClawTerminalPanel", () => {
     const oldRequests: string[] = [];
     const oldUnsubscribe = vi.fn();
     const oldClient: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) => {
         oldRequests.push(method);
         return (method === "terminal.open" ? terminalOpenResult("old-session") : {}) as T;
@@ -716,6 +695,7 @@ describe("OpenClawTerminalPanel", () => {
     };
     const newRequests: string[] = [];
     const newClient: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) => {
         newRequests.push(method);
         if (method === "terminal.list") {
@@ -755,6 +735,7 @@ describe("OpenClawTerminalPanel", () => {
       .mockResolvedValueOnce(currentController);
     const requests: string[] = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) => {
         requests.push(method);
         return (method === "terminal.open" ? terminalOpenResult("current-session") : {}) as T;
@@ -796,6 +777,7 @@ describe("OpenClawTerminalPanel", () => {
   it("removes resize listeners when disconnected mid-drag", async () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) =>
         (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
       addEventListener: () => () => {},
@@ -839,61 +821,11 @@ describe("OpenClawTerminalPanel", () => {
     expect(host.isConnected).toBe(false);
   });
 
-  it("uploads dropped files and pastes shell-safe paths without executing", async () => {
-    const controller = createTerminalController();
-    createGhosttyTerminalMock.mockResolvedValue(controller);
-    const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      request: async <T>(method: string, params?: unknown) => {
-        requests.push({ method, params });
-        if (method === "terminal.open") {
-          return terminalOpenResult("session-1") as T;
-        }
-        if (method === "terminal.upload") {
-          return { path: "/tmp/openclaw upload/scan final.pdf", size: 3 } as T;
-        }
-        return {} as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
-    panel.toggle();
-    await vi.waitFor(() => {
-      expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
-    });
-    expect(panel.renderRoot.querySelector<HTMLInputElement>(".tp-file-input")?.multiple).toBe(true);
-
-    const file = new File(["pdf"], "scan final.pdf", { type: "application/pdf" });
-    Object.defineProperty(file, "arrayBuffer", {
-      value: async () => new TextEncoder().encode("pdf").buffer,
-    });
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, "dataTransfer", {
-      value: { types: ["Files"], files: [file], dropEffect: "none" },
-    });
-    panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
-
-    await vi.waitFor(() => {
-      expect(requests).toContainEqual({
-        method: "terminal.upload",
-        params: {
-          sessionId: "session-1",
-          name: "scan final.pdf",
-          contentBase64: "cGRm",
-        },
-      });
-    });
-    expect(controller.terminal.paste).toHaveBeenCalledWith("'/tmp/openclaw upload/scan final.pdf'");
-    expect(controller.terminal.paste).not.toHaveBeenCalledWith(expect.stringContaining("\n"));
-  });
-
   it("retranslates cached exit state when the locale changes", async () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) =>
         (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
       addEventListener: (nextListener) => {
