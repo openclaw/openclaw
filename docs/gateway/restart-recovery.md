@@ -83,7 +83,12 @@ confirms a same-conversation send, the gateway mirrors its terminal intent and
 source message ID into the transcript. If restart recovery finds that exact
 terminal receipt, it completes the interrupted turn without rerunning tools or
 asking the user to resend. Progress sends and receipts from older turns cannot
-complete the current turn.
+complete the current turn. Only durable channel-ingress claims can restore
+message-action authority. A resumed run keeps the original source-delivery mode
+and source correlation, including requester identity and any same-channel/thread
+restriction, so the same receipt remains authoritative even if another restart
+happens during recovery. A message-tool-only turn without reconstructable
+channel authority is failed closed and receives the one-time resend notice.
 
 Before resuming, the gateway checks that the transcript tail is safe to
 continue from. If it is not (for example, the turn ended on a stale pending

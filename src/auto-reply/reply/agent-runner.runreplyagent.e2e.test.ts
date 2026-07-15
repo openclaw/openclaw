@@ -69,6 +69,7 @@ type AgentRunParams = {
 
 const state = vi.hoisted(() => ({
   compactEmbeddedAgentSessionMock: vi.fn(),
+  getChannelPluginMock: vi.fn(),
   queueEmbeddedAgentMessageMock: vi.fn(),
   runEmbeddedAgentMock: vi.fn(),
 }));
@@ -148,6 +149,11 @@ vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
 }));
 
+vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/index.js")>()),
+  getChannelPlugin: (channel: unknown) => state.getChannelPluginMock(channel),
+}));
+
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   formatEmbeddedAgentQueueFailureSummary: () => "test queue rejection",
   queueEmbeddedAgentMessageWithOutcomeAsync: async (
@@ -205,6 +211,7 @@ beforeEach(() => {
   });
   state.queueEmbeddedAgentMessageMock.mockReset();
   state.queueEmbeddedAgentMessageMock.mockReturnValue(false);
+  state.getChannelPluginMock.mockReset();
   vi.mocked(enqueueFollowupRun).mockReset().mockReturnValue(true);
   vi.mocked(refreshQueuedFollowupSession).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
@@ -1094,6 +1101,10 @@ describe("runReplyAgent pending final delivery capture", () => {
       });
       expect(typeof storedAtAdoption.restartRecoveryDeliveryRunId).toBe("string");
       expect(storedAtAdoption.restartRecoveryDeliverySourceRunId).toBe("1503645939964055592");
+      expect(storedAtAdoption.restartRecoveryRequesterAccountId).toBe("work");
+      expect(storedAtAdoption.restartRecoveryRequesterSenderId).toBe("discord-user");
+      expect(storedAtAdoption.restartRecoverySourceIngress).toBe("channel");
+      expect(storedAtAdoption.restartRecoverySourceReplyDeliveryMode).toBe("message_tool_only");
       const transcript = await loadTranscriptEvents({
         agentId: "main",
         sessionId: "session",
@@ -1121,12 +1132,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
 
     const { followupRun, run } = createMinimalRun({
-      opts: { onTurnAdopted },
+      opts: { onTurnAdopted, sourceReplyDeliveryMode: "message_tool_only" },
       sessionCtx: {
         Provider: "discord",
         OriginatingChannel: "discord",
         OriginatingTo: "channel:24680",
         AccountId: "work",
+        SenderId: "discord-user",
         MessageSid: "1503645939964055592",
         MessageThreadId: "1503645939964055592",
       },
@@ -1157,6 +1169,57 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     expect(onTurnAdopted).toHaveBeenCalledOnce();
     expect(events).toEqual(["adopted", "agent-run"]);
+    expect(
+      (await readStoredMainSession(storePath)).restartRecoverySourceReplyDeliveryMode,
+    ).toBeUndefined();
+    expect((await readStoredMainSession(storePath)).restartRecoverySourceIngress).toBeUndefined();
+    expect(
+      (await readStoredMainSession(storePath)).restartRecoveryRequesterAccountId,
+    ).toBeUndefined();
+    expect(
+      (await readStoredMainSession(storePath)).restartRecoveryRequesterSenderId,
+    ).toBeUndefined();
+  });
+
+  it("persists the channel adapter's narrowed message-action scope", async () => {
+    state.getChannelPluginMock.mockReturnValue({
+      threading: {
+        buildToolContext: () => ({ sameChannelThreadRequired: true }),
+      },
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const onTurnAdopted = vi.fn(async () => {
+      expect(
+        (await readStoredMainSession(storePath)).restartRecoverySameChannelThreadRequired,
+      ).toBe(true);
+    });
+    const { run } = createMinimalRun({
+      opts: { onTurnAdopted, sourceReplyDeliveryMode: "message_tool_only" },
+      sessionCtx: {
+        Provider: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+        MessageSid: "1700000000.000001",
+        MessageThreadId: "1699999999.000001",
+      },
+      runOverrides: { messageProvider: "slack" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(
+      (await readStoredMainSession(storePath)).restartRecoverySameChannelThreadRequired,
+    ).toBeUndefined();
   });
 
   it("runs a deferred before_agent_reply hook only after durable admission", async () => {

@@ -314,6 +314,12 @@ export function resolveRestartSafeChatAdmission(params: {
               entry.restartRecoveryDeliveryRequestFingerprint,
             restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
             restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+            restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
+            restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
+            restartRecoverySameChannelThreadRequired:
+              entry.restartRecoverySameChannelThreadRequired,
+            restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
+            restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
             status: entry.status,
             updatedAt: entry.updatedAt,
           },
@@ -345,6 +351,11 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryDeliveryRequestFingerprint: params.admission.requestFingerprint,
       restartRecoveryDeliveryRunId: params.clientRunId,
       restartRecoveryDeliverySourceRunId: params.clientRunId,
+      restartRecoveryRequesterAccountId: undefined,
+      restartRecoveryRequesterSenderId: undefined,
+      restartRecoverySameChannelThreadRequired: undefined,
+      restartRecoverySourceIngress: undefined,
+      restartRecoverySourceReplyDeliveryMode: undefined,
       ...(params.admission.priorTerminalSourceRunId
         ? { restartRecoveryTerminalRunIds: [params.admission.priorTerminalSourceRunId] }
         : {}),

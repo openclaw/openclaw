@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildChannelSourceTurnId,
   readChannelSourceTurnId,
+  readChannelSourceTurnSameThreadRequired,
   setChannelSourceTurnId,
+  setChannelSourceTurnSameThreadRequired,
 } from "./source-turn-id.js";
 
 describe("buildChannelSourceTurnId", () => {
@@ -60,8 +62,10 @@ describe("buildChannelSourceTurnId", () => {
   it("carries host-only identity through context clones without serializing it", () => {
     const context = { MessageSid: "7" };
     setChannelSourceTurnId(context, "channel-user:v1:source-7");
+    setChannelSourceTurnSameThreadRequired(context, true);
 
     expect(readChannelSourceTurnId({ ...context })).toBe("channel-user:v1:source-7");
+    expect(readChannelSourceTurnSameThreadRequired({ ...context })).toBe(true);
     expect(JSON.stringify(context)).toBe('{"MessageSid":"7"}');
   });
 });

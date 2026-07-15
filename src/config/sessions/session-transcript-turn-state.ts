@@ -29,6 +29,16 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
           expectedState.restartRecoveryDeliveryRunId &&
         selected.entry.restartRecoveryDeliverySourceRunId ===
           expectedState.restartRecoveryDeliverySourceRunId &&
+        selected.entry.restartRecoveryRequesterAccountId ===
+          expectedState.restartRecoveryRequesterAccountId &&
+        selected.entry.restartRecoveryRequesterSenderId ===
+          expectedState.restartRecoveryRequesterSenderId &&
+        selected.entry.restartRecoverySameChannelThreadRequired ===
+          expectedState.restartRecoverySameChannelThreadRequired &&
+        selected.entry.restartRecoverySourceIngress ===
+          expectedState.restartRecoverySourceIngress &&
+        selected.entry.restartRecoverySourceReplyDeliveryMode ===
+          expectedState.restartRecoverySourceReplyDeliveryMode &&
         selected.entry.status === expectedState.status &&
         selected.entry.updatedAt === expectedState.updatedAt)),
   );

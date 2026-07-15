@@ -7,9 +7,13 @@ import { normalizeAccountId } from "../../routing/account-id.js";
 
 const CHANNEL_SOURCE_TURN_ID_PREFIX = "channel-user:v1:";
 const CHANNEL_SOURCE_TURN_ID = Symbol("openclaw.channelSourceTurnId");
+const CHANNEL_SOURCE_TURN_SAME_THREAD_REQUIRED = Symbol(
+  "openclaw.channelSourceTurnSameThreadRequired",
+);
 
 type ChannelSourceTurnContext = object & {
   [CHANNEL_SOURCE_TURN_ID]?: string;
+  [CHANNEL_SOURCE_TURN_SAME_THREAD_REQUIRED]?: true;
 };
 
 /**
@@ -50,4 +54,21 @@ export function setChannelSourceTurnId(context: object, sourceTurnId: string | u
 
 export function readChannelSourceTurnId(context: object): string | undefined {
   return (context as ChannelSourceTurnContext)[CHANNEL_SOURCE_TURN_ID];
+}
+
+/** Carries the original channel adapter's narrowed message-action scope privately. */
+export function setChannelSourceTurnSameThreadRequired(
+  context: object,
+  sameThreadRequired: boolean | undefined,
+): void {
+  const scoped = context as ChannelSourceTurnContext;
+  if (sameThreadRequired === true) {
+    scoped[CHANNEL_SOURCE_TURN_SAME_THREAD_REQUIRED] = true;
+  } else {
+    delete scoped[CHANNEL_SOURCE_TURN_SAME_THREAD_REQUIRED];
+  }
+}
+
+export function readChannelSourceTurnSameThreadRequired(context: object): boolean {
+  return (context as ChannelSourceTurnContext)[CHANNEL_SOURCE_TURN_SAME_THREAD_REQUIRED] === true;
 }

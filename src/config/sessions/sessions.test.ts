@@ -459,6 +459,11 @@ describe("session store writer queue", () => {
         restartRecoveryBeforeAgentReplyState: "maybe",
         restartRecoveryDeliveryRunId: 123,
         restartRecoveryDeliverySourceRunId: 123,
+        restartRecoveryRequesterAccountId: 123,
+        restartRecoveryRequesterSenderId: {},
+        restartRecoverySameChannelThreadRequired: "yes",
+        restartRecoverySourceIngress: "web",
+        restartRecoverySourceReplyDeliveryMode: "sometimes",
         restartRecoveryTerminalRunIds: [123, "", {}],
       },
       "agent:main:good-pending": {
@@ -486,6 +491,11 @@ describe("session store writer queue", () => {
         restartRecoveryBeforeAgentReplyState: "continue",
         restartRecoveryDeliveryRunId: "run-1",
         restartRecoveryDeliverySourceRunId: "source-run-1",
+        restartRecoveryRequesterAccountId: " work ",
+        restartRecoveryRequesterSenderId: " sender-1 ",
+        restartRecoverySameChannelThreadRequired: true,
+        restartRecoverySourceIngress: "channel",
+        restartRecoverySourceReplyDeliveryMode: "message_tool_only",
         restartRecoveryTerminalRunIds: [" terminal-1 ", "terminal-2", "terminal-1", null],
       },
     } as unknown as Record<string, SessionEntry>);
@@ -510,6 +520,11 @@ describe("session store writer queue", () => {
     expect(bad?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(bad?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(bad?.restartRecoveryRequesterAccountId).toBeUndefined();
+    expect(bad?.restartRecoveryRequesterSenderId).toBeUndefined();
+    expect(bad?.restartRecoverySameChannelThreadRequired).toBeUndefined();
+    expect(bad?.restartRecoverySourceIngress).toBeUndefined();
+    expect(bad?.restartRecoverySourceReplyDeliveryMode).toBeUndefined();
     expect(bad?.restartRecoveryTerminalRunIds).toBeUndefined();
 
     expect(good).toMatchObject({
@@ -535,6 +550,11 @@ describe("session store writer queue", () => {
       restartRecoveryBeforeAgentReplyState: "continue",
       restartRecoveryDeliveryRunId: "run-1",
       restartRecoveryDeliverySourceRunId: "source-run-1",
+      restartRecoveryRequesterAccountId: "work",
+      restartRecoveryRequesterSenderId: "sender-1",
+      restartRecoverySameChannelThreadRequired: true,
+      restartRecoverySourceIngress: "channel",
+      restartRecoverySourceReplyDeliveryMode: "message_tool_only",
       restartRecoveryTerminalRunIds: ["terminal-2", "terminal-1"],
     });
   });

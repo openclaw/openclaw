@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
+import {
+  buildRestartRecoveryClaimCleanupPatch,
+  resolveRestartRecoveryChannelAuthority,
+} from "../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -26,6 +29,10 @@ type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
 
 function normalizeFiniteTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+export function hasRestartRecoveryMessageActionAuthority(entry: SessionEntry): boolean {
+  return resolveRestartRecoveryChannelAuthority(entry) !== undefined;
 }
 
 function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
@@ -201,6 +208,13 @@ export async function resumeMainSession(params: {
   });
   const claimedRunId = normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId);
   const sourceRunId = normalizeOptionalString(params.entry.restartRecoveryDeliverySourceRunId);
+  if (
+    params.entry.restartRecoverySourceReplyDeliveryMode === "message_tool_only" &&
+    !hasRestartRecoveryMessageActionAuthority(params.entry)
+  ) {
+    log.warn(`refusing message-tool-only recovery without channel authority: ${params.sessionKey}`);
+    return false;
+  }
   const recoveryRunId = claimedRunId && claimedRunId !== sourceRunId ? claimedRunId : randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
   const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
@@ -246,9 +260,14 @@ export async function resumeMainSession(params: {
         ? { internalRuntimeHandoffId: params.sessionWorkAdmissionHandoffId }
         : {}),
       idempotencyKey: recoveryRunId,
-      deliver: Boolean(deliveryContext),
+      deliver:
+        Boolean(deliveryContext) &&
+        params.entry.restartRecoverySourceReplyDeliveryMode !== "message_tool_only",
       lane: CommandLane.Main,
       ...(params.forceRestartSafeTools ? { forceRestartSafeTools: true } : {}),
+      ...(params.entry.restartRecoverySourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode }
+        : {}),
     };
     if (deliveryContext) {
       agentParams.channel = deliveryContext.channel;

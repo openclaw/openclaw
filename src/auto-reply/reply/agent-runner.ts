@@ -98,7 +98,10 @@ import {
 } from "./agent-runner-reminder-guard.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
-import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
+import {
+  buildThreadingToolContext,
+  resolveQueuedReplyExecutionConfig,
+} from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import {
@@ -258,7 +261,13 @@ function resolveReplyRunDeliveryContext(params: {
   runtimePolicySessionKey?: string;
   opts?: GetReplyOptions;
 }): DeliveryContext | undefined {
-  if (resolveSourceReplyPolicy(params).suppressDelivery) {
+  const sourceReplyPolicy = resolveSourceReplyPolicy(params);
+  if (
+    params.sessionCtx.InboundEventKind === "room_event" ||
+    sourceReplyPolicy.sendPolicyDenied ||
+    (sourceReplyPolicy.suppressDelivery &&
+      sourceReplyPolicy.sourceReplyDeliveryMode !== "message_tool_only")
+  ) {
     return undefined;
   }
   const threadId =
@@ -1533,6 +1542,14 @@ export async function runReplyAgent(params: {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
+  const restartRecoverySourceTurnId = readChannelSourceTurnId(sessionCtx);
+  const restartRecoverySameChannelThreadRequired = restartRecoverySourceTurnId
+    ? buildThreadingToolContext({
+        sessionCtx,
+        config: cfg,
+        hasRepliedRef: undefined,
+      }).sameChannelThreadRequired
+    : undefined;
   const {
     admitUserTurn,
     checkpointBeforeAgentReply,
@@ -1558,6 +1575,9 @@ export async function runReplyAgent(params: {
             opts,
           })
         : undefined,
+    requesterAccountId:
+      followupRun.originatingAccountId ?? sessionCtx.AccountId ?? followupRun.run.agentAccountId,
+    requesterSenderId: sessionCtx.SenderId,
     ...(sessionKey ? { sessionKey } : {}),
     setEntry: (entry) => {
       activeSessionEntry = entry;
@@ -1565,7 +1585,16 @@ export async function runReplyAgent(params: {
         activeSessionStore[sessionKey] = entry;
       }
     },
-    sourceTurnId: readChannelSourceTurnId(sessionCtx),
+    sameChannelThreadRequired: restartRecoverySameChannelThreadRequired,
+    sourceTurnId: restartRecoverySourceTurnId,
+    sourceReplyDeliveryMode: resolveSourceReplyPolicy({
+      cfg,
+      sessionCtx,
+      sessionEntry: activeSessionEntry,
+      sessionKey,
+      runtimePolicySessionKey,
+      opts,
+    }).sourceReplyDeliveryMode,
     ...(storePath ? { storePath } : {}),
   });
   type SessionResetOptions = {

@@ -1583,6 +1583,13 @@ describe("main-session-restart-recovery", () => {
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "recovery-main",
         restartRecoveryDeliverySourceRunId: "source-main",
+        restartRecoverySourceIngress: "channel",
+        restartRecoverySourceReplyDeliveryMode: "message_tool_only",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:main",
+          accountId: "work",
+        },
       },
       "agent:main:other": {
         sessionId: "other-session",
@@ -1615,6 +1622,11 @@ describe("main-session-restart-recovery", () => {
       expectedExistingSessionId: "main-session",
       internalRuntimeHandoffId: expect.any(String),
       sessionKey: "agent:main:main",
+      sourceReplyDeliveryMode: "message_tool_only",
+      deliver: false,
+      channel: "discord",
+      to: "discord:dm:main",
+      accountId: "work",
     });
     expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
       abortedLastRun: false,
@@ -1623,6 +1635,96 @@ describe("main-session-restart-recovery", () => {
     expect(loadSessionEntry({ sessionKey: "agent:main:other", storePath })).toMatchObject({
       abortedLastRun: true,
       restartRecoveryDeliveryRunId: "recovery-other",
+    });
+  });
+
+  it("fails closed when message-tool-only authority cannot be reconstructed", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "recovery-main",
+        restartRecoverySourceReplyDeliveryMode: "message_tool_only",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:main",
+          accountId: "work",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "recover only with delivery authority" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    const [gatewayRequest] = vi.mocked(callGateway).mock.calls[0] ?? [];
+    expect(gatewayRequest?.method).toBe("message.action");
+    expect(gatewayRequest?.params).toMatchObject({
+      action: "send",
+      accountId: "work",
+      channel: "discord",
+      params: {
+        to: "discord:dm:main",
+        message: expect.stringContaining("couldn't safely resume"),
+      },
+    });
+    const failedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+    expect(failedEntry).toMatchObject({
+      abortedLastRun: true,
+      status: "failed",
+    });
+    expect(failedEntry?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(failedEntry?.restartRecoverySourceReplyDeliveryMode).toBeUndefined();
+  });
+
+  it("does not restore channel authority from a generic session route", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        channel: "discord",
+        lastTo: "discord:dm:fallback",
+        restartRecoveryDeliveryRunId: "recovery-main",
+        restartRecoveryDeliverySourceRunId: "source-main",
+        restartRecoverySourceIngress: "channel",
+        restartRecoverySourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do not inherit a fallback route" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: "main-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    });
+    expect(events.at(-1)).toMatchObject({
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: expect.stringContaining("couldn't safely resume"),
+          },
+        ],
+      },
     });
   });
 

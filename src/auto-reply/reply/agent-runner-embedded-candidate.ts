@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isTrustedMessageActionTurnIngress,
   mintMessageActionTurnCapability,
+  resolveMessageActionTurnCapabilityLifetime,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { logVerbose } from "../../globals.js";
@@ -159,7 +160,7 @@ export async function runEmbeddedFallbackCandidate(params: {
             hasRepliedRef: embeddedContext.hasRepliedRef,
             sameChannelThreadRequired: embeddedContext.sameChannelThreadRequired,
           },
-          ttlMs: runBaseParams.timeoutMs + 60_000,
+          ...resolveMessageActionTurnCapabilityLifetime(runBaseParams.timeoutMs),
         })
       : undefined;
   let attemptCompactionCount = 0;

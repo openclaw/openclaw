@@ -1,9 +1,42 @@
+import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.shared.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import type { SessionEntry } from "./types.js";
 
 const MAX_TERMINAL_RUN_IDS = 64;
 
+export type RestartRecoveryChannelAuthority = {
+  deliveryContext: DeliveryContext & { channel: string; to: string };
+  sourceTurnId: string;
+};
+
 function normalizeRunId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Resolves only a complete durable channel claim; session-route fallbacks carry no authority. */
+export function resolveRestartRecoveryChannelAuthority(
+  entry: SessionEntry,
+): RestartRecoveryChannelAuthority | undefined {
+  const sourceTurnId = normalizeRunId(entry.restartRecoveryDeliverySourceRunId);
+  const deliveryContext = normalizeDeliveryContext(entry.restartRecoveryDeliveryContext);
+  const channel = normalizeRunId(deliveryContext?.channel);
+  const to = normalizeRunId(deliveryContext?.to);
+  if (
+    entry.restartRecoverySourceIngress !== "channel" ||
+    !sourceTurnId ||
+    !channel ||
+    !to ||
+    !isDeliverableMessageChannel(channel)
+  ) {
+    return undefined;
+  }
+  return {
+    sourceTurnId,
+    deliveryContext: { ...deliveryContext, channel, to },
+  };
 }
 
 /** Keeps a bounded durable set of client runs that must never execute again. */
@@ -32,6 +65,11 @@ type RestartRecoveryNormalizedField =
   | "restartRecoveryDeliveryRequestFingerprint"
   | "restartRecoveryDeliveryRunId"
   | "restartRecoveryDeliverySourceRunId"
+  | "restartRecoveryRequesterAccountId"
+  | "restartRecoveryRequesterSenderId"
+  | "restartRecoverySameChannelThreadRequired"
+  | "restartRecoverySourceIngress"
+  | "restartRecoverySourceReplyDeliveryMode"
   | "restartRecoveryTerminalRunIds";
 
 function sameOptionalStringArray(left: unknown, right: string[] | undefined): boolean {
@@ -67,6 +105,29 @@ export function normalizeRestartRecoveryEntryFields(
   assign(
     "restartRecoveryDeliverySourceRunId",
     normalizeRunId(entry.restartRecoveryDeliverySourceRunId),
+  );
+  assign(
+    "restartRecoveryRequesterAccountId",
+    normalizeRunId(entry.restartRecoveryRequesterAccountId),
+  );
+  assign(
+    "restartRecoveryRequesterSenderId",
+    normalizeRunId(entry.restartRecoveryRequesterSenderId),
+  );
+  assign(
+    "restartRecoverySameChannelThreadRequired",
+    entry.restartRecoverySameChannelThreadRequired === true ? true : undefined,
+  );
+  assign(
+    "restartRecoverySourceIngress",
+    entry.restartRecoverySourceIngress === "channel" ? "channel" : undefined,
+  );
+  assign(
+    "restartRecoverySourceReplyDeliveryMode",
+    entry.restartRecoverySourceReplyDeliveryMode === "automatic" ||
+      entry.restartRecoverySourceReplyDeliveryMode === "message_tool_only"
+      ? entry.restartRecoverySourceReplyDeliveryMode
+      : undefined,
   );
   const terminalRunIds = normalizeRestartRecoveryTerminalRunIds(
     entry.restartRecoveryTerminalRunIds,
@@ -124,6 +185,11 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryRequesterAccountId: undefined,
+    restartRecoveryRequesterSenderId: undefined,
+    restartRecoverySameChannelThreadRequired: undefined,
+    restartRecoverySourceIngress: undefined,
+    restartRecoverySourceReplyDeliveryMode: undefined,
     ...(terminalRunIds ? { restartRecoveryTerminalRunIds: terminalRunIds } : {}),
   };
 }

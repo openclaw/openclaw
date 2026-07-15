@@ -56,6 +56,7 @@ import {
   type ExpectedRestartRecoveryClaim,
 } from "./main-session-restart-claim.js";
 import {
+  hasRestartRecoveryMessageActionAuthority,
   resolveRestartRecoveryDeliveryContext,
   resumeMainSession,
 } from "./main-session-restart-dispatch.js";
@@ -913,6 +914,12 @@ async function writeUnresumableSessionNotice(params: {
         params.entry.restartRecoveryDeliveryRequestFingerprint,
       restartRecoveryDeliveryRunId: params.entry.restartRecoveryDeliveryRunId,
       restartRecoveryDeliverySourceRunId: params.entry.restartRecoveryDeliverySourceRunId,
+      restartRecoveryRequesterAccountId: params.entry.restartRecoveryRequesterAccountId,
+      restartRecoveryRequesterSenderId: params.entry.restartRecoveryRequesterSenderId,
+      restartRecoverySameChannelThreadRequired:
+        params.entry.restartRecoverySameChannelThreadRequired,
+      restartRecoverySourceIngress: params.entry.restartRecoverySourceIngress,
+      restartRecoverySourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode,
       status: params.entry.status,
       updatedAt: params.entry.updatedAt,
     },
@@ -926,6 +933,53 @@ async function writeUnresumableSessionNotice(params: {
     );
   }
   return result.ok;
+}
+
+async function failUnresumableMainSession(params: {
+  cfg?: OpenClawConfig;
+  entry: SessionEntry;
+  expectedRecoverySourceRunId?: string;
+  reason: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<"failed" | "skipped"> {
+  const deliveryContext = resolveRestartRecoveryDeliveryContext({
+    cfg: params.cfg,
+    entry: params.entry,
+    includeSessionDeliveryFallback: true,
+    sessionKey: params.sessionKey,
+  });
+  if (
+    !deliveryContext &&
+    !(await writeUnresumableSessionNotice({
+      entry: params.entry,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    }))
+  ) {
+    // Keep ownership for another recovery attempt until its terminal notice is durable.
+    return "failed";
+  }
+  const marked = await markSessionFailed({
+    expectedRecoveryRunId: normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId),
+    expectedRecoverySourceRunId: params.expectedRecoverySourceRunId,
+    expectedSessionId: params.entry.sessionId,
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    reason: params.reason,
+  });
+  if (!marked) {
+    return "skipped";
+  }
+  if (deliveryContext) {
+    await sendUnresumableSessionNotice({
+      deliveryContext,
+      entry: params.entry,
+      reason: params.reason,
+      sessionKey: params.sessionKey,
+    });
+  }
+  return "failed";
 }
 
 export async function markRestartAbortedMainSessionsFromLocks(params: {
@@ -1081,6 +1135,24 @@ async function recoverStore(params: {
     }
 
     if (
+      entry.restartRecoverySourceReplyDeliveryMode === "message_tool_only" &&
+      !hasRestartRecoveryMessageActionAuthority(entry)
+    ) {
+      const disposition = await failUnresumableMainSession({
+        cfg: params.cfg,
+        entry,
+        expectedRecoverySourceRunId: normalizeOptionalString(
+          entry.restartRecoveryDeliverySourceRunId,
+        ),
+        reason: "message-tool-only recovery authority is unavailable",
+        sessionKey,
+        storePath: params.storePath,
+      });
+      result[disposition]++;
+      continue;
+    }
+
+    if (
       entry.pendingFinalDelivery === true &&
       entry.pendingFinalDeliveryText &&
       entry.restartRecoveryForceSafeTools === true
@@ -1198,47 +1270,15 @@ async function recoverStore(params: {
       continue;
     }
     if (resumePolicy.action === "fail") {
-      const deliveryContext = resolveRestartRecoveryDeliveryContext({
+      const disposition = await failUnresumableMainSession({
         cfg: params.cfg,
         entry,
-        includeSessionDeliveryFallback: true,
-        sessionKey,
-      });
-      // Transcript-only notices are guarded by the interrupted entry snapshot.
-      // External delivery waits until the same ownership is atomically failed.
-      if (
-        !deliveryContext &&
-        !(await writeUnresumableSessionNotice({
-          entry,
-          sessionKey,
-          storePath: params.storePath,
-        }))
-      ) {
-        // Keep the claim recoverable until its user-visible terminal notice is durable.
-        result.failed++;
-        continue;
-      }
-      const failed = await markSessionFailed({
-        expectedRecoveryRunId: normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
         expectedRecoverySourceRunId,
-        expectedSessionId: entry.sessionId,
-        storePath: params.storePath,
-        sessionKey,
         reason: resumePolicy.reason,
+        sessionKey,
+        storePath: params.storePath,
       });
-      if (failed) {
-        if (deliveryContext) {
-          await sendUnresumableSessionNotice({
-            deliveryContext,
-            entry,
-            reason: resumePolicy.reason,
-            sessionKey,
-          });
-        }
-        result.failed++;
-      } else {
-        result.skipped++;
-      }
+      result[disposition]++;
       continue;
     }
 

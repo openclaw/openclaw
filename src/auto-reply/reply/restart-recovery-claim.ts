@@ -10,6 +10,7 @@ import type {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 type ReplyRestartRecoveryClaimController = {
   admitUserTurn: (recorder?: UserTurnTranscriptRecorder) => Promise<void>;
@@ -32,6 +33,11 @@ function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnEx
     restartRecoveryDeliveryRequestFingerprint: entry.restartRecoveryDeliveryRequestFingerprint,
     restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
     restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+    restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
+    restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
+    restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
+    restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
+    restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
     status: entry.status,
     updatedAt: entry.updatedAt,
   };
@@ -50,6 +56,13 @@ function matchesExpectedSessionState(
       expected.restartRecoveryDeliveryRequestFingerprint &&
     entry.restartRecoveryDeliveryRunId === expected.restartRecoveryDeliveryRunId &&
     entry.restartRecoveryDeliverySourceRunId === expected.restartRecoveryDeliverySourceRunId &&
+    entry.restartRecoveryRequesterAccountId === expected.restartRecoveryRequesterAccountId &&
+    entry.restartRecoveryRequesterSenderId === expected.restartRecoveryRequesterSenderId &&
+    entry.restartRecoverySameChannelThreadRequired ===
+      expected.restartRecoverySameChannelThreadRequired &&
+    entry.restartRecoverySourceIngress === expected.restartRecoverySourceIngress &&
+    entry.restartRecoverySourceReplyDeliveryMode ===
+      expected.restartRecoverySourceReplyDeliveryMode &&
     entry.status === expected.status &&
     entry.updatedAt === expected.updatedAt
   );
@@ -62,9 +75,13 @@ export function createReplyRestartRecoveryClaimController(params: {
   hasBeforeAgentReplyHook: boolean;
   isRestartAbort: () => boolean;
   resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
+  requesterAccountId?: unknown;
+  requesterSenderId?: unknown;
   sessionKey?: string;
   setEntry: (entry: SessionEntry) => void;
+  sameChannelThreadRequired?: boolean;
   sourceTurnId?: unknown;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   storePath?: string;
 }): ReplyRestartRecoveryClaimController {
   let recoveryRunId: string = randomUUID();
@@ -199,6 +216,16 @@ export function createReplyRestartRecoveryClaimController(params: {
           restartRecoveryDeliveryRequestFingerprint: undefined,
           restartRecoveryDeliveryRunId: recoveryRunId,
           restartRecoveryDeliverySourceRunId: sourceTurnId,
+          restartRecoveryRequesterAccountId: sourceTurnId
+            ? normalizeOptionalString(params.requesterAccountId)
+            : undefined,
+          restartRecoveryRequesterSenderId: sourceTurnId
+            ? normalizeOptionalString(params.requesterSenderId)
+            : undefined,
+          restartRecoverySameChannelThreadRequired:
+            sourceTurnId && params.sameChannelThreadRequired === true ? true : undefined,
+          restartRecoverySourceIngress: sourceTurnId ? "channel" : undefined,
+          restartRecoverySourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           runtimeMs: undefined,
           startedAt: updatedAt,
           status: "running",
