@@ -72,6 +72,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     },
     provider: attempt.provider,
     modelId: attempt.modelId,
+    forceToolCallIdSanitization: attempt.forceToolCallIdSanitization,
     config: attempt.config,
     env: process.env,
   });

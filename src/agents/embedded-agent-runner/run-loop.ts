@@ -29,6 +29,10 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-pre
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
+import {
+  shouldForceToolCallIdSanitization,
+  shouldRetryWithForcedToolCallIdSanitization,
+} from "./run/attempt.transcript-policy.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -269,6 +273,7 @@ export async function runPreparedEmbeddedLoop(
       sessionPromptState,
     });
     let authRetryPending = false;
+    let forceToolCallIdSanitizationApi: string | undefined;
     let accumulatedReplayState = createEmbeddedRunReplayState();
     // Hoisted so the retry-limit error path can use the most recent API total.
     let lastTurnTotal: number | undefined;
@@ -313,6 +318,10 @@ export async function runPreparedEmbeddedLoop(
       const runtimeAuthRetry: boolean = authRetryPending;
       authRetryPending = false;
       attemptedThinking.add(thinkLevel);
+      const forceToolCallIdSanitization = shouldForceToolCallIdSanitization({
+        forceToolCallIdSanitizationApi,
+        modelApi: effectiveModel.api,
+      });
       const codexAppServerRecoveryRetryAvailable = hasCodexAppServerRecoveryRetryBudget({
         alreadyRetried: codexAppServerRecoveryRetries > 0,
         runLoopIterations,
@@ -327,6 +336,7 @@ export async function runPreparedEmbeddedLoop(
         replayState: accumulatedReplayState,
         provider,
         modelId,
+        forceToolCallIdSanitization,
         startupStagesEmitted,
         bootstrapPromptWarningSignaturesSeen,
         resolveRuntimeFallbackReason,
@@ -435,6 +445,19 @@ export async function runPreparedEmbeddedLoop(
         continue;
       }
       const { shouldSurfaceCodexCompletionTimeout } = recovery;
+
+      if (
+        shouldRetryWithForcedToolCallIdSanitization({
+          cloudCodeAssistFormatError: attempt.cloudCodeAssistFormatError,
+          errorMessage: attemptAssistant?.errorMessage,
+          forceToolCallIdSanitizationApi,
+          modelApi: effectiveModel.api,
+        })
+      ) {
+        forceToolCallIdSanitizationApi = effectiveModel.api;
+        lastRetryFailoverReason = "format";
+        continue;
+      }
 
       const assistantFailureOutcome = await handleEmbeddedAssistantFailure({
         runParams: params,

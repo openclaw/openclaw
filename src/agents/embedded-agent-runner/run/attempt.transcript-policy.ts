@@ -10,6 +10,34 @@ type AttemptRuntimeModelContext = NonNullable<
   Parameters<AgentRuntimePlan["transcript"]["resolvePolicy"]>[0]
 >;
 
+export function shouldForceToolCallIdSanitization(params: {
+  forceToolCallIdSanitizationApi?: string;
+  modelApi?: string;
+}): boolean {
+  return (
+    params.forceToolCallIdSanitizationApi !== undefined &&
+    params.forceToolCallIdSanitizationApi === params.modelApi
+  );
+}
+
+export function shouldRetryWithForcedToolCallIdSanitization(params: {
+  cloudCodeAssistFormatError: boolean;
+  errorMessage?: string;
+  forceToolCallIdSanitizationApi?: string;
+  modelApi?: string;
+}): boolean {
+  const isOpenAIResponsesApi =
+    params.modelApi === "openai-responses" ||
+    params.modelApi === "openai-chatgpt-responses" ||
+    params.modelApi === "azure-openai-responses";
+  return (
+    params.cloudCodeAssistFormatError &&
+    !shouldForceToolCallIdSanitization(params) &&
+    !isOpenAIResponsesApi &&
+    /tool[._\s-]+(?:use|call)[._\s-]+id/i.test(params.errorMessage ?? "")
+  );
+}
+
 /**
  * Adapts the RuntimePlan model context to the legacy provider-runtime model
  * shape used by transcript-policy fallbacks.
@@ -30,10 +58,11 @@ export function resolveAttemptTranscriptPolicy(params: {
   runtimePlanModelContext: AttemptRuntimeModelContext;
   provider: string;
   modelId: string;
+  forceToolCallIdSanitization?: boolean;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): TranscriptPolicy {
-  return (
+  const policy =
     params.runtimePlan?.transcript.resolvePolicy(params.runtimePlanModelContext) ??
     resolveTranscriptPolicy({
       modelApi: params.runtimePlanModelContext.modelApi,
@@ -43,6 +72,13 @@ export function resolveAttemptTranscriptPolicy(params: {
       workspaceDir: params.runtimePlanModelContext.workspaceDir,
       env: params.env ?? process.env,
       model: asProviderRuntimeModel(params.runtimePlanModelContext.model),
-    })
-  );
+    });
+  if (!params.forceToolCallIdSanitization) {
+    return policy;
+  }
+  return {
+    ...policy,
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict",
+  };
 }

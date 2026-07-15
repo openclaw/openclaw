@@ -32,6 +32,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   replayState: ReturnType<typeof createEmbeddedRunReplayState>;
   provider: string;
   modelId: string;
+  forceToolCallIdSanitization: boolean;
   startupStagesEmitted: boolean;
   bootstrapPromptWarningSignaturesSeen: string[];
   resolveRuntimeFallbackReason: () => string | null;
@@ -188,6 +189,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       agentHarnessId: runtime.agentHarness.id,
       expectedRuntimeArtifact: expectedHarnessArtifact?.artifact,
       runtimePlan,
+      forceToolCallIdSanitization: input.forceToolCallIdSanitization,
       model: runtime.effectiveModel,
       resolvedApiKey: resolvedStreamApiKey,
       authProfileId: runtime.lastProfileId,
