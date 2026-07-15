@@ -10,13 +10,7 @@ import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/string-coerce
 import { A2UI_PATH, injectCanvasRuntime, isA2uiPath } from "./a2ui-shared.js";
 import { resolveFileWithinRoot } from "./file-resolver.js";
 
-export {
-  A2UI_PATH,
-  CANVAS_HOST_PATH,
-  CANVAS_WS_PATH,
-  injectCanvasRuntime,
-  isA2uiPath,
-} from "./a2ui-shared.js";
+export { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./a2ui-shared.js";
 
 let cachedA2uiRootReal: string | null | undefined;
 let resolvingA2uiRoot: Promise<string | null> | null = null;

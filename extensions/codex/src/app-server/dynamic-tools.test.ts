@@ -349,9 +349,9 @@ describe("createCodexDynamicToolBridge", () => {
     // An accepted sessions_spawn launch carries details.status "accepted" with a
     // runId + childSessionKey. The launch succeeded (the child session was
     // accepted), so Codex must see a successful tool call, not an error.
-    // Regression for #96833: "accepted" was missing from the non-error status
-    // allowlist, so the launch was classified as an error and persisted with
-    // isError: true (and reported to Codex as success: false).
+    // Regression for #96833: the former Codex-only success allowlist omitted
+    // "accepted", so the launch was persisted with isError: true and reported
+    // to Codex as success: false.
     const onAgentToolResult = vi.fn();
     const bridge = createBridgeWithToolResult(
       "sessions_spawn",
@@ -407,8 +407,8 @@ describe("createCodexDynamicToolBridge", () => {
   });
 
   it("treats accepted goal tool statuses (created / updated) as successful dynamic tool calls", async () => {
-    // Same classifier-completeness class as the accepted spawn fix: create_goal /
-    // update_goal return details.status "created" / "updated", reach codex agents
+    // Same runtime-parity class as the accepted spawn fix: create_goal /
+    // update_goal return details.status "created" / "updated", reach Codex agents
     // through the dynamic-tool bridge, and must not be classified as errors (#96833).
     const createdBridge = createBridgeWithToolResult(
       "create_goal",
@@ -484,6 +484,52 @@ describe("createCodexDynamicToolBridge", () => {
     expect(onMissingResult).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "get_goal", isError: false }),
     );
+  });
+
+  it.each(["pending", "applied", "rejected", "quarantined", "stale"] as const)(
+    "treats Skill Workshop lifecycle status %s as a successful dynamic tool call",
+    async (status) => {
+      const onAgentToolResult = vi.fn();
+      const bridge = createBridgeWithToolResult(
+        "skill_workshop",
+        textToolResult(`Proposal is ${status}.`, { status }),
+      );
+
+      const result = await bridge.handleToolCall(
+        {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: `call-${status}`,
+          namespace: null,
+          tool: "skill_workshop",
+          arguments: { action: "inspect" },
+        },
+        { onAgentToolResult },
+      );
+
+      expect(result.success).toBe(true);
+      expect(onAgentToolResult).toHaveBeenCalledWith(
+        expect.objectContaining({ toolName: "skill_workshop", isError: false }),
+      );
+    },
+  );
+
+  it("treats arbitrary plugin-owned status metadata as successful by default", async () => {
+    const bridge = createBridgeWithToolResult(
+      "plugin_tool",
+      textToolResult("Plugin action completed.", { status: "plugin-defined-outcome" }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-plugin-defined-outcome",
+      namespace: null,
+      tool: "plugin_tool",
+      arguments: {},
+    });
+
+    expect(result.success).toBe(true);
   });
 
   it("keeps available and registered schemas paired with their tools", () => {
@@ -2381,7 +2427,7 @@ describe("createCodexDynamicToolBridge", () => {
     expectContextFields(callArg(handler, 0, 1, "middleware context"), { runtime: "codex" });
   });
 
-  it("keeps unrecognized non-success statuses fail-closed", async () => {
+  it("keeps shared failure statuses fail-closed", async () => {
     const onAgentToolResult = vi.fn();
     const bridge = createCodexDynamicToolBridge({
       tools: [

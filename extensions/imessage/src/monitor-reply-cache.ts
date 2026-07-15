@@ -565,21 +565,3 @@ export function isIMessageCurrentMessageInChat(params: {
     isPositiveChatMatch(entry, params.chatContext),
   );
 }
-
-export function resetIMessageShortIdState(options: { clearPersistent?: boolean } = {}): void {
-  imessageReplyCacheByMessageId.clear();
-  imessageShortIdToUuid.clear();
-  imessageUuidToShortId.clear();
-  imessageShortIdCounter = 0;
-  hydrated = false;
-  persistenceFailureLogged = false;
-  if (options.clearPersistent === false) {
-    return;
-  }
-  try {
-    openReplyCacheStore().clear();
-    openReplyCacheCounterStore().clear();
-  } catch {
-    // best-effort
-  }
-}

@@ -15,7 +15,7 @@ var (
 	listMarkerRe  = regexp.MustCompile(`^([ \t]*(?:>[ \t]*)*)([-+*]|[0-9]+[.)])([ \t]+)`)
 	// Hard validation stays limited to low-ambiguity composite literals. Plain numbers remain
 	// model-visible so target-language plurals and ordinals can change grammar without false failures.
-	numericValueRe = regexp.MustCompile(`(?:0[xX][0-9A-Za-z_]+|0[bB][0-9A-Za-z_]+|0[oO][0-9A-Za-z_]+|[0-9]+(?:\.[0-9]+)?(?::[0-9]+(?:\.[0-9]+)?)+|(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[eE][+-]?[0-9]+)`)
+	numericValueRe = regexp.MustCompile(`(?:0[xX][0-9A-Za-z_]+|0[bB][0-9A-Za-z_]+|0[oO][0-9A-Za-z_]+|[0-9]+(?:\.[0-9]+)?(?::[0-9]+(?:\.[0-9]+)?)+|[0-9]+(?:\.[0-9]+)?(?:/[0-9]+(?:\.[0-9]+)?)+|(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[eE][+-]?[0-9]+)`)
 )
 
 func maskMarkdown(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {

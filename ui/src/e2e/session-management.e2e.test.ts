@@ -18,6 +18,13 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const uiProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "thread-management",
+);
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -126,12 +133,11 @@ function actionPointerEvents(button: Locator): Promise<string> {
 }
 
 async function captureUiProof(page: Page, fileName: string) {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+  if (!captureUiProofEnabled) {
     return;
   }
-  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "thread-management");
-  await mkdir(artifactDir, { recursive: true });
-  await page.screenshot({ fullPage: true, path: path.join(artifactDir, fileName) });
+  await mkdir(uiProofArtifactDir, { recursive: true });
+  await page.screenshot({ fullPage: true, path: path.join(uiProofArtifactDir, fileName) });
 }
 
 describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
@@ -1242,6 +1248,74 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await expect.poll(() => chatsGroup.locator(".sidebar-recent-session").count()).toBe(1);
     } finally {
       await context.close();
+    }
+  });
+
+  it("pins a session dropped into the Pinned group", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      recordVideo: captureUiProofEnabled
+        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow(
+            "agent:main:pinned",
+            "Already pinned",
+            Date.parse("2026-07-01T16:00:00.000Z"),
+            {
+              pinned: true,
+            },
+          ),
+          sessionRow("agent:main:candidate", "Pin me", Date.parse("2026-07-01T15:59:00.000Z"), {
+            category: "Research",
+          }),
+        ]),
+        "sessions.patch": {},
+      },
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      sessionKey: "agent:main:candidate",
+      sessionGroups: ["Research"],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const pinnedGroup = page.locator('[data-session-section="pinned"]');
+      const researchGroup = page.locator('[data-session-section="category:Research"]');
+      await expect
+        .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
+        .toEqual(["Already pinned"]);
+      await captureUiProof(page, "sidebar-session-before-pinned-drop.png");
+      await researchGroup
+        .locator('.sidebar-recent-session[data-session-key="agent:main:candidate"]')
+        .dragTo(pinnedGroup);
+
+      const pinPatch = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:candidate" && params.pinned === true,
+      );
+      expect(requireRecord(pinPatch.params)).toMatchObject({
+        key: "agent:main:candidate",
+        pinned: true,
+      });
+      expect(requireRecord(pinPatch.params)).not.toHaveProperty("category");
+      await expect
+        .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
+        .toEqual(["Already pinned", "Pin me"]);
+      await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
+      await captureUiProof(page, "sidebar-session-dropped-into-pinned.png");
+    } finally {
+      await context.close();
+      if (proofVideo) {
+        await proofVideo.saveAs(path.join(uiProofArtifactDir, "sidebar-session-pinned-drop.webm"));
+      }
     }
   });
 

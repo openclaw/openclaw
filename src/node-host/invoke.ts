@@ -62,6 +62,7 @@ import type {
   SystemRunParams,
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
+import { buildNodeEventParams } from "./node-event-params.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
@@ -693,9 +694,11 @@ async function dispatchInvoke(
     });
     return;
   }
-
   try {
-    const pluginResult = await invokePlugin(command, frame.paramsJSON, runtime.pluginCommandIo);
+    const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
+    const invokeContext =
+      context && frame.sessionKey ? { ...context, sessionKey: frame.sessionKey } : context;
+    const pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
     if (pluginResult !== null) {
       await sendRawPayloadResult(client, frame, pluginResult);
       return;
@@ -1062,17 +1065,6 @@ function buildNodeInvokeResultParams(
     params.error = result.error;
   }
   return params;
-}
-
-function buildNodeEventParams(
-  event: string,
-  payload: unknown,
-): { event: string; payloadJSON: string | null } {
-  const payloadJSON = payload === undefined ? undefined : JSON.stringify(payload);
-  return {
-    event,
-    payloadJSON: typeof payloadJSON === "string" ? payloadJSON : null,
-  };
 }
 
 async function sendNodeEvent(client: NodeHostClient, event: string, payload: unknown) {

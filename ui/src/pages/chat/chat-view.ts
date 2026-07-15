@@ -219,6 +219,7 @@ export function renderChat(props: ChatProps) {
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
   const sidebarStacked = props.sidebarStacked === true;
+  const workspaceCollapsed = props.sessionWorkspace?.collapsed !== false;
   const workspaceDockBottom = Boolean(
     props.sessionWorkspace &&
     (props.sessionWorkspace.dock === "bottom" || props.sessionWorkspace.narrowLayout),
@@ -470,7 +471,7 @@ export function renderChat(props: ChatProps) {
         requestUpdate,
       )}
       <div
-        class="chat-workbench ${props.sessionWorkspace?.collapsed
+        class="chat-workbench ${workspaceCollapsed
           ? "chat-workbench--workspace-collapsed"
           : ""} ${workspaceDockBottom ? "chat-workbench--dock-bottom" : ""} ${tasksOpen &&
         !tasksDockBottom

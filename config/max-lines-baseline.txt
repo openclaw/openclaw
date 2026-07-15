@@ -127,7 +127,6 @@ extensions/feishu/src/outbound.test.ts
 extensions/feishu/src/outbound.ts
 extensions/feishu/src/reply-dispatcher.test.ts
 extensions/feishu/src/reply-dispatcher.ts
-extensions/feishu/src/send.ts
 extensions/feishu/src/streaming-card.test.ts
 extensions/file-transfer/src/shared/node-invoke-policy.ts
 extensions/firecrawl/src/firecrawl-tools.test.ts
@@ -245,7 +244,6 @@ extensions/qa-lab/src/cli.runtime.ts
 extensions/qa-lab/src/cli.ts
 extensions/qa-lab/src/confidence-report.ts
 extensions/qa-lab/src/evidence-gallery.ts
-extensions/qa-lab/src/evidence-summary.ts
 extensions/qa-lab/src/gateway-child.test.ts
 extensions/qa-lab/src/gateway-child.ts
 extensions/qa-lab/src/gateway-process-boundary.ts
@@ -275,7 +273,6 @@ extensions/qa-matrix/src/runners/contract/runtime.ts
 extensions/qa-matrix/src/runners/contract/scenario-catalog.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-approval.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts
-extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee.ts
 extensions/qa-matrix/src/runners/contract/scenario-runtime-room.ts
 extensions/qa-matrix/src/runners/contract/scenarios.test.ts
 extensions/qa-matrix/src/substrate/client.ts
@@ -564,7 +561,6 @@ src/agents/sessions/model-registry.ts
 src/agents/sessions/package-manager.ts
 src/agents/sessions/resource-loader.ts
 src/agents/sessions/session-manager.test.ts
-src/agents/sessions/session-manager.ts
 src/agents/sessions/settings-manager.ts
 src/agents/subagent-announce-delivery.test.ts
 src/agents/subagent-announce-delivery.ts
@@ -786,7 +782,6 @@ src/config/schema.test.ts
 src/config/schema.ts
 src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
-src/config/sessions/session-accessor.sqlite.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/session-accessor.ts
 src/config/sessions/sessions.test.ts

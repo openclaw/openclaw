@@ -1,5 +1,5 @@
 ---
-summary: "Adds OpenCode model provider and native session catalog support to OpenClaw."
+summary: "Adds OpenCode model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the opencode plugin
 title: "OpenCode plugin"
@@ -7,7 +7,7 @@ title: "OpenCode plugin"
 
 # OpenCode plugin
 
-Adds OpenCode model provider and native session catalog support to OpenClaw.
+Adds OpenCode model provider support to OpenClaw.
 
 ## Distribution
 
@@ -16,7 +16,9 @@ Adds OpenCode model provider and native session catalog support to OpenClaw.
 
 ## Surface
 
-providers: opencode; contracts: mediaUnderstandingProviders; session catalog: opencode
+providers: opencode; contracts: mediaUnderstandingProviders
+
+<!-- openclaw-plugin-reference:manual-start -->
 
 ## Native sessions
 
@@ -29,6 +31,8 @@ Gateway credentials.
 
 Turn **OpenCode Session Catalog** off under **Config > Plugins > OpenCode** to
 disable discovery. It is enabled by default.
+
+<!-- openclaw-plugin-reference:manual-end -->
 
 ## Related docs
 
