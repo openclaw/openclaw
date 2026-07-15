@@ -6,6 +6,7 @@ import {
   getLogbookState,
   loadLogbook,
   loadLogbookStandup,
+  runLogbookAnalysisNow,
   stopLogbookPolling,
   type LogbookStatusPayload,
 } from "./logbook-controller.ts";
@@ -135,6 +136,196 @@ describe("Logbook controller", () => {
     expect(request.mock.calls.filter(([method]) => method === "logbook.days")).toHaveLength(2);
     expect(request.mock.calls.filter(([method]) => method === "logbook.timeline")).toHaveLength(2);
     expect(state.timeline?.cards[0]?.title).toBe("Resumed poll");
+  });
+
+  it("retires a pending poll refresh when the client changes", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    hosts.push(host);
+    const state = getLogbookState(host);
+    state.day = "2026-07-04";
+    state.dayPinned = true;
+    const oldStatus = deferred<unknown>();
+    const oldDays = deferred<unknown>();
+    const oldTimeline = deferred<unknown>();
+    const oldResponses = new Map([
+      ["logbook.status", oldStatus],
+      ["logbook.days", oldDays],
+      ["logbook.timeline", oldTimeline],
+    ]);
+    const oldRequest = vi.fn((method: string) => {
+      const response = oldResponses.get(method);
+      if (!response) {
+        throw new Error(`Unexpected old-client request: ${method}`);
+      }
+      return response.promise;
+    });
+    const newRequest = vi.fn(async (method: string) => {
+      if (method === "logbook.status") {
+        return statusFor("2026-07-04");
+      }
+      if (method === "logbook.days") {
+        return { days: [] };
+      }
+      return timelineFor("2026-07-04", "New client");
+    });
+
+    configureLogbookPolling(state, clientWithRequest(oldRequest), true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(oldRequest).toHaveBeenCalledTimes(3);
+
+    configureLogbookPolling(state, clientWithRequest(newRequest), true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(newRequest).toHaveBeenCalledTimes(3);
+    expect(state.timeline?.cards[0]?.title).toBe("New client");
+
+    oldStatus.resolve(statusFor("2026-07-04"));
+    oldDays.resolve({ days: [] });
+    oldTimeline.resolve(timelineFor("2026-07-04", "Retired client"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(state.timeline?.cards[0]?.title).toBe("New client");
+  });
+
+  it("shares the background refresh owner with analysis completion", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    hosts.push(host);
+    const state = getLogbookState(host);
+    state.day = "2026-07-04";
+    state.dayPinned = true;
+    const status = deferred<unknown>();
+    const days = deferred<unknown>();
+    const timeline = deferred<unknown>();
+    const pending = new Map([
+      ["logbook.status", status],
+      ["logbook.days", days],
+      ["logbook.timeline", timeline],
+    ]);
+    const request = vi.fn((method: string) => {
+      if (method === "logbook.analyze.now") {
+        return Promise.resolve({ started: true });
+      }
+      const response = pending.get(method);
+      if (response) {
+        pending.delete(method);
+        return response.promise;
+      }
+      if (method === "logbook.status") {
+        return Promise.resolve(statusFor("2026-07-04"));
+      }
+      if (method === "logbook.days") {
+        return Promise.resolve({ days: [] });
+      }
+      return Promise.resolve(timelineFor("2026-07-04", "Resumed poll"));
+    });
+    const client = clientWithRequest(request);
+
+    configureLogbookPolling(state, client, true);
+    await runLogbookAnalysisNow(state, client);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    status.resolve(statusFor("2026-07-04"));
+    days.resolve({ days: [] });
+    timeline.resolve(timelineFor("2026-07-04", "Analysis refresh"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state.timeline?.cards[0]?.title).toBe("Analysis refresh");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(request).toHaveBeenCalledTimes(7);
+    expect(state.timeline?.cards[0]?.title).toBe("Resumed poll");
+  });
+
+  it("queues an analysis refresh behind an in-flight poll", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    hosts.push(host);
+    const state = getLogbookState(host);
+    state.day = "2026-07-04";
+    state.dayPinned = true;
+    const status = deferred<unknown>();
+    const days = deferred<unknown>();
+    const timeline = deferred<unknown>();
+    const pending = new Map([
+      ["logbook.status", status],
+      ["logbook.days", days],
+      ["logbook.timeline", timeline],
+    ]);
+    const request = vi.fn((method: string) => {
+      if (method === "logbook.analyze.now") {
+        return Promise.resolve({ started: true });
+      }
+      const response = pending.get(method);
+      if (response) {
+        pending.delete(method);
+        return response.promise;
+      }
+      if (method === "logbook.status") {
+        return Promise.resolve(statusFor("2026-07-04"));
+      }
+      if (method === "logbook.days") {
+        return Promise.resolve({ days: [] });
+      }
+      return Promise.resolve(timelineFor("2026-07-04", "Post-analysis refresh"));
+    });
+    const client = clientWithRequest(request);
+
+    configureLogbookPolling(state, client, true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(request).toHaveBeenCalledTimes(3);
+
+    await runLogbookAnalysisNow(state, client);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    status.resolve(statusFor("2026-07-04"));
+    days.resolve({ days: [] });
+    timeline.resolve(timelineFor("2026-07-04", "Pre-analysis refresh"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(request).toHaveBeenCalledTimes(7);
+    expect(state.timeline?.cards[0]?.title).toBe("Post-analysis refresh");
+  });
+
+  it("does not refresh a retired client after analysis settles", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    hosts.push(host);
+    const state = getLogbookState(host);
+    state.day = "2026-07-04";
+    state.dayPinned = true;
+    const analysis = deferred<unknown>();
+    const oldRequest = vi.fn((method: string) => {
+      if (method !== "logbook.analyze.now") {
+        throw new Error(`Unexpected retired-client request: ${method}`);
+      }
+      return analysis.promise;
+    });
+    const newRequest = vi.fn(async (method: string) => {
+      if (method === "logbook.status") {
+        return statusFor("2026-07-04");
+      }
+      if (method === "logbook.days") {
+        return { days: [] };
+      }
+      return timelineFor("2026-07-04", "New client");
+    });
+    const oldClient = clientWithRequest(oldRequest);
+
+    configureLogbookPolling(state, oldClient, true);
+    const action = runLogbookAnalysisNow(state, oldClient);
+    configureLogbookPolling(state, clientWithRequest(newRequest), true);
+
+    analysis.resolve({ started: true });
+    await action;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(oldRequest).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(newRequest).toHaveBeenCalledTimes(3);
+    expect(state.timeline?.cards[0]?.title).toBe("New client");
   });
 
   it("does not let an older day load overwrite a newer selection", async () => {

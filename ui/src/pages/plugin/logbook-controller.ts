@@ -55,6 +55,11 @@ type LogbookDaysPayload = {
   days: Array<{ day: string; cards: number; firstMs: number; lastMs: number }>;
 };
 
+type LogbookBackgroundRefresh = {
+  client: GatewayBrowserClient;
+  lifecycleGeneration: number;
+};
+
 export type LogbookUiState = {
   day: string;
   /** True once the user navigated to a specific day; unpinned views follow the gateway's today. */
@@ -74,10 +79,13 @@ export type LogbookUiState = {
   askAnswer: string | null;
   askLoading: boolean;
   actionPending: boolean;
-  // Foreground loads advance the result owner; silent loads share it so they
-  // cannot leave a foreground load stuck in its loading state.
+  // Every load advances result ownership; foreground loading state has its own
+  // owner so a superseded request cannot clear a newer spinner.
   loadGeneration: number;
-  pollRefresh: Promise<void> | null;
+  loadingGeneration: number | null;
+  lifecycleGeneration: number;
+  backgroundRefresh: Promise<void> | null;
+  backgroundRefreshQueued: LogbookBackgroundRefresh | null;
   pollTimer: ReturnType<typeof globalThis.setInterval> | null;
   pollClient: GatewayBrowserClient | null;
   requestUpdate: (() => void) | null;
@@ -122,7 +130,10 @@ export function getLogbookState(host: object): LogbookUiState {
       askLoading: false,
       actionPending: false,
       loadGeneration: 0,
-      pollRefresh: null,
+      loadingGeneration: null,
+      lifecycleGeneration: 0,
+      backgroundRefresh: null,
+      backgroundRefreshQueued: null,
       pollTimer: null,
       pollClient: null,
       requestUpdate: null,
@@ -160,9 +171,10 @@ export async function loadLogbook(
   } else if (opts?.today) {
     state.dayPinned = false;
   }
-  const generation = opts?.silent ? state.loadGeneration : ++state.loadGeneration;
+  const generation = ++state.loadGeneration;
   const requestedDay = state.day;
   if (!opts?.silent) {
+    state.loadingGeneration = generation;
     state.loading = true;
     state.error = null;
     notify(state);
@@ -199,13 +211,82 @@ export async function loadLogbook(
       state.error = err instanceof Error ? err.message : String(err);
     }
   } finally {
-    if (generation === state.loadGeneration) {
-      if (!opts?.silent) {
-        state.loading = false;
-      }
+    let shouldNotify = generation === state.loadGeneration;
+    if (state.loadingGeneration === generation) {
+      state.loadingGeneration = null;
+      state.loading = false;
+      shouldNotify = true;
+    }
+    if (shouldNotify) {
       notify(state);
     }
+    drainQueuedLogbookRefresh(state);
   }
+}
+
+function retireLogbookLoads(state: LogbookUiState): void {
+  // A stopped or rebound view must not accept results from its retired client,
+  // and an abandoned background request must not block the next polling epoch.
+  state.loadGeneration += 1;
+  state.lifecycleGeneration += 1;
+  state.loadingGeneration = null;
+  state.loading = false;
+  state.backgroundRefresh = null;
+  state.backgroundRefreshQueued = null;
+}
+
+function isLogbookRefreshCurrent(
+  state: LogbookUiState,
+  refresh: LogbookBackgroundRefresh,
+): boolean {
+  return (
+    refresh.lifecycleGeneration === state.lifecycleGeneration &&
+    (state.pollClient === null || state.pollClient === refresh.client)
+  );
+}
+
+function drainQueuedLogbookRefresh(state: LogbookUiState): void {
+  if (state.loading || state.backgroundRefresh) {
+    return;
+  }
+  const queued = state.backgroundRefreshQueued;
+  state.backgroundRefreshQueued = null;
+  if (!queued || !isLogbookRefreshCurrent(state, queued)) {
+    return;
+  }
+  void refreshLogbookSilently(state, queued.client, {
+    lifecycleGeneration: queued.lifecycleGeneration,
+    required: true,
+  });
+}
+
+function refreshLogbookSilently(
+  state: LogbookUiState,
+  client: GatewayBrowserClient,
+  opts?: { lifecycleGeneration?: number; required?: boolean },
+): Promise<void> {
+  const refreshRequest = {
+    client,
+    lifecycleGeneration: opts?.lifecycleGeneration ?? state.lifecycleGeneration,
+  };
+  if (!isLogbookRefreshCurrent(state, refreshRequest)) {
+    return Promise.resolve();
+  }
+  if (state.loading || state.backgroundRefresh) {
+    if (opts?.required) {
+      state.backgroundRefreshQueued = refreshRequest;
+    }
+    return state.backgroundRefresh ?? Promise.resolve();
+  }
+  const refresh = loadLogbook(state, client, { silent: true });
+  state.backgroundRefresh = refresh;
+  void refresh.finally(() => {
+    if (state.backgroundRefresh === refresh) {
+      state.backgroundRefresh = null;
+    }
+    drainQueuedLogbookRefresh(state);
+  });
+  return refresh;
 }
 
 /** Stops background polling; wired into tab-switch and disconnect cleanup. */
@@ -217,6 +298,7 @@ export function stopLogbookPolling(host: object): void {
   }
   if (state) {
     state.pollClient = null;
+    retireLogbookLoads(state);
   }
 }
 
@@ -231,6 +313,7 @@ export function configureLogbookPolling(
       state.pollTimer = null;
     }
     state.pollClient = null;
+    retireLogbookLoads(state);
     return;
   }
   if (state.pollTimer && state.pollClient === client) {
@@ -239,20 +322,12 @@ export function configureLogbookPolling(
   if (state.pollTimer) {
     clearInterval(state.pollTimer);
   }
+  retireLogbookLoads(state);
   state.pollClient = client;
   state.pollTimer = setInterval(() => {
-    // Keep one silent batch in flight so slow gateway responses cannot stack
-    // another status/days/timeline batch on every interval.
-    if (state.loading || state.pollRefresh) {
-      return;
-    }
-    const refresh = loadLogbook(state, client, { silent: true });
-    state.pollRefresh = refresh;
-    void refresh.finally(() => {
-      if (state.pollRefresh === refresh) {
-        state.pollRefresh = null;
-      }
-    });
+    // All background refresh sources share one owner so slow gateway responses
+    // cannot stack another status/days/timeline batch on every interval.
+    void refreshLogbookSilently(state, client);
   }, POLL_INTERVAL_MS);
 }
 
@@ -320,6 +395,7 @@ export async function runLogbookAnalysisNow(
   }
   state.actionPending = true;
   notify(state);
+  const lifecycleGeneration = state.lifecycleGeneration;
   try {
     const result = await client.request<{ started: boolean; reason?: string }>(
       "logbook.analyze.now",
@@ -333,7 +409,7 @@ export async function runLogbookAnalysisNow(
   } finally {
     state.actionPending = false;
     notify(state);
-    void loadLogbook(state, client, { silent: true });
+    void refreshLogbookSilently(state, client, { lifecycleGeneration, required: true });
   }
 }
 
