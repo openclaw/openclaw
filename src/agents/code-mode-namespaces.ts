@@ -35,7 +35,7 @@ const RESERVED_NAMESPACE_GLOBALS = new Set([
 const CODE_MODE_NAMESPACE_REGISTRY_KEY = Symbol.for("openclaw.codeMode.namespaces");
 
 /** Runtime context passed to plugin code-mode namespace scope factories. */
-export type CodeModeNamespaceContext = {
+type CodeModeNamespaceContext = {
   config?: unknown;
   runtimeConfig?: unknown;
   agentId?: string;
@@ -48,13 +48,13 @@ export type CodeModeNamespaceContext = {
 };
 
 /** Object installed into a code-mode namespace global. */
-export type CodeModeNamespaceScope = Record<string, unknown>;
+type CodeModeNamespaceScope = Record<string, unknown>;
 
 /** Maps JavaScript namespace function arguments into a tool input payload. */
-export type CodeModeNamespaceToolInputMapper = (args: unknown[]) => unknown;
+type CodeModeNamespaceToolInputMapper = (args: unknown[]) => unknown;
 
 /** Marker object used inside namespace scopes to represent a tool invocation. */
-export type CodeModeNamespaceToolCall = {
+type CodeModeNamespaceToolCall = {
   readonly [CODE_MODE_NAMESPACE_TOOL_CALL]: true;
   readonly toolName: string;
   readonly catalogId?: string;
@@ -63,7 +63,7 @@ export type CodeModeNamespaceToolCall = {
 };
 
 /** Plugin registration contract for one code-mode namespace. */
-export type CodeModeNamespaceRegistration = {
+type CodeModeNamespaceRegistration = {
   id: string;
   globalName: string;
   description?: string;
@@ -75,7 +75,7 @@ export type CodeModeNamespaceRegistration = {
 };
 
 /** Registration with the owning plugin id attached. */
-export type RegisteredCodeModeNamespace = CodeModeNamespaceRegistration & {
+type RegisteredCodeModeNamespace = CodeModeNamespaceRegistration & {
   pluginId: string;
 };
 

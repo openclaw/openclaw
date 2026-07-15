@@ -1123,6 +1123,12 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status_due
 CREATE INDEX IF NOT EXISTS idx_commitments_scope_dedupe
   ON commitments(agent_id, session_key, channel, dedupe_key, status);
 
+CREATE INDEX IF NOT EXISTS idx_commitments_agent_due
+  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
+
+CREATE INDEX IF NOT EXISTS idx_commitments_agent_sent
+  ON commitments(agent_id, status, sent_at_ms, session_key);
+
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,

@@ -1381,9 +1381,12 @@ function createCompactNodeTestShardBundles(options = {}) {
         ...(bin.hasWholeConfigGroup
           ? { timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES }
           : {}),
-        // Exclusive bins hold spawn/signal-timing suites; the shard runner
-        // must not overlap them with a concurrent sibling Vitest run.
-        ...(bin.exclusive ? { planConcurrency: 1 } : {}),
+        // 4 vCPU bins run their plans serially: overlapping two Vitest runs
+        // there starves process-spawning tests (worker-startup timeouts in
+        // core-runtime-infra-process, tooling process-group waits), and the
+        // packed weights are contention-inflated so serializing is roughly
+        // wall-neutral. Exclusive spawn/signal bins stay serial everywhere.
+        ...(bin.exclusive || runnerClass === "small" ? { planConcurrency: 1 } : {}),
       });
     }
   }

@@ -133,6 +133,7 @@ describe("qa suite", () => {
       gateway: env.gateway,
       outputDir: "/tmp/qa-output",
       timeoutMs: 45_000,
+      waitForConfigRestartSettle: expect.any(Function),
     });
     expect(scenarioStep).not.toHaveBeenCalled();
   });

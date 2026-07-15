@@ -9,7 +9,6 @@ import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveProfileUnusableUntil } from "./usage-state.js";
 import {
-  testing as authProfileUsageTesting,
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
@@ -18,6 +17,7 @@ import {
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
 } from "./usage.js";
+import { testing as authProfileUsageTesting } from "./usage.test-support.js";
 
 const storeMocks = vi.hoisted(() => ({
   saveAuthProfileStore: vi.fn(),

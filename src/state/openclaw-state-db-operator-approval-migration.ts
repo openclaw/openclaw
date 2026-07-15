@@ -1,5 +1,6 @@
 // Doctor-only repair for the operator approval kind constraint.
 import type { DatabaseSync } from "node:sqlite";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
@@ -128,8 +129,7 @@ function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
   // The copy/drop/rename must be atomic: a crash after DROP but before RENAME
   // would strand the rows in the temp table, and the next schema bootstrap would
   // recreate an empty canonical table and abandon them.
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  runSqliteImmediateTransactionSync(db, () => {
     db.exec(canonicalCreateSql());
     db.exec(`
       INSERT INTO operator_approvals_migration_new (${columns})
@@ -138,11 +138,7 @@ function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
       ALTER TABLE operator_approvals_migration_new RENAME TO operator_approvals;
     `);
     db.exec(OPENCLAW_STATE_SCHEMA_SQL);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
   return true;
 }
 

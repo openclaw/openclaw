@@ -8,7 +8,7 @@ import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
-} from "../../agents/subagent-registry.js";
+} from "../../agents/subagent-registry.test-helpers.js";
 import {
   getDetachedTaskLifecycleRuntime,
   setDetachedTaskLifecycleRuntime,

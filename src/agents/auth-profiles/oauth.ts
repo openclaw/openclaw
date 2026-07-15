@@ -161,7 +161,7 @@ function extractErrorMessage(error: unknown): string {
 }
 
 /** Detect provider errors caused by single-use OAuth refresh token races. */
-export function isRefreshTokenReusedError(error: unknown): boolean {
+function isRefreshTokenReusedError(error: unknown): boolean {
   const message = normalizeLowercaseStringOrEmpty(extractErrorMessage(error));
   return (
     message.includes("refresh_token_reused") ||
@@ -234,8 +234,15 @@ const oauthManager = createOAuthManager({
 });
 
 /** Clear in-process OAuth refresh queues between isolated tests. */
-export function resetOAuthRefreshQueuesForTest(): void {
+function resetOAuthRefreshQueuesForTest(): void {
   oauthManager.resetRefreshQueuesForTest();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.oauthTestApi")] = {
+    isRefreshTokenReusedError,
+    resetOAuthRefreshQueuesForTest,
+  };
 }
 
 async function tryResolveOAuthProfile(

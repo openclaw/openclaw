@@ -46,7 +46,7 @@ const authProfileUsageDeps = {
 export { setAuthProfileFailureHook };
 
 /** Test-only dependency injection for usage persistence hooks. */
-export const testing = {
+const testing = {
   setDepsForTest(
     overrides: Partial<{
       updateAuthProfileStoreWithLock: typeof updateAuthProfileStoreWithLock;
@@ -56,6 +56,10 @@ export const testing = {
       overrides?.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
   },
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.authProfileUsageTestApi")] =
+    testing;
+}
 
 function logDroppedAuthProfileBookkeeping(kind: string, profileId: string): void {
   authProfileUsageLog.warn("dropped auth profile bookkeeping after locked store update failed", {

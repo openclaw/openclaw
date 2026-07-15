@@ -83,10 +83,10 @@ vi.mock("./subagent-registry.store.js", () => ({
 }));
 
 describe("subagent registry archive behavior", () => {
-  let mod: typeof import("./subagent-registry.js");
+  let mod: typeof import("./subagent-registry.test-helpers.js");
 
   beforeAll(async () => {
-    mod = await import("./subagent-registry.js");
+    mod = await import("./subagent-registry.test-helpers.js");
   });
 
   const setRegistryTestDeps = (

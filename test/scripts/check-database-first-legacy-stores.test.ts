@@ -185,6 +185,19 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
   });
 
+  it("flags runtime writes to the retired commitments JSON store", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "commitments", "commitments.json"), "{}\\n");
+      `,
+      "src/commitments/file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
   it("flags runtime writes to retired system-agent rescue approval stores", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `

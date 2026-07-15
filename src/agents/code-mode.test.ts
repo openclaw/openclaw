@@ -8,7 +8,6 @@ import {
   clearCodeModeNamespacesForPlugin,
   clearCodeModeNamespacesForTest,
   createCodeModeNamespaceTool,
-  type CodeModeNamespaceRegistration,
   listCodeModeNamespaces,
   registerCodeModeNamespaceForPlugin,
 } from "./code-mode-namespaces.js";
@@ -28,6 +27,8 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+
+type CodeModeNamespaceRegistration = Parameters<typeof registerCodeModeNamespaceForPlugin>[1];
 
 function fakeTool(name: string, description: string): AnyAgentTool {
   // Minimal tool shape keeps Code Mode catalog tests runtime-free.
