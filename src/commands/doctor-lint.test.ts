@@ -265,6 +265,110 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+  it("reports active agent model refs that drift from explicit runtime policies", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              model: {
+                primary: "openai-codex/gpt-5.5",
+                fallbacks: ["openai-codex/gpt-5.3-codex"],
+              },
+              heartbeat: {
+                model: "openai-codex/gpt-5.4-mini",
+              },
+              models: {
+                "openai/gpt-5.5": {
+                  agentRuntime: { id: "pi" },
+                },
+                "openai/gpt-5.3-codex": {
+                  agentRuntime: { id: "pi" },
+                },
+              },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      path: "/tmp/openclaw.json",
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        onlyIds: ["core/doctor/agent-model-runtime-policies"],
+      });
+
+      expect(exitCode).toBe(1);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(payload).toMatchObject({
+        ok: false,
+        checksRun: 1,
+      });
+      expect(payload.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "core/doctor/agent-model-runtime-policies",
+            severity: "warning",
+            path: "agents.list.main.model.primary",
+            target: "openai-codex/gpt-5.5",
+          }),
+          expect.objectContaining({
+            checkId: "core/doctor/agent-model-runtime-policies",
+            severity: "warning",
+            path: "agents.list.main.models.openai/gpt-5.5.agentRuntime.id",
+            target: "openai/gpt-5.5",
+          }),
+        ]),
+      );
+      expect(payload.findings).toHaveLength(5);
+      expect(payload.findings[0].message).toContain("no matching model key");
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it("accepts bare model keys used by runtime policy resolution", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            models: {
+              "gpt-5.5": {
+                agentRuntime: { id: "pi" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      path: "/tmp/openclaw.json",
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        onlyIds: ["core/doctor/agent-model-runtime-policies"],
+      });
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+        ok: true,
+        checksRun: 1,
+        findings: [],
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it("fails informational findings when severity-min is explicit", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
