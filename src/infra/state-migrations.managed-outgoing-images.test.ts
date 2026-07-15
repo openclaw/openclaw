@@ -22,7 +22,9 @@ import {
 } from "./state-migrations.managed-outgoing-images.js";
 
 type LegacyRecord = Omit<ManagedImageRecord, "original"> & {
-  original: Omit<ManagedImageRecord["original"], "mediaId" | "mediaSubdir"> & { path: string };
+  original: Omit<ManagedImageRecord["original"], "mediaId" | "mediaRoot" | "mediaSubdir"> & {
+    path: string;
+  };
 };
 
 function resolveLegacyManagedOutgoingImageRecordsDir(stateDir: string): string {
@@ -106,6 +108,7 @@ describe("legacy managed outgoing image migration", () => {
       ...legacy.record,
       original: {
         ...legacy.record.original,
+        mediaRoot: path.join(stateDir, "media"),
         mediaId: path.basename(legacy.originalPath),
         mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
         path: undefined,
@@ -121,7 +124,8 @@ describe("legacy managed outgoing image migration", () => {
         .select("record_json")
         .where("attachment_id", "=", legacy.record.attachmentId),
     );
-    expect(row?.record_json).not.toContain(stateDir);
+    expect(row?.record_json).not.toContain(legacy.originalPath);
+    expect(row?.record_json).not.toContain('"path"');
   });
 
   it("recovers an interrupted Doctor source claim", async () => {
@@ -199,6 +203,7 @@ describe("legacy managed outgoing image migration", () => {
         retentionClass: "history",
         alt: "Different",
         original: {
+          mediaRoot: path.join(stateDir, "media"),
           mediaId: path.basename(second.originalPath),
           mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
           contentType: "image/png",

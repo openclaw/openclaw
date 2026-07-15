@@ -642,6 +642,7 @@ export interface ManagedOutgoingImageRecords {
   original_filename: string | null;
   original_height: number | null;
   original_media_id: string;
+  original_media_root: string;
   original_media_subdir: string;
   original_size_bytes: number | null;
   original_width: number | null;

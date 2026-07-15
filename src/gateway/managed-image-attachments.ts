@@ -16,7 +16,7 @@ import {
   getImageMetadata,
   readImageProbeFromHeader,
 } from "../media/media-services.js";
-import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
+import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
@@ -226,8 +226,9 @@ async function resizeManagedImageBufferToLimits(params: {
   };
 }
 
-function resolveManagedImageOriginalPath(record: ManagedImageRecord, stateDir = resolveStateDir()) {
+function resolveManagedImageOriginalPath(record: ManagedImageRecord) {
   if (
+    !path.isAbsolute(record.original.mediaRoot) ||
     record.original.mediaSubdir !== MANAGED_OUTGOING_ORIGINALS_SUBDIR ||
     !record.original.mediaId ||
     record.original.mediaId.includes("/") ||
@@ -236,11 +237,15 @@ function resolveManagedImageOriginalPath(record: ManagedImageRecord, stateDir = 
   ) {
     throw new Error("Managed image record has an unsafe media identity");
   }
-  return path.join(stateDir, "media", record.original.mediaSubdir, record.original.mediaId);
+  return path.join(record.original.mediaRoot, record.original.mediaSubdir, record.original.mediaId);
 }
 
 function resolveManagedImageOriginalsDir(stateDir: string): string {
-  return path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR);
+  const runtimeMediaRoot =
+    path.resolve(stateDir) === path.resolve(resolveStateDir())
+      ? getMediaDir()
+      : path.join(stateDir, "media");
+  return path.join(runtimeMediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR);
 }
 
 async function hasUnmigratedManagedImageMetadata(stateDir: string): Promise<boolean> {
@@ -392,7 +397,7 @@ async function deleteManagedImageRecordArtifacts(
     return { deletedRecord: false, deletedFileCount: 0 };
   }
   try {
-    await fs.rm(resolveManagedImageOriginalPath(record, stateDir), { force: true });
+    await fs.rm(resolveManagedImageOriginalPath(record), { force: true });
   } catch {
     // Keep the durable cleanup claim so the next sweep retries this exact file.
     return { deletedRecord: false, deletedFileCount: 0 };
@@ -974,6 +979,7 @@ export async function createManagedOutgoingImageBlocks(params: {
         retentionClass: params.messageId ? "history" : "transient",
         alt,
         original: {
+          mediaRoot: path.dirname(path.dirname(path.dirname(path.resolve(savedOriginal.path)))),
           mediaId: savedOriginal.id,
           mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
           contentType: savedOriginalContentType,
@@ -1101,7 +1107,7 @@ export async function handleManagedOutgoingImageHttpRequest(
   try {
     body = (
       await readLocalFileSafely({
-        filePath: resolveManagedImageOriginalPath(record, opts.stateDir),
+        filePath: resolveManagedImageOriginalPath(record),
       })
     ).buffer;
   } catch {

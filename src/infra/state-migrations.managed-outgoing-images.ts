@@ -11,6 +11,7 @@ import {
   type ManagedImageRecord,
   type ManagedImageRecordDatabase,
 } from "../gateway/managed-image-record-store.js";
+import { getMediaDir } from "../media/store.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -230,9 +231,16 @@ function parseLegacyManagedImageRecord(params: {
     throw new Error(`legacy managed image record is invalid: ${params.snapshot.sourcePath}`);
   }
 
-  const originalsDir = path.resolve(params.stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR);
   const resolvedOriginalPath = path.resolve(originalPath);
-  if (path.dirname(resolvedOriginalPath) !== originalsDir) {
+  const mediaRoot = path.dirname(path.dirname(path.dirname(resolvedOriginalPath)));
+  const allowedMediaRoots = new Set([
+    path.resolve(params.stateDir, "media"),
+    path.resolve(getMediaDir()),
+  ]);
+  if (
+    !allowedMediaRoots.has(mediaRoot) ||
+    path.dirname(resolvedOriginalPath) !== path.join(mediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR)
+  ) {
     throw new Error("legacy managed image original is outside managed outgoing storage");
   }
   const mediaId = path.basename(resolvedOriginalPath);
@@ -253,6 +261,7 @@ function parseLegacyManagedImageRecord(params: {
       ...(retentionClass === "transient" || retentionClass === "history" ? { retentionClass } : {}),
       alt,
       original: {
+        mediaRoot,
         mediaId,
         mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
         contentType,

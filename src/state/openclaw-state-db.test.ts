@@ -19,6 +19,7 @@ import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sq
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
+  assertOpenClawStateDatabaseForMaintenance,
   closeOpenClawStateDatabaseForTest,
   detectOpenClawStateDatabaseSchemaMigrations,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -1982,7 +1983,7 @@ describe("openclaw state database", () => {
     expect(migratedSql.sql).toContain("'system-agent'");
   });
 
-  it("adds managed-image lifecycle columns before creating canonical indexes", () => {
+  it("adds managed-image typed columns before creating canonical indexes", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = openOpenClawStateDatabase(options).path;
@@ -1995,6 +1996,7 @@ describe("openclaw state database", () => {
       DROP INDEX idx_managed_outgoing_images_message;
       DROP INDEX idx_managed_outgoing_images_agent_session;
       DROP INDEX idx_managed_outgoing_images_agent_message;
+      ALTER TABLE managed_outgoing_image_records DROP COLUMN original_media_root;
       ALTER TABLE managed_outgoing_image_records DROP COLUMN agent_id;
       ALTER TABLE managed_outgoing_image_records DROP COLUMN cleanup_pending;
     `);
@@ -2003,9 +2005,13 @@ describe("openclaw state database", () => {
     const reopened = openOpenClawStateDatabase(options);
     const columns = reopened.db
       .prepare("PRAGMA table_info(managed_outgoing_image_records)")
-      .all() as Array<{ name?: unknown }>;
+      .all() as Array<{ name?: unknown; notnull?: unknown }>;
+    expect(columns).toContainEqual(
+      expect.objectContaining({ name: "original_media_root", notnull: 1 }),
+    );
     expect(columns).toContainEqual(expect.objectContaining({ name: "agent_id" }));
     expect(columns).toContainEqual(expect.objectContaining({ name: "cleanup_pending" }));
+    assertOpenClawStateDatabaseForMaintenance(reopened.db, { pathname: reopened.path });
     const indexes = reopened.db
       .prepare("PRAGMA index_list(managed_outgoing_image_records)")
       .all() as Array<{ name?: unknown }>;

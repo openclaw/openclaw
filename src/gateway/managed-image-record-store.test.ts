@@ -34,6 +34,7 @@ function record(overrides: Partial<ManagedImageRecord> = {}): ManagedImageRecord
     retentionClass: "transient",
     alt: "Cat",
     original: {
+      mediaRoot: path.join(os.tmpdir(), "managed-image-media"),
       mediaId: "cat---11111111-1111-4111-8111-111111111111.png",
       mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
       contentType: "image/png",

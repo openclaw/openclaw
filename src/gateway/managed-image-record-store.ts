@@ -15,6 +15,7 @@ import {
 export const MANAGED_OUTGOING_ORIGINALS_SUBDIR = "outgoing/originals";
 
 type ManagedImageRecordVariant = {
+  mediaRoot: string;
   mediaId: string;
   mediaSubdir: string;
   contentType: string;
@@ -69,6 +70,7 @@ export function managedImageRecordToRow(record: ManagedImageRecord): ManagedImag
     updated_at: record.updatedAt ?? null,
     retention_class: record.retentionClass ?? null,
     alt: record.alt,
+    original_media_root: record.original.mediaRoot,
     original_media_id: record.original.mediaId,
     original_media_subdir: record.original.mediaSubdir,
     original_content_type: record.original.contentType,
@@ -93,6 +95,7 @@ export function managedImageRecordFromRow(row: ManagedImageRecordRow): ManagedIm
       : {}),
     alt: row.alt,
     original: {
+      mediaRoot: row.original_media_root,
       mediaId: row.original_media_id,
       mediaSubdir: row.original_media_subdir,
       contentType: row.original_content_type,

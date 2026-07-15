@@ -140,6 +140,7 @@ async function createFixture(
       createdAt: new Date().toISOString(),
       alt: "Cat",
       original: {
+        mediaRoot: path.join(stateDir, "media"),
         mediaId: filename,
         mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
         contentType: "image/png",
@@ -314,6 +315,44 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),
     );
+  });
+
+  it("keeps serving and deleting an original after the configured media root changes", async () => {
+    const fixture = await createFixture(stateDir);
+    const externalConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "managed-image-moved-config-"),
+    );
+    const isolatedHome = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-moved-home-"));
+
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_CONFIG_PATH: path.join(externalConfigDir, "config.json"),
+          OPENCLAW_HOME: isolatedHome,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+        async () => {
+          const pathName = `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`;
+          const { result } = await requestManagedImage({
+            stateDir,
+            pathName,
+            authResponse: { authMethod: "token" },
+          });
+          expect(result.statusCode).toBe(200);
+          expect(result.body.toString("utf8")).toBe("original-image");
+
+          await cleanupManagedOutgoingImageRecords({
+            stateDir,
+            sessionKey: fixture.sessionKey,
+            forceDeleteSessionRecords: true,
+          });
+          await expectPathMissing(fixture.originalPath);
+        },
+      );
+    } finally {
+      await fs.rm(externalConfigDir, { recursive: true, force: true });
+      await fs.rm(isolatedHome, { recursive: true, force: true });
+    }
   });
 
   it("does not read retired record JSON at runtime", async () => {
@@ -776,35 +815,67 @@ describe("createManagedOutgoingImageBlocks", () => {
     }
   });
 
-  it("keeps managed originals under the state-dir media root when config path differs", async () => {
+  it("serves managed originals from a split config-path media root", async () => {
+    const openClawHome = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-home-"));
     const externalConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-config-"));
-    const sourcePath = path.join(stateDir, "workspace", "fixtures", "dot.png");
+    const splitStateDir = path.join(openClawHome, ".openclaw");
+    const sourcePath = path.join(splitStateDir, "workspace", "fixtures", "dot.png");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
     try {
       await withEnvAsync(
         {
+          OPENCLAW_HOME: openClawHome,
           OPENCLAW_CONFIG_PATH: path.join(externalConfigDir, "config.json"),
-          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_STATE_DIR: undefined,
         },
         async () => {
           const blocks = await createManagedOutgoingImageBlocks({
-            stateDir,
+            stateDir: splitStateDir,
             sessionKey: "agent:main:main",
+            messageId: "msg-1",
             mediaUrls: [sourcePath],
-            localRoots: [path.join(stateDir, "workspace")],
+            localRoots: [path.join(splitStateDir, "workspace")],
           });
 
           const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
-          const originalPath = requireManagedOriginalPath(stateDir, attachmentId);
+          const record = readManagedImageRecord(attachmentId, splitStateDir);
+          if (!record) {
+            throw new Error(`expected managed image record ${attachmentId}`);
+          }
+          const originalPath = path.join(
+            externalConfigDir,
+            "media",
+            record.original.mediaSubdir,
+            record.original.mediaId,
+          );
 
-          expect(originalPath).toContain(path.join(stateDir, "media", "outgoing", "originals"));
-          expect(originalPath).not.toContain(externalConfigDir);
+          expect(originalPath).toContain(
+            path.join(externalConfigDir, "media", "outgoing", "originals"),
+          );
+          expect(record.original.mediaRoot).toBe(path.join(externalConfigDir, "media"));
           await expect(fs.access(originalPath)).resolves.toBeUndefined();
+
+          const { result } = await requestManagedImage({
+            stateDir: splitStateDir,
+            pathName: String(blocks[0]?.url),
+            authResponse: { authMethod: "token" },
+          });
+          expect(result.statusCode).toBe(200);
+          expect(result.body).toEqual(Buffer.from(TINY_PNG_BASE64, "base64"));
+
+          await cleanupManagedOutgoingImageRecords({
+            stateDir: splitStateDir,
+            sessionKey: "agent:main:main",
+            forceDeleteSessionRecords: true,
+          });
+          await expectPathMissing(originalPath);
         },
       );
     } finally {
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(openClawHome, { recursive: true, force: true });
       await fs.rm(externalConfigDir, { recursive: true, force: true });
     }
   });

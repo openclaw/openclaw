@@ -548,6 +548,7 @@ CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   updated_at TEXT,
   retention_class TEXT,
   alt TEXT NOT NULL,
+  original_media_root TEXT NOT NULL,
   original_media_id TEXT NOT NULL,
   original_media_subdir TEXT NOT NULL,
   original_content_type TEXT NOT NULL,
