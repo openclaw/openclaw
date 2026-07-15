@@ -10,7 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { prerelease as parseSemverPrerelease, satisfies as satisfiesSemver } from "semver";
-import { parseAbsoluteTimeMs } from "../cron/parse.js";
+import { isValidIsoAbsolute } from "../shared/iso-time.js";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
@@ -1849,7 +1849,8 @@ export async function fetchClawHubPromotion(params: {
 // regardless of snapshot staleness.
 
 const CLAWHUB_PROMOTIONS_FEED_ID = "clawhub-promotions";
-// Strict cross-repo wire contract with ClawHub's promotionsFeed publisher; bump in lockstep.
+// Strict cross-repo wire contract with ClawHub's promotionsFeed publisher.
+// Bump only in lockstep with the server-side schema.
 const CLAWHUB_PROMOTIONS_FEED_SCHEMA_VERSION = 1;
 
 export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFeed {
@@ -1871,9 +1872,14 @@ export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFee
   }
   const generatedAt = requiredStringField(value, "generatedAt", context);
   const expiresAt = requiredStringField(value, "expiresAt", context);
-  const generatedAtMs = generatedAt.includes("-") ? parseAbsoluteTimeMs(generatedAt) : null;
-  const expiresAtMs = expiresAt.includes("-") ? parseAbsoluteTimeMs(expiresAt) : null;
-  if (generatedAtMs === null || expiresAtMs === null) {
+  const generatedAtMs = Date.parse(generatedAt);
+  const expiresAtMs = Date.parse(expiresAt);
+  if (
+    !Number.isFinite(generatedAtMs) ||
+    !Number.isFinite(expiresAtMs) ||
+    !isValidIsoAbsolute(generatedAt) ||
+    !isValidIsoAbsolute(expiresAt)
+  ) {
     throw new Error(`Malformed ClawHub ${context}: timestamps must be ISO dates.`);
   }
   if (expiresAtMs <= generatedAtMs) {

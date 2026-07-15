@@ -208,8 +208,8 @@ describe("createClackPrompter", () => {
 
   it("rejects navigation after Clack resolves an aborted prompt", async () => {
     navigationPromptMocks.textWithNavigationFooter.mockImplementation(async ({ signal }) => {
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
+      await new Promise((resolve) => {
+        signal.addEventListener("abort", resolve, { once: true });
       });
       return Symbol("clack:cancel");
     });
