@@ -897,6 +897,13 @@ export interface SkillLifecycle {
   state_changed_at_ms: number;
 }
 
+export interface SkillUploadChunks {
+  byte_offset: number;
+  chunk_blob: Uint8Array;
+  size_bytes: number;
+  upload_id: string;
+}
+
 export interface SkillUploads {
   actual_sha256: string | null;
   archive_blob: Uint8Array;
@@ -1273,6 +1280,7 @@ export interface DB {
   session_watch_cursors: SessionWatchCursors;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
+  skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
   state_leases: StateLeases;
