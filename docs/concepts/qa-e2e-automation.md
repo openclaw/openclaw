@@ -185,9 +185,9 @@ precedence over `--profile`.
 
 | Profile      | Scenarios | Purpose                                                                                                                                  |
 | ------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `all`        | 92        | Complete catalog (default).                                                                                                              |
+| `all`        | 93        | Complete catalog (default).                                                                                                              |
 | `release`    | 2         | Release-critical channel baseline and live allowlist reload.                                                                             |
-| `fast`       | 11        | Focused threading, reactions, approvals, policy, bot-gating, and encrypted-reply coverage.                                               |
+| `fast`       | 12        | Focused threading, reactions, approvals, policy, bot-gating, and encrypted-reply coverage.                                               |
 | `transport`  | 50        | Threading, DM/room routing, autojoin, approvals, reactions, restarts, mention/allowlist policy, edits, and multi-actor ordering.         |
 | `media`      | 7         | Image, generated-image, voice, attachment, unsupported-media, and encrypted-media coverage.                                              |
 | `e2ee-smoke` | 8         | Minimum encrypted reply, threading, bootstrap, recovery, restart, redaction, and failure coverage.                                       |
@@ -463,11 +463,12 @@ accept the same flags:
 | `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports, summaries, evidence, transport-specific artifacts, and the output log are written. Relative paths resolve against `--repo-root`. |
 | `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                                               |
 | `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                                              |
-| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                                            |
+| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai`, `aimock`, or `live-frontier`.                                                                                                    |
 | `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                                                   |
 | `--fast`                              | off                                                | Provider fast mode where supported.                                                                                                             |
 | `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                                          |
 | `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                                                    |
+| `--allow-failures`                    | off                                                | Write artifacts without returning a failing exit code when scenarios fail.                                                                      |
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes
 artifacts without setting a failing exit code. Telegram also accepts
@@ -521,7 +522,7 @@ when threaded directly after canary, and the latter is a real-Telegram proof
 of the `/usage` footer on tool-only replies. Use `pnpm openclaw qa telegram
 --list-scenarios --provider-mode mock-openai` to print the current
 default/optional split with regression refs. Use `--profile all` for every
-Telegram scenario and `--fail-fast` to stop after the first failed scenario.
+Telegram live-adapter scenario.
 
 Output artifacts:
 
