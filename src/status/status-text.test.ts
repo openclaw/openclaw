@@ -1,5 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { appendSessionCostLine } from "./status-runtime-lines.js";
 import { buildStatusText } from "./status-text.js";
+
+const mocks = vi.hoisted(() => ({
+  loadSessionCostSummariesFromCache: vi.fn(),
+}));
+
+vi.mock("../infra/session-cost-usage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/session-cost-usage.js")>();
+  return {
+    ...actual,
+    loadSessionCostSummariesFromCache: mocks.loadSessionCostSummariesFromCache,
+  };
+});
 
 type StatusTextParams = Parameters<typeof buildStatusText>[0];
 
@@ -92,5 +106,127 @@ describe("buildStatusText channel features", () => {
 
     expect(text).toContain("Telegram rich messages: off");
     expect(text).toContain("enable richMessages for this Telegram account");
+  });
+});
+
+describe("session status cost line", () => {
+  const sessionEntry = {
+    sessionId: "cost-session",
+    updatedAt: 0,
+    sessionFile: formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId: "cost-session",
+      storePath: "/tmp/openclaw-status-cost/sessions.json",
+    }),
+  };
+
+  beforeEach(() => {
+    mocks.loadSessionCostSummariesFromCache.mockReset();
+  });
+
+  it("shows cached current-session cost and tokens", async () => {
+    mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
+      cacheStatus: {
+        status: "fresh" as const,
+        cachedFiles: 1,
+        pendingFiles: 0,
+        staleFiles: 0,
+      },
+      summaries: [
+        {
+          input: 400_000,
+          output: 56_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 456_000,
+          totalCost: 1.23,
+          inputCost: 1,
+          outputCost: 0.23,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        },
+      ],
+    });
+
+    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
+      "💵 $1.23 · 456k tok (today)",
+    );
+  });
+
+  it("omits a cold cost cache", async () => {
+    mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
+      cacheStatus: {
+        status: "partial",
+        cachedFiles: 0,
+        pendingFiles: 1,
+        staleFiles: 0,
+      },
+      summaries: [null],
+    });
+
+    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBeNull();
+  });
+
+  it("omits a stale cached summary", async () => {
+    mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
+      cacheStatus: {
+        status: "stale",
+        cachedFiles: 0,
+        pendingFiles: 1,
+        staleFiles: 1,
+      },
+      summaries: [
+        {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          totalCost: 1,
+          inputCost: 1,
+          outputCost: 0,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        },
+      ],
+    });
+
+    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBeNull();
+  });
+
+  it("marks incomplete pricing", async () => {
+    mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
+      cacheStatus: {
+        status: "fresh",
+        cachedFiles: 1,
+        pendingFiles: 0,
+        staleFiles: 0,
+      },
+      summaries: [
+        {
+          input: 400_000,
+          output: 56_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 456_000,
+          totalCost: 1.23,
+          inputCost: 1,
+          outputCost: 0.23,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 12,
+          missingCostByModel: {
+            "openai/gpt-5.6-sol": 10,
+            "openai-codex/gpt-5.5": 2,
+          },
+        },
+      ],
+    });
+
+    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
+      "💵 missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2) · 456k tok (today)",
+    );
   });
 });

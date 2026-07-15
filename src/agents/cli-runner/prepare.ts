@@ -418,12 +418,12 @@ async function resolveCliSkillsPrompt(params: {
 }
 
 /** Overrides preparation dependencies for CLI runner tests. */
-export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
+function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
 }
 
 /** Returns whether profile-owned prepared execution should skip local CLI epoch hashing. */
-export function shouldSkipLocalCliCredentialEpoch(params: {
+function shouldSkipLocalCliCredentialEpoch(params: {
   authEpochMode?: CliBackendAuthEpochMode;
   authProfileId?: string;
   authCredential?: AuthProfileCredential;
@@ -435,6 +435,14 @@ export function shouldSkipLocalCliCredentialEpoch(params: {
     params.authCredential &&
     params.preparedExecution,
   );
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerPrepareTestApi")] = {
+    setCliRunnerPrepareTestDeps: (overrides: Record<string, unknown>) => {
+      setCliRunnerPrepareTestDeps(overrides as Partial<typeof prepareDeps>);
+    },
+  };
 }
 
 function shouldRefreshAuthProfileForExecution(params: {

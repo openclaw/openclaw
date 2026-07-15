@@ -323,6 +323,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "auto-reply/reply/commands-system-agent": "src/auto-reply/reply/commands-system-agent.ts",
     "cli/run-main": "src/cli/run-main.ts",
     "commitments/runtime": "src/commitments/runtime.ts",
+    "commitments/runtime.test-support": "src/commitments/runtime.test-support.ts",
     "commitments/store": "src/commitments/store.ts",
     "config/config": "src/config/config.ts",
     "system-agent/system-agent": "src/system-agent/system-agent.ts",

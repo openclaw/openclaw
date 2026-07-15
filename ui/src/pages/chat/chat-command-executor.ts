@@ -738,6 +738,7 @@ async function executeSteer(
         ...selectedGlobalScope(resolved.key, context),
         message: resolved.message,
         deliver: false,
+        queueMode: "steer",
         idempotencyKey: generateUUID(),
       }),
     );

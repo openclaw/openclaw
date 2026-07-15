@@ -3,11 +3,11 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import {
-  testing as extraParamsTesting,
   applyExtraParamsToAgent,
   resolveExtraParams,
   resolvePreparedExtraParams,
 } from "./extra-params.js";
+import { testing as extraParamsTesting } from "./extra-params.test-support.js";
 
 vi.mock("./logger.js", () => ({
   // Sampling tests assert call options only; silence warning/debug output from

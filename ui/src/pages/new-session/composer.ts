@@ -68,7 +68,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
           <div class="agent-chat__composer-combobox">
             <textarea
               class="new-session-page__message"
-              rows="3"
+              rows="1"
               ?disabled=${options.submitting || options.messageLocked}
               placeholder=${t("newSession.messagePlaceholder")}
               .value=${options.message}
@@ -98,7 +98,9 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
         </div>
         ${options.modelControl && options.modelControl !== nothing
           ? html`<div class="agent-chat__composer-footer">
-              <div class="agent-chat__composer-controls">${options.modelControl}</div>
+              <div class="agent-chat__composer-controls">
+                <div class="chat-composer-model-control">${options.modelControl}</div>
+              </div>
             </div>`
           : nothing}
         ${options.pendingAttachmentReads > 0

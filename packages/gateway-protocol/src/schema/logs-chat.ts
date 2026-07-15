@@ -95,6 +95,8 @@ export const ChatSendParamsSchema = closedObject({
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
   // One-turn override for auto fast-mode cutoff seconds.
   fastAutoOnSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+  // One-turn override for active-run queue admission.
+  queueMode: Type.Optional(Type.String({ enum: ["steer", "followup", "collect", "interrupt"] })),
   deliver: Type.Optional(Type.Boolean()),
   originatingChannel: Type.Optional(Type.String()),
   originatingTo: Type.Optional(Type.String()),
@@ -160,6 +162,7 @@ export const ChatFinalEventSchema = closedObject({
   message: Type.Optional(Type.Unknown()),
   usage: Type.Optional(Type.Unknown()),
   stopReason: Type.Optional(Type.String()),
+  yielded: Type.Optional(Type.Literal(true)),
 });
 
 /** Terminal event for user-initiated or coordinator-initiated cancellation. */

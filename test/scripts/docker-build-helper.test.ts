@@ -2754,7 +2754,11 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(assertions).not.toContain('const content = fs.readFileSync(filePath, "utf8")');
     expect(runner).toContain("docker_e2e_print_log /tmp/openclaw-codex-plugin-pack.log");
     expect(runner).not.toContain("cat /tmp/openclaw-codex-plugin-pack.log");
-    expect(runner).toContain("tail -n 120 /tmp/openclaw-codex-agent-after-uninstall.err");
+    expect(assertions).toContain(
+      'readTextFileTail(\n        "/tmp/openclaw-codex-agent-after-uninstall.err",',
+    );
+    expect(runner).toContain('assert-agent-error "$post_uninstall_status"');
+    expect(runner).not.toContain("tail -n 120 /tmp/openclaw-codex-agent-after-uninstall.err");
     expect(runner).not.toContain("cat /tmp/openclaw-codex-agent-after-uninstall.err");
     const earlyAgentTimeoutEnvIndex = runner.indexOf(
       "docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS 420",
@@ -4023,7 +4027,10 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(runner).toContain('if [ "$UPDATE_FAILED" -ne 0 ]; then');
     expect(runner).toContain('if [ "$GATEWAY_START_FAILED" -ne 0 ]; then');
     expect(runner).toContain('if [ "$GATEWAY_HEALTH_FAILED" -ne 0 ]; then');
-    expect(runner).toContain("ActiveState=active");
+    expect(runner).toContain('printf "%s\\n" "\\$!" >"$GATEWAY_PID_FILE"');
+    expect(runner).toContain('printf "ActiveState=active\\nSubState=running');
+    expect(runner).toContain('status.service?.runtime?.status !== "running"');
+    expect(runner).toContain("FAIL: gateway service was not running before update");
     expect(runner).toContain("OPENCLAW_NO_RESPAWN=1");
     expect(runner).toContain("is-enabled)");
     expect(runner).toContain("/healthz");

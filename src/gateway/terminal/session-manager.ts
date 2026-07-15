@@ -52,6 +52,10 @@ export class TerminalSessionManager {
   // Slots reserved by opens that are still awaiting spawn. Counted against the
   // cap so concurrent opens cannot all pass the check and exceed maxSessions.
   private opening = 0;
+  // Cancellation frees a session slot, but cannot stop every backend factory.
+  // Bound those physical operations until they settle so disconnect churn
+  // cannot create an unbounded number of native/node spawn attempts.
+  private spawning = 0;
 
   constructor(options: TerminalSessionManagerOptions) {
     void ensureTerminalUploadCleanup();
@@ -71,6 +75,16 @@ export class TerminalSessionManager {
 
   /** Spawns a shell and wires its output/exit to the owning connection. */
   async open(request: TerminalOpenRequest): Promise<TerminalOpenOutcome> {
+    if (request.signal?.aborted) {
+      return { ok: false, code: "closed", message: this.openAbortMessage(request.signal) };
+    }
+    if (this.spawning >= this.maxSessions * 2) {
+      return {
+        ok: false,
+        code: "limit",
+        message: `terminal spawn limit reached (${this.maxSessions * 2})`,
+      };
+    }
     if (this.sessions.size + this.opening >= this.maxSessions) {
       return {
         ok: false,
@@ -80,7 +94,29 @@ export class TerminalSessionManager {
     }
     // Reserve the slot before the async spawn so it is visible to concurrent opens.
     this.opening += 1;
-    const pending: TerminalPendingOpen = { agentId: request.agentId };
+    this.spawning += 1;
+    let reservationActive = true;
+    const releaseReservation = () => {
+      if (!reservationActive) {
+        return;
+      }
+      reservationActive = false;
+      this.opening -= 1;
+      this.untrackPendingOpen(request.connId, pending);
+    };
+    const pending: TerminalPendingOpen = {
+      agentId: request.agentId,
+      abort: (message) => {
+        pending.abortMessage ??= message;
+        // A hung spawn must not consume capacity after its owner is gone.
+        // Its eventual backend is still killed by the abortMessage check below.
+        releaseReservation();
+      },
+    };
+    const abortPending = () => {
+      pending.abort(this.openAbortMessage(request.signal));
+    };
+    request.signal?.addEventListener("abort", abortPending, { once: true });
     this.trackPendingOpen(request.connId, pending);
     let backend: TerminalBackend;
     try {
@@ -98,15 +134,17 @@ export class TerminalSessionManager {
             this.spawn,
           );
     } catch (err) {
-      this.opening -= 1;
-      this.untrackPendingOpen(request.connId, pending);
+      this.spawning -= 1;
+      releaseReservation();
+      request.signal?.removeEventListener("abort", abortPending);
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, code: "spawn_failed", message };
     }
     // Hand the reservation over to the live session (synchronous from here — no
     // await — so the counts never both drop).
-    this.opening -= 1;
-    this.untrackPendingOpen(request.connId, pending);
+    this.spawning -= 1;
+    releaseReservation();
+    request.signal?.removeEventListener("abort", abortPending);
     if (pending.abortMessage) {
       // The owning connection disconnected while the shell was spawning; kill it
       // now rather than register an orphan no one can reach or close.
@@ -310,6 +348,10 @@ export class TerminalSessionManager {
     set.add(pending);
   }
 
+  private openAbortMessage(signal: AbortSignal | undefined): string {
+    return signal?.reason instanceof Error ? signal.reason.message : "terminal open cancelled";
+  }
+
   private untrackPendingOpen(connId: string, pending: TerminalPendingOpen): void {
     const set = this.pendingOpens.get(connId);
     if (set) {
@@ -332,7 +374,7 @@ export class TerminalSessionManager {
     const opens = this.pendingOpens.get(connId);
     if (opens) {
       for (const pending of opens) {
-        pending.abortMessage = "connection closed during open";
+        pending.abort("connection closed during open");
       }
     }
     const ids = this.byConn.get(connId);
@@ -361,7 +403,7 @@ export class TerminalSessionManager {
     for (const opens of this.pendingOpens.values()) {
       for (const pending of opens) {
         if (!isAllowed(pending.agentId)) {
-          pending.abortMessage = "terminal closed because the agent policy changed";
+          pending.abort("terminal closed because the agent policy changed");
         }
       }
     }
@@ -413,7 +455,7 @@ export class TerminalSessionManager {
     // Abort any opens still spawning so they don't register after shutdown.
     for (const opens of this.pendingOpens.values()) {
       for (const pending of opens) {
-        pending.abortMessage = "gateway closed during terminal open";
+        pending.abort("gateway closed during terminal open");
       }
     }
     // Snapshot first: finalize() deletes from this.sessions during iteration.
