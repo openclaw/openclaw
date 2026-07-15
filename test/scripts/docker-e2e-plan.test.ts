@@ -808,6 +808,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.6.11-tilde-log-path",
       "published-upgrade-survivor-2026.6.11-versioned-runtime-deps",
     ]);
+    expect(plan.omittedUnsupportedLanes).toEqual([
+      "published-upgrade-survivor-2026.6.11-acpx-openclaw-tools-bridge",
+    ]);
   });
 
   it("omits survivor lanes when the target exposes none of the requested scenarios", () => {
@@ -824,7 +827,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
 
     expect(plan.lanes).toEqual([]);
-    expect(plan.omittedUnsupportedLanes).toEqual(["published-upgrade-survivor"]);
+    expect(plan.omittedUnsupportedLanes).toHaveLength(10);
+    expect(plan.omittedUnsupportedLanes).toContain("published-upgrade-survivor-2026.6.11");
+    expect(plan.omittedUnsupportedLanes).toContain(
+      "published-upgrade-survivor-2026.6.11-versioned-runtime-deps",
+    );
   });
 
   it("omits baseline-only survivor lanes when the target lacks the implicit base scenario", () => {
@@ -836,6 +843,21 @@ describe("scripts/lib/docker-e2e-plan", () => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
       upgradeSurvivorBaselines: "2026.6.11",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toEqual(["published-upgrade-survivor-2026.6.11"]);
+  });
+
+  it("omits an unconfigured survivor lane when the target lacks the implicit base scenario", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-default-base-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(assertionsFile, 'const SCENARIOS = new Set(["unrelated"]);\n');
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
       upgradeSurvivorTargetRoot: targetRoot,
     });
 
@@ -856,7 +878,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
 
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["plugin-binding-command-escape"]);
-    expect(plan.omittedUnsupportedLanes).toEqual(["published-upgrade-survivor"]);
+    expect(plan.omittedUnsupportedLanes).toHaveLength(10);
+    expect(plan.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
+    expect(plan.omittedUnsupportedLanes).toContain(
+      "published-upgrade-survivor-versioned-runtime-deps",
+    );
   });
 
   it("reports an explicitly selected expanded survivor lane as unsupported", () => {
@@ -889,6 +915,23 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
 
     expect(plan.lanes).toEqual([]);
+  });
+
+  it("does not fall back to base when an unsupported scenario is baseline-incompatible", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-incompatible-scenario-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(assertionsFile, 'const SCENARIOS = new Set(["unrelated"]);\n');
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.4.21",
+      upgradeSurvivorScenarios: "acpx-openclaw-tools-bridge",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toEqual([]);
   });
 
   it("fails closed when a frozen target scenario contract is not a literal set", () => {

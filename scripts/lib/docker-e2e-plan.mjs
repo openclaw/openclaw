@@ -257,6 +257,24 @@ function supportsUpgradeSurvivorAcpToolsBridge(baselineSpec) {
   return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 22 }) >= 0;
 }
 
+function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
+  return (
+    (scenario !== "plugin-deps-cleanup" ||
+      supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
+    (scenario !== "acpx-openclaw-tools-bridge" ||
+      supportsUpgradeSurvivorAcpToolsBridge(baselineSpec))
+  );
+}
+
+function expandedUpgradeSurvivorLaneName(poolLaneName, baselineSpec, scenario) {
+  const suffixParts = [
+    baselineSpec ? sanitizeLaneNameSuffix(baselineSpec) : "",
+    scenario && scenario !== "base" ? sanitizeLaneNameSuffix(scenario) : "",
+  ].filter(Boolean);
+  const suffix = suffixParts.join("-");
+  return suffix ? `${poolLaneName}-${suffix}` : poolLaneName;
+}
+
 function expandUpgradeSurvivorBaselineLanes(
   poolLanes,
   rawBaselineSpecs,
@@ -275,53 +293,52 @@ function expandUpgradeSurvivorBaselineLanes(
   // harness cannot seed or assert. Filter by the selected tree's concrete
   // harness contract so validation never schedules an impossible target lane.
   const configuredScenarios = parseUpgradeSurvivorScenarios(rawScenarios);
-  const requestedScenarios =
-    configuredScenarios.length > 0 ? configuredScenarios : baselineSpecs.length > 0 ? ["base"] : [];
-  const supportedScenarios =
-    requestedScenarios.length > 0
-      ? filterUpgradeSurvivorScenariosForTarget(requestedScenarios, targetRoot)
-      : [];
+  const requestedScenarios = configuredScenarios.length > 0 ? configuredScenarios : ["base"];
+  const supportedScenarios = filterUpgradeSurvivorScenariosForTarget(
+    requestedScenarios,
+    targetRoot,
+  );
+  const supportedScenarioSet = new Set(supportedScenarios);
+  const unsupportedScenarios = targetRoot
+    ? requestedScenarios.filter((scenario) => !supportedScenarioSet.has(scenario))
+    : [];
   const scenarios = configuredScenarios.length > 0 ? supportedScenarios : [];
-  const targetSupportsNoRequestedScenario =
-    Boolean(targetRoot) && requestedScenarios.length > 0 && supportedScenarios.length === 0;
-  if (targetSupportsNoRequestedScenario) {
-    const omittedLaneNames = poolLanes
-      .filter(
-        (poolLane) =>
-          poolLane.name === "published-upgrade-survivor" || poolLane.name === "update-migration",
-      )
-      .map((poolLane) => poolLane.name);
+  const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];
+  const survivorLanes = poolLanes.filter(
+    (poolLane) =>
+      poolLane.name === "published-upgrade-survivor" || poolLane.name === "update-migration",
+  );
+  const omittedLaneNames = survivorLanes.flatMap((poolLane) =>
+    matrixBaselines.flatMap((baselineSpec) =>
+      unsupportedScenarios
+        .filter((scenario) => supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec))
+        .map((scenario) => expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario)),
+    ),
+  );
+  if (supportedScenarios.length === 0 && unsupportedScenarios.length > 0) {
     return {
-      lanes: poolLanes.filter((poolLane) => !omittedLaneNames.includes(poolLane.name)),
+      lanes: poolLanes.filter(
+        (poolLane) =>
+          poolLane.name !== "published-upgrade-survivor" && poolLane.name !== "update-migration",
+      ),
       omittedLaneNames,
     };
   }
   if (baselineSpecs.length === 0 && scenarios.length === 0) {
-    return { lanes: poolLanes, omittedLaneNames: [] };
+    return { lanes: poolLanes, omittedLaneNames };
   }
   return {
     lanes: poolLanes.flatMap((poolLane) => {
       if (poolLane.name !== "published-upgrade-survivor" && poolLane.name !== "update-migration") {
         return [poolLane];
       }
-      const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];
       const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
       return matrixBaselines.flatMap((baselineSpec) =>
         matrixScenarios
-          .filter(
-            (scenario) =>
-              (scenario !== "plugin-deps-cleanup" ||
-                supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
-              (scenario !== "acpx-openclaw-tools-bridge" ||
-                supportsUpgradeSurvivorAcpToolsBridge(baselineSpec)),
-          )
+          .filter((scenario) => supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec))
           .map((scenario) => {
-            const suffixParts = [
-              baselineSpec ? sanitizeLaneNameSuffix(baselineSpec) : "",
-              scenario && scenario !== "base" ? sanitizeLaneNameSuffix(scenario) : "",
-            ].filter(Boolean);
-            const suffix = suffixParts.join("-");
-            const name = suffix ? `${poolLane.name}-${suffix}` : poolLane.name;
+            const name = expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario);
+            const suffix = name.slice(poolLane.name.length + 1);
             const commandPrefix = [
               `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
               baselineSpec
@@ -343,7 +360,7 @@ function expandUpgradeSurvivorBaselineLanes(
           }),
       );
     }),
-    omittedLaneNames: [],
+    omittedLaneNames,
   };
 }
 

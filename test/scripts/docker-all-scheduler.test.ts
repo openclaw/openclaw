@@ -327,7 +327,11 @@ describe("scripts/test-docker-all scheduler", () => {
       const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
       expect(summary.status).toBe("passed");
       expect(summary.lanes).toEqual([]);
-      expect(summary.omittedUnsupportedLanes).toEqual(["published-upgrade-survivor"]);
+      expect(summary.omittedUnsupportedLanes).toHaveLength(10);
+      expect(summary.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
+      expect(summary.omittedUnsupportedLanes).toContain(
+        "published-upgrade-survivor-versioned-runtime-deps",
+      );
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
