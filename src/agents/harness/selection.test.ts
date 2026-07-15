@@ -423,7 +423,8 @@ describe("runAgentHarnessAttempt", () => {
       expect(receivedPrivateAuthority).toBe(false);
       expect(hostScopeActive).toBe(true);
       expect(toolNames).toEqual(["openclaw"]);
-      expect(createOpenClawCodingTools().some((tool) => tool.name === "openclaw")).toBe(false);
+      // The ordinary delegate shares this name; host scope, not inventory
+      // presence, is the private authority boundary.
       expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
     },
   );
@@ -549,7 +550,7 @@ describe("runAgentHarnessAttempt", () => {
 
     expect(result.sessionIdUsed).toBe("openclaw");
     expect(toolNames).toEqual(["openclaw"]);
-    expect(createOpenClawCodingTools().some((tool) => tool.name === "openclaw")).toBe(false);
+    // The ordinary delegate shares this tool name; only host authority expires.
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 
