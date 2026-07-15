@@ -31,7 +31,7 @@ type WorkerCleanupHelpers = {
   drainSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").drainSessionWriteLockStateForTest;
   resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
   resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
-  resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.js").resetModelsJsonReadyCacheForTest;
+  resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
   resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").resetSessionWriteLockStateForTest;
 };
 
@@ -73,8 +73,8 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
     vi.importActual<typeof import("../src/agents/context-runtime-state.js")>(
       "../src/agents/context-runtime-state.js",
     ),
-    vi.importActual<typeof import("../src/agents/models-config-state.js")>(
-      "../src/agents/models-config-state.js",
+    vi.importActual<typeof import("../src/agents/models-config-state.test-support.js")>(
+      "../src/agents/models-config-state.test-support.js",
     ),
     vi.importActual<typeof import("../src/agents/session-write-lock.js")>(
       "../src/agents/session-write-lock.js",

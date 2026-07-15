@@ -13,7 +13,7 @@ import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
   planOpenClawModelsJsonWithDeps,
   resolveProvidersForModelsJsonWithDeps,
-} from "./models-config.plan.js";
+} from "./models-config.plan.test-support.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js";
 
