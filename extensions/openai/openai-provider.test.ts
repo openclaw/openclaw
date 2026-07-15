@@ -207,20 +207,22 @@ describe("buildOpenAIProvider", () => {
   it("classifies OpenAI-native code-only failover errors", () => {
     const provider = buildOpenAIProvider();
 
-    expect(
-      provider.classifyFailoverReason?.({
-        provider: "openai",
-        errorMessage: "",
-        code: "SERVER_ERROR",
-      }),
-    ).toBe("server_error");
-    expect(
-      provider.classifyFailoverReason?.({
-        provider: "openai",
-        errorMessage: "",
-        code: "INSUFFICIENT_QUOTA",
-      }),
-    ).toBe("billing");
+    for (const providerId of ["openai", "azure-openai", "azure-openai-responses"]) {
+      expect(
+        provider.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "",
+          code: "SERVER_ERROR",
+        }),
+      ).toBe("server_error");
+      expect(
+        provider.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "",
+          code: "INSUFFICIENT_QUOTA",
+        }),
+      ).toBe("billing");
+    }
     // API_ERROR is an Anthropic-native code, not OpenAI's: fall through to generic.
     expect(
       provider.classifyFailoverReason?.({

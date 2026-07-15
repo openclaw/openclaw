@@ -120,20 +120,22 @@ describe("anthropic provider replay hooks", () => {
   it("classifies Anthropic-native structured failover errors", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
-    expect(
-      provider.classifyFailoverReason?.({
-        provider: "anthropic",
-        errorMessage: "",
-        errorType: "rate_limit_error",
-      }),
-    ).toBe("rate_limit");
-    expect(
-      provider.classifyFailoverReason?.({
-        provider: "anthropic",
-        errorMessage: "",
-        errorType: "api_error",
-      }),
-    ).toBe("server_error");
+    for (const providerId of ["anthropic", "claude-cli"]) {
+      expect(
+        provider.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "",
+          errorType: "rate_limit_error",
+        }),
+      ).toBe("rate_limit");
+      expect(
+        provider.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "",
+          errorType: "api_error",
+        }),
+      ).toBe("server_error");
+    }
     expect(
       provider.classifyFailoverReason?.({
         provider: "anthropic",

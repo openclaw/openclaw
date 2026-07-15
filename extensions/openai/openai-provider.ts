@@ -940,10 +940,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
-    classifyFailoverReason: ({ provider, code }) =>
-      normalizeProviderId(provider ?? "") === PROVIDER_ID
-        ? classifyOpenAiFailoverCode(code)
-        : undefined,
+    classifyFailoverReason: ({ code }) => classifyOpenAiFailoverCode(code),
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: ({ provider, modelId, agentRuntime, compat }) =>
       normalizeProviderId(provider) === PROVIDER_ID

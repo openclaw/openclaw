@@ -906,11 +906,9 @@ export function buildAnthropicProvider(): ProviderPlugin {
       (!isAnthropicMandatoryClaude5Model(modelId) ||
         normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID),
     resolveReasoningOutputMode: () => "native",
-    classifyFailoverReason: ({ provider, code, errorType }) =>
-      normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID
-        ? (classifyAnthropicFailoverDescriptor(errorType) ??
-          classifyAnthropicFailoverDescriptor(code))
-        : undefined,
+    classifyFailoverReason: ({ code, errorType }) =>
+      classifyAnthropicFailoverDescriptor(errorType) ??
+      classifyAnthropicFailoverDescriptor(code),
     resolveThinkingProfile: ({ provider, modelId, params }) => {
       const contractModelId = resolveClaudeModelIdentity({ id: modelId, params });
       return isAnthropicMandatoryClaude5Model(contractModelId) &&
