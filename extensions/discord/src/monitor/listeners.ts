@@ -15,6 +15,7 @@ import {
   ReadyListener,
   ThreadUpdateListener,
 } from "../internal/discord.js";
+import { canViewDiscordGuildChannel } from "../send.permissions.js";
 import { discordEventQueueLog, runDiscordListenerWithSlowLog } from "./listeners.queue.js";
 export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listeners.reactions.js";
 import { type DiscordGuildEntryResolved, resolveDiscordGuildEntry } from "./allow-list.js";
@@ -297,6 +298,25 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       return;
     }
     if (fetchedUserIsBot) {
+      this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+      return;
+    }
+    const canViewTargetChannel = await canViewDiscordGuildChannel(
+      data.guild_id,
+      presenceEvent.channelId,
+      userId,
+      {
+        cfg: this.params.cfg,
+        accountId: this.params.accountId,
+        rest: client.rest,
+      },
+    );
+    if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
+      return;
+    }
+    if (!canViewTargetChannel) {
+      // Presence is guild-wide. Require target-channel visibility so private channel greetings
+      // cannot be triggered by unrelated guild members.
       this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
       return;
     }

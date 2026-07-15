@@ -12,6 +12,7 @@ import { clearPresences } from "./presence-cache.js";
 import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 
 const mocks = vi.hoisted(() => ({
+  canViewDiscordGuildChannel: vi.fn(async () => true),
   enqueueSystemEvent: vi.fn(() => true),
   requestHeartbeat: vi.fn(),
   resolveAgentRoute: vi.fn(() => ({
@@ -28,6 +29,9 @@ vi.mock("openclaw/plugin-sdk/routing", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
+}));
+vi.mock("../send.permissions.js", () => ({
+  canViewDiscordGuildChannel: mocks.canViewDiscordGuildChannel,
 }));
 
 import { DiscordPresenceGuildDeleteListener, DiscordPresenceListener } from "./listeners.js";
@@ -133,6 +137,44 @@ describe("DiscordPresenceListener", () => {
         accountId: "molty",
       },
     });
+    expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledWith(
+      "guild-1",
+      "channel-1",
+      "user-1",
+      expect.objectContaining({ accountId: "molty" }),
+    );
+  });
+
+  it("ignores guild members who cannot view the target channel", async () => {
+    mocks.canViewDiscordGuildChannel.mockResolvedValueOnce(false);
+    let nowMs = 0;
+    const store = cooldownStore();
+    const registerIfAbsent = vi.spyOn(store, "registerIfAbsent");
+    const listener = new DiscordPresenceListener({
+      cfg: {} as OpenClawConfig,
+      accountId: "molty",
+      guildEntries: {
+        "guild-1": { presenceEvents: { channelId: "channel-1" } },
+      },
+      cooldownStore: store,
+      nowMs: () => nowMs,
+    });
+
+    nowMs = 30_000;
+    await listener.handle(presence("offline"), client());
+    nowMs += 1000;
+    await listener.handle(presence("online"), client());
+
+    expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledWith(
+      "guild-1",
+      "channel-1",
+      "user-1",
+      expect.objectContaining({ accountId: "molty" }),
+    );
+    expect(mocks.resolveAgentRoute).not.toHaveBeenCalled();
+    expect(registerIfAbsent).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
   });
 
   it("retries when the queue rejects an event", async () => {
@@ -864,6 +906,31 @@ describe("DiscordPresenceListener", () => {
     nowMs += 1000;
     await secondListener.handle(presence("online"), humanClient);
 
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates repeated offline-to-online flaps during the cooldown", async () => {
+    let nowMs = 0;
+    const listener = new DiscordPresenceListener({
+      cfg: {} as OpenClawConfig,
+      accountId: "molty",
+      guildEntries: {
+        "guild-1": { presenceEvents: { channelId: "channel-1" } },
+      },
+      cooldownStore: cooldownStore(),
+      nowMs: () => nowMs,
+    });
+    const humanClient = client();
+
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      nowMs += 1000;
+      await listener.handle(presence("offline"), humanClient);
+      nowMs += 1000;
+      await listener.handle(presence("online"), humanClient);
+    }
+
+    expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledTimes(1);
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
   });
