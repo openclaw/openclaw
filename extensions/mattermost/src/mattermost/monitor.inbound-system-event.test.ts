@@ -393,6 +393,16 @@ const testConfig: OpenClawConfig = {
   },
 };
 
+const mentionConfig: OpenClawConfig = {
+  ...testConfig,
+  channels: {
+    mattermost: {
+      ...testConfig.channels?.mattermost,
+      chatmode: "oncall",
+    },
+  },
+};
+
 vi.mock("../runtime.js", () => ({
   getMattermostRuntime: () => mockState.runtimeCore,
 }));
@@ -570,9 +580,10 @@ describe("mattermost inbound user posts", () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
     mockState.abortController = abortController;
+    mockState.runtimeCore = createRuntimeCore(mentionConfig);
 
     const monitor = monitorMattermostProvider({
-      config: testConfig,
+      config: mentionConfig,
       runtime: testRuntime(),
       abortSignal: abortController.signal,
       webSocketFactory: () => socket,
@@ -1079,13 +1090,14 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.CommandAuthorized).toBe(true);
   });
 
-  it("uses an edit-specific message id for edited post turns", async () => {
+  it("dispatches an edit that adds a bot mention with an edit-specific message id", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
     mockState.abortController = abortController;
+    mockState.runtimeCore = createRuntimeCore(mentionConfig);
 
     const monitor = monitorMattermostProvider({
-      config: testConfig,
+      config: mentionConfig,
       runtime: testRuntime(),
       abortSignal: abortController.signal,
       webSocketFactory: () => socket,
@@ -1095,6 +1107,12 @@ describe("mattermost inbound user posts", () => {
       expect(socket.openListenerCount).toBeGreaterThan(0);
     });
     socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-lone-edit",
+      message: "not addressed to the bot",
+    });
+    expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
 
     await socket.emitMessage({
       event: "post_edited",
@@ -1123,8 +1141,103 @@ describe("mattermost inbound user posts", () => {
     expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("edited wake");
-    expect(ctx?.MessageSid).toBe("post-lone-edit:edit:1714000000125");
+    expect(ctx?.MessageSid).toBe("post-lone-edit");
     expect(ctx?.MessageSids).toBeUndefined();
+  });
+
+  it("does not dispatch an edited post without a bot mention", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.runtimeCore = createRuntimeCore(mentionConfig);
+
+    const monitor = monitorMattermostProvider({
+      config: mentionConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "post_edited",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-edit-no-mention",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "still not addressed to the bot",
+          create_at: 1_714_000_000_000,
+          edit_at: 1_714_000_000_125,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    abortController.abort();
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates repeated edited-post events", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.runtimeCore = createRuntimeCore(mentionConfig);
+    mockState.dispatchReplyFromConfig.mockResolvedValue(undefined);
+
+    const monitor = monitorMattermostProvider({
+      config: mentionConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    const editedEvent = {
+      event: "post_edited",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-edit-duplicate",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "@openclaw edited wake",
+          create_at: 1_714_000_000_000,
+          edit_at: 1_714_000_000_125,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    };
+    await socket.emitMessage(editedEvent);
+    await socket.emitMessage(editedEvent);
+    abortController.abort();
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   it("collapses debounced edited posts to the latest post body", async () => {
@@ -1205,10 +1318,73 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.BodyForAgent).toBe("latest edited text");
     expect(ctx?.Body).toContain("latest edited text");
     expect(ctx?.Body).not.toContain("stale pre-edit text");
-    expect(ctx?.MessageSid).toBe("post-edited:edit:1714000000050");
-    expect(ctx?.MessageSids).toEqual(["post-edited", "post-edited:edit:1714000000050"]);
-    expect(ctx?.MessageSidFirst).toBe("post-edited");
-    expect(ctx?.MessageSidLast).toBe("post-edited:edit:1714000000050");
+    expect(ctx?.MessageSid).toBe("post-edited");
+    expect(ctx?.MessageSids).toBeUndefined();
+    expect(ctx?.MessageSidFirst).toBeUndefined();
+    expect(ctx?.MessageSidLast).toBeUndefined();
+  });
+
+  it("keeps a mixed debounce batch aligned to the latest edited event identity", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const debounceConfig: OpenClawConfig = {
+      ...testConfig,
+      messages: { inbound: { debounceMs: 5 } },
+    };
+    mockState.runtimeCore = createRuntimeCore(debounceConfig, undefined, {
+      inboundDebounceMs: 5,
+      createInboundDebouncer,
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: debounceConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, { id: "post-a", message: "stale post A" });
+    await emitMattermostChannelPost(socket, { id: "post-b", message: "post B" });
+    await socket.emitMessage({
+      event: "post_edited",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-a",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "edited post A",
+          create_at: 1_714_000_000_000,
+          edit_at: 1_714_000_000_075,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("post B\nedited post A");
+    expect(ctx?.MessageSid).toBe("post-a");
+    expect(ctx?.MessageSids).toEqual(["post-b", "post-a"]);
+    expect(ctx?.MessageSidFirst).toBe("post-b");
+    expect(ctx?.MessageSidLast).toBe("post-a");
   });
 
   it("does not let bot edited draft posts consume debounced user posts", async () => {

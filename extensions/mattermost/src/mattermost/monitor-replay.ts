@@ -1,5 +1,7 @@
 // Mattermost plugin module owns replay-guarded post processing.
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
+import type { MattermostPost } from "./client.js";
+import type { MattermostEventPayload } from "./monitor-websocket.js";
 
 const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
@@ -22,6 +24,29 @@ function createMattermostInboundReplayGuard() {
 
 type MattermostInboundReplayGuard = ReturnType<typeof createMattermostInboundReplayGuard>;
 const recentInboundMessages = createMattermostInboundReplayGuard();
+
+function readMattermostNumberField(post: MattermostPost, field: string): number | undefined {
+  const value = post[field];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** Gives each edit its own replay identity while ordinary posts keep their stable post id. */
+export function resolveMattermostPostReplayMessageIds(params: {
+  post: MattermostPost;
+  payload: MattermostEventPayload;
+}): string[] {
+  const postId = params.post.id.trim();
+  if (!postId) {
+    return [];
+  }
+  if (params.payload.event !== "post_edited") {
+    return [postId];
+  }
+  const editedAt =
+    readMattermostNumberField(params.post, "edit_at") ??
+    readMattermostNumberField(params.post, "update_at");
+  return [`${postId}:edit:${editedAt ?? "unknown"}`];
+}
 
 export async function processMattermostReplayGuardedPost(params: {
   accountId: string;
