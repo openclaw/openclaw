@@ -191,6 +191,7 @@ import {
 import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
+  settleCompactionLifecycleWithinGrace,
 } from "./compaction-safety-timeout.js";
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import {
@@ -1493,6 +1494,44 @@ async function compactEmbeddedAgentSessionDirectOnce(
         attemptedThinking.add(thinkLevel);
         const systemPromptText = buildSystemPromptText(thinkLevel);
         let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+        let nativeCompactionCompletion: Promise<void> | undefined;
+        let nativeCompactionLifecycleObserved = false;
+        let sessionDisposed = false;
+        const disposeSession = () => {
+          if (sessionDisposed) {
+            return;
+          }
+          sessionDisposed = true;
+          try {
+            session?.dispose();
+          } catch {
+            /* best-effort */
+          }
+        };
+        const settleNativeCompactionLifecycle = async (propagateFailure: boolean) => {
+          if (!nativeCompactionCompletion || nativeCompactionLifecycleObserved) {
+            return;
+          }
+          nativeCompactionLifecycleObserved = true;
+          try {
+            const completed = await settleCompactionLifecycleWithinGrace(
+              nativeCompactionCompletion,
+            );
+            if (!completed) {
+              log.warn(
+                "[compaction] post-commit lifecycle exceeded bounded settlement grace; invalidating the compaction session",
+              );
+              disposeSession();
+            }
+          } catch (lifecycleError) {
+            if (propagateFailure) {
+              throw lifecycleError;
+            }
+            log.warn("[compaction] failed while draining rejected compaction lifecycle", {
+              error: formatErrorMessage(lifecycleError),
+            });
+          }
+        };
         try {
           const createdSession = await createAgentSession({
             cwd: effectiveCwd,
@@ -1676,7 +1715,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
             // the sanity check below becomes a no-op instead of crashing compaction.
           }
           const activeSession = session;
-          let nativeCompactionCompletion: Promise<void> = Promise.resolve();
           const result = await compactWithSafetyTimeout(
             (compactAbortSignal) => {
               setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
@@ -1695,8 +1733,9 @@ async function compactEmbeddedAgentSessionDirectOnce(
           );
           // A typed partial result may settle as soon as it is durably committed, but
           // transcript rotation, outer hooks, lane release, and session disposal must
-          // remain behind the exact AgentSession compaction lifecycle that produced it.
-          await nativeCompactionCompletion;
+          // remain behind the exact AgentSession compaction lifecycle that produced it,
+          // up to the bounded post-commit cleanup grace.
+          await settleNativeCompactionLifecycle(true);
           let effectiveFirstKeptEntryId = result.firstKeptEntryId;
           let postCompactionLeafId =
             typeof sessionManager.getLeafId === "function"
@@ -1865,19 +1904,18 @@ async function compactEmbeddedAgentSessionDirectOnce(
           }
           throw err;
         } finally {
-          try {
-            await flushPendingToolResultsAfterIdle({
-              agent: session?.agent,
-              sessionManager,
-            });
-          } catch {
-            /* best-effort */
+          await settleNativeCompactionLifecycle(false);
+          if (!sessionDisposed) {
+            try {
+              await flushPendingToolResultsAfterIdle({
+                agent: session?.agent,
+                sessionManager,
+              });
+            } catch {
+              /* best-effort */
+            }
           }
-          try {
-            session?.dispose();
-          } catch {
-            /* best-effort */
-          }
+          disposeSession();
         }
       }
     } finally {

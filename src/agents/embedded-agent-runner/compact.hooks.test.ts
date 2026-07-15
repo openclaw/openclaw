@@ -51,6 +51,7 @@ import {
   sessionCompactionCompletionMock,
   sessionMessages,
   sessionCompactImpl,
+  settleCompactionLifecycleWithinGraceMock,
   triggerInternalHook,
 } from "./compact.hooks.harness.js";
 import {
@@ -2335,6 +2336,51 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     completion.resolve(undefined);
     expect(settledBeforeCompletion).toBe(false);
     await expect(resultPromise).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(created.session.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a stalled accepted compaction lifecycle before releasing outer work", async () => {
+    const completion = createDeferred<void>();
+    sessionCompactionCompletionMock.mockReturnValueOnce(completion.promise);
+    settleCompactionLifecycleWithinGraceMock.mockResolvedValueOnce(false);
+
+    const resultPromise = compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+    await vi.waitFor(() => expect(sessionCompactImpl).toHaveBeenCalledTimes(1));
+    const created = await createAgentSessionMock.mock.results[0]?.value;
+    if (!created) {
+      throw new Error("Expected a created compaction session");
+    }
+
+    const settledWithinBound = await Promise.race([
+      resultPromise.then(() => true),
+      new Promise<false>((resolve) => {
+        setTimeout(() => resolve(false), 25);
+      }),
+    ]);
+    completion.resolve(undefined);
+    await expect(resultPromise).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(settledWithinBound).toBe(true);
+    expect(created.session.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains a rejected compaction lifecycle within a bound before disposal", async () => {
+    const completion = createDeferred<void>();
+    sessionCompactionCompletionMock.mockReturnValueOnce(completion.promise);
+    settleCompactionLifecycleWithinGraceMock.mockResolvedValueOnce(false);
+    compactWithSafetyTimeoutMock.mockImplementationOnce(async (compact) => {
+      void compact();
+      throw new CompactionSafetyTimeoutError();
+    });
+
+    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+    const created = await createAgentSessionMock.mock.results[0]?.value;
+    if (!created) {
+      throw new Error("Expected a created compaction session");
+    }
+    completion.resolve(undefined);
+
+    expect(result).toMatchObject({ ok: false, compacted: false });
+    expect(settleCompactionLifecycleWithinGraceMock).toHaveBeenCalledWith(completion.promise);
     expect(created.session.dispose).toHaveBeenCalledTimes(1);
   });
 

@@ -79,6 +79,10 @@ export const sessionCompactImpl = vi.fn(
   }),
 );
 export const sessionCompactionCompletionMock = vi.fn<() => Promise<void>>(async () => {});
+export const settleCompactionLifecycleWithinGraceMock = vi.fn(async (completion: Promise<void>) => {
+  await completion;
+  return true;
+});
 export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
 export const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
@@ -587,6 +591,11 @@ export function resetCompactHooksHarnessMocks(): void {
   });
   sessionCompactionCompletionMock.mockReset();
   sessionCompactionCompletionMock.mockResolvedValue(undefined);
+  settleCompactionLifecycleWithinGraceMock.mockReset();
+  settleCompactionLifecycleWithinGraceMock.mockImplementation(async (completion) => {
+    await completion;
+    return true;
+  });
 
   triggerInternalHook.mockReset();
   resetCompactSessionStateMocks();
@@ -896,6 +905,7 @@ export async function loadCompactHooksHarness(): Promise<{
     return {
       compactWithSafetyTimeout: compactWithSafetyTimeoutMock,
       resolveCompactionTimeoutMs: vi.fn(() => 30_000),
+      settleCompactionLifecycleWithinGrace: settleCompactionLifecycleWithinGraceMock,
       // Mirror the real wrapper: bound the engine's compact() with the
       // (mocked) safety timeout and thread the abort signal into its params.
       compactContextEngineWithSafetyTimeout: vi.fn(

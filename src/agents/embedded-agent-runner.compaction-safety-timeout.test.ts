@@ -11,6 +11,7 @@ import {
   compactContextEngineWithSafetyTimeout,
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
+  settleCompactionLifecycleWithinGrace,
 } from "./embedded-agent-runner/compaction-safety-timeout.js";
 
 const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
@@ -314,6 +315,35 @@ describe("resolveCompactionTimeoutMs", () => {
         agents: { defaults: { compaction: { timeoutSeconds: Infinity } } },
       }),
     ).toBe(EMBEDDED_COMPACTION_TIMEOUT_MS);
+  });
+});
+
+describe("settleCompactionLifecycleWithinGrace", () => {
+  it("reports completion before the lifecycle grace expires", async () => {
+    vi.useFakeTimers();
+    const completion = new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    const settled = settleCompactionLifecycleWithinGrace(completion, 30);
+
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(settled).resolves.toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("returns false when lifecycle cleanup exceeds the grace", async () => {
+    vi.useFakeTimers();
+    const settled = settleCompactionLifecycleWithinGrace(new Promise<void>(() => {}), 30);
+
+    await vi.advanceTimersByTimeAsync(30);
+    await expect(settled).resolves.toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("propagates lifecycle errors", async () => {
+    await expect(
+      settleCompactionLifecycleWithinGrace(Promise.reject(new Error("hook failed")), 30),
+    ).rejects.toThrow("hook failed");
   });
 });
 

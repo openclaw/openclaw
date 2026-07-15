@@ -1684,6 +1684,59 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result.compaction?.firstKeptEntryId).toBe("entry-newer");
   });
 
+  it("keeps a completed history stage when split-turn prefix times out immediately", async () => {
+    const controller = new AbortController();
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages
+      .mockResolvedValueOnce("completed history stage")
+      .mockImplementationOnce(async () => {
+        const timeout = new CompactionSafetyTimeoutError();
+        controller.abort(timeout);
+        throw timeout;
+      });
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+    });
+    const event = createCompactionEvent({ messageText: "older context", tokensBefore: 1_500 });
+    event.signal = controller.signal;
+    event.preparation.messagesToSummarize = [
+      { role: "user", content: "older context", timestamp: 1 },
+    ];
+    event.preparation.turnPrefixMessages = [
+      {
+        role: "assistant",
+        content: "unsummarized split turn",
+        timestamp: 2,
+      } as unknown as AgentMessage,
+    ];
+    Object.assign(event.preparation, {
+      messageEntryIdsToSummarize: ["entry-history"],
+      turnPrefixEntryIds: ["entry-prefix"],
+      firstKeptEntryId: "entry-retained-tail",
+      isSplitTurn: true,
+      settings: { reserveTokens: 4_000 },
+    });
+
+    const result = (await createCompactionHandler()(
+      event,
+      createCompactionContext({
+        sessionManager,
+        getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+      }),
+    )) as {
+      cancel?: boolean;
+      compaction?: { firstKeptEntryId?: string; summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(isCompactionTimeoutPartialResult(result.compaction)).toBe(true);
+    expect(result.compaction?.summary).toContain("completed history stage");
+    expect(result.compaction?.firstKeptEntryId).toBe("entry-prefix");
+  });
+
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages

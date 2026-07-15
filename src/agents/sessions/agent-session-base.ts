@@ -113,6 +113,7 @@ export abstract class AgentSessionBase {
   protected extensionShutdownHandler?: ShutdownHandler;
   protected extensionErrorListener?: ExtensionErrorListener;
   protected extensionErrorUnsubscriber?: () => void;
+  private disposed = false;
 
   // Model registry for API key resolution
   protected sessionModelRegistry: ModelRegistry;
@@ -531,7 +532,7 @@ export abstract class AgentSessionBase {
    * Preserves all existing listeners.
    */
   protected reconnectToAgent(): void {
-    if (this.unsubscribeAgent) {
+    if (this.disposed || this.unsubscribeAgent) {
       return;
     } // Already connected
     this.unsubscribeAgent = this.agent.subscribe(this.handleAgentEvent);
@@ -542,6 +543,10 @@ export abstract class AgentSessionBase {
    * Call this when completely done with the session.
    */
   dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
     this.currentExtensionRunner.invalidate(
       "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
     );

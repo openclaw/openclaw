@@ -1,5 +1,5 @@
 // Covers timeout-partial compaction ownership, persistence, and write-lock ordering.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Model } from "../../llm/types.js";
 import {
   CompactionSafetyTimeoutError,
@@ -311,6 +311,87 @@ describe("AgentSession compaction timeout partial results", () => {
     } finally {
       releasePostCommitHook();
     }
+  });
+
+  it("does not reconnect after disposal while a post-commit hook finishes", async () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({
+      role: "user",
+      content: "user context ".repeat(200),
+      timestamp: 1,
+    } as Parameters<SessionManager["appendMessage"]>[0]);
+    appendPersistedAssistantMessage({
+      sessionManager,
+      content: "assistant context ".repeat(200),
+    });
+
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
+    let releasePostCommitHook = () => {};
+    const postCommitHookBlocked = new Promise<void>((resolve) => {
+      releasePostCommitHook = resolve;
+    });
+    const resourceLoader = createResourceLoaderWithHandlers(
+      new Map([
+        [
+          "session_before_compact",
+          [
+            async (rawEvent: unknown) => {
+              const event = rawEvent as {
+                preparation: { firstKeptEntryId: string; tokensBefore: number };
+                signal: AbortSignal;
+              };
+              await new Promise<void>((resolve) => {
+                event.signal.addEventListener("abort", () => resolve(), { once: true });
+              });
+              return {
+                compaction: markCompactionTimeoutPartialResult({
+                  summary: "partial summary committed before disposal",
+                  firstKeptEntryId: event.preparation.firstKeptEntryId,
+                  tokensBefore: event.preparation.tokensBefore,
+                }),
+              };
+            },
+          ],
+        ],
+        ["session_compact", [async () => await postCommitHookBlocked]],
+      ]),
+    );
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      authStorage,
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+      resourceLoader,
+      sessionManager,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+      }),
+    });
+    const subscribeSpy = vi.spyOn(session.agent, "subscribe");
+
+    let completion: Promise<void> = Promise.resolve();
+    const result = compactWithSafetyTimeout(
+      () => {
+        const compactionRun = session.startCompaction();
+        completion = compactionRun.completion;
+        return compactionRun.result;
+      },
+      25,
+      {
+        onCancel: (reason) => session.abortCompaction(reason),
+        acceptResultAfterTimeout: isCompactionTimeoutPartialResult,
+        timeoutResultGraceMs: 50,
+      },
+    );
+
+    await expect(result).resolves.toMatchObject({
+      summary: "partial summary committed before disposal",
+    });
+    session.dispose();
+    releasePostCommitHook();
+    await expect(completion).resolves.toBeUndefined();
+    expect(subscribeSpy).not.toHaveBeenCalled();
   });
 
   it("cancels only the queued compaction whose safety timeout fired", async () => {

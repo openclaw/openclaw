@@ -1277,6 +1277,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         let summaryWithPreservedTurns = "";
         let splitTurnSectionLocal = "";
         let historySummary = "";
+        let completedHistoryStage = false;
         try {
           historySummary =
             messagesToSummarize.length > 0
@@ -1305,6 +1306,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
           summaryWithoutPreservedTurns = historySummary;
+          completedHistoryStage = messagesToSummarize.length > 0;
           if (!timeoutPartialProgress && preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const prefixSummary = await summarizeViaLLM({
               messages: turnPrefixMessages,
@@ -1340,6 +1342,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             preservedTurnsSectionLocal,
           );
         } catch (attemptError) {
+          if (
+            completedHistoryStage &&
+            preparation.isSplitTurn &&
+            turnPrefixMessages.length > 0 &&
+            signal.aborted &&
+            isCompactionSafetyTimeoutError(signal.reason)
+          ) {
+            timeoutPartialProgress = true;
+            partialFirstKeptEntryId = turnPrefixEntryIds?.at(0) ?? preparation.firstKeptEntryId;
+            lastHistorySummary = historySummary;
+            lastSplitTurnSection = "";
+            summary = appendSummarySection(historySummary, preservedTurnsSectionLocal);
+            break;
+          }
           if (lastSuccessfulSummary && attempt > 0) {
             log.warn(
               `Compaction safeguard: quality retry failed on attempt ${attempt + 1}; ` +

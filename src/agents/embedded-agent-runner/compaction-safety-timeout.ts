@@ -19,6 +19,47 @@ const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
 // acceptance token prevents the underlying AgentSession from committing after rejection.
 const COMPACTION_TIMEOUT_SETTLE_GRACE_MS = 10_000;
 
+export async function settleCompactionLifecycleWithinGrace(
+  completion: Promise<void>,
+  timeoutMs: number = COMPACTION_TIMEOUT_SETTLE_GRACE_MS,
+): Promise<boolean> {
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
+  if (!resolvedTimeoutMs) {
+    await completion;
+    return true;
+  }
+
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await new Promise<boolean>((resolve, reject) => {
+      let settled = false;
+      const finish = (value: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(value);
+      };
+      timeout = setTimeout(() => finish(false), resolvedTimeoutMs);
+      timeout.unref?.();
+      completion.then(
+        () => finish(true),
+        (error: unknown) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          reject(toErrorObject(error, "Non-Error lifecycle rejection"));
+        },
+      );
+    });
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 function abortErrorFromSignal(signal: AbortSignal): Error {
   const reason = "reason" in signal ? signal.reason : undefined;
   if (reason instanceof Error) {
