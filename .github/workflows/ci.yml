@@ -1840,8 +1840,11 @@ jobs:
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: |
-          brew install xcodegen swiftlint
-          brew install --HEAD swiftformat
+          set -euo pipefail
+          brew install xcodegen swiftlint mint
+          mint install nicklockwood/SwiftFormat@0.62.1
+          sudo ln -sf "$HOME/.mint/bin/swiftformat" /opt/homebrew/bin/swiftformat
+          swiftformat --version
 
       - name: Detect Swift toolchain cache key
         id: swift-toolchain
@@ -1992,9 +1995,8 @@ jobs:
         run: |
           set -euo pipefail
           brew install xcodegen swiftlint mint
-          mint install nicklockwood/SwiftFormat@main
-          echo "$HOME/.mint/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.mint/bin:$PATH"
+          mint install nicklockwood/SwiftFormat@0.62.1
+          sudo ln -sf "$HOME/.mint/bin/swiftformat" /opt/homebrew/bin/swiftformat
           swiftformat --version
 
       - name: Build iOS app
