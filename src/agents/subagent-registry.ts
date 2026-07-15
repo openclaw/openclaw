@@ -1693,7 +1693,20 @@ const subagentRunManager = createSubagentRunManager({
   resumedRuns,
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
-  callGateway: (request) => subagentRegistryDeps.callGateway(request),
+  callGateway: async <T>(request: Parameters<typeof callGateway>[0]) => {
+    if (request.method === "agent.wait") {
+      const gatewayRuntime = getGatewayRecoveryRuntime();
+      if (gatewayRuntime) {
+        // Registry waits are Gateway-owned lifecycle work. Keep them on the
+        // owning instance when one exists; standalone processes authenticate normally.
+        return await gatewayRuntime.waitForAgent<T>(
+          (request.params ?? {}) as Record<string, unknown>,
+          request.timeoutMs ?? undefined,
+        );
+      }
+    }
+    return await subagentRegistryDeps.callGateway<T>(request);
+  },
   getRuntimeConfig: () => subagentRegistryDeps.getRuntimeConfig(),
   ensureListener,
   startSweeper,
