@@ -2,7 +2,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -74,6 +75,8 @@ const state = vi.hoisted(() => ({
   runEmbeddedAgentMock: vi.fn(),
 }));
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
   for (const item of items) {
@@ -108,7 +111,7 @@ function requireStoredSessionEntry(storePath: string, sessionKey = "main"): Sess
 }
 
 async function createSessionStoreFile(entry: SessionEntry): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-"));
+  const dir = tempDirs.make("openclaw-agent-runner-");
   const storePath = join(dir, "sessions.json");
   await replaceSessionEntry({ storePath, sessionKey: "main" }, entry);
   return storePath;
