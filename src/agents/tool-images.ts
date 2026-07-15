@@ -336,8 +336,9 @@ export async function sanitizeContentBlocksImages(
 
     // Estimate decoded bytes on the raw payload before trim/canonicalize/decode
     // so pathological multi-GB base64 cannot force a transient large allocation.
-    // maxBytes is the resize target; MAX_IMAGE_INPUT_BYTES bounds the decode
-    // against OOM-sized input keyed to MAX_IMAGE_INPUT_PIXELS (25MP ~= 100MB).
+    // maxBytes is the post-decode resize target; MAX_IMAGE_INPUT_BYTES is a
+    // conservative pre-decode ceiling (10 MiB) far below the 25MP/100MB
+    // processing headroom, so legitimate tool images still decode and resize.
     if (estimateBase64DecodedBytes(block.data) > MAX_IMAGE_INPUT_BYTES) {
       out.push({
         type: "text",
