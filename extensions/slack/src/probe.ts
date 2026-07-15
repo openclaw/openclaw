@@ -21,10 +21,13 @@ export async function probeSlack(
   // slow Slack API aborts the underlying HTTP request and releases the socket,
   // instead of a Promise-race timeout that leaves the request dangling. A single
   // attempt (retries: 0) keeps the probe a fast pass/fail and avoids background
-  // retry sockets after the timeout fires (issue #106565).
+  // retry sockets after the timeout fires. Rate-limit retries are rejected
+  // immediately so a 429 does not stall diagnostics through the WebClient's
+  // queue pause (issue #106565).
   const client = createSlackWebClient(token, {
     timeout: timeoutMs,
     retryConfig: { retries: 0 },
+    rejectRateLimitedCalls: true,
   });
   const start = Date.now();
   try {

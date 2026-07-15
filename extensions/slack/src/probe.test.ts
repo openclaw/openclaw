@@ -12,6 +12,7 @@ vi.mock("./client.js", () => ({
 const ABORTABLE_CLIENT_OPTIONS = {
   timeout: 2500,
   retryConfig: { retries: 0 },
+  rejectRateLimitedCalls: true,
 };
 
 describe("probeSlack", () => {
