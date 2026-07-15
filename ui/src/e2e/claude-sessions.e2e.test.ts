@@ -163,6 +163,48 @@ function resumableClaudeCatalog() {
   };
 }
 
+function hostGroupedNativeCatalogs() {
+  const catalog = (id: "claude" | "codex", label: string) => ({
+    id,
+    label,
+    capabilities: { continueSession: true, archive: false },
+    hosts: [
+      {
+        hostId: "gateway:local",
+        label: "Gateway Mac",
+        kind: "gateway",
+        connected: true,
+        sessions: [
+          {
+            threadId: `${id}-local`,
+            name: `${label} local plan`,
+            status: "stored",
+            canContinue: true,
+            canArchive: false,
+          },
+        ],
+      },
+      {
+        hostId: "node:build",
+        label: "Build Node",
+        kind: "node",
+        connected: true,
+        nodeId: "build",
+        sessions: [
+          {
+            threadId: `${id}-remote`,
+            name: `${label} remote review`,
+            status: "stored",
+            canContinue: false,
+            canArchive: false,
+          },
+        ],
+      },
+    ],
+  });
+  return { catalogs: [catalog("claude", "Claude Code"), catalog("codex", "Codex")] };
+}
+
 async function openClaudeCatalogTerminal(page: Page) {
   await page.goto(`${server.baseUrl}chat`);
   const row = page.locator('[data-session-key^="catalog:"]').filter({
@@ -184,6 +226,38 @@ suite("Claude native session catalog", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("groups Claude and Codex sessions by Gateway and paired-node host", async () => {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: { "sessions.catalog.list": hostGroupedNativeCatalogs() },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      for (const catalogId of ["claude", "codex"]) {
+        const section = page.locator(`[data-session-section="catalog:${catalogId}"]`);
+        const gatewayHost = section.locator('[data-session-catalog-host="gateway:local"]');
+        const buildHost = section.locator('[data-session-catalog-host="node:build"]');
+        await gatewayHost.getByText("Gateway Mac", { exact: true }).waitFor();
+        await buildHost.getByText("Build Node", { exact: true }).waitFor();
+        expect(await gatewayHost.locator(".sidebar-recent-session").count()).toBe(1);
+        expect(await buildHost.locator(".sidebar-recent-session").count()).toBe(1);
+      }
+
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await fs.mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          path: path.join(artifactDir, "native-session-host-groups.png"),
+          fullPage: true,
+        });
+      }
+    } finally {
+      await page.close();
+    }
   });
 
   it("shows catalog connection progress until the first terminal output", async () => {

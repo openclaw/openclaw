@@ -1,6 +1,7 @@
 // Covers shell environment fallback loading.
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -591,6 +592,37 @@ describe("shell env fallback", () => {
 
     expect(result).toEqual({ executable: "/bin/sh", pathEnv: "/bin" });
     expect(exec).toHaveBeenCalledOnce();
+  });
+
+  it("prefers the login-shell executable over a daemon PATH candidate when requested", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-path-"));
+    const daemonBin = path.join(root, "daemon-bin");
+    const shellBin = path.join(root, "shell-bin");
+    fs.mkdirSync(daemonBin);
+    fs.mkdirSync(shellBin);
+    const daemonTool = path.join(daemonBin, "tool");
+    const shellTool = path.join(shellBin, "tool");
+    fs.writeFileSync(daemonTool, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    fs.writeFileSync(shellTool, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const exec = vi.fn(() => Buffer.from(`PATH=${shellBin}\0`));
+
+    try {
+      const result = resolveExecutableFromUserShellPathWithPathEnv("tool", {
+        env: { PATH: daemonBin, SHELL: "/bin/sh" },
+        exec: exec as unknown as Parameters<
+          typeof resolveExecutableFromUserShellPathWithPathEnv
+        >[1]["exec"],
+        preferLoginShell: true,
+      });
+
+      expect(result).toEqual({ executable: shellTool, pathEnv: shellBin });
+      expect(exec).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("returns the login-shell PATH needed by env-based executable launchers", () => {

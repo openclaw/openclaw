@@ -331,6 +331,7 @@ export function resolveExecutableFromUserShellPathWithPathEnv(
     env: NodeJS.ProcessEnv;
     pathEnv?: string;
     includeExtensionless?: boolean;
+    preferLoginShell?: boolean;
     timeoutMs?: number;
     exec?: typeof execFileSync;
     platform?: NodeJS.Platform;
@@ -342,7 +343,9 @@ export function resolveExecutableFromUserShellPathWithPathEnv(
     opts.env,
     { includeExtensionless: opts.includeExtensionless },
   );
-  if (direct) {
+  // Interactive catalog terminals should mirror the operator's shell command.
+  // A service PATH can contain package shims that are absent or unusable there.
+  if (direct && !opts.preferLoginShell) {
     return { executable: direct };
   }
   const shellPath = getShellPathFromLoginShell({
@@ -352,12 +355,15 @@ export function resolveExecutableFromUserShellPathWithPathEnv(
     platform: opts.platform,
   });
   if (!shellPath) {
-    return undefined;
+    return direct ? { executable: direct } : undefined;
   }
   const resolved = resolveExecutableFromPathEnv(executable, shellPath, opts.env, {
     includeExtensionless: opts.includeExtensionless,
   });
-  return resolved ? { executable: resolved, pathEnv: shellPath } : undefined;
+  if (resolved) {
+    return { executable: resolved, pathEnv: shellPath };
+  }
+  return direct ? { executable: direct } : undefined;
 }
 
 export function getShellEnvAppliedKeys(): string[] {

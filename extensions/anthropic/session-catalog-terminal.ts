@@ -27,8 +27,10 @@ type ClaudeTerminalDependencies = {
 export function isClaudeCliAvailable(pathEnv = process.env.PATH ?? ""): boolean {
   const env = { ...process.env, PATH: pathEnv };
   return (
-    resolveExecutableFromPathEnv("claude", pathEnv, env, { fallbackToLoginShell: true }) !==
-    undefined
+    resolveExecutableFromPathEnv("claude", pathEnv, env, {
+      fallbackToLoginShell: true,
+      preferLoginShell: true,
+    }) !== undefined
   );
 }
 
@@ -96,6 +98,7 @@ export async function openClaudeCatalogTerminal(
     }
     const resolution = resolveExecutableFromPathEnv("claude", process.env.PATH ?? "", process.env, {
       fallbackToLoginShell: true,
+      preferLoginShell: true,
       withPathEnv: true,
     });
     if (!resolution) {
