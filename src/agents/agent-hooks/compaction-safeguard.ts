@@ -289,15 +289,27 @@ function selectAlignedEntryIds(params: {
   if (params.sourceEntryIds?.length !== params.sourceMessages.length) {
     return undefined;
   }
-  const selected = new Set(params.selectedMessages);
-  const entryIds = params.sourceMessages.flatMap((message, index) => {
-    if (!selected.has(message)) {
-      return [];
+  const entryIdsByMessage = new Map<AgentMessage, string[]>();
+  for (const [index, message] of params.sourceMessages.entries()) {
+    const entryId = params.sourceEntryIds[index];
+    if (!entryId) {
+      return undefined;
     }
-    const entryId = params.sourceEntryIds?.at(index);
-    return entryId ? [entryId] : [];
-  });
-  return entryIds.length === params.selectedMessages.length ? entryIds : undefined;
+    const entryIds = entryIdsByMessage.get(message) ?? [];
+    entryIds.push(entryId);
+    entryIdsByMessage.set(message, entryIds);
+  }
+
+  const selectedEntryIds: string[] = [];
+  for (const message of params.selectedMessages) {
+    const entryIds = entryIdsByMessage.get(message);
+    const entryId = entryIds?.shift();
+    if (!entryId) {
+      return undefined;
+    }
+    selectedEntryIds.push(entryId);
+  }
+  return selectedEntryIds;
 }
 
 function resolvePartialFirstKeptEntryId(params: {

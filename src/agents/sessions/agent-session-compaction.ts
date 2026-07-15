@@ -36,7 +36,13 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     customInstructions?: string,
     requestAbortSignal?: AbortSignal,
   ): Promise<CompactionResult> {
-    return await this.startCompaction(customInstructions, requestAbortSignal).result;
+    const compaction = this.startCompaction(customInstructions, requestAbortSignal);
+    // Public callers observe the full lifecycle through completion. The internal
+    // result promise can reject at the same failure point, so mark that plumbing
+    // rejection as observed while preserving it for the return below.
+    void compaction.result.catch(() => {});
+    await compaction.completion;
+    return await compaction.result;
   }
 
   startCompaction(
@@ -122,7 +128,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         customInstructions,
         mode: "manual",
         onTimeoutPartialCommitted: (result) => {
-          emitCompactionEnd(result);
           onTimeoutPartialCommitted?.(result);
         },
         settings,

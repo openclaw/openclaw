@@ -313,6 +313,107 @@ describe("AgentSession compaction timeout partial results", () => {
     }
   });
 
+  it("keeps public completion and compaction_end pending until post-commit hooks finish", async () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({
+      role: "user",
+      content: "user context ".repeat(200),
+      timestamp: 1,
+    } as Parameters<SessionManager["appendMessage"]>[0]);
+    appendPersistedAssistantMessage({
+      sessionManager,
+      content: "assistant context ".repeat(200),
+    });
+
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
+    const timeoutError = new CompactionSafetyTimeoutError();
+    let releasePostCommitHook = () => {};
+    const postCommitHookBlocked = new Promise<void>((resolve) => {
+      releasePostCommitHook = resolve;
+    });
+    let markPostCommitHookStarted = () => {};
+    const postCommitHookStarted = new Promise<void>((resolve) => {
+      markPostCommitHookStarted = resolve;
+    });
+    const resourceLoader = createResourceLoaderWithHandlers(
+      new Map([
+        [
+          "session_before_compact",
+          [
+            async (rawEvent: unknown) => {
+              const event = rawEvent as {
+                preparation: { firstKeptEntryId: string; tokensBefore: number };
+              };
+              session.abortCompaction(timeoutError);
+              return {
+                compaction: markCompactionTimeoutPartialResult({
+                  summary: "public lifecycle stays pending",
+                  firstKeptEntryId: event.preparation.firstKeptEntryId,
+                  tokensBefore: event.preparation.tokensBefore,
+                }),
+              };
+            },
+          ],
+        ],
+        [
+          "session_compact",
+          [
+            async () => {
+              markPostCommitHookStarted();
+              await postCommitHookBlocked;
+            },
+          ],
+        ],
+      ]),
+    );
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      authStorage,
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+      resourceLoader,
+      sessionManager,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+      }),
+    });
+    const compactionEndEvents: unknown[] = [];
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEndEvents.push(event);
+      }
+    });
+
+    try {
+      const publicCompaction = session.compact();
+      await postCommitHookStarted;
+      const completedBeforeHookRelease = await Promise.race([
+        publicCompaction.then(() => true),
+        new Promise<false>((resolve) => {
+          setTimeout(() => resolve(false), 10);
+        }),
+      ]);
+
+      expect(completedBeforeHookRelease).toBe(false);
+      expect(compactionEndEvents).toHaveLength(0);
+
+      releasePostCommitHook();
+      await expect(publicCompaction).resolves.toMatchObject({
+        summary: "public lifecycle stays pending",
+      });
+      expect(compactionEndEvents).toEqual([
+        expect.objectContaining({
+          type: "compaction_end",
+          result: expect.objectContaining({ summary: "public lifecycle stays pending" }),
+          aborted: false,
+        }),
+      ]);
+    } finally {
+      releasePostCommitHook();
+    }
+  });
+
   it("does not reconnect after disposal while a post-commit hook finishes", async () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage({

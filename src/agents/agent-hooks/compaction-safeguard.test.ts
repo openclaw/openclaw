@@ -1684,6 +1684,93 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result.compaction?.firstKeptEntryId).toBe("entry-newer");
   });
 
+  it("maps a timeout partial boundary in repaired summarization order", async () => {
+    const controller = new AbortController();
+    const assistantToolCall = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-late", name: "read", arguments: {} }],
+      timestamp: 1,
+    } as unknown as AgentMessage;
+    const unsummarizedUser = {
+      role: "user",
+      content: "must remain verbatim",
+      timestamp: 2,
+    } as AgentMessage;
+    const lateToolResult = {
+      role: "toolResult",
+      toolCallId: "call-late",
+      toolName: "read",
+      content: [{ type: "text", text: "late result" }],
+      timestamp: 3,
+    } as unknown as AgentMessage;
+    const preservedMessages = [
+      { role: "user", content: "recent ask one", timestamp: 4 },
+      { role: "assistant", content: "recent answer one", timestamp: 5 },
+      { role: "user", content: "recent ask two", timestamp: 6 },
+      { role: "assistant", content: "recent answer two", timestamp: 7 },
+      { role: "user", content: "recent ask three", timestamp: 8 },
+      { role: "assistant", content: "recent answer three", timestamp: 9 },
+    ] as AgentMessage[];
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockImplementationOnce(async (params) => {
+      expect(params.messages).toEqual([assistantToolCall, lateToolResult, unsummarizedUser]);
+      controller.abort(new CompactionSafetyTimeoutError());
+      params.onPartialSummary?.({
+        kind: "safety-timeout",
+        completedChunks: 1,
+        totalChunks: 2,
+        completedMessages: 2,
+        totalMessages: 3,
+      });
+      return "Summary of assistant and tool result";
+    });
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+    });
+    const event = createCompactionEvent({ messageText: "unused", tokensBefore: 1_500 });
+    event.signal = controller.signal;
+    event.preparation.messagesToSummarize = [
+      assistantToolCall,
+      unsummarizedUser,
+      lateToolResult,
+      ...preservedMessages,
+    ];
+    Object.assign(event.preparation, {
+      messageEntryIdsToSummarize: [
+        "entry-assistant",
+        "entry-unsummarized-user",
+        "entry-tool-result",
+        "entry-recent-user-1",
+        "entry-recent-assistant-1",
+        "entry-recent-user-2",
+        "entry-recent-assistant-2",
+        "entry-recent-user-3",
+        "entry-recent-assistant-3",
+      ],
+      firstKeptEntryId: "entry-retained-tail",
+    });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const result = (await createCompactionHandler()(
+      event,
+      createCompactionContext({
+        sessionManager,
+        getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+      }),
+    )) as {
+      cancel?: boolean;
+      compaction?: { firstKeptEntryId?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(isCompactionTimeoutPartialResult(result.compaction)).toBe(true);
+    expect(result.compaction?.firstKeptEntryId).toBe("entry-unsummarized-user");
+  });
+
   it("keeps a completed history stage when split-turn prefix times out immediately", async () => {
     const controller = new AbortController();
     mockSummarizeInStages.mockReset();
