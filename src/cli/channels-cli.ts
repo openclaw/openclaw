@@ -51,7 +51,7 @@ function getOptionNames(command: Command): string[] {
   return command.options.map((option) => option.attributeName());
 }
 
-export function resolveChannelsAddOptions(
+function resolveChannelsAddOptions(
   channelArg: string | undefined,
   opts: Record<string, unknown>,
 ): Record<string, unknown> {
