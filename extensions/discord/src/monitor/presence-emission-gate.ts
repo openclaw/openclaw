@@ -50,7 +50,7 @@ type DiscordPresenceBurstReservation = number;
 
 type DiscordPresenceBurstDecision =
   | { allowed: true; reservation: DiscordPresenceBurstReservation }
-  | { allowed: false; reason: "burst"; shouldLog: boolean };
+  | { allowed: false; reason: "burst" | "burst-pending"; shouldLog: boolean };
 
 /**
  * Per-account lifecycle gate for online-presence events. Reconnect state belongs to the Gateway
@@ -98,7 +98,10 @@ export class DiscordPresenceEmissionGate {
     if (state.reservations.length >= options.burstLimit) {
       const shouldLog = !state.logged;
       state.logged = true;
-      return { allowed: false, reason: "burst", shouldLog };
+      const reason = state.reservations.some((reservation) => !reservation.committed)
+        ? "burst-pending"
+        : "burst";
+      return { allowed: false, reason, shouldLog };
     }
     state.logged = false;
     const reservation = { id: this.nextReservationId++, atMs: nowMs, committed: false };

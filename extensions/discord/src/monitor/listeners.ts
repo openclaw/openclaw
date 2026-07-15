@@ -305,6 +305,11 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
           guildId: data.guild_id,
         });
       }
+      if (burstGate.reason === "burst-pending") {
+        // Pending permission checks cap REST concurrency, but they are not emitted greetings.
+        // Keep this member retryable after a lookup settles instead of advancing its baseline.
+        return;
+      }
       this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
       return;
     }

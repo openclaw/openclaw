@@ -685,6 +685,49 @@ describe("DiscordPresenceListener", () => {
     );
   });
 
+  it("keeps an eligible member retryable while lookup admission is full", async () => {
+    let nowMs = 30_000;
+    let resolveFirstLookup!: (allowed: boolean) => void;
+    mocks.canViewDiscordGuildChannel
+      .mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            resolveFirstLookup = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(true);
+    const listener = new DiscordPresenceListener({
+      cfg: {} as OpenClawConfig,
+      accountId: "molty",
+      guildEntries: {
+        "guild-1": { presenceEvents: { channelId: "channel-1", burstLimit: 1 } },
+      },
+      cooldownStore: cooldownStore(),
+      nowMs: () => nowMs,
+    });
+    const humanClient = client();
+
+    listener.seedGuildSnapshot(guildSnapshot([]));
+    const unrelated = listener.handle(presence("online", "unrelated"), humanClient);
+    await vi.waitFor(() => expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledTimes(1));
+
+    nowMs += 1;
+    await listener.handle(presence("online", "eligible"), humanClient);
+    expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+
+    resolveFirstLookup(false);
+    await unrelated;
+    nowMs += 1;
+    await listener.handle(presence("online", "eligible"), humanClient);
+
+    expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledTimes(2);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining('user_id="eligible"'),
+      expect.anything(),
+    );
+  });
+
   it("keeps burst limits independent per guild", async () => {
     let nowMs = 30_000;
     const listener = new DiscordPresenceListener({

@@ -131,7 +131,7 @@ describe("DiscordPresenceEmissionGate", () => {
     }
     expect(gate.reserveBurst(guildId, 12_000, burstOptions)).toMatchObject({
       allowed: false,
-      reason: "burst",
+      reason: "burst-pending",
     });
 
     gate.commitBurst(guildId, first.reservation, 12_000);
