@@ -106,11 +106,16 @@ function renderPresentation(presentation: ApprovalPresentation) {
     <div class="approval-page__preview-label">${t("approvalPage.requestLabel")}</div>
     <div class=${previewClass}>${presentation.description}</div>
     <dl class="approval-page__meta">
-      ${presentation.kind === "plugin"
-        ? html`${renderMetaRow(t("execApproval.labels.severity"), presentation.severity)}
-          ${renderMetaRow(t("execApproval.labels.plugin"), presentation.pluginId)}
-          ${renderMetaRow(t("approvalPage.toolLabel"), presentation.toolName)}`
-        : nothing}
+      ${
+        // severity/pluginId/toolName exist only on the plugin presentation.
+        // exec is rendered in its own branch above and carries no toolName
+        // (ExecApprovalPresentationSchema is closed); system-agent has none.
+        presentation.kind === "plugin"
+          ? html`${renderMetaRow(t("execApproval.labels.severity"), presentation.severity)}
+            ${renderMetaRow(t("execApproval.labels.plugin"), presentation.pluginId)}
+            ${renderMetaRow(t("approvalPage.toolLabel"), presentation.toolName)}`
+          : nothing
+      }
       ${renderMetaRow(t("execApproval.labels.agent"), presentation.agentId)}
     </dl>
   `;

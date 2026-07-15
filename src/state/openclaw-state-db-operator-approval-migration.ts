@@ -125,14 +125,24 @@ export function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
     return false;
   }
   const columns = COLUMNS.join(", ");
-  db.exec(canonicalCreateSql());
-  db.exec(`
-    INSERT INTO operator_approvals_migration_new (${columns})
-    SELECT ${columns} FROM operator_approvals;
-    DROP TABLE operator_approvals;
-    ALTER TABLE operator_approvals_migration_new RENAME TO operator_approvals;
-  `);
-  db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+  // The copy/drop/rename must be atomic: a crash after DROP but before RENAME
+  // would strand the rows in the temp table, and the next schema bootstrap would
+  // recreate an empty canonical table and abandon them.
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(canonicalCreateSql());
+    db.exec(`
+      INSERT INTO operator_approvals_migration_new (${columns})
+      SELECT ${columns} FROM operator_approvals;
+      DROP TABLE operator_approvals;
+      ALTER TABLE operator_approvals_migration_new RENAME TO operator_approvals;
+    `);
+    db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
   return true;
 }
 

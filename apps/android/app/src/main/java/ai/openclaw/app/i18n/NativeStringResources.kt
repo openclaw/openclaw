@@ -1394,7 +1394,6 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "remove" to R.string.native_7e5608ab610017af,
     "rename group" to R.string.native_5fa1d457ddfcd26c,
     "requested \${relativeDeviceTime(it)}" to R.string.native_d0d0de0039c7990b,
-    "restart" to R.string.native_3ace60b0a0c1b6c9,
     "role add" to R.string.native_c58ab237bd246028,
     "role remove" to R.string.native_7098dec92670efb0,
     "roles" to R.string.native_66cf5513b37462be,
