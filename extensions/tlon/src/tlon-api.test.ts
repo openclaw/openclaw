@@ -132,6 +132,10 @@ describe("uploadFile memex upload hardening", () => {
     expect(result).toEqual({ url: "https://memex.tlon.network/files/uploaded.png" });
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
     expect(mockGuardedFetch).toHaveBeenCalledTimes(2);
+    // Both guarded fetch calls carry the upload timeout.
+    for (let i = 0; i < 2; i++) {
+      expect(guardedFetchCall(i).timeoutMs).toBe(300_000);
+    }
     const firstCall = guardedFetchCall(0);
     expect(firstCall?.url).toBe("https://memex.tlon.network/v1/zod/upload");
     expect(firstCall?.init?.method).toBe("PUT");

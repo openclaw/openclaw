@@ -10,6 +10,8 @@ import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
 import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js";
 
+const TLON_UPLOAD_TIMEOUT_MS = 300_000;
+
 type ClientConfig = {
   shipUrl: string;
   shipName: string;
@@ -251,6 +253,7 @@ async function getMemexUploadUrl(params: {
       auditContext: "tlon-memex-upload-url",
       capture: false,
       maxRedirects: 0,
+      timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
     });
     release = guarded.release;
     if (!guarded.response.ok) {
@@ -318,6 +321,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
         auditContext: "tlon-memex-upload",
         capture: false,
         maxRedirects: 0,
+        timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
       });
       release = guarded.release;
       assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");
@@ -376,6 +380,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
       capture: false,
       maxRedirects: 0,
       policy: privateNetworkPolicy,
+      timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
     });
     release = guarded.release;
     if (!guarded.response.ok) {
