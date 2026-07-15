@@ -54,6 +54,24 @@ describe("dir.fetch process wrapper", () => {
     );
   });
 
+  it("falls back to entry listing for preflight-only requests when the optional du probe fails", async () => {
+    runCommandBufferedMock.mockRejectedValueOnce(new Error("du failed"));
+
+    await expect(
+      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
+    ).resolves.toMatchObject({
+      ok: true,
+      entries: ["ok.txt"],
+      fileCount: 1,
+      preflightOnly: true,
+    });
+    expect(runCommandBufferedMock).toHaveBeenCalledOnce();
+    expect(runCommandBufferedMock).toHaveBeenCalledWith(
+      ["du", "-sk", tmpRoot],
+      expect.objectContaining({ discardOutput: { stderr: true } }),
+    );
+  });
+
   it("rejects preflight-only requests when du reports an oversized directory", async () => {
     runCommandBufferedMock.mockResolvedValueOnce(
       commandResult({ stdout: Buffer.from("999\t/tmp/project\n") }),
