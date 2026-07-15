@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
@@ -2530,11 +2531,14 @@ export async function applyShortTermPromotions(
       compactedDates = compaction.droppedDates;
       const baseMemory = compaction.compacted;
       const header = baseMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
-      await fs.writeFile(
-        memoryPath,
-        `${header}${withTrailingNewline(baseMemory)}${section}`,
-        "utf-8",
-      );
+      await replaceFileAtomic({
+        filePath: memoryPath,
+        content: `${header}${withTrailingNewline(baseMemory)}${section}`,
+        mode: 0o600,
+        preserveExistingMode: true,
+        tempPrefix: `${path.basename(memoryPath)}.promotion`,
+        throwOnCleanupError: true,
+      });
     }
 
     for (const candidate of rehydratedSelected) {
