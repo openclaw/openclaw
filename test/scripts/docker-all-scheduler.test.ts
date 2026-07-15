@@ -301,6 +301,33 @@ describe("scripts/test-docker-all scheduler", () => {
     }
   });
 
+  it("rejects candidate-controlled survivor omissions without trusted opt-in", () => {
+    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-all-untrusted-filter-`);
+    const assertionsFile = path.join(root, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    try {
+      mkdirSync(path.dirname(assertionsFile), { recursive: true });
+      writeFileSync(assertionsFile, 'const SCENARIOS = new Set(["unrelated"]);\n');
+      const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "0",
+          OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+          OPENCLAW_DOCKER_ALL_LANES: "published-upgrade-survivor",
+          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+          OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: root,
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("require trusted workflow opt-in");
+      expect(result.stdout).not.toContain("Dry run complete");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("writes a passing summary when a frozen target cannot run selected survivor lanes", () => {
     const root = mkdtempSync(`${tmpdir()}/openclaw-docker-all-filtered-`);
     const logDir = path.join(root, "logs");
@@ -313,6 +340,7 @@ describe("scripts/test-docker-all scheduler", () => {
         encoding: "utf8",
         env: {
           ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
           OPENCLAW_DOCKER_ALL_BUILD: "0",
           OPENCLAW_DOCKER_ALL_LANES: "published-upgrade-survivor",
           OPENCLAW_DOCKER_ALL_LOG_DIR: logDir,
@@ -348,6 +376,7 @@ describe("scripts/test-docker-all scheduler", () => {
         encoding: "utf8",
         env: {
           ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
           OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
           OPENCLAW_DOCKER_ALL_LANES: "published-upgrade-survivor,plugin-binding-command-escape",
           OPENCLAW_DOCKER_ALL_TIMINGS: "0",
