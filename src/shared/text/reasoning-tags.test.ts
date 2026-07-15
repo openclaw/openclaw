@@ -265,14 +265,69 @@ describe("stripReasoningTagsFromText", () => {
 
     it.each([
       {
-        name: "strips reasoning tags with CJK fullwidth quotation marks (U+300C-U+300F)",
-        input: "A 「think」hidden『/log』 B",
+        name: "strips U+300C fullwidth think tag",
+        input: "A 「think」 B",
         expected: "A  B",
       },
       {
-        name: "strips mixed ASCII and fullwidth quote variants",
-        input: "A 「think hidden』 visible 」/log『 B",
-        expected: "A  visible  B",
+        name: "strips U+300E fullwidth think tag",
+        input: "A 『think』 B",
+        expected: "A  B",
+      },
+      {
+        name: "strips fullwidth /think close tag",
+        input: "A 「/think」 B",
+        expected: "A  B",
+      },
+      {
+        name: "strips fullwidth THINK uppercase",
+        input: "A 「THINK」 B",
+        expected: "A  B",
+      },
+      {
+        name: "strips fullwidth thinking tag",
+        input: "A 「thinking」 B",
+        expected: "A  B",
+      },
+      {
+        name: "strips fullwidth thought tag (U+300E opener)",
+        input: "A 『thought』 B",
+        expected: "A  B",
+      },
+      {
+        name: "strips fullwidth final open and close pair",
+        input: "A 「final」answer「/final」 B",
+        expected: "A answer B",
+      },
+      {
+        name: "strips fullwidth antml:think namespaced tag",
+        input: "A 「antml:think」 B",
+        expected: "A  B",
+      },
+      {
+        name: "strips fullwidth mm:thinking namespaced tag (U+300E opener)",
+        input: "A 『mm:thinking』 B",
+        expected: "A  B",
+      },
+      {
+        name: "preserves visible CJK quotes that are not reasoning tags",
+        input: "「quoted」<think>hidden</think>",
+        expected: "「quoted」",
+      },
+      {
+        name: "preserves Chinese visible content alongside ASCII reasoning",
+        input: "你好「quoted」世界<think>x</think>",
+        expected: "你好「quoted」世界",
+      },
+      {
+        name: "preserves 「hello world」 which is not a tag",
+        input: "A 「hello world」 B",
+        expected: "A 「hello world」 B",
+      },
+      {
+        name: "preserves fullwidth tag inside backtick code region",
+        input: "`「think」hidden`",
+        expected: "`「think」hidden`",
       },
     ] as const)("$name", (testCase) => {
       expectStrippedCase(testCase);

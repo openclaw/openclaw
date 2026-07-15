@@ -10,6 +10,39 @@ export type ReasoningTagTrim = "none" | "start" | "both";
 const QUICK_TAG_RE = /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking|final)\b/i;
 const THINKING_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
+// Fullwidth-bracketed reasoning tags. Models occasionally emit CJK fullwidth
+// quotation marks (U+300C 「, U+300D 」, U+300E 『, U+300F 』) around reasoning
+// tag names instead of ASCII angle brackets. Match such regions so they can be
+// stripped by index without rewriting visible CJK quotes elsewhere in the text.
+const FULLWIDTH_TAG_REGION_RE =
+  /[\u300C\u300E]\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking|final)[^\u300C\u300D\u300E\u300F]*[\u300D\u300F]/gi;
+const FULLWIDTH_TAG_NAME_RE =
+  /^\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking|final)\s*$/i;
+
+function stripFullwidthReasoningTags(text: string): string {
+  const matches = text.matchAll(FULLWIDTH_TAG_REGION_RE);
+  const regions: Array<{ index: number; length: number }> = [];
+  const codeRegions = findCodeRegions(text);
+  for (const m of matches) {
+    const idx = m.index ?? 0;
+    if (isInsideCode(idx, codeRegions)) {
+      continue;
+    }
+    const inner = m[0].slice(1, -1);
+    if (FULLWIDTH_TAG_NAME_RE.test(inner)) {
+      regions.push({ index: idx, length: m[0].length });
+    }
+  }
+  if (regions.length === 0) {
+    return text;
+  }
+  let result = text;
+  for (let i = regions.length - 1; i >= 0; i--) {
+    const r = regions[i]!;
+    result = result.slice(0, r.index) + result.slice(r.index + r.length);
+  }
+  return result;
+}
 
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {
@@ -40,30 +73,27 @@ export function stripReasoningTagsFromText(
   if (!text) {
     return text;
   }
-  // Normalize CJK/fullwidth quotation marks in tag delimiters before pattern matching.
-  // Fullwidth quotes (U+300C 「, U+300D 」, U+300E ❲, U+300F ❳) are commonly inserted
-  // by models at stream boundaries; the ASCII variants (<, >) are used in the regex.
-  // ASCII-opening brackets already match the QUICK_TAG_RE pattern.
-  const normalizedText = text
-    .replace(/\u300C/g, "<")
-    .replace(/\u300D/g, ">")
-    .replace(/\u300E/g, "<")
-    .replace(/\u300F/g, ">");
-  const quickTagMatch = normalizedText.match(QUICK_TAG_RE);
-  if (!quickTagMatch) {
+  // Strip fullwidth-bracketed reasoning/final tags by index so visible CJK
+  // quotes elsewhere in the text are preserved. Pre-step before ASCII matching.
+  const fullwidthStripped = stripFullwidthReasoningTags(text);
+  const quickTagMatch = QUICK_TAG_RE.test(fullwidthStripped);
+  if (!quickTagMatch && fullwidthStripped === text) {
+    // No fullwidth regions matched and no ASCII tag markers — return original
+    // text untouched so visible CJK quotes are not perturbed.
     return text;
   }
+  let cleaned = fullwidthStripped;
 
   const mode = options?.mode ?? "strict";
   const trimMode = options?.trim ?? "both";
-
-  let cleaned = normalizedText;
   const matches = findFinalTagMatches(cleaned);
   THINKING_TAG_RE.lastIndex = 0;
   const hasThinkingTag = THINKING_TAG_RE.test(cleaned);
   THINKING_TAG_RE.lastIndex = 0;
   if (matches.length === 0 && !hasThinkingTag) {
-    return text;
+    // No ASCII tags remain; if fullwidth regions were stripped, return the
+    // pre-stripped text so those tags don't leak back into the visible output.
+    return fullwidthStripped;
   }
   if (matches.length > 0) {
     const finalMatches: Array<{ start: number; length: number; inCode: boolean }> = [];
