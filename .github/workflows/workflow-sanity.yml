@@ -198,8 +198,26 @@ jobs:
           mapfile -d '' -t workflow_files < <(
             find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z
           )
+          lint_workflow() {
+            local exit_code workflow_file="$1"
+            for attempt in 1 2; do
+              echo "actionlint ${workflow_file} (attempt ${attempt}/2)"
+              set +e
+              timeout --foreground 30s actionlint "${workflow_file}"
+              exit_code=$?
+              set -e
+              if [[ "${exit_code}" -eq 0 ]]; then
+                return 0
+              fi
+              if [[ "${exit_code}" -ne 124 || "${attempt}" -eq 2 ]]; then
+                return "${exit_code}"
+              fi
+              echo "::warning title=actionlint timed out::Retrying ${workflow_file} once after a runner-level stall."
+            done
+          }
           for workflow_file in "${workflow_files[@]}"; do
-            actionlint "${workflow_file}"
+            # Bound each external process so a runner stall reports the exact workflow.
+            lint_workflow "${workflow_file}"
           done
 
       - name: Audit all workflows with zizmor
