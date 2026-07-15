@@ -46,10 +46,9 @@ describe("tool image sanitizer oversized input cap", () => {
     );
 
     expect(out).toHaveLength(1);
-    expect(out[0].type).toBe("text");
-    expect((out[0] as { type: "text"; text: string }).text).toContain(
-      "image exceeds input size limit",
-    );
+    const first = out[0] as { type: "text"; text: string };
+    expect(first.type).toBe("text");
+    expect(first.text).toContain("image exceeds input size limit");
   });
 
   it("passes through small input under the cap", async () => {
