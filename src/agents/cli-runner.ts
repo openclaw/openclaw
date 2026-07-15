@@ -486,7 +486,9 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
   params.onExecutionStarted?.();
   const hookStartedAt = Date.now();
   const earlyHookRunner = getGlobalHookRunner();
-  if (earlyHookRunner?.hasHooks("before_agent_reply")) {
+  const supportsBeforeAgentReply =
+    params.trigger === "user" || params.trigger === "heartbeat" || params.trigger === "cron";
+  if (supportsBeforeAgentReply && earlyHookRunner?.hasHooks("before_agent_reply")) {
     const hookContext = {
       runId: params.runId,
       jobId: params.jobId,

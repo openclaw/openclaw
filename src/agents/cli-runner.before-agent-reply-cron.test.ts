@@ -191,6 +191,20 @@ describe("runCliAgent before_agent_reply seam", () => {
     }
   });
 
+  it("does not expose internal manual runs to before_agent_reply hooks", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    executePreparedCliRunMock.mockResolvedValue({ text: "manual result" });
+
+    await runCliAgent({
+      ...baseRunParams,
+      trigger: "manual",
+    });
+
+    expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
+    expect(prepareCliRunContextMock).toHaveBeenCalledTimes(1);
+    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
+  });
+
   it("clears stateless CLI bindings when before_agent_reply claims a cron turn", async () => {
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
     runBeforeAgentReplyMock.mockResolvedValue({ handled: true });
