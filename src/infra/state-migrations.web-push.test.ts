@@ -327,6 +327,39 @@ describe("legacy Web Push Doctor migration", () => {
     expect(listWebPushSubscriptions(stateDir)).toEqual([legacy]);
   });
 
+  it("retries a committed newer-row merge after normalizing its creation time", async () => {
+    const stateDir = useStateDir();
+    const canonical = subscription({ createdAtMs: 100, updatedAtMs: 200 });
+    const legacy = subscription({
+      keys: { p256dh: "newer-p256dh", auth: "newer-auth" },
+      createdAtMs: 500,
+      updatedAtMs: 600,
+    });
+    seedSubscription(hashWebPushEndpoint(canonical.endpoint), canonical);
+    const { subscriptionsPath } = await writeLegacyState({
+      stateDir,
+      subscriptions: [legacy],
+    });
+
+    const first = await migrateLegacyWebPush({
+      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
+      stateDir,
+      removeSource: () => {
+        throw new Error("simulated unlink failure");
+      },
+    });
+    expect(first.warnings[0]).toContain("legacy cleanup failed");
+    expect(listWebPushSubscriptions(stateDir)).toEqual([{ ...legacy, createdAtMs: 100 }]);
+
+    const retry = await migrateLegacyWebPush({
+      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
+      stateDir,
+    });
+    expect(retry.warnings).toEqual([]);
+    expect(listWebPushSubscriptions(stateDir)).toEqual([{ ...legacy, createdAtMs: 100 }]);
+    expect(fs.existsSync(`${subscriptionsPath}.doctor-importing`)).toBe(false);
+  });
+
   it("rolls back equal-timestamp divergence and VAPID identity conflicts", async () => {
     const stateDir = useStateDir();
     const canonical = subscription({ keys: { p256dh: "canonical", auth: "canonical" } });
@@ -473,8 +506,38 @@ describe("legacy Web Push Doctor migration", () => {
       stateDir,
     });
 
-    expect(result.warnings[0]).toContain("non-symlink file");
+    expect(result.warnings[0]).toContain("Failed reading legacy Web Push state");
     expect(fs.lstatSync(sourcePath).isSymbolicLink()).toBe(true);
+    expect(listWebPushSubscriptions(stateDir)).toEqual([]);
+  });
+
+  it("refuses a legacy store reached through a symlinked state-directory ancestor", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = useStateDir();
+    const outside = tempDirs.make("openclaw-web-push-outside-");
+    const legacy = subscription();
+    const sourcePath = path.join(outside, "web-push-subscriptions.json");
+    await fsp.writeFile(
+      sourcePath,
+      JSON.stringify({
+        subscriptionsByEndpointHash: {
+          [hashWebPushEndpoint(legacy.endpoint)]: legacy,
+        },
+      }),
+      "utf8",
+    );
+    await fsp.mkdir(stateDir, { recursive: true });
+    await fsp.symlink(outside, path.join(stateDir, "push"));
+
+    const result = await migrateLegacyWebPush({
+      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
+      stateDir,
+    });
+
+    expect(result.warnings[0]).toContain("Failed reading legacy Web Push state");
+    expect(fs.existsSync(sourcePath)).toBe(true);
     expect(listWebPushSubscriptions(stateDir)).toEqual([]);
   });
 });
