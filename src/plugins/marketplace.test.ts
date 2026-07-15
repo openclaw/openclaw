@@ -751,7 +751,7 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it("returns a structured error for invalid archive URLs", async () => {
+  it("redacts invalid archive URLs in structured errors", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const manifestPath = await writeMarketplaceManifest(rootDir, {
         plugins: [

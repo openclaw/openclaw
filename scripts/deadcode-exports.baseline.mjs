@@ -2,7 +2,6 @@
 // New entries fail CI. After deleting dead code, run `pnpm deadcode:exports:update`.
 // Do not add entries to avoid fixing new findings.
 export const KNIP_UNUSED_EXPORT_BASELINE = [
-  "extensions/canvas/src/host/a2ui.ts: createA2uiHttpRequestHandler",
   "extensions/codex/src/session-catalog.ts: CODEX_TERMINAL_RESUME_COMMAND",
   "extensions/codex/src/session-upstream-activity.ts: checkCodexUpstreamActivity (upstream)",
   "extensions/codex/src/session-upstream-activity.ts: classifyCodexUpstreamTurns",

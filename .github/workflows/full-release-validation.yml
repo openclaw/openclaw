@@ -1248,7 +1248,9 @@ jobs:
     name: Run product performance evidence
     needs: [resolve_target, evidence_reuse]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ubuntu-24.04
+    # Keep this monitor off the four-slot GitHub-hosted pool so performance starts
+    # with the other child workflows instead of extending the critical path.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: ${{ inputs.release_profile == 'full' && 360 || 120 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
