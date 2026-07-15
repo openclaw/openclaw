@@ -7,12 +7,17 @@ import {
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 
-type CacheSnapshotArgs = Parameters<typeof cacheChatSessionSnapshot>;
+function createHost() {
+  return {
+    assistantAgentId: "ops",
+    agentsList: { defaultId: "ops", mainKey: "home" },
+  };
+}
 
-function cacheMessages(
-  cache: CacheSnapshotArgs[0],
-  host: CacheSnapshotArgs[1],
-  target: CacheSnapshotArgs[2],
+function cacheChatMessages(
+  cache: ChatMessageCache,
+  host: Parameters<typeof cacheChatSessionSnapshot>[1],
+  target: Parameters<typeof cacheChatSessionSnapshot>[2],
   messages: unknown[],
 ): void {
   cacheChatSessionSnapshot(cache, host, target, {
@@ -22,19 +27,12 @@ function cacheMessages(
   });
 }
 
-function createHost() {
-  return {
-    assistantAgentId: "ops",
-    agentsList: { defaultId: "ops", mainKey: "home" },
-  };
-}
-
 describe("session message cache", () => {
   it("canonicalizes main aliases without crossing agent scopes", () => {
     const host = createHost();
     const cache: ChatMessageCache = new Map();
 
-    cacheMessages(cache, host, { sessionKey: "home" }, ["ops"]);
+    cacheChatMessages(cache, host, { sessionKey: "home" }, ["ops"]);
 
     expect(readChatMessagesFromCache(cache, host, { sessionKey: "agent:ops:home" })).toEqual([
       "ops",
@@ -52,8 +50,8 @@ describe("session message cache", () => {
     };
     const cache: ChatMessageCache = new Map();
 
-    cacheMessages(cache, host, { sessionKey: "global" }, ["work"]);
-    cacheMessages(cache, host, { sessionKey: "global", agentId: "main" }, ["main"]);
+    cacheChatMessages(cache, host, { sessionKey: "global" }, ["work"]);
+    cacheChatMessages(cache, host, { sessionKey: "global", agentId: "main" }, ["main"]);
 
     expect(readChatMessagesFromCache(cache, host, { sessionKey: "global" })).toEqual(["work"]);
     expect(
@@ -65,12 +63,12 @@ describe("session message cache", () => {
     const host = createHost();
     const cache: ChatMessageCache = new Map();
     for (let index = 0; index < 20; index += 1) {
-      cacheMessages(cache, host, { sessionKey: `agent:ops:session-${index}` }, [index]);
+      cacheChatMessages(cache, host, { sessionKey: `agent:ops:session-${index}` }, [index]);
     }
 
     readChatMessagesFromCache(cache, host, { sessionKey: "agent:ops:session-0" });
-    cacheMessages(cache, host, { sessionKey: "agent:ops:session-20" }, [20]);
-    cacheMessages(cache, host, { sessionKey: "agent:ops:large" }, [21]);
+    cacheChatMessages(cache, host, { sessionKey: "agent:ops:session-20" }, [20]);
+    cacheChatMessages(cache, host, { sessionKey: "agent:ops:large" }, [21]);
 
     expect(cache.size).toBe(20);
     expect(cache.has("agent:ops:session-0")).toBe(true);
@@ -262,7 +260,7 @@ describe("session message cache", () => {
   it("removes an empty identity-free snapshot after a cleared session reload", () => {
     const host = createHost();
     const cache: ChatMessageCache = new Map();
-    cacheMessages(cache, host, { sessionKey: "home" }, ["stale"]);
+    cacheChatMessages(cache, host, { sessionKey: "home" }, ["stale"]);
 
     cacheChatSessionSnapshot(
       cache,

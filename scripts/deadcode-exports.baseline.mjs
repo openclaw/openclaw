@@ -130,6 +130,7 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts: resetDeferredTurnMaintenanceStateForTest",
   "src/agents/embedded-agent-runner/extra-params.ts: testing",
   "src/agents/embedded-agent-runner/model-discovery-cache.ts: resetModelDiscoveryCacheForTest",
+  "src/agents/embedded-agent-runner/run.ts: testing",
   "src/agents/embedded-agent-runner/run/attempt.session-lock.ts: resetEmbeddedAttemptSessionFileOwnersForTest",
   "src/agents/embedded-agent-runner/runs.ts: testing",
   "src/agents/embedded-agent-runner/session-manager-cache.ts: createSessionManagerCache",

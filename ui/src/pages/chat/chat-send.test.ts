@@ -38,21 +38,6 @@ import {
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 
-type CacheSnapshotArgs = Parameters<typeof cacheChatSessionSnapshot>;
-
-function cacheMessages(
-  cache: CacheSnapshotArgs[0],
-  host: CacheSnapshotArgs[1],
-  target: CacheSnapshotArgs[2],
-  messages: unknown[],
-): void {
-  cacheChatSessionSnapshot(cache, host, target, {
-    messages,
-    pagination: { hasMore: false },
-    sessionId: null,
-  });
-}
-
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = Omit<ChatHost, "settings"> & {
   applySettings: (next: UiSettings) => void;
@@ -74,6 +59,19 @@ function requireChatMessageCache(host: ChatHost): ChatMessageCache {
     throw new Error("Expected chat message cache");
   }
   return host.chatMessagesBySession;
+}
+
+function cacheChatMessages(
+  cache: ChatMessageCache,
+  host: Parameters<typeof cacheChatSessionSnapshot>[1],
+  target: Parameters<typeof cacheChatSessionSnapshot>[2],
+  messages: unknown[],
+): void {
+  cacheChatSessionSnapshot(cache, host, target, {
+    messages,
+    pagination: { hasMore: false },
+    sessionId: null,
+  });
 }
 
 const executeSlashCommandMock = vi.hoisted(() => vi.fn());
@@ -6441,10 +6439,10 @@ describe("handleSendChat", () => {
       chatMessagesBySession: new Map(),
     });
     const cache = requireChatMessageCache(host);
-    cacheMessages(cache, host, { sessionKey: "global", agentId: "work" }, [
+    cacheChatMessages(cache, host, { sessionKey: "global", agentId: "work" }, [
       { role: "assistant", content: "work history" },
     ]);
-    cacheMessages(cache, host, { sessionKey: "global", agentId: "main" }, [
+    cacheChatMessages(cache, host, { sessionKey: "global", agentId: "main" }, [
       { role: "assistant", content: "main history" },
     ]);
 
@@ -6483,10 +6481,10 @@ describe("handleSendChat", () => {
       sessionKey: sourceSessionKey,
     });
     const cache = requireChatMessageCache(host);
-    cacheMessages(cache, host, { sessionKey: sourceSessionKey }, [
+    cacheChatMessages(cache, host, { sessionKey: sourceSessionKey }, [
       { role: "user", content: "source history" },
     ]);
-    cacheMessages(cache, host, { sessionKey: visibleSessionKey }, [
+    cacheChatMessages(cache, host, { sessionKey: visibleSessionKey }, [
       { role: "user", content: "visible history" },
     ]);
 
@@ -6532,10 +6530,10 @@ describe("handleSendChat", () => {
       sessionKey: sourceSessionKey,
     });
     const cache = requireChatMessageCache(host);
-    cacheMessages(cache, host, { sessionKey: sourceSessionKey }, [
+    cacheChatMessages(cache, host, { sessionKey: sourceSessionKey }, [
       { role: "user", content: "cached source history" },
     ]);
-    cacheMessages(cache, host, { sessionKey: visibleSessionKey }, [
+    cacheChatMessages(cache, host, { sessionKey: visibleSessionKey }, [
       { role: "user", content: "cached visible history" },
     ]);
 

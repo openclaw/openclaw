@@ -12,7 +12,7 @@ import {
   type ChatSplitLayout,
 } from "./split-layout.ts";
 
-function singlePaneLayout(sessionKey = "main"): ChatSplitLayout {
+function createSinglePaneLayout(sessionKey: string): ChatSplitLayout {
   return {
     columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
     columnWeights: [1],
@@ -20,24 +20,33 @@ function singlePaneLayout(sessionKey = "main"): ChatSplitLayout {
   };
 }
 
-function splitLayout(sessionKey = "main"): ChatSplitLayout {
-  return {
-    columns: [
-      { id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] },
-      { id: "c2", panes: [{ id: "p2", sessionKey }], paneWeights: [1] },
-    ],
-    columnWeights: [0.5, 0.5],
-    activePaneId: "p2",
-  };
+function createSplitLayout(sessionKey: string): ChatSplitLayout {
+  return insertPane(createSinglePaneLayout(sessionKey), "p1", sessionKey, "right");
 }
 
 function threePaneLayout(): ChatSplitLayout {
-  return insertPane(splitLayout(), "p2", "agent:main:second", "down");
+  return insertPane(createSplitLayout("main"), "p2", "agent:main:second", "down");
 }
 
 describe("chat split layout", () => {
-  it("inserts beside a single-pane layout", () => {
-    expect(insertPane(singlePaneLayout(), "p1", "dropped", "left")).toEqual({
+  it("creates two equal columns with the second pane active", () => {
+    expect(createSplitLayout("main")).toEqual({
+      columns: [
+        { id: "c1", panes: [{ id: "p1", sessionKey: "main" }], paneWeights: [1] },
+        { id: "c2", panes: [{ id: "p2", sessionKey: "main" }], paneWeights: [1] },
+      ],
+      columnWeights: [0.5, 0.5],
+      activePaneId: "p2",
+    });
+  });
+
+  it("composes the split layout from an ephemeral single pane", () => {
+    expect(createSinglePaneLayout("main")).toEqual({
+      columns: [{ id: "c1", panes: [{ id: "p1", sessionKey: "main" }], paneWeights: [1] }],
+      columnWeights: [1],
+      activePaneId: "p1",
+    });
+    expect(insertPane(createSinglePaneLayout("main"), "p1", "dropped", "left")).toEqual({
       columns: [
         { id: "c2", panes: [{ id: "p2", sessionKey: "dropped" }], paneWeights: [1] },
         { id: "c1", panes: [{ id: "p1", sessionKey: "main" }], paneWeights: [1] },
@@ -48,7 +57,7 @@ describe("chat split layout", () => {
   });
 
   it("inserts columns immediately left or right and halves only the target weight", () => {
-    const right = insertPane(splitLayout(), "p1", "right", "right");
+    const right = insertPane(createSplitLayout("main"), "p1", "right", "right");
     expect(right.columns.map((column) => column.id)).toEqual(["c1", "c3", "c2"]);
     expect(right.columns.map((column) => column.panes.map((pane) => pane.id))).toEqual([
       ["p1"],
@@ -58,7 +67,7 @@ describe("chat split layout", () => {
     expect(right.columnWeights).toEqual([0.25, 0.25, 0.5]);
     expect(right.activePaneId).toBe("p3");
 
-    const left = insertPane(splitLayout(), "p2", "left", "left");
+    const left = insertPane(createSplitLayout("main"), "p2", "left", "left");
     expect(left.columns.map((column) => column.panes.at(0)?.sessionKey)).toEqual([
       "main",
       "left",
@@ -69,7 +78,7 @@ describe("chat split layout", () => {
   });
 
   it("inserts panes immediately up or down and halves only the target weight", () => {
-    const down = insertPane(splitLayout(), "p1", "down", "down");
+    const down = insertPane(createSplitLayout("main"), "p1", "down", "down");
     expect(down.columns.at(0)?.panes).toEqual([
       { id: "p1", sessionKey: "main" },
       { id: "p3", sessionKey: "down" },
@@ -77,7 +86,7 @@ describe("chat split layout", () => {
     expect(down.columns.at(0)?.paneWeights).toEqual([0.5, 0.5]);
     expect(down.activePaneId).toBe("p3");
 
-    const up = insertPane(splitLayout(), "p1", "up", "up");
+    const up = insertPane(createSplitLayout("main"), "p1", "up", "up");
     expect(up.columns.at(0)?.panes).toEqual([
       { id: "p3", sessionKey: "up" },
       { id: "p1", sessionKey: "main" },
@@ -99,19 +108,19 @@ describe("chat split layout", () => {
       { id: "p3", sessionKey: "agent:main:second" },
     ]);
 
-    const threeColumns = insertPane(splitLayout(), "p1", "third", "right");
+    const threeColumns = insertPane(createSplitLayout("main"), "p1", "third", "right");
     const collapsedColumn = closePane(threeColumns, "p3");
     expect(collapsedColumn?.columns.map((column) => column.id)).toEqual(["c1", "c2"]);
     expect(collapsedColumn?.columnWeights.at(0)).toBeCloseTo(1 / 3);
     expect(collapsedColumn?.columnWeights.at(1)).toBeCloseTo(2 / 3);
     expect(collapsedColumn?.activePaneId).toBe("p1");
 
-    const collapsed = closePane(splitLayout(), "p1");
+    const collapsed = closePane(createSplitLayout("main"), "p1");
     expect(collapsed).toBeUndefined();
   });
 
   it("updates pane session and active pane without mutating the input", () => {
-    const layout = splitLayout();
+    const layout = createSplitLayout("main");
     const sessionChanged = setPaneSession(layout, "p1", "agent:main:new");
     const activeChanged = setActivePane(sessionChanged, "p1");
     expect(findPane(activeChanged, "p1")?.pane.sessionKey).toBe("agent:main:new");
@@ -121,7 +130,7 @@ describe("chat split layout", () => {
   });
 
   it("resizes only a boundary pair and clamps each side to fifteen percent", () => {
-    const layout = insertPane(splitLayout(), "p1", "third", "right");
+    const layout = insertPane(createSplitLayout("main"), "p1", "third", "right");
     const columns = resizeColumns(layout, 0, 0.8);
     expect(columns.columnWeights.at(0)).toBeCloseTo(0.4);
     expect(columns.columnWeights.at(1)).toBeCloseTo(0.1);
@@ -220,7 +229,7 @@ describe("chat split layout", () => {
   });
 
   it("returns an unchanged clone when the target pane is unknown", () => {
-    const layout = splitLayout();
+    const layout = createSplitLayout("main");
     const unchanged = insertPane(layout, "missing", "new", "right");
     expect(unchanged).toEqual(layout);
     expect(unchanged).not.toBe(layout);
