@@ -30,10 +30,12 @@ import { createQuietRuntime, requireValidConfigFileSnapshot } from "./agents.com
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
 import { moveToTrash } from "./onboard-helpers.js";
 
-type AgentsDeleteOptions = {
+export type AgentsDeleteOptions = {
   id: string;
   force?: boolean;
   json?: boolean;
+  /** Retain workspace and agent files for callers that own narrower cleanup. */
+  deleteFiles?: boolean;
 };
 
 type AgentsDeleteGatewayResult = {
@@ -128,17 +130,21 @@ export async function agentsDeleteCommand(
 
   const gatewayResult = await maybeDeleteAgentThroughGateway({
     agentId,
-    deleteFiles: true,
+    deleteFiles: opts.deleteFiles ?? true,
   });
   if (gatewayResult) {
-    const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
-    const workspaceRetained = workspaceSharedWith.length > 0;
+    const workspaceSharedWith =
+      opts.deleteFiles === false
+        ? []
+        : findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
+    const workspaceRetained = opts.deleteFiles === false || workspaceSharedWith.length > 0;
     if (opts.json) {
       writeRuntimeJson(runtime, {
         agentId,
         workspace: workspaceDir,
         workspaceRetained: workspaceRetained || undefined,
-        workspaceRetainedReason: workspaceRetained ? "shared" : undefined,
+        workspaceRetainedReason:
+          opts.deleteFiles === false ? "requested" : workspaceRetained ? "shared" : undefined,
         workspaceSharedWith: workspaceRetained ? workspaceSharedWith : undefined,
         agentDir,
         sessionsDir,
@@ -166,10 +172,13 @@ export async function agentsDeleteCommand(
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   // Only trash the workspace if no other agent can depend on that path (#70890).
-  const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
-  const workspaceRetained = workspaceSharedWith.length > 0;
+  const workspaceSharedWith =
+    opts.deleteFiles === false ? [] : findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
+  const workspaceRetained = opts.deleteFiles === false || workspaceSharedWith.length > 0;
   let workspaceCleanupError: Error | undefined;
-  if (workspaceRetained) {
+  if (opts.deleteFiles === false) {
+    quietRuntime.log(`Retained agent files by request: ${workspaceDir}`);
+  } else if (workspaceRetained) {
     quietRuntime.log(
       `Skipped workspace removal (shared with other agents: ${workspaceSharedWith.join(", ")}): ${workspaceDir}`,
     );
@@ -189,8 +198,10 @@ export async function agentsDeleteCommand(
       }
     }
   }
-  await moveToTrash(agentDir, quietRuntime);
-  await moveToTrash(sessionsDir, quietRuntime);
+  if (opts.deleteFiles !== false) {
+    await moveToTrash(agentDir, quietRuntime);
+    await moveToTrash(sessionsDir, quietRuntime);
+  }
   if (workspaceCleanupError) {
     throw workspaceCleanupError;
   }
@@ -200,7 +211,8 @@ export async function agentsDeleteCommand(
       agentId,
       workspace: workspaceDir,
       workspaceRetained: workspaceRetained || undefined,
-      workspaceRetainedReason: workspaceRetained ? "shared" : undefined,
+      workspaceRetainedReason:
+        opts.deleteFiles === false ? "requested" : workspaceRetained ? "shared" : undefined,
       workspaceSharedWith: workspaceRetained ? workspaceSharedWith : undefined,
       agentDir,
       sessionsDir,
