@@ -1761,6 +1761,8 @@ describe("main-session-restart-recovery", () => {
       internalRuntimeHandoffId: expect.any(String),
       sessionKey: "agent:main:main",
     });
+    // The gateway mock stops before agent admission, which promotes this alias
+    // to the canonical key before the recovered run can execute message tools.
     expect(
       sessionAccessor.loadExactSessionEntry({ sessionKey: "main", storePath })?.entry,
     ).toMatchObject({

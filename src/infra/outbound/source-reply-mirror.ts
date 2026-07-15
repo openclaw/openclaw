@@ -173,6 +173,8 @@ function resolveTerminalSourceReplyDeliveryReceipt(
     return undefined;
   }
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  // Agent admission promotes legacy aliases before the run starts. The signed
+  // runtime session key therefore owns both the active claim and transcript.
   return {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
