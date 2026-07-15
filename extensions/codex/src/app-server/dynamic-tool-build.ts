@@ -24,6 +24,7 @@ import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   filterCodexDynamicTools,
+  filterCodexDynamicToolsWithOpenClawShell,
   isCrestodianOnlyCodexDynamicToolAllowlist,
   isForcedPrivateQaCodexRuntime,
   normalizeCodexDynamicToolName,
@@ -34,14 +35,15 @@ import {
   resolveCodexNativeExecutionPolicy,
   type CodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
+import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
+import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
 import {
   CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
   CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME,
   createNodeExecDynamicTool,
   createNodeProcessDynamicTool,
-} from "./node-shell-dynamic-tools.js";
-import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
-import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
+  isCodexDynamicToolExcluded,
+} from "./shell-dynamic-tools.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
@@ -341,25 +343,22 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
   });
   const readableAllTools = [...readableAllToolProjection.tools];
-  const normallyProfiledTools = filterCodexDynamicTools(readableAllTools, input.pluginConfig);
+  const normallyProfiledTools = shouldKeepOpenClawShellDynamicTools(input, nativeExecutionPolicy)
+    ? filterCodexDynamicToolsWithOpenClawShell(readableAllTools, input.pluginConfig)
+    : filterCodexDynamicTools(readableAllTools, input.pluginConfig);
   const hostCrestodianActive =
     input.isHostScopedToolActive?.("crestodian") ?? isHostScopedAgentToolActive("crestodian");
   const profileFilteredTools =
     hostCrestodianActive && isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow)
       ? preserveRingZeroCrestodianTool(readableAllTools, normallyProfiledTools)
       : normallyProfiledTools;
-  const codexFilteredTools = addDirectShellDynamicToolsIfNeeded(
-    addNodeShellDynamicToolsIfNeeded(
-      addSandboxShellDynamicToolsIfAvailable(
-        isCodexMemoryFlushRun(params)
-          ? filterCodexMemoryFlushDynamicTools(readableAllTools)
-          : profileFilteredTools,
-        readableAllTools,
-        input,
-      ),
+  const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
+    addSandboxShellDynamicToolsIfAvailable(
+      isCodexMemoryFlushRun(params)
+        ? filterCodexMemoryFlushDynamicTools(readableAllTools)
+        : profileFilteredTools,
       readableAllTools,
       input,
-      nativeExecutionPolicy,
     ),
     readableAllTools,
     input,
@@ -744,13 +743,6 @@ function shouldExposeSandboxExecDynamicTool(input: DynamicToolBuildParams): bool
   const backendId = input.sandbox?.enabled ? input.sandbox.backendId.trim().toLowerCase() : "";
   return Boolean(backendId && input.nativeToolSurfaceEnabled === false);
 }
-function isCodexDynamicToolExcluded(config: CodexPluginConfig, names: string[]): boolean {
-  const normalizedNames = new Set(names.map((name) => normalizeCodexDynamicToolName(name)));
-  return (config.codexDynamicToolsExclude ?? []).some((name) => {
-    const normalized = normalizeCodexDynamicToolName(name);
-    return normalizedNames.has(normalized);
-  });
-}
 function isSandboxShellDynamicToolExcluded(config: CodexPluginConfig): boolean {
   return isCodexDynamicToolExcluded(config, ["exec", "sandbox_exec", "process", "sandbox_process"]);
 }
@@ -798,57 +790,18 @@ function addNodeShellDynamicToolsIfNeeded(
   }
   return toolsToAppend.length > 0 ? [...filteredTools, ...toolsToAppend] : filteredTools;
 }
-function restoreOpenClawShellDynamicTools<T extends { name: string }>(
-  filteredTools: T[],
-  allTools: T[],
-  pluginConfig: CodexPluginConfig,
-): T[] {
-  let next = filteredTools;
-  for (const toolName of ["exec", "process"]) {
-    if (isCodexDynamicToolExcluded(pluginConfig, [toolName])) {
-      continue;
-    }
-    if (next.some((tool) => normalizeCodexDynamicToolName(tool.name) === toolName)) {
-      continue;
-    }
-    const tool = allTools.find(
-      (candidate) => normalizeCodexDynamicToolName(candidate.name) === toolName,
-    );
-    if (!tool) {
-      continue;
-    }
-    if (next === filteredTools) {
-      next = [...filteredTools];
-    }
-    next.push(tool);
-  }
-  return next;
-}
-function addDirectShellDynamicToolsIfNeeded(
-  filteredTools: OpenClawDynamicTool[],
-  allTools: OpenClawDynamicTool[],
+function shouldKeepOpenClawShellDynamicTools(
   input: DynamicToolBuildParams,
   nodePolicy: CodexNativeExecutionPolicy,
-): OpenClawDynamicTool[] {
-  if (
-    isCodexMemoryFlushRun(input.params) ||
-    input.nativeToolSurfaceEnabled !== true ||
-    input.sandbox?.enabled === true ||
-    nodePolicy.effectiveExecHost === "node"
-  ) {
-    return filteredTools;
-  }
-  return restoreOpenClawShellDynamicTools(filteredTools, allTools, input.pluginConfig);
-}
-export function filterCodexSideQuestionTools<T extends { name: string }>(
-  allTools: T[],
-  pluginConfig: CodexPluginConfig,
-  sandbox: { enabled: boolean } | null | undefined,
-): T[] {
-  const filteredTools = filterCodexDynamicTools(allTools, pluginConfig);
-  return sandbox?.enabled === true
-    ? filteredTools
-    : restoreOpenClawShellDynamicTools(filteredTools, allTools, pluginConfig);
+): boolean {
+  return (
+    !isCodexMemoryFlushRun(input.params) &&
+    // Disabled native Code Mode sends `environments: []`, so Codex cannot
+    // advertise a shell. Preserve OpenClaw's policy-filtered direct shell.
+    input.nativeToolSurfaceEnabled === false &&
+    input.sandbox?.enabled !== true &&
+    nodePolicy.effectiveExecHost !== "node"
+  );
 }
 function resolveCodexNativeExecutionPolicyForDynamicTools(
   input: DynamicToolBuildParams,

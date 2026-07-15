@@ -1,4 +1,3 @@
-// Codex plugin module implements side question behavior.
 import { randomUUID } from "node:crypto";
 import {
   buildAgentHookContextChannelFields,
@@ -38,7 +37,6 @@ import {
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
 import {
-  filterCodexSideQuestionTools,
   resolveCodexMessageToolProvider,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
@@ -52,7 +50,10 @@ import {
   resolveCodexToolAbortTerminalReason,
   resolveDynamicToolCallTimeoutMs,
 } from "./dynamic-tool-execution.js";
-import { resolveCodexDynamicToolsLoading } from "./dynamic-tool-profile.js";
+import {
+  filterCodexDynamicTools,
+  resolveCodexDynamicToolsLoading,
+} from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector.js";
@@ -251,8 +252,7 @@ export async function runCodexAppServerSideQuestion(
   const appServer = connection.appServer;
   const cwd = binding.cwd || params.workspaceDir || process.cwd();
   const runId = params.opts?.runId ?? randomUUID();
-  // A supervised side run inherits capability facts from the private binding.
-  // Outer model metadata may describe another provider or disable tools entirely.
+  // Side runs inherit private-binding capabilities, not outer model metadata.
   const effectiveParams: AgentHarnessSideQuestionParams = supervisionModelSelection
     ? {
         ...params,
@@ -988,7 +988,7 @@ async function createCodexSideToolBridge(input: {
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       requireExplicitMessageTarget: true,
     });
-    const codexFilteredTools = filterCodexSideQuestionTools(allTools, input.pluginConfig, sandbox);
+    const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
     tools = filterToolsForVisionInputs(codexFilteredTools, {
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       hasInboundImages: false,

@@ -1,12 +1,24 @@
+import type { CodexPluginConfig } from "./config.js";
 import { normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 
 type OpenClawCodingToolsFactory =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
-type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
+export type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
 
 export const CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME = "node_exec";
 export const CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME = "node_process";
 const CODEX_NODE_EXEC_POLICY_PARAMETER_NAMES = new Set(["host", "security", "ask"]);
+
+/** Returns true when plugin config explicitly removes any named dynamic tool. */
+export function isCodexDynamicToolExcluded(
+  config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
+  names: readonly string[],
+): boolean {
+  const normalizedNames = new Set(names.map((name) => normalizeCodexDynamicToolName(name)));
+  return (config.codexDynamicToolsExclude ?? []).some((name) =>
+    normalizedNames.has(normalizeCodexDynamicToolName(name)),
+  );
+}
 
 export function createNodeExecDynamicTool(
   execTool: OpenClawDynamicTool,
@@ -45,6 +57,7 @@ export function createNodeExecDynamicTool(
     },
   };
 }
+
 export function createNodeProcessDynamicTool(
   processTool: OpenClawDynamicTool,
 ): OpenClawDynamicTool {
@@ -55,6 +68,7 @@ export function createNodeProcessDynamicTool(
       "Manage node_exec sessions that were started on OpenClaw remote nodes: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for node_exec follow-up; use Codex's native shell session handling for local app-server work.",
   };
 }
+
 function pinNodeExecDynamicToolArgs(args: unknown, configuredNode: string | undefined): unknown {
   const source =
     args && typeof args === "object" && !Array.isArray(args)
@@ -68,6 +82,7 @@ function pinNodeExecDynamicToolArgs(args: unknown, configuredNode: string | unde
     ...(node ? { node } : {}),
   };
 }
+
 function hideNodeExecDynamicToolParameters(
   parameters: OpenClawDynamicTool["parameters"],
   options: { hideNode: boolean },
