@@ -1676,7 +1676,7 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
     let currentVersion: string | undefined;
-    let installedPayloadRunnable = false;
+    let installedPayloadRunnable: boolean;
     try {
       const installedManifest = readInstalledPackageManifest(installPath) as
         | PackageManifest
