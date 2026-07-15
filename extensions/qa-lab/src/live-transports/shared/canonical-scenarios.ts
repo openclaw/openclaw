@@ -6,33 +6,6 @@ import { readQaScenarioPack } from "../../scenario-catalog.js";
 import { runQaFlowSuiteFromRuntime } from "../../suite-launch.runtime.js";
 import type { LiveTransportQaCommandOptions } from "./live-transport-cli.js";
 
-export const TELEGRAM_CANONICAL_SCENARIO_IDS = [
-  "channel-canary",
-  "channel-mention-gating",
-  "telegram-help-command",
-  "telegram-commands-command",
-  "telegram-tools-compact-command",
-  "telegram-whoami-command",
-  "telegram-status-command",
-  "telegram-repeated-command-authorization",
-  "telegram-context-command",
-  "telegram-current-session-status-tool",
-  "telegram-tool-only-usage-footer",
-  "telegram-reply-chain-exact-marker",
-] as const;
-
-export const TELEGRAM_DEFAULT_CANONICAL_SCENARIO_IDS = [
-  "channel-canary",
-  "channel-mention-gating",
-  "telegram-help-command",
-  "telegram-commands-command",
-  "telegram-tools-compact-command",
-  "telegram-whoami-command",
-  "telegram-status-command",
-  "telegram-repeated-command-authorization",
-  "telegram-context-command",
-] as const;
-
 export const WHATSAPP_ROUTING_CANONICAL_SCENARIO_IDS = [
   "channel-canary",
   "channel-dm-group-routing",
