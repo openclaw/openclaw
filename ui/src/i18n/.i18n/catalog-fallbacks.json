@@ -1,5 +1,50 @@
 {
-  "fallbacks": {},
-  "sourceHash": "85e004373478d946c5002519a35b2c50e1aa220fd2a81f7c1c80ded99bc7dc4e",
+  "fallbacks": {
+    "terminal.connecting": [
+      "ar",
+      "de",
+      "es",
+      "fa",
+      "fr",
+      "hi",
+      "id",
+      "it",
+      "ja-JP",
+      "ko",
+      "nl",
+      "pl",
+      "pt-BR",
+      "ru",
+      "th",
+      "tr",
+      "uk",
+      "vi",
+      "zh-CN",
+      "zh-TW"
+    ],
+    "terminal.connectionTimedOut": [
+      "ar",
+      "de",
+      "es",
+      "fa",
+      "fr",
+      "hi",
+      "id",
+      "it",
+      "ja-JP",
+      "ko",
+      "nl",
+      "pl",
+      "pt-BR",
+      "ru",
+      "th",
+      "tr",
+      "uk",
+      "vi",
+      "zh-CN",
+      "zh-TW"
+    ]
+  },
+  "sourceHash": "dc6d0f7bdb69960a5b9d54c5743445b89b0689913b3f962829f8490dede56d2c",
   "version": 1
 }
