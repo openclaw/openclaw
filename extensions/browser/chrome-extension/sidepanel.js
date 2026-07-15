@@ -164,10 +164,22 @@ async function connect() {
     // schedule a reconnect — only the CURRENT socket's close drives retry.
     if (ws === sock) {
       ws = null;
+      // The subscription is per-socket state; the reconnect must resubscribe.
+      subscribedKey = null;
       setWsStatus("err", "Disconnected");
       scheduleReconnect();
     }
   });
+}
+
+// Null `ws` BEFORE close(): the close listener only retries for the CURRENT
+// socket, so a deliberate replacement would otherwise race its own reconnect
+// against this one. The subscription lives on the socket, so it dies with it.
+function dropSocket() {
+  const old = ws;
+  ws = null;
+  subscribedKey = null;
+  old?.close();
 }
 
 function scheduleReconnect() {
@@ -242,7 +254,7 @@ function handleMessage(msg) {
         ).classList.add("pairing-msg");
       }
       setTimeout(() => {
-        ws?.close();
+        dropSocket();
         void connect();
       }, 5000);
       return;
@@ -335,10 +347,13 @@ async function subscribeSession(key) {
   }
   if (subscribedKey) {
     sendReq("sessions.messages.unsubscribe", { key: subscribedKey }).catch(() => {});
+    subscribedKey = null;
   }
-  subscribedKey = key;
   try {
     await sendReq("sessions.messages.subscribe", { key });
+    // Only a CONFIRMED subscription may short-circuit the check above; recording
+    // the key before the round trip would strand a failed attempt un-retryable.
+    subscribedKey = key;
   } catch {
     // Streaming chat events still arrive via the broadcast chat stream.
   }
@@ -597,13 +612,10 @@ saveBtn.addEventListener("click", () => void onSaveSettings());
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && (changes.gatewayUrl || changes.gatewayToken)) {
-    const old = ws;
-    ws = null;
-    old?.close();
+    dropSocket();
     reconnectAttempt = 0;
     messagesEl.innerHTML = "";
     sessionKey = null;
-    subscribedKey = null;
     void connect();
   }
 });
