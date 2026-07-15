@@ -1030,5 +1030,4 @@ export const testing = {
   resolveBindingsPath,
   resolveStoredBindingKey,
 };
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

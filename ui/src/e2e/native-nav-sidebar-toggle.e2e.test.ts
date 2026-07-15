@@ -286,11 +286,18 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
   });
 
   it("keeps the drawer hamburger at narrow widths in web titlebar chrome", async () => {
-    const page = await openPage({ webChrome: true, width: 900 });
+    const page = await openPage({ webChrome: true, width: 700 });
     // The web toolbar hides below the drawer breakpoint, so the hamburger is
     // the only remaining sidebar toggle there.
     await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(false);
     await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
+    // The native traffic-light cluster ends around x=78. Keep the brand aligned
+    // with the desktop titlebar controls' 92px inset so the groups stay distinct.
+    await expect
+      .poll(() =>
+        page.locator(".topbar-brand").evaluate((element) => element.getBoundingClientRect().x),
+      )
+      .toBe(92);
   });
 
   it("hides the drawer hamburger at narrow widths when the native toggle is present", async () => {

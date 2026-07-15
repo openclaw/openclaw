@@ -1,11 +1,13 @@
 // Zalo tests cover monitor.image.polling plugin behavior.
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createImageLifecycleCore,
   createImageUpdate,
   createLifecycleMonitorSetup,
   expectImageLifecycleDelivery,
+  postWebhookReplay,
   settleAsyncWork,
 } from "./test-support/lifecycle-test-support.js";
 import {
@@ -14,6 +16,7 @@ import {
   loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendMessageMock,
+  startWebhookLifecycleMonitor,
 } from "./test-support/monitor-mocks-test-support.js";
 
 describe("Zalo polling image handling", () => {
@@ -74,6 +77,47 @@ describe("Zalo polling image handling", () => {
 
     abort.abort();
     await run;
+  });
+
+  it("downloads inbound image media through the registered webhook route", async () => {
+    const monitor = await startWebhookLifecycleMonitor({
+      ...createLifecycleMonitorSetup({
+        accountId: "default",
+        dmPolicy: "open",
+      }),
+      cacheKey: "zalo-image-webhook",
+    });
+
+    try {
+      await withServer(
+        (req, res) => {
+          void monitor.route.handler(req, res);
+        },
+        async (baseUrl) => {
+          const { first, replay } = await postWebhookReplay({
+            baseUrl,
+            path: "/hooks/zalo",
+            secret: "supersecret",
+            payload: createImageUpdate({ messageId: `zalo-image-webhook-${Date.now()}` }),
+          });
+          expect(first.status).toBe(200);
+          expect(replay.status).toBe(200);
+          await settleAsyncWork();
+        },
+      );
+
+      expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+      expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+      expectImageLifecycleDelivery({
+        readRemoteMediaBufferMock,
+        saveRemoteMediaMock,
+        saveMediaBufferMock,
+        finalizeInboundContextMock,
+        recordInboundSessionMock,
+      });
+    } finally {
+      await monitor.stop();
+    }
   });
 
   it("rejects unauthorized DM images before downloading media", async () => {

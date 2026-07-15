@@ -548,6 +548,14 @@
     "target": "Discord"
   },
   {
+    "source": "Fireworks",
+    "target": "Fireworks"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
     "source": "Matrix",
     "target": "Matrix"
   },
@@ -556,12 +564,36 @@
     "target": "Microsoft Teams"
   },
   {
+    "source": "Raft",
+    "target": "Raft"
+  },
+  {
+    "source": "Runway",
+    "target": "Runway"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
     "source": "Slack",
     "target": "Slack"
   },
   {
+    "source": "Synthetic",
+    "target": "Synthetic"
+  },
+  {
     "source": "Telegram",
     "target": "Telegram"
+  },
+  {
+    "source": "Tokenjuice",
+    "target": "Tokenjuice"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
   },
   {
     "source": "Discovery + transports",
@@ -1494,5 +1526,9 @@
   {
     "source": "Security audit",
     "target": "安全审计"
+  },
+  {
+    "source": "Linux Canvas plugin",
+    "target": "Linux Canvas plugin"
   }
 ]

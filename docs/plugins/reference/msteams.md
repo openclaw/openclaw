@@ -20,4 +20,4 @@ channels: msteams
 
 ## Related docs
 
-- [msteams](/channels/msteams)
+- [Microsoft Teams](/channels/msteams)
