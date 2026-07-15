@@ -134,7 +134,14 @@ import {
   scheduleChatScroll,
   scheduleCommittedChatScroll,
 } from "./scroll.ts";
-import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
+import {
+  appendChatMessageToCache,
+  cacheChatSessionSnapshot,
+  readChatMessagesFromCache,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 import {
   clearAuthoritativeTerminal,
   rememberAuthoritativeTerminal,
@@ -195,7 +202,7 @@ export type ChatPageHost = ChatHost &
     chatQueueByScope: Record<string, ChatQueueItem[]>;
     chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
     chatSendingScopeKey: string | null;
-    chatMessagesBySession: Map<string, unknown[]>;
+    chatMessagesBySession: ChatMessageCache;
     basePath: string;
     chatAvatarUrl: string | null;
     chatAvatarSource: string | null;
@@ -241,7 +248,6 @@ export type ChatPageHost = ChatHost &
     chatStreamRenderFrame: number | null;
     chatScrollFrame: number | null;
     chatScrollGuardFrame: number | null;
-    chatScrollTimeout: number | null;
     chatScrollGeneration: number;
     chatLastScrollTop: number;
     chatLastScrollHeight: number;
@@ -250,6 +256,7 @@ export type ChatPageHost = ChatHost &
     chatFollowLocked: boolean;
     chatIsProgrammaticScroll: boolean;
     chatProgrammaticScrollTarget: number;
+    chatScrollToEnd?: (options: { behavior?: ScrollBehavior }) => void;
     sidebarOpen: boolean;
     sidebarContent: SidebarContent | null;
     splitRatio: number;
@@ -331,11 +338,29 @@ function restoreChatQueueForSession(state: ChatPageHost, sessionKey: string): Ch
 }
 
 function saveChatMessagesForSession(state: ChatPageHost, sessionKey: string) {
-  cacheChatMessages(state.chatMessagesBySession, state, { sessionKey }, state.chatMessages);
+  cacheChatSessionSnapshot(
+    state.chatMessagesBySession,
+    state,
+    { sessionKey },
+    {
+      messages: state.chatMessages,
+      pagination: state.chatHistoryPagination ?? { hasMore: false },
+      sessionId: state.currentSessionId ?? null,
+    },
+  );
 }
 
-function restoreChatMessagesForSession(state: ChatPageHost, sessionKey: string): unknown[] {
-  return readChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey });
+function restoreChatMessagesForSession(
+  state: ChatPageHost,
+  sessionKey: string,
+): ChatSessionSnapshot {
+  return (
+    readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }) ?? {
+      messages: [],
+      pagination: { hasMore: false },
+      sessionId: null,
+    }
+  );
 }
 
 function resolveChatComposerMemoryFallback(
@@ -472,18 +497,19 @@ export function resetChatStateForRouteSession(
   }
   saveChatQueueForSession(state, previousSessionKey);
   saveChatMessagesForSession(state, previousSessionKey);
+  const snapshot = restoreChatMessagesForSession(state, sessionKey);
   state.sessionKey = sessionKey;
   state.selectedChatSessionArchived =
     state.sessionsResult?.sessions.some(
       (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, sessionKey),
     ) === true;
-  state.currentSessionId = null;
+  state.currentSessionId = snapshot.sessionId;
   state.reconnectResumeSessionId = null;
-  state.chatHistoryPagination = { hasMore: false };
+  state.chatHistoryPagination = snapshot.pagination;
   state.chatMessage = "";
   state.chatAttachments = [];
   state.chatReplyTarget = null;
-  state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
+  state.chatMessages = snapshot.messages;
   state.chatToolMessages = [];
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
@@ -1169,6 +1195,7 @@ export function createPageState(
   context: ApplicationContext,
   renderLifecycle: RenderLifecycle,
   page: ChatPageElement,
+  chatMessagesBySession: ChatMessageCache = new Map(),
 ): ChatPageHost {
   const settings = loadSettings();
   const identity = loadLocalUserIdentity();
@@ -1250,7 +1277,7 @@ export function createPageState(
     chatQueueByScope: {} as Record<string, ChatQueueItem[]>,
     chatComposerFallbackByScope: {} as Record<string, ChatComposerMemoryFallback>,
     chatSendingScopeKey: null,
-    chatMessagesBySession: new Map<string, unknown[]>(),
+    chatMessagesBySession,
     eventLogBuffer: [] as unknown[],
     basePath: context.basePath,
     chatNewMessagesBelow: false,
@@ -1265,7 +1292,6 @@ export function createPageState(
     chatStreamRenderFrame: null,
     chatScrollFrame: null,
     chatScrollGuardFrame: null,
-    chatScrollTimeout: null,
     chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
@@ -1514,7 +1540,7 @@ function preserveDeliveredQueuedUserTurn(state: ChatPageHost, item: ChatQueueIte
   const target = { sessionKey, agentId: item.agentId };
   const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, target);
   if (!containsUserTurn(cached)) {
-    cacheChatMessages(state.chatMessagesBySession, state, target, [...cached, userMessage]);
+    appendChatMessageToCache(state.chatMessagesBySession, state, target, userMessage);
   }
 }
 
@@ -1576,7 +1602,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private chatThreadResizeTargets:
     | {
         thread: Element;
-        content: Element;
       }
     | undefined;
   private pendingCreatedSessionComposer: PendingCreatedSessionComposer | null = null;
@@ -1783,25 +1808,19 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       return;
     }
     const thread = state.querySelector(".chat-thread");
-    const content = state.querySelector(".chat-thread-inner");
-    if (
-      thread &&
-      content &&
-      this.chatThreadResizeTargets?.thread === thread &&
-      this.chatThreadResizeTargets.content === content
-    ) {
+    if (thread && this.chatThreadResizeTargets?.thread === thread) {
       return;
     }
 
     this.chatThreadResizeObserver?.disconnect();
     this.chatThreadResizeObserver = null;
     this.chatThreadResizeTargets = undefined;
-    if (!thread || !content) {
+    if (!thread) {
       return;
     }
 
-    // Streamed markdown and mobile composer controls can finish sizing after
-    // Lit's update. Follow the rendered geometry so the viewport stays pinned.
+    // The transcript virtualizer owns row measurement and content-height
+    // correction. This observer only follows viewport-size changes.
     this.chatThreadResizeObserver = new ResizeObserver(() => {
       const currentState = this.stateValue;
       if (!currentState) {
@@ -1810,8 +1829,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       scheduleCommittedChatScroll(currentState, false, false, { source: "resize" });
     });
     this.chatThreadResizeObserver.observe(thread);
-    this.chatThreadResizeObserver.observe(content);
-    this.chatThreadResizeTargets = { thread, content };
+    this.chatThreadResizeTargets = { thread };
   }
 
   hostConnected() {
@@ -1919,3 +1937,4 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.pendingCreatedSessionComposer = null;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

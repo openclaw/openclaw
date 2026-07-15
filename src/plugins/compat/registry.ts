@@ -293,7 +293,7 @@ const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "plugin-sdk-testing-barrel",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-28",
     deprecated: "2026-04-28",
@@ -301,14 +301,12 @@ const PLUGIN_COMPAT_RECORDS = [
     removeAfter: "2026-07-28",
     replacement:
       "focused `openclaw/plugin-sdk/*` test subpaths such as `plugin-test-runtime`, `channel-test-helpers`, `test-env`, and `test-fixtures`",
-    docsPath: "/plugins/sdk-migration",
+    docsPath: "/plugins/sdk-migration#private-testing-barrel",
     surfaces: ["openclaw/plugin-sdk/testing"],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: [
-      "src/plugins/compat/registry.test.ts",
-      "scripts/check-no-extension-test-core-imports.ts",
-      "test/extension-test-boundary.test.ts",
-    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The testing subpath was private-local-only and pack-excluded in shipped stables v2026.6.5 and v2026.7.1, so it was safely removed before its removeAfter date.",
   },
   {
     code: "channel-route-key-aliases",
@@ -1147,3 +1145,4 @@ export function getPluginCompatRecord(code: PluginCompatCode): KnownPluginCompat
   }
   return record;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

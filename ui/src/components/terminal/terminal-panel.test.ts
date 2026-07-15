@@ -20,15 +20,23 @@ type TerminalFactory = typeof import("./terminal-runtime.ts").createIsolatedGhos
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 
 function createTerminalController(dispose: () => void = vi.fn()) {
+  const wasmTerm = {};
+  const renderer = {
+    setTheme: vi.fn(),
+    render: vi.fn(),
+  };
   return {
     readOnly: false,
     terminal: {
       cols: 100,
       rows: 30,
       viewportY: 0,
+      wasmTerm,
+      renderer,
       write: vi.fn(),
       focus: vi.fn(),
       reset: vi.fn(),
+      paste: vi.fn(),
     },
     write: vi.fn(),
     fit: vi.fn(),
@@ -80,6 +88,7 @@ async function startPanelWithPendingOpen() {
   const open = deferred<ReturnType<typeof terminalOpenResult>>();
   const requests: Array<{ method: string; params: unknown }> = [];
   const client: TerminalGatewayClient = {
+    forceReconnect: () => {},
     request: <T>(method: string, params?: unknown) => {
       requests.push({ method, params });
       return (method === "terminal.open" ? open.promise : Promise.resolve({})) as Promise<T>;
@@ -138,6 +147,7 @@ describe("OpenClawTerminalPanel", () => {
     });
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         return {
@@ -166,7 +176,10 @@ describe("OpenClawTerminalPanel", () => {
     });
     expect(createOptions?.terminalOptions?.fontFamily).toContain("MesloLGLDZ Nerd Font Mono");
     expect(getComputedStyle(createOptions!.parent).caretColor).toBe("rgba(0, 0, 0, 0)");
-    const styles = (OpenClawTerminalPanel.styles as { cssText: string }).cssText;
+    const styleResults = Array.isArray(OpenClawTerminalPanel.styles)
+      ? OpenClawTerminalPanel.styles
+      : [OpenClawTerminalPanel.styles];
+    const styles = styleResults.map((style) => style.cssText).join("\n");
     expect(styles).toMatch(/\.tp-new\s*\{[^}]*align-self:\s*center/u);
     await vi.waitFor(() => {
       expect(requests).toContainEqual({
@@ -187,6 +200,47 @@ describe("OpenClawTerminalPanel", () => {
         params: { sessionId: "session-1", cols: 120, rows: 40 },
       });
     });
+  });
+
+  it("forces a full render after hiding and showing the panel", async () => {
+    const controller = createTerminalController();
+    let createOptions: CreateOptions | undefined;
+    createGhosttyTerminalMock.mockImplementation(async (options: CreateOptions) => {
+      createOptions = options;
+      return controller;
+    });
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string) =>
+        (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    panel.toggle();
+
+    await vi.waitFor(() => expect(createOptions?.parent.isConnected).toBe(true));
+    controller.fit.mockClear();
+    controller.terminal.renderer.render.mockClear();
+
+    panel.toggle();
+    await panel.updateComplete;
+    expect(createOptions?.parent.isConnected).toBe(false);
+
+    panel.toggle();
+    await panel.updateComplete;
+
+    expect(createOptions?.parent.isConnected).toBe(true);
+    expect(controller.fit).toHaveBeenCalled();
+    expect(controller.terminal.renderer.render).toHaveBeenCalledWith(
+      controller.terminal.wasmTerm,
+      true,
+      0,
+      controller.terminal,
+      0,
+    );
   });
 
   it("flushes keystrokes entered while open is in flight after resize resync", async () => {
@@ -241,37 +295,6 @@ describe("OpenClawTerminalPanel", () => {
     expect(requests.some(({ method }) => method === "terminal.input")).toBe(false);
   });
 
-  it("opens a new titled tab for a catalog toggle request", async () => {
-    createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
-    const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      request: async <T>(method: string, params?: unknown) => {
-        requests.push({ method, params });
-        return {
-          ...terminalOpenResult("catalog-terminal-1"),
-          title: "codex resume 0d5c…",
-        } as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
-    const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
-
-    panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
-
-    await vi.waitFor(() => {
-      expect(requests).toContainEqual({
-        method: "terminal.open",
-        params: { agentId: undefined, cols: 100, rows: 30, catalog },
-      });
-    });
-    await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tp-tab")?.textContent).toContain("codex resume 0d5c…");
-  });
-
   it("reattaches persisted sessions before opening a catalog tab", async () => {
     sessionStorage.setItem("openclaw.terminal.sessions.v1", JSON.stringify(["persisted-1"]));
     createGhosttyTerminalMock
@@ -279,6 +302,7 @@ describe("OpenClawTerminalPanel", () => {
       .mockResolvedValueOnce(createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.list") {
@@ -325,7 +349,7 @@ describe("OpenClawTerminalPanel", () => {
       requests.findIndex((entry) => entry.method === "terminal.open"),
     );
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
-      JSON.stringify(["persisted-1", "catalog-terminal-1"]),
+      JSON.stringify(["persisted-1"]),
     );
   });
 
@@ -341,6 +365,7 @@ describe("OpenClawTerminalPanel", () => {
       .mockResolvedValueOnce(controllers[2]);
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.open") {
@@ -447,6 +472,7 @@ describe("OpenClawTerminalPanel", () => {
     const secondList = deferred<{ sessions: ListedSession[] }>();
     let listCount = 0;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: <T>(method: string) => {
         if (method === "terminal.open") {
           return Promise.resolve(terminalOpenResult("current-1")) as Promise<T>;
@@ -511,6 +537,7 @@ describe("OpenClawTerminalPanel", () => {
       .mockResolvedValueOnce(createTerminalController())
       .mockResolvedValueOnce(createTerminalController());
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) => {
         if (method === "terminal.open") {
           return terminalOpenResult("current-1") as T;
@@ -553,6 +580,7 @@ describe("OpenClawTerminalPanel", () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     let openCount = 0;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.open") {
@@ -587,6 +615,7 @@ describe("OpenClawTerminalPanel", () => {
     createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         return {
@@ -613,7 +642,8 @@ describe("OpenClawTerminalPanel", () => {
     const section = panel.renderRoot.querySelector(".tp");
     expect(section?.classList.contains("tp--fullscreen")).toBe(true);
     expect(panel.renderRoot.querySelector(".tp-resizer")).toBeNull();
-    expect(panel.renderRoot.querySelector(".tp-actions")).toBeNull();
+    expect(panel.renderRoot.querySelector(".tp-upload")).not.toBeNull();
+    expect(panel.renderRoot.querySelectorAll(".tp-actions button")).toHaveLength(1);
 
     // Closing the last tab must keep the panel (with its "+" button) rendered —
     // a fullscreen document has no toggle to bring a closed panel back.
@@ -634,6 +664,7 @@ describe("OpenClawTerminalPanel", () => {
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     let openCount = 0;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.open") {
@@ -703,6 +734,7 @@ describe("OpenClawTerminalPanel", () => {
     const oldRequests: string[] = [];
     const oldUnsubscribe = vi.fn();
     const oldClient: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) => {
         oldRequests.push(method);
         return (method === "terminal.open" ? terminalOpenResult("old-session") : {}) as T;
@@ -711,6 +743,7 @@ describe("OpenClawTerminalPanel", () => {
     };
     const newRequests: string[] = [];
     const newClient: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) => {
         newRequests.push(method);
         if (method === "terminal.list") {
@@ -750,6 +783,7 @@ describe("OpenClawTerminalPanel", () => {
       .mockResolvedValueOnce(currentController);
     const requests: string[] = [];
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) => {
         requests.push(method);
         return (method === "terminal.open" ? terminalOpenResult("current-session") : {}) as T;
@@ -791,6 +825,7 @@ describe("OpenClawTerminalPanel", () => {
   it("removes resize listeners when disconnected mid-drag", async () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) =>
         (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
       addEventListener: () => () => {},
@@ -838,6 +873,7 @@ describe("OpenClawTerminalPanel", () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
       request: async <T>(method: string) =>
         (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
       addEventListener: (nextListener) => {

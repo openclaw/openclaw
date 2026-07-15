@@ -1669,3 +1669,4 @@ export function isOpenClawStateDatabaseOpen(): boolean {
 
 /** Test alias for closing shared state handles from teardown code. */
 export const closeOpenClawStateDatabaseForTest = closeOpenClawStateDatabase;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

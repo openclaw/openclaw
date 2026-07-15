@@ -16,10 +16,10 @@ import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import {
-  createMockPluginRegistry,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
-} from "../plugin-sdk/testing.js";
+} from "../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
   applyCliBackendLiveEnv,

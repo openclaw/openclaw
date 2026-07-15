@@ -30,9 +30,18 @@ import type {
 export const CODEX_TERMINAL_RESUME_COMMAND = "codex.terminal.resume.v1";
 
 export function resolveLocalCodexTerminalExecutable(
-  pathEnv = process.env.PATH ?? "",
+  env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  return resolveExecutableFromPathEnv("codex", pathEnv);
+  return resolveExecutableFromPathEnv("codex", env.PATH ?? env.Path ?? "", env, {
+    fallbackToLoginShell: true,
+  });
+}
+
+function resolveLocalCodexTerminalExecutableWithPathEnv(env: NodeJS.ProcessEnv = process.env) {
+  return resolveExecutableFromPathEnv("codex", env.PATH ?? env.Path ?? "", env, {
+    fallbackToLoginShell: true,
+    withPathEnv: true,
+  });
 }
 
 export function codexNodeTerminalCapability(node: {
@@ -173,16 +182,17 @@ export async function openCodexCatalogTerminal(params: {
   const title = `codex resume ${params.threadId.slice(0, 8)}…`;
   if (params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
     const record = await requireCatalogEligibleThread(params.control, params.threadId);
-    const executable = resolveLocalCodexTerminalExecutable();
+    const resolution = resolveLocalCodexTerminalExecutableWithPathEnv();
     // A managed app-server may exist without a local CLI. Fail closed so
     // terminal resume never targets a different machine or missing binary.
-    if (!executable) {
+    if (!resolution) {
       throw new CatalogParamsError("Codex CLI is unavailable");
     }
     return {
       kind: "local",
-      argv: [executable, "resume", params.threadId],
+      argv: [resolution.executable, "resume", params.threadId],
       ...(record.cwd ? { cwd: record.cwd } : {}),
+      ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
       title,
     };
   }

@@ -28,7 +28,7 @@ import {
 } from "./a2ui-shared.js";
 import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
 
-export const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
+const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
 
 /** Options for Canvas host creation. */
 type CanvasHostOpts = {
@@ -299,13 +299,7 @@ export async function createCanvasHostHandler(
     if (!wss) {
       return;
     }
-    for (const ws of wss.clients) {
-      try {
-        ws.send("reload");
-      } catch {
-        // ignore
-      }
-    }
+    wss.clients.forEach((ws) => ws.send("reload"));
   };
   const scheduleReload = () => {
     if (debounce) {
@@ -459,13 +453,7 @@ export async function createCanvasHostHandler(
       }
       watcherClosed = true;
       await watcher?.close().catch(() => {});
-      for (const ws of wss?.clients ?? []) {
-        try {
-          ws.terminate();
-        } catch {
-          // ignore
-        }
-      }
+      wss?.clients.forEach((ws) => ws.terminate());
       if (wss) {
         await new Promise<void>((resolve) => {
           wss.close(() => resolve());

@@ -987,3 +987,4 @@ export type {
   ManagedWorktreeRecord,
   RemoveManagedWorktreeResult,
 } from "./types.js";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

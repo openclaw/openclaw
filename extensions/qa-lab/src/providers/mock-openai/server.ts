@@ -471,7 +471,7 @@ async function buildResponsesPayload(
       },
     ]);
   }
-  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(allInputText);
+  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(prompt, input);
   if (whatsAppPendingHistoryReply) {
     return buildAssistantEvents(whatsAppPendingHistoryReply);
   }
@@ -1551,3 +1551,4 @@ export async function startQaMockOpenAiServer(params?: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -21,7 +21,7 @@ let sendMessageDiscord: typeof import("./send.js").sendMessageDiscord;
 let unpinMessageDiscord: typeof import("./send.js").unpinMessageDiscord;
 let resolveDiscordTargetChannelId: typeof import("./send.shared.js").resolveDiscordTargetChannelId;
 let loadWebMedia: typeof import("openclaw/plugin-sdk/web-media").loadWebMedia;
-let resetDiscordDirectoryCacheForTest: typeof import("./directory-cache.js").resetDiscordDirectoryCacheForTest;
+let clearDiscordDirectoryCacheForTest: typeof import("./directory-cache.test-support.js").clearDiscordDirectoryCacheForTest;
 let rememberDiscordDirectoryUser: typeof import("./directory-cache.js").rememberDiscordDirectoryUser;
 
 const DISCORD_TEST_CFG = {
@@ -46,13 +46,13 @@ beforeAll(async () => {
   } = await import("./send.js"));
   ({ resolveDiscordTargetChannelId } = await import("./send.shared.js"));
   ({ loadWebMedia } = await import("openclaw/plugin-sdk/web-media"));
-  ({ resetDiscordDirectoryCacheForTest, rememberDiscordDirectoryUser } =
-    await import("./directory-cache.js"));
+  ({ rememberDiscordDirectoryUser } = await import("./directory-cache.js"));
+  ({ clearDiscordDirectoryCacheForTest } = await import("./directory-cache.test-support.js"));
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  resetDiscordDirectoryCacheForTest();
+  clearDiscordDirectoryCacheForTest();
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1286,3 +1286,4 @@ describe("searchMessagesDiscord", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

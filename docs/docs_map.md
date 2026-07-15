@@ -314,6 +314,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Account config keys
   - H2: Multiple bots
   - H2: Reply modes
+  - H2: Command menu
   - H2: Durable media delivery
   - H2: Agent activity rows
   - H2: Targets
@@ -1383,19 +1384,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 ## cli/crestodian.md
 
 - Route: /cli/crestodian
-- Headings:
-  - H1: openclaw crestodian
-  - H2: When it starts
-  - H2: What Crestodian shows
-  - H2: Examples
-  - H2: Operations and approval
-  - H3: Switching to masked channel setup
-  - H2: Setup bootstrap
-  - H2: AI conversation
-  - H3: CLI harness trust model
-  - H2: Switching to an agent
-  - H2: Message rescue mode
-  - H2: Related
+- Headings: none
 
 ## cli/cron.md
 
@@ -1793,6 +1782,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Web-search follow-ups
   - H2: Other behaviors
   - H2: Common follow-up commands
+
+## cli/openclaw.md
+
+- Route: /cli/openclaw
+- Headings:
+  - H1: openclaw setup
+  - H2: When it starts
+  - H2: What OpenClaw shows
+  - H2: Examples
+  - H2: Operations and approval
+  - H3: Switching to masked channel setup
+  - H2: Setup bootstrap
+  - H2: AI conversation
+  - H3: CLI harness trust model
+  - H2: Switching to an agent
+  - H2: Message rescue mode
+  - H2: Related
 
 ## cli/pairing.md
 
@@ -4887,6 +4893,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Codex sessions and transcripts
   - H3: Claude sessions and transcripts
   - H3: OpenCode and Pi sessions
+  - H3: Terminal file uploads
   - H2: Invoking commands
   - H2: Command policy
   - H2: Config (openclaw.json)
@@ -5166,6 +5173,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/linux
 - Headings:
   - H2: Desktop companion
+  - H3: Canvas
   - H2: CLI and SSH alternative
   - H2: Node capabilities
   - H2: Install
@@ -6512,6 +6520,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
+
+## plugins/reference/linux-canvas.md
+
+- Route: /plugins/reference/linux-canvas
+- Headings:
+  - H1: Linux Canvas plugin
+  - H2: Distribution
+  - H2: Surface
 
 ## plugins/reference/linux-node.md
 
@@ -8385,6 +8401,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: GLM models
   - H2: Getting started
   - H3: Endpoints
+  - H2: Rate limits and overloads
   - H2: Config example
   - H2: Built-in catalog
   - H2: Thinking levels
@@ -10435,7 +10452,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Keyboard shortcuts
   - H2: Slash commands
   - H2: Local shell commands
-  - H2: Crestodian setup and repair helper
+  - H2: OpenClaw setup and repair helper
   - H2: Tool output
   - H2: Terminal colors
   - H2: History + streaming

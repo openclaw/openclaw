@@ -70,8 +70,6 @@
     "!dist/plugin-sdk/test-node-mocks.d.ts",
     "!dist/plugin-sdk/test-utils.js",
     "!dist/plugin-sdk/test-utils.d.ts",
-    "!dist/plugin-sdk/testing.js",
-    "!dist/plugin-sdk/testing.d.ts",
     "!dist/plugin-sdk/src/agents/test-helpers/**",
     "!dist/plugin-sdk/src/test-helpers/**",
     "!dist/plugin-sdk/src/test-utils/**",
@@ -931,10 +929,6 @@
       "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
       "default": "./dist/plugin-sdk/channel-lifecycle.js"
     },
-    "./plugin-sdk/channel-ingress": {
-      "types": "./dist/plugin-sdk/channel-ingress.d.ts",
-      "default": "./dist/plugin-sdk/channel-ingress.js"
-    },
     "./plugin-sdk/channel-ingress-runtime": {
       "types": "./dist/plugin-sdk/channel-ingress-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-ingress-runtime.js"
@@ -1562,7 +1556,7 @@
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-mdx && pnpm docs:check-i18n-glossary && pnpm docs:check-links && pnpm docs:map:check",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:import-cycles": "node --import tsx scripts/check-import-cycles.ts",
-    "check:loc": "node --import tsx scripts/check-ts-max-loc.ts",
+    "check:max-lines-ratchet": "node scripts/check-max-lines-ratchet.mjs",
     "check:madge-import-cycles": "node --import tsx scripts/check-madge-import-cycles.ts",
     "check:media-download-helpers": "node scripts/check-media-download-helper-roundtrip.mjs",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
@@ -1818,8 +1812,8 @@
     "test:docker:cleanup": "bash scripts/test-cleanup-docker.sh",
     "test:docker:commitments-safety": "bash scripts/e2e/commitments-safety-docker.sh",
     "test:docker:config-reload": "bash scripts/e2e/config-reload-source-docker.sh",
-    "test:docker:crestodian-first-run": "bash scripts/e2e/crestodian-first-run-docker.sh",
-    "test:docker:crestodian-rescue": "bash scripts/e2e/crestodian-rescue-docker.sh",
+    "test:docker:system-agent-first-run": "bash scripts/e2e/system-agent-first-run-docker.sh",
+    "test:docker:system-agent-rescue": "bash scripts/e2e/system-agent-rescue-docker.sh",
     "test:docker:cron-cli": "bash scripts/e2e/cron-cli-docker.sh",
     "test:docker:cron-mcp-cleanup": "bash scripts/e2e/cron-mcp-cleanup-docker.sh",
     "test:docker:codex-media-path": "bash scripts/e2e/codex-media-path-docker.sh",
@@ -1922,7 +1916,7 @@
     "test:live": "node scripts/test-live.mjs",
     "test:live:cache": "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import tsx scripts/check-live-cache.ts",
     "test:live:codex-harness": "node scripts/test-live.mjs --codex-harness -- src/gateway/gateway-codex-harness.live.test.ts",
-    "test:live:crestodian-rescue-channel": "node scripts/run-with-env.mjs OPENCLAW_LIVE_CRESTODIAN_RESCUE_CHANNEL=1 -- node scripts/test-live.mjs -- src/crestodian/rescue-channel.live.test.ts",
+    "test:live:system-agent-rescue-channel": "node scripts/run-with-env.mjs OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL=1 -- node scripts/test-live.mjs -- src/system-agent/rescue-channel.live.test.ts",
     "test:live:gateway-profiles": "node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts",
     "test:live:media": "node --import tsx test/e2e/qa-lab/media/hosted-media-provider-live.ts",
     "test:live:media:image": "node --import tsx test/e2e/qa-lab/media/hosted-media-provider-live.ts image",
@@ -2093,6 +2087,7 @@
     "@types/node": "26.1.0",
     "@types/proper-lockfile": "4.1.4",
     "@types/semver": "7.7.1",
+    "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vitest/coverage-v8": "4.1.9",

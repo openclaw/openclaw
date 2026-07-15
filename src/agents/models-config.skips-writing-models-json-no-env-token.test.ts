@@ -14,10 +14,9 @@ import {
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
 import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.secrets.js";
-import {
-  PLUGIN_MODEL_CATALOG_FILE,
-  PLUGIN_MODEL_CATALOG_GENERATED_BY,
-} from "./plugin-model-catalog.js";
+import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
+
+const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   resolveExternalCliAuthProfiles: () => [],

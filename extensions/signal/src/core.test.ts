@@ -28,7 +28,6 @@ import {
 } from "./identity.js";
 import { probeSignal } from "./probe.js";
 import {
-  clearSignalReplyAuthorsForTest,
   registerSignalReplyContext,
   resolveSignalReplyContextWithPersistence,
 } from "./reply-authors.js";
@@ -1036,7 +1035,6 @@ describe("signal outbound", () => {
     await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toEqual({
       ambiguous: true,
     });
-    await clearSignalReplyAuthorsForTest();
   });
 
   it("keeps newer reply context when older events arrive out of order", async () => {
@@ -1058,11 +1056,9 @@ describe("signal outbound", () => {
       author: "+15551234567",
       body: "newer",
     });
-    await clearSignalReplyAuthorsForTest();
   });
 
   it("hydrates durable Signal sends with stored native quote context", async () => {
-    await clearSignalReplyAuthorsForTest();
     await registerSignalReplyContext({
       to: "signal:+15555550123",
       replyToId: "1700000000001",
@@ -1089,7 +1085,6 @@ describe("signal outbound", () => {
       replyToAuthor: "+15555550123",
       replyToBody: "original message",
     });
-    await clearSignalReplyAuthorsForTest();
   });
 
   it("declares message adapter durable text and media with receipt proofs", async () => {
@@ -1290,3 +1285,4 @@ describe("signal setup parsing", () => {
     expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

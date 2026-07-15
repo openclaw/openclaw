@@ -1311,3 +1311,4 @@ describe("TUI PTY real backends", () => {
     registerValidationLoopTest("gateway");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1790,3 +1790,4 @@ export const testing = {
   resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
     resolvePositiveTimerTimeoutMs(valueMs, TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS),
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,5 +1,6 @@
 // Builds CI node/Vitest shard plans from the full suite configuration.
 import { relative } from "node:path";
+import { agentsCoreIsolatedTestFiles } from "../../test/vitest/vitest.agents-paths.mjs";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
@@ -280,17 +281,18 @@ function resolveAgentCoreShardName(file) {
 }
 
 function createAgentCoreSplitShards() {
+  const isolatedTests = new Set(agentsCoreIsolatedTestFiles);
   const groups = new Map();
   for (const file of listTestFiles("src/agents")) {
     const name = relative("src/agents", file).replaceAll("\\", "/");
-    if (name.includes("/")) {
+    if (name.includes("/") || isolatedTests.has(file)) {
       continue;
     }
     const shardName = resolveAgentCoreShardName(file);
     groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
   }
 
-  return [
+  const sharedShards = [
     "agentic-agents-core-auth",
     "agentic-agents-core-models",
     "agentic-agents-core-tools",
@@ -305,6 +307,16 @@ function createAgentCoreSplitShards() {
       shardName,
     }))
     .filter((shard) => shard.includePatterns.length > 0);
+
+  return [
+    ...sharedShards,
+    {
+      configs: ["test/vitest/vitest.agents-core-isolated.config.ts"],
+      includePatterns: agentsCoreIsolatedTestFiles,
+      requiresDist: false,
+      shardName: "agentic-agents-core-isolated",
+    },
+  ];
 }
 
 const GATEWAY_SERVER_BACKED_HTTP_TESTS = new Set([

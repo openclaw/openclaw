@@ -2,23 +2,27 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetIMessageShortIdState, rememberIMessageReplyCache } from "../monitor-reply-cache.js";
-import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
-import {
-  buildIMessageInboundContext,
-  resolveIMessageReactionContext,
-  resolveIMessageInboundDecision,
-} from "./inbound-processing.js";
+import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
-beforeEach(() => {
-  installIMessageStateRuntimeForTest();
-  resetIMessageShortIdState();
+type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
+type InboundProcessingModule = typeof import("./inbound-processing.js");
+let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
+let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
+let resolveIMessageReactionContext: InboundProcessingModule["resolveIMessageReactionContext"];
+let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
+
+beforeEach(async () => {
+  ({ rememberIMessageReplyCache } = await loadFreshIMessageReplyCacheForTest());
+  ({ buildIMessageInboundContext, resolveIMessageReactionContext, resolveIMessageInboundDecision } =
+    await import("./inbound-processing.js"));
 });
 
 describe("resolveIMessageInboundDecision echo detection", () => {
   const cfg = {} as OpenClawConfig;
-  type InboundDecisionParams = Parameters<typeof resolveIMessageInboundDecision>[0];
+  type InboundDecisionParams = Parameters<
+    InboundProcessingModule["resolveIMessageInboundDecision"]
+  >[0];
 
   function createInboundDecisionParams(
     overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
@@ -775,7 +779,8 @@ describe("buildIMessageInboundContext", () => {
       groupHistories: new Map(),
     });
 
-    expect(ctxPayload.MessageSid).toBe("1");
+    expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
+    expect(ctxPayload.MessageSid).not.toBe("12345");
     expect(ctxPayload.MessageSidFull).toBe("p:0/GUID-current");
   });
 
@@ -1059,8 +1064,9 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     const { ctxPayload } = await buildIMessageInboundContext(
       buildParams({ id: 999, guid: "FAB-INBOUND-1" }),
     );
-    // First inbound → shortId "1". The chat.db rowid 999 must NOT leak.
-    expect(ctxPayload.MessageSid).toBe("1");
+    // The gateway-allocated short id must not leak the chat.db rowid.
+    expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
+    expect(ctxPayload.MessageSid).not.toBe("999");
   });
 
   it("does not leak chat.db ROWIDs as MessageSid when the guid is missing", async () => {

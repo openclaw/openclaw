@@ -1738,3 +1738,4 @@ export async function handleToolExecutionEnd(
       });
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -672,6 +672,7 @@ async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
   await noteSessionTranscriptHealth({
+    cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
   });
@@ -2280,3 +2281,4 @@ export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext)
     await contribution.run(ctx);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

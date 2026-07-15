@@ -9,6 +9,14 @@ type TerminalPtyHandle = Awaited<ReturnType<typeof spawnTerminalPty>>;
 const TERMINAL_EVENT_DATA = "terminal.data";
 const TERMINAL_EVENT_EXIT = "terminal.exit";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 /** A controllable fake PTY that records writes and lets tests drive data/exit. */
 function makeFakePty() {
   let dataListener: ((chunk: string) => void) | undefined;
@@ -77,6 +85,73 @@ function baseRequest(overrides?: Partial<TerminalOpenRequest>): TerminalOpenRequ
 }
 
 describe("TerminalSessionManager", () => {
+  it("kills a backend that finishes after its open request is cancelled", async () => {
+    const spawned = deferred<TerminalPtyHandle>();
+    const controller = new AbortController();
+    const first = makeFakePty();
+    const second = makeFakePty();
+    let spawnCount = 0;
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      maxSessions: 1,
+      spawn: () => (spawnCount++ === 0 ? spawned.promise : Promise.resolve(second)),
+    });
+    const opening = manager.open(baseRequest({ signal: controller.signal }));
+
+    controller.abort(new Error("terminal open timed out"));
+    const next = await manager.open(baseRequest({ connId: "conn-2" }));
+    expect(next.ok).toBe(true);
+    spawned.resolve(first);
+
+    await expect(opening).resolves.toEqual({
+      ok: false,
+      code: "closed",
+      message: "terminal open timed out",
+    });
+    expect(first.killed).toBe(true);
+    expect(manager.size).toBe(1);
+    if (next.ok) {
+      expect(manager.close("conn-2", next.sessionId)).toBe(true);
+    }
+    expect(second.killed).toBe(true);
+    expect(manager.size).toBe(0);
+  });
+
+  it("bounds cancelled backend operations until they settle", async () => {
+    const firstSpawn = deferred<TerminalPtyHandle>();
+    const secondSpawn = deferred<TerminalPtyHandle>();
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    let spawnCount = 0;
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      maxSessions: 1,
+      spawn: () => (spawnCount++ === 0 ? firstSpawn.promise : secondSpawn.promise),
+    });
+
+    const firstOpening = manager.open(baseRequest({ signal: firstController.signal }));
+    firstController.abort(new Error("first cancelled"));
+    const secondOpening = manager.open(
+      baseRequest({ connId: "conn-2", signal: secondController.signal }),
+    );
+    secondController.abort(new Error("second cancelled"));
+
+    await expect(manager.open(baseRequest({ connId: "conn-3" }))).resolves.toEqual({
+      ok: false,
+      code: "limit",
+      message: "terminal spawn limit reached (2)",
+    });
+
+    const first = makeFakePty();
+    const second = makeFakePty();
+    firstSpawn.resolve(first);
+    secondSpawn.resolve(second);
+    await expect(firstOpening).resolves.toMatchObject({ ok: false, code: "closed" });
+    await expect(secondOpening).resolves.toMatchObject({ ok: false, code: "closed" });
+    expect(first.killed).toBe(true);
+    expect(second.killed).toBe(true);
+  });
+
   it("runs relay backends through the same stream, input, resize, and close lifecycle", async () => {
     let onData: ((data: string) => void) | undefined;
     let onExit:
@@ -336,6 +411,25 @@ describe("TerminalSessionManager", () => {
     }
     expect(manager.write("conn-2", outcome.sessionId, "rm -rf /\n")).toBe(false);
     expect(fake.writes).toEqual([]);
+  });
+
+  it("stages uploads only through the owning session host", async () => {
+    const fake = makeFakePty();
+    const stageUpload = vi.fn(async () => ({ path: "/tmp/node/report.pdf", size: 4 }));
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => fake });
+    const outcome = await manager.open(baseRequest({ stageUpload }));
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+    const file = { name: "report.pdf", contentBase64: "dGVzdA==" };
+
+    await expect(manager.upload("conn-2", outcome.sessionId, file)).resolves.toBeUndefined();
+    expect(stageUpload).not.toHaveBeenCalled();
+    await expect(manager.upload("conn-1", outcome.sessionId, file)).resolves.toEqual({
+      path: "/tmp/node/report.pdf",
+      size: 4,
+    });
+    expect(stageUpload).toHaveBeenCalledWith(file);
   });
 
   it("emits an exit event and drops the session when the process exits", async () => {

@@ -1020,8 +1020,4 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   }
 }
 
-export const testing = {
-  resolveZaloRuntimeGroupPolicy,
-  clearHostedMediaRouteRefsForTest: () => hostedMediaRouteRefs.clear(),
-  handleZaloWebhookRequest,
-};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -33,7 +33,6 @@ import {
   buildKnownAgentRunFailureReplyPayload,
   buildContextOverflowRecoveryText,
   computeContextAwareReserveTokensFloor,
-  MAX_LIVE_SWITCH_RETRIES,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
@@ -8707,11 +8706,11 @@ describe("runAgentTurnWithFallback", () => {
       resolvedVerboseLevel: "off",
     });
 
-    // After MAX_LIVE_SWITCH_RETRIES (2) the loop must break instead of continuing
+    // After two retries the loop must break instead of continuing
     // forever. The result should be a final error, not an infinite hang.
     expect(result.kind).toBe("final");
-    // 1 initial + MAX_LIVE_SWITCH_RETRIES retries = exact total invocations
-    expect(switchCallCount).toBe(1 + MAX_LIVE_SWITCH_RETRIES);
+    // One initial attempt plus two retries.
+    expect(switchCallCount).toBe(3);
   });
 
   it("propagates auth profile state on bounded live model switch retries (#58348)", async () => {
@@ -9239,3 +9238,4 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

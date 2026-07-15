@@ -224,7 +224,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     }),
     directToolNames: resolveCodexDynamicToolDirectNames(
       params,
-      isHostScopedAgentToolActive("crestodian"),
+      isHostScopedAgentToolActive("openclaw"),
     ),
     hookContext: {
       agentId: sessionAgentId,

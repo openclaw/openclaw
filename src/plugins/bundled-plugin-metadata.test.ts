@@ -45,6 +45,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "diffs-language-pack",
   "file-transfer",
   "google-meet",
+  "linux-canvas",
   "linux-node",
   "llm-task",
   "lobster",
@@ -70,6 +71,7 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "canvas",
   "device-pair",
   "file-transfer",
+  "linux-canvas",
   "linux-node",
   "memory-core",
   "ollama",
@@ -1184,3 +1186,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

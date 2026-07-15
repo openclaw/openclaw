@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **ClickClack command menus:** publish each bot's native OpenClaw commands to ClickClack composer autocomplete at gateway startup, with per-account opt-out and nonfatal compatibility handling for older tokens and servers. Thanks @shakkernerd.
+- **Skill Workshop approvals:** run agent-initiated apply, reject, and quarantine actions without an additional approval prompt by default while preserving `skills.workshop.approvalPolicy: "pending"` as an opt-in approval gate. Thanks @shakkernerd.
 - **TUI fuzzy selectors:** delegate list matching to pi-tui, adding slash-token and alpha-number matching while removing the local matcher fork.
 - **macOS paired-node terminals:** advertise duplex Codex and Claude terminal resume commands from the embedded node host and forward interactive input and cancellation through the native app bridge. (#107335)
 - **Control UI catalog terminals:** open eligible Codex and Claude Code sessions in the native CLI on their Gateway or paired-node host, with viewer-versus-terminal preferences, validated resume commands, and an interactive PTY relay. (#107086)
@@ -34,9 +36,18 @@ Docs: https://docs.openclaw.ai
 - **Android chat code highlighting:** render fenced Kotlin, Swift, TypeScript, JavaScript, Python, Bash, and JSON blocks with bounded, theme-aware syntax colors while preserving plain rendering for unknown, partial, or oversized blocks. (#100217)
 - **Gateway TTS playback:** add an operator-scoped `tts.speak` RPC that returns configured-provider speech as inline whole-clip audio for remote clients. (#100708, #100770)
 - **Workboard dispatch cap:** add a request-scoped `--max-starts` override while preserving the default cap, sequential starts, and one-card-per-owner guard. (#100174) Thanks @souvikDevloper.
+- **Plugin install provenance warnings:** require explicit `--force` acknowledgement for arbitrary executable plugin sources in CLI and chat installs, keep trusted ClawHub, bundled, official-catalog, and tracked-update flows frictionless, and restrict Crestodian installs to trusted sources. (#102197) Thanks @jesse-merhi.
 
 ### Fixes
 
+- **Mattermost progress command details:** accept the documented `streaming.preview.commandText` and `streaming.progress.commandText` modes in channel config validation and bundled metadata. Thanks @shakkernerd.
+- **1Password authorization handoff:** persist nonce-bound pending approvals in shared plugin state so hook and tool execution across broker instances remain single-use and fail closed.
+- **Control UI chat transcripts:** preserve loaded history across session and pane returns, bound automatic backscroll loading, virtualize long transcripts, retain hidden native run boundaries, and keep prepends, streaming, and responsive layouts from flickering or jumping. Thanks @shakkernerd.
+- **Codex dynamic tool outcomes:** use the shared tool-result failure contract for arbitrary lifecycle metadata, preventing successful Skill Workshop results from being displayed and persisted as failed calls. Fixes #107684. Thanks @shakkernerd.
+- **Nested resource ignores:** honor slash-free patterns and escaped literal exclamation marks in nested ignore files during skill and resource discovery. Thanks @moguangyu5-design.
+- **Proxy bypass precedence:** honor blank lower-case `no_proxy` values shadowing upper-case `NO_PROXY` consistently with Undici, and reuse the canonical matcher for Telegram fallback selection.
+- **Tokenjuice exec compaction:** avoid retaining raw command output inside compacted middleware metadata, preventing large successful compactions from failing the middleware details-size guard.
+- **Agent git package identities:** strip refs before hosted-repository parsing and reject traversal segments so GitLab branch refs resolve to the canonical managed install path.
 - **Tlon custom S3 uploads:** pass storage endpoints through the AWS SDK's native parser so custom S3-compatible uploads no longer fail before presigning.
 - **Signal active-run controls:** keep authorized stop, status, approval, and queue-read controls responsive during active turns while preserving ordinary and stateful turns in canonical session admission, and cancel every pending group sender lane on stop. (#107422) Thanks @arduano.
 - **Agent auth storage locks:** surface normal release failures while avoiding redundant release attempts after `proper-lockfile` reports a compromised lock.

@@ -233,6 +233,7 @@ describe("resolveNpmSpecMetadata", () => {
     await expect(resolveNpmSpecMetadata({ spec: "@openclaw/codex@^2026.6" })).resolves.toEqual({
       ok: false,
       error: "npm view produced incomplete package metadata",
+      category: "metadata-env",
     });
   });
 });

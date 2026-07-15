@@ -23,12 +23,16 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { buildMatrixQaMessageContent } from "./client.js";
+import { buildMatrixQaMessageContent } from "./client-message-content.js";
+import {
+  MATRIX_QA_E2EE_SYNC_FILTER,
+  buildMatrixQaE2eeStoragePaths,
+  shouldRecordMatrixQaObservedEventUpdate,
+  type MatrixQaE2eeActorId,
+} from "./e2ee-client-internals.js";
 import { findMatrixQaObservedEventMatch, normalizeMatrixQaObservedEvent } from "./events.js";
 import type { MatrixQaObservedEvent } from "./events.js";
 import type { MatrixQaRoomEventWaitResult } from "./sync.js";
-
-type MatrixQaE2eeActorId = "driver" | "observer" | `driver-${string}` | `cli-${string}`;
 
 type MatrixQaE2eeRuntime = typeof import("@openclaw/matrix/test-api.js");
 
@@ -42,12 +46,6 @@ type MatrixQaE2eeClientParams = {
   scenarioId: string;
   timeoutMs: number;
   userId: string;
-};
-
-const MATRIX_QA_E2EE_SYNC_FILTER = {
-  room: {
-    ephemeral: { not_types: ["m.receipt"] },
-  },
 };
 
 type MatrixQaPluginStateValue = {
@@ -188,24 +186,6 @@ function createMatrixQaPluginStateKeyedStore<T>(
   };
 }
 
-function shouldRecordMatrixQaObservedEventUpdate(params: {
-  next: MatrixQaObservedEvent;
-  previous: MatrixQaObservedEvent | undefined;
-}) {
-  const previous = params.previous;
-  if (!previous) {
-    return true;
-  }
-  const next = params.next;
-  return (
-    (previous.body === undefined && next.body !== undefined) ||
-    (previous.formattedBody === undefined && next.formattedBody !== undefined) ||
-    (previous.msgtype === undefined && next.msgtype !== undefined) ||
-    (previous.mentions === undefined && next.mentions !== undefined) ||
-    (previous.attachment === undefined && next.attachment !== undefined)
-  );
-}
-
 export type MatrixQaE2eeScenarioClient = {
   acceptVerification(id: string): Promise<MatrixVerificationSummary>;
   bootstrapOwnDeviceVerification(params?: {
@@ -289,28 +269,6 @@ export async function loadMatrixQaE2eeRuntime(): Promise<MatrixQaE2eeRuntime> {
   const { loadQaRunnerBundledPluginTestApi } =
     await import("openclaw/plugin-sdk/qa-runner-runtime");
   return loadQaRunnerBundledPluginTestApi<MatrixQaE2eeRuntime>("matrix");
-}
-
-function buildMatrixQaE2eeStoragePaths(params: {
-  actorId: MatrixQaE2eeActorId;
-  outputDir: string;
-  scenarioId: string;
-}) {
-  const rootDir = path.join(params.outputDir, "matrix-e2ee", "accounts", params.actorId);
-  const accountDir = path.join(rootDir, "account");
-  const runKey = path
-    .basename(params.outputDir)
-    .replace(/[^A-Za-z0-9_-]/g, "-")
-    .slice(-80);
-  const actorKey = params.actorId.replace(/[^A-Za-z0-9_-]/g, "-").slice(-40);
-  return {
-    accountDir,
-    cryptoDatabasePrefix: `qa-matrix-${runKey || "run"}-${actorKey || "actor"}`,
-    idbSnapshotPath: path.join(accountDir, "crypto-idb-snapshot.json"),
-    recoveryKeyPath: path.join(accountDir, "recovery-key.json"),
-    rootDir,
-    storagePath: path.join(accountDir, "sync-store.json"),
-  };
 }
 
 async function prepareMatrixQaE2eeStorage(params: {
@@ -578,10 +536,3 @@ export async function runMatrixQaE2eeBootstrap(
     await client.stopAndPersist().catch(() => undefined);
   }
 }
-
-export const testing = {
-  MATRIX_QA_E2EE_SYNC_FILTER,
-  buildMatrixQaE2eeStoragePaths,
-  findMatrixQaObservedEventMatch,
-  shouldRecordMatrixQaObservedEventUpdate,
-};
