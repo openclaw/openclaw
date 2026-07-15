@@ -477,42 +477,36 @@ describe("agentCliCommand", () => {
 
   // FIFOs have no stat-able size; the bounded descriptor read must drain them
   // until EOF like the legacy fs.readFile path did. Windows lacks mkfifo.
-  it.skipIf(process.platform === "win32")(
-    "reads a FIFO message file until EOF",
-    async () => {
-      await withTempStore(async ({ dir }) => {
-        const messageFile = path.join(dir, "pipe.md");
-        execFileSync("mkfifo", [messageFile]);
-        mockGatewaySuccessReply();
+  it.skipIf(process.platform === "win32")("reads a FIFO message file until EOF", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "pipe.md");
+      execFileSync("mkfifo", [messageFile]);
+      mockGatewaySuccessReply();
 
-        const dispatch = agentCliCommand(
-          { messageFile, sessionKey: "agent:main:incident-42" },
-          runtime,
-        );
-        // Opening a FIFO for reading blocks until a writer arrives; start the
-        // writer after dispatch kicks off, then close so the bounded read sees
-        // EOF instead of waiting forever.
-        const writer = (async () => {
-          const handle = await fs.promises.open(messageFile, "w");
-          try {
-            await handle.writeFile("hello from fifo");
-          } finally {
-            await handle.close();
-          }
-        })();
-        await dispatch;
-        await writer;
+      const dispatch = agentCliCommand(
+        { messageFile, sessionKey: "agent:main:incident-42" },
+        runtime,
+      );
+      // Opening a FIFO for reading blocks until a writer arrives; start the
+      // writer after dispatch kicks off, then close so the bounded read sees
+      // EOF instead of waiting forever.
+      const writer = (async () => {
+        const handle = await fs.promises.open(messageFile, "w");
+        try {
+          await handle.writeFile("hello from fifo");
+        } finally {
+          await handle.close();
+        }
+      })();
+      await dispatch;
+      await writer;
 
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.message).toBe("hello from fifo");
-      });
-    },
-  );
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.message).toBe("hello from fifo");
+    });
+  });
 
   it.each(["/new", "/RESET", "/reset check status"] as const)(
     "uses backend admin authority for %s gateway commands",
