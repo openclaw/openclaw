@@ -1,7 +1,10 @@
 // Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
+import { execFile } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -37,6 +40,8 @@ const isGatewayTransportError = vi.hoisted(() =>
 const agentCommand = vi.hoisted(() => vi.fn());
 const agentModuleLoadCount = vi.hoisted(() => vi.fn());
 const loadAgentSessionModuleMock = vi.hoisted(() => vi.fn());
+
+const execFileAsync = promisify(execFile);
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -473,6 +478,73 @@ describe("agentCliCommand", () => {
       expect(params.message).toBe("hello from chained symlink target");
     });
   });
+
+  // FIFOs have no stat-able size; the bounded descriptor read must drain them
+  // until EOF like the legacy fs.readFile path did. Windows lacks mkfifo.
+  it.runIf(process.platform !== "win32")(
+    "reads a FIFO message file until EOF within the byte cap",
+    async () => {
+      await withTempStore(async ({ dir }) => {
+        const messageFile = path.join(dir, "pipe.md");
+        await execFileAsync("mkfifo", [messageFile]);
+        mockGatewaySuccessReply();
+
+        // Opening a FIFO blocks until both ends are open, so write from the
+        // event loop while the command reads; a sync write would deadlock.
+        const pending = agentCliCommand(
+          { messageFile, sessionKey: "agent:main:incident-42" },
+          runtime,
+        );
+        await fs.promises.writeFile(messageFile, "hello from fifo");
+        await pending;
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.message).toBe("hello from fifo");
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reads a FIFO message file until EOF",
+    async () => {
+      await withTempStore(async ({ dir }) => {
+        const messageFile = path.join(dir, "pipe.md");
+        execFileSync("mkfifo", [messageFile]);
+        mockGatewaySuccessReply();
+
+        const dispatch = agentCliCommand(
+          { messageFile, sessionKey: "agent:main:incident-42" },
+          runtime,
+        );
+        // Opening a FIFO for reading blocks until a writer arrives; start the
+        // writer after dispatch kicks off, then close so the bounded read sees
+        // EOF instead of waiting forever.
+        const writer = (async () => {
+          const handle = await fs.promises.open(messageFile, "w");
+          try {
+            await handle.writeFile("hello from fifo");
+          } finally {
+            await handle.close();
+          }
+        })();
+        await dispatch;
+        await writer;
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.message).toBe("hello from fifo");
+      });
+    },
+  );
 
   it.each(["/new", "/RESET", "/reset check status"] as const)(
     "uses backend admin authority for %s gateway commands",
