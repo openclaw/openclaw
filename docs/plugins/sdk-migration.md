@@ -175,7 +175,10 @@ SDK.
     runtime-neutral middleware:
 
     ```typescript
-    // OpenClaw and Codex runtime dynamic tools
+    // OpenClaw runtime tools and Codex runtime dynamic tools (result may be
+    // transformed). Codex-native tool results are also relayed for observation,
+    // but their transformed output never reaches the model: the Codex
+    // PostToolUse hook contract cannot replace a native tool response.
     api.registerAgentToolResultMiddleware(async (event) => {
       return compactToolResult(event);
     }, {
