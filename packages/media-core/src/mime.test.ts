@@ -134,6 +134,14 @@ describe("mime detection", () => {
   });
 
   it.each([
+    "application/epub+zip",
+    "application/java-archive",
+    "application/vnd.apple.pages",
+    "application/vnd.google-earth.kmz",
+    "application/vnd.ms-word.document.macroenabled.12",
+    "application/vnd.ms-visio.drawing",
+    "application/vnd.oasis.opendocument.text",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -157,6 +165,34 @@ describe("mime detection", () => {
         headerMime: "application/pdf",
       },
       expected: "application/zip",
+    });
+  });
+
+  it.each(["application/vnd.oasis.opendocument.text-flat-xml", "application/vnd.visio"])(
+    "does not let non-ZIP %s metadata override generic ZIP bytes",
+    async (headerMime) => {
+      const zip = new JSZip();
+      zip.file("hello.txt", "hi");
+
+      await expectDetectedMime({
+        input: { buffer: await zip.generateAsync({ type: "nodebuffer" }), headerMime },
+        expected: "application/zip",
+      });
+    },
+  );
+
+  it("prefers ZIP-compatible metadata over an incompatible filename extension", async () => {
+    const zip = new JSZip();
+    zip.file("hello.txt", "hi");
+    const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+    await expectDetectedMime({
+      input: {
+        buffer: await zip.generateAsync({ type: "nodebuffer" }),
+        filePath: "upload.pdf",
+        headerMime: docxMime,
+      },
+      expected: docxMime,
     });
   });
 
