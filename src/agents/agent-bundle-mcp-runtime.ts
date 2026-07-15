@@ -567,8 +567,11 @@ export function createSessionMcpRuntime(params: {
           ({ serverName, rawServer, resolved, safeServerName, launchDescription }) =>
             async (): Promise<ServerResult> => {
               failIfDisposed();
+              let session: BundleMcpSession | undefined;
+              let reusedSession = false;
+              try {
 
-              let session = sessions.get(serverName);
+              session = sessions.get(serverName);
               while (
                 session &&
                 !session.retiring &&
@@ -584,7 +587,7 @@ export function createSessionMcpRuntime(params: {
               if (session?.retiring) {
                 session = undefined;
               }
-              const reusedSession = Boolean(session);
+              reusedSession = Boolean(session);
               if (!session) {
                 const client = new Client(
                   {
@@ -643,7 +646,6 @@ export function createSessionMcpRuntime(params: {
                 session.sharedAcrossCatalogGenerations = true;
               }
               session.catalogUseCount += 1;
-              try {
                 failIfDisposed();
                 await ensureSessionConnected(session, resolved.connectionTimeoutMs);
                 failIfDisposed();
@@ -726,6 +728,7 @@ export function createSessionMcpRuntime(params: {
                   diagnostics: [] as McpToolCatalogDiagnostic[],
                 };
               } catch (error) {
+                failIfDisposed();
                 const message = redactErrorUrls(error);
                 if (!disposed) {
                   const action = reusedSession ? "refresh" : "start";
@@ -741,16 +744,18 @@ export function createSessionMcpRuntime(params: {
                     message,
                   },
                 ];
-                const sharedWithNewerGeneration =
-                  session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
-                if (!session.connected) {
-                  // A close is terminal for every catalog generation sharing this
-                  // session. The identity guard preserves any newer replacement.
-                  await retireSessionIfCurrent(serverName, session);
-                } else if (!reusedSession && !sharedWithNewerGeneration) {
-                  // Catalog invalidation can overlap generations; an older failed
-                  // generation must not dispose a session a newer one already reused.
-                  await retireSessionIfCurrent(serverName, session);
+                if (session) {
+                  const sharedWithNewerGeneration =
+                    session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
+                  if (!session.connected) {
+                    // A close is terminal for every catalog generation sharing this
+                    // session. The identity guard preserves any newer replacement.
+                    await retireSessionIfCurrent(serverName, session);
+                  } else if (!reusedSession && !sharedWithNewerGeneration) {
+                    // Catalog invalidation can overlap generations; an older failed
+                    // generation must not dispose a session a newer one already reused.
+                    await retireSessionIfCurrent(serverName, session);
+                  }
                 }
                 failIfDisposed();
                 return {
@@ -760,9 +765,11 @@ export function createSessionMcpRuntime(params: {
                   diagnostics: diags,
                 } as ServerResult;
               } finally {
-                session.catalogUseCount -= 1;
-                if (session.catalogUseCount === 0) {
-                  session.sharedAcrossCatalogGenerations = false;
+                if (session) {
+                  session.catalogUseCount -= 1;
+                  if (session.catalogUseCount === 0) {
+                    session.sharedAcrossCatalogGenerations = false;
+                  }
                 }
               }
             },
