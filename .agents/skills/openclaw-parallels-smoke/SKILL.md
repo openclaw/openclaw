@@ -138,7 +138,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
   ```
 
 - Restoring discards all post-snapshot changes. Inventory first and do not restore while another developer or lane owns the VM. `e2e` selects the newest `pre-openclaw-native-e2e-*`; use an exact snapshot for historical reproduction.
-- For native companion work, read `../../../../openclaw-windows-node/.agents/skills/openclaw-parallels-windows/SKILL.md`. That supplement reuses this controller and adds only .NET, Windows SDK, WebView2, the app checkout, app-layer snapshots, build/tests, and native proof.
+- For native companion work, read `../../../../openclaw-windows-node/.agents/skills/openclaw-proof-validation/PARALLELS.md`. That optional macOS sidecar reuses this controller and adds only .NET, Windows SDK, WebView2, the app checkout, app-layer snapshots, build/tests, and native proof.
 - Preferred entrypoint: `pnpm test:parallels:windows`
 - Use the newest verified `pre-openclaw-native-e2e-*` snapshot and pass its exact name with `--snapshot-hint`.
 - Default upgrade coverage on Windows should now include: fresh snapshot -> site installer pinned to the requested stable tag -> `openclaw update --channel dev` on the guest. Keep the older host-tgz upgrade path only when the caller explicitly passes `--target-package-spec`.
