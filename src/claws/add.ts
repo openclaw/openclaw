@@ -5,6 +5,7 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-co
 import { stableStringify } from "../agents/stable-stringify.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { ClawPackageInstallError, installClawPackages } from "./packages.js";
@@ -31,6 +32,7 @@ type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
   persistRecord?: typeof persistClawInstallRecord;
   updateRecord?: typeof updateClawInstallRecordStatus;
   createWorkspaceFiles?: typeof createClawWorkspaceFiles;
+  runtime?: RuntimeEnv;
   installPackages?: typeof installClawPackages;
   nowMs?: number;
 };
@@ -338,7 +340,7 @@ export async function applyClawAddPlan(
       workspaceFiles,
       packages,
       error: { code: "provenance_failed", message: (error as Error).message },
-    };
+    });
   }
 
   return {

@@ -246,7 +246,10 @@ export async function runClawsAddCommand(
 
   let addResult;
   try {
-    addResult = await applyClawAddPlan(plan, { consentPlanIntegrity: opts.planIntegrity });
+    addResult = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: opts.planIntegrity,
+      runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
+    });
   } catch (error) {
     const code = error instanceof ClawAddMutationError ? error.code : "add_failed";
     const message = (error as Error).message;
