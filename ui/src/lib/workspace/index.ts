@@ -326,10 +326,7 @@ export function findTab(
  * Resolve which tab is active: prefer the requested slug if it exists and is not
  * hidden; otherwise fall back to the first visible tab (or first tab of any kind).
  */
-export function resolveActiveSlug(
-  workspace: WorkspaceDocument,
-  requested: string | null,
-): string | null {
+function resolveActiveSlug(workspace: WorkspaceDocument, requested: string | null): string | null {
   const requestedTab = findTab(workspace, requested);
   if (requestedTab) {
     return requestedTab.slug;
@@ -463,10 +460,7 @@ export async function loadWorkspace(
   } finally {
     const isCurrent = generation === state.loadGeneration;
     let shouldNotify = isCurrent;
-    if (
-      state.loadingGeneration === generation ||
-      (isCurrent && state.loadingGeneration !== null)
-    ) {
+    if (state.loadingGeneration === generation || (isCurrent && state.loadingGeneration !== null)) {
       // A current silent completion supersedes any older foreground owner; keep
       // no spinner tied to a response that can only finish stale.
       state.loadingGeneration = null;

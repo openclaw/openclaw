@@ -873,12 +873,10 @@ export function renderWorkspace(props: WorkspaceProps): TemplateResult {
   }
 
   // Deep-link: a changed `?ws=` re-points the active tab without a refetch.
-  if (state.workspace) {
-    if (requestedSlug) {
-      setActiveWorkspaceSlug(state, state.workspace, requestedSlug);
-    } else {
-      cancelWorkspaceLoadIntent(state);
-    }
+  if (!requestedSlug) {
+    cancelWorkspaceLoadIntent(state);
+  } else if (state.workspace) {
+    setActiveWorkspaceSlug(state, state.workspace, requestedSlug);
   }
 
   return html`
@@ -908,10 +906,10 @@ function renderBody(
         <button
           class="btn btn--small"
           type="button"
-        @click=${() =>
-          void loadWorkspace(state, props.client, {
-            requestedSlug: requestedWorkspaceSlug(window.location.search),
-          })}
+          @click=${() =>
+            void loadWorkspace(state, props.client, {
+              requestedSlug: requestedWorkspaceSlug(window.location.search),
+            })}
         >
           ${t("common.reload")}
         </button>
