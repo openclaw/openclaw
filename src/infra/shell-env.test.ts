@@ -10,7 +10,6 @@ let clearShellEnvAppliedKeys: ShellEnvModule["clearShellEnvAppliedKeys"];
 let getShellEnvAppliedKeys: ShellEnvModule["getShellEnvAppliedKeys"];
 let getShellPathFromLoginShell: ShellEnvModule["getShellPathFromLoginShell"];
 let loadShellEnvFallback: ShellEnvModule["loadShellEnvFallback"];
-let resolveExecutableFromUserShellPath: ShellEnvModule["resolveExecutableFromUserShellPath"];
 let resolveExecutableFromUserShellPathWithPathEnv: ShellEnvModule["resolveExecutableFromUserShellPathWithPathEnv"];
 let resolveShellEnvFallbackTimeoutMs: ShellEnvModule["resolveShellEnvFallbackTimeoutMs"];
 let shouldDeferShellEnvFallback: ShellEnvModule["shouldDeferShellEnvFallback"];
@@ -23,7 +22,6 @@ beforeEach(async () => {
     getShellEnvAppliedKeys,
     getShellPathFromLoginShell,
     loadShellEnvFallback,
-    resolveExecutableFromUserShellPath,
     resolveExecutableFromUserShellPathWithPathEnv,
     resolveShellEnvFallbackTimeoutMs,
     shouldDeferShellEnvFallback,
@@ -570,24 +568,28 @@ describe("shell env fallback", () => {
   it("resolves from the daemon PATH without probing the login shell", () => {
     const exec = vi.fn(() => Buffer.from("PATH=/bin\0"));
 
-    const result = resolveExecutableFromUserShellPath("sh", {
+    const result = resolveExecutableFromUserShellPathWithPathEnv("sh", {
       env: { PATH: "/bin" },
-      exec: exec as unknown as Parameters<typeof resolveExecutableFromUserShellPath>[1]["exec"],
+      exec: exec as unknown as Parameters<
+        typeof resolveExecutableFromUserShellPathWithPathEnv
+      >[1]["exec"],
     });
 
-    expect(result).toBe("/bin/sh");
+    expect(result).toEqual({ executable: "/bin/sh" });
     expect(exec).not.toHaveBeenCalled();
   });
 
   it("resolves from the login-shell PATH when the daemon PATH misses the executable", () => {
     const exec = vi.fn(() => Buffer.from("PATH=/bin\0"));
 
-    const result = resolveExecutableFromUserShellPath("sh", {
+    const result = resolveExecutableFromUserShellPathWithPathEnv("sh", {
       env: { PATH: "/missing", SHELL: "/bin/sh" },
-      exec: exec as unknown as Parameters<typeof resolveExecutableFromUserShellPath>[1]["exec"],
+      exec: exec as unknown as Parameters<
+        typeof resolveExecutableFromUserShellPathWithPathEnv
+      >[1]["exec"],
     });
 
-    expect(result).toBe("/bin/sh");
+    expect(result).toEqual({ executable: "/bin/sh", pathEnv: "/bin" });
     expect(exec).toHaveBeenCalledOnce();
   });
 

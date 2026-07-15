@@ -319,7 +319,7 @@ export function getShellPathFromLoginShell(opts: {
   return cachedShellPath;
 }
 
-export type UserShellExecutableResolution = {
+type UserShellExecutableResolution = {
   executable: string;
   /** Present only when resolution required the login-shell PATH fallback. */
   pathEnv?: string;
@@ -358,13 +358,6 @@ export function resolveExecutableFromUserShellPathWithPathEnv(
     includeExtensionless: opts.includeExtensionless,
   });
   return resolved ? { executable: resolved, pathEnv: shellPath } : undefined;
-}
-
-export function resolveExecutableFromUserShellPath(
-  executable: string,
-  opts: Parameters<typeof resolveExecutableFromUserShellPathWithPathEnv>[1],
-): string | undefined {
-  return resolveExecutableFromUserShellPathWithPathEnv(executable, opts)?.executable;
 }
 
 export function getShellEnvAppliedKeys(): string[] {
