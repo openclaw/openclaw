@@ -1,6 +1,6 @@
 // HTML-fragment parsing and inline-island conversion for the Telegram rich
 // blocks emitter. Agents author rich content as markdown plus a documented set
-// of HTML islands (see the core system prompt's "Telegram rich ON" contract);
+// of HTML islands (see agentPrompt.inboundFormattingHints "markdown_telegram_rich");
 // this module owns the tolerant parser and inline (RichText-level) mapping,
 // while rich-blocks-html-map.ts owns block-level island mapping.
 import { tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
