@@ -484,6 +484,8 @@ export type ChannelThreadingToolContext = {
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  /** Route-scoped durable identity for the active inbound channel turn. */
+  currentSourceTurnId?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   /** True when posting at the parent conversation root would leak a thread-originated reply. */

@@ -113,7 +113,9 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import {
+  buildRecoverablePendingFinalDeliveryText,
   buildPendingFinalDeliveryText,
+  normalizePendingFinalDeliveryPayloads,
   sanitizePendingFinalDeliveryText,
 } from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
@@ -1174,6 +1176,7 @@ export async function runReplyAgent(params: {
   resetTriggered?: boolean;
   replyThreadingOverride?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
+  beforeAgentReply?: (admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -1206,6 +1209,7 @@ export async function runReplyAgent(params: {
     resetTriggered,
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
+    beforeAgentReply,
   } = params;
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
@@ -1529,13 +1533,16 @@ export async function runReplyAgent(params: {
     return value;
   };
   const {
+    admitUserTurn,
+    checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
-    persist: persistRestartRecoveryDeliveryClaim,
   } = createReplyRestartRecoveryClaimController({
-    admittedRunId: sessionCtx.MessageSid,
+    admissionRunId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     getEntry: () =>
       sessionKey ? (activeSessionStore?.[sessionKey] ?? activeSessionEntry) : activeSessionEntry,
+    getSessionId: () => replyOperation.sessionId,
+    hasBeforeAgentReplyHook: beforeAgentReply !== undefined,
     isRestartAbort: () =>
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart",
@@ -1550,7 +1557,6 @@ export async function runReplyAgent(params: {
             opts,
           })
         : undefined,
-    sessionId: replyOperation.sessionId,
     ...(sessionKey ? { sessionKey } : {}),
     setEntry: (entry) => {
       activeSessionEntry = entry;
@@ -1558,6 +1564,7 @@ export async function runReplyAgent(params: {
         activeSessionStore[sessionKey] = entry;
       }
     },
+    sourceTurnId: sessionCtx.SourceTurnId,
     ...(storePath ? { storePath } : {}),
   });
   type SessionResetOptions = {
@@ -1700,11 +1707,58 @@ export async function runReplyAgent(params: {
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
-    await persistRestartRecoveryDeliveryClaim();
+    await admitUserTurn(followupRun.userTurnTranscriptRecorder);
     // Adoption marks run start and must never be spool-replayed (would re-run tools).
-    // Suppressed delivery has no recovery state to persist; crashed suppressed runs die
-    // silently. When a delivery context is resolvable, this still runs after its persist.
+    // Suppressed delivery persists only the user transcript; crashed suppressed runs die
+    // silently. Deliverable turns atomically persist transcript plus recovery ownership.
     await opts?.onTurnAdopted?.();
+    const hookReply = await beforeAgentReply?.({ sessionId: replyOperation.sessionId });
+    if (hookReply) {
+      const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
+      const normalizedHookReplies = normalizePendingFinalDeliveryPayloads([hookReply]);
+      let hookCheckpoint: Parameters<typeof checkpointBeforeAgentReply>[0] = {
+        state: normalizedHookReplies.length === 0 ? "handled-silent" : "handled-unrecoverable",
+      };
+      if (sessionKey && storePath && hookFinalDeliveryText) {
+        const sourceReplyPolicy = resolveSourceReplyPolicy({
+          cfg,
+          sessionCtx,
+          sessionEntry: activeSessionEntry,
+          sessionKey,
+          runtimePolicySessionKey,
+          opts,
+        });
+        if (!sourceReplyPolicy.suppressDelivery) {
+          const pendingFinalDeliveryIntentId = crypto.randomUUID();
+          setReplyPayloadMetadata(hookReply, {
+            pendingFinalDeliveryIntentId,
+            pendingFinalDeliveryRetryText: hookFinalDeliveryText,
+          });
+          hookCheckpoint = {
+            state: "handled-reply",
+            pendingFinalDelivery: {
+              text: hookFinalDeliveryText,
+              intentId: pendingFinalDeliveryIntentId,
+              context: resolveReplyRunDeliveryContext({
+                cfg,
+                sessionCtx,
+                sessionEntry: activeSessionEntry,
+                sessionKey,
+                runtimePolicySessionKey,
+                opts,
+              }),
+            },
+          };
+        } else {
+          hookCheckpoint = { state: "handled-silent" };
+        }
+      }
+      await checkpointBeforeAgentReply(hookCheckpoint);
+      return returnWithQueuedFollowupDrain(hookReply);
+    }
+    if (beforeAgentReply) {
+      await checkpointBeforeAgentReply({ state: "continue" });
+    }
     const runOutcome = await traceAgentPhase("reply.run_agent_turn", () =>
       runAgentTurnWithFallback({
         commandBody,

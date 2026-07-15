@@ -538,6 +538,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       sessionKey?: string;
       sessionId?: string;
       inboundTurnKind?: "user_request" | "room_event";
+      sourceReplyFinal?: boolean;
       agentId?: string;
       toolContext?: MessageActionToolContext;
       conversationReadOrigin?: "direct-operator";
@@ -647,6 +648,9 @@ export const sendHandlers: GatewayRequestHandlers = {
             agentId,
             toolContext: trustedContext.toolContext,
             idempotencyKey: request.idempotencyKey,
+            ...(request.sourceReplyFinal !== undefined
+              ? { sourceReplyFinal: request.sourceReplyFinal }
+              : {}),
             deliveredPayload: payload,
           },
         });

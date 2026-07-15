@@ -124,6 +124,7 @@ describe("agent runtime identity token", () => {
           currentChannelProvider: "matrix",
           currentChannelId: "!room:example.org",
           currentChatType: "direct",
+          currentSourceTurnId: "channel-user:v1:source-1",
         },
       },
     });
@@ -141,6 +142,7 @@ describe("agent runtime identity token", () => {
           currentChannelProvider: "matrix",
           currentChannelId: "!room:example.org",
           currentChatType: "direct",
+          currentSourceTurnId: "channel-user:v1:source-1",
         },
       },
     });

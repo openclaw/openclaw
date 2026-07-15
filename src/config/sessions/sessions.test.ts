@@ -456,6 +456,7 @@ describe("session store writer queue", () => {
           channel: "discord",
           to: [],
         },
+        restartRecoveryBeforeAgentReplyState: "maybe",
         restartRecoveryDeliveryRunId: 123,
         restartRecoveryDeliverySourceRunId: 123,
         restartRecoveryTerminalRunIds: [123, "", {}],
@@ -482,6 +483,7 @@ describe("session store writer queue", () => {
           accountId: "Main",
           threadId: "reply-1",
         },
+        restartRecoveryBeforeAgentReplyState: "continue",
         restartRecoveryDeliveryRunId: "run-1",
         restartRecoveryDeliverySourceRunId: "source-run-1",
         restartRecoveryTerminalRunIds: [" terminal-1 ", "terminal-2", "terminal-1", null],
@@ -505,6 +507,7 @@ describe("session store writer queue", () => {
     expect(bad?.pendingFinalDeliveryContext).toBeUndefined();
     expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(bad?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(bad?.restartRecoveryDeliverySourceRunId).toBeUndefined();
     expect(bad?.restartRecoveryTerminalRunIds).toBeUndefined();
@@ -529,6 +532,7 @@ describe("session store writer queue", () => {
         accountId: "main",
         threadId: "reply-1",
       },
+      restartRecoveryBeforeAgentReplyState: "continue",
       restartRecoveryDeliveryRunId: "run-1",
       restartRecoveryDeliverySourceRunId: "source-run-1",
       restartRecoveryTerminalRunIds: ["terminal-2", "terminal-1"],

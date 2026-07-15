@@ -1419,6 +1419,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const params = { ...(args as Record<string, unknown>) };
       // `final` is a Codex app-server-only source-delivery control. It must
       // not be dispatched to a provider or participate in idempotency.
+      const requestedSourceReplyFinal =
+        typeof params.final === "boolean" ? params.final : undefined;
       delete params.final;
 
       // Sanitize outbound text fields in three layers:
@@ -1675,6 +1677,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,
           sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
+          sourceReplyFinal:
+            action === "send" && sourceReplySinkDeliveryMode === "message_tool_only"
+              ? (requestedSourceReplyFinal ?? true)
+              : undefined,
           inboundEventKind: options?.inboundEventKind,
           inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,
           abortSignal: signal,

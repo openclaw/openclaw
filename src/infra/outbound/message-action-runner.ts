@@ -153,6 +153,7 @@ export type RunMessageActionParams = {
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplyFinal?: boolean;
   inboundEventKind?: InboundEventKind;
   inboundAudio?: boolean;
   abortSignal?: AbortSignal;
@@ -745,6 +746,9 @@ async function runGatewayPluginMessageActionOrNull(params: {
       sessionKey: params.input.sessionKey,
       sessionId: params.input.sessionId,
       inboundTurnKind: params.input.inboundEventKind,
+      ...(params.input.sourceReplyFinal !== undefined
+        ? { sourceReplyFinal: params.input.sourceReplyFinal }
+        : {}),
       agentId: params.agentId,
       ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
       idempotencyKey: await resolveGatewayActionIdempotencyKey(

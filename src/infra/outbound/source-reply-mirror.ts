@@ -25,6 +25,7 @@ type SourceReplyTranscriptMirrorParams = {
   agentId?: string;
   toolContext?: ChannelThreadingToolContext;
   idempotencyKey?: string;
+  sourceReplyFinal?: boolean;
   deliveredPayload?: unknown;
 };
 
@@ -138,6 +139,12 @@ function hasExplicitDeliveryFailure(payload: unknown): boolean {
   return deliveryStatus === "failed" || deliveryStatus === "error";
 }
 
+function resolveCurrentSourceTurnId(
+  toolContext: ChannelThreadingToolContext | undefined,
+): string | undefined {
+  return normalizeOptionalString(toolContext?.currentSourceTurnId);
+}
+
 function isCurrentSourceConversation(
   params: SourceReplyTranscriptMirrorParams,
 ): params is MirrorableSourceReplyTranscriptParams {
@@ -223,6 +230,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   if (!mirror.text && mirror.mediaUrls.length === 0) {
     return false;
   }
+  const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
 
   await appendAssistantMessageToSessionTranscript({
     agentId: params.agentId,
@@ -230,6 +238,15 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     text: mirror.text,
     mediaUrls: mirror.mediaUrls.length ? mirror.mediaUrls : undefined,
     idempotencyKey: params.idempotencyKey,
+    ...(params.sourceReplyFinal !== undefined
+      ? {
+          deliveryMirror: {
+            kind: "message-tool-source-reply" as const,
+            final: params.sourceReplyFinal,
+            ...(sourceTurnId ? { sourceTurnId } : {}),
+          },
+        }
+      : {}),
     config: params.cfg,
   });
   return true;

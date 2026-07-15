@@ -133,12 +133,14 @@ export function buildThreadingToolContext(params: {
   if (!config) {
     return {
       currentMessageId,
+      currentSourceTurnId: sessionCtx.SourceTurnId,
     };
   }
   const rawProvider = normalizeOptionalLowercaseString(originProvider);
   if (!rawProvider) {
     return {
       currentMessageId,
+      currentSourceTurnId: sessionCtx.SourceTurnId,
     };
   }
   const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
@@ -149,6 +151,7 @@ export function buildThreadingToolContext(params: {
       currentChannelId: normalizeOptionalString(originTo),
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       currentMessageId,
+      currentSourceTurnId: sessionCtx.SourceTurnId,
       hasRepliedRef,
     };
   }
@@ -179,6 +182,7 @@ export function buildThreadingToolContext(params: {
     // Some providers expose only thread resources as reply targets; explicit
     // `undefined` means the adapter rejected the generic message-id fallback.
     currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
+    currentSourceTurnId: sessionCtx.SourceTurnId,
   };
 }
 

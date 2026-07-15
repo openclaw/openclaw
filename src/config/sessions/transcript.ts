@@ -69,6 +69,11 @@ export type SessionTranscriptDeliveryMirror =
       kind: "channel-final-suppressed";
       reason: "stale-foreground";
       sourceMessageId?: string;
+    }
+  | {
+      kind: "message-tool-source-reply";
+      final: boolean;
+      sourceTurnId?: string;
     };
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
@@ -749,7 +754,9 @@ function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage):
     .openclawDeliveryMirror;
   return (
     isRedundantDeliveryMirror(message) &&
-    (marker?.kind === "channel-final" || marker?.kind === "channel-final-suppressed")
+    (marker?.kind === "channel-final" ||
+      marker?.kind === "channel-final-suppressed" ||
+      marker?.kind === "message-tool-source-reply")
   );
 }
 

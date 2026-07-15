@@ -104,6 +104,7 @@ function decodeMessageActionContext(
           | undefined,
         currentThreadTs: normalizeOptionalString(rawToolContext.currentThreadTs),
         currentMessageId,
+        currentSourceTurnId: normalizeOptionalString(rawToolContext.currentSourceTurnId),
         replyToMode:
           replyToMode === "off" ||
           replyToMode === "first" ||

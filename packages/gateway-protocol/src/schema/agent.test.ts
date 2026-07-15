@@ -116,6 +116,21 @@ describe("MessageActionParamsSchema", () => {
     ).toBe(false);
   });
 
+  it("accepts only boolean source-reply terminal intent", () => {
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        ...baseParams,
+        sourceReplyFinal: true,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        ...baseParams,
+        sourceReplyFinal: "true",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects caller-supplied current chat classification", () => {
     expect(
       Value.Check(MessageActionParamsSchema, {

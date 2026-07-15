@@ -21,7 +21,7 @@ and what the automatic resume looks like.
 | State                         | Storage                                     | Behavior across restart                                                 |
 | ----------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
 | Conversation history          | Per-agent SQLite database                   | Untouched; sessions continue from the stored transcript                 |
-| Interrupted main-session turn | Per-agent SQLite session row and transcript | Automatically resumed a few seconds after startup                       |
+| Interrupted main-session turn | Per-agent SQLite session row and transcript | Automatically resumed or reconciled a few seconds after startup         |
 | Subagent runs                 | SQLite (shared state database)              | Registry restored on boot; interrupted runs resumed                     |
 | Background tasks              | SQLite (shared state database)              | Reconciled on boot; orphaned runs recovered or marked lost              |
 | Queued outbound deliveries    | SQLite delivery queue                       | Drained after restart; undelivered replies are retried                  |
@@ -44,13 +44,19 @@ affected session is marked for recovery.
 
 Three complementary mechanisms mark sessions whose turn did not finish:
 
-- **At Control UI admission:** for an ordinary text turn on an existing main
-  session, the gateway appends the user message, marks the session running, and
-  records its transcript-only delivery claim in one SQLite transaction before
-  returning the `started` acknowledgement.
+- **At turn admission:** for an ordinary text turn on an existing main session,
+  the gateway appends the user message, marks the session running, and records
+  its recovery delivery claim in one SQLite transaction before model or
+  `before_agent_reply` hook execution. Control UI does this before returning the
+  `started` acknowledgement; channel dispatch does it when the prepared turn
+  adopts the agent run.
   Commands, attachments, per-turn overrides, pending deliveries, prior abort
   hints, plugin-owned sessions, and turns with execution hooks keep their
   specialized admission paths.
+  If a `before_agent_reply` hook is installed, admission also records its phase.
+  Recovery never replays a hook interrupted mid-call. Once an unhandled hook
+  finishes, its checkpoint lets recovery skip that hook and continue to the
+  model. Handled text and silent results are checkpointed separately.
 - **At shutdown:** during the restart drain, every session with an active run
   is stamped with a recovery marker in the session store before the run is
   aborted.
@@ -71,6 +77,13 @@ identifier, so an ambiguous connection failure cannot start the same recovery
 twice. Completed and unresumable Control UI turns also retain bounded durable
 idempotency tombstones, allowing a reconnecting outbox to retire them without
 re-executing the request.
+
+Message-tool-only replies use a second durable correlation. After the channel
+confirms a same-conversation send, the gateway mirrors its terminal intent and
+source message ID into the transcript. If restart recovery finds that exact
+terminal receipt, it completes the interrupted turn without rerunning tools or
+asking the user to resend. Progress sends and receipts from older turns cannot
+complete the current turn.
 
 Before resuming, the gateway checks that the transcript tail is safe to
 continue from. If it is not (for example, the turn ended on a stale pending

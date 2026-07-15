@@ -154,6 +154,7 @@ export async function runEmbeddedFallbackCandidate(params: {
             currentChannelProvider: embeddedContext.currentChannelProvider,
             currentThreadTs: embeddedContext.currentThreadTs,
             currentMessageId: embeddedContext.currentMessageId,
+            currentSourceTurnId: embeddedContext.currentSourceTurnId,
             replyToMode: embeddedContext.replyToMode,
             hasRepliedRef: embeddedContext.hasRepliedRef,
             sameChannelThreadRequired: embeddedContext.sameChannelThreadRequired,

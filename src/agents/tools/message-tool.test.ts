@@ -934,6 +934,33 @@ describe("message tool secret scoping", () => {
     expect(second?.params).not.toHaveProperty("final");
   });
 
+  it("carries terminal source-reply intent outside provider params", async () => {
+    mockSendResult();
+    const tool = createMessageTool({
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      runMessageAction: mocks.runMessageAction as never,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await tool.execute("message_progress", {
+      action: "send",
+      message: "progress",
+      to: "123",
+      final: false,
+    });
+    await tool.execute("message_terminal", {
+      action: "send",
+      message: "done",
+      to: "123",
+    });
+
+    const [progress, terminal] = mocks.runMessageAction.mock.calls.map((call) => call[0]);
+    expect(progress?.sourceReplyFinal).toBe(false);
+    expect(terminal?.sourceReplyFinal).toBe(true);
+    expect(progress?.params).not.toHaveProperty("final");
+    expect(terminal?.params).not.toHaveProperty("final");
+  });
+
   it("uses delivery params to avoid collisions across distinct sends", async () => {
     mockSendResult();
 

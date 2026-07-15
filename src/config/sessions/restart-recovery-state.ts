@@ -28,6 +28,7 @@ function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[] | unde
 }
 
 type RestartRecoveryNormalizedField =
+  | "restartRecoveryBeforeAgentReplyState"
   | "restartRecoveryDeliveryRequestFingerprint"
   | "restartRecoveryDeliveryRunId"
   | "restartRecoveryDeliverySourceRunId"
@@ -43,8 +44,21 @@ function sameOptionalStringArray(left: unknown, right: string[] | undefined): bo
 /** Normalizes restart-claim fields while preserving an already-canonical array identity. */
 export function normalizeRestartRecoveryEntryFields(
   entry: SessionEntry,
-  assign: (key: RestartRecoveryNormalizedField, value: string | string[] | undefined) => void,
+  assign: <K extends RestartRecoveryNormalizedField>(
+    key: K,
+    value: SessionEntry[K] | undefined,
+  ) => void,
 ): void {
+  assign(
+    "restartRecoveryBeforeAgentReplyState",
+    entry.restartRecoveryBeforeAgentReplyState === "pending" ||
+      entry.restartRecoveryBeforeAgentReplyState === "continue" ||
+      entry.restartRecoveryBeforeAgentReplyState === "handled-silent" ||
+      entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
+      entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable"
+      ? entry.restartRecoveryBeforeAgentReplyState
+      : undefined,
+  );
   assign(
     "restartRecoveryDeliveryRequestFingerprint",
     normalizeRunId(entry.restartRecoveryDeliveryRequestFingerprint),
@@ -105,6 +119,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
         ])
       : undefined;
   return {
+    restartRecoveryBeforeAgentReplyState: undefined,
     restartRecoveryDeliveryContext: undefined,
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,

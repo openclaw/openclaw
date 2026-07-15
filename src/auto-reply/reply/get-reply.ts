@@ -1024,6 +1024,11 @@ export async function getReplyFromConfig(
   }
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
+  // Dispatch-owned turns defer this until durable admission so a restart after
+  // hook entry can still recover the accepted user request.
+  let beforeAgentReply:
+    | ((admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>)
+    | undefined;
   if (!useFastTestBootstrap) {
     const { getGlobalHookRunner } = await loadHookRunnerGlobal();
     const hookRunner = getGlobalHookRunner();
@@ -1037,34 +1042,43 @@ export async function getReplyFromConfig(
         normalizeOptionalString(sessionCtx.NativeChannelId) ??
         normalizeOptionalString(sessionCtx.ChatId);
       const hookTrigger = opts?.isHeartbeat ? "heartbeat" : "user";
-      const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
-        hookRunner.runBeforeAgentReply(
-          { cleanedBody },
-          {
-            agentId,
-            sessionKey: agentSessionKey,
-            sessionId,
-            workspaceDir,
-            trigger: hookTrigger,
-            ...buildAgentHookContextChannelFields({
+      beforeAgentReply = async (admitted) => {
+        const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
+          hookRunner.runBeforeAgentReply(
+            { cleanedBody },
+            {
+              agentId,
               sessionKey: agentSessionKey,
-              messageProvider: hookMessageProvider,
-              currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-              messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-              senderId: sessionCtx.SenderId ?? ctx.SenderId,
-            }),
-            ...buildAgentHookContextIdentityFields({
+              sessionId: admitted?.sessionId ?? sessionId,
+              workspaceDir,
               trigger: hookTrigger,
-              senderId: sessionCtx.SenderId,
-              chatId: hookChatId,
-              channelContext: sessionCtx.ChannelContext ?? ctx.ChannelContext,
-            }),
-          },
-        ),
-      );
-      if (hookResult?.handled) {
+              ...buildAgentHookContextChannelFields({
+                sessionKey: agentSessionKey,
+                messageProvider: hookMessageProvider,
+                currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+                messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+                senderId: sessionCtx.SenderId ?? ctx.SenderId,
+              }),
+              ...buildAgentHookContextIdentityFields({
+                trigger: hookTrigger,
+                senderId: sessionCtx.SenderId,
+                chatId: hookChatId,
+                channelContext: sessionCtx.ChannelContext ?? ctx.ChannelContext,
+              }),
+            },
+          ),
+        );
+        if (!hookResult?.handled) {
+          return undefined;
+        }
         logResolverTiming("completed", "before_agent_reply_hook");
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+      };
+      if (!internalResolvedOpts?.replyOperation) {
+        const hookReply = await beforeAgentReply();
+        if (hookReply) {
+          return hookReply;
+        }
       }
     }
   }
@@ -1136,6 +1150,7 @@ export async function getReplyFromConfig(
       workspaceDir,
       abortedLastRun,
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
+      ...(internalResolvedOpts?.replyOperation && beforeAgentReply ? { beforeAgentReply } : {}),
     }),
   );
   logResolverTiming("completed", "prepared_reply");

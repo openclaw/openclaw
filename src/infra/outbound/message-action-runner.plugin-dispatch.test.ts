@@ -1138,6 +1138,8 @@ describe("runMessageAction plugin dispatch", () => {
         } as OpenClawConfig,
         action: "send",
         conversationReadOrigin: "direct-operator",
+        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplyFinal: true,
         params: {
           channel: "gatewaychat",
           target: "user-123",
@@ -1162,6 +1164,7 @@ describe("runMessageAction plugin dispatch", () => {
           channel: "gatewaychat",
           action: "send",
           conversationReadOrigin: "direct-operator",
+          sourceReplyFinal: true,
           idempotencyKey: "idem-gateway-action",
         },
         "gateway call params",

@@ -1098,6 +1098,7 @@ describe("main-session-restart-recovery", () => {
         restartRecoveryForceSafeTools: true,
         pendingFinalDelivery: true,
         pendingFinalDeliveryText: pendingPayload,
+        restartRecoveryBeforeAgentReplyState: "handled-reply",
         pendingFinalDeliveryContext: {
           channel: "discord",
           to: "discord:dm:final",
@@ -1869,6 +1870,250 @@ describe("main-session-restart-recovery", () => {
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.status).toBe("failed");
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+  });
+
+  it("completes an interrupted turn whose exact terminal source reply was delivered", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:discord:direct:123";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        startedAt: Date.now() - 20_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryBeforeAgentReplyState: "pending",
+        pendingFinalDeliveryIntentId: "pending-1",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "discord-message-1",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing", idempotencyKey: "discord-message-1" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "delivered answer" }],
+        stopReason: "stop",
+        openclawDeliveryMirror: {
+          kind: "message-tool-source-reply",
+          final: true,
+          sourceTurnId: "discord-message-1",
+        },
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        content: [{ type: "text", text: "sent" }],
+      },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "done",
+      abortedLastRun: false,
+      restartRecoveryTerminalRunIds: ["discord-message-1"],
+    });
+    const completed = loadSessionEntry({ sessionKey, storePath });
+    expect(completed?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(completed?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(completed?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(completed?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
+    expect(completed?.pendingFinalDelivery).toBeUndefined();
+    expect(completed?.pendingFinalDeliveryText).toBeUndefined();
+    expect(completed?.pendingFinalDeliveryIntentId).toBeUndefined();
+  });
+
+  it("resumes after an unhandled before_agent_reply hook checkpoint", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const sessionKey = "agent:main:discord:direct:123";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryBeforeAgentReplyState: "continue",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "discord-message-1",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing", idempotencyKey: "discord-message-1" },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+
+    expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({ method: "agent" });
+    expect(firstGatewayParams()).toMatchObject({ deliver: true });
+  });
+
+  it("completes a checkpointed silent before_agent_reply result without dispatch", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:discord:direct:123";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryBeforeAgentReplyState: "handled-silent",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "discord-message-1",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing", idempotencyKey: "discord-message-1" },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "done",
+      abortedLastRun: false,
+      restartRecoveryTerminalRunIds: ["discord-message-1"],
+    });
+  });
+
+  it("completes a source-less silent before_agent_reply checkpoint", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:custom:direct:123";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryBeforeAgentReplyState: "handled-silent",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [{ role: "user", content: "quiet" }]);
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    const completed = loadSessionEntry({ sessionKey, storePath });
+    expect(completed).toMatchObject({ status: "done", abortedLastRun: false });
+    expect(completed?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(completed?.restartRecoveryTerminalRunIds).toBeUndefined();
+  });
+
+  it.each(["pending", "handled-reply", "handled-unrecoverable"] as const)(
+    "fails closed for a %s before_agent_reply checkpoint without a recoverable result",
+    async (restartRecoveryBeforeAgentReplyState) => {
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionKey = "agent:main:discord:direct:123";
+      await writeStore(sessionsDir, {
+        [sessionKey]: {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 10_000,
+          status: "running",
+          abortedLastRun: true,
+          restartRecoveryBeforeAgentReplyState,
+          restartRecoveryDeliveryRunId: "recovery-1",
+          restartRecoveryDeliverySourceRunId: "discord-message-1",
+          restartRecoveryDeliveryContext: {
+            channel: "discord",
+            to: "discord:dm:123",
+          },
+        },
+      });
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "do the thing", idempotencyKey: "discord-message-1" },
+      ]);
+
+      await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+        recovered: 0,
+        failed: 1,
+        skipped: 0,
+      });
+
+      expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
+        method: "message.action",
+      });
+      expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
+    },
+  );
+
+  it.each([
+    ["progress delivery", false, "discord-message-1"],
+    ["an older turn's terminal delivery", true, "discord-message-0"],
+  ])("does not complete from %s", async (_label, final, sourceTurnId) => {
+    const sessionsDir = await makeSessionsDir();
+    const sessionKey = "agent:main:discord:direct:123";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "discord-message-1",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "not this turn's terminal answer" }],
+        stopReason: "stop",
+        openclawDeliveryMirror: {
+          kind: "message-tool-source-reply",
+          final,
+          sourceTurnId,
+        },
+      },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 0,
+      failed: 1,
+      skipped: 0,
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
   });
 
   it.each([

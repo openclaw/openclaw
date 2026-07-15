@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import {
   HEARTBEAT_RUN_SCOPE,
@@ -225,6 +229,7 @@ function createMinimalRun(params?: {
   currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
   sessionCtx?: Partial<TemplateContext>;
   runOverrides?: Partial<FollowupRun["run"]>;
+  beforeAgentReply?: (admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -233,6 +238,7 @@ function createMinimalRun(params?: {
     MessageSid: "msg",
     ...params?.sessionCtx,
   } as unknown as TemplateContext;
+  sessionCtx.SourceTurnId ??= sessionCtx.MessageSid;
   const resolvedQueue = {
     mode: params?.resolvedQueueMode ?? "interrupt",
   } as unknown as QueueSettings;
@@ -298,6 +304,7 @@ function createMinimalRun(params?: {
         shouldInjectGroupIntro: false,
         typingMode: params?.typingMode ?? "instant",
         replyOperation: params?.replyOperation,
+        beforeAgentReply: params?.beforeAgentReply,
       });
     },
   };
@@ -886,7 +893,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       });
       expect(storedDuringRun.restartRecoveryDeliveryRunId).not.toBe("stale-run");
       expect(storedDuringRun.restartRecoveryDeliveryRunId).toEqual(expect.any(String));
-      expect(storedDuringRun.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(storedDuringRun.restartRecoveryDeliverySourceRunId).toBe("1503645939964055592");
       expect(storedDuringRun.restartRecoveryTerminalRunIds).toEqual(["stale-control-ui-run"]);
       return {
         payloads: [{ text: "visible final" }],
@@ -916,7 +923,10 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(stored.restartRecoveryTerminalRunIds).toEqual(["stale-control-ui-run"]);
+    expect(stored.restartRecoveryTerminalRunIds).toEqual([
+      "stale-control-ui-run",
+      "1503645939964055592",
+    ]);
   });
 
   it("adopts and clears a transcript-only restart recovery claim", async () => {
@@ -947,6 +957,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionCtx: {
         Provider: "webchat",
         OriginatingChannel: "webchat",
+        SourceTurnId: "channel-user:v1:different-from-gateway-run",
       },
       runOverrides: { messageProvider: "webchat" },
       sessionEntry,
@@ -965,6 +976,48 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
     expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+  });
+
+  it("rejects a transcript-only claim already aborted for restart", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: true,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const beforeAgentReply = vi.fn(async () => undefined);
+    const onTurnAdopted = vi.fn();
+    const { run } = createMinimalRun({
+      beforeAgentReply,
+      opts: { onTurnAdopted },
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+      },
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await expect(run()).rejects.toThrow("restart recovery claim changed before agent adoption");
+
+    expect(onTurnAdopted).not.toHaveBeenCalled();
+    expect(beforeAgentReply).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(await readStoredMainSession(storePath)).toMatchObject({
+      abortedLastRun: true,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      status: "running",
+    });
   });
 
   it("clears an adopted transcript-only claim after user cancellation", async () => {
@@ -1038,6 +1091,23 @@ describe("runReplyAgent pending final delivery capture", () => {
         threadId: "1503645939964055592",
       });
       expect(typeof storedAtAdoption.restartRecoveryDeliveryRunId).toBe("string");
+      expect(storedAtAdoption.restartRecoveryDeliverySourceRunId).toBe("1503645939964055592");
+      const transcript = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "session",
+        sessionKey: "main",
+        storePath,
+      });
+      expect(transcript).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: expect.objectContaining({
+              role: "user",
+              content: "durable discord request",
+            }),
+          }),
+        ]),
+      );
       events.push("adopted");
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
@@ -1048,7 +1118,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       };
     });
 
-    const { run } = createMinimalRun({
+    const { followupRun, run } = createMinimalRun({
       opts: { onTurnAdopted },
       sessionCtx: {
         Provider: "discord",
@@ -1064,11 +1134,157 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionKey: "main",
       storePath,
     });
+    followupRun.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "durable discord request",
+        idempotencyKey: "channel-user:discord:1503645939964055592",
+      },
+      target: {
+        agentId: "main",
+        config: {},
+        cwd: "/tmp",
+        sessionEntry,
+        sessionId: "session",
+        sessionKey: "main",
+        sessionStore,
+        storePath,
+      },
+    });
 
     await run();
 
     expect(onTurnAdopted).toHaveBeenCalledOnce();
     expect(events).toEqual(["adopted", "agent-run"]);
+  });
+
+  it("runs a deferred before_agent_reply hook only after durable admission", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const events: string[] = [];
+    const beforeAgentReply = vi.fn(async (admitted?: { sessionId?: string }) => {
+      expect(admitted?.sessionId).toBe("session");
+      const storedAtHook = await readStoredMainSession(storePath);
+      expect(storedAtHook.status).toBe("running");
+      expect(storedAtHook.restartRecoveryDeliverySourceRunId).toBe("discord-message-1");
+      expect(storedAtHook.restartRecoveryBeforeAgentReplyState).toBe("pending");
+      const transcript = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "session",
+        sessionKey: "main",
+        storePath,
+      });
+      expect(transcript.at(-1)).toMatchObject({
+        message: { role: "user", content: "hook-owned request" },
+      });
+      events.push("hook");
+      return { text: "hook reply" };
+    });
+    const { followupRun, run } = createMinimalRun({
+      beforeAgentReply,
+      opts: {
+        onTurnAdopted: async () => {
+          events.push("adopted");
+        },
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "discord-message-1",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    followupRun.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "hook-owned request",
+        idempotencyKey: "channel-user:discord:discord-message-1",
+      },
+      target: {
+        agentId: "main",
+        config: {},
+        cwd: "/tmp",
+        sessionEntry,
+        sessionId: "session",
+        sessionKey: "main",
+        sessionStore,
+        storePath,
+      },
+    });
+
+    await expect(run()).resolves.toEqual({ text: "hook reply" });
+
+    expect(events).toEqual(["adopted", "hook"]);
+    expect(beforeAgentReply).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(await readStoredMainSession(storePath)).toMatchObject({
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "hook reply",
+    });
+  });
+
+  it("checkpoints an unhandled before_agent_reply hook before the model starts", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const beforeAgentReply = vi.fn(async () => undefined);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
+        "continue",
+      );
+      return {
+        payloads: [{ text: "model reply" }],
+        meta: { agentMeta: {} },
+      };
+    });
+    const { followupRun, run } = createMinimalRun({
+      beforeAgentReply,
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "discord-message-2",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    followupRun.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "model-owned request",
+        idempotencyKey: "channel-user:discord:discord-message-2",
+      },
+      target: {
+        agentId: "main",
+        config: {},
+        cwd: "/tmp",
+        sessionEntry,
+        sessionId: "session",
+        sessionKey: "main",
+        sessionStore,
+        storePath,
+      },
+    });
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "model reply" }));
+
+    expect(beforeAgentReply).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(
+      (await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState,
+    ).toBeUndefined();
   });
 
   it("fires onTurnAdopted for suppressed-delivery runs before the agent turn", async () => {

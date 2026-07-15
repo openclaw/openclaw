@@ -21,6 +21,8 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
       selected.entry.lifecycleRevision === expected.expectedLifecycleRevision) &&
     (expectedState === undefined ||
       (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
+        selected.entry.restartRecoveryBeforeAgentReplyState ===
+          expectedState.restartRecoveryBeforeAgentReplyState &&
         selected.entry.restartRecoveryDeliveryRequestFingerprint ===
           expectedState.restartRecoveryDeliveryRequestFingerprint &&
         selected.entry.restartRecoveryDeliveryRunId ===

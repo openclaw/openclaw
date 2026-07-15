@@ -2171,21 +2171,39 @@ describe("gateway send mirroring", () => {
       jsonResult({ ok: true, messageId: "tg-1" }),
     );
 
-    const { respond } = await runMessageActionRequest({
-      channel: "telegram",
-      action: "send",
-      params: {
-        to: "chat-123",
-        message: "visible source reply",
+    const sessionKey = "agent:main:telegram:direct:chat-123";
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "chat-123",
+          message: "visible source reply",
+        },
+        sessionKey,
+        agentId: "main",
+        sourceReplyFinal: true,
+        idempotencyKey: "idem-source-message-action",
       },
-      sessionKey: "agent:main:telegram:direct:chat-123",
-      agentId: "main",
-      toolContext: {
-        currentChannelProvider: "telegram",
-        currentChannelId: "chat-123",
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              toolContext: {
+                currentChannelProvider: "telegram",
+                currentChannelId: "chat-123",
+                currentMessageId: "telegram-message-1",
+                currentSourceTurnId: "channel-user:v1:telegram-message-1",
+              },
+            },
+          },
+        },
       },
-      idempotencyKey: "idem-source-message-action",
-    });
+    );
 
     expect(firstRespondCall(respond)[0]).toBe(true);
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
@@ -2194,6 +2212,11 @@ describe("gateway send mirroring", () => {
       text: "visible source reply",
       mediaUrls: undefined,
       idempotencyKey: "idem-source-message-action",
+      deliveryMirror: {
+        kind: "message-tool-source-reply",
+        final: true,
+        sourceTurnId: "channel-user:v1:telegram-message-1",
+      },
       config: {},
     });
   });

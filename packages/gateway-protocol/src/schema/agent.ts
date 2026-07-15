@@ -101,6 +101,8 @@ export const MessageActionParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
   sessionId: Type.Optional(Type.String()),
   inboundTurnKind: Type.Optional(Type.String({ enum: ["user_request", "room_event"] })),
+  /** Internal terminal intent for a confirmed same-source message-tool delivery. */
+  sourceReplyFinal: Type.Optional(Type.Boolean()),
   agentId: Type.Optional(Type.String()),
   toolContext: Type.Optional(MessageActionToolContextSchema),
   /**
