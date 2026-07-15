@@ -259,14 +259,14 @@ snapshots:
       responseBody: `ab\u{1f600}tail`,
       expectedText: `ab\u{1f600}\n[truncated]`,
     },
-  ])("keeps bulk advisory error truncation UTF-16 safe: $caseName", async ({
-    responseBody,
-    expectedText,
-  }) => {
-    const response = new Response(responseBody, { status: 500 });
+  ])(
+    "keeps bulk advisory error truncation UTF-16 safe: $caseName",
+    async ({ responseBody, expectedText }) => {
+      const response = new Response(responseBody, { status: 500 });
 
-    await expect(readBoundedBulkAdvisoryErrorText(response, 4)).resolves.toBe(expectedText);
-  });
+      await expect(readBoundedBulkAdvisoryErrorText(response, 4)).resolves.toBe(expectedText);
+    },
+  );
 
   it("aborts stalled bulk advisory requests", async () => {
     let signal: AbortSignal | undefined;
