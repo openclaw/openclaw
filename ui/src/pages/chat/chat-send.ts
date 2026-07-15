@@ -7,7 +7,11 @@ import {
   type GatewayHelloOk,
 } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
-import { setLastActiveSessionKey } from "../../app/settings.ts";
+import {
+  loadSettings,
+  normalizeChatFollowUpMode,
+  setLastActiveSessionKey,
+} from "../../app/settings.ts";
 import type {
   ChatAttachment,
   ChatQueueItem,
@@ -2430,6 +2434,17 @@ export async function handleSendChat(
       } else {
         recordChatSendTiming(host, pending, "queued-busy", submittedAtMs);
         sendResult = "pending";
+        // Steer-by-default injects the follow-up into the active run, same as
+        // clicking Steer on the queued row. When steering is unavailable the
+        // message stays queued, keeping the queue row as the visible fallback.
+        if (
+          !skillWorkshopRevision &&
+          normalizeChatFollowUpMode(loadSettings().chatFollowUpMode) === "steer" &&
+          host.connected &&
+          hasAbortableSessionRun(host)
+        ) {
+          void steerQueuedChatMessage(host, pending.id);
+        }
       }
     } else {
       sendResult = await sendChatMessageNow(host, effectiveMessage, {

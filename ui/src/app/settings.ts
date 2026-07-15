@@ -61,6 +61,11 @@ function normalizeChoice<T extends string>(
 
 export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
 
+const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
+export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
+
+export const normalizeChatFollowUpMode = normalizeChoice(CHAT_FOLLOW_UP_MODES, "queue");
+
 const CATALOG_OPEN_TARGETS = ["viewer", "terminal"] as const;
 export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
 
@@ -98,6 +103,7 @@ export type UiSettings = {
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
   chatSendShortcut?: ChatSendShortcut;
+  chatFollowUpMode?: ChatFollowUpMode; // Default handling for messages sent while a run is active
   catalogOpenTarget?: CatalogOpenTarget;
   realtimeTalkInputDeviceId?: string;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
@@ -333,6 +339,7 @@ export function loadSettings(): UiSettings {
     chatShowToolCalls: true,
     chatPersistCommentary: false,
     chatSendShortcut: "enter",
+    chatFollowUpMode: "queue",
     catalogOpenTarget: "viewer",
     splitRatio: 0.6,
     navCollapsed: false,
@@ -384,6 +391,7 @@ export function loadSettings(): UiSettings {
           ? parsed.chatPersistCommentary
           : defaults.chatPersistCommentary,
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
+      chatFollowUpMode: normalizeChatFollowUpMode(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       splitRatio:
@@ -488,6 +496,10 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     chatPersistCommentary: next.chatPersistCommentary ?? false,
     ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
       ? { chatSendShortcut: "modifier-enter" as const }
+      : {}),
+    // Queue is the default; only the opt-in steer mode persists.
+    ...(normalizeChatFollowUpMode(next.chatFollowUpMode) === "steer"
+      ? { chatFollowUpMode: "steer" as const }
       : {}),
     ...(normalizeCatalogOpenTarget(next.catalogOpenTarget) === "terminal"
       ? { catalogOpenTarget: "terminal" as const }

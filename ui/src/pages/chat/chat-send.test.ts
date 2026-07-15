@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { UiSettings } from "../../app/settings.ts";
+import { patchSettings, type UiSettings } from "../../app/settings.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -3244,6 +3244,58 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
     expect(navigateChatInputHistory(host, "up")).toBe(true);
     expect(host.chatMessage).toBe("queued while busy");
+  });
+
+  it("auto-steers messages sent during an active run when the follow-up mode is steer", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    patchSettings({ chatFollowUpMode: "steer" });
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "steer-run" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "tighten the plan",
+      chatRunId: "run-1",
+      chatStream: "Working...",
+      sessionKey: "agent:main:main",
+    });
+
+    await handleSendChat(host);
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          message: "tighten the plan",
+          deliver: false,
+        }),
+      ),
+    );
+    expect(host.chatRunId).toBe("run-1");
+    await vi.waitFor(() => expect(host.chatQueue[0]?.kind).toBe("steered"));
+    expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
+  });
+
+  it("keeps busy sends queued in steer mode while disconnected", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    patchSettings({ chatFollowUpMode: "steer" });
+    const host = makeHost({
+      client: null,
+      connected: false,
+      chatMessage: "queued while offline",
+      chatRunId: "run-1",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]?.text).toBe("queued while offline");
+    expect(host.chatQueue[0]?.sendState).toBe("waiting-reconnect");
+    expect(host.chatQueue[0]?.kind).not.toBe("steered");
   });
 
   it("requires durable admission for offline input queued behind an active run", async () => {
