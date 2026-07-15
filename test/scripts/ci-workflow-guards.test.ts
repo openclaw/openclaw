@@ -1494,6 +1494,93 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs["pnpm-store-warmup"]["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
   });
 
+  it("keeps sticky dependency snapshots on trusted Blacksmith Node shards", () => {
+    const workflow = readCiWorkflow();
+    const blacksmithJobs = Object.entries(workflow.jobs).filter(([, job]) => {
+      const runsOn = (job as { "runs-on"?: unknown })["runs-on"];
+      return typeof runsOn === "string" && runsOn.includes("blacksmith-");
+    });
+    const setupNodeStep = workflow.jobs["checks-node-core-test-nondist-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Setup Node environment",
+    );
+    const stickyCondition = setupNodeStep.with["sticky-disk"];
+    const cacheCondition = setupNodeStep.with["use-actions-cache"];
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const mountStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Mount dependency sticky disk",
+    );
+    const cleanupStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Register sticky bind cleanup",
+    );
+    const bindStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Bind sticky node_modules into workspace",
+    );
+
+    expect(blacksmithJobs.length).toBeGreaterThan(0);
+    for (const [jobName, job] of blacksmithJobs) {
+      expect(
+        (job as { "runs-on": string })["runs-on"],
+        `${jobName} must route fork pull requests to GitHub-hosted runners`,
+      ).toContain(
+        "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+      );
+    }
+    expect(stickyCondition).toContain("github.event_name != 'workflow_dispatch'");
+    expect(stickyCondition).toContain(
+      "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+    );
+    expect(cacheCondition).toContain("github.event_name != 'workflow_dispatch'");
+    expect(cacheCondition).toContain(
+      "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+    );
+    expect(cacheCondition).toContain("&& 'false' || 'true'");
+    expect(action.inputs["sticky-disk"].default).toBe("false");
+    expect(mountStep).toMatchObject({
+      if: "inputs.sticky-disk == 'true'",
+      uses: "useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f",
+      with: {
+        path: "/var/tmp/openclaw-node-deps",
+        commit: "if-missing",
+      },
+    });
+    expect(mountStep.with.key).toContain("node-deps-bind-v1-");
+    expect(mountStep.with.key).toContain("format('pr-{0}', github.event.pull_request.number)");
+    expect(mountStep.with.key).toContain("hashFiles('package.json', 'pnpm-lock.yaml'");
+    expect(cleanupStep).toMatchObject({
+      if: "inputs.sticky-disk == 'true'",
+      uses: "./.github/actions/register-bind-mount-cleanup",
+      with: { path: "${{ github.workspace }}/node_modules" },
+    });
+    expect(action.runs.steps.indexOf(mountStep)).toBeLessThan(
+      action.runs.steps.indexOf(cleanupStep),
+    );
+    expect(action.runs.steps.indexOf(cleanupStep)).toBeLessThan(
+      action.runs.steps.indexOf(bindStep),
+    );
+    expect(bindStep.run).toContain('sudo mount --bind "$sticky_modules" "$workspace_modules"');
+    expect(bindStep.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$sticky_store"');
+    expect(bindStep.run).not.toContain("PNPM_CONFIG_MODULES_DIR");
+    expect(bindStep.run).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
+    const cleanupAction = parse(
+      readFileSync(".github/actions/register-bind-mount-cleanup/action.yml", "utf8"),
+    );
+    expect(cleanupAction.runs).toMatchObject({
+      using: "node24",
+      main: "main.cjs",
+      post: "post.cjs",
+      "post-if": "always()",
+    });
+    const cleanupPost = readFileSync(
+      ".github/actions/register-bind-mount-cleanup/post.cjs",
+      "utf8",
+    );
+    expect(cleanupPost).toContain("mountpoint.status === 32");
+    expect(cleanupPost).toContain('spawnSync("sudo", ["umount", mountPath]');
+    expect(readFileSync(".github/actions/setup-pnpm-store-cache/action.yml", "utf8")).toContain(
+      "actions/cache/restore@",
+    );
+  });
+
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
     const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();

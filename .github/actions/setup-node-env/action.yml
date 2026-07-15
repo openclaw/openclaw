@@ -27,6 +27,14 @@ inputs:
     description: Whether to save the pnpm store with actions/cache after install when no exact cache restored.
     required: false
     default: "false"
+  sticky-disk:
+    description: >
+      Mount a Blacksmith sticky disk for the pnpm store and bind its
+      node_modules directory over the checkout's stock node_modules path.
+      Only valid on Blacksmith Linux runners; pass use-actions-cache: "false"
+      alongside.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -47,6 +55,46 @@ runs:
         set -euo pipefail
         source "$GITHUB_ACTION_PATH/../setup-pnpm-store-cache/ensure-node.sh"
         openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+
+    - name: Mount dependency sticky disk
+      if: inputs.sticky-disk == 'true'
+      uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+      with:
+        # Keep this key distinct from the retired pnpm-relocation layout. The
+        # PR scope prevents feature-branch snapshots from reaching main. The
+        # first job per scope/input hash snapshots once; later jobs clone it.
+        key: ${{ github.repository }}-node-deps-bind-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ inputs.node-version }}-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml') }}
+        path: /var/tmp/openclaw-node-deps
+        commit: if-missing
+
+    # Post actions run last-in-first-out. Register after stickydisk so this bind
+    # is gone before stickydisk flushes, unmounts, and snapshots its filesystem.
+    - name: Register sticky bind cleanup
+      if: inputs.sticky-disk == 'true'
+      uses: ./.github/actions/register-bind-mount-cleanup
+      with:
+        path: ${{ github.workspace }}/node_modules
+
+    - name: Bind sticky node_modules into workspace
+      if: inputs.sticky-disk == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sticky_root=/var/tmp/openclaw-node-deps
+        sticky_modules="$sticky_root/node_modules"
+        sticky_store="$sticky_root/store"
+        workspace_modules="$GITHUB_WORKSPACE/node_modules"
+
+        mkdir -p "$sticky_modules" "$sticky_store" "$workspace_modules"
+        sudo mount --bind "$sticky_modules" "$workspace_modules"
+        mountpoint -q "$workspace_modules"
+        if [ "$(stat -c %d "$sticky_store")" != "$(stat -c %d "$workspace_modules")" ]; then
+          echo "::error::pnpm store and workspace node_modules must share a filesystem"
+          exit 1
+        fi
+        findmnt --target "$workspace_modules"
+        # zizmor: ignore[github-env] static trusted path defined in this composite action.
+        echo "PNPM_CONFIG_STORE_DIR=$sticky_store" >> "$GITHUB_ENV"
 
     - name: Setup pnpm
       id: setup-pnpm
@@ -124,6 +172,7 @@ runs:
         append_pnpm_option_arg PNPM_CONFIG_CHILD_CONCURRENCY child-concurrency
         append_pnpm_option_arg PNPM_CONFIG_MODULES_DIR modules-dir
         append_pnpm_option_arg PNPM_CONFIG_NETWORK_CONCURRENCY network-concurrency
+        append_pnpm_option_arg PNPM_CONFIG_STORE_DIR store-dir
         append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
         if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
           mkdir -p "$PNPM_CONFIG_MODULES_DIR"
