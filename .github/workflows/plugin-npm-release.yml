@@ -1085,13 +1085,22 @@ jobs:
             exit 1
           }
           if [[ "$publish_route" == "npm-token-bootstrap" ]]; then
-            [[ "$WORKFLOW_REF" == "refs/heads/main" ]] || {
-              echo "npm token bootstrap requires the trusted main plugin release workflow." >&2
+            sha_pinned_release_publish=false
+            if [[ "$WORKFLOW_REF" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
+              workflow_sha_prefix="${BASH_REMATCH[1]}"
+              [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ && "${WORKFLOW_SHA:0:12}" == "$workflow_sha_prefix" ]] || {
+                echo "npm token bootstrap release-publish tag does not match the workflow SHA." >&2
+                exit 1
+              }
+              sha_pinned_release_publish=true
+            fi
+            [[ "$WORKFLOW_REF" == "refs/heads/main" || "$sha_pinned_release_publish" == "true" ]] || {
+              echo "npm token bootstrap requires trusted main tooling or a protected SHA-pinned release-publish tag." >&2
               exit 1
             }
             git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
             git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
-              echo "npm token bootstrap workflow revision is not reachable from main." >&2
+              echo "npm token bootstrap workflow revision is not reachable from current main." >&2
               exit 1
             }
           fi

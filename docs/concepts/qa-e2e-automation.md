@@ -164,11 +164,10 @@ tokens, or local paths.
 ### Matrix smoke lanes
 
 For a transport-real Matrix smoke lane that does not require model-provider
-credentials, run the fast profile with the deterministic mock OpenAI provider:
+credentials, run the release profile with the deterministic mock OpenAI provider:
 
 ```bash
-OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
-  pnpm openclaw qa matrix --provider-mode mock-openai --profile fast --fail-fast
+pnpm openclaw qa matrix --provider-mode mock-openai --profile release
 ```
 
 For the live-frontier provider lane, supply OpenAI-compatible credentials
@@ -176,8 +175,7 @@ explicitly:
 
 ```bash
 OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" \
-OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
-  pnpm openclaw qa matrix --provider-mode live-frontier --profile fast --fail-fast
+  pnpm openclaw qa matrix --provider-mode live-frontier --profile release
 ```
 
 Plain `pnpm openclaw qa matrix` runs the full `all` profile and continues after
@@ -255,11 +253,10 @@ gateway replies.
 explicit `--scenario` selection but stay outside the default `all` profile.
 
 CI uses the same command surface in
-`.github/workflows/qa-live-transports-convex.yml`. Scheduled and default
-manual runs execute the fast Matrix profile with QA-provided live-frontier
-credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`.
-Manual `matrix_profile=all` fans out into five profile shards: `transport`,
-`media`, `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli`.
+`.github/workflows/qa-live-transports-convex.yml`. Scheduled and release runs
+execute the release scenarios. Manual `matrix_profile=all` dispatches fan out
+the `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` profiles;
+focused dispatches select `fast`, `release`, or `transport` in one job.
 
 ### Discord Mantis scenarios
 

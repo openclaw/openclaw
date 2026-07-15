@@ -1,7 +1,7 @@
 // Codex catalog terminal ownership: validated resume commands and terminal plans.
 import {
   decodeNodePtyResumeParams,
-  resolveExecutableFromPathEnv,
+  resolveNodeHostExecutable,
   runNodePtyCommand,
 } from "openclaw/plugin-sdk/node-host";
 import type {
@@ -32,15 +32,14 @@ export const CODEX_TERMINAL_RESUME_COMMAND = "codex.terminal.resume.v1";
 export function resolveLocalCodexTerminalExecutable(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  return resolveExecutableFromPathEnv("codex", env.PATH ?? env.Path ?? "", env, {
-    fallbackToLoginShell: true,
-  });
+  return resolveLocalCodexTerminalResolution(env)?.executable;
 }
 
-function resolveLocalCodexTerminalExecutableWithPathEnv(env: NodeJS.ProcessEnv = process.env) {
-  return resolveExecutableFromPathEnv("codex", env.PATH ?? env.Path ?? "", env, {
-    fallbackToLoginShell: true,
-    withPathEnv: true,
+function resolveLocalCodexTerminalResolution(env: NodeJS.ProcessEnv = process.env) {
+  return resolveNodeHostExecutable("codex", {
+    env,
+    pathEnv: env.PATH ?? env.Path ?? "",
+    strategy: "fallback",
   });
 }
 
@@ -98,7 +97,14 @@ export function createCodexTerminalNodeHostCommand(
     cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
     dangerous: false,
     duplex: true,
-    isAvailable: ({ env }) => Boolean(resolveExecutableFromPathEnv("codex", env.PATH ?? "")),
+    isAvailable: ({ env }) =>
+      Boolean(
+        resolveNodeHostExecutable("codex", {
+          env,
+          pathEnv: env.PATH ?? env.Path ?? "",
+          strategy: "direct",
+        }),
+      ),
     handle: async (paramsJSON, io) => {
       if (!io) {
         throw new Error("Codex terminal command requires duplex transport");
@@ -113,14 +119,18 @@ export function createCodexTerminalNodeHostCommand(
         return value;
       });
       const record = await requireCatalogEligibleThread(control, resume.threadId);
-      const file = resolveExecutableFromPathEnv("codex", process.env.PATH ?? "");
-      if (!file) {
+      const resolution = resolveNodeHostExecutable("codex", {
+        env: process.env,
+        pathEnv: process.env.PATH ?? process.env.Path ?? "",
+        strategy: "direct",
+      });
+      if (!resolution) {
         throw new Error("Codex CLI is unavailable");
       }
       return JSON.stringify(
         await runNodePtyCommand(
           {
-            file,
+            file: resolution.executable,
             args: ["resume", resume.threadId],
             cwd: record.cwd,
             cols: resume.cols,
@@ -182,7 +192,7 @@ export async function openCodexCatalogTerminal(params: {
   const title = `codex resume ${params.threadId.slice(0, 8)}…`;
   if (params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
     const record = await requireCatalogEligibleThread(params.control, params.threadId);
-    const resolution = resolveLocalCodexTerminalExecutableWithPathEnv();
+    const resolution = resolveLocalCodexTerminalResolution();
     // A managed app-server may exist without a local CLI. Fail closed so
     // terminal resume never targets a different machine or missing binary.
     if (!resolution) {

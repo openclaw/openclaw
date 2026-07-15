@@ -253,8 +253,9 @@ Gateways, and manually managed local Gateways.
 In the signed macOS app, a local app-owned Gateway changes that card to
 **Update Mac app + Gateway**. Sparkle updates the app first; after relaunch, the
 app runs `openclaw update --tag <app-version> --json`, restarts its Gateway,
-and verifies health in a setup-style progress window. Failure details stay
-visible with Retry, [Update guide](/install/updating), and
+and verifies health in a setup-style progress window. The window appears only
+when that managed Gateway needs update, repair, or installation; app-only updates relaunch
+directly into the app. Failure details stay visible with Retry, [Update guide](/install/updating), and
 [Discord](https://discord.gg/clawd) actions. The app never uses this coordinated
 path for a remote or externally managed Gateway, never downgrades a newer
 Gateway, and never overrides an `extended-stable` channel pin.

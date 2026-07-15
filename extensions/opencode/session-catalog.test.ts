@@ -13,15 +13,22 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
   return {
     ...actual,
     runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveExecutableFromPathEnv: (
+    resolveNodeHostExecutable: (
       command: string,
-      pathEnv: string,
-      env?: NodeJS.ProcessEnv,
-      options?: { withPathEnv?: boolean },
-    ) =>
-      options?.withPathEnv
-        ? actual.resolveExecutableFromPathEnv(command, pathEnv, env, { withPathEnv: true })
-        : actual.resolveExecutableFromPathEnv(command, pathEnv, env),
+      options: {
+        env?: NodeJS.ProcessEnv;
+        pathEnv?: string;
+        includeExtensionless?: boolean;
+      },
+    ) => {
+      const env = options.env ?? process.env;
+      return actual.resolveNodeHostExecutable(command, {
+        env,
+        pathEnv: options.pathEnv ?? env.PATH ?? env.Path ?? "",
+        includeExtensionless: options.includeExtensionless,
+        strategy: "direct",
+      });
+    },
   };
 });
 
@@ -614,7 +621,7 @@ describe("OpenCode session catalog", () => {
     } as unknown as OpenClawPluginApi;
     registerOpenCodeSessionCatalog(api);
 
-    const listing = provider!.list({});
+    const listing = provider!.list({ hostIds: ["node:node-a", "node:node-b"] });
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
     releaseSlow?.(page("session-a"));
     await expect(listing).resolves.toEqual([

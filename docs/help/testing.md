@@ -167,13 +167,14 @@ checks keep exhaustive live/Docker soak behind `run_release_soak=true`; the
 `full` profile forces soak on. `QA-Lab - All Lanes` runs nightly on `main` and
 from manual dispatch with the mock parity lane, live Matrix lane,
 Convex-managed live Telegram lane, and Convex-managed live Discord lane as
-parallel jobs. Scheduled QA and release checks pass Matrix `--profile fast`
-explicitly, while the Matrix CLI and manual workflow input default remains
-`all`; manual dispatch can shard `all` into `transport`, `media`,
-`e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` runs
-parity plus the fast Matrix and Telegram lanes before release approval, using
-`mock-openai/gpt-5.6-luna` for release transport checks so they stay deterministic
-and avoid normal provider-plugin startup. These live transport gateways
+parallel jobs. Scheduled QA and release checks run the Matrix release profile
+through the shared live adapter. The Matrix CLI and manual workflow input
+default remain `all`; manual `all` dispatches fan out the transport, media, and
+E2EE profiles, while focused dispatches can select `fast`, `release`, or
+`transport`. `OpenClaw Release Checks` runs parity plus the reusable Matrix
+live-adapter profile and Telegram lane before release approval. Release
+transport checks use `mock-openai/gpt-5.6-luna` so they stay deterministic and
+avoid normal provider-plugin startup. These live transport gateways
 disable memory search; memory behavior stays covered by the QA parity suites.
 
 Full release live media shards use

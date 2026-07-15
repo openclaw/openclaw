@@ -27,6 +27,7 @@ const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_TELEGRAM_QA_WORKFLOW = ".github/workflows/openclaw-release-telegram-qa.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
+const OPENCLAW_NPM_RELEASE_WORKFLOW = ".github/workflows/openclaw-npm-release.yml";
 const PLUGIN_CLAWHUB_RELEASE_WORKFLOW = ".github/workflows/plugin-clawhub-release.yml";
 const PLUGIN_NPM_RELEASE_WORKFLOW = ".github/workflows/plugin-npm-release.yml";
 const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
@@ -89,13 +90,15 @@ type WorkflowJob = {
     "fail-fast"?: boolean;
     matrix?: {
       include?: WorkflowMatrixEntry[];
+      profile?: string[];
       tier?: string;
     };
   };
+  secrets?: string | Record<string, string>;
   "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
   uses?: string;
-  with?: Record<string, string>;
+  with?: Record<string, boolean | number | string>;
 };
 
 type Workflow = {
@@ -248,6 +251,33 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
   });
 }
 
+function runOpenClawNpmTrustedRefGuard(overrides: Record<string, string>) {
+  const job = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "validate_publish_request");
+  const script = workflowStep(job, "Require trusted workflow ref for publish").run;
+  if (!script) {
+    throw new Error("Expected OpenClaw npm trusted ref guard");
+  }
+  const binDir = tempDirs.make("openclaw-npm-trusted-ref-");
+  const gitPath = `${binDir}/git`;
+  writeFileSync(
+    gitPath,
+    `#!/bin/sh\nif [ "$1" = "fetch" ]; then exit 0; fi\nif [ "$1" = "merge-base" ]; then [ "\${MOCK_WORKFLOW_ANCESTOR}" = "true" ]; exit $?; fi\nexit 2\n`,
+  );
+  chmodSync(gitPath, 0o755);
+  return spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: {
+      MOCK_WORKFLOW_ANCESTOR: "true",
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELEASE_NPM_DIST_TAG: "beta",
+      RELEASE_TAG: "v2026.7.2-beta.1",
+      WORKFLOW_REF: "refs/heads/release/2026.7.2",
+      WORKFLOW_SHA: "a".repeat(40),
+      ...overrides,
+    },
+  });
+}
+
 function runReleaseChecksSummary(params: {
   currentAttempt: string;
   currentResult: "cancelled" | "failure" | "skipped" | "success";
@@ -281,7 +311,7 @@ function runReleaseChecksSummary(params: {
       QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: "skipped",
       QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: "skipped",
-      QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT: "skipped",
+      QA_LIVE_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: params.currentResult,
       QA_LIVE_TELEGRAM_SELECTED: String(params.telegramSelected ?? true),
@@ -341,7 +371,7 @@ describe("package acceptance workflow", () => {
     expect(runReleasePublishInputValidation({ PUBLISH_OPENCLAW_NPM: "false" }).status).toBe(0);
   });
 
-  it("accepts only main-reachable SHA-pinned release publish branches", () => {
+  it("accepts only main-reachable protected SHA-pinned release publish tags", () => {
     const workflowSha = "a".repeat(40);
     const binDir = tempDirs.make("release-publish-gh-");
     const ghPath = `${binDir}/gh`;
@@ -350,7 +380,7 @@ describe("package acceptance workflow", () => {
     const pinnedEnv = {
       GITHUB_REPOSITORY: "openclaw/openclaw",
       PATH: `${binDir}:${process.env.PATH}`,
-      WORKFLOW_REF: `refs/heads/release-publish/${workflowSha.slice(0, 12)}-123`,
+      WORKFLOW_REF: `refs/tags/release-publish/${workflowSha.slice(0, 12)}-123`,
       WORKFLOW_SHA: workflowSha,
     };
 
@@ -362,11 +392,11 @@ describe("package acceptance workflow", () => {
 
     const mismatchedName = runReleasePublishInputValidation({
       ...pinnedEnv,
-      WORKFLOW_REF: `refs/heads/release-publish/${"b".repeat(12)}-123`,
+      WORKFLOW_REF: `refs/tags/release-publish/${"b".repeat(12)}-123`,
     });
     expect(mismatchedName.status).toBe(1);
     expect(mismatchedName.stderr).toContain(
-      "SHA-pinned release publish branch does not match workflow SHA",
+      "SHA-pinned release publish tag does not match workflow SHA",
     );
 
     const unreachable = runReleasePublishInputValidation({
@@ -375,8 +405,66 @@ describe("package acceptance workflow", () => {
     });
     expect(unreachable.status).toBe(1);
     expect(unreachable.stderr).toContain(
-      "SHA-pinned release publish workflow revision is not reachable from current main",
+      "SHA-pinned release publish tag revision is not reachable from current main",
     );
+  });
+
+  it("allows protected SHA-pinned tooling tags through the core npm publish guard", () => {
+    const workflowSha = "a".repeat(40);
+    const protectedRef = `refs/tags/release-publish/${workflowSha.slice(0, 12)}-123`;
+
+    const valid = runOpenClawNpmTrustedRefGuard({
+      WORKFLOW_REF: protectedRef,
+      WORKFLOW_SHA: workflowSha,
+    });
+    expect(valid.status, valid.stderr).toBe(0);
+
+    const mismatchedName = runOpenClawNpmTrustedRefGuard({
+      WORKFLOW_REF: `refs/tags/release-publish/${"b".repeat(12)}-123`,
+      WORKFLOW_SHA: workflowSha,
+    });
+    expect(mismatchedName.status).toBe(1);
+    expect(mismatchedName.stderr).toContain(
+      "SHA-pinned release-publish tag does not match the OpenClaw npm workflow SHA",
+    );
+
+    const unreachable = runOpenClawNpmTrustedRefGuard({
+      MOCK_WORKFLOW_ANCESTOR: "false",
+      WORKFLOW_REF: protectedRef,
+      WORKFLOW_SHA: workflowSha,
+    });
+    expect(unreachable.status).toBe(1);
+    expect(unreachable.stderr).toContain(
+      "SHA-pinned OpenClaw npm workflow revision is not reachable from current main",
+    );
+  });
+
+  it("allows protected SHA-pinned tooling tags to consume token-bootstrap evidence", () => {
+    const publishJob = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm");
+    const evidenceStep = workflowStep(publishJob, "Consume immutable npm publication evidence");
+
+    expect(evidenceStep.run).toContain("^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$");
+    expect(evidenceStep.run).toContain(
+      '[[ "$WORKFLOW_REF" == "refs/heads/main" || "$sha_pinned_release_publish" == "true" ]]',
+    );
+    expect(evidenceStep.run).toContain('git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main');
+  });
+
+  it("retries child environment approval when deployment propagation lags", () => {
+    const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const orchestration = workflowStep(publishJob, "Dispatch publish workflows").run;
+    if (!orchestration) {
+      throw new Error("Expected release publish orchestration script");
+    }
+    const waitForRun = shellFunctionSource(orchestration, "wait_for_run");
+    const stateAssignment = waitForRun.indexOf('last_state="$state"');
+    const approvalRetry = waitForRun.indexOf(
+      'approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}" ||',
+    );
+
+    expect(stateAssignment).toBeGreaterThan(-1);
+    expect(approvalRetry).toBeGreaterThan(stateAssignment);
+    expect(waitForRun).toContain("propagation lag cannot strand an approved release");
   });
 
   it("resolves broad release evidence and exact-binds every publish child", () => {
@@ -405,6 +493,7 @@ describe("package acceptance workflow", () => {
     }
 
     expect(publishOrchestration.env?.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
+    expect(publishOrchestration.env?.CHILD_WORKFLOW_REF).toBe("${{ github.ref_name }}");
     expectTextToIncludeAll(publishOrchestration.run, [
       'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}"',
       'if [[ "$resolved_workflow_sha" != "$expected_sha" ]]',
@@ -2139,28 +2228,107 @@ describe("package artifact reuse", () => {
     }
   });
 
-  it("detects Matrix fail-fast support for older release refs", () => {
+  it("routes release Matrix through the QA Lab selector", () => {
     const releaseWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const releaseTelegramWorkflow = readFileSync(RELEASE_TELEGRAM_QA_WORKFLOW, "utf8");
     const qaWorkflow = readFileSync(".github/workflows/qa-live-transports-convex.yml", "utf8");
+    const releaseJob = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_release_checks");
 
-    expect(releaseWorkflow).toContain("matrix_args=(");
-    expect(releaseWorkflow).toContain(
-      'pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"',
+    expect(releaseJob.uses).toBe("./.github/workflows/qa-live-transports-convex.yml");
+    expect(releaseJob.secrets).toBeUndefined();
+    expect(releaseJob.permissions).toEqual({ contents: "read", "pull-requests": "read" });
+    expect(releaseJob.if).toContain('contains(fromJSON(\'["all","qa","qa-live"]\')');
+    expect(releaseJob.with).toMatchObject({
+      expected_sha: "${{ needs.resolve_target.outputs.revision }}",
+      matrix_profile: "release",
+      matrix_provider_mode: "mock-openai",
+      matrix_primary_model: "mock-openai/gpt-5.6-luna",
+      matrix_alternate_model: "mock-openai/gpt-5.6-luna-alt",
+      matrix_attempts: 2,
+      run_matrix: true,
+      matrix_advisory: true,
+    });
+    for (const lane of ["mock_parity", "telegram", "discord", "whatsapp", "slack"]) {
+      expect(releaseJob.with?.[`run_${lane}`]).toBeUndefined();
+    }
+    expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_mock_parity").if).toBe(
+      "inputs.expected_sha == '' || inputs.run_mock_parity",
     );
-    expect(releaseWorkflow).toContain("matrix_args+=(--fail-fast)");
-    expect(releaseWorkflow).toContain(
-      'pnpm openclaw qa matrix --output-dir "${attempt_output_dir}" "${matrix_args[@]}"',
+    expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix").if).toBe(
+      "(github.event_name != 'workflow_call' || inputs.run_matrix) && !(github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all')",
     );
-    expect(releaseWorkflow).toContain(
-      'echo "Matrix live lane failed on attempt ${attempt}; retrying once..." >&2',
+    for (const channel of ["telegram", "discord", "whatsapp", "slack"]) {
+      expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, `run_live_${channel}`).if).toBe(
+        `inputs.expected_sha == '' || inputs.run_${channel}`,
+      );
+    }
+    expect(releaseWorkflow).not.toContain("qa_live_matrix_release_checks");
+    expect(releaseWorkflow).not.toContain("Run QA Lab live Matrix lane");
+    expect(releaseWorkflow).not.toContain("pnpm openclaw qa matrix");
+    expect(qaWorkflow).toContain("pnpm openclaw qa matrix");
+    expect(qaWorkflow).toContain('for attempt in $(seq 1 "${MATRIX_ATTEMPTS}")');
+    expect(qaWorkflow).toContain("matrix_status:");
+    expect(qaWorkflow).toContain("value: ${{ jobs.run_live_matrix.outputs.status }}");
+    expect(qaWorkflow).toContain('trusted_reason="repository-branch"');
+    expect(qaWorkflow).toContain('"${selected_revision}" != "${EXPECTED_SHA}"');
+    expect(qaWorkflow).toContain("EXPECTED_SHA: ${{ inputs.expected_sha }}");
+    expect(
+      workflowStep(
+        workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "authorize_actor"),
+        "Require maintainer-level repository access",
+      ).env?.EXPECTED_SHA,
+    ).toBe("${{ inputs.expected_sha }}");
+    expect(qaWorkflow).toContain('(process.env.EXPECTED_SHA ?? "") !== ""');
+    expect(qaWorkflow).not.toContain('"${{ inputs.expected_sha }}" !== ""');
+    expect(qaWorkflow).toContain('if [[ -n "${EXPECTED_SHA}" ]]; then');
+    const matrixJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix");
+    const conditionalOpenAiSecret =
+      "${{ (inputs.expected_sha != '' && inputs.matrix_provider_mode == 'live-frontier' || inputs.expected_sha == '' && github.event_name != 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}";
+    expect(workflowStep(matrixJob, "Validate required QA credential env").env?.OPENAI_API_KEY).toBe(
+      conditionalOpenAiSecret,
+    );
+    expect(workflowStep(matrixJob, "Run Matrix live lane").env?.OPENAI_API_KEY).toBe(
+      conditionalOpenAiSecret,
+    );
+    expect(workflowStep(matrixJob, "Run Matrix live lane").env).toMatchObject({
+      MATRIX_PROVIDER_MODE:
+        "${{ inputs.expected_sha != '' && inputs.matrix_provider_mode || github.event_name == 'workflow_dispatch' && 'mock-openai' || 'live-frontier' }}",
+      MATRIX_PRIMARY_MODEL:
+        "${{ inputs.expected_sha != '' && inputs.matrix_primary_model || github.event_name == 'workflow_dispatch' && 'mock-openai/gpt-5.6-luna' || env.OPENCLAW_CI_OPENAI_MODEL }}",
+      MATRIX_ALTERNATE_MODEL:
+        "${{ inputs.expected_sha != '' && inputs.matrix_alternate_model || github.event_name == 'workflow_dispatch' && 'mock-openai/gpt-5.6-luna-alt' || env.OPENCLAW_CI_OPENAI_FALLBACK_MODEL }}",
+    });
+    expect(workflowStep(matrixJob, "Upload Matrix QA artifacts").with?.name).toBe(
+      "${{ inputs.expected_sha != '' && format('release-qa-live-matrix-{0}', inputs.expected_sha) || format('qa-live-matrix-{0}-{1}', github.run_id, github.run_attempt) }}",
+    );
+    expect(matrixJob["continue-on-error"]).toBe(
+      "${{ github.event_name == 'workflow_call' && inputs.matrix_advisory }}",
+    );
+    expect(qaWorkflow).toContain("status: ${{ steps.record_status.outputs.status }}");
+    expect(qaWorkflow).not.toContain('matrix_runner="legacy"');
+    const shardedMatrixJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix_sharded");
+    expect(shardedMatrixJob.if).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' }}",
+    );
+    expect(shardedMatrixJob.strategy?.matrix?.profile).toEqual([
+      "transport",
+      "media",
+      "e2ee-smoke",
+      "e2ee-deep",
+      "e2ee-cli",
+    ]);
+    expect(workflowStep(shardedMatrixJob, "Run Matrix live lane shard").run).toContain(
+      '--profile "${{ matrix.profile }}"',
     );
     expect(releaseTelegramWorkflow).toContain(
       'echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2',
     );
     expect(qaWorkflow).toContain(
-      'pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"',
+      'echo "Matrix live lane failed on attempt ${attempt}; retrying..." >&2',
     );
+    expect(qaWorkflow).not.toContain("OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS");
+    expect(qaWorkflow).toContain('--profile "${INPUT_MATRIX_PROFILE}"');
+    expect(qaWorkflow).not.toContain("--fail-fast");
   });
 
   it("runs live transport lanes nightly while release checks stay gated", () => {
@@ -2224,7 +2392,6 @@ describe("package artifact reuse", () => {
       ["qa_lab_parity_lane_release_checks", "Upload parity lane artifacts"],
       ["qa_lab_parity_report_release_checks", "Upload parity artifacts"],
       ["qa_lab_runtime_parity_release_checks", "Upload runtime parity artifacts"],
-      ["qa_live_matrix_release_checks", "Upload Matrix QA artifacts"],
       ["qa_live_discord_release_checks", "Upload Discord QA artifacts"],
       ["qa_live_whatsapp_release_checks", "Upload WhatsApp QA artifacts"],
       ["qa_live_slack_release_checks", "Upload Slack QA artifacts"],
@@ -2684,7 +2851,6 @@ describe("package artifact reuse", () => {
     for (const jobName of [
       "qa_lab_parity_lane_release_checks",
       "qa_lab_parity_report_release_checks",
-      "qa_live_matrix_release_checks",
     ]) {
       expect(releaseChecksWorkflow).toMatch(
         new RegExp(`${jobName}:[\\s\\S]*?runs-on: ubuntu-24\\.04`, "u"),
@@ -2725,7 +2891,6 @@ describe("package artifact reuse", () => {
       "qa_lab_parity_lane_release_checks",
       "qa_lab_parity_report_release_checks",
       "qa_lab_runtime_parity_release_checks",
-      "qa_live_matrix_release_checks",
       "qa_live_discord_release_checks",
       "qa_live_whatsapp_release_checks",
       "qa_live_slack_release_checks",
@@ -2819,6 +2984,8 @@ describe("package artifact reuse", () => {
 
     const verifyStep = workflowStep(summary, "Verify release check results");
     expect(verifyStep.env).toMatchObject({
+      QA_LIVE_RELEASE_CHECKS_RESULT:
+        "${{ needs.qa_live_release_checks.result == 'skipped' && 'skipped' || needs.qa_live_release_checks.outputs.matrix_status || 'failure' }}",
       RELEASE_CHECK_RUN_ATTEMPT: "${{ github.run_attempt }}",
       RELEASE_CHECK_RUN_ID: "${{ github.run_id }}",
       RELEASE_CHECK_TARGET_SHA: "${{ needs.resolve_target.outputs.revision }}",
@@ -2840,7 +3007,9 @@ describe("package artifact reuse", () => {
       'if advisory_status_override_allowed "$name"; then',
       "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory.",
       "::error::${name} ended with ${result}",
+      '"qa_live_release_checks=${QA_LIVE_RELEASE_CHECKS_RESULT}"',
     ]);
+    expect(verifyStep.run).not.toContain("qa_live_matrix_release_checks");
     expect(verifyStep.run).not.toContain(
       "QA release-check lanes are advisory and do not block release validation.",
     );
@@ -3565,8 +3734,14 @@ describe("package artifact reuse", () => {
       '--release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"',
     );
     expect(trustedClawHubPlan.run).toContain(
+      '--bootstrap-workflow-ref "${BOOTSTRAP_WORKFLOW_REF}"',
+    );
+    expect(trustedClawHubPlan.run).toContain(
       '--bootstrap-workflow-sha "${bootstrap_workflow_sha}"',
     );
+    expect(trustedClawHubPlan.run).toContain('if [[ "${BOOTSTRAP_WORKFLOW_REF}" == "main" ]]');
+    expect(trustedClawHubPlan.run).toContain('bootstrap_workflow_sha="${GITHUB_SHA}"');
+    expect(trustedClawHubPlan.run).toContain(".bootstrap.ref == $bootstrap_ref");
     expect(trustedClawHubPlan.run).toContain(
       'gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main"',
     );
@@ -3601,6 +3776,9 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Bootstrap/repair candidates:");
     expect(releaseWorkflow).toContain("Trusted-publisher repair plugins:");
     expect(releaseWorkflow).toContain(
+      'echo "- ClawHub bootstrap workflow ref: \\`${bootstrap_summary_ref}\\` at \\`${bootstrap_summary_sha}\\`"',
+    );
+    expect(releaseWorkflow).toContain(
       "Waiting for plugin-clawhub-new.yml bootstrap to finish before continuing release publish.",
     );
     expect(releaseWorkflow).toContain(
@@ -3608,6 +3786,12 @@ describe("package artifact reuse", () => {
     );
     const verifyBootstrapWorkflowIndex = releaseWorkflow.indexOf(
       'bootstrap_workflow_sha="$(verify_bootstrap_workflow_sha)"',
+    );
+    expect(releaseWorkflow).toContain('if [[ "${approved_ref}" == "main" ]]');
+    expect(releaseWorkflow).toContain('[[ "${approved_ref}" == "${CHILD_WORKFLOW_REF}" ]]');
+    expect(releaseWorkflow).toContain('[[ "${approved_sha}" == "${PARENT_WORKFLOW_SHA}" ]]');
+    expect(releaseWorkflow).toContain(
+      "Trusted main moved from approved ClawHub bootstrap workflow SHA",
     );
     const dispatchPluginNpmIndex = releaseWorkflow.indexOf(
       'plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml',
@@ -3680,12 +3864,16 @@ describe("package artifact reuse", () => {
     expect(releaseInputGuard).toContain(
       '[[ "${WORKFLOW_REF}" != "refs/heads/main" && "${tideclaw_alpha_publish}" != "true" && "${sha_pinned_release_publish}" != "true" ]]',
     );
-    expect(releaseInputGuard).toContain("refs/heads/release-publish/");
+    expect(releaseInputGuard).toContain("refs/tags/release-publish/");
     expect(releaseInputGuard).not.toContain("refs/heads/release/");
     expect(releaseInputGuard).toContain(
       '"${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha"',
     );
     expect(releaseWorkflow).toContain('--workflow-ref "${CHILD_WORKFLOW_REF}"');
+    expect(releaseWorkflow).toContain('OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${GITHUB_REF}"');
+    expect(releaseWorkflow).toContain(
+      'OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${PARENT_WORKFLOW_SHA}"',
+    );
     expect(releaseWorkflow).toContain("--skip-github-release");
     expect(clawHubReleasePlanScript).toContain("--plugin-clawhub-bootstrap-run");
     expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');
@@ -3812,7 +4000,7 @@ describe("package artifact reuse", () => {
     expect(clawHubNewWorkflow).toContain("verify-clawhub-published-artifact.mjs");
     expect(openclawNpmWorkflow).toContain("environment: npm-release");
     expect(releaseWorkflow).toContain("default: from-validation");
-    expect(releaseWorkflow).toContain('--release-publish-branch "${CHILD_WORKFLOW_REF}"');
+    expect(releaseWorkflow).toContain('--release-publish-branch "${PARENT_WORKFLOW_BRANCH}"');
     expect(releaseWorkflow).toContain('--release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"');
     expect(releaseWorkflow).toContain('--release-publish-run-id "${GITHUB_RUN_ID}"');
     expect(releaseWorkflow).toContain('--release-sha "${TARGET_SHA}"');

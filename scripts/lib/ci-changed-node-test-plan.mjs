@@ -44,19 +44,41 @@ export function hasBuildArtifactAffectingChange(changedPaths) {
   return changedPaths.some((changedPath) => !isTestOnlyPath(changedPath));
 }
 
-const QA_SMOKE_CRITICAL_RE =
-  /^(?:extensions\/qa-lab|qa)\/|^scripts\/(?:build-all\.mjs|package-openclaw-for-docker\.mjs)$|^(?:package\.json|pnpm-lock\.yaml|npm-shrinkwrap\.json)$|^ui\//u;
+// Surfaces the CI smoke scenarios exercise outside the core runtime import
+// graph: the qa-lab harness and scenario data, the packaged-CLI build inputs,
+// the control UI (playwright scenario), the two channels the smoke profile
+// drives (matrix, telegram), and workspace packages whose package-specifier
+// imports the relative import graph cannot see. The QA lane's own
+// orchestration (this planner, the CI workflow, composite actions) is also
+// QA-impacting: changes to the gate must not be able to skip the gated lane.
+const QA_SMOKE_SURFACE_RE =
+  /^(?:extensions\/(?:matrix|qa-lab|telegram)|packages|qa|ui)\/|^scripts\/(?:build-all\.mjs|package-openclaw-for-docker\.mjs)$|^scripts\/lib\/ci-changed-node-test-plan\.mjs$|^\.github\/(?:workflows\/ci\.yml$|actions\/)|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|npm-shrinkwrap\.json|pnpm-workspace\.yaml|tsdown\.config\.ts)$/u;
+// The smoke profile runs the packaged CLI end to end, so its runtime blast
+// radius is exactly the CLI entry's import graph (dynamic imports included).
+const QA_SMOKE_RUNTIME_ENTRY = "src/index.ts";
 
 /**
- * True when a changed path touches the QA smoke packaging/scenario surface.
- * Deliberate product tradeoff: targeted PRs outside this surface skip QA smoke
- * and rely on import-selected shards plus build-artifact CLI smokes. Targeting
- * only fires for narrow non-SDK-impacting diffs, and QA smoke still runs on
- * every node-scoped main push, so a missed regression breaks main visibly
- * instead of shipping silently.
+ * True when a changed path can influence the QA smoke scenarios: it touches
+ * the smoke surface directly, or the packaged CLI's import graph reaches it.
+ * Diffs outside both are invisible to the smoke profile, so the manifest may
+ * skip that lane regardless of whether test targeting fired.
  */
-export function hasQaSmokeAffectingChange(changedPaths) {
-  return changedPaths.some((changedPath) => QA_SMOKE_CRITICAL_RE.test(changedPath));
+export function hasQaSmokeAffectingChange(changedPaths, options = {}) {
+  const cwd = options.cwd ?? process.cwd();
+  if (changedPaths.some((changedPath) => QA_SMOKE_SURFACE_RE.test(changedPath))) {
+    return true;
+  }
+  const sourcePaths = changedPaths.filter(
+    (changedPath) => changedPath.startsWith("src/") && !isTestFileTarget(changedPath),
+  );
+  if (sourcePaths.length === 0) {
+    return false;
+  }
+  // Deleted sources cannot be graphed; fail safe to running the smoke lane.
+  if (sourcePaths.some((changedPath) => !existsSync(path.join(cwd, changedPath)))) {
+    return true;
+  }
+  return hasImportGraphImpactOnTargets(sourcePaths, [QA_SMOKE_RUNTIME_ENTRY], cwd);
 }
 
 function createBoundaryShard() {

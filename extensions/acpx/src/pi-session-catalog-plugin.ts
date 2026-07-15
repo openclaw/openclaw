@@ -1,7 +1,7 @@
 import process from "node:process";
 import {
   decodeNodePtyResumeParams,
-  resolveExecutableFromPathEnv,
+  resolveNodeHostExecutable,
   runNodePtyCommand,
 } from "openclaw/plugin-sdk/node-host";
 import type {
@@ -157,21 +157,31 @@ function createPiSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
       duplex: true,
       isAvailable: ({ config, env }) =>
         storeAvailable({ config, env }) &&
-        Boolean(resolveExecutableFromPathEnv("pi", env.PATH ?? "")),
+        Boolean(
+          resolveNodeHostExecutable("pi", {
+            env,
+            pathEnv: env.PATH ?? env.Path ?? "",
+            strategy: "direct",
+          }),
+        ),
       handle: async (paramsJSON, io) => {
         if (!io) {
           throw new Error("Pi terminal command requires duplex transport");
         }
         const params = decodeNodePtyResumeParams(paramsJSON, validatePiThreadId);
         const record = await requireLocalPiSession(params.threadId);
-        const file = resolveExecutableFromPathEnv("pi", process.env.PATH ?? "");
-        if (!file) {
+        const resolution = resolveNodeHostExecutable("pi", {
+          env: process.env,
+          pathEnv: process.env.PATH ?? process.env.Path ?? "",
+          strategy: "direct",
+        });
+        if (!resolution) {
           throw new Error("Pi CLI is unavailable");
         }
         return JSON.stringify(
           await runNodePtyCommand(
             {
-              file,
+              file: resolution.executable,
               args: ["--session", params.threadId],
               cwd: record.cwd,
               cols: params.cols,
@@ -329,8 +339,10 @@ async function listPiHosts(
         }).then((page) =>
           setTerminalCapability(
             page,
-            resolveExecutableFromPathEnv("pi", process.env.PATH ?? "", process.env, {
-              fallbackToLoginShell: true,
+            resolveNodeHostExecutable("pi", {
+              env: process.env,
+              pathEnv: process.env.PATH ?? "",
+              strategy: "fallback",
             }) !== undefined,
           ),
         )),
@@ -401,9 +413,10 @@ async function openPiTerminal(params: {
   const title = `pi --session ${params.threadId.slice(0, 12)}…`;
   if (params.hostId === LOCAL_HOST_ID) {
     const record = await requireLocalPiSession(params.threadId);
-    const resolution = resolveExecutableFromPathEnv("pi", process.env.PATH ?? "", process.env, {
-      fallbackToLoginShell: true,
-      withPathEnv: true,
+    const resolution = resolveNodeHostExecutable("pi", {
+      env: process.env,
+      pathEnv: process.env.PATH ?? "",
+      strategy: "fallback",
     });
     if (!resolution) {
       throw new Error("Pi CLI is unavailable");

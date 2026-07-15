@@ -237,7 +237,6 @@ extensions/policy/src/doctor/register.gateway-data-and-approvals.test-utils.ts
 extensions/policy/src/doctor/register.ingress-and-secrets.test-utils.ts
 extensions/policy/src/doctor/register.models-and-mcp.test-utils.ts
 extensions/policy/src/doctor/register.sandbox-and-tools.test-utils.ts
-extensions/policy/src/policy-state.ts
 extensions/qa-lab/src/cli.runtime.test.ts
 extensions/qa-lab/src/cli.runtime.ts
 extensions/qa-lab/src/cli.ts
@@ -601,7 +600,6 @@ src/auto-reply/command-control.test.ts
 src/auto-reply/commands-registry.shared.ts
 src/auto-reply/inbound.test.ts
 src/auto-reply/reply/abort.test.ts
-src/auto-reply/reply/agent-runner-execution.test.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
 src/auto-reply/reply/agent-runner-memory.ts
 src/auto-reply/reply/agent-runner-payloads.test.ts

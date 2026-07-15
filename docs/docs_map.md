@@ -5971,6 +5971,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Policy tiers and approvals
   - H2: Inspect status and audit history
   - H2: 1Password CLI behavior
+  - H2: Error codes
 
 ## plugins/plugin-inventory.md
 
