@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  capCronJobToolsAllowOnCreate,
-  type CronJobUpdatePatchPlan,
-  planCronJobUpdatePatch,
-} from "./cron-tool-creator-cap.js";
+import { capCronJobToolsAllowOnCreate, planCronJobUpdatePatch } from "./cron-tool-creator-cap.js";
+
+type CronJobUpdatePatchPlan = ReturnType<typeof planCronJobUpdatePatch>;
 
 function readReadyPatch(plan: CronJobUpdatePatchPlan): Record<string, unknown> {
   expect(plan.kind).toBe("ready");
