@@ -1675,13 +1675,15 @@ jobs:
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
           install-bun: "false"
-          # Mirrors this job's runs-on ternary exactly: every canonical-repo
-          # run that lands on a Blacksmith runner (including fork PRs, which
-          # run Blacksmith here) mounts deps from a sticky disk instead of
-          # restoring the ~1GB pnpm store tar; workflow_dispatch runs are
-          # GitHub-hosted and keep the actions/cache path.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && 'true' || 'false' }}
-          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && 'false' || 'true' }}
+          # Blacksmith same-repo runs mount deps from a sticky disk instead of
+          # restoring the ~1GB pnpm store tar. Fork PRs are excluded even
+          # though they run on Blacksmith here: sticky snapshots are
+          # repository-global and writable (commit: if-missing), so untrusted
+          # fork code must never produce a snapshot a trusted run could clone.
+          # workflow_dispatch runs are GitHub-hosted and also keep the
+          # actions/cache path.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
