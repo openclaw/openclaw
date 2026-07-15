@@ -143,7 +143,7 @@ type ToolSearchDirectoryIntent = {
 
 type ToolDirectoryFamily = "memory" | "web";
 
-export type ToolSearchCatalogSession = {
+type ToolSearchCatalogSession = {
   entries: ToolSearchCatalogEntry[];
   searchCount: number;
   describeCount: number;
