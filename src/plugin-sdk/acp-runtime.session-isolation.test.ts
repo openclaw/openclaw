@@ -83,8 +83,9 @@ describe("acp-runtime session isolation", () => {
       managerFacadeIsStable: true,
       boundManagerMethodWorks: true,
     });
-    expect(loadInternalSessionEntry({ sessionKey, storePath })?.mainRestartRecovery).toEqual(
-      mainRestartRecovery,
-    );
+    const internalEntry = loadInternalSessionEntry({ sessionKey, storePath }) as
+      | InternalSessionEntry
+      | undefined;
+    expect(internalEntry?.mainRestartRecovery).toEqual(mainRestartRecovery);
   });
 });
