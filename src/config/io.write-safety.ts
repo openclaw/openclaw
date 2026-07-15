@@ -5,10 +5,8 @@ import { isRecord } from "../utils.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
 import {
   hashConfigRaw,
-  hasConfigMeta,
   parseConfigJson5,
   resolveConfigSnapshotHash,
-  resolveGatewayMode,
 } from "./io.read-helpers.js";
 import type { ConfigWriteOptions } from "./io.types.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
@@ -219,18 +217,4 @@ export function resolveConfigSizeBaselineBytes(params: {
     .trimEnd()
     .concat("\n");
   return Buffer.byteLength(canonical, "utf-8");
-}
-
-function resolveConfigWriteMetadata(params: { before: unknown; after: OpenClawConfig }): {
-  hasMetaBefore: boolean;
-  hasMetaAfter: boolean;
-  gatewayModeBefore: string | null;
-  gatewayModeAfter: string | null;
-} {
-  return {
-    hasMetaBefore: hasConfigMeta(params.before),
-    hasMetaAfter: hasConfigMeta(params.after),
-    gatewayModeBefore: resolveGatewayMode(params.before),
-    gatewayModeAfter: resolveGatewayMode(params.after),
-  };
 }
