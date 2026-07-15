@@ -984,9 +984,10 @@ describe("doctor repair sequencing", () => {
       (
         cfg: OpenClawConfig,
         _env: NodeJS.ProcessEnv | undefined,
-        params: { preservePluginIds?: string[] },
+        params: { preservePluginIds?: string[]; surfacePreservePluginIds?: { allow?: string[] } },
       ) => {
-        expect(params.preservePluginIds).toEqual(["brave", "codex"]);
+        expect(params.preservePluginIds).toEqual(["brave"]);
+        expect(params.surfacePreservePluginIds).toEqual({ allow: new Set(["codex"]) });
         return {
           config: {
             ...cfg,
@@ -1079,9 +1080,10 @@ describe("doctor repair sequencing", () => {
       (
         cfg: OpenClawConfig,
         _env: NodeJS.ProcessEnv | undefined,
-        params: { preservePluginIds?: string[] },
+        params: { preservePluginIds?: string[]; surfacePreservePluginIds?: { allow?: string[] } },
       ) => {
-        expect(params.preservePluginIds).toEqual(["whatsapp", "codex"]);
+        expect(params.preservePluginIds).toEqual(["whatsapp"]);
+        expect(params.surfacePreservePluginIds).toEqual({ allow: new Set(["codex"]) });
         return {
           config: cfg,
           changes: [],

@@ -157,7 +157,8 @@ export async function runDoctorRepairSequence(params: {
   if (!isUpdatePackageSwapInProgress(env) && !hasUnscopedInstallRepairWarnings) {
     applyMutation(
       maybeRepairStalePluginConfig(state.candidate, env, {
-        preservePluginIds: [...failedPluginIds, ...VERSION_BOUND_RUNTIME_PLUGIN_IDS],
+        preservePluginIds: failedPluginIds,
+        surfacePreservePluginIds: { allow: VERSION_BOUND_RUNTIME_PLUGIN_IDS },
       }),
     );
   }

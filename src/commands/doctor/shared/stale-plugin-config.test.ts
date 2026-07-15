@@ -157,6 +157,43 @@ describe("doctor stale plugin config helpers", () => {
     expect(result.config.plugins?.allow).toEqual([]);
   });
 
+  it("preserves codex in allowlist when surfacePreservePluginIds.allow includes codex", () => {
+    const result = maybeRepairStalePluginConfig(
+      {
+        plugins: {
+          allow: ["codex", "discord"],
+          deny: ["codex"],
+        },
+      } as OpenClawConfig,
+      undefined,
+      { surfacePreservePluginIds: { allow: ["codex"] } },
+    );
+
+    // codex is preserved in allow (discord stays as known manifest plugin),
+    // but still removed from deny
+    expect(result.config.plugins?.allow).toEqual(["codex", "discord"]);
+    expect(result.changes).toEqual(["- plugins.deny: removed 1 stale plugin id (codex)"]);
+  });
+
+  it("does not preserve codex in non-allow surfaces when surfacePreservePluginIds.allow includes codex", () => {
+    const result = maybeRepairStalePluginConfig(
+      {
+        plugins: {
+          allow: ["codex"],
+          entries: {
+            codex: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      { surfacePreservePluginIds: { allow: ["codex"] } },
+    );
+
+    expect(result.config.plugins?.allow).toEqual(["codex"]);
+    expect(result.config.plugins?.entries?.codex).toBeUndefined();
+    expect(result.changes).toEqual(["- plugins.entries: removed 1 stale plugin entry (codex)"]);
+  });
+
   it("does not report slot defaults or none as stale plugin refs", () => {
     expect(
       scanStalePluginConfig({

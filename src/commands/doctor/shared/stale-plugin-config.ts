@@ -338,7 +338,10 @@ export function collectStalePluginConfigWarnings(params: {
 export function maybeRepairStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-  params?: { preservePluginIds?: Iterable<string> },
+  params?: {
+    preservePluginIds?: Iterable<string>;
+    surfacePreservePluginIds?: Partial<Record<StalePluginSurface, Iterable<string>>>;
+  },
 ): {
   config: OpenClawConfig;
   changes: string[];
@@ -357,9 +360,22 @@ export function maybeRepairStalePluginConfig(
       .map((pluginId) => normalizePluginId(pluginId))
       .filter((pluginId): pluginId is string => Boolean(pluginId)),
   );
-  const hits = scanStalePluginConfigWithState(cfg, registryState, environment).filter(
-    (hit) => !preservePluginIds.has(normalizePluginId(hit.pluginId)),
-  );
+  const surfacePreservePluginIds: Partial<Record<StalePluginSurface, Set<string>>> = {};
+  for (const [surface, ids] of Object.entries(params?.surfacePreservePluginIds ?? {})) {
+    const normalized = new Set(
+      [...ids].map((id) => normalizePluginId(id)).filter((id): id is string => Boolean(id)),
+    );
+    if (normalized.size > 0) {
+      surfacePreservePluginIds[surface as StalePluginSurface] = normalized;
+    }
+  }
+  const hits = scanStalePluginConfigWithState(cfg, registryState, environment).filter((hit) => {
+    const id = normalizePluginId(hit.pluginId);
+    if (preservePluginIds.has(id)) return false;
+    const surfaceIds = surfacePreservePluginIds[hit.surface];
+    if (surfaceIds?.has(id)) return false;
+    return true;
+  });
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
   }
