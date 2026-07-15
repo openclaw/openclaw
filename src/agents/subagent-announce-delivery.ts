@@ -80,6 +80,7 @@ import {
 } from "./subagent-announce-dispatch.js";
 import type { DeliveryContext } from "./subagent-announce-origin.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { isGatewayLifecycleTransientError } from "./subagent-gateway-lifecycle.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
@@ -436,7 +437,7 @@ function hasSessionFileChangedAnnounceError(error: unknown): boolean {
   );
 }
 
-function isTransientAnnounceDeliveryError(error: unknown): boolean {
+export function isTransientAnnounceDeliveryError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
   const topLevelPermanent = Boolean(
     message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
@@ -468,7 +469,10 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
   if (topLevelPermanent) {
     return false;
   }
-  return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
+  return (
+    isGatewayLifecycleTransientError(error) ||
+    TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))
+  );
 }
 
 function isPermanentAnnounceDeliveryError(error: unknown): boolean {

@@ -24,6 +24,7 @@ import {
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import {
   deliverSubagentAnnouncement,
+  isTransientAnnounceDeliveryError,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
   runAnnounceDeliveryWithRetry,
@@ -51,7 +52,6 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
@@ -163,6 +163,36 @@ function stripAndClassifyReply(text: string): string | null {
     return null;
   }
   return result;
+}
+
+const SUBAGENT_ANNOUNCE_SESSION_FINALIZE_TIMEOUT_MS = 20_000;
+
+async function callGatewayForAnnounceFinalize(params: {
+  method: "sessions.patch" | "sessions.delete";
+  params: Record<string, unknown>;
+  signal?: AbortSignal;
+}): Promise<void> {
+  try {
+    await subagentAnnounceDeps.callGateway({
+      method: params.method,
+      params: params.params,
+      timeoutMs: SUBAGENT_ANNOUNCE_SESSION_FINALIZE_TIMEOUT_MS,
+    });
+  } catch (error) {
+    if (!isTransientAnnounceDeliveryError(error)) {
+      throw error;
+    }
+    await runAnnounceDeliveryWithRetry({
+      operation: `${params.method} finalize`,
+      signal: params.signal,
+      run: async () =>
+        await subagentAnnounceDeps.callGateway({
+          method: params.method,
+          params: params.params,
+          timeoutMs: SUBAGENT_ANNOUNCE_SESSION_FINALIZE_TIMEOUT_MS,
+        }),
+    });
+  }
 }
 
 async function wakeSubagentRunAfterDescendants(params: {
@@ -611,21 +641,29 @@ export async function runSubagentAnnounceFlow(params: {
     // Patch label after all writes complete
     if (params.label) {
       try {
-        await subagentAnnounceDeps.callGateway({
+        await callGatewayForAnnounceFinalize({
           method: "sessions.patch",
           params: { key: params.childSessionKey, label: params.label },
-          timeoutMs: 10_000,
+          signal: params.signal,
         });
       } catch {
         // Best-effort
       }
     }
     if (shouldDeleteChildSession && (params.onBeforeDeleteChildSession?.() ?? true)) {
-      await deleteSubagentSessionForCleanup({
-        callGateway: subagentAnnounceDeps.callGateway,
-        childSessionKey: params.childSessionKey,
-        spawnMode: params.spawnMode,
-      });
+      try {
+        await callGatewayForAnnounceFinalize({
+          method: "sessions.delete",
+          params: {
+            key: params.childSessionKey,
+            deleteTranscript: true,
+            emitLifecycleHooks: params.spawnMode === "session",
+          },
+          signal: params.signal,
+        });
+      } catch {
+        // ignore
+      }
     }
   }
   return didAnnounce;

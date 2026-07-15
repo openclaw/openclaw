@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import {
   capFrozenResultText,
+  deleteSubagentSessionWithRetry,
   logAnnounceGiveUp,
   reconcileOrphanedRun,
 } from "./subagent-registry-helpers.js";
@@ -130,5 +131,79 @@ describe("logAnnounceGiveUp", () => {
     expect(line).toContain(`${"x".repeat(1_999)}…`);
     expect(line).not.toContain("\uD83D");
     logSpy.mockRestore();
+  });
+});
+
+describe("deleteSubagentSessionWithRetry", () => {
+  function makeTransientError(message = "gateway closed (1006): transport close") {
+    const err = new Error(message);
+    return err;
+  }
+
+  function makePermanentError() {
+    return new Error("session not found");
+  }
+
+  it("succeeds on first attempt when the gateway call works", async () => {
+    const callGateway = vi.fn().mockResolvedValue({});
+    await deleteSubagentSessionWithRetry({ callGateway, sessionKey: "agent:main:subagent:abc" });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: { key: "agent:main:subagent:abc", deleteTranscript: true, emitLifecycleHooks: false },
+      timeoutMs: 10_000,
+    });
+  });
+
+  it("does not retry on non-transient errors", async () => {
+    const callGateway = vi.fn().mockRejectedValue(makePermanentError());
+    await expect(
+      deleteSubagentSessionWithRetry({ callGateway, sessionKey: "agent:main:subagent:abc" }),
+    ).rejects.toThrow("session not found");
+    expect(callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries up to the limit on transient errors", async () => {
+    const callGateway = vi
+      .fn()
+      .mockRejectedValueOnce(makeTransientError())
+      .mockRejectedValueOnce(makeTransientError())
+      .mockResolvedValueOnce({});
+
+    await deleteSubagentSessionWithRetry({
+      callGateway,
+      sessionKey: "agent:main:subagent:abc",
+    });
+
+    expect(callGateway).toHaveBeenCalledTimes(3);
+  });
+
+  it("throws the last transient error after exhausting retries", async () => {
+    const callGateway = vi.fn().mockRejectedValue(makeTransientError());
+
+    await expect(
+      deleteSubagentSessionWithRetry({
+        callGateway,
+        sessionKey: "agent:main:subagent:abc",
+      }),
+    ).rejects.toThrow("transport close");
+    expect(callGateway).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries lifecycle readiness failures shared with subagent spawn", async () => {
+    const callGateway = vi
+      .fn()
+      .mockRejectedValueOnce(makeTransientError("WebSocket handshake timeout after 10000ms"))
+      .mockRejectedValueOnce(
+        makeTransientError("Gateway not yet ready to accept connections (retry after a moment)"),
+      )
+      .mockResolvedValueOnce({});
+
+    await deleteSubagentSessionWithRetry({
+      callGateway,
+      sessionKey: "agent:main:subagent:abc",
+    });
+
+    expect(callGateway).toHaveBeenCalledTimes(3);
   });
 });
