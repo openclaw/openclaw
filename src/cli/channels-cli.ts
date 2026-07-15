@@ -234,6 +234,7 @@ export async function registerChannelsCli(
     .option("--cli-path <path>", "Channel CLI path")
     .option("--url <url>", "Channel setup URL")
     .option("--base-url <url>", "Channel base URL")
+    .option("--workspace <workspace>", "Channel workspace id, slug, or name")
     .option("--http-url <url>", "Channel HTTP service URL")
     .option("--auth-dir <path>", "Channel auth directory override")
     .option("--use-env", "Use env-backed credentials when supported", false);
