@@ -168,7 +168,7 @@ export type ProviderResolveUsageAuthContext = {
   resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
 };
 
-type ProviderUsageAuthToken = {
+export type ProviderUsageAuthToken = {
   token: string;
   accountId?: string;
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */

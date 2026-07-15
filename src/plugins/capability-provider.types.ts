@@ -65,7 +65,7 @@ export type WorkerSshIdentity =
   | { kind: "material"; contents: string };
 
 /** Durable context supplied when a worker provider resolves the identity it minted. */
-type WorkerSshIdentityRequest = {
+export type WorkerSshIdentityRequest = {
   leaseId: string;
   profile: WorkerProfile;
   keyRef: SecretRef;

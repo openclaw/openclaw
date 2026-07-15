@@ -120,3 +120,111 @@ export type * from "./provider-plugin.types.js";
 export type * from "./provider-replay.types.js";
 export type * from "./provider-runtime.types.js";
 export type * from "./provider-transport.types.js";
+
+// Explicit named rows mirror the type-star re-exports above for names the
+// plugin-entry SDK facade consumes; the .d.ts bundler cannot resolve names
+// through `export type *` and fails the build without them.
+export type {
+  MediaUnderstandingProviderPlugin,
+  RealtimeTranscriptionProviderPlugin,
+  SpeechProviderPlugin,
+  TranscriptSourceProvider,
+  WorkerLease,
+  WorkerLeaseStatus,
+  WorkerProfile,
+  WorkerProvider,
+  WorkerSshEndpoint,
+  WorkerSshIdentity,
+} from "./capability-provider.types.js";
+export type {
+  MigrationApplyResult,
+  MigrationDetection,
+  MigrationItem,
+  MigrationPlan,
+  MigrationProviderContext,
+  MigrationProviderPlugin,
+  MigrationSummary,
+} from "./migration-provider.types.js";
+export type { OpenClawPluginApi } from "./plugin-api.types.js";
+export type {
+  AgentPromptGuidance,
+  AgentPromptGuidanceEntry,
+  AgentPromptSurfaceKind,
+  OpenClawPluginCommandDefinition,
+  PluginCommandContext,
+  PluginCommandResult,
+} from "./plugin-command.types.js";
+export type { OpenClawPluginConfigSchema } from "./plugin-config-schema.types.js";
+export type { OpenClawPluginDefinition } from "./plugin-definition.types.js";
+export type {
+  OpenClawGatewayDiscoveryService,
+  OpenClawPluginNodeInvokePolicy,
+  OpenClawPluginNodeInvokePolicyContext,
+  OpenClawPluginNodeInvokePolicyResult,
+  OpenClawPluginReloadRegistration,
+  OpenClawPluginSecurityAuditCollector,
+  OpenClawPluginService,
+  OpenClawPluginServiceContext,
+} from "./plugin-registration.types.js";
+export type {
+  ProviderAuthContext,
+  ProviderAuthMethod,
+  ProviderAuthMethodNonInteractiveContext,
+  ProviderAuthResult,
+  ProviderDeferSyntheticProfileAuthContext,
+} from "./provider-authentication.types.js";
+export type {
+  ProviderAugmentModelCatalogContext,
+  ProviderBuiltInModelSuppressionContext,
+  ProviderBuiltInModelSuppressionResult,
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderDiscoveryContext,
+  ProviderModernModelPolicyContext,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
+} from "./provider-catalog.types.js";
+export type {
+  ProviderNormalizeToolSchemasContext,
+  ProviderReasoningOutputMode,
+  ProviderReasoningOutputModeContext,
+  ProviderReplayPolicy,
+  ProviderReplayPolicyContext,
+  ProviderReplaySessionEntry,
+  ProviderReplaySessionState,
+  ProviderSanitizeReplayHistoryContext,
+  ProviderToolSchemaDiagnostic,
+  ProviderValidateReplayTurnsContext,
+} from "./provider-replay.types.js";
+export type {
+  ProviderAuthDoctorHintContext,
+  ProviderFetchUsageSnapshotContext,
+  ProviderNormalizeModelIdContext,
+  ProviderNormalizeResolvedModelContext,
+  ProviderNormalizeTransportContext,
+  ProviderPrepareDynamicModelContext,
+  ProviderPrepareExtraParamsContext,
+  ProviderPrepareRuntimeAuthContext,
+  ProviderPreparedRuntimeAuth,
+  ProviderResolveDynamicModelContext,
+  ProviderResolveUsageAuthContext,
+  ProviderResolvedUsageAuth,
+} from "./provider-runtime.types.js";
+export type {
+  ProviderBuildMissingAuthMessageContext,
+  ProviderBuildUnknownModelHintContext,
+  ProviderCacheTtlEligibilityContext,
+  ProviderFailoverErrorContext,
+  ProviderResolveTransportTurnStateContext,
+  ProviderResolveWebSocketSessionPolicyContext,
+  ProviderTransportTurnState,
+  ProviderWebSocketSessionPolicy,
+  ProviderWrapStreamFnContext,
+} from "./provider-transport.types.js";
+export type {
+  OpenClawGatewayDiscoveryAdvertiseContext,
+  OpenClawPluginHttpRouteHandler,
+  OpenClawPluginSecurityAuditContext,
+} from "./plugin-registration.types.js";
+export type { ProviderUsageAuthToken } from "./provider-runtime.types.js";
+export type { WorkerSshIdentityRequest } from "./capability-provider.types.js";

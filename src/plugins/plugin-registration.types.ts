@@ -33,7 +33,7 @@ type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";
 export type OpenClawPluginGatewayRuntimeScopeSurface = "write-default" | "trusted-operator";
 
-type OpenClawPluginHttpRouteHandler = (
+export type OpenClawPluginHttpRouteHandler = (
   req: IncomingMessage,
   res: ServerResponse,
 ) => Promise<boolean | void> | boolean | void;
@@ -210,7 +210,7 @@ export type OpenClawPluginNodeInvokePolicy = {
   ) => Promise<OpenClawPluginNodeInvokePolicyResult> | OpenClawPluginNodeInvokePolicyResult;
 };
 
-type OpenClawPluginSecurityAuditContext = {
+export type OpenClawPluginSecurityAuditContext = {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -222,7 +222,7 @@ export type OpenClawPluginSecurityAuditCollector = (
   ctx: OpenClawPluginSecurityAuditContext,
 ) => SecurityAuditFinding[] | Promise<SecurityAuditFinding[]>;
 
-type OpenClawGatewayDiscoveryAdvertiseContext = {
+export type OpenClawGatewayDiscoveryAdvertiseContext = {
   machineDisplayName: string;
   gatewayPort: number;
   gatewayTlsEnabled: boolean;
