@@ -2,34 +2,103 @@
 
 ![Banner](./ag-ui.png)
 
-An [OpenClaw](https://github.com/openclaw/openclaw) channel plugin that exposes the gateway as an [AG-UI](https://docs.ag-ui.com) protocol-compatible HTTP endpoint (SSE). Any AG-UI client can connect to OpenClaw and receive streamed responses.
+A bundled [OpenClaw](https://github.com/openclaw/openclaw) channel that exposes
+your gateway as an [AG-UI](https://docs.ag-ui.com) protocol endpoint over HTTP +
+Server-Sent Events. Any AG-UI client — `@ag-ui/client`, a custom web UI, or a
+plain `curl` — can POST a conversation and stream the agent's reply back as
+AG-UI events (text, tool calls, reasoning, and generative UI).
+
+It ships **inside** OpenClaw, so there's nothing to build — you just enable it.
+
+---
+
+## Quick start
+
+Three steps to a live endpoint:
+
+**1. Enable the channel.** Add it to your gateway config (`~/.openclaw/openclaw.json`):
+
+```json
+{
+  "channels": {
+    "ag-ui": { "enabled": true, "name": "AG-UI" }
+  }
+}
+```
+
+**2. (Re)start the gateway:**
+
+```bash
+openclaw gateway run
+```
+
+On startup you'll see `ag-ui` in the loaded channel list and
+`AG-UI channel active (HTTP endpoint ready)` in the logs. Two routes are now
+served (replace `http://localhost:8000` with your gateway's host/port):
+
+| Route | Auth | Use it for |
+|---|---|---|
+| `POST /v1/ag-ui/operator` | Gateway token (`Authorization: Bearer <OPENCLAW_GATEWAY_TOKEN>`) | Trusted, server-side integrations where the token stays on a server you control (behind your own auth). |
+| `POST /v1/ag-ui` | Device pairing (per-client token) | Untrusted / external AG-UI clients that pair once and get their own token. |
+
+**3. Say hi.** With the operator route and your gateway token:
+
+```bash
+curl -N http://localhost:8000/v1/ag-ui/operator \
+  -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"messages":[{"role":"user","content":"Say hello in 3 words"}]}'
+```
+
+You'll get an SSE stream: `RUN_STARTED` → `TEXT_MESSAGE_*` → `RUN_FINISHED`.
+
+> The channel uses whatever agent + model your gateway is already configured
+> with — it doesn't pick a model itself. Make sure a provider/model is set up
+> (`openclaw models …`) before your first turn.
+
+---
 
 ## Installation
+
+The channel is **bundled with OpenClaw** — if you're running the gateway, it's
+already present and just needs [enabling](#quick-start). Nothing to install or
+build.
+
+Running an OpenClaw build that doesn't bundle it? Install the published package
+and enable it the same way:
 
 ```bash
 openclaw plugins install @openclaw/ag-ui
 ```
 
-Then restart the gateway. The plugin auto-registers the `/v1/ag-ui` endpoint and the `ag-ui` channel.
+---
 
 ## How it works
 
-The plugin registers as an OpenClaw channel and adds an HTTP route at `/v1/ag-ui`. When an AG-UI client POSTs a `RunAgentInput` payload, the plugin:
+The channel registers with the gateway and serves the two HTTP routes above.
+When an AG-UI client POSTs a `RunAgentInput` payload, the channel:
 
-1. Authenticates the request using device pairing (see [Authentication](#authentication))
-2. Parses the AG-UI messages into an OpenClaw inbound context
-3. Routes to the appropriate agent via the gateway's standard routing
-4. Dispatches the message through the reply pipeline (same path as Telegram, Teams, etc.)
-5. Streams the agent's response back as AG-UI SSE events
+1. **Authenticates** the request — a gateway token on `/v1/ag-ui/operator`, or a
+   paired device token on `/v1/ag-ui` (see [Authentication](#authentication)).
+2. **Parses** the AG-UI messages into a prompt, sending only the *delta* since
+   the last assistant turn (a stable per-conversation session supplies the rest
+   of the history).
+3. **Routes** to the target agent via the gateway's standard routing.
+4. **Runs** the turn through the embedded agent (`runEmbeddedAgent`) against a
+   stable per-conversation session, so conversation history, compaction, and
+   context management come for free.
+5. **Streams** the response back as AG-UI SSE events — assistant text, tool
+   calls, reasoning summaries, and A2UI generative-UI surfaces.
 
 ```
 AG-UI Client                        OpenClaw Gateway
     |                                      |
-    |  POST /v1/ag-ui (RunAgentInput)   |
+    |  POST /v1/ag-ui[/operator]           |
     |------------------------------------->|
-    |                                      |  Auth (device token)
+    |                                      |  Authenticate
     |                                      |  Route to agent
-    |                                      |  Dispatch inbound message
+    |                                      |  runEmbeddedAgent (stable session)
     |                                      |
     |  SSE: RUN_STARTED                    |
     |<-------------------------------------|
@@ -37,179 +106,76 @@ AG-UI Client                        OpenClaw Gateway
     |<-------------------------------------|
     |  SSE: TEXT_MESSAGE_CONTENT (delta)   |
     |<-------------------------------------|  (streamed chunks)
-    |  SSE: TEXT_MESSAGE_CONTENT (delta)   |
-    |<-------------------------------------|
-    |  SSE: TOOL_CALL_START               |
-    |<-------------------------------------|  (if agent uses tools)
-    |  SSE: TOOL_CALL_ARGS                |
-    |<-------------------------------------|
-    |  SSE: TOOL_CALL_RESULT              |
+    |  SSE: TOOL_CALL_START / _ARGS        |
+    |<-------------------------------------|  (if the agent uses tools)
+    |  SSE: TOOL_CALL_RESULT / _END        |
     |<-------------------------------------|  (server tools only)
-    |  SSE: TOOL_CALL_END                 |
+    |  SSE: TEXT_MESSAGE_END               |
     |<-------------------------------------|
-    |  SSE: TEXT_MESSAGE_END              |
-    |<-------------------------------------|
-    |  SSE: RUN_FINISHED                  |
+    |  SSE: RUN_FINISHED                   |
     |<-------------------------------------|
 ```
 
-## Usage
-
-### Prerequisites
-
-- OpenClaw gateway running (`openclaw gateway run`)
-- A paired device token (see [Authentication](#authentication))
-
-### curl
-
-```bash
-# Using your device token (obtained through pairing)
-curl -N -X POST http://localhost:18789/v1/ag-ui \
-  -H "Content-Type: application/json" \
-  -H "Accept: text/event-stream" \
-  -H "Authorization: Bearer $AG_UI_DEVICE_TOKEN" \
-  -d '{
-    "threadId": "thread-1",
-    "runId": "run-1",
-    "messages": [
-      {"role": "user", "content": "What is the weather in San Francisco?"}
-    ]
-  }'
-```
-
-### @ag-ui/client
-
-```typescript
-import { HttpAgent } from "@ag-ui/client";
-
-// Device token obtained through the pairing flow
-const deviceToken = process.env.AG_UI_DEVICE_TOKEN;
-
-const agent = new HttpAgent({
-  url: "http://localhost:18789/v1/ag-ui",
-  headers: {
-    Authorization: `Bearer ${deviceToken}`,
-  },
-});
-
-const stream = agent.run({
-  threadId: "thread-1",
-  runId: "run-1",
-  messages: [
-    { role: "user", content: "Hello from AG-UI" },
-  ],
-});
-
-for await (const event of stream) {
-  console.log(event.type, event);
-}
-```
-
-## Request format
-
-The endpoint accepts a POST with a JSON body matching the AG-UI `RunAgentInput` schema:
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `threadId` | string | no | Conversation thread ID. Auto-generated if omitted. |
-| `runId` | string | no | Unique run ID. Auto-generated if omitted. |
-| `messages` | Message[] | yes | Array of messages. May be empty (returns an empty run). For agent execution, at least one `user` or `tool` message should be present. |
-| `tools` | Tool[] | no | Client-side tool definitions. The agent can invoke these; see [Tool call events](#tool-call-events). |
-| `state` | object | no | Client state (reserved for future use). |
-
-### Message format
-
-```json
-{
-  "role": "user",
-  "content": "Hello"
-}
-```
-
-Supported roles: `user`, `assistant`, `system`, `tool`.
-
-## Response format
-
-The response is an SSE stream. Each event is a `data:` line containing a JSON object with a `type` field from the AG-UI `EventType` enum:
-
-| Event | When |
-|---|---|
-| `RUN_STARTED` | Immediately after validation |
-| `TEXT_MESSAGE_START` | First assistant text chunk |
-| `TEXT_MESSAGE_CONTENT` | Each streamed text delta |
-| `TEXT_MESSAGE_END` | After last text chunk |
-| `TOOL_CALL_START` | Agent invokes a tool |
-| `TOOL_CALL_ARGS` | Tool call arguments (JSON delta) |
-| `TOOL_CALL_RESULT` | Server-side tool execution result |
-| `TOOL_CALL_END` | Tool call complete |
-| `RUN_FINISHED` | Agent run complete |
-| `RUN_ERROR` | On failure |
-
-### Tool call events
-
-Tool call events (`TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_RESULT`, `TOOL_CALL_END`) are emitted when the OpenClaw agent invokes a tool during its run. They are emitted via OpenClaw lifecycle hooks (`before_tool_call` and `tool_result_persist`) in `index.ts`.
-
-**When do tool events appear?**
-
-- The agent must have tools available (server-side tools on the agent, or client-side tools passed via the `tools` field)
-- The agent's LLM must decide to call a tool based on the conversation
-
-**Client tools vs server tools:**
-
-- **Client tools** (passed via `tools` in the request): the stream emits `TOOL_CALL_START` → `TOOL_CALL_ARGS` → `TOOL_CALL_END`, then the run finishes. The client executes the tool locally and starts a new run with the result as a `tool` message.
-- **Server tools** (registered on the OpenClaw agent): the stream emits `TOOL_CALL_START` → `TOOL_CALL_ARGS` → `TOOL_CALL_RESULT` → `TOOL_CALL_END`. The agent continues processing in the same or a subsequent run.
-
-> **Tip:** To confirm tool calls are being triggered, check the gateway logs for `[ag-ui] before_tool_call:` entries.
+---
 
 ## Authentication
 
-ag-ui uses **device pairing** to authenticate clients. This provides secure, per-device access control without exposing the gateway's master token.
+The channel offers two auth modes on two routes. Pick based on how much you
+trust the client.
 
-### Device Pairing Flow
+### Operator token — `/v1/ag-ui/operator`
+
+For **trusted, server-side** integrations. The caller presents the gateway
+token, and the route is scoped to `operator.write` (least privilege — it can run
+agent turns but cannot reach admin, pairing, or secret surfaces). No pairing
+step.
+
+```bash
+curl -N http://localhost:8000/v1/ag-ui/operator \
+  -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"messages":[{"role":"user","content":"Hello"}]}'
+```
+
+Use this when the token stays on a server you control — e.g. a server-side
+runtime or backend proxy that has already authenticated the end user. **Never
+ship the gateway token to a browser.**
+
+### Device pairing — `/v1/ag-ui`
+
+For **untrusted / external** clients. Each client pairs once and receives its own
+device token, so you get per-device access control without exposing the gateway
+token.
 
 ```
 ┌─────────────────┐      ┌──────────────────┐      ┌─────────────────┐
 │  Gateway Owner  │      │  OpenClaw Server │      │   AG-UI Client  │
 └────────┬────────┘      └────────┬─────────┘      └────────┬────────┘
-         │                        │                         │
          │                        │  1. POST (no auth)      │
          │                        │<────────────────────────│
-         │                        │                         │
-         │                        │  2. Return device token │
-         │                        │     + pairing code      │
-         │                        │────────────────────────>│
-         │                        │     403 pairing_pending │
+         │                        │  2. 403 pairing_pending │
          │                        │     { pairingCode, token }
-         │                        │                         │
-         │              3. Share pairing code (out of band) │
-         │<─────────────────────────────────────────────────│
-         │                        │                         │
-    4. Approve device             │                         │
-         │  openclaw pairing approve ag-ui ABCD1234      │
-         │───────────────────────>│                         │
-         │                        │                         │
-         │                        │  5. POST with device token
-         │                        │<────────────────────────│
-         │                        │     Authorization: Bearer <token>
-         │                        │                         │
-         │                        │  6. Success - SSE stream│
          │                        │────────────────────────>│
-         │                        │                         │
+         │  3. Share pairing code (out of band)             │
+         │<─────────────────────────────────────────────────│
+    4. Approve device             │                         │
+         │  openclaw pairing approve ag-ui ABCD1234         │
+         │───────────────────────>│                         │
+         │                        │  5. POST + device token │
+         │                        │<────────────────────────│
+         │                        │  6. SSE stream          │
+         │                        │────────────────────────>│
 ```
 
-### Step-by-Step Setup
-
-#### 1. Client initiates pairing
-
-The client sends a POST request without any authorization header:
+**Step 1 — client initiates pairing** (POST with no `Authorization` header):
 
 ```bash
-curl -X POST http://localhost:18789/v1/ag-ui \
-  -H "Content-Type: application/json" \
-  -d '{}'
+curl -X POST http://localhost:8000/v1/ag-ui \
+  -H "Content-Type: application/json" -d '{}'
 ```
 
-Response (403):
+Response (`403`):
 
 ```json
 {
@@ -225,32 +191,26 @@ Response (403):
 }
 ```
 
-The client must save the `token` for future requests.
+The client saves the `token`.
 
-#### 2. Approve the device (gateway owner)
-
-The client shares the `pairingCode` with the gateway owner, who approves it:
+**Step 2 — owner approves** (the client shares the `pairingCode` out of band):
 
 ```bash
-# List pending pairing requests
-openclaw pairing list ag-ui
-
-# Approve the device
+openclaw pairing list ag-ui          # see pending requests
 openclaw pairing approve ag-ui ABCD1234
 ```
 
-#### 3. Client uses Bearer token
-
-Once approved, the client uses their Bearer token for all requests:
+**Step 3 — client uses its device token** on every request:
 
 ```bash
-curl -N -X POST http://localhost:18789/v1/ag-ui \
+curl -N http://localhost:8000/v1/ag-ui \
   -H "Authorization: Bearer MmRlOTA0ODIt...b71d" \
   -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
   -d '{"messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-### CLI Commands
+### CLI commands
 
 | Command | Description |
 |---------|-------------|
@@ -258,78 +218,181 @@ curl -N -X POST http://localhost:18789/v1/ag-ui \
 | `openclaw pairing list ag-ui` | List pending pairing requests awaiting approval |
 | `openclaw pairing approve ag-ui <code>` | Approve a device by its pairing code |
 
-### Error Responses
+### Auth errors
 
 | Status | Type | Meaning |
 |--------|------|---------|
-| 401 | `unauthorized` | Invalid device token |
-| 403 | `pairing_pending` | No auth (initiates pairing) or valid token but device not yet approved |
+| 401 | `unauthorized` | Invalid device or gateway token |
+| 403 | `pairing_pending` | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved |
 
-### Deprecated: Direct Bearer Token
+> **Note on the gateway token.** The device route `/v1/ag-ui` does **not** accept
+> the raw gateway/master token — it requires pairing. If you have a trusted
+> server-side integration and want token auth, use `/v1/ag-ui/operator` instead,
+> which accepts the gateway token with a least-privilege operator scope.
 
-> **Deprecated:** Previous versions (0.1.x) allowed using the gateway's master token (`OPENCLAW_GATEWAY_TOKEN`) directly. This approach is **no longer supported**. All clients must now use device pairing.
->
-> Old (deprecated):
-> ```
-> Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN
-> ```
->
-> New (required):
-> ```
-> POST without Authorization header  # Initiates pairing
-> Authorization: Bearer <device-token>  # After approval
-> ```
+---
+
+## Using an AG-UI client
+
+Any AG-UI client works. With `@ag-ui/client` against the pairing route:
+
+```typescript
+import { HttpAgent } from "@ag-ui/client";
+
+const agent = new HttpAgent({
+  url: "http://localhost:8000/v1/ag-ui",
+  headers: { Authorization: `Bearer ${process.env.AG_UI_DEVICE_TOKEN}` },
+});
+
+const stream = agent.run({
+  threadId: "thread-1",
+  runId: "run-1",
+  messages: [{ role: "user", content: "Hello from AG-UI" }],
+});
+
+for await (const event of stream) {
+  console.log(event.type, event);
+}
+```
+
+For the operator route, point the client at `/v1/ag-ui/operator` and pass the
+gateway token instead — from server-side code only.
+
+---
+
+## Request format
+
+POST a JSON body matching the AG-UI `RunAgentInput` schema:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `threadId` | string | no | Conversation thread ID. Auto-generated if omitted. |
+| `runId` | string | no | Unique run ID. Auto-generated if omitted. |
+| `messages` | Message[] | yes | Array of messages. May be empty (returns an empty run). For agent execution, include at least one `user` or `tool` message. |
+| `tools` | Tool[] | no | Client-side tool definitions the agent may invoke; see [Tool call events](#tool-call-events). |
+| `state` | object | no | Client state (reserved for future use). |
+
+### Message format
+
+```json
+{ "role": "user", "content": "Hello" }
+```
+
+Supported roles: `user`, `assistant`, `system`, `tool`.
+
+---
+
+## Response format
+
+The response is an SSE stream. Each event is a `data:` line containing a JSON
+object with a `type` from the AG-UI `EventType` enum:
+
+| Event | When |
+|---|---|
+| `RUN_STARTED` | Immediately after validation |
+| `TEXT_MESSAGE_START` | First assistant text chunk |
+| `TEXT_MESSAGE_CONTENT` | Each streamed text delta |
+| `TEXT_MESSAGE_END` | After the last text chunk |
+| `REASONING_MESSAGE_START` / `_CONTENT` / `_END` | Streamed model reasoning summary (when the model emits one and `reasoningDefault` streams) |
+| `TOOL_CALL_START` | Agent invokes a tool |
+| `TOOL_CALL_ARGS` | Tool call arguments (JSON delta) |
+| `TOOL_CALL_RESULT` | Server-side tool execution result |
+| `TOOL_CALL_END` | Tool call complete |
+| `ACTIVITY_SNAPSHOT` | An A2UI generative-UI surface produced by a tool result |
+| `RUN_FINISHED` | Agent run complete |
+| `RUN_ERROR` | On failure (stream then closes) |
+
+### Tool call events
+
+Tool events are emitted when the agent invokes a tool during its run, mapped
+from OpenClaw's `before_tool_call` / `tool_result_persist` lifecycle hooks.
+
+**When do they appear?**
+
+- The agent has tools available (server-side tools, or client tools passed via
+  the request's `tools` field), **and**
+- the model decides to call one based on the conversation.
+
+**Client tools vs server tools:**
+
+- **Client tools** (from the request `tools`): the stream emits `TOOL_CALL_START`
+  → `TOOL_CALL_ARGS` → `TOOL_CALL_END`, then the run finishes. The client
+  executes the tool locally and starts a new run with the result as a `tool`
+  message.
+- **Server tools** (registered on the agent): the stream emits `TOOL_CALL_START`
+  → `TOOL_CALL_ARGS` → `TOOL_CALL_RESULT` → `TOOL_CALL_END`, and the agent keeps
+  going.
+
+---
 
 ## Agent routing
 
-The plugin uses OpenClaw's standard agent routing. By default, messages route to the `main` agent. To target a specific agent, set the `X-OpenClaw-Agent-Id` header:
+Messages route via OpenClaw's standard routing (to the `main` agent by default).
+Target a specific agent with the `X-OpenClaw-Agent-Id` header:
 
 ```bash
-curl -N -X POST http://localhost:18789/v1/ag-ui \
-  -H "Authorization: Bearer $AG_UI_DEVICE_TOKEN" \
+curl -N http://localhost:8000/v1/ag-ui/operator \
+  -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   -H "X-OpenClaw-Agent-Id: my-agent" \
   -d '{"messages":[{"role":"user","content":"Hello"}]}'
 ```
 
+---
+
 ## Session isolation
 
-By default, sessions are keyed by `route.sessionKey` plus a `:thread:<threadId>` suffix so each thread gets its own session within the device. For multi-user applications where each user needs isolated conversation history within a shared AG-UI client, pass the `X-OpenClaw-Session-Key` header to add a `:user:<value>` scope on top:
+By default, sessions are keyed by `route.sessionKey` plus a `:thread:<threadId>`
+suffix, so each thread gets its own conversation history within the caller. For
+multi-user apps where each user needs isolated history within one shared client,
+add the `X-OpenClaw-Session-Key` header to layer a `:user:<value>` scope on top:
 
 ```bash
-curl -N -X POST http://localhost:18789/v1/ag-ui \
-  -H "Authorization: Bearer $AG_UI_DEVICE_TOKEN" \
+curl -N http://localhost:8000/v1/ag-ui/operator \
+  -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   -H "X-OpenClaw-Session-Key: user@example.com" \
   -d '{"messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-This is useful when:
-- Multiple authenticated users share the same AG-UI client (e.g., a web app with auth)
-- You want to key sessions by user identity *in addition to* thread ID
-- AG-UI clients manage `threadId` internally
+Useful when:
+
+- Multiple authenticated users share one AG-UI client (e.g. a web app with auth).
+- You want to key sessions by user identity *in addition to* thread ID.
+- The AG-UI client manages `threadId` internally.
 
 ### How the final session key is composed
 
-The header **scopes** the route-derived key; it does not replace it:
+The header **scopes** the route-derived key; it never replaces it:
 
 ```
 <route.sessionKey>[:user:<header>][:thread:<threadId>]
 ```
 
-With no header, the session key is `<route.sessionKey>:thread:<threadId>` (existing behaviour). With the header set to `alice@example.com` and `threadId: "t-1"`, it becomes `<route.sessionKey>:user:alice@example.com:thread:t-1`. The header can only subdivide an existing route scope — it cannot escape it.
+With no header the key is `<route.sessionKey>:thread:<threadId>`. With the header
+`alice@example.com` and `threadId: "t-1"` it becomes
+`<route.sessionKey>:user:alice@example.com:thread:t-1`. The header can only
+subdivide an existing route scope — it cannot escape it.
 
 ### Trust model — treat this header like `X-Forwarded-For`
 
-`X-OpenClaw-Session-Key` is a **trusted-proxy-only** concern, in the same family as `X-Forwarded-For` and `X-Request-ID`. It is expected to be set by a reverse proxy or authentication middleware that has already authenticated the user — not by end clients.
+`X-OpenClaw-Session-Key` is a **trusted-proxy-only** concern, in the same family
+as `X-Forwarded-For`. It should be set by a reverse proxy or auth middleware that
+has already authenticated the user — not by end clients.
 
-Deployments that are reachable by untrusted clients **must strip or overwrite this header at the ingress edge** before forwarding to the gateway. If an end client can set this header freely, they can impersonate any other user's session scope for that same device.
+Deployments reachable by untrusted clients **must strip or overwrite this header
+at the ingress edge** before forwarding to the gateway. If an end client can set
+it freely, they can impersonate any other user's session scope for that device.
 
 ### Validation
 
-The header value must match these rules; invalid values return `HTTP 400 invalid_request_error` and the agent is not dispatched:
+The header value must match these rules; invalid values return
+`HTTP 400 invalid_request_error` and the agent is not dispatched:
 
-- 1–256 characters after trimming
-- Characters restricted to `[A-Za-z0-9._@:-]` (covers emails, UUIDs, and colon-separated identifiers)
-- No path-traversal sequences: rejects `..` as a substring, slashes (`/`, `\`), and null bytes
+- 1–256 characters after trimming.
+- Characters restricted to `[A-Za-z0-9._@:-]` (covers emails, UUIDs, and
+  colon-separated identifiers).
+- No path-traversal: rejects `..`, slashes (`/`, `\`), and null bytes.
+
+---
 
 ## Error responses
 
@@ -337,12 +400,14 @@ Non-streaming errors return JSON:
 
 | Status | Type | Meaning |
 |---|---|---|
-| 400 | `invalid_request_error` | Invalid request (missing messages, bad JSON) |
-| 401 | `unauthorized` | Invalid device token |
-| 403 | `pairing_pending` | No auth header (initiates pairing) or valid token but device not yet approved |
+| 400 | `invalid_request_error` | Invalid request (missing messages, bad JSON, bad session-key header) |
+| 401 | `unauthorized` | Invalid device or gateway token |
+| 403 | `pairing_pending` | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved |
 | 405 | — | Method not allowed (only POST accepted) |
 
-Streaming errors emit a `RUN_ERROR` event and close the connection.
+Errors that happen mid-stream emit a `RUN_ERROR` event and close the connection.
+
+---
 
 ## Development
 
@@ -352,8 +417,23 @@ This channel lives in the OpenClaw monorepo under `extensions/ag-ui`.
 git clone https://github.com/openclaw/openclaw
 cd openclaw
 pnpm install
-pnpm test extensions/ag-ui
+pnpm test extensions/ag-ui        # run the channel's tests
 ```
+
+Layout:
+
+- `index.ts` — the bundled channel entry (`defineBundledChannelEntry`): registers
+  the channel, the `/v1/ag-ui` + `/v1/ag-ui/operator` routes, tool-lifecycle
+  hooks, and the CLI.
+- `src/http-handler.ts` — request handling, auth, AG-UI ⇄ OpenClaw translation,
+  and the SSE event stream.
+- `src/channel.ts` — the channel plugin (metadata, pairing, gateway lifecycle).
+- `src/hooks.ts` — maps OpenClaw tool-lifecycle hooks to AG-UI `TOOL_CALL_*`
+  events.
+- `src/a2ui.ts` — detects A2UI operations in tool results and emits them as
+  `ACTIVITY_SNAPSHOT` surfaces.
+- `setup-entry.ts` / `src/config-schema.ts` — the bundled-channel setup surface
+  and config schema used by discovery/activation.
 
 ## License
 
