@@ -1,5 +1,8 @@
 // Gateway Network Client tests cover gateway network client script behavior.
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   type GatewayFrame,
@@ -7,11 +10,26 @@ import {
   assertReadySuspensionResponse,
   assertSuspendedProbes,
   runGatewayNetworkClient,
+  runGatewaySuspensionPostRestartClient,
+  runGatewaySuspensionPreRestartClient,
 } from "../../scripts/e2e/lib/gateway-network/client.mjs";
 import { readGatewayNetworkClientConnectTimeoutMs } from "../../scripts/e2e/lib/gateway-network/limits.mjs";
 import { onceFrame } from "../../scripts/e2e/lib/gateway-network/ws-frames.mjs";
 
-describe("gateway network WebSocket open guard", () => {
+describe("gateway network client", () => {
+  function rejectWhenAborted(signal: AbortSignal | null | undefined): Promise<never> {
+    expect(signal).toBeInstanceOf(AbortSignal);
+    const requestSignal = signal as AbortSignal;
+    return new Promise((_, reject) => {
+      const rejectWithReason = () => reject(requestSignal.reason);
+      if (requestSignal.aborted) {
+        rejectWithReason();
+        return;
+      }
+      requestSignal.addEventListener("abort", rejectWithReason, { once: true });
+    });
+  }
+
   function healthResponse() {
     return {
       ok: true,
@@ -58,6 +76,113 @@ describe("gateway network WebSocket open guard", () => {
         OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS: "3000",
       }),
     ).toBe(3000);
+  });
+
+  it("bounds a stalled suspension admin request by the client deadline", async () => {
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchImpl = vi.fn<typeof fetch>((_input, init) => {
+      requestSignal = init?.signal;
+      return rejectWhenAborted(requestSignal);
+    });
+
+    const startedAt = Date.now();
+    await expect(
+      runGatewaySuspensionPreRestartClient(
+        {
+          statePath: "/tmp/unused-gateway-network-state.json",
+          token: "x",
+          url: "ws://127.0.0.1:12345",
+          timeoutMs: 25,
+        },
+        { fetchImpl },
+      ),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(requestSignal?.aborted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a stalled suspension response body inside the client deadline", async () => {
+    let callCount = 0;
+    let bodySignal: AbortSignal | null | undefined;
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      callCount += 1;
+      if (callCount === 1) {
+        return Response.json({
+          ok: true,
+          payload: {
+            status: "ready",
+            suspensionId: "lease-1",
+            expiresAtMs: Date.now() + 10_000,
+            activeCount: 0,
+            blockers: [],
+          },
+        });
+      }
+      bodySignal = init?.signal;
+      return {
+        status: 200,
+        json: () => rejectWhenAborted(bodySignal),
+      } as Response;
+    });
+
+    const startedAt = Date.now();
+    await expect(
+      runGatewaySuspensionPreRestartClient(
+        {
+          statePath: "/tmp/unused-gateway-network-state.json",
+          token: "x",
+          url: "ws://127.0.0.1:12345",
+          timeoutMs: 25,
+        },
+        { fetchImpl },
+      ),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(bodySignal?.aborted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(String(fetchImpl.mock.calls[1]?.[0])).toContain("/healthz");
+  });
+
+  it("bounds a stalled post-restart admin request by the client deadline", async () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-gateway-network-post-restart-"));
+    const statePath = join(workDir, "suspension.json");
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        requestId: "gateway-network-restart-contract",
+        suspensionId: "lease-before-restart",
+        expiresAtMs: Date.now() + 10_000,
+      }),
+    );
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchImpl = vi.fn<typeof fetch>((_input, init) => {
+      requestSignal = init?.signal;
+      return rejectWhenAborted(requestSignal);
+    });
+
+    try {
+      const startedAt = Date.now();
+      await expect(
+        runGatewaySuspensionPostRestartClient(
+          {
+            statePath,
+            token: "x",
+            url: "ws://127.0.0.1:12345",
+            timeoutMs: 25,
+          },
+          { fetchImpl },
+        ),
+      ).rejects.toMatchObject({ name: "TimeoutError" });
+
+      expect(Date.now() - startedAt).toBeLessThan(500);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   it("resolves matching frames and ignores unrelated frames", async () => {
