@@ -687,6 +687,17 @@ describe("session cost usage", () => {
         : undefined;
       expect(cachedEntry?.hasUntimestampedTranscriptEntry).toBe(true);
 
+      const upperBounded = await loadSessionCostSummariesFromCache({
+        sessions: [session],
+        agentId: "main",
+        endMs: rangeEndMs,
+        requestRefresh: false,
+      });
+      expect(upperBounded.summaries[0]?.totalTokens).toBe(30);
+      expect(upperBounded.summaries[0]?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(
+        false,
+      );
+
       const allRange = await loadSessionCostSummariesFromCache({
         sessions: [session],
         agentId: "main",

@@ -1921,6 +1921,9 @@ export async function loadSessionCostSummariesFromCache(params: {
   const staleFiles = new Set<string>();
   let cachedFiles = 0;
   const requiresDailyRebucket = params.dayBucket !== undefined;
+  const hasExplicitRange = params.startMs !== undefined || params.endMs !== undefined;
+  const rangeStartMs = params.startMs ?? Number.NEGATIVE_INFINITY;
+  const rangeEndMs = params.endMs ?? Number.POSITIVE_INFINITY;
   let sharedFormatDayKey: UsageDayKeyFormatter | undefined;
   // IANA formatter construction is expensive; lazily share it across every
   // session rebuilt from this cache snapshot.
@@ -1944,14 +1947,13 @@ export async function loadSessionCostSummariesFromCache(params: {
     const summary = entry?.sessionSummary ?? null;
     if (
       summary &&
-      params.startMs !== undefined &&
-      params.endMs !== undefined &&
+      hasExplicitRange &&
       (requiresDailyRebucket ||
         shouldDeriveCachedSessionSummaryForRange({
           summary,
           entry,
-          startMs: params.startMs,
-          endMs: params.endMs,
+          startMs: rangeStartMs,
+          endMs: rangeEndMs,
           includeUntimestamped: params.includeUntimestamped,
         }))
     ) {
@@ -1960,8 +1962,8 @@ export async function loadSessionCostSummariesFromCache(params: {
             entry,
             sessionId: session.sessionId,
             sessionFile: session.sessionFile,
-            startMs: params.startMs,
-            endMs: params.endMs,
+            startMs: rangeStartMs,
+            endMs: rangeEndMs,
             includeUntimestamped: params.includeUntimestamped,
             formatDayKey: getFormatDayKey(),
           })
