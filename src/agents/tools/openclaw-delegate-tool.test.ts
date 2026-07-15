@@ -22,11 +22,14 @@ describe("openclaw delegation tool", () => {
       needsApproval: true,
       proposalId: "system-agent:proposal-1",
     });
-    const [tool] = createOpenClawDelegateToolsForRun({
+    const tool = createOpenClawDelegateToolsForRun({
       sessionAgentId: "main",
       runSessionKey: "agent:main:dm:one",
       agentChannel: "webchat",
-    });
+    })[0];
+    if (!tool) {
+      throw new Error("expected OpenClaw delegation tool");
+    }
 
     const result = await tool.execute("call-1", { message: "Add channel." });
 
@@ -52,10 +55,13 @@ describe("openclaw delegation tool", () => {
       sessionId: params.sessionId,
       reply: "Done.",
     }));
-    const [tool] = createOpenClawDelegateToolsForRun({
+    const tool = createOpenClawDelegateToolsForRun({
       sessionAgentId: "main",
       runSessionKey: "agent:main:main",
-    });
+    })[0];
+    if (!tool) {
+      throw new Error("expected OpenClaw delegation tool");
+    }
 
     await tool.execute("call-1", { message: "First." });
     await tool.execute("call-2", { message: "Second." });
