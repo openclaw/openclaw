@@ -68,13 +68,11 @@ describe("process input-wait hints", () => {
     });
     installWritableStdin(session);
     addSession(session);
-
     const result = await runProcessAction(processTool, {
       action: "write",
       sessionId: "sess-write-bytes",
       data: "你好😀",
     });
-
     expect(textOf(result)).toContain("Wrote 10 bytes to session sess-write-bytes");
   });
 
