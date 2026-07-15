@@ -1,5 +1,9 @@
 // Msteams plugin module implements policy behavior.
-import { resolveScopeToolsPolicy, type ScopeTree } from "openclaw/plugin-sdk/channel-policy";
+import {
+  resolveScopeToolsPolicy,
+  scopeKey,
+  type ScopeTree,
+} from "openclaw/plugin-sdk/channel-policy";
 import type {
   AllowlistMatch,
   ChannelGroupContext,
@@ -29,12 +33,10 @@ type MSTeamsResolvedRouteConfig = {
   channelMatchSource?: "direct" | "wildcard";
 };
 
-const encodeScopeSegment = (value: string) => `${value.length}:${value}`;
-
 // Length-prefixed segments keep arbitrary config keys, including slashes, collision-free.
-const teamScopeKey = (teamKey: string) => `team:${encodeScopeSegment(teamKey)}`;
+const teamScopeKey = (teamKey: string) => scopeKey(["team", teamKey]);
 const channelScopeKey = (teamKey: string, channelKey: string) =>
-  `${teamScopeKey(teamKey)}/channel:${encodeScopeSegment(channelKey)}`;
+  scopeKey(["team", teamKey], ["channel", channelKey]);
 
 function buildMSTeamsToolPolicyTree(teams: MSTeamsConfig["teams"]): ScopeTree {
   const scopes: ScopeTree["scopes"] = {};

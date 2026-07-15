@@ -1294,7 +1294,7 @@ async function sendDetachedCommandMessage(
 }
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string) {
-  if (!host.connected || !host.chatRunId) {
+  if (!host.connected || !hasAbortableSessionRun(host)) {
     return;
   }
   const activeRunId = host.chatRunId;
@@ -1333,7 +1333,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     createdAt: item.createdAt,
     kind: "steered",
     ...(item.attachments?.length ? { attachments: item.attachments } : {}),
-    pendingRunId: activeRunId,
+    ...(activeRunId ? { pendingRunId: activeRunId } : { sendState: "steering" as const }),
   };
   const hasTransientProjection = setTransientQueuedMessageProjection(
     host,
@@ -1361,17 +1361,19 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     hasAttachments ? attachments : undefined,
     () => visibleSessionMatches(host, itemSessionKey, item.agentId),
   );
-  const pendingStillVisible = host.chatQueue.some(
-    (entry) => entry.id === id && entry.pendingRunId === activeRunId,
-  );
-  replacePendingQueuedMessageProjection(
-    host,
-    itemSessionKey,
-    id,
-    activeRunId,
-    claimed,
-    item.agentId,
-  );
+  const pendingStillVisible = activeRunId
+    ? host.chatQueue.some((entry) => entry.id === id && entry.pendingRunId === activeRunId)
+    : false;
+  if (activeRunId) {
+    replacePendingQueuedMessageProjection(
+      host,
+      itemSessionKey,
+      id,
+      activeRunId,
+      claimed,
+      item.agentId,
+    );
+  }
   clearTransientQueuedMessageProjection(host, itemSessionKey, id, item.agentId);
   const itemStillVisible = visibleSessionMatches(host, itemSessionKey, item.agentId);
   if (!ack) {

@@ -127,6 +127,7 @@ export function createAttackerPersonalActivity(id: string): HandlerInput {
 
 export function createChannelThreadActivity(params?: {
   attachments?: TestAttachment[];
+  parentMessageId?: string;
 }): HandlerInput {
   return createMessageActivity({
     id: "current-msg",
@@ -144,7 +145,7 @@ export function createChannelThreadActivity(params?: {
       team: { id: "team123", name: "Team 123", aadGroupId: "graph-team-123" },
       channel: { id: "19:graph-channel@thread.tacv2", name: "General" },
     },
-    extraActivity: { replyToId: "parent-msg" },
+    extraActivity: { replyToId: params?.parentMessageId ?? "parent-msg" },
     attachments: params?.attachments ?? [],
   });
 }

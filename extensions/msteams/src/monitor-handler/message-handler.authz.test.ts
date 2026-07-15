@@ -3,7 +3,6 @@ import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debo
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
-import { resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
 import "./message-handler-mock-support.test-support.js";
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import {
@@ -44,6 +43,8 @@ const graphThreadMockState = vi.hoisted(() => ({
     (token: string, chatId: string, messageId: string) => Promise<string | undefined>
   >(async () => undefined),
 }));
+let parentMessageSequence = 0;
+let currentParentMessageId = "";
 
 vi.mock("../graph-thread.js", () => {
   const stripHtmlFromTeamsMessage = (html: string) =>
@@ -126,14 +127,12 @@ describe("msteams monitor handler authz", () => {
   }
 
   function resetThreadMocks() {
+    currentParentMessageId = `parent-msg-${++parentMessageSequence}`;
     runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
     graphThreadMockState.resolveTeamGroupId.mockClear();
     graphThreadMockState.fetchChannelMessage.mockReset();
     graphThreadMockState.fetchThreadReplies.mockReset();
     graphThreadMockState.fetchChatMessageText.mockClear();
-    // Parent-context LRU + per-session dedupe are module-level; clear between
-    // cases so stale parent fetches from earlier tests don't bleed in.
-    resetThreadParentContextCachesForTest();
   }
 
   function mockThreadContext(params: {
@@ -149,7 +148,12 @@ describe("msteams monitor handler authz", () => {
     mockThreadContext({ parent });
     const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
     const handler = createMSTeamsMessageHandler(deps);
-    await handler(createChannelThreadActivity({ attachments: [createQuoteAttachment()] }));
+    await handler(
+      createChannelThreadActivity({
+        attachments: [createQuoteAttachment()],
+        parentMessageId: currentParentMessageId,
+      }),
+    );
     return firstSettledDispatch().ctxPayload;
   }
 
@@ -922,7 +926,7 @@ describe("msteams monitor handler authz", () => {
     const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
 
     const handler = createMSTeamsMessageHandler(deps);
-    await handler(createChannelThreadActivity());
+    await handler(createChannelThreadActivity({ parentMessageId: currentParentMessageId }));
 
     const dispatched = firstSettledDispatch();
     const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
@@ -963,7 +967,7 @@ describe("msteams monitor handler authz", () => {
     );
 
     const handler = createMSTeamsMessageHandler(deps);
-    await handler(createChannelThreadActivity());
+    await handler(createChannelThreadActivity({ parentMessageId: currentParentMessageId }));
 
     const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched?.ctxPayload).BodyForAgent).toBe(

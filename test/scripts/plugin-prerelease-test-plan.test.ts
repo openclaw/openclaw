@@ -659,7 +659,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
 
   it("allows Unreleased notes only for current-tree release checks", () => {
     const workflow = parse(readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"));
-    const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+    const fullReleaseWorkflow = readFullReleaseValidationWorkflow();
     const resolveTarget = workflow.jobs.resolve_target;
     const captureInputs = resolveTarget.steps.find(
       (step: WorkflowStep) => step.name === "Capture selected inputs",
@@ -694,9 +694,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(workflow.jobs.docker_e2e_release_checks.with.allow_unreleased_changelog).toBe(
       currentTreeAllowance,
     );
-    expect(fullReleaseSource).toContain(
-      "ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.target_context_ref == '' && (inputs.allow_unreleased_changelog || inputs.ref == 'main' || inputs.ref == 'refs/heads/main') }}",
+    const fullReleaseAllowance =
+      "${{ inputs.target_context_ref == '' && (inputs.allow_unreleased_changelog || inputs.ref == 'main' || inputs.ref == 'refs/heads/main') }}";
+    const releaseChecksDispatch = fullReleaseWorkflow.jobs.release_checks.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
     );
+    expect(releaseChecksDispatch?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);
   });
 
   it("keeps runtime tool coverage blocking in release checks", () => {

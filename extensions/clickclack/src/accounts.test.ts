@@ -107,6 +107,7 @@ describe("ClickClack account resolution", () => {
       defaultTo: "channel:general",
       enabled: true,
       agentActivity: false,
+      commandMenu: true,
       model: undefined,
       name: undefined,
       reconnectMs: 1_500,
@@ -160,6 +161,7 @@ describe("ClickClack account resolution", () => {
       defaultTo: "channel:general",
       enabled: true,
       agentActivity: false,
+      commandMenu: true,
       model: "openai/gpt-5.4-mini",
       name: undefined,
       reconnectMs: 1_500,
@@ -192,6 +194,31 @@ describe("ClickClack account resolution", () => {
 
     expect(resolveClickClackAccount({ cfg }).agentActivity).toBe(false);
     expect(resolveClickClackAccount({ cfg, accountId: "bridge" }).agentActivity).toBe(true);
+  });
+
+  it("enables command menus unless the resolved account explicitly disables them", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          token: "test-token-placeholder",
+          accounts: {
+            disabled: {
+              commandMenu: false,
+            },
+            enabled: {
+              commandMenu: true,
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(resolveClickClackAccount({ cfg }).commandMenu).toBe(true);
+    expect(resolveClickClackAccount({ cfg, accountId: "disabled" }).commandMenu).toBe(false);
+    expect(resolveClickClackAccount({ cfg, accountId: "enabled" }).commandMenu).toBe(true);
   });
 
   it("normalizes reconnect intervals to the public config bounds", () => {

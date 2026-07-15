@@ -874,7 +874,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           wasMentioned: isDirectMessage || mentionDecision.effectiveWasMentioned,
         },
         commands: {
-          authorized: commandAuthorized,
+          authorized: commandAuthorized === true,
         },
       },
       extra: {
