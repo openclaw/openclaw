@@ -58,7 +58,7 @@ const providerRuntimeDeps = {
 let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
 const REQUEST_SCOPED_EXTRA_PARAM_KEYS = new Set(["response_format", "responseFormat", "stop"]);
 
-export const testing = {
+const testing = {
   setProviderRuntimeDepsForTest(
     deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
   ): void {
@@ -79,6 +79,10 @@ export const testing = {
     providerRuntimeDeps.wrapProviderStreamFn = defaultProviderRuntimeDeps.wrapProviderStreamFn;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.extraParamsTestApi")] = testing;
+}
 
 /**
  * Resolve provider-specific extra params from model config.
