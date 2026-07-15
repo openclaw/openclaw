@@ -1,249 +1,102 @@
+// AG-UI channel plugin entrypoint.
+//
+// Registers the bundled AG-UI channel (an HTTP/SSE endpoint that speaks the
+// AG-UI protocol) the same way every other bundled channel does: via
+// `defineBundledChannelEntry`, so the control-plane can discover the channel
+// (id/metadata/plugin surface) without executing runtime code, and the full
+// runtime wiring (HTTP routes, tool lifecycle hooks, CLI) happens in
+// `registerFull`. The ChannelPlugin itself is resolved lazily from the
+// `channel-plugin-api.js` public surface below.
+import {
+  defineBundledChannelEntry,
+  loadBundledEntryExportSync,
+} from "openclaw/plugin-sdk/channel-entry-contract";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import type { Command } from "commander";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-import { randomUUID } from "node:crypto";
-import { EventType } from "@ag-ui/core";
-import { aguiChannelPlugin } from "./src/channel.js";
-import {
-  createAguiHttpHandler,
-  createOperatorAguiHttpHandler,
-} from "./src/http-handler.js";
-import { aguiToolFactory } from "./src/client-tools.js";
-import {
-  getWriter,
-  getMessageId,
-  pushToolCallId,
-  popToolCallId,
-  isClientTool,
-} from "./src/tool-store.js";
-import {
-  extractToolResultText,
-  tryParseA2UIOperations,
-  groupBySurface,
-  A2UI_OPERATIONS_KEY,
-} from "./src/a2ui.js";
+import type { IncomingMessage, ServerResponse } from "node:http";
+// Type-only imports (erased at runtime — no eager module load) so the lazily
+// loaded runtime exports are strongly typed at their use sites.
+import type { aguiToolFactory } from "./src/client-tools.js";
+import type {
+  handleBeforeToolCall,
+  handleToolResultPersist,
+} from "./src/hooks.js";
+import type { registerAguiCli } from "./src/cli.js";
+import type { cronReportToolFactory } from "./examples/cron-report-tool.js";
 
-// ---------------------------------------------------------------------------
-// Hook handlers — exported for testability
-// ---------------------------------------------------------------------------
+type HttpHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+) => Promise<void> | void;
+type HttpHandlerFactory = (api: OpenClawPluginApi) => HttpHandler;
 
-export interface BeforeToolCallEvent {
-  toolName: string;
-  params?: Record<string, unknown>;
-}
-
-export interface ToolCallContext {
-  sessionKey?: string;
-}
-
-/**
- * Handles the `before_tool_call` OpenClaw hook.
- * Emits TOOL_CALL_START + TOOL_CALL_ARGS (and TOOL_CALL_END for client tools).
- */
-export function handleBeforeToolCall(
-  event: BeforeToolCallEvent,
-  ctx: ToolCallContext,
-): void {
-  const sk = ctx.sessionKey;
-  console.log(
-    `[ag-ui] before_tool_call: tool=${event.toolName}, sessionKey=${sk ?? "none"}, hasParams=${!!(event.params && Object.keys(event.params).length > 0)}, params=${JSON.stringify(event.params ?? {})}`,
-  );
-  if (!sk) {
-    console.log(`[ag-ui] before_tool_call: skipping, no sessionKey`);
-    return;
-  }
-  const writer = getWriter(sk);
-  if (!writer) {
-    console.log(
-      `[ag-ui] before_tool_call: skipping, no writer for sessionKey=${sk}`,
-    );
-    return;
-  }
-  // Marked client/frontend + state-writer tools are emitted by the HTTP
-  // handler's pendingToolCalls path (client tools) or intercepted into
-  // STATE_SNAPSHOTs (state writers). The writer is now registered on EVERY turn
-  // so BACKEND (server-side) tools render even when the turn also carries client
-  // tools — so skip the marked names here to avoid a duplicate TOOL_CALL_*
-  // sequence for the same call.
-  if (isClientTool(sk, event.toolName)) {
-    console.log(
-      `[ag-ui] before_tool_call: ${event.toolName} is a client/state-writer tool — skipping hook emission (handled by pendingToolCalls path)`,
-    );
-    return;
-  }
-  // Server (backend) tool: emit START + ARGS and push the id so
-  // tool_result_persist can emit TOOL_CALL_RESULT + TOOL_CALL_END after
-  // execute() completes.
-  const toolCallId = `tool-${randomUUID()}`;
-  console.log(
-    `[ag-ui] before_tool_call: emitting TOOL_CALL_START, toolCallId=${toolCallId}`,
-  );
-  writer({
-    type: EventType.TOOL_CALL_START,
-    toolCallId,
-    toolCallName: event.toolName,
+// Lazily load runtime pieces from the `./api.js` surface so discovery/config
+// passes never pull the HTTP handler, tool, or hook code into memory.
+function loadApi<T>(exportName: string): T {
+  return loadBundledEntryExportSync<T>(import.meta.url, {
+    specifier: "./api.js",
+    exportName,
   });
-  if (event.params && Object.keys(event.params).length > 0) {
-    console.log(
-      `[ag-ui] before_tool_call: emitting TOOL_CALL_ARGS, params=${JSON.stringify(event.params)}`,
-    );
-    writer({
-      type: EventType.TOOL_CALL_ARGS,
-      toolCallId,
-      delta: JSON.stringify(event.params),
-    });
-  }
-  pushToolCallId(sk, toolCallId);
 }
 
-/**
- * Handles the `tool_result_persist` OpenClaw hook.
- * Emits TOOL_CALL_RESULT + TOOL_CALL_END for server-side tools.
- */
-export function handleToolResultPersist(
-  event: Record<string, unknown>,
-  ctx: ToolCallContext,
-): void {
-  const sk = ctx.sessionKey;
-  console.log(
-    `[ag-ui] tool_result_persist: sessionKey=${sk ?? "none"}, event=${JSON.stringify(event)}`,
-  );
-  if (!sk) {
-    console.log(
-      `[ag-ui] tool_result_persist: skipping, no sessionKey`,
-    );
-    return;
-  }
-  const writer = getWriter(sk);
-  const toolCallId = popToolCallId(sk);
-  const messageId = getMessageId(sk);
-  console.log(
-    `[ag-ui] tool_result_persist: writer=${writer ? "present" : "missing"}, toolCallId=${toolCallId ?? "none"}, messageId=${messageId ?? "none"}`,
-  );
-  if (writer && toolCallId && messageId) {
-    // Extract actual tool result text from event.message.content
-    const msg = (event as Record<string, unknown>).message as
-      | { content?: unknown }
-      | undefined;
-    const resultText = msg?.content
-      ? extractToolResultText(msg.content)
-      : "";
-
-    console.log(
-      `[ag-ui] tool_result_persist: emitting TOOL_CALL_RESULT and TOOL_CALL_END`,
-    );
-    // Use a dedicated messageId for the tool result so it doesn't collide
-    // with the text message messageId. Tool events are linked via toolCallId.
-    const toolResultMessageId = `msg-tool-${toolCallId}`;
-    writer({
-      type: EventType.TOOL_CALL_RESULT,
-      toolCallId,
-      messageId: toolResultMessageId,
-      content: resultText,
-    });
-
-    // Detect A2UI and emit ACTIVITY_SNAPSHOT per surface
-    const a2uiOps = tryParseA2UIOperations(resultText);
-    if (a2uiOps) {
-      const groups = groupBySurface(a2uiOps);
-      for (const [surfaceId, ops] of groups) {
-        writer({
-          type: EventType.ACTIVITY_SNAPSHOT,
-          messageId: `a2ui-surface-${surfaceId}-${toolCallId}`,
-          activityType: "a2ui-surface",
-          content: { [A2UI_OPERATIONS_KEY]: ops },
-          replace: true,
-        });
-      }
-    }
-
-    writer({
-      type: EventType.TOOL_CALL_END,
-      toolCallId,
-    });
-  }
-}
-
-const plugin: {
-  id: string;
-  name: string;
-  description: string;
-  configSchema: ReturnType<typeof emptyPluginConfigSchema>;
-  register: (api: OpenClawPluginApi) => void;
-} = {
+export default defineBundledChannelEntry({
   id: "ag-ui",
   name: "AG-UI",
   description: "AG-UI protocol endpoint for AG-UI clients",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    api.registerChannel({ plugin: aguiChannelPlugin });
-    api.registerTool(aguiToolFactory);
-    // Example tools (not published to npm — live in examples/)
-    import("./examples/cron-report-tool.js")
-      .then(({ cronReportToolFactory }) => {
-        api.registerTool(cronReportToolFactory, { name: "cron_report", optional: true });
-      })
-      .catch(() => {
-        // examples/ not available (npm install) — skip
-      });
-
-    // Use registerPluginHttpRoute from plugin-runtime which writes directly to
-    // the pinned HTTP route registry. api.registerHttpRoute writes to the
-    // loader's private registry which is not the one the HTTP handler reads.
-    import("openclaw/plugin-sdk/plugin-runtime")
-      .then((mod: any) => {
-        mod.registerPluginHttpRoute({
-          path: "/v1/ag-ui",
-          auth: "plugin",
-          match: "exact",
-          pluginId: "ag-ui",
-          handler: createAguiHttpHandler(api),
-        });
-        // Operator-auth AG-UI route — for OpenClaw operator-UI embedded
-        // consumers (plugin-contributed `chat.surface` slot, etc.) that
-        // already hold a gateway token and shouldn't need a second pairing
-        // dance. Gateway validates operator scope before our handler runs.
-        mod.registerPluginHttpRoute({
-          path: "/v1/ag-ui/operator",
-          auth: "gateway",
-          match: "exact",
-          pluginId: "ag-ui",
-          handler: createOperatorAguiHttpHandler(api),
-        });
-      })
-      .catch((err: unknown) => {
-        console.error("[ag-ui] failed to register HTTP routes:", err);
-      });
-
-    api.on("before_tool_call", handleBeforeToolCall);
-    api.on("tool_result_persist", handleToolResultPersist);
-
-    // CLI commands for device management
-    api.registerCli(
-      ({ program }: { program: Command }) => {
-        const agui = program
-          .command("ag-ui")
-          .description("AG-UI channel commands");
-
-        agui
-          .command("devices")
-          .description("List approved devices")
-          .action(async () => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK types lag behind runtime
-            const devices = await (api.runtime.channel.pairing.readAllowFromStore as (arg: any) => Promise<string[]>)({ channel: "ag-ui" });
-            if (devices.length === 0) {
-              console.log("No approved devices.");
-              return;
-            }
-            console.log("Approved devices:");
-            for (const deviceId of devices) {
-              console.log(`  ${deviceId}`);
-            }
-          });
-      },
-      { commands: ["ag-ui"] },
-    );
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "aguiChannelPlugin",
   },
-};
+  registerFull(api: OpenClawPluginApi) {
+    // Device-token + pairing route (the plugin performs its own HMAC/pairing
+    // auth; auth: "plugin").
+    const createAguiHttpHandler = loadApi<HttpHandlerFactory>(
+      "createAguiHttpHandler",
+    );
+    api.registerHttpRoute({
+      path: "/v1/ag-ui",
+      auth: "plugin",
+      match: "exact",
+      handler: createAguiHttpHandler(api),
+    });
 
-export default plugin;
+    // Operator-token route for operator-UI-embedded consumers that already hold
+    // a gateway token (no second pairing dance). Scoped to `write-default`
+    // (operator.write) so a leaked token can invoke agent turns but cannot reach
+    // admin/pairing/secrets surfaces.
+    const createOperatorAguiHttpHandler = loadApi<HttpHandlerFactory>(
+      "createOperatorAguiHttpHandler",
+    );
+    api.registerHttpRoute({
+      path: "/v1/ag-ui/operator",
+      auth: "gateway",
+      match: "exact",
+      gatewayRuntimeScopeSurface: "write-default",
+      handler: createOperatorAguiHttpHandler(api),
+    });
+
+    // Frontend/client tools are declared per request via forwardedProps; the
+    // factory returns null at discovery (no session) and real tools at runtime.
+    api.registerTool(loadApi<typeof aguiToolFactory>("aguiToolFactory"));
+
+    // Example server-side tool demonstrating A2UI operations (declared in
+    // openclaw.plugin.json contracts.tools). Optional so it never blocks a turn.
+    api.registerTool(
+      loadApi<typeof cronReportToolFactory>("cronReportToolFactory"),
+      { name: "cron_report", optional: true },
+    );
+
+    // Map the OpenClaw server-side tool lifecycle onto AG-UI TOOL_CALL_* events.
+    api.on(
+      "before_tool_call",
+      loadApi<typeof handleBeforeToolCall>("handleBeforeToolCall"),
+    );
+    api.on(
+      "tool_result_persist",
+      loadApi<typeof handleToolResultPersist>("handleToolResultPersist"),
+    );
+
+    // `openclaw ag-ui` CLI (approved-device listing).
+    loadApi<typeof registerAguiCli>("registerAguiCli")(api);
+  },
+});
