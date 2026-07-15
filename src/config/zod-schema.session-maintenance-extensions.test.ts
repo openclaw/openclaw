@@ -78,7 +78,7 @@ describe("SessionSchema maintenance extensions", () => {
     ).toThrow(/maxDiskBytes|size/i);
   });
 
-  it.each(["0h", "0d", "0ms", "0", "0s", "0m"])(
+  it.each([0, "0h", "0d", "0ms", "0", "0s", "0m"])(
     "rejects zero-value resetArchiveRetention: %s",
     (resetArchiveRetention) => {
       const result = SessionSchema.safeParse({
@@ -107,7 +107,7 @@ describe("SessionSchema maintenance extensions", () => {
     );
   });
 
-  it.each(["0h", "0d", "0ms", "0", "0s", "0m"])(
+  it.each([0, "0h", "0d", "0ms", "0", "0s", "0m"])(
     "rejects zero-value pruneAfter: %s",
     (pruneAfter) => {
       const result = SessionSchema.safeParse({

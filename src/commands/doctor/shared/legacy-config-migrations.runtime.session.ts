@@ -18,8 +18,8 @@ function hasLegacyParentForkMaxTokens(value: unknown): boolean {
   return Boolean(session && Object.hasOwn(session, "parentForkMaxTokens"));
 }
 
-/** Returns `true` when `val` normalizes to a string that `parseDurationMs` evaluates to ≤ 0. */
-function parseZeroDuration(val: unknown): boolean {
+/** Match only parser-valid values that resolve to an unsafe zero-duration cutoff. */
+function isZeroDuration(val: unknown): boolean {
   if (val === false) {
     return false;
   }
@@ -39,7 +39,7 @@ function isZeroDurationPruneAfter(raw: unknown): boolean {
   if (!maintenance || !Object.hasOwn(maintenance, "pruneAfter")) {
     return false;
   }
-  return parseZeroDuration(maintenance.pruneAfter);
+  return isZeroDuration(maintenance.pruneAfter);
 }
 
 function isZeroDurationResetArchiveRetention(raw: unknown): boolean {
@@ -47,7 +47,7 @@ function isZeroDurationResetArchiveRetention(raw: unknown): boolean {
   if (!maintenance || !Object.hasOwn(maintenance, "resetArchiveRetention")) {
     return false;
   }
-  return parseZeroDuration(maintenance.resetArchiveRetention);
+  return isZeroDuration(maintenance.resetArchiveRetention);
 }
 
 const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
@@ -74,7 +74,7 @@ const SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE: LegacyConfigRule = {
 const SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE: LegacyConfigRule = {
   path: ["session", "maintenance"],
   message:
-    'session.maintenance.resetArchiveRetention is a zero duration — this causes immediate deletion of all reset transcript archives. Run "openclaw doctor --fix" to rewrite it to false so archives are kept indefinitely.',
+    'session.maintenance.resetArchiveRetention is a zero duration — this causes immediate deletion of all reset transcript archives. Run "openclaw doctor --fix" to remove it so the keep-by-default archive retention applies.',
   match: isZeroDurationResetArchiveRetention,
 };
 
@@ -123,17 +123,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
           continue;
         }
         const val = maintenance[key];
-        const normalized = normalizeStringifiedOptionalString(val);
-        if (!normalized) {
-          continue;
-        }
-        let ms: number;
-        try {
-          ms = parseDurationMs(normalized, { defaultUnit: "d" });
-        } catch {
-          continue;
-        }
-        if (ms > 0) {
+        if (!isZeroDuration(val)) {
           continue;
         }
         const label = String(val);
@@ -141,20 +131,12 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
           key === "resetArchiveRetention"
             ? "session.maintenance.resetArchiveRetention"
             : "session.maintenance.pruneAfter";
-        if (key === "resetArchiveRetention") {
-          // Writing `false` preserves archives indefinitely (the documented
-          // disable value).  Deleting would fall back to pruneAfter, which
-          // still deletes archives after the configured/default window.
-          maintenance[key] = false;
-          changes.push(
-            `Rewrote ${fieldPath} "${label}" → false (zero duration); archives kept indefinitely.`,
-          );
-        } else {
-          delete maintenance[key];
-          changes.push(
-            `Removed ${fieldPath} "${label}" (zero duration); 30d session-pruning default applies.`,
-          );
-        }
+        delete maintenance[key];
+        const outcome =
+          key === "resetArchiveRetention"
+            ? "keep-by-default archive retention applies"
+            : "30d session-pruning default applies";
+        changes.push(`Removed ${fieldPath} "${label}" (zero duration); ${outcome}.`);
       }
     },
   }),
