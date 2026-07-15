@@ -1,10 +1,10 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 /**
  * Enforces source-managed provider secret ownership rules.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   resolveNonEnvSecretRefApiKeyMarker,
   resolveNonEnvSecretRefHeaderValueMarker,
