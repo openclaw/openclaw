@@ -17,6 +17,7 @@ import {
   resolveCodexAppServerPreparedAuthProfileSnapshot,
   resolveCodexAppServerPreparedApiKeyCacheKey,
   type CodexAppServerPreparedAuth,
+  type CodexAppServerAuthRequirement,
   type CodexAppServerResolvedPreparedAuth,
 } from "./auth-bridge.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
@@ -246,6 +247,7 @@ export type CodexAppServerClientOptions = {
   /** Previously minted exact runtime required before the process may start. */
   expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   preparedAuth?: CodexAppServerPreparedAuth;
+  authRequirement?: CodexAppServerAuthRequirement;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   onStartedClient?: (client: CodexAppServerClient) => void;
@@ -263,9 +265,19 @@ type ResolvedCodexAppServerClientStartContext = {
   authProfileId: string | undefined;
   authProfileStore: AuthProfileStore | undefined;
   preparedAuth: CodexAppServerResolvedPreparedAuth | undefined;
+  authRequirement: CodexAppServerAuthRequirement | undefined;
   requestedStartOptions: CodexAppServerStartOptions;
   startOptions: CodexAppServerStartOptions;
 };
+
+function inferAuthRequirement(
+  preparedAuth: CodexAppServerPreparedAuth | undefined,
+): CodexAppServerAuthRequirement | undefined {
+  if (preparedAuth?.kind === "api-key") {
+    return "api-key";
+  }
+  return preparedAuth?.kind === "profile" ? "subscription" : undefined;
+}
 
 async function resolveCodexAppServerClientStartContext(
   options?: CodexAppServerClientOptions,
@@ -287,6 +299,15 @@ async function resolveCodexAppServerClientStartContext(
   if (preparedAuth && requestedStartOptions.homeScope === "user") {
     throw new Error("Prepared Codex auth requires an isolated app-server home.");
   }
+  const preparedAuthRequirement = inferAuthRequirement(preparedAuth);
+  if (
+    options?.authRequirement &&
+    preparedAuthRequirement &&
+    options.authRequirement !== preparedAuthRequirement
+  ) {
+    throw new Error("Prepared Codex auth does not satisfy the requested auth requirement.");
+  }
+  const authRequirement = options?.authRequirement ?? preparedAuthRequirement;
   const usesNativeAuth =
     !preparedAuth &&
     (options?.authProfileId === null || requestedStartOptions.homeScope === "user");
@@ -361,6 +382,7 @@ async function resolveCodexAppServerClientStartContext(
     authProfileStore,
     requestedStartOptions,
     preparedAuth: resolvedPreparedAuth,
+    authRequirement,
     startOptions,
   };
 }
@@ -500,6 +522,7 @@ async function acquireSharedCodexAppServerClient(
     authProfileId,
     authProfileStore,
     preparedAuth,
+    authRequirement,
     requestedStartOptions,
     startOptions,
   } = context;
@@ -508,15 +531,15 @@ async function acquireSharedCodexAppServerClient(
     preparedAuth?.kind === "api-key"
       ? resolveCodexAppServerPreparedApiKeyCacheKey(preparedAuth.apiKey)
       : (preparedAuth?.snapshot.secretFreeCacheKey ??
-        (authProfileId
-          ? undefined
-          : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions })));
-  const baseKey = codexAppServerStartOptionsKey(startOptions, {
+        (authRequirement === "api-key" && !authProfileId
+          ? resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions })
+          : undefined));
+  const baseKey = `${codexAppServerStartOptionsKey(startOptions, {
     authProfileId,
     authBindingFingerprint: options?.authBindingFingerprint,
     agentDir: usesNativeAuth ? undefined : agentDir,
     fallbackApiKeyCacheKey: authIdentityCacheKey,
-  });
+  })}\0auth-requirement:${authRequirement ?? "native"}`;
   // Capture turns cannot inherit a normal client whose loaded bytes predate the
   // filesystem snapshot. Keep their physical process generation separate.
   const runtimeArtifactMode =
@@ -576,6 +599,7 @@ async function acquireSharedCodexAppServerClient(
       authProfileId: usesNativeAuth || preparedAuth?.kind === "api-key" ? null : authProfileId,
       authProfileStore,
       preparedAuth,
+      authRequirement,
       runtimeArtifactMode,
       ...(options?.expectedRuntimeArtifact
         ? { expectedRuntimeArtifact: options.expectedRuntimeArtifact }
@@ -665,6 +689,7 @@ function createSharedCodexAppServerClientStartup(params: {
   expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   runtimeArtifactSignal?: AbortSignal;
   preparedAuth?: CodexAppServerResolvedPreparedAuth;
+  authRequirement?: CodexAppServerAuthRequirement;
   config?: CodexAppServerClientOptions["config"];
 }): SharedCodexAppServerClientStartup {
   const initialized = createDeferred<void>();
@@ -675,6 +700,7 @@ function createSharedCodexAppServerClientStartup(params: {
     authProfileId: params.authProfileId,
     authProfileStore: params.authProfileStore,
     preparedAuth: params.preparedAuth,
+    authRequirement: params.authRequirement,
     runtimeArtifactMode: params.runtimeArtifactMode,
     ...(params.expectedRuntimeArtifact
       ? { expectedRuntimeArtifact: params.expectedRuntimeArtifact }
@@ -722,6 +748,7 @@ export async function createIsolatedCodexAppServerClient(
     authProfileId,
     authProfileStore,
     preparedAuth,
+    authRequirement,
     requestedStartOptions,
     startOptions,
   } = await withCodexAppServerAcquireDeadline(
@@ -736,6 +763,7 @@ export async function createIsolatedCodexAppServerClient(
     authProfileId: usesNativeAuth || preparedAuth?.kind === "api-key" ? null : authProfileId,
     authProfileStore,
     preparedAuth,
+    authRequirement,
     runtimeArtifactMode:
       options?.runtimeArtifactMode ?? (options?.expectedRuntimeArtifact ? "capture" : undefined),
     ...(options?.expectedRuntimeArtifact
@@ -759,6 +787,7 @@ async function startInitializedCodexAppServerClient(params: {
   expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   runtimeArtifactSignal?: AbortSignal;
   preparedAuth?: CodexAppServerResolvedPreparedAuth;
+  authRequirement?: CodexAppServerAuthRequirement;
   config?: CodexAppServerClientOptions["config"];
   timeoutMs?: number;
   abandonSignal?: AbortSignal;
@@ -859,6 +888,7 @@ async function startInitializedCodexAppServerClient(params: {
           agentDir: params.agentDir,
           authProfileId: params.authProfileId,
           preparedAuth: params.preparedAuth,
+          authRequirement: params.authRequirement,
           startOptions,
           config: params.config,
           ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),

@@ -540,16 +540,18 @@ jobs:
               console.warn(`Changed Node test planning failed; using compact full suite: ${error}`);
             }
           }
-          // Targeted (narrow-diff) PRs skip the heavy packaging lanes unless the
-          // diff touches surfaces those lanes exist to prove: test-only diffs
-          // cannot change dist bytes, and QA smoke re-proves packaging/scenario
-          // surfaces that unit shards plus build smokes already cover elsewhere.
+          // Heavy packaging lanes run only when the diff touches surfaces they
+          // exist to prove: test-only diffs cannot change dist bytes, and QA
+          // smoke only sees changes on its scenario surface or inside the
+          // packaged CLI's import graph. QA gating is diff-based, so it also
+          // applies when test targeting fell back to the full compact suite.
           const changedScopeHasBuildImpact =
             changedNodeTestShards === null ||
             typeof changedNodeTestPlan.hasBuildArtifactAffectingChange !== "function" ||
             changedNodeTestPlan.hasBuildArtifactAffectingChange(changedPaths);
           const changedScopeHasQaImpact =
-            changedNodeTestShards === null ||
+            changedPaths === null ||
+            eventName !== "pull_request" ||
             typeof changedNodeTestPlan.hasQaSmokeAffectingChange !== "function" ||
             changedNodeTestPlan.hasQaSmokeAffectingChange(changedPaths);
           const runBuildArtifacts = runNodeFull && changedScopeHasBuildImpact;
@@ -1691,7 +1693,10 @@ jobs:
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
 
       - name: Run Node test shard
+        # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the
+        # non-secret job context, then validate the defining workflow identity below.
         env:
+          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
@@ -1703,7 +1708,36 @@ jobs:
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency }}
         shell: bash
-        run: node scripts/ci-run-node-test-shard.mjs
+        run: |
+          set -euo pipefail
+          runner="scripts/ci-run-node-test-shard.mjs"
+          if [[ ! -f "$runner" ]]; then
+            # Frozen release targets can predate the workflow-owned shard runner.
+            # Load only that runner from the exact trusted workflow commit while
+            # keeping its child tests rooted in the checked-out candidate.
+            job_workflow_repository=$(jq -r '.workflow_repository // empty' <<<"$JOB_CONTEXT_JSON")
+            job_workflow_sha=$(jq -r '.workflow_sha // empty' <<<"$JOB_CONTEXT_JSON")
+            if [[ ! "$job_workflow_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+              echo "invalid job workflow repository: $job_workflow_repository" >&2
+              exit 1
+            fi
+            if [[ ! "$job_workflow_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "invalid job workflow SHA: $job_workflow_sha" >&2
+              exit 1
+            fi
+            harness_root="${RUNNER_TEMP}/openclaw-ci-shard-runner"
+            workflow_remote="https://github.com/${job_workflow_repository}.git"
+            git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"
+            for file in \
+              scripts/ci-run-node-test-shard.mjs \
+              scripts/lib/direct-run.mjs \
+              scripts/lib/local-heavy-check-runtime.mjs; do
+              mkdir -p "${harness_root}/$(dirname "$file")"
+              git show "${job_workflow_sha}:${file}" > "${harness_root}/${file}"
+            done
+            runner="${harness_root}/${runner}"
+          fi
+          node "$runner"
 
   # Types, lint, and format check shards.
   check-shard:
@@ -1851,12 +1885,15 @@ jobs:
           - check_name: check-additional-boundaries-a
             group: boundaries
             boundary_shard: 1/4
-            # This shard runs ~4min on 8 vCPU and regularly owns the PR wall
-            # clock; extra cores shorten it for similar billed core-minutes.
-            runner: blacksmith-16vcpu-ubuntu-2404
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-boundaries-bcd
             group: boundaries
             boundary_shard: 2/4,3/4,4/4
+            runner: blacksmith-8vcpu-ubuntu-2404
+          # Prompt snapshot regeneration runs real embedded-agent turns (~2min)
+          # and used to own the boundaries-a wall clock; keep it in its own lane.
+          - check_name: check-prompt-snapshots
+            group: prompt-snapshots
             runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
@@ -1969,6 +2006,12 @@ jobs:
           case "$ADDITIONAL_CHECK_GROUP" in
             boundaries)
               node scripts/run-additional-boundary-checks.mjs
+              ;;
+            prompt-snapshots)
+              # No presence fallback: the boundary runner previously invoked
+              # this unconditionally, and silent success would drop snapshot
+              # drift coverage.
+              run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
               ;;
             session-accessor-boundary)
               if [ ! -f scripts/check-session-accessor-boundary.mjs ]; then

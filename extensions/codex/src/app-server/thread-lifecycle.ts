@@ -153,6 +153,8 @@ type CodexPluginThreadConfigProvider = {
   enabled: boolean;
   inputFingerprint?: string;
   enabledPluginConfigKeys?: readonly string[];
+  recoverablePluginConfigKeys?: readonly string[];
+  accountAppRecoveryEnabled?: boolean;
   build: () => Promise<CodexPluginThreadConfig>;
 };
 
@@ -2142,8 +2144,27 @@ function shouldRecheckRecoverablePluginBinding(params: {
   if (!policyContext) {
     return false;
   }
-  const expectedPluginConfigKeys = params.pluginThreadConfig.enabledPluginConfigKeys ?? [];
-  return Object.keys(policyContext.apps).length === 0 || expectedPluginConfigKeys.length > 0;
+  const enabledPluginConfigKeys = params.pluginThreadConfig.enabledPluginConfigKeys ?? [];
+  const recoverablePluginConfigKeys =
+    params.pluginThreadConfig.recoverablePluginConfigKeys ?? enabledPluginConfigKeys;
+  const recoverablePluginConfigKeySet = new Set(recoverablePluginConfigKeys);
+  const settledPluginConfigKeys = enabledPluginConfigKeys.filter(
+    (configKey) => !recoverablePluginConfigKeySet.has(configKey),
+  );
+  const bindingContainsSettledPlugin = settledPluginConfigKeys.some(
+    (configKey) =>
+      (policyContext.pluginAppIds[configKey]?.length ?? 0) > 0 ||
+      Object.values(policyContext.apps).some(
+        (app) => app.source !== "account" && app.configKey === configKey,
+      ),
+  );
+  const accountAppRecoveryEnabled =
+    params.pluginThreadConfig.accountAppRecoveryEnabled ?? enabledPluginConfigKeys.length === 0;
+  return (
+    bindingContainsSettledPlugin ||
+    (accountAppRecoveryEnabled && Object.keys(policyContext.apps).length === 0) ||
+    recoverablePluginConfigKeys.length > 0
+  );
 }
 
 export function buildThreadStartParams(

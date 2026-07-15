@@ -4,11 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
-import {
-  findTaskByRunId,
-  listTaskRecordsUnsorted,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-registry.js";
+import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import * as cronSchedule from "../schedule.js";

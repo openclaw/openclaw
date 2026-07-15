@@ -6,11 +6,11 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { callGateway } from "../gateway/call.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
+import { getDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.js";
 import {
-  getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
-} from "../tasks/detached-task-runtime.js";
+} from "../tasks/task-runtime.test-helpers.js";
 
 const taskRuntimeMocks = vi.hoisted(() => ({
   finalizeTaskRunByRunId: vi.fn<(_params: unknown) => unknown[]>(() => [{}]),
@@ -83,10 +83,10 @@ vi.mock("./subagent-registry.store.js", () => ({
 }));
 
 describe("subagent registry archive behavior", () => {
-  let mod: typeof import("./subagent-registry.js");
+  let mod: typeof import("./subagent-registry.test-helpers.js");
 
   beforeAll(async () => {
-    mod = await import("./subagent-registry.js");
+    mod = await import("./subagent-registry.test-helpers.js");
   });
 
   const setRegistryTestDeps = (

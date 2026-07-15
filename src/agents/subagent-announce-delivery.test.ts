@@ -15,15 +15,15 @@ import type {
 } from "./embedded-agent-runner/runs.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import {
-  testing,
-  deliverSubagentAnnouncement,
-  resolveSubagentCompletionOrigin,
-} from "./subagent-announce-delivery.js";
-import {
   callGateway as runtimeCallGateway,
   dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess,
   sendMessage as runtimeSendMessage,
 } from "./subagent-announce-delivery.runtime.js";
+import {
+  testing,
+  deliverSubagentAnnouncement,
+  resolveSubagentCompletionOrigin,
+} from "./subagent-announce-delivery.test-support.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
 type EmbeddedAgentQueueFailureReason = Extract<

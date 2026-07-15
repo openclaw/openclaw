@@ -647,7 +647,7 @@ private fun ChatHeader(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      OpenClawMascot(modifier = Modifier.size(25.dp), tint = ClawTheme.colors.text)
+      OpenClawMascot(modifier = Modifier.size(25.dp))
       Text(
         text = nativeString("OpenClaw"),
         style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),

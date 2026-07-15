@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAuthHealthSummary } from "../../../agents/auth-health.js";
-import { testing as externalAuthTesting } from "../../../agents/auth-profiles/external-auth.js";
+import { testing as externalAuthTesting } from "../../../agents/auth-profiles/external-auth.test-support.js";
 import { resolveAuthProfileOrder } from "../../../agents/auth-profiles/order.js";
 import {
   resolveAuthStorePath,

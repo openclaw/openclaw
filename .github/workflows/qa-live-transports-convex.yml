@@ -475,7 +475,23 @@ jobs:
               ;;
           esac
 
-          output_dir=".artifacts/qa-e2e/matrix-live-${INPUT_MATRIX_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          resolve_matrix_profile() {
+            local requested="$1"
+            local help_text="$2"
+            if [[ "${requested}" == "release" ]] && ! grep -Fq "fast, release, transport" <<<"${help_text}"; then
+              printf 'fast\n'
+              return
+            fi
+            printf '%s\n' "${requested}"
+          }
+
+          matrix_help="$(pnpm openclaw qa matrix --help 2>&1)"
+          matrix_profile="$(resolve_matrix_profile "${INPUT_MATRIX_PROFILE}" "${matrix_help}")"
+          if [[ "${matrix_profile}" != "${INPUT_MATRIX_PROFILE}" ]]; then
+            echo "Selected target does not support Matrix profile '${INPUT_MATRIX_PROFILE}'; using '${matrix_profile}'."
+          fi
+
+          output_dir=".artifacts/qa-e2e/matrix-live-${matrix_profile}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
           for attempt in $(seq 1 "${MATRIX_ATTEMPTS}"); do
@@ -486,7 +502,7 @@ jobs:
               --provider-mode "${MATRIX_PROVIDER_MODE}" \
               --model "${MATRIX_PRIMARY_MODEL}" \
               --alt-model "${MATRIX_ALTERNATE_MODEL}" \
-              --profile "${INPUT_MATRIX_PROFILE}" \
+              --profile "${matrix_profile}" \
               --fast; then
               exit 0
             fi

@@ -500,7 +500,6 @@ function buildMessagingSection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
   inlineButtonsEnabled: boolean;
-  richTextEnabled: boolean;
   runtimeChannel?: string;
   runtimeChatType?: ChatType;
   messageChannelOptions?: string;
@@ -516,8 +515,6 @@ function buildMessagingSection(params: {
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
   const groupMessageToolOnly =
     messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
-  const telegramRuntime = params.runtimeChannel === "telegram";
-  const telegramRichTextEnabled = telegramRuntime && params.richTextEnabled;
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const hasSessionsYield = params.availableTools.has("sessions_yield");
@@ -537,11 +534,6 @@ function buildMessagingSection(params: {
     messageToolOnly
       ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
       : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.",
-    telegramRuntime
-      ? telegramRichTextEnabled
-        ? '- Telegram rich ON (Bot API 10.1 HTML; OpenClaw renders safely): headings, tables (alignment/captions/spans), block/pull quotes, `<details><summary>`, dividers, sup/sub/mark/spoilers, ul/ol/li + checkbox tasks, code, footnotes/references, anchors/in-message links, custom emoji, maps/collages/slideshows, block media e.g. `<img src="https://..."/>`. Math: `<tg-math>` inline, `<tg-math-block>` block; never `$...$`/`\\(...\\)`. Not MarkdownV2/parse_mode. Collapse=`<details>` (not expandable blockquote); structured bullets=`<ul><li>` (not literal bullets); media tags block-only, captions/credits when useful; buttons plain text; normal files via attachments.'
-        : "- Telegram rich OFF. Standard Telegram HTML only; no 10.1 tables/details/rich media/formulas. Ask owner to enable rich messages for this account/channel."
-      : "",
     "- Cross-session: `sessions_send(sessionKey, message)`.",
     subagentOrchestrationGuidance,
     completionEventGuidance,
@@ -1316,7 +1308,6 @@ export function buildAgentSystemPrompt(params: {
       isMinimal,
       availableTools,
       inlineButtonsEnabled,
-      richTextEnabled: runtimeCapabilitiesLower.has("richtext"),
       runtimeChannel,
       runtimeChatType,
       messageChannelOptions,

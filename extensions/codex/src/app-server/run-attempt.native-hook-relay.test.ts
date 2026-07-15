@@ -168,6 +168,33 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
+  it("omits the loop-detection PreToolUse subprocess when Codex config disables it", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.config = { tools: { loopDetection: { enabled: true } } } as never;
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: { loopDetectionPreToolUseRelay: false },
+      },
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig?.["features.hooks"]).toBe(true);
+    expect(startConfig?.["hooks.PreToolUse"]).toEqual([]);
+  });
+
   it("forwards command approval requests through the active native hook relay", async () => {
     const approvalSpy = vi
       .spyOn(approvalBridge, "handleCodexAppServerApprovalRequest")

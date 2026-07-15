@@ -96,6 +96,14 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  commitments: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
+  managedOutgoingImages: {
+    sourceDir: string;
+    hasLegacy: boolean;
+  };
   rescuePending: LegacyRescuePendingDetection;
   channelPairing: LegacyChannelPairingStateDetection;
   execApprovals: {

@@ -77,7 +77,7 @@ async function waitForRuntimeOutput(
       throw new Error(`Timed out waiting for output containing ${pattern}`);
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 5);
     });
   }
 }

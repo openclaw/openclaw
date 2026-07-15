@@ -1034,13 +1034,16 @@ jobs:
               if [[ "$state" != "$last_state" ]]; then
                 echo "${workflow} still ${status} (updated ${updated_at}): ${url}"
                 print_pending_deployments "${workflow}" "${run_id}"
-                approval_status=0
-                approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}" ||
-                  approval_status=$?
-                if (( approval_status > 1 )); then
-                  return 1
-                fi
                 last_state="$state"
+              fi
+              # The deployment gate can appear after the run first reports
+              # waiting without changing updatedAt. Retry every poll so that
+              # propagation lag cannot strand an approved release.
+              approval_status=0
+              approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}" ||
+                approval_status=$?
+              if (( approval_status > 1 )); then
+                return 1
               fi
               sleep 30
             done
@@ -1838,7 +1841,9 @@ jobs:
               verify_args+=(--npm-telegram-run "${NPM_TELEGRAM_RUN_ID}")
             fi
 
-            node --import tsx \
+            OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${GITHUB_REF}" \
+              OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${PARENT_WORKFLOW_SHA}" \
+              node --import tsx \
               "${GITHUB_WORKSPACE}/.release-harness/scripts/release-verify-beta.ts" \
               "${verify_args[@]}"
 
