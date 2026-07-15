@@ -33187,6 +33187,14 @@
     },
     {
       "kind": "ui-call",
+      "line": 818,
+      "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
+      "source": "Update guide",
+      "surface": "apple",
+      "id": "native.apple.e2ffc7753f75e1b8"
+    },
+    {
+      "kind": "ui-call",
       "line": 819,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Ask Discord",
@@ -33203,15 +33211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 827,
-      "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
-      "source": "Update guide",
-      "surface": "apple",
-      "id": "native.apple.e2ffc7753f75e1b8"
-    },
-    {
-      "kind": "ui-call",
-      "line": 830,
+      "line": 828,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Continue",
       "surface": "apple",
