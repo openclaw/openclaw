@@ -138,6 +138,10 @@ normal `browser` tool.
   openclaw config set gateway.controlUi.allowedOrigins '["chrome-extension://<extension-id>"]'
   ```
 
+  That command sets the **whole** list, so include any origins you already allow
+  (check with `openclaw config get gateway.controlUi.allowedOrigins`) or you will
+  revoke them — the Control UI's own origin included.
+
   Without it the panel reports "Gateway refused the connection" and keeps
   retrying. This applies on the same machine too; loopback does not exempt it.
 
