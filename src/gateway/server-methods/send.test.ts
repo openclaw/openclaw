@@ -2210,6 +2210,7 @@ describe("gateway send mirroring", () => {
               expiresAtMs: Date.now() + 60_000,
               sessionId: "session-1",
               sourceReplyFinal: true,
+              sourceReplyToolCallId: "message-call-1",
               toolContext: {
                 currentChannelProvider: "telegram",
                 currentChannelId: "chat-123",
@@ -2235,6 +2236,7 @@ describe("gateway send mirroring", () => {
         kind: "message-tool-source-reply",
         final: true,
         sourceTurnId: "channel-user:v1:telegram-message-1",
+        toolCallId: "message-call-1",
       },
       config: {},
     });
@@ -2243,6 +2245,7 @@ describe("gateway send mirroring", () => {
         sessionId: "session-1",
         sessionKey,
         sourceTurnId: "channel-user:v1:telegram-message-1",
+        toolCallId: "message-call-1",
       }),
     );
     expect(mocks.completeRestartRecoveryTerminalDelivery).toHaveBeenCalledWith(
@@ -2250,6 +2253,7 @@ describe("gateway send mirroring", () => {
         sessionId: "session-1",
         sessionKey,
         sourceTurnId: "channel-user:v1:telegram-message-1",
+        toolCallId: "message-call-1",
       }),
     );
     expect(
@@ -2349,6 +2353,7 @@ describe("gateway send mirroring", () => {
               expiresAtMs: Date.now() + 60_000,
               sessionId: "session-ambiguous-receipt",
               sourceReplyFinal: true,
+              sourceReplyToolCallId: "message-call-ambiguous",
               toolContext: {
                 currentChannelProvider: "telegram",
                 currentChannelId: "chat-123",
@@ -2389,6 +2394,7 @@ describe("gateway send mirroring", () => {
               expiresAtMs: Date.now() + 60_000,
               sessionId: "session-duplicate-terminal",
               sourceReplyFinal: true,
+              sourceReplyToolCallId: "message-call-duplicate",
               toolContext: {
                 currentChannelProvider: "telegram",
                 currentChannelId: "chat-123",
@@ -2435,6 +2441,7 @@ describe("gateway send mirroring", () => {
               expiresAtMs: Date.now() + 60_000,
               sessionId: "session-2",
               sourceReplyFinal: true,
+              sourceReplyToolCallId: "message-call-2",
               toolContext: {
                 currentChannelProvider: "telegram",
                 currentChannelId: "chat-123",
@@ -2485,6 +2492,7 @@ describe("gateway send mirroring", () => {
               expiresAtMs: Date.now() + 60_000,
               sessionId: "session-unmirrorable",
               sourceReplyFinal: true,
+              sourceReplyToolCallId: "message-call-unmirrorable",
               toolContext: {
                 currentChannelProvider: "telegram",
                 currentChannelId: "chat-123",
@@ -2533,6 +2541,7 @@ describe("gateway send mirroring", () => {
               expiresAtMs: Date.now() + 60_000,
               sessionId: "session-diverted",
               sourceReplyFinal: true,
+              sourceReplyToolCallId: "message-call-diverted",
               toolContext: {
                 currentChannelProvider: "telegram",
                 currentChannelId: "chat-123",
@@ -3284,6 +3293,7 @@ describe("gateway send mirroring", () => {
               expiresAtMs: Date.now() + 60_000,
               sessionId: "session-failed",
               sourceReplyFinal: true,
+              sourceReplyToolCallId: "message-call-failed",
               toolContext: {
                 currentChannelProvider: "telegram",
                 currentChannelId: "chat-123",
@@ -3325,6 +3335,7 @@ describe("gateway send mirroring", () => {
               expiresAtMs: Date.now() + 60_000,
               sessionId: "session-timeout",
               sourceReplyFinal: true,
+              sourceReplyToolCallId: "message-call-timeout",
               toolContext: {
                 currentChannelProvider: "telegram",
                 currentChannelId: "chat-123",

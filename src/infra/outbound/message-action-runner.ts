@@ -113,6 +113,7 @@ export type MessageActionRunnerGateway = {
   timeoutMs?: number;
   resolveAgentRuntimeIdentityToken?: (context?: {
     sourceReplyFinal?: boolean;
+    sourceReplyToolCallId?: string;
   }) => Promise<string | undefined>;
   clientName: GatewayClientName;
   clientDisplayName?: string;
@@ -156,6 +157,7 @@ export type RunMessageActionParams = {
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sourceReplyFinal?: boolean;
+  sourceReplyToolCallId?: string;
   inboundEventKind?: InboundEventKind;
   inboundAudio?: boolean;
   abortSignal?: AbortSignal;
@@ -230,6 +232,7 @@ async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
   actionParams: Record<string, unknown>;
   sourceReplyFinal?: boolean;
+  sourceReplyToolCallId?: string;
   abortSignal?: AbortSignal;
 }): Promise<T> {
   const { callGatewayLeastPrivilege, isGatewayTransportError } =
@@ -237,6 +240,7 @@ async function callGatewayMessageAction<T>(params: {
   const gateway = resolveGatewayActionOptions(params.gateway);
   const agentRuntimeIdentityToken = await params.gateway?.resolveAgentRuntimeIdentityToken?.({
     sourceReplyFinal: params.sourceReplyFinal,
+    sourceReplyToolCallId: params.sourceReplyToolCallId,
   });
   // A timed-out send is reattached with the same idempotency key. Cap only the
   // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
@@ -743,6 +747,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
     gateway: params.gateway,
     abortSignal: params.input.abortSignal,
     sourceReplyFinal: params.input.sourceReplyFinal,
+    sourceReplyToolCallId: params.input.sourceReplyToolCallId,
     actionParams: {
       channel: params.channel,
       action: params.action,

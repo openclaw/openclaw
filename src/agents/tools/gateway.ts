@@ -388,6 +388,7 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   runId?: string;
   sessionId?: string;
   sourceReplyFinal?: boolean;
+  sourceReplyToolCallId?: string;
 }): Promise<string | undefined> {
   const identity = getGatewayToolCallerIdentity();
   if (!identity) {
@@ -414,6 +415,9 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
       ...messageActionContext,
       ...(params.sourceReplyFinal !== undefined
         ? { sourceReplyFinal: params.sourceReplyFinal }
+        : {}),
+      ...(params.sourceReplyToolCallId
+        ? { sourceReplyToolCallId: params.sourceReplyToolCallId }
         : {}),
     },
   });

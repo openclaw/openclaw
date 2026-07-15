@@ -7,9 +7,10 @@ export type RestartRecoveryTerminalDeliveryScope = {
   sessionKey: string;
   sourceTurnId: string;
   storePath: string;
+  toolCallId: string;
 };
 
-function hasExactActiveClaim(
+function hasActiveClaim(
   entry: SessionEntry | null | undefined,
   scope: RestartRecoveryTerminalDeliveryScope,
 ): entry is SessionEntry {
@@ -18,6 +19,15 @@ function hasExactActiveClaim(
     entry.status === "running" &&
     normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== undefined &&
     normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) === scope.sourceTurnId
+  );
+}
+
+function hasExactDeliveryClaim(
+  entry: SessionEntry | null | undefined,
+  scope: RestartRecoveryTerminalDeliveryScope,
+): entry is SessionEntry {
+  return (
+    hasActiveClaim(entry, scope) && entry.restartRecoveryDeliveryToolCallId === scope.toolCallId
   );
 }
 
@@ -37,12 +47,17 @@ export async function beginRestartRecoveryTerminalDelivery(
   const updated = await updateSessionEntry(
     { sessionKey: scope.sessionKey, storePath: scope.storePath },
     (entry) => {
-      if (!hasExactActiveClaim(entry, scope) || entry.restartRecoveryDeliveryReceiptState) {
+      if (
+        !hasActiveClaim(entry, scope) ||
+        entry.restartRecoveryDeliveryReceiptState ||
+        entry.restartRecoveryDeliveryToolCallId
+      ) {
         return null;
       }
       started = true;
       return {
         restartRecoveryDeliveryReceiptState: "terminal-pending",
+        restartRecoveryDeliveryToolCallId: scope.toolCallId,
         updatedAt: Date.now(),
       };
     },
@@ -50,16 +65,16 @@ export async function beginRestartRecoveryTerminalDelivery(
   );
   if (
     started &&
-    hasExactActiveClaim(updated, scope) &&
+    hasExactDeliveryClaim(updated, scope) &&
     updated.restartRecoveryDeliveryReceiptState === "terminal-pending"
   ) {
     return "started";
   }
   const current = loadCurrent(scope);
-  if (!hasExactActiveClaim(current, scope)) {
+  if (!hasActiveClaim(current, scope)) {
     return "stale";
   }
-  if (current.restartRecoveryDeliveryReceiptState) {
+  if (current.restartRecoveryDeliveryReceiptState || current.restartRecoveryDeliveryToolCallId) {
     return "blocked";
   }
   throw new Error("failed to persist terminal delivery intent");
@@ -73,7 +88,7 @@ export async function completeRestartRecoveryTerminalDelivery(
     { sessionKey: scope.sessionKey, storePath: scope.storePath },
     (entry) => {
       if (
-        !hasExactActiveClaim(entry, scope) ||
+        !hasExactDeliveryClaim(entry, scope) ||
         entry.restartRecoveryDeliveryReceiptState !== "terminal-pending"
       ) {
         return null;
@@ -86,16 +101,19 @@ export async function completeRestartRecoveryTerminalDelivery(
     { skipMaintenance: true, takeCacheOwnership: true },
   );
   if (
-    hasExactActiveClaim(updated, scope) &&
+    hasExactDeliveryClaim(updated, scope) &&
     updated.restartRecoveryDeliveryReceiptState === "delivered-terminal"
   ) {
     return "recorded";
   }
   const current = loadCurrent(scope);
-  if (!hasExactActiveClaim(current, scope)) {
+  if (!hasActiveClaim(current, scope)) {
     return "stale";
   }
-  if (current.restartRecoveryDeliveryReceiptState === "delivered-terminal") {
+  if (
+    hasExactDeliveryClaim(current, scope) &&
+    current.restartRecoveryDeliveryReceiptState === "delivered-terminal"
+  ) {
     return "recorded";
   }
   throw new Error("failed to persist terminal delivery completion");
@@ -109,29 +127,37 @@ export async function cancelRestartRecoveryTerminalDelivery(
     { sessionKey: scope.sessionKey, storePath: scope.storePath },
     (entry) => {
       if (
-        !hasExactActiveClaim(entry, scope) ||
+        !hasExactDeliveryClaim(entry, scope) ||
         entry.restartRecoveryDeliveryReceiptState !== "terminal-pending"
       ) {
         return null;
       }
       return {
         restartRecoveryDeliveryReceiptState: undefined,
+        restartRecoveryDeliveryToolCallId: undefined,
         updatedAt: Date.now(),
       };
     },
     { skipMaintenance: true, takeCacheOwnership: true },
   );
-  if (hasExactActiveClaim(updated, scope) && !updated.restartRecoveryDeliveryReceiptState) {
+  if (
+    hasActiveClaim(updated, scope) &&
+    !updated.restartRecoveryDeliveryReceiptState &&
+    !updated.restartRecoveryDeliveryToolCallId
+  ) {
     return "cleared";
   }
   const current = loadCurrent(scope);
-  if (!hasExactActiveClaim(current, scope)) {
+  if (!hasActiveClaim(current, scope)) {
     return "stale";
   }
-  if (!current.restartRecoveryDeliveryReceiptState) {
+  if (!current.restartRecoveryDeliveryReceiptState && !current.restartRecoveryDeliveryToolCallId) {
     return "cleared";
   }
-  if (current.restartRecoveryDeliveryReceiptState === "delivered-terminal") {
+  if (
+    hasExactDeliveryClaim(current, scope) &&
+    current.restartRecoveryDeliveryReceiptState === "delivered-terminal"
+  ) {
     return "stale";
   }
   throw new Error("failed to clear terminal delivery intent");

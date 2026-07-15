@@ -76,6 +76,7 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     restartRecoveryDeliverySourceRunId: undefined,
     restartRecoveryBeforeAgentReplyState: undefined,
     restartRecoveryDeliveryReceiptState: undefined,
+    restartRecoveryDeliveryToolCallId: undefined,
     restartRecoveryRequesterAccountId: undefined,
     restartRecoveryRequesterSenderId: undefined,
     restartRecoverySameChannelThreadRequired: undefined,

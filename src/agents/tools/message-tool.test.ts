@@ -957,6 +957,8 @@ describe("message tool secret scoping", () => {
     const [progress, terminal] = mocks.runMessageAction.mock.calls.map((call) => call[0]);
     expect(progress?.sourceReplyFinal).toBe(false);
     expect(terminal?.sourceReplyFinal).toBe(true);
+    expect(progress?.sourceReplyToolCallId).toBe("message_progress");
+    expect(terminal?.sourceReplyToolCallId).toBe("message_terminal");
     expect(progress?.params).not.toHaveProperty("final");
     expect(terminal?.params).not.toHaveProperty("final");
   });

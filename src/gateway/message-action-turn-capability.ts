@@ -16,6 +16,7 @@ const CAPABILITY_COMPLETION_GRACE_MS = 60_000;
 export type AgentRuntimeMessageActionContext = {
   expiresAtMs: number;
   sourceReplyFinal?: boolean;
+  sourceReplyToolCallId?: string;
   sessionId?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;

@@ -311,6 +311,7 @@ export function resolveRestartSafeChatAdmission(params: {
             abortedLastRun: entry.abortedLastRun,
             restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
             restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
+            restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
             restartRecoveryDeliveryRequestFingerprint:
               entry.restartRecoveryDeliveryRequestFingerprint,
             restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
@@ -346,6 +347,7 @@ export function buildRestartSafeChatTranscriptState(params: {
     sessionLifecyclePatch: {
       restartRecoveryBeforeAgentReplyState: undefined,
       restartRecoveryDeliveryReceiptState: undefined,
+      restartRecoveryDeliveryToolCallId: undefined,
       status: "running",
       startedAt: params.startedAt,
       endedAt: undefined,

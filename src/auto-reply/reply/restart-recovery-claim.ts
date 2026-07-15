@@ -31,6 +31,7 @@ function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnEx
     abortedLastRun: entry.abortedLastRun,
     restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
     restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
+    restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
     restartRecoveryDeliveryRequestFingerprint: entry.restartRecoveryDeliveryRequestFingerprint,
     restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
     restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
@@ -54,6 +55,7 @@ function matchesExpectedSessionState(
     entry.abortedLastRun === expected.abortedLastRun &&
     entry.restartRecoveryBeforeAgentReplyState === expected.restartRecoveryBeforeAgentReplyState &&
     entry.restartRecoveryDeliveryReceiptState === expected.restartRecoveryDeliveryReceiptState &&
+    entry.restartRecoveryDeliveryToolCallId === expected.restartRecoveryDeliveryToolCallId &&
     entry.restartRecoveryDeliveryRequestFingerprint ===
       expected.restartRecoveryDeliveryRequestFingerprint &&
     entry.restartRecoveryDeliveryRunId === expected.restartRecoveryDeliveryRunId &&
@@ -176,6 +178,7 @@ export function createReplyRestartRecoveryClaimController(params: {
             ? "pending"
             : undefined,
           restartRecoveryDeliveryReceiptState: undefined,
+          restartRecoveryDeliveryToolCallId: undefined,
           restartRecoveryDeliveryRequestFingerprint: undefined,
           updatedAt: Date.now(),
         },
@@ -216,6 +219,7 @@ export function createReplyRestartRecoveryClaimController(params: {
             ? "pending"
             : undefined,
           restartRecoveryDeliveryReceiptState: undefined,
+          restartRecoveryDeliveryToolCallId: undefined,
           restartRecoveryDeliveryContext: deliveryContext,
           restartRecoveryDeliveryRequestFingerprint: undefined,
           restartRecoveryDeliveryRunId: recoveryRunId,

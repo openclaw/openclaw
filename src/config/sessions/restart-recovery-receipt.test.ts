@@ -30,6 +30,7 @@ describe("restart recovery terminal delivery receipt", () => {
       sessionKey,
       sourceTurnId: params?.sourceTurnId ?? "source-1",
       storePath: fixture.storePath(),
+      toolCallId: "message-call-1",
     };
   }
 
@@ -41,6 +42,10 @@ describe("restart recovery terminal delivery receipt", () => {
       loadSessionEntry({ sessionKey, storePath: fixture.storePath() })
         ?.restartRecoveryDeliveryReceiptState,
     ).toBe("terminal-pending");
+    expect(
+      loadSessionEntry({ sessionKey, storePath: fixture.storePath() })
+        ?.restartRecoveryDeliveryToolCallId,
+    ).toBe("message-call-1");
 
     await expect(completeRestartRecoveryTerminalDelivery(scope())).resolves.toBe("recorded");
     expect(
@@ -64,6 +69,10 @@ describe("restart recovery terminal delivery receipt", () => {
     expect(
       loadSessionEntry({ sessionKey, storePath: fixture.storePath() })
         ?.restartRecoveryDeliveryReceiptState,
+    ).toBeUndefined();
+    expect(
+      loadSessionEntry({ sessionKey, storePath: fixture.storePath() })
+        ?.restartRecoveryDeliveryToolCallId,
     ).toBeUndefined();
   });
 

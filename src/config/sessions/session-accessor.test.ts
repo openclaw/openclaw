@@ -2593,6 +2593,7 @@ describe("session accessor seam", () => {
         abortedLastRun: retryable.abortedLastRun,
         restartRecoveryBeforeAgentReplyState: retryable.restartRecoveryBeforeAgentReplyState,
         restartRecoveryDeliveryReceiptState: retryable.restartRecoveryDeliveryReceiptState,
+        restartRecoveryDeliveryToolCallId: retryable.restartRecoveryDeliveryToolCallId,
         restartRecoveryDeliveryRequestFingerprint:
           retryable.restartRecoveryDeliveryRequestFingerprint,
         restartRecoveryDeliveryRunId: retryable.restartRecoveryDeliveryRunId,
@@ -2786,6 +2787,7 @@ describe("session accessor seam", () => {
       abortedLastRun: stored.abortedLastRun,
       restartRecoveryBeforeAgentReplyState: stored.restartRecoveryBeforeAgentReplyState,
       restartRecoveryDeliveryReceiptState: stored.restartRecoveryDeliveryReceiptState,
+      restartRecoveryDeliveryToolCallId: stored.restartRecoveryDeliveryToolCallId,
       restartRecoveryDeliveryRequestFingerprint: stored.restartRecoveryDeliveryRequestFingerprint,
       restartRecoveryDeliveryRunId: stored.restartRecoveryDeliveryRunId,
       restartRecoveryDeliverySourceRunId: stored.restartRecoveryDeliverySourceRunId,

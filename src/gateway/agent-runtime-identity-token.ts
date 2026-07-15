@@ -68,7 +68,11 @@ function decodeMessageActionContext(
   }
   const rawToolContext = value.toolContext;
   const sourceReplyFinal = value.sourceReplyFinal;
+  const sourceReplyToolCallId = normalizeOptionalString(value.sourceReplyToolCallId);
   if (sourceReplyFinal !== undefined && typeof sourceReplyFinal !== "boolean") {
+    return undefined;
+  }
+  if (value.sourceReplyToolCallId !== undefined && !sourceReplyToolCallId) {
     return undefined;
   }
   if (rawToolContext !== undefined && !isRecord(rawToolContext)) {
@@ -129,6 +133,7 @@ function decodeMessageActionContext(
   return {
     expiresAtMs: value.expiresAtMs,
     sourceReplyFinal,
+    sourceReplyToolCallId,
     sessionId: normalizeOptionalString(value.sessionId),
     requesterAccountId: normalizeOptionalString(value.requesterAccountId),
     requesterSenderId: normalizeOptionalString(value.requesterSenderId),

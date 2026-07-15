@@ -33,6 +33,7 @@ type SourceReplyTranscriptMirrorParams = {
   toolContext?: InternalChannelThreadingToolContext;
   idempotencyKey?: string;
   sourceReplyFinal?: boolean;
+  toolCallId?: string;
   deliveredPayload?: unknown;
 };
 
@@ -160,6 +161,7 @@ function resolveTerminalSourceReplyDeliveryReceipt(
   if (
     params.sourceReplyFinal !== true ||
     !params.sessionId ||
+    !normalizeOptionalString(params.toolCallId) ||
     !isCurrentSourceConversation(params)
   ) {
     return undefined;
@@ -174,6 +176,7 @@ function resolveTerminalSourceReplyDeliveryReceipt(
     sessionKey: params.sessionKey,
     sourceTurnId,
     storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+    toolCallId: normalizeOptionalString(params.toolCallId)!,
   };
 }
 
@@ -355,6 +358,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
           deliveryMirror: {
             kind: "message-tool-source-reply" as const,
             final: params.sourceReplyFinal,
+            ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
             ...(sourceTurnId ? { sourceTurnId } : {}),
           },
         }

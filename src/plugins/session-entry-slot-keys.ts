@@ -105,6 +105,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "restartRecoveryDeliverySourceRunId",
   "restartRecoveryBeforeAgentReplyState",
   "restartRecoveryDeliveryReceiptState",
+  "restartRecoveryDeliveryToolCallId",
   "restartRecoveryRequesterAccountId",
   "restartRecoveryRequesterSenderId",
   "restartRecoverySameChannelThreadRequired",

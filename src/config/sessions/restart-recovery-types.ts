@@ -13,6 +13,8 @@ export type SessionRestartRecoveryState = {
   restartRecoveryBeforeAgentReplyState?: RestartRecoveryBeforeAgentReplyState;
   /** Durable pre/post boundary around the terminal external send. */
   restartRecoveryDeliveryReceiptState?: "terminal-pending" | "delivered-terminal";
+  /** Exact agent tool call whose terminal external send owns the receipt. */
+  restartRecoveryDeliveryToolCallId?: string;
   restartRecoveryDeliveryContext?: DeliveryContext;
   restartRecoveryDeliveryRequestFingerprint?: string;
   restartRecoveryDeliveryRunId?: string;

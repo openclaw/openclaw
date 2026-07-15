@@ -77,6 +77,7 @@ type InternalSessionTranscriptDeliveryMirror =
       kind: "message-tool-source-reply";
       final: boolean;
       sourceTurnId?: string;
+      toolCallId?: string;
     };
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {

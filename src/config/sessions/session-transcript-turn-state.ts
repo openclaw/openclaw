@@ -25,6 +25,8 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
           expectedState.restartRecoveryBeforeAgentReplyState &&
         selected.entry.restartRecoveryDeliveryReceiptState ===
           expectedState.restartRecoveryDeliveryReceiptState &&
+        selected.entry.restartRecoveryDeliveryToolCallId ===
+          expectedState.restartRecoveryDeliveryToolCallId &&
         selected.entry.restartRecoveryDeliveryRequestFingerprint ===
           expectedState.restartRecoveryDeliveryRequestFingerprint &&
         selected.entry.restartRecoveryDeliveryRunId ===

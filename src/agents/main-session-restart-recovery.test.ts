@@ -2005,10 +2005,12 @@ describe("main-session-restart-recovery", () => {
           kind: "message-tool-source-reply",
           final: true,
           sourceTurnId: "discord-message-1",
+          toolCallId: "message-call-1",
         },
       },
       {
         role: "toolResult",
+        toolCallId: "message-call-1",
         toolName: "message",
         content: [{ type: "text", text: "sent" }],
       },
@@ -2080,6 +2082,7 @@ describe("main-session-restart-recovery", () => {
         abortedLastRun: true,
         restartRecoveryBeforeAgentReplyState: "continue",
         restartRecoveryDeliveryReceiptState: "terminal-pending",
+        restartRecoveryDeliveryToolCallId: "message-call-1",
         restartRecoveryDeliveryRunId: "recovery-1",
         restartRecoveryDeliverySourceRunId: "discord-message-1",
         restartRecoveryDeliveryContext: {
@@ -2118,6 +2121,7 @@ describe("main-session-restart-recovery", () => {
         abortedLastRun: true,
         restartRecoveryBeforeAgentReplyState: "continue",
         restartRecoveryDeliveryReceiptState: "delivered-terminal",
+        restartRecoveryDeliveryToolCallId: "message-call-1",
         restartRecoveryDeliveryRunId: "recovery-1",
         restartRecoveryDeliverySourceRunId: "discord-message-1",
         restartRecoveryDeliveryContext: {
@@ -2128,6 +2132,18 @@ describe("main-session-restart-recovery", () => {
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "do the thing", idempotencyKey: "discord-message-1" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "message-call-1",
+            name: "message",
+            arguments: { action: "send", message: "delivered answer" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
     ]);
 
     await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
@@ -2142,6 +2158,22 @@ describe("main-session-restart-recovery", () => {
       abortedLastRun: false,
       restartRecoveryTerminalRunIds: ["discord-message-1"],
     });
+    const transcript = (await loadTranscriptEvents({
+      sessionId: "main-session",
+      sessionKey,
+      storePath,
+    })) as Array<{ message?: Record<string, unknown> }>;
+    expect(transcript.map((event) => event.message).filter(Boolean)).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "message-call-1",
+        toolName: "message",
+        isError: false,
+      }),
+    );
+    expect(
+      loadSessionEntry({ sessionKey, storePath })?.restartRecoveryDeliveryToolCallId,
+    ).toBeUndefined();
   });
 
   it("completes a checkpointed silent before_agent_reply result without dispatch", async () => {
@@ -2282,6 +2314,7 @@ describe("main-session-restart-recovery", () => {
           kind: "message-tool-source-reply",
           final,
           sourceTurnId,
+          toolCallId: "message-call-1",
         },
       },
     ]);

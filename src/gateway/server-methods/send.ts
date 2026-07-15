@@ -95,6 +95,7 @@ function resolveTrustedMessageActionToolContext(params: {
       requesterSenderId: string | undefined;
       sessionId: string | undefined;
       sourceReplyFinal: boolean | undefined;
+      sourceReplyToolCallId: string | undefined;
     }
   | { ok: false; error: ReturnType<typeof errorShape> } {
   // Current-turn metadata can relax channel read policy. It must come from the
@@ -109,6 +110,7 @@ function resolveTrustedMessageActionToolContext(params: {
       requesterSenderId: undefined,
       sessionId: undefined,
       sourceReplyFinal: undefined,
+      sourceReplyToolCallId: undefined,
     };
   }
   if (Date.now() >= messageActionContext.expiresAtMs) {
@@ -148,6 +150,7 @@ function resolveTrustedMessageActionToolContext(params: {
     requesterSenderId: messageActionContext.requesterSenderId,
     sessionId: messageActionContext.sessionId,
     sourceReplyFinal: messageActionContext.sourceReplyFinal,
+    sourceReplyToolCallId: messageActionContext.sourceReplyToolCallId,
   };
 }
 
@@ -636,6 +639,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           agentId,
           toolContext: trustedContext.toolContext,
           idempotencyKey: request.idempotencyKey,
+          toolCallId: trustedContext.sourceReplyToolCallId,
           ...(trustedContext.sourceReplyFinal !== undefined
             ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
             : {}),

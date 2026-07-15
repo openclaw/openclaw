@@ -1603,6 +1603,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
                   runId: options?.runId,
                   sessionId: options?.sessionId,
                   sourceReplyFinal: context?.sourceReplyFinal,
+                  sourceReplyToolCallId: context?.sourceReplyToolCallId,
                 }),
             };
       const hasCurrentMessageId =
@@ -1683,6 +1684,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             action === "send" && sourceReplySinkDeliveryMode === "message_tool_only"
               ? (requestedSourceReplyFinal ?? true)
               : undefined,
+          sourceReplyToolCallId: toolCallId,
           inboundEventKind: options?.inboundEventKind,
           inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,
           abortSignal: signal,
