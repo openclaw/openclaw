@@ -2189,6 +2189,91 @@ describe("main-session-restart-recovery", () => {
   });
 
   it.each([
+    {
+      label: "empty restart-abort artifact",
+      content: [],
+      expected: { recovered: 1, failed: 0, skipped: 0 },
+      expectedStatus: "done",
+      gatewayCalls: 0,
+      recoveredResult: true,
+    },
+    {
+      label: "restart-abort artifact with partial output",
+      content: [{ type: "text", text: "partial answer" }],
+      expected: { recovered: 0, failed: 1, skipped: 0 },
+      expectedStatus: "failed",
+      gatewayCalls: 1,
+      recoveredResult: false,
+    },
+  ] as const)(
+    "reconciles a delivered terminal receipt through $label",
+    async ({ content, expected, expectedStatus, gatewayCalls, recoveredResult }) => {
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionKey = "agent:main:discord:direct:123";
+      await writeStore(sessionsDir, {
+        [sessionKey]: {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 10_000,
+          status: "running",
+          abortedLastRun: true,
+          restartRecoveryBeforeAgentReplyState: "continue",
+          restartRecoveryDeliveryReceiptState: "delivered-terminal",
+          restartRecoveryDeliveryToolCallId: "message-call-1",
+          restartRecoveryDeliveryRunId: "recovery-1",
+          restartRecoveryDeliverySourceRunId: "discord-message-1",
+          restartRecoveryDeliveryContext: {
+            channel: "discord",
+            to: "discord:dm:123",
+          },
+        },
+      });
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "do the thing", idempotencyKey: "discord-message-1" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "message-call-1",
+              name: "message",
+              arguments: { action: "send", message: "delivered answer" },
+            },
+          ],
+          stopReason: "toolUse",
+        },
+        {
+          role: "assistant",
+          content,
+          stopReason: "aborted",
+          errorMessage: "Request was aborted",
+        },
+      ]);
+
+      await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual(
+        expected,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(gatewayCalls);
+      expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe(expectedStatus);
+      const transcript = (await loadTranscriptEvents({
+        sessionId: "main-session",
+        sessionKey,
+        storePath,
+      })) as Array<{ message?: Record<string, unknown> }>;
+      expect(
+        transcript
+          .map((event) => event.message)
+          .some(
+            (message) =>
+              message?.idempotencyKey ===
+              "restart-recovery:message-tool-result:discord-message-1:message-call-1",
+          ),
+      ).toBe(recoveredResult);
+    },
+  );
+
+  it.each([
     ["error", { toolName: "message", isError: true }],
     ["different-tool", { toolName: "other", isError: false }],
   ] as const)(

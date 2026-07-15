@@ -535,13 +535,19 @@ function canAppendRecoveredToolResultAtSourceTurnTail(params: {
   if (params.sourceTurnRange.endIndex !== params.messages.length) {
     return false;
   }
-  return params.messages.slice(params.toolCallIndex + 1).every((message) =>
-    isExactMessageToolDeliveryMirror({
-      message,
-      sourceTurnId: params.sourceTurnId,
-      toolCallId: params.toolCallId,
-    }),
-  );
+  return params.messages.slice(params.toolCallIndex + 1).every((message) => {
+    if (
+      isExactMessageToolDeliveryMirror({
+        message,
+        sourceTurnId: params.sourceTurnId,
+        toolCallId: params.toolCallId,
+      })
+    ) {
+      return true;
+    }
+    // An empty provider abort is restart lifecycle noise. Partial output remains unsafe.
+    return isRestartAbortTailArtifact(message);
+  });
 }
 
 function buildRecoveryToolResultIdempotencyKey(sourceTurnId: string, toolCallId: string): string {
