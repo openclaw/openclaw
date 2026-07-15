@@ -300,7 +300,7 @@ function isExactCurrentSourceConversation(
   params: SourceReplyTranscriptMirrorParams,
 ): params is MirrorableSourceReplyTranscriptParams {
   return (
-    resolveSourceReplyThreadPlacement(params) !== "unknown" && isCurrentSourceConversation(params)
+    resolveSourceReplyThreadPlacement(params) === "match" && isCurrentSourceConversation(params)
   );
 }
 
