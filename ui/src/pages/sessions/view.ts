@@ -423,6 +423,7 @@ function transcriptSearchSessionLabel(hit: SessionsSearchHit, rows: GatewaySessi
   return (
     normalizeOptionalString(row?.label) ??
     normalizeOptionalString(row?.displayName) ??
+    normalizeOptionalString(row?.derivedTitle) ??
     hit.sessionKey
   );
 }
@@ -1437,8 +1438,12 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const detailsId = `session-details-${encodeURIComponent(row.key)}`;
   const displayName = normalizeOptionalString(row.displayName) ?? null;
   const trimmedLabel = normalizeOptionalString(row.label) ?? "";
+  const derivedTitle = normalizeOptionalString(row.derivedTitle) ?? null;
   const showDisplayName = Boolean(
-    displayName && displayName !== row.key && displayName !== trimmedLabel,
+    displayName &&
+    displayName !== row.key &&
+    displayName !== trimmedLabel &&
+    displayName !== derivedTitle,
   );
   const keyParts = parseSessionKeyParts(row.key);
   const agentIdentity = keyParts
@@ -1449,7 +1454,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const friendlyKeyLabel =
     identityName && keyParts
       ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
-      : null;
+      : derivedTitle;
   const keyCellTitle = friendlyKeyLabel ?? row.key;
   const canLink = row.kind !== "global";
   const chatUrl = canLink
@@ -1555,7 +1560,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                       >${friendlyKeyLabel ?? row.key}</a
                     >`
                   : html`<span>${friendlyKeyLabel ?? row.key}</span>`}
-                ${trimmedLabel
+                ${trimmedLabel && trimmedLabel !== derivedTitle
                   ? html`<span class="session-label-chip" title=${trimmedLabel}
                       >${trimmedLabel}</span
                     >`

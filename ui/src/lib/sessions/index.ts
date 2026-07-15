@@ -261,6 +261,9 @@ const SESSION_LIST_PARAMS = {
   includeGlobal: true,
   includeUnknown: true,
   configuredAgentsOnly: true,
+  // Populate derivedTitle (label/displayName/subject/first-user-message) so
+  // peer-direct chats show a topic instead of an opaque session key.
+  includeDerivedTitles: true,
 } as const;
 
 function buildSessionRequestParams(

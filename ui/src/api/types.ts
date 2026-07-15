@@ -486,6 +486,12 @@ export type GatewaySessionRow = {
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   displayName?: string;
+  /**
+   * Gateway-derived display title: prefers label/displayName/subject, falling
+   * back to the first user message. Only present when sessions.list is called
+   * with includeDerivedTitles; undefined otherwise.
+   */
+  derivedTitle?: string;
   channel?: string;
   surface?: string;
   subject?: string;

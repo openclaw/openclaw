@@ -95,6 +95,7 @@ type SessionKeyInfo = {
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
+  derivedTitle?: string;
 } & SessionWorktreeDisplayRow;
 
 function capitalize(s: string): string {
@@ -197,6 +198,12 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
   const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
   if (workSubtitle && row?.worktree) {
     return applyTypedPrefix(workSubtitle);
+  }
+  // Gateway-derived title (label/displayName/subject/first user message) before
+  // the opaque key fallback, so peer-direct chats read as their opening topic.
+  const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
+  if (derivedTitle && derivedTitle !== key) {
+    return applyTypedPrefix(derivedTitle);
   }
   return fallbackName;
 }

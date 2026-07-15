@@ -52,6 +52,29 @@ describe("resolveSessionDisplayName", () => {
       "node-fleet-…8b2e",
     );
   });
+
+  it("falls back to the derived title (first message) for unnamed peer chats", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:telegram:direct:42", {
+        derivedTitle: "Help me fix the login bug",
+      }),
+    ).toBe("Help me fix the login bug");
+  });
+
+  it("keeps derivedTitle behind an explicit label/displayName", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:telegram:direct:42", {
+        label: "Alice",
+        derivedTitle: "first message",
+      }),
+    ).toBe("Alice");
+    expect(
+      resolveSessionDisplayName("agent:main:telegram:direct:42", {
+        displayName: "Peter",
+        derivedTitle: "first message",
+      }),
+    ).toBe("Peter");
+  });
 });
 
 describe("resolveSessionWorkSubtitle", () => {
