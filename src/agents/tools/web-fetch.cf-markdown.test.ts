@@ -82,6 +82,25 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     expect(details?.text).toContain("server-rendered markdown");
   });
 
+  it("recognizes markdown response media types case-insensitively", async () => {
+    const md = "# Mixed Case\n\nStill markdown.";
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(markdownResponse(md, { "content-type": "Text/Markdown; charset=utf-8" }));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/case" });
+    const details = result?.details as
+      | { status?: number; extractor?: string; contentType?: string; text?: string }
+      | undefined;
+    expect(details?.status).toBe(200);
+    expect(details?.extractor).toBe("cf-markdown");
+    expect(details?.contentType).toBe("text/markdown");
+    expect(details?.text).toContain("Mixed Case");
+  });
+
   it("falls back to readability for text/html responses", async () => {
     const html =
       "<html><body><article><h1>HTML Page</h1><p>Content here.</p></article></body></html>";
