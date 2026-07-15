@@ -206,11 +206,12 @@ describe("subscription CRUD", () => {
     ).rejects.toThrow("invalid push subscription keys");
   });
 
-  it("ignores retired JSON during steady-state runtime", async () => {
+  it("blocks an empty broadcast while retired subscriptions await Doctor", async () => {
     const pushDir = path.join(tmpDir, "push");
+    const legacyPath = path.join(pushDir, "web-push-subscriptions.json");
     await fs.mkdir(pushDir, { recursive: true });
     await fs.writeFile(
-      path.join(pushDir, "web-push-subscriptions.json"),
+      legacyPath,
       JSON.stringify({
         subscriptionsByEndpointHash: {
           legacy: {
@@ -225,8 +226,30 @@ describe("subscription CRUD", () => {
     );
 
     expect(listWebPushSubscriptions(tmpDir)).toEqual([]);
-    await expect(broadcastWebPush({ title: "Ignored" }, tmpDir)).resolves.toEqual([]);
+    await expect(broadcastWebPush({ title: "Blocked" }, tmpDir)).rejects.toThrow(
+      "openclaw doctor --fix",
+    );
     expect(vi.mocked(webPush.sendNotification)).not.toHaveBeenCalled();
+  });
+
+  it("blocks mutations while a Doctor claim is pending", async () => {
+    const existing = await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
+    const pushDir = path.join(tmpDir, "push");
+    const claimPath = path.join(pushDir, "web-push-subscriptions.json.doctor-importing");
+    await fs.mkdir(pushDir, { recursive: true });
+    await fs.writeFile(claimPath, "{}", "utf8");
+
+    await expect(clearWebPushSubscriptionByEndpoint(endpoint, tmpDir)).rejects.toThrow(
+      "openclaw doctor --fix",
+    );
+    await expect(
+      registerWebPushSubscription({
+        endpoint: "https://push.example.com/new",
+        keys,
+        baseDir: tmpDir,
+      }),
+    ).rejects.toThrow("openclaw doctor --fix");
+    expect(listWebPushSubscriptions(tmpDir)).toEqual([existing]);
   });
 });
 
@@ -275,6 +298,34 @@ describe("sending", () => {
     await broadcast;
 
     expect(listWebPushSubscriptions(tmpDir)).toEqual([replacement]);
+  });
+
+  it("does not delete an expired subscription after a legacy claim appears", async () => {
+    const endpoint = "https://push.example.com/pending-claim";
+    const subscription = await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
+    let rejectSend: ((error: unknown) => void) | undefined;
+    vi.mocked(webPush.sendNotification).mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectSend = reject;
+        }),
+    );
+
+    const broadcast = broadcastWebPush({ title: "Race" }, tmpDir);
+    await vi.waitFor(() => expect(rejectSend).toBeTypeOf("function"));
+    const pushDir = path.join(tmpDir, "push");
+    await fs.mkdir(pushDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pushDir, "web-push-subscriptions.json.doctor-importing"),
+      "{}",
+      "utf8",
+    );
+    rejectSend?.(Object.assign(new Error("gone"), { statusCode: 410 }));
+
+    await expect(broadcast).resolves.toEqual([
+      expect.objectContaining({ ok: false, statusCode: 410 }),
+    ]);
+    expect(listWebPushSubscriptions(tmpDir)).toEqual([subscription]);
   });
 
   it("keeps completed delivery results when expired-subscription cleanup fails", async () => {

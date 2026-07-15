@@ -1110,8 +1110,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   claims them before the SQLite write, imports them atomically, rejects
   conflicting VAPID identities, verifies the result, and only then removes the
   claims. Doctor holds the state-directory maintenance lock for the complete
-  import so an older Gateway cannot recreate the retired files. First-use key
-  generation fails closed until Doctor resolves pending legacy sources.
+  import so an older Gateway cannot recreate the retired files. Registration,
+  delivery, deletion, and key resolution fail closed until Doctor resolves
+  pending legacy sources or interrupted claims.
 - Cron job definitions, schedule state, and run history no longer have runtime
   JSON writers or readers. Runtime uses `cron_jobs` rows with typed schedule,
   payload, delivery, failure-alert, session, status, and runtime-state columns plus

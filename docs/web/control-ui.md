@@ -435,7 +435,7 @@ If the page shows **Protocol mismatch** right after an OpenClaw update, first re
 | `state/openclaw.sqlite` → `web_push_vapid_keys`    | Auto-generated VAPID keypair used to sign Web Push payloads.                 |
 | `state/openclaw.sqlite` → `web_push_subscriptions` | Persisted browser subscription endpoints, keys, and registration timestamps. |
 
-Upgrades from the retired `push/vapid-keys.json` and `push/web-push-subscriptions.json` stores are imported by `openclaw doctor --fix`. Stop the Gateway before running that repair so an older process cannot recreate retired state during import. Run the repair before using Web Push after an upgrade; first-use VAPID generation refuses to create a competing identity while either retired source or an interrupted Doctor claim remains. The Gateway runtime reads and writes SQLite only.
+Upgrades from the retired `push/vapid-keys.json` and `push/web-push-subscriptions.json` stores are imported by `openclaw doctor --fix`. Stop the Gateway before running that repair so an older process cannot recreate retired state during import. Run the repair before using Web Push after an upgrade; registration, delivery, deletion, and key resolution refuse to proceed while either retired source or an interrupted Doctor claim remains. The Gateway runtime reads and writes SQLite only.
 
 Override the VAPID keypair through env vars on the Gateway process when you want to pin keys (multi-host deployments, secrets rotation, or tests):
 

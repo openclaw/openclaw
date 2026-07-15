@@ -51,9 +51,30 @@ function legacyWebPushPathMayExist(filePath: string): boolean {
   }
 }
 
+// Production callers run under the Gateway's lifetime state/config lock. Doctor must
+// acquire those same locks before claiming legacy files, so this check remains stable
+// through the following SQLite operation or asynchronous delivery fan-out.
+function assertLegacyWebPushMigrationComplete(baseDir?: string): void {
+  const stateDir = baseDir ?? resolveStateDir();
+  const pendingLegacyPath = LEGACY_WEB_PUSH_PATHS.find((relativePath) => {
+    const sourcePath = path.join(stateDir, relativePath);
+    return (
+      legacyWebPushPathMayExist(sourcePath) ||
+      legacyWebPushPathMayExist(`${sourcePath}.doctor-importing`)
+    );
+  });
+  if (pendingLegacyPath) {
+    throw new Error(
+      `legacy Web Push state requires migration; run \`openclaw doctor --fix\` before using Web Push`,
+    );
+  }
+}
+
 // --- VAPID keys ---
 
 export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> {
+  assertLegacyWebPushMigrationComplete(baseDir);
+
   // Env vars take precedence — allows operators to share a stable VAPID
   // identity across multiple gateway instances.
   const envPublic = resolveVapidPublicKeyFromEnv();
@@ -69,22 +90,6 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
   const existing = readPersistedVapidKeyPair(baseDir);
   if (existing) {
     return { ...existing, subject: resolveVapidSubjectFromEnv() };
-  }
-
-  // Never create a competing signing identity across the shipped JSON-to-SQLite boundary.
-  // Doctor must preserve the old keypair and subscriptions before first SQLite use.
-  const stateDir = baseDir ?? resolveStateDir();
-  const pendingLegacyPath = LEGACY_WEB_PUSH_PATHS.find((relativePath) => {
-    const sourcePath = path.join(stateDir, relativePath);
-    return (
-      legacyWebPushPathMayExist(sourcePath) ||
-      legacyWebPushPathMayExist(`${sourcePath}.doctor-importing`)
-    );
-  });
-  if (pendingLegacyPath) {
-    throw new Error(
-      `legacy Web Push state requires migration; run \`openclaw doctor --fix\` before using Web Push`,
-    );
   }
 
   // Generation can race across gateway processes. SQLite selects one durable
@@ -134,6 +139,7 @@ export async function registerWebPushSubscription(
   if (!isValidWebPushKey(keys.p256dh) || !isValidWebPushKey(keys.auth)) {
     throw new Error("invalid push subscription keys: must be non-empty strings under 512 chars");
   }
+  assertLegacyWebPushMigrationComplete(baseDir);
 
   return upsertWebPushSubscription({
     endpointHash: hashWebPushEndpoint(endpoint),
@@ -149,6 +155,7 @@ export async function clearWebPushSubscriptionByEndpoint(
   endpoint: string,
   baseDir?: string,
 ): Promise<boolean> {
+  assertLegacyWebPushMigrationComplete(baseDir);
   return deleteWebPushSubscriptionByEndpoint({
     endpointHash: hashWebPushEndpoint(endpoint),
     endpoint,
@@ -211,6 +218,7 @@ export async function broadcastWebPush(
   payload: WebPushPayload,
   baseDir?: string,
 ): Promise<WebPushSendResult[]> {
+  assertLegacyWebPushMigrationComplete(baseDir);
   const subscriptions = listWebPushSubscriptions(baseDir);
   if (subscriptions.length === 0) {
     return [];
@@ -245,6 +253,7 @@ export async function broadcastWebPush(
 
   for (const subscription of expiredSubscriptions) {
     try {
+      assertLegacyWebPushMigrationComplete(baseDir);
       deleteWebPushSubscriptionIfCurrent({
         endpointHash: hashWebPushEndpoint(subscription.endpoint),
         subscription,
