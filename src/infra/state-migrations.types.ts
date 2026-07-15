@@ -104,6 +104,11 @@ export type LegacyStateDetection = {
     sourceDir: string;
     hasLegacy: boolean;
   };
+  webPush: {
+    subscriptionsPath: string;
+    vapidKeysPath: string;
+    hasLegacy: boolean;
+  };
   rescuePending: LegacyRescuePendingDetection;
   channelPairing: LegacyChannelPairingStateDetection;
   execApprovals: {

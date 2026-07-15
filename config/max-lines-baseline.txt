@@ -247,6 +247,7 @@ extensions/qa-lab/src/gateway-process-boundary.ts
 extensions/qa-lab/src/lab-server.test.ts
 extensions/qa-lab/src/lab-server.ts
 extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts
+extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.ts
 extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts
 extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.test.ts
 extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts
@@ -266,7 +267,6 @@ extensions/qa-lab/src/suite-launch.runtime.ts
 extensions/qa-lab/src/suite.ts
 extensions/qa-lab/src/test-file-scenario-runner.test.ts
 extensions/qa-lab/web/src/app.ts
-extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts
 extensions/qqbot/src/engine/gateway/outbound-dispatch.ts
 extensions/qqbot/src/engine/messaging/outbound-deliver.ts
@@ -577,7 +577,6 @@ src/agents/tools/image-generate-tool.ts
 src/agents/tools/image-tool.test.ts
 src/agents/tools/image-tool.ts
 src/agents/tools/media-generate-background-shared.test.ts
-src/agents/tools/media-generate-background-shared.ts
 src/agents/tools/message-tool.test.ts
 src/agents/tools/message-tool.ts
 src/agents/tools/music-generate-tool.test.ts
@@ -1062,7 +1061,6 @@ src/plugins/setup-registry.test.ts
 src/plugins/setup-registry.ts
 src/plugins/tools.optional.test.ts
 src/plugins/tools.ts
-src/plugins/types.ts
 src/plugins/uninstall.test.ts
 src/plugins/update.test.ts
 src/plugins/update.ts

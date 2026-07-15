@@ -5,6 +5,9 @@ import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
+import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
+
+export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
@@ -33,8 +36,6 @@ export type ReplyThreadingPolicy = {
   /** Override implicit reply-to-current behavior for the current turn. */
   implicitCurrentMessage?: "default" | "allow" | "deny";
 };
-
-export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
 
 /** Action sink available for model-proposed follow-up tasks during this turn. */
 export type TaskSuggestionDeliveryMode = "gateway";
