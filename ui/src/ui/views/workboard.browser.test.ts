@@ -80,7 +80,7 @@ describe("workboard dialogs (browser)", () => {
         titleInput?.focus();
       }
 
-      const close = modal!.querySelector<HTMLButtonElement>("button[aria-label='Cancel']");
+      const close = modal!.querySelector<HTMLButtonElement>(".workboard-card__icon");
       const cancel = [...modal!.querySelectorAll<HTMLButtonElement>("button")].at(-1);
       cancel?.focus();
       const tab = dispatchKey(cancel!, "Tab");

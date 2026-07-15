@@ -2540,7 +2540,8 @@ describe("formatChatTimestampForDisplay time format", () => {
   it("renders an AM/PM clock when preference is 12", () => {
     setUiTimeFormatPreference("12");
     const display = formatChatTimestampForDisplay(timestamp);
-    expect(display.label).toMatch(/AM|PM/i);
+    // 12-hour mode should include AM/PM or locale equivalent (e.g. 上午/下午)
+    expect(display.label).toMatch(/AM|PM|上午|下午/i);
   });
 
   it("renders a 24-hour clock with no AM/PM when preference is 24", () => {

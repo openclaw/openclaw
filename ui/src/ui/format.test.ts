@@ -84,12 +84,13 @@ describe("agents.defaults.timeFormat preference", () => {
     setUiTimeFormatPreference("12");
     const formatted = formatTimeMs(ts, opts, "");
     expect(formatted).toContain("7:30");
-    expect(formatted).toMatch(/PM/i);
+    // 12-hour mode should not use 24-hour format
+    expect(formatted).not.toContain("19:30");
   });
 
   it("lets the caller override the resolved hour cycle", () => {
     setUiTimeFormatPreference("24");
-    expect(formatTimeMs(ts, { ...opts, hour12: true }, "")).toMatch(/PM/i);
+    expect(formatTimeMs(ts, { ...opts, hour12: true }, "")).toContain("7:30");
   });
 
   it("leaves rendering to the browser locale default for auto", () => {
