@@ -14,6 +14,7 @@ import {
 import {
   LINE_WEBHOOK_RESPONSE_DEADLINE_MS,
   assertLineWebhookResponseDeadline,
+  dispatchLineWebhookInBackground,
   type LineWebhookAcceptanceDispatchHandler,
   type LineWebhookDispatchHandler,
   waitForLineWebhookDispatchAcceptance,
@@ -45,8 +46,8 @@ type LineNodeWebhookHandlerParams = {
   onRequestAuthenticated?: () => void;
   bot:
     | {
-        /** Preserve the existing API contract by acknowledging after dispatch completes. */
-        webhookAcknowledgement?: "after_dispatch";
+        /** Preserve the existing API contract by acknowledging before background dispatch. */
+        webhookAcknowledgement?: "before_dispatch";
         handleWebhook: LineWebhookDispatchHandler;
       }
     | {
@@ -142,7 +143,7 @@ export function createLineNodeWebhookHandler(
         id: `${Date.now()}:line:webhook`,
         channel: "line",
         message: body,
-        ackPolicy: "after_agent_dispatch",
+        ackPolicy: waitsForEventAcceptance ? "after_agent_dispatch" : "after_receive_record",
         onAck: () => {
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
@@ -164,7 +165,13 @@ export function createLineNodeWebhookHandler(
           runtime: params.runtime,
         });
       } else {
-        await params.bot.handleWebhook(body);
+        await receiveContext.ack();
+        dispatchLineWebhookInBackground({
+          body,
+          dispatch: params.bot.handleWebhook,
+          runtime: params.runtime,
+        });
+        return;
       }
       await receiveContext.ack();
     } catch (err) {

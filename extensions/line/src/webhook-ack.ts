@@ -19,6 +19,8 @@ export function assertLineWebhookResponseDeadline(responseDeadlineAt: number): v
 export type LineWebhookDispatchCallbacks = {
   /** Called once when one webhook event is durably owned or needs no dispatch. */
   onEventAccepted: (event: webhook.Event) => void | Promise<void>;
+  /** Aborted when ingress can no longer acknowledge pre-acceptance work safely. */
+  abortSignal: AbortSignal;
 };
 
 export type LineWebhookDispatchHandler = (body: webhook.CallbackRequest) => Promise<void>;
@@ -30,6 +32,16 @@ export type LineWebhookAcceptanceDispatchHandler = (
 
 function logLineWebhookDispatchError(runtime: RuntimeEnv | undefined, err: unknown): void {
   runtime?.error?.(danger(`line webhook dispatch failed: ${String(err)}`));
+}
+
+export function dispatchLineWebhookInBackground(params: {
+  body: webhook.CallbackRequest;
+  dispatch: LineWebhookDispatchHandler;
+  runtime?: RuntimeEnv;
+}): void {
+  void Promise.resolve()
+    .then(() => params.dispatch(params.body))
+    .catch((error: unknown) => logLineWebhookDispatchError(params.runtime, error));
 }
 
 /**
@@ -52,6 +64,7 @@ export async function waitForLineWebhookDispatchAcceptance(params: {
     params.responseDeadlineAt ?? Date.now() + LINE_WEBHOOK_RESPONSE_DEADLINE_MS;
   assertLineWebhookResponseDeadline(responseDeadlineAt);
   const acceptedEvents = new Set<webhook.Event>();
+  const dispatchAbort = new AbortController();
   let settled = false;
   let acceptanceDeadline: ReturnType<typeof setTimeout> | undefined;
   let resolveAcceptance!: () => void;
@@ -71,6 +84,7 @@ export async function waitForLineWebhookDispatchAcceptance(params: {
       return;
     }
     settled = true;
+    dispatchAbort.abort(error);
     clearAcceptanceDeadline();
     rejectAcceptancePromise(error);
   };
@@ -95,6 +109,7 @@ export async function waitForLineWebhookDispatchAcceptance(params: {
   const dispatch = Promise.resolve().then(() => {
     assertLineWebhookResponseDeadline(responseDeadlineAt);
     return params.dispatch(params.body, {
+      abortSignal: dispatchAbort.signal,
       onEventAccepted: (event) => {
         if (settled || !expectedEvents.has(event)) {
           return;

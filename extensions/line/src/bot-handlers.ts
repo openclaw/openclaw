@@ -71,6 +71,22 @@ function isLineMediaSizeLimitError(err: unknown): boolean {
   return message.includes("exceeds") && message.includes("limit");
 }
 
+function isPermanentLineMediaDownloadError(err: unknown): boolean {
+  if (!err || typeof err !== "object" || !("status" in err)) {
+    return false;
+  }
+  // @line/bot-sdk exposes HTTPFetchError.status. Retrying non-429 4xx
+  // responses cannot recover this event's media, so keep its text path usable.
+  const status = (err as { status?: unknown }).status;
+  return (
+    typeof status === "number" &&
+    Number.isInteger(status) &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 429
+  );
+}
+
 interface LineHandlerContext {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -78,6 +94,7 @@ interface LineHandlerContext {
   mediaMaxBytes: number;
   processMessage: (ctx: LineInboundContext) => Promise<void>;
   onEventAccepted?: (event: WebhookEvent) => void | Promise<void>;
+  abortSignal?: AbortSignal;
   replayCache?: LineWebhookReplayCache;
   groupHistories?: Map<string, HistoryEntry[]>;
   conversationAcceptanceTails?: Map<string, Promise<void>>;
@@ -436,7 +453,7 @@ function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
 }
 
 async function handleMessageEvent(event: MessageEvent, context: LineHandlerContext): Promise<void> {
-  const { cfg, account, mediaMaxBytes, processMessage } = context;
+  const { cfg, account, mediaMaxBytes, processMessage, runtime } = context;
   const message = event.message;
 
   const decision = await shouldProcessLineEvent(event, context);
@@ -483,6 +500,9 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       if (isLineMediaSizeLimitError(err)) {
         mediaUnavailable = true;
         logVerbose(`line: media exceeds size limit for message ${message.id}`);
+      } else if (isPermanentLineMediaDownloadError(err)) {
+        mediaUnavailable = true;
+        runtime.error?.(danger(`line: media is unavailable: ${String(err)}`));
       } else {
         throw new Error(`failed to download media for ${message.id}`, {
           cause: err,
@@ -612,6 +632,7 @@ function startLineWebhookEvent(
   context: LineHandlerContext,
 ): LineWebhookEventTask {
   let eventAccepted = false;
+  let replayClaimOwned = false;
   let eventAcceptance: Promise<void> | undefined;
   let acceptanceSettled = false;
   let resolveAcceptance!: () => void;
@@ -635,17 +656,38 @@ function startLineWebhookEvent(
     rejectAcceptance(error);
   };
   const replayCandidate = getLineReplayCandidate(event, context);
+  const throwIfAborted = () => context.abortSignal?.throwIfAborted();
+  const releaseReplayClaim = (error: unknown) => {
+    if (!replayCandidate || !replayClaimOwned || eventAccepted) {
+      return;
+    }
+    replayClaimOwned = false;
+    replayCandidate.cache.release(replayCandidate.key, { error });
+  };
+  const abortEvent = () => {
+    const error = context.abortSignal?.reason ?? new Error("LINE webhook acceptance aborted");
+    releaseReplayClaim(error);
+    rejectEventAcceptance(error);
+  };
+  if (context.abortSignal?.aborted) {
+    abortEvent();
+  } else {
+    context.abortSignal?.addEventListener("abort", abortEvent, { once: true });
+  }
   const acceptEvent = async () => {
+    throwIfAborted();
     if (eventAccepted) {
       return;
     }
     eventAcceptance ??= (async () => {
       await context.onEventAccepted?.(event);
+      throwIfAborted();
       // The reply lane now owns this event durably. Resolve replay claims here,
       // rather than after the full turn, so a redelivered batch can retry its
       // other events without waiting for this turn to settle.
-      if (replayCandidate) {
+      if (replayCandidate && replayClaimOwned) {
         await replayCandidate.cache.commit(replayCandidate.key);
+        replayClaimOwned = false;
       }
       eventAccepted = true;
       resolveEventAcceptance();
@@ -660,22 +702,27 @@ function startLineWebhookEvent(
   };
   const eventContext = { ...context, onEventAccepted: acceptEvent };
   const completion = (async () => {
-    const replaySkip = replayCandidate ? await claimLineReplayEvent(replayCandidate) : null;
-    if (replaySkip?.skip) {
-      if (replaySkip.inFlightResult) {
-        try {
-          await replaySkip.inFlightResult;
-          await acceptEvent();
-        } catch (err) {
-          context.runtime.error?.(danger(`line: replayed in-flight event failed: ${String(err)}`));
-          throw err;
-        }
-      } else {
-        await acceptEvent();
-      }
-      return;
-    }
     try {
+      throwIfAborted();
+      const replaySkip = replayCandidate ? await claimLineReplayEvent(replayCandidate) : null;
+      replayClaimOwned = Boolean(replayCandidate && !replaySkip?.skip);
+      throwIfAborted();
+      if (replaySkip?.skip) {
+        if (replaySkip.inFlightResult) {
+          try {
+            await replaySkip.inFlightResult;
+            await acceptEvent();
+          } catch (err) {
+            context.runtime.error?.(
+              danger(`line: replayed in-flight event failed: ${String(err)}`),
+            );
+            throw err;
+          }
+        } else {
+          await acceptEvent();
+        }
+        return;
+      }
       switch (event.type) {
         case "message":
           await handleMessageEvent(event, eventContext);
@@ -700,13 +747,15 @@ function startLineWebhookEvent(
       }
       await acceptEvent();
     } catch (err) {
-      if (replayCandidate && !eventAccepted) {
+      if (replayClaimOwned && !eventAccepted) {
         // Every error here propagates to the webhook response before durable
         // adoption. Leave the replay claim available so LINE can redeliver it.
-        replayCandidate.cache.release(replayCandidate.key, { error: err });
+        releaseReplayClaim(err);
       }
       context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
       throw err;
+    } finally {
+      context.abortSignal?.removeEventListener("abort", abortEvent);
     }
   })();
   void completion.then(resolveEventAcceptance, rejectEventAcceptance);

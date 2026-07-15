@@ -8,6 +8,7 @@ import {
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   LINE_WEBHOOK_RESPONSE_DEADLINE_MS,
+  dispatchLineWebhookInBackground,
   type LineWebhookAcceptanceDispatchHandler,
   type LineWebhookDispatchHandler,
   waitForLineWebhookDispatchAcceptance,
@@ -24,8 +25,8 @@ type LineWebhookOptionsBase = {
 export type LineWebhookOptions = LineWebhookOptionsBase &
   (
     | {
-        /** Preserve the existing API contract by acknowledging after dispatch completes. */
-        acknowledgement?: "after_dispatch";
+        /** Preserve the existing API contract by acknowledging before background dispatch. */
+        acknowledgement?: "before_dispatch";
         onEvents: LineWebhookDispatchHandler;
       }
     | {
@@ -101,7 +102,10 @@ export function createLineWebhookMiddleware(
         id: `${Date.now()}:line:webhook`,
         channel: "line",
         message: body,
-        ackPolicy: "after_agent_dispatch",
+        ackPolicy:
+          options.acknowledgement === "after_event_acceptance"
+            ? "after_agent_dispatch"
+            : "after_receive_record",
         onAck: () => {
           res.status(200).json({ status: "ok" });
         },
@@ -121,7 +125,9 @@ export function createLineWebhookMiddleware(
           runtime,
         });
       } else {
-        await options.onEvents(body);
+        await receiveContext.ack();
+        dispatchLineWebhookInBackground({ body, dispatch: options.onEvents, runtime });
+        return;
       }
       await receiveContext.ack();
     } catch (err) {

@@ -72,6 +72,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
       conversationAcceptanceTails,
       historyLimit: cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
       onEventAccepted: callbacks?.onEventAccepted,
+      abortSignal: callbacks?.abortSignal,
     });
   };
 

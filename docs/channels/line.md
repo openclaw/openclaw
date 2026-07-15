@@ -50,8 +50,9 @@ inbound events (POST), it returns success only after every event is either
 accepted by the durable reply lane or completes without an agent dispatch;
 agent processing then continues asynchronously. OpenClaw stops waiting after
 1.5 seconds so it can return a non-success response before LINE's 2-second
-request timeout; any already-started processing may still finish, and replay
-deduplication prevents the redelivery from running an accepted event twice. See LINE's
+request timeout. If that deadline expires before acceptance, OpenClaw aborts
+the pending dispatch and releases its replay claim so redelivery can retry;
+replay deduplication prevents an accepted event from running twice. See LINE's
 [Webhook redelivery documentation](https://developers.line.biz/en/docs/messaging-api/receiving-messages/#redelivery)
 for the upstream retry contract.
 If you need a custom path, set `channels.line.webhookPath` or

@@ -228,6 +228,7 @@ function createLineWebhookTestContext(params: {
   groupHistories?: Map<string, HistoryEntry[]>;
   conversationAcceptanceTails?: Map<string, Promise<void>>;
   onEventAccepted?: (event: webhook.Event) => void | Promise<void>;
+  abortSignal?: AbortSignal;
   replayCache?: ReturnType<typeof createLineWebhookReplayCache>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
 }): Parameters<typeof handleLineWebhookEvents>[1] {
@@ -260,6 +261,7 @@ function createLineWebhookTestContext(params: {
     mediaMaxBytes: 1,
     processMessage: params.processMessage,
     ...(params.onEventAccepted ? { onEventAccepted: params.onEventAccepted } : {}),
+    ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
     ...(params.conversationAcceptanceTails
       ? { conversationAcceptanceTails: params.conversationAcceptanceTails }
@@ -1511,8 +1513,8 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("retries media materialization failures before reply-lane acceptance", async () => {
-    downloadLineMediaMock.mockRejectedValueOnce(new Error("expired content"));
+  it("retries transient media materialization failures before reply-lane acceptance", async () => {
+    downloadLineMediaMock.mockRejectedValueOnce(new Error("connection reset"));
     const processMessage = vi.fn();
     const onEventAccepted = vi.fn();
     const event = createTestMessageEvent({
@@ -1604,6 +1606,35 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps permanent LINE media failures processable as attachment unavailable", async () => {
+    downloadLineMediaMock.mockRejectedValueOnce({
+      name: "HTTPFetchError",
+      status: 404,
+      statusText: "Not Found",
+    });
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-expired-1",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "test-token-placeholder",
+      },
+      source: { type: "user", userId: "user-image-expired" },
+      webhookEventId: "evt-image-expired",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allMedia: [], mediaUnavailable: true }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("allows non-text group messages through when requireMention is set (cannot detect mention)", async () => {
     // Image message -- LINE only carries mention metadata on text messages.
     downloadLineMediaMock.mockResolvedValueOnce({
@@ -1674,6 +1705,52 @@ describe("handleLineWebhookEvents", () => {
     expect(context.runtime.error).toHaveBeenCalledWith(
       "line: event handler failed: Error: transient failure",
     );
+  });
+
+  it("releases replay ownership when webhook acceptance is aborted", async () => {
+    let releaseFirstProcessing: (() => void) | undefined;
+    const firstProcessing = new Promise<void>((resolve) => {
+      releaseFirstProcessing = resolve;
+    });
+    const processMessage = vi.fn<LineWebhookContext["processMessage"]>(async (message) => {
+      if (processMessage.mock.calls.length === 1) {
+        await firstProcessing;
+      }
+      await message.onEventAccepted?.();
+    });
+    const event = createReplayMessageEvent({
+      messageId: "m-aborted-claim",
+      groupId: "group-aborted-claim",
+      userId: "user-aborted-claim",
+      webhookEventId: "evt-aborted-claim",
+      isRedelivery: true,
+    });
+    const replayCache = createLineWebhookReplayCache();
+    const abortController = new AbortController();
+    const firstContext = createOpenGroupReplayContext(processMessage, replayCache);
+    firstContext.abortSignal = abortController.signal;
+    const firstRequest = handleLineWebhookEvents([event], firstContext);
+
+    await vi.waitFor(() => expect(processMessage).toHaveBeenCalledOnce());
+    abortController.abort(new Error("webhook deadline elapsed"));
+    await expect(firstRequest).rejects.toThrow("webhook deadline elapsed");
+
+    const retryContext = createOpenGroupReplayContext(processMessage, replayCache);
+    await handleLineWebhookEvents([event], retryContext);
+    expect(processMessage).toHaveBeenCalledTimes(2);
+
+    if (!releaseFirstProcessing) {
+      throw new Error("Expected aborted LINE processing release callback");
+    }
+    releaseFirstProcessing();
+    await vi.waitFor(() =>
+      expect(firstContext.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("webhook deadline elapsed"),
+      ),
+    );
+
+    await handleLineWebhookEvents([event], retryContext);
+    expect(processMessage).toHaveBeenCalledTimes(2);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

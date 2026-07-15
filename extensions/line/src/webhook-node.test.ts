@@ -37,12 +37,16 @@ const SECRET = "secret";
 it("bounds stalled LINE webhook acceptance before the upstream response deadline", async () => {
   vi.useFakeTimers();
   try {
+    let dispatchSignal: AbortSignal | undefined;
     const body = {
       events: [{ type: "message" }],
     } as unknown as webhook.CallbackRequest;
     const acceptance = waitForLineWebhookDispatchAcceptance({
       body,
-      dispatch: async () => await new Promise<void>(() => {}),
+      dispatch: async (_body, callbacks) => {
+        dispatchSignal = callbacks.abortSignal;
+        await new Promise<void>(() => {});
+      },
       runtime: createRuntimeMock(),
     });
     const rejection = expect(acceptance).rejects.toThrow(
@@ -51,6 +55,7 @@ it("bounds stalled LINE webhook acceptance before the upstream response deadline
 
     await vi.advanceTimersByTimeAsync(1_500);
     await rejection;
+    expect(dispatchSignal?.aborted).toBe(true);
   } finally {
     vi.useRealTimers();
   }
@@ -159,13 +164,21 @@ async function invokeWebhook(params: {
   onEvents?: ReturnType<typeof vi.fn>;
   autoSign?: boolean;
   runtime?: RuntimeEnv;
+  waitsForEventAcceptance?: boolean;
 }) {
   const onEventsMock = params.onEvents ?? vi.fn(async () => {});
-  const middleware = createLineWebhookMiddleware({
-    channelSecret: SECRET,
-    onEvents: onEventsMock as never,
-    runtime: params.runtime,
-  });
+  const middleware = params.waitsForEventAcceptance
+    ? createLineWebhookMiddleware({
+        channelSecret: SECRET,
+        onEvents: onEventsMock as never,
+        runtime: params.runtime,
+        acknowledgement: "after_event_acceptance",
+      })
+    : createLineWebhookMiddleware({
+        channelSecret: SECRET,
+        onEvents: onEventsMock as never,
+        runtime: params.runtime,
+      });
 
   const headers = { ...params.headers };
   const autoSign = params.autoSign ?? true;
@@ -224,7 +237,10 @@ async function invokeNodePostContract(params: {
   const runtime = createRuntimeMock();
   const handler = createLineNodeWebhookHandler({
     channelSecret: SECRET,
-    bot: { handleWebhook: dispatched },
+    bot: {
+      handleWebhook: dispatched,
+      webhookAcknowledgement: "after_event_acceptance",
+    },
     runtime,
     readBody: async () => params.rawBody,
   });
@@ -262,6 +278,7 @@ async function invokeMiddlewarePostContract(params: {
     autoSign: params.signed,
     onEvents,
     runtime,
+    waitsForEventAcceptance: true,
   });
   return {
     body: res.json.mock.calls.at(-1)?.[0],
@@ -545,7 +562,7 @@ describe("createLineNodeWebhookHandler", () => {
     const runtime = createRuntimeMock();
     const handler = createLineNodeWebhookHandler({
       channelSecret: SECRET,
-      bot,
+      bot: { ...bot, webhookAcknowledgement: "after_event_acceptance" },
       runtime,
       readBody: async () => rawBody,
     });
@@ -620,41 +637,33 @@ describe("createLineNodeWebhookHandler", () => {
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
-  it("preserves completion acknowledgement for callback-less handlers", async () => {
-    vi.useFakeTimers();
-    try {
-      const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-      let finishDispatch: (() => void) | undefined;
-      const bot = {
-        handleWebhook: vi.fn(
-          async () =>
-            await new Promise<void>((resolve) => {
-              finishDispatch = resolve;
-            }),
-        ),
-      };
-      const handler = createLineNodeWebhookHandler({
-        channelSecret: SECRET,
-        bot,
-        runtime: createRuntimeMock(),
-        readBody: async () => rawBody,
-      });
-      const { res } = createRes();
-      const request = runSignedPost({ handler, rawBody, secret: SECRET, res });
+  it("preserves immediate acknowledgement for callback-less handlers", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    let finishDispatch: (() => void) | undefined;
+    const bot = {
+      handleWebhook: vi.fn(
+        async () =>
+          await new Promise<void>((resolve) => {
+            finishDispatch = resolve;
+          }),
+      ),
+    };
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: SECRET,
+      bot,
+      runtime: createRuntimeMock(),
+      readBody: async () => rawBody,
+    });
+    const { res } = createRes();
 
-      await vi.waitFor(() => expect(bot.handleWebhook).toHaveBeenCalledTimes(1));
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(res.headersSent).toBe(false);
-      if (!finishDispatch) {
-        throw new Error("Expected callback-less LINE handler to start");
-      }
-      finishDispatch();
-      await request;
+    await runSignedPost({ handler, rawBody, secret: SECRET, res });
 
-      expect(res.statusCode).toBe(200);
-    } finally {
-      vi.useRealTimers();
+    expect(res.statusCode).toBe(200);
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+    if (!finishDispatch) {
+      throw new Error("Expected callback-less LINE handler to start");
     }
+    finishDispatch();
   });
 });
 
@@ -765,40 +774,32 @@ describe("createLineWebhookMiddleware", () => {
     expect(onEvents).not.toHaveBeenCalled();
   });
 
-  it("preserves completion acknowledgement for callback-less handlers", async () => {
-    vi.useFakeTimers();
-    try {
-      const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-      let finishDispatch: (() => void) | undefined;
-      const onEvents = vi.fn(
-        async () =>
-          await new Promise<void>((resolve) => {
-            finishDispatch = resolve;
-          }),
-      );
-      const middleware = createLineWebhookMiddleware({
-        channelSecret: SECRET,
-        onEvents,
-      });
-      const req = createMiddlewareRequest({
-        headers: { "x-line-signature": sign(rawBody, SECRET) },
-        body: rawBody,
-      });
-      const res = createMiddlewareRes();
-      const request = middleware(req, res, vi.fn() as NextFunction);
+  it("preserves immediate acknowledgement for callback-less handlers", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    let finishDispatch: (() => void) | undefined;
+    const onEvents = vi.fn(
+      async () =>
+        await new Promise<void>((resolve) => {
+          finishDispatch = resolve;
+        }),
+    );
+    const middleware = createLineWebhookMiddleware({
+      channelSecret: SECRET,
+      onEvents,
+    });
+    const req = createMiddlewareRequest({
+      headers: { "x-line-signature": sign(rawBody, SECRET) },
+      body: rawBody,
+    });
+    const res = createMiddlewareRes();
 
-      await vi.waitFor(() => expect(onEvents).toHaveBeenCalledTimes(1));
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(res.status).not.toHaveBeenCalled();
-      if (!finishDispatch) {
-        throw new Error("Expected callback-less LINE middleware handler to start");
-      }
-      finishDispatch();
-      await request;
+    await middleware(req, res, vi.fn() as NextFunction);
 
-      expect(res.status).toHaveBeenCalledWith(200);
-    } finally {
-      vi.useRealTimers();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(onEvents).toHaveBeenCalledTimes(1);
+    if (!finishDispatch) {
+      throw new Error("Expected callback-less LINE middleware handler to start");
     }
+    finishDispatch();
   });
 });
