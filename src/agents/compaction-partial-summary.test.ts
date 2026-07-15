@@ -409,4 +409,47 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
       expect.objectContaining({ completedMessages: 4, totalMessages: 4 }),
     );
   });
+
+  it("keeps every completed stage when the final merge first request times out", async () => {
+    const controller = new AbortController();
+    const timeoutError = new CompactionSafetyTimeoutError();
+    const onPartialSummary = vi.fn();
+    const stagedMessages: AgentMessage[] = Array.from({ length: 4 }, (_, index) => ({
+      role: "user",
+      content: `${index + 1}-${"x".repeat(1200)}`,
+      timestamp: index + 1,
+    }));
+
+    compactionMocks.generateSummary
+      .mockResolvedValueOnce(`stage-1-complete ${"a".repeat(4000)}`)
+      .mockResolvedValueOnce(`stage-2-complete ${"b".repeat(4000)}`)
+      .mockImplementationOnce(async () => {
+        controller.abort(timeoutError);
+        throw timeoutError;
+      });
+
+    const result = await summarizeInStages({
+      messages: stagedMessages,
+      model: testModel,
+      apiKey: "test-key", // pragma: allowlist secret
+      signal: controller.signal,
+      reserveTokens: 1000,
+      maxChunkTokens: 1000,
+      contextWindow: 200_000,
+      parts: 2,
+      minMessagesForSplit: 4,
+      onPartialSummary,
+    });
+
+    expect(result).toContain("stage-1-complete");
+    expect(result).toContain("stage-2-complete");
+    expect(result).toContain("Partial staged summary: 2 of 2");
+    expect(onPartialSummary).toHaveBeenCalledWith({
+      kind: "safety-timeout",
+      completedChunks: 2,
+      totalChunks: 2,
+      completedMessages: 4,
+      totalMessages: 4,
+    });
+  });
 });

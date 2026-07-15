@@ -516,19 +516,40 @@ export async function summarizeInStages(params: {
     : MERGE_SUMMARIES_INSTRUCTIONS;
 
   let mergeTimedOutWithPartialProgress = false;
-  const mergedSummary = await summarizeWithFallback({
-    ...params,
-    messages: summaryMessages,
-    customInstructions: mergeInstructions,
-    onPartialSummary: (progress) => {
-      mergeTimedOutWithPartialProgress = true;
-      params.onPartialSummary?.({
-        ...progress,
+  let mergedSummary: string;
+  try {
+    mergedSummary = await summarizeWithFallback({
+      ...params,
+      messages: summaryMessages,
+      customInstructions: mergeInstructions,
+      onPartialSummary: (progress) => {
+        mergeTimedOutWithPartialProgress = true;
+        params.onPartialSummary?.({
+          ...progress,
+          completedMessages: messages.length,
+          totalMessages: messages.length,
+        });
+      },
+    });
+  } catch (err) {
+    if (params.signal.aborted && isCompactionSafetyTimeoutError(params.signal.reason)) {
+      const progress = {
+        kind: "safety-timeout" as const,
+        completedChunks: partialSummaries.length,
+        totalChunks: plan.chunks.length,
         completedMessages: messages.length,
         totalMessages: messages.length,
+      };
+      log.warn("safety timeout interrupted final staged-summary merge", {
+        err,
+        completedStages: progress.completedChunks,
+        totalStages: progress.totalChunks,
       });
-    },
-  });
+      params.onPartialSummary?.(progress);
+      return formatPartialStagedSummary(partialSummaries, plan.chunks.length);
+    }
+    throw err;
+  }
   return mergeTimedOutWithPartialProgress
     ? formatPartialStagedSummary(partialSummaries, plan.chunks.length)
     : mergedSummary;

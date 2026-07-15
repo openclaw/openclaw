@@ -1836,6 +1836,49 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(secondCall.customInstructions).toContain("missing_section:## Decisions");
   });
 
+  it("marks the last successful summary when a quality retry first request times out", async () => {
+    const controller = new AbortController();
+    const timeoutError = new CompactionSafetyTimeoutError();
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages
+      .mockResolvedValueOnce("summary missing required headings")
+      .mockImplementationOnce(async () => {
+        controller.abort(timeoutError);
+        throw timeoutError;
+      });
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = createCompactionEvent({ messageText: "older context", tokensBefore: 1_500 });
+    event.signal = controller.signal;
+    Object.assign(event.preparation, {
+      messageEntryIdsToSummarize: ["entry-history"],
+      firstKeptEntryId: "entry-retained-tail",
+      settings: { reserveTokens: 4_000 },
+    });
+
+    const result = (await createCompactionHandler()(
+      event,
+      createCompactionContext({
+        sessionManager,
+        getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+      }),
+    )) as {
+      cancel?: boolean;
+      compaction?: { firstKeptEntryId?: string; summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(isCompactionTimeoutPartialResult(result.compaction)).toBe(true);
+    expect(result.compaction?.summary).toContain("summary missing required headings");
+    expect(result.compaction?.firstKeptEntryId).toBe("entry-retained-tail");
+  });
+
   it("does not treat preserved latest asks as satisfying overlap checks", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages

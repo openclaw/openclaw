@@ -1357,6 +1357,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             break;
           }
           if (lastSuccessfulSummary && attempt > 0) {
+            if (signal.aborted && isCompactionSafetyTimeoutError(signal.reason)) {
+              timeoutPartialProgress = true;
+              partialFirstKeptEntryId = preparation.firstKeptEntryId;
+            }
             log.warn(
               `Compaction safeguard: quality retry failed on attempt ${attempt + 1}; ` +
                 `keeping last successful summary: ${formatErrorMessage(attemptError)}`,
