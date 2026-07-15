@@ -468,7 +468,7 @@ describe("resolveLegacyWebhookNameToChatUserId user lookup", () => {
     // Single oversized Buffer: over 1 MiB cap without multi-write/destroy races.
     const oversized = Buffer.alloc(1 * 1024 * 1024 + 1, 0x78);
     const overflowUrl =
-      "https://overflow-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22overflow%22";
+      "https://overflow-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2";
     httpsGet.mockImplementation(((_url, _opts, callback) => {
       const res = createMockResponseEmitter(200);
       process.nextTick(() => {

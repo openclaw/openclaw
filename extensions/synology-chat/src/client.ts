@@ -7,6 +7,7 @@ import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   formatErrorMessage,
@@ -184,71 +185,46 @@ async function fetchChatUsers(
 
     const req = transport
       .get(listUrl, requestOptions, (res) => {
-        // Bound the body while preserving UTF-8 across chunk splits (Buffer concat).
-        let totalBytes = 0;
-        let overflow = false;
-        const chunks: Buffer[] = [];
-
-        const failOverflow = () => {
-          if (settled) {
-            return;
-          }
-          log?.warn(
-            `fetchChatUsers: response exceeded ${USER_LIST_RESPONSE_MAX_BYTES} bytes, using cached data`,
-          );
-          finish(cached?.users ?? []);
-        };
-
-        res.on("data", (chunk: Buffer | string) => {
-          if (overflow) {
-            return;
-          }
-          const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-          totalBytes += buf.byteLength;
-          if (totalBytes > USER_LIST_RESPONSE_MAX_BYTES) {
-            overflow = true;
-            chunks.length = 0;
-            // Settle immediately: destroy() without an error often skips end/error.
-            failOverflow();
-            res.destroy();
-            return;
-          }
-          chunks.push(buf);
-        });
-        res.on("error", (err) => {
-          if (overflow) {
-            finish(cached?.users ?? []);
-            return;
-          }
-          log?.warn(`fetchChatUsers: HTTP error — ${err instanceof Error ? err.message : err}`);
-          finish(cached?.users ?? []);
-        });
-        res.on("end", () => {
-          if (overflow) {
-            finish(cached?.users ?? []);
-            return;
-          }
-          const data = Buffer.concat(chunks).toString("utf8");
-          const result = safeParseJsonWithSchema(ChatUserListResponseSchema, data);
-          if (!result) {
-            log?.warn("fetchChatUsers: failed to parse user_list response");
-            finish(cached?.users ?? []);
-            return;
-          }
-
-          if (result.success) {
-            const users = result.data?.users ?? [];
-            chatUserCache.set(listUrl, {
-              users,
-              cachedAt: now,
+        void (async () => {
+          try {
+            const data = await readByteStreamWithLimit(res, {
+              maxBytes: USER_LIST_RESPONSE_MAX_BYTES,
+              onOverflow: ({ maxBytes }) =>
+                new Error(`user_list response exceeded ${maxBytes} bytes`),
             });
-            finish(users);
-            return;
-          }
+            if (settled) {
+              return;
+            }
+            const result = safeParseJsonWithSchema(
+              ChatUserListResponseSchema,
+              data.toString("utf8"),
+            );
+            if (!result) {
+              log?.warn("fetchChatUsers: failed to parse user_list response");
+              finish(cached?.users ?? []);
+              return;
+            }
 
-          log?.warn(`fetchChatUsers: API returned success=${result.success}, using cached data`);
-          finish(cached?.users ?? []);
-        });
+            if (result.success) {
+              const users = result.data?.users ?? [];
+              chatUserCache.set(listUrl, {
+                users,
+                cachedAt: now,
+              });
+              finish(users);
+              return;
+            }
+
+            log?.warn(`fetchChatUsers: API returned success=${result.success}, using cached data`);
+            finish(cached?.users ?? []);
+          } catch (err) {
+            if (settled) {
+              return;
+            }
+            log?.warn(`fetchChatUsers: ${formatErrorMessage(err)}, using cached data`);
+            finish(cached?.users ?? []);
+          }
+        })();
       })
       .on("error", (err) => {
         log?.warn(`fetchChatUsers: HTTP error — ${err instanceof Error ? err.message : err}`);
