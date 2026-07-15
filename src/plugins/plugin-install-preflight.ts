@@ -2,6 +2,7 @@ import {
   resolvePluginInstallRequestContext,
   type PluginInstallRequestContext,
 } from "../cli/plugin-install-config-policy.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 
 export type PluginInstallPreflightResult =
@@ -22,7 +23,7 @@ export type PluginInstallPreflightResult =
   | { ok: false; code: "invalid_plugin_spec"; error: string };
 
 export async function preflightPluginInstall(params: {
-  pluginId: string;
+  clawhubPackage: string;
   rawSpec: string;
   expectedVersion: string;
   marketplace?: string;
@@ -38,7 +39,11 @@ export async function preflightPluginInstall(params: {
   }
 
   const records = await (params.loadInstallRecords ?? loadInstalledPluginIndexInstallRecords)();
-  const installed = records[params.pluginId];
+  const installed = Object.values(records).find(
+    (record) =>
+      (record.clawhubPackage ?? parseClawHubPluginSpec(record.spec ?? "")?.name) ===
+      params.clawhubPackage,
+  );
   const installedVersion = installed?.resolvedVersion ?? installed?.version;
   if (!installedVersion) {
     return { ok: true, action: "install", request: resolved.request };
