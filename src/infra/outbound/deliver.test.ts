@@ -3,11 +3,8 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  onTrustedMessageAuditEvent,
-  resetMessageAuditEventsForTest,
-  type TrustedMessageAuditEvent,
-} from "../../audit/message-audit-events.js";
+import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
+import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type {
@@ -315,7 +312,6 @@ describe("deliverOutboundPayloads", () => {
 
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    resetMessageAuditEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
@@ -358,7 +354,6 @@ describe("deliverOutboundPayloads", () => {
 
   afterEach(() => {
     resetDiagnosticEventsForTest();
-    resetMessageAuditEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
   });

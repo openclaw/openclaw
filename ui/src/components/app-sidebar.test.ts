@@ -845,6 +845,72 @@ describe("AppSidebar session catalog pagination", () => {
     expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
   });
 
+  it.each([
+    { id: "claude", label: "Claude Code" },
+    { id: "codex", label: "Codex" },
+  ])("groups $label catalog rows by their owning host", async ({ id, label }) => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.sessionCatalogs = [
+      {
+        id,
+        label,
+        capabilities: { continueSession: true, archive: false },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Gateway Mac",
+            kind: "gateway",
+            connected: true,
+            sessions: [
+              {
+                threadId: "local-thread",
+                name: "Local plan",
+                status: "stored",
+                archived: false,
+                canContinue: true,
+                canArchive: false,
+              },
+            ],
+          },
+          {
+            hostId: "node:build",
+            label: "Build Node",
+            kind: "node",
+            connected: true,
+            nodeId: "build",
+            sessions: [
+              {
+                threadId: "remote-thread",
+                name: "Remote review",
+                status: "stored",
+                archived: false,
+                canContinue: false,
+                canArchive: false,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    await sidebar.updateComplete;
+
+    const section = sidebar.querySelector(`[data-session-section="catalog:${id}"]`);
+    const hostGroups = section?.querySelectorAll<HTMLElement>("[data-session-catalog-host]");
+    expect(Array.from(hostGroups ?? []).map((host) => host.dataset.sessionCatalogHost)).toEqual([
+      "gateway:local",
+      "node:build",
+    ]);
+    const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
+    const remote = section?.querySelector('[data-session-catalog-host="node:build"]');
+    expect(local?.textContent).toContain("Gateway Mac");
+    expect(local?.textContent).toContain("Local plan");
+    expect(local?.textContent).not.toContain("Remote review");
+    expect(remote?.textContent).toContain("Build Node");
+    expect(remote?.textContent).toContain("Remote review");
+    expect(remote?.textContent).not.toContain("Local plan");
+  });
+
   it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const backingSessionKey = "agent:main:claude-bound";
@@ -2603,7 +2669,7 @@ describe("AppSidebar catalog session rows", () => {
     return { sidebar, request };
   }
 
-  it("shows a host subtitle only for paired-node rows", async () => {
+  it("renders local and paired-node rows under persistent host headings", async () => {
     vi.useFakeTimers();
     try {
       const { sidebar } = await mountWithCatalog(
@@ -2648,12 +2714,19 @@ describe("AppSidebar catalog session rows", () => {
         ["agent:main:main"],
       );
 
-      const subtitles = [
-        ...sidebar.querySelectorAll(
-          '[data-session-section="catalog:codex"] .sidebar-recent-session__subtitle',
-        ),
-      ].map((node) => node.textContent?.trim());
-      expect(subtitles).toEqual(["Dev Box"]);
+      const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
+      const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
+      const node = section?.querySelector('[data-session-catalog-host="node:devbox"]');
+      expect(local?.querySelector(".sidebar-session-catalog-host__label")?.textContent).toBe(
+        "Local Codex",
+      );
+      expect(local?.textContent).toContain("Local session");
+      expect(local?.textContent).not.toContain("Node session");
+      expect(node?.querySelector(".sidebar-session-catalog-host__label")?.textContent).toBe(
+        "Dev Box",
+      );
+      expect(node?.textContent).toContain("Node session");
+      expect(node?.textContent).not.toContain("Local session");
     } finally {
       vi.useRealTimers();
     }

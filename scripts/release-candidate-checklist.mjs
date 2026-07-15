@@ -836,8 +836,11 @@ export function validateCandidateChangelogProvenance({
 async function runArtifacts(repo, runId) {
   const data = await githubApi(`repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`);
   return (data.artifacts ?? []).map((artifact) => ({
-    name: artifact.name,
+    digest: artifact.digest,
     expired: artifact.expired,
+    id: artifact.id,
+    name: artifact.name,
+    workflowRunId: artifact.workflow_run?.id,
   }));
 }
 
@@ -863,8 +866,14 @@ export function resolveArtifactName(artifacts, preferredName, prefix) {
   );
 }
 
-async function resolveRunArtifactName(repo, runId, preferredName, prefix) {
-  return resolveArtifactName(await runArtifacts(repo, runId), preferredName, prefix);
+async function resolveRunArtifact(repo, runId, preferredName, prefix) {
+  const artifacts = await runArtifacts(repo, runId);
+  const name = resolveArtifactName(artifacts, preferredName, prefix);
+  const artifact = artifacts.find((candidate) => candidate.name === name);
+  if (!artifact) {
+    throw new Error(`resolved artifact ${name} disappeared from run ${runId}`);
+  }
+  return artifact;
 }
 
 function runAndEcho(command, args) {
@@ -1034,9 +1043,9 @@ function downloadArtifact(repo, runId, name, dir) {
 }
 
 async function downloadResolvedArtifact(repo, runId, preferredName, prefix, dir) {
-  const name = await resolveRunArtifactName(repo, runId, preferredName, prefix);
-  downloadArtifact(repo, runId, name, dir);
-  return name;
+  const artifact = await resolveRunArtifact(repo, runId, preferredName, prefix);
+  downloadArtifact(repo, runId, artifact.name, dir);
+  return artifact;
 }
 
 function sha256(path) {
@@ -1255,16 +1264,48 @@ async function runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths
   };
 }
 
-async function runTelegramIfNeeded(options, artifactName) {
+export function buildTelegramArtifactInputs({ artifact, manifest, runAttempt, runId, sourceSha }) {
+  const artifactDigest = artifact.digest?.match(/^sha256:([0-9a-f]{64})$/u)?.[1];
+  if (!Number.isInteger(artifact.id) || artifact.id < 1 || !artifactDigest) {
+    throw new Error(`npm preflight artifact ${artifact.name} is missing immutable identity`);
+  }
+  if (String(artifact.workflowRunId) !== String(runId)) {
+    throw new Error(
+      `npm preflight artifact ${artifact.name} belongs to run ${artifact.workflowRunId}, not ${runId}`,
+    );
+  }
+  if (!Number.isInteger(runAttempt) || runAttempt < 1) {
+    throw new Error(`npm preflight run ${runId} has invalid attempt`);
+  }
+  return {
+    package_artifact_digest: artifactDigest,
+    package_artifact_id: artifact.id,
+    package_artifact_name: artifact.name,
+    package_artifact_run_attempt: runAttempt,
+    package_artifact_run_id: runId,
+    package_file_name: manifest.tarballName,
+    package_sha256: manifest.tarballSha256,
+    package_source_sha: sourceSha,
+    package_version: manifest.packageVersion,
+  };
+}
+
+async function runTelegramIfNeeded(options, artifact, manifest, runAttempt, sourceSha) {
   if (options.skipTelegram) {
     return { status: "skipped" };
   }
   const workflowFile = "npm-telegram-beta-e2e.yml";
+  const artifactInputs = buildTelegramArtifactInputs({
+    artifact,
+    manifest,
+    runAttempt,
+    runId: options.npmPreflightRunId,
+    sourceSha,
+  });
   const runId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
     package_spec: `openclaw@${options.tag.replace(/^v/u, "")}`,
     package_label: options.tag,
-    package_artifact_name: artifactName,
-    package_artifact_run_id: options.npmPreflightRunId,
+    ...artifactInputs,
     harness_ref: options.workflowRef,
     provider_mode: options.telegramProviderMode,
   });
@@ -1276,7 +1317,7 @@ async function runTelegramIfNeeded(options, artifactName) {
     status: "passed",
     runId,
     url: runLocal.url,
-    artifactName,
+    artifactName: artifact.name,
     providerMode: options.telegramProviderMode,
   };
 }
@@ -1389,13 +1430,14 @@ async function main() {
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const fullDir = join(options.outputDir, "full-release-validation");
-  const npmArtifactName = await downloadResolvedArtifact(
+  const npmArtifact = await downloadResolvedArtifact(
     options.repo,
     options.npmPreflightRunId,
     `openclaw-npm-preflight-${options.tag}`,
     "openclaw-npm-preflight-",
     npmDir,
   );
+  const npmArtifactName = npmArtifact.name;
   if (!Number.isInteger(fullRun.runAttempt) || fullRun.runAttempt < 1) {
     throw new Error(`Full Release Validation run ${options.fullReleaseRunId} has invalid attempt.`);
   }
@@ -1458,7 +1500,13 @@ async function main() {
   });
 
   const parallels = await runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths);
-  const npmTelegram = await runTelegramIfNeeded(options, npmArtifactName);
+  const npmTelegram = await runTelegramIfNeeded(
+    options,
+    npmArtifact,
+    npmManifest,
+    npmRun.runAttempt,
+    targetSha,
+  );
   options.npmTelegramRunId = npmTelegram.runId ?? "";
   const pluginNpmPlan = await collectPluginPlanWithRetry(
     "scripts/plugin-npm-release-plan.ts",

@@ -1,4 +1,3 @@
-// Codex plugin module implements side question behavior.
 import { randomUUID } from "node:crypto";
 import {
   buildAgentHookContextChannelFields,
@@ -253,8 +252,7 @@ export async function runCodexAppServerSideQuestion(
   const appServer = connection.appServer;
   const cwd = binding.cwd || params.workspaceDir || process.cwd();
   const runId = params.opts?.runId ?? randomUUID();
-  // A supervised side run inherits capability facts from the private binding.
-  // Outer model metadata may describe another provider or disable tools entirely.
+  // Side runs inherit private-binding capabilities, not outer model metadata.
   const effectiveParams: AgentHarnessSideQuestionParams = supervisionModelSelection
     ? {
         ...params,

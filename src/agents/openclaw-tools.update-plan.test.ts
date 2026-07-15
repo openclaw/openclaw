@@ -135,6 +135,32 @@ describe("openclaw-tools update_plan gating", () => {
     expect(toolNames(tools)).toContain("message");
   });
 
+  it("exposes delegation only to regular unsandboxed gateway agents", () => {
+    const regular = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+    });
+    const sandboxed = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+      sandboxed: true,
+    });
+    const system = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:openclaw:main",
+    });
+    setEmbeddedMode(true);
+    const embedded = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+    });
+
+    expect(regular).toContain("openclaw");
+    expect(sandboxed).not.toContain("openclaw");
+    expect(system).not.toContain("openclaw");
+    expect(embedded).not.toContain("openclaw");
+  });
+
   it("requires explicit transcripts enablement before registering the transcripts tool", () => {
     const defaultTools = createFastToolNames({
       config: {} as OpenClawConfig,

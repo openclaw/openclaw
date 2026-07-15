@@ -20584,36 +20584,6 @@
       "translated": "Kontrollerar Mac-appen och Gateway…"
     },
     {
-      "id": "native.apple.3a2e38e488490964",
-      "source": "The Mac app is updated. Gateway setup is not configured on this Mac.",
-      "translated": "Mac-appen är uppdaterad. Gateway-konfigurationen har inte konfigurerats på denna Mac."
-    },
-    {
-      "id": "native.apple.3abafcfb64b362fb",
-      "source": "The Gateway could not be checked.",
-      "translated": "Gateway kunde inte kontrolleras."
-    },
-    {
-      "id": "native.apple.00e3d2037782506c",
-      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
-      "translated": "OpenClaw kunde inte läsa ägarposten för Gateway-tjänsten. Försök igen efter att ha kontrollerat Gateway LaunchAgent."
-    },
-    {
-      "id": "native.apple.c4b8806a570dad31",
-      "source": "The Mac node could not be checked.",
-      "translated": "Mac-noden kunde inte kontrolleras."
-    },
-    {
-      "id": "native.apple.0483bf19d612560b",
-      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
-      "translated": "OpenClaw kunde inte läsa ägarposten för nodtjänsten. Försök igen efter att ha kontrollerat nodens LaunchAgent."
-    },
-    {
-      "id": "native.apple.1c57b3fcc10eabe7",
-      "source": "The Mac app is updated. Gateway \\(found) is newer than app \\(required), so OpenClaw left it unchanged.",
-      "translated": "Mac-appen är uppdaterad. Gateway \\(found) är nyare än appen \\(required), så OpenClaw lämnade den oförändrad."
-    },
-    {
       "id": "native.apple.e9b1899627402a15",
       "source": "Gateway recovery failed.",
       "translated": "Återställningen av Gateway misslyckades."
@@ -20622,11 +20592,6 @@
       "id": "native.apple.91debe404bb7affc",
       "source": "The managed OpenClaw runtime could not be reinstalled.",
       "translated": "Den hanterade OpenClaw-körmiljön kunde inte installeras om."
-    },
-    {
-      "id": "native.apple.3522be8112301d9f",
-      "source": "The Mac app is updated. This Gateway is managed separately, so OpenClaw left it unchanged.",
-      "translated": "Mac-appen är uppdaterad. Denna Gateway hanteras separat, så OpenClaw lämnade den oförändrad."
     },
     {
       "id": "native.apple.1cc391ec928070c4",
@@ -20734,14 +20699,34 @@
       "translated": "OpenClaw installerade uppdateringen men kunde inte verifiera anslutningen till Gateway."
     },
     {
-      "id": "native.apple.8bf292892311882e",
-      "source": "Mac app updated",
-      "translated": "Mac-appen har uppdaterats"
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "Gateway kunde inte kontrolleras."
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClaw kunde inte läsa ägarposten för Gateway-tjänsten. Försök igen efter att ha kontrollerat Gateway LaunchAgent."
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "Mac-noden kunde inte kontrolleras."
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClaw kunde inte läsa ägarposten för nodtjänsten. Försök igen efter att ha kontrollerat nodens LaunchAgent."
     },
     {
       "id": "native.apple.d0f712a2ed470a3e",
       "source": "Gateway update needs help",
       "translated": "Gateway-uppdateringen behöver hjälp"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "Uppdateringsguide"
     },
     {
       "id": "native.apple.3a6aaa0aa0be82e7",
@@ -20752,11 +20737,6 @@
       "id": "native.apple.11b9ee23142b1060",
       "source": "Retry",
       "translated": "Försök igen"
-    },
-    {
-      "id": "native.apple.e2ffc7753f75e1b8",
-      "source": "Update guide",
-      "translated": "Uppdateringsguide"
     },
     {
       "id": "native.apple.144b21229f65f2a4",

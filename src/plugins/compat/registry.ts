@@ -7,7 +7,376 @@ const LEGACY_CONFIG_MIGRATE_TEST_PATH = [
   "migrate.test.ts",
 ].join("-");
 
+type DeprecatedPluginSdkSubpathSeed = Pick<
+  PluginCompatRecord,
+  "code" | "owner" | "removeAfter" | "replacement"
+> & {
+  subpath: string;
+};
+
+const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
+  {
+    code: "plugin-sdk-self-hosted-provider-setup-subpath",
+    subpath: "self-hosted-provider-setup",
+    owner: "provider",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/provider-setup`",
+  },
+  {
+    code: "plugin-sdk-runtime-logger-subpath",
+    subpath: "runtime-logger",
+    owner: "sdk",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/runtime`",
+  },
+  {
+    code: "plugin-sdk-runtime-secret-resolution-subpath",
+    subpath: "runtime-secret-resolution",
+    owner: "sdk",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/runtime` and `openclaw/plugin-sdk/secret-ref-runtime`",
+  },
+  {
+    code: "plugin-sdk-setup-adapter-runtime-subpath",
+    subpath: "setup-adapter-runtime",
+    owner: "setup",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/setup-runtime`",
+  },
+  {
+    code: "plugin-sdk-channel-streaming-subpath",
+    subpath: "channel-streaming",
+    owner: "channel",
+    removeAfter: "2026-08-15",
+    replacement: "`openclaw/plugin-sdk/channel-outbound`",
+  },
+  {
+    code: "plugin-sdk-config-runtime-subpath",
+    subpath: "config-runtime",
+    owner: "config",
+    removeAfter: "2026-09-01",
+    replacement:
+      "`openclaw/plugin-sdk/plugin-config-runtime`, `openclaw/plugin-sdk/config-mutation`, `openclaw/plugin-sdk/runtime-config-snapshot`, and `openclaw/plugin-sdk/config-contracts`",
+  },
+  {
+    code: "plugin-sdk-config-types-subpath",
+    subpath: "config-types",
+    owner: "config",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/config-contracts`",
+  },
+  {
+    code: "plugin-sdk-config-schema-subpath",
+    subpath: "config-schema",
+    owner: "config",
+    removeAfter: "2026-07-30",
+    replacement:
+      "plugin-local schemas with `openclaw/plugin-sdk/json-schema-runtime` for JSON Schema validation",
+  },
+  {
+    code: "plugin-sdk-reply-dedupe-subpath",
+    subpath: "reply-dedupe",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/reply-runtime`",
+  },
+  {
+    code: "plugin-sdk-inbound-reply-dispatch-subpath",
+    subpath: "inbound-reply-dispatch",
+    owner: "channel",
+    removeAfter: "2026-08-15",
+    replacement: "`openclaw/plugin-sdk/channel-inbound` and `openclaw/plugin-sdk/channel-outbound`",
+  },
+  {
+    code: "plugin-sdk-channel-reply-pipeline-subpath",
+    subpath: "channel-reply-pipeline",
+    owner: "channel",
+    removeAfter: "2026-09-01",
+    replacement: "`openclaw/plugin-sdk/channel-outbound`",
+  },
+  {
+    code: "plugin-sdk-channel-reply-options-runtime-subpath",
+    subpath: "channel-reply-options-runtime",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/channel-outbound`",
+  },
+  {
+    code: "plugin-sdk-outbound-send-deps-subpath",
+    subpath: "outbound-send-deps",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/channel-outbound`",
+  },
+  {
+    code: "plugin-sdk-outbound-runtime-subpath",
+    subpath: "outbound-runtime",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/channel-outbound`",
+  },
+  {
+    code: "plugin-sdk-infra-runtime-subpath",
+    subpath: "infra-runtime",
+    owner: "sdk",
+    removeAfter: "2026-09-01",
+    replacement:
+      "focused subpaths including `openclaw/plugin-sdk/delivery-queue-runtime`, `openclaw/plugin-sdk/diagnostic-runtime`, `openclaw/plugin-sdk/error-runtime`, `openclaw/plugin-sdk/exec-approvals-runtime`, `openclaw/plugin-sdk/fetch-runtime`, and `openclaw/plugin-sdk/ssrf-runtime`",
+  },
+  {
+    code: "plugin-sdk-text-runtime-subpath",
+    subpath: "text-runtime",
+    owner: "sdk",
+    removeAfter: "2026-08-15",
+    replacement:
+      "`openclaw/plugin-sdk/logging-core`, `openclaw/plugin-sdk/text-chunking`, `openclaw/plugin-sdk/text-utility-runtime`, and `openclaw/plugin-sdk/string-coerce-runtime`",
+  },
+  {
+    code: "plugin-sdk-channel-secret-runtime-subpath",
+    subpath: "channel-secret-runtime",
+    owner: "channel",
+    removeAfter: "2026-08-15",
+    replacement:
+      "`openclaw/plugin-sdk/channel-secret-basic-runtime` and `openclaw/plugin-sdk/channel-secret-tts-runtime`",
+  },
+  {
+    code: "plugin-sdk-agent-config-primitives-subpath",
+    subpath: "agent-config-primitives",
+    owner: "config",
+    removeAfter: "2026-08-15",
+    replacement: "`openclaw/plugin-sdk/channel-config-schema`",
+  },
+  {
+    code: "plugin-sdk-direct-dm-subpath",
+    subpath: "direct-dm",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/channel-inbound`",
+  },
+  {
+    code: "plugin-sdk-direct-dm-access-subpath",
+    subpath: "direct-dm-access",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/channel-inbound`",
+  },
+  {
+    code: "plugin-sdk-mattermost-subpath",
+    subpath: "mattermost",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement:
+      "`openclaw/plugin-sdk/command-auth`, `openclaw/plugin-sdk/channel-plugin-common`, and `openclaw/plugin-sdk/reply-history`",
+  },
+  {
+    code: "plugin-sdk-matrix-subpath",
+    subpath: "matrix",
+    owner: "channel",
+    removeAfter: "2026-08-15",
+    replacement: "`openclaw/plugin-sdk/run-command`",
+  },
+  {
+    code: "plugin-sdk-channel-envelope-subpath",
+    subpath: "channel-envelope",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/channel-inbound`",
+  },
+  {
+    code: "plugin-sdk-channel-inbound-roots-subpath",
+    subpath: "channel-inbound-roots",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/channel-inbound`",
+  },
+  {
+    code: "plugin-sdk-channel-logging-subpath",
+    subpath: "channel-logging",
+    owner: "channel",
+    removeAfter: "2026-08-15",
+    replacement: "`openclaw/plugin-sdk/channel-inbound` and `openclaw/plugin-sdk/channel-outbound`",
+  },
+  {
+    code: "plugin-sdk-channel-location-subpath",
+    subpath: "channel-location",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/channel-inbound`",
+  },
+  {
+    code: "plugin-sdk-channel-lifecycle-subpath",
+    subpath: "channel-lifecycle",
+    owner: "channel",
+    removeAfter: "2026-09-01",
+    replacement: "`openclaw/plugin-sdk/channel-outbound`",
+  },
+  {
+    code: "plugin-sdk-channel-message-subpath",
+    subpath: "channel-message",
+    owner: "channel",
+    removeAfter: "2026-09-01",
+    replacement: "`openclaw/plugin-sdk/channel-outbound` and `openclaw/plugin-sdk/channel-inbound`",
+  },
+  {
+    code: "plugin-sdk-channel-message-runtime-subpath",
+    subpath: "channel-message-runtime",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/channel-outbound`",
+  },
+  {
+    code: "plugin-sdk-channel-pairing-paths-subpath",
+    subpath: "channel-pairing-paths",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/channel-pairing`",
+  },
+  {
+    code: "plugin-sdk-group-access-subpath",
+    subpath: "group-access",
+    owner: "channel",
+    removeAfter: "2026-08-15",
+    replacement: "`openclaw/plugin-sdk/channel-ingress-runtime`",
+  },
+  {
+    code: "plugin-sdk-media-generation-runtime-shared-subpath",
+    subpath: "media-generation-runtime-shared",
+    owner: "provider",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/media-generation-runtime`",
+  },
+  {
+    code: "plugin-sdk-music-generation-core-subpath",
+    subpath: "music-generation-core",
+    owner: "provider",
+    removeAfter: "2026-07-30",
+    replacement:
+      "`openclaw/plugin-sdk/music-generation` for public types and assets; plugin-owned provider runtime helpers for provider registration",
+  },
+  {
+    code: "plugin-sdk-memory-core-subpath",
+    subpath: "memory-core",
+    owner: "sdk",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/memory-host-core`",
+  },
+  {
+    code: "plugin-sdk-memory-core-engine-runtime-subpath",
+    subpath: "memory-core-engine-runtime",
+    owner: "sdk",
+    removeAfter: "2026-07-30",
+    replacement:
+      "`openclaw/plugin-sdk/memory-host-search` for active search-manager lifecycle operations",
+  },
+  {
+    code: "plugin-sdk-memory-core-host-multimodal-subpath",
+    subpath: "memory-core-host-multimodal",
+    owner: "sdk",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/memory-core-host-engine-embeddings`",
+  },
+  {
+    code: "plugin-sdk-memory-core-host-query-subpath",
+    subpath: "memory-core-host-query",
+    owner: "sdk",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/memory-core-host-engine-qmd`",
+  },
+  {
+    code: "plugin-sdk-memory-core-host-events-subpath",
+    subpath: "memory-core-host-events",
+    owner: "sdk",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/memory-host-events`",
+  },
+  {
+    code: "plugin-sdk-memory-host-files-subpath",
+    subpath: "memory-host-files",
+    owner: "sdk",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/memory-core-host-runtime-files`",
+  },
+  {
+    code: "plugin-sdk-memory-host-status-subpath",
+    subpath: "memory-host-status",
+    owner: "sdk",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/memory-core-host-status`",
+  },
+  {
+    code: "plugin-sdk-provider-auth-login-subpath",
+    subpath: "provider-auth-login",
+    owner: "provider",
+    removeAfter: "2026-07-30",
+    replacement: "provider auth hooks built with `openclaw/plugin-sdk/provider-auth`",
+  },
+  {
+    code: "plugin-sdk-provider-zai-endpoint-subpath",
+    subpath: "provider-zai-endpoint",
+    owner: "provider",
+    removeAfter: "2026-07-30",
+    replacement:
+      "plugin-owned endpoint detection using `openclaw/plugin-sdk/provider-http` for generic transport helpers",
+  },
+  {
+    code: "plugin-sdk-telegram-command-config-subpath",
+    subpath: "telegram-command-config",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "plugin-local Telegram command config (no public SDK import replacement)",
+  },
+  {
+    code: "plugin-sdk-webhook-path-subpath",
+    subpath: "webhook-path",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/webhook-ingress`",
+  },
+  {
+    code: "plugin-sdk-zalouser-subpath",
+    subpath: "zalouser",
+    owner: "channel",
+    removeAfter: "2026-07-30",
+    replacement: "`openclaw/plugin-sdk/command-auth`",
+  },
+  {
+    code: "plugin-sdk-zod-subpath",
+    subpath: "zod",
+    owner: "sdk",
+    removeAfter: "2026-08-15",
+    replacement: "the direct `zod` package import",
+  },
+  {
+    code: "plugin-sdk-agent-dir-compat-subpath",
+    subpath: "agent-dir-compat",
+    owner: "agent-runtime",
+    removeAfter: "2026-07-30",
+    replacement:
+      "`resolveAgentDir` or `resolveDefaultAgentDir` from `openclaw/plugin-sdk/agent-harness-runtime`",
+  },
+] as const satisfies readonly DeprecatedPluginSdkSubpathSeed[];
+
+const DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS = DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS.map(
+  ({ code, subpath, owner, removeAfter, replacement }) => ({
+    code,
+    status: "deprecated" as const,
+    owner,
+    introduced: "2026-07-06",
+    deprecated: "2026-07-06",
+    warningStarts: "2026-07-06",
+    removeAfter,
+    replacement,
+    docsPath: "/plugins/sdk-migration",
+    surfaces: [`openclaw/plugin-sdk/${subpath}`],
+    diagnostics: [
+      "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
+    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+  }),
+) satisfies readonly PluginCompatRecord[];
+
 const PLUGIN_COMPAT_RECORDS = [
+  ...DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS,
   {
     code: "legacy-before-agent-start",
     status: "deprecated",

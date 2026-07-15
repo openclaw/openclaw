@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
-  getContextEngineFactory,
   getContextEngineRegistration,
   registerContextEngine,
   registerContextEngineForOwner,
@@ -108,7 +107,6 @@ describe("doctor context-engine host compatibility", () => {
       factory,
       lifecycle: "readOnlyDiscovery",
     });
-    expect(getContextEngineFactory(id)).toBeUndefined();
   });
 
   it("evaluates native Codex and OpenClaw agent-run hosts", async () => {
