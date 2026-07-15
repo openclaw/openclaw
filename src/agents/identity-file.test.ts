@@ -11,6 +11,7 @@ import {
   mergeIdentityMarkdownContent,
   parseIdentityMarkdown,
 } from "./identity-file.js";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace.js";
 
 describe("parseIdentityMarkdown", () => {
   it("ignores identity template placeholders", () => {
@@ -150,7 +151,11 @@ describe("loadAgentIdentityFromWorkspace", () => {
   });
 
   it("returns null when IDENTITY.md exceeds the size cap", () => {
-    fs.writeFileSync(path.join(tempDir, "IDENTITY.md"), "x".repeat(2 * 1024 * 1024), "utf-8");
+    fs.writeFileSync(
+      path.join(tempDir, "IDENTITY.md"),
+      "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1),
+      "utf-8",
+    );
 
     expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
   });

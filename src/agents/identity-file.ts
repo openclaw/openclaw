@@ -6,11 +6,7 @@
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { readRegularFileSync } from "../infra/regular-file.js";
-import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
-
-// Identity files are small human-authored markdown; 1 MiB is generous headroom
-// while preventing a malicious or runaway IDENTITY.md from OOMing the loader.
-const IDENTITY_FILE_MAX_BYTES = 1024 * 1024;
+import { DEFAULT_IDENTITY_FILENAME, MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace.js";
 
 /** Parsed rich identity values from a workspace `IDENTITY.md` file. */
 export type AgentIdentityFile = {
@@ -217,7 +213,7 @@ function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
   try {
     const { buffer } = readRegularFileSync({
       filePath: identityPath,
-      maxBytes: IDENTITY_FILE_MAX_BYTES,
+      maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
     });
     const parsed = parseIdentityMarkdown(buffer.toString("utf-8"));
     if (!identityHasValues(parsed)) {
