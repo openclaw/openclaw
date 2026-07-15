@@ -844,9 +844,7 @@ export async function handleGatewayRequest(
     }
     const budget = consumeControlPlaneWriteBudget({
       client,
-      // Degrade to the built-in default when runtime config is unavailable
-      // rather than throwing from the rate-limit path.
-      maxRequests: resolveControlPlaneWriteBudgetMaxRequests(context.getRuntimeConfig?.()),
+      maxRequests: resolveControlPlaneWriteBudgetMaxRequests(context.getRuntimeConfig()),
     });
     if (budget.allowed) {
       return false;
