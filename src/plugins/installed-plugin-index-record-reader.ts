@@ -4,8 +4,14 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { compareValidSemver } from "../infra/semver.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { resolveDefaultPluginNpmDir, validatePluginId } from "./install-paths.js";
+import {
+  resolveDefaultPluginNpmDir,
+  resolvePluginNpmProjectsDir,
+  validatePluginId,
+} from "./install-paths.js";
 import {
   getInstalledPluginIndexInstallRecordsCache,
   getInstalledPluginIndexInstallRecordsCacheGeneration,
@@ -16,7 +22,10 @@ import {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
-import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
+import {
+  hasRetainedManagedNpmInstallMarker,
+  resolveRetainedManagedNpmInstallPackageInfo,
+} from "./managed-npm-retention.js";
 import { listManagedPluginNpmProjectRootsSync } from "./npm-project-roots.js";
 
 export { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
@@ -177,10 +186,75 @@ function readInstallRecordVersion(record: PluginInstallRecord | undefined): stri
   return record?.resolvedVersion ?? record?.version;
 }
 
+function isUnavailableManagedNpmInstallRecord(params: {
+  npmRoot: string;
+  persisted: PluginInstallRecord | undefined;
+  recovered: PluginInstallRecord;
+}): boolean {
+  const installPath = params.persisted?.installPath;
+  if (params.persisted?.source !== "npm" || !installPath) {
+    return false;
+  }
+  try {
+    if (fs.statSync(installPath).isDirectory()) {
+      return false;
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      return false;
+    }
+  }
+
+  const packageInfo = resolveRetainedManagedNpmInstallPackageInfo(installPath);
+  if (!packageInfo || packageInfo.packageName !== params.recovered.resolvedName) {
+    return false;
+  }
+  const npmRoot = path.resolve(params.npmRoot);
+  const projectRoot = path.resolve(packageInfo.projectRoot);
+  return (
+    projectRoot === npmRoot ||
+    path.dirname(projectRoot) === path.resolve(resolvePluginNpmProjectsDir(npmRoot))
+  );
+}
+
+function mergeRecoveredManagedNpmMetadata(
+  persisted: PluginInstallRecord,
+  recovered: PluginInstallRecord,
+  options: { preservePersistedSpec?: boolean } = {},
+): PluginInstallRecord {
+  const next: PluginInstallRecord = {
+    ...persisted,
+    ...recovered,
+  };
+  if (options.preservePersistedSpec) {
+    const persistedSpec = persisted.spec ? parseRegistryNpmSpec(persisted.spec) : null;
+    const selectorIsCompatible =
+      persistedSpec?.selectorKind !== "exact-version" ||
+      (persistedSpec.selector !== undefined &&
+        recovered.resolvedVersion !== undefined &&
+        compareValidSemver(persistedSpec.selector, recovered.resolvedVersion) === 0);
+    if (persistedSpec?.name === recovered.resolvedName && selectorIsCompatible) {
+      next.spec = persisted.spec;
+    }
+  }
+  delete next.integrity;
+  delete next.shasum;
+  delete next.resolvedAt;
+  delete next.installedAt;
+  return next;
+}
+
 function mergeRecoveredManagedNpmRecord(params: {
+  npmRoot: string;
   persisted: PluginInstallRecord | undefined;
   recovered: PluginInstallRecord;
 }): PluginInstallRecord {
+  if (params.persisted && isUnavailableManagedNpmInstallRecord(params)) {
+    return mergeRecoveredManagedNpmMetadata(params.persisted, params.recovered, {
+      preservePersistedSpec: true,
+    });
+  }
   const persistedVersion = readInstallRecordVersion(params.persisted);
   const recoveredVersion = readInstallRecordVersion(params.recovered);
   if (
@@ -189,15 +263,7 @@ function mergeRecoveredManagedNpmRecord(params: {
     recoveredVersion &&
     persistedVersion !== recoveredVersion
   ) {
-    const next: PluginInstallRecord = {
-      ...params.persisted,
-      ...params.recovered,
-    };
-    delete next.integrity;
-    delete next.shasum;
-    delete next.resolvedAt;
-    delete next.installedAt;
-    return next;
+    return mergeRecoveredManagedNpmMetadata(params.persisted, params.recovered);
   }
   return params.persisted ?? params.recovered;
 }
@@ -206,10 +272,12 @@ function mergeRecoveredManagedNpmInstallRecords(
   persisted: Record<string, PluginInstallRecord> | null,
   options: InstalledPluginIndexStoreOptions,
 ): Record<string, PluginInstallRecord> {
+  const npmRoot = resolveRecoveredManagedNpmRoot(options);
   const recovered = buildRecoveredManagedNpmInstallRecords(options);
   const merged: Record<string, PluginInstallRecord> = { ...persisted };
   for (const [pluginId, record] of Object.entries(recovered)) {
     merged[pluginId] = mergeRecoveredManagedNpmRecord({
+      npmRoot,
       persisted: merged[pluginId],
       recovered: record,
     });
