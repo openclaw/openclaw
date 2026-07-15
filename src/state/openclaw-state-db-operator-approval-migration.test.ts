@@ -1,10 +1,9 @@
 // Operator-approval kind migration: exact-legacy fail-closed repair.
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   assertCanonicalOperatorApprovalKinds,
-  repairOperatorApprovalSchemaInTransaction,
+  repairOperatorApprovalSchema,
 } from "./openclaw-state-db-operator-approval-migration.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
@@ -38,13 +37,6 @@ function seedRow(db: DatabaseSync, kind: string): void {
   `);
 }
 
-function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
-  return runSqliteImmediateTransactionSync(
-    db,
-    () => repairOperatorApprovalSchemaInTransaction(db).length > 0,
-  );
-}
-
 describe("repairOperatorApprovalKinds", () => {
   it("migrates the exact legacy two-kind schema and preserves rows", () => {
     const db = new DatabaseSync(":memory:");
@@ -54,7 +46,9 @@ describe("repairOperatorApprovalKinds", () => {
       "legacy operator approval schema",
     );
 
-    expect(repairOperatorApprovalKinds(db)).toBe(true);
+    expect(repairOperatorApprovalSchema(db)).toEqual([
+      "Migrated shared state operator approvals → OpenClaw system changes",
+    ]);
 
     expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
     const rows = db.prepare("SELECT approval_id, kind FROM operator_approvals").all();
@@ -65,7 +59,7 @@ describe("repairOperatorApprovalKinds", () => {
   it("is a no-op when the schema is already canonical", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(canonicalOperatorApprovalCreateSql());
-    expect(repairOperatorApprovalKinds(db)).toBe(false);
+    expect(repairOperatorApprovalSchema(db)).toEqual([]);
     db.close();
   });
 
@@ -78,7 +72,7 @@ describe("repairOperatorApprovalKinds", () => {
     );
     seedRow(db, "custom-thing");
 
-    expect(repairOperatorApprovalKinds(db)).toBe(false);
+    expect(repairOperatorApprovalSchema(db)).toEqual([]);
 
     // The unrecognized table is left untouched.
     const rows = db.prepare("SELECT approval_id, kind FROM operator_approvals").all();

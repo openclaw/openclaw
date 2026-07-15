@@ -27,6 +27,7 @@ const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_TELEGRAM_QA_WORKFLOW = ".github/workflows/openclaw-release-telegram-qa.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
+const OPENCLAW_NPM_RELEASE_WORKFLOW = ".github/workflows/openclaw-npm-release.yml";
 const PLUGIN_CLAWHUB_RELEASE_WORKFLOW = ".github/workflows/plugin-clawhub-release.yml";
 const PLUGIN_NPM_RELEASE_WORKFLOW = ".github/workflows/plugin-npm-release.yml";
 const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
@@ -250,6 +251,33 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
   });
 }
 
+function runOpenClawNpmTrustedRefGuard(overrides: Record<string, string>) {
+  const job = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "validate_publish_request");
+  const script = workflowStep(job, "Require trusted workflow ref for publish").run;
+  if (!script) {
+    throw new Error("Expected OpenClaw npm trusted ref guard");
+  }
+  const binDir = tempDirs.make("openclaw-npm-trusted-ref-");
+  const gitPath = `${binDir}/git`;
+  writeFileSync(
+    gitPath,
+    `#!/bin/sh\nif [ "$1" = "fetch" ]; then exit 0; fi\nif [ "$1" = "merge-base" ]; then [ "\${MOCK_WORKFLOW_ANCESTOR}" = "true" ]; exit $?; fi\nexit 2\n`,
+  );
+  chmodSync(gitPath, 0o755);
+  return spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: {
+      MOCK_WORKFLOW_ANCESTOR: "true",
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELEASE_NPM_DIST_TAG: "beta",
+      RELEASE_TAG: "v2026.7.2-beta.1",
+      WORKFLOW_REF: "refs/heads/release/2026.7.2",
+      WORKFLOW_SHA: "a".repeat(40),
+      ...overrides,
+    },
+  });
+}
+
 function runReleaseChecksSummary(params: {
   currentAttempt: string;
   currentResult: "cancelled" | "failure" | "skipped" | "success";
@@ -379,6 +407,64 @@ describe("package acceptance workflow", () => {
     expect(unreachable.stderr).toContain(
       "SHA-pinned release publish tag revision is not reachable from current main",
     );
+  });
+
+  it("allows protected SHA-pinned tooling tags through the core npm publish guard", () => {
+    const workflowSha = "a".repeat(40);
+    const protectedRef = `refs/tags/release-publish/${workflowSha.slice(0, 12)}-123`;
+
+    const valid = runOpenClawNpmTrustedRefGuard({
+      WORKFLOW_REF: protectedRef,
+      WORKFLOW_SHA: workflowSha,
+    });
+    expect(valid.status, valid.stderr).toBe(0);
+
+    const mismatchedName = runOpenClawNpmTrustedRefGuard({
+      WORKFLOW_REF: `refs/tags/release-publish/${"b".repeat(12)}-123`,
+      WORKFLOW_SHA: workflowSha,
+    });
+    expect(mismatchedName.status).toBe(1);
+    expect(mismatchedName.stderr).toContain(
+      "SHA-pinned release-publish tag does not match the OpenClaw npm workflow SHA",
+    );
+
+    const unreachable = runOpenClawNpmTrustedRefGuard({
+      MOCK_WORKFLOW_ANCESTOR: "false",
+      WORKFLOW_REF: protectedRef,
+      WORKFLOW_SHA: workflowSha,
+    });
+    expect(unreachable.status).toBe(1);
+    expect(unreachable.stderr).toContain(
+      "SHA-pinned OpenClaw npm workflow revision is not reachable from current main",
+    );
+  });
+
+  it("allows protected SHA-pinned tooling tags to consume token-bootstrap evidence", () => {
+    const publishJob = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm");
+    const evidenceStep = workflowStep(publishJob, "Consume immutable npm publication evidence");
+
+    expect(evidenceStep.run).toContain("^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$");
+    expect(evidenceStep.run).toContain(
+      '[[ "$WORKFLOW_REF" == "refs/heads/main" || "$sha_pinned_release_publish" == "true" ]]',
+    );
+    expect(evidenceStep.run).toContain('git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main');
+  });
+
+  it("retries child environment approval when deployment propagation lags", () => {
+    const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const orchestration = workflowStep(publishJob, "Dispatch publish workflows").run;
+    if (!orchestration) {
+      throw new Error("Expected release publish orchestration script");
+    }
+    const waitForRun = shellFunctionSource(orchestration, "wait_for_run");
+    const stateAssignment = waitForRun.indexOf('last_state="$state"');
+    const approvalRetry = waitForRun.indexOf(
+      'approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}" ||',
+    );
+
+    expect(stateAssignment).toBeGreaterThan(-1);
+    expect(approvalRetry).toBeGreaterThan(stateAssignment);
+    expect(waitForRun).toContain("propagation lag cannot strand an approved release");
   });
 
   it("resolves broad release evidence and exact-binds every publish child", () => {
@@ -3784,6 +3870,10 @@ describe("package artifact reuse", () => {
       '"${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha"',
     );
     expect(releaseWorkflow).toContain('--workflow-ref "${CHILD_WORKFLOW_REF}"');
+    expect(releaseWorkflow).toContain('OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${GITHUB_REF}"');
+    expect(releaseWorkflow).toContain(
+      'OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${PARENT_WORKFLOW_SHA}"',
+    );
     expect(releaseWorkflow).toContain("--skip-github-release");
     expect(clawHubReleasePlanScript).toContain("--plugin-clawhub-bootstrap-run");
     expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');

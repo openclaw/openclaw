@@ -237,7 +237,6 @@ extensions/policy/src/doctor/register.gateway-data-and-approvals.test-utils.ts
 extensions/policy/src/doctor/register.ingress-and-secrets.test-utils.ts
 extensions/policy/src/doctor/register.models-and-mcp.test-utils.ts
 extensions/policy/src/doctor/register.sandbox-and-tools.test-utils.ts
-extensions/policy/src/policy-state.ts
 extensions/qa-lab/src/cli.runtime.test.ts
 extensions/qa-lab/src/cli.runtime.ts
 extensions/qa-lab/src/cli.ts

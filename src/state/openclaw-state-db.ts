@@ -807,7 +807,7 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
             `Migrated shared state audit event ledger → versioned message lifecycle schema`,
           );
         }
-        applied.push(...operatorApprovalMigration.repairOperatorApprovalSchemaInTransaction(db));
+        applied.push(...operatorApprovalMigration.repairOperatorApprovalSchema(db));
         assertCanonicalStateSchemaShape(db, pathname);
         markCurrentStateSchemaVersion(db);
         return applied;

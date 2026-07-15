@@ -75,7 +75,7 @@ const MAX_ACTIVE_CODE_MODE_RUNS = 64;
 type CodeModeLanguage = "javascript" | "typescript";
 
 /** Resolved Code Mode runtime limits and visible language options. */
-export type CodeModeConfig = {
+type CodeModeConfig = {
   enabled: boolean;
   runtime: "quickjs-wasi";
   mode: "only";
