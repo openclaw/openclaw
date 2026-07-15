@@ -534,11 +534,16 @@ describe("loadCliSessionHistoryMessages", () => {
     // between the size probe and the read.
     const realFspStat = fsp.stat;
     const statSpy = vi.spyOn(fsp, "stat").mockImplementation(async (target, ...rest) => {
-      const stats = await realFspStat(target as Parameters<typeof realFspStat>[0], ...rest);
       if (String(target).endsWith("session-oversized-shrink.jsonl")) {
-        return { ...stats, size: stats.size + 4096, isFile: () => true } as typeof stats;
+        const stats = await realFspStat(target as Parameters<typeof realFspStat>[0]);
+        // Proxy keeps the Stats prototype (isFile etc.) and only inflates the
+        // reported size past EOF; spreading a Stats instance would drop both.
+        return new Proxy(stats, {
+          get: (obj, prop, receiver) =>
+            prop === "size" ? obj.size + 4096 : Reflect.get(obj, prop, receiver),
+        });
       }
-      return stats;
+      return realFspStat(target as Parameters<typeof realFspStat>[0], ...rest);
     });
 
     try {
