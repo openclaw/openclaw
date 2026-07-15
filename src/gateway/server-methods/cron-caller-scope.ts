@@ -1,5 +1,12 @@
+import { listRouteBindings } from "../../config/bindings.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { resolveNormalizedRouteBindingMatch } from "../../routing/binding-scope.js";
+import {
+  DEFAULT_AGENT_ID,
+  normalizeAccountId,
+  normalizeAgentId,
+} from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import type { GatewayClient } from "./types.js";
 
@@ -173,4 +180,111 @@ export function cronPatchSessionRefsMatchCaller(
       ? parseAgentIdFromCronSessionTarget(patch.sessionTarget)
       : undefined;
   return !sessionTargetAgentId || normalizeAgentId(sessionTargetAgentId) === callerScope.agentId;
+}
+
+// Verifies that an accountId is present in the caller agent's configured
+// channel route bindings. Foreign accounts that belong to another agent must
+// not be accepted even when the agentId/session references are valid.
+function isAccountBoundToCallerAgent(params: {
+  accountId: string;
+  callerAgentId: string;
+  cfg: OpenClawConfig;
+}): boolean {
+  const normalizedAccount = normalizeAccountId(params.accountId);
+  const normalizedAgent = normalizeAgentId(params.callerAgentId);
+  for (const binding of listRouteBindings(params.cfg)) {
+    const resolved = resolveNormalizedRouteBindingMatch(binding);
+    if (!resolved) {
+      continue;
+    }
+    if (resolved.agentId === normalizedAgent && resolved.accountId === normalizedAccount) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Verifies that every delivery accountId on a cron.create payload is bound to
+ * the caller's agent. Call after {@link cronCreateMatchesCallerScope} has
+ * already validated agentId, sessionKey, and sessionTarget references.
+ */
+export function cronDeliveryAccountMatchesCallerScope(params: {
+  job: CronJobCreate;
+  callerScope: CronCallerScope | undefined;
+  cfg: OpenClawConfig;
+}): boolean {
+  if (!params.callerScope) {
+    return true;
+  }
+  const delivery = params.job.delivery;
+  if (!delivery) {
+    return true;
+  }
+  if (delivery.accountId) {
+    if (
+      !isAccountBoundToCallerAgent({
+        accountId: delivery.accountId,
+        callerAgentId: params.callerScope.agentId,
+        cfg: params.cfg,
+      })
+    ) {
+      return false;
+    }
+  }
+  if (delivery.failureDestination?.accountId) {
+    if (
+      !isAccountBoundToCallerAgent({
+        accountId: delivery.failureDestination.accountId,
+        callerAgentId: params.callerScope.agentId,
+        cfg: params.cfg,
+      })
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Verifies that every delivery accountId in a cron.update patch is bound to
+ * the caller's agent. Call after {@link cronPatchSessionRefsMatchCaller} has
+ * already validated sessionKey and sessionTarget references in the patch.
+ */
+export function cronPatchDeliveryAccountMatchesCaller(params: {
+  patch: CronJobPatch;
+  callerScope: CronCallerScope | undefined;
+  cfg: OpenClawConfig;
+}): boolean {
+  if (!params.callerScope) {
+    return true;
+  }
+  const delivery = params.patch.delivery;
+  if (!delivery) {
+    return true;
+  }
+  // null means "clear this field" — not an accountId selection.
+  if (delivery.accountId && delivery.accountId !== null) {
+    if (
+      !isAccountBoundToCallerAgent({
+        accountId: delivery.accountId,
+        callerAgentId: params.callerScope.agentId,
+        cfg: params.cfg,
+      })
+    ) {
+      return false;
+    }
+  }
+  if (delivery.failureDestination?.accountId && delivery.failureDestination.accountId !== null) {
+    if (
+      !isAccountBoundToCallerAgent({
+        accountId: delivery.failureDestination.accountId,
+        callerAgentId: params.callerScope.agentId,
+        cfg: params.cfg,
+      })
+    ) {
+      return false;
+    }
+  }
+  return true;
 }

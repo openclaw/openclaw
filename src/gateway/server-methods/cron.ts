@@ -50,8 +50,10 @@ import { loadSessionEntry } from "../session-utils.js";
 import {
   applyCronCreateCallerScopeDefault,
   cronCreateMatchesCallerScope,
+  cronDeliveryAccountMatchesCallerScope,
   cronJobMatchesDeclarationScope,
   cronJobMatchesCallerScope,
+  cronPatchDeliveryAccountMatchesCaller,
   cronPatchSessionRefsMatchCaller,
   readCronCallerScope,
 } from "./cron-caller-scope.js";
@@ -509,6 +511,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondInvalidCronParams(respond, "cron.add", "job agentId outside caller scope");
       return;
     }
+    if (
+      !cronDeliveryAccountMatchesCallerScope({
+        job: jobCreate,
+        callerScope,
+        cfg,
+      })
+    ) {
+      respondInvalidCronParams(
+        respond,
+        "cron.add",
+        "delivery.accountId is not bound to caller agent",
+      );
+      return;
+    }
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
       respond(
@@ -658,6 +674,20 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     if (!cronPatchSessionRefsMatchCaller(patch, callerScope)) {
       respondInvalidCronParams(respond, "cron.update", "session target outside caller scope");
+      return;
+    }
+    if (
+      !cronPatchDeliveryAccountMatchesCaller({
+        patch,
+        callerScope,
+        cfg,
+      })
+    ) {
+      respondInvalidCronParams(
+        respond,
+        "cron.update",
+        "delivery.accountId is not bound to caller agent",
+      );
       return;
     }
     if (patch.schedule) {
