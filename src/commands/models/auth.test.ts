@@ -300,7 +300,7 @@ function withInteractiveStdin() {
   };
 }
 
-function withPipedStdin(input: string) {
+function withPipedStdinChunks(chunks: readonly string[]) {
   const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
   const restoreInteractive = withInteractiveStdin();
   const previousAsyncIteratorDescriptor = Object.getOwnPropertyDescriptor(
@@ -315,7 +315,7 @@ function withPipedStdin(input: string) {
   Object.defineProperty(stdin, Symbol.asyncIterator, {
     configurable: true,
     async *value() {
-      yield input;
+      yield* chunks;
     },
   });
   return () => {
@@ -326,6 +326,10 @@ function withPipedStdin(input: string) {
     }
     restoreInteractive();
   };
+}
+
+function withPipedStdin(input: string) {
+  return withPipedStdinChunks([input]);
 }
 
 function createProvider(params: {
@@ -1471,6 +1475,37 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.clackPassword).not.toHaveBeenCalled();
     expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
     expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["paste-token", modelsAuthPasteTokenCommand],
+    ["paste-api-key", modelsAuthPasteApiKeyCommand],
+  ])("rejects oversized piped secrets before %s persistence", async (_name, command) => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdinChunks(["x".repeat(1024 * 1024), "y"]);
+
+    await expect(command({ provider: "dummy" }, runtime)).rejects.toThrow(
+      "Piped secret input exceeds 1048576 bytes.",
+    );
+
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("preserves multibyte piped secrets below the byte limit", async () => {
+    const runtime = createRuntime();
+    const token = "é".repeat(512 * 1024 - 1);
+    restoreStdin?.();
+    restoreStdin = withPipedStdinChunks([token.slice(0, 200_000), token.slice(200_000)]);
+
+    await modelsAuthPasteTokenCommand({ provider: "dummy" }, runtime);
+
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: expect.objectContaining({ token }),
+      }),
+    );
   });
 
   it("writes pasted API keys to the requested agent store", async () => {

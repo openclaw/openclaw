@@ -72,6 +72,8 @@ import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./sha
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
+const PIPED_SECRET_MAX_BYTES = 1024 * 1024;
+
 // CLI auth writes occur outside the gateway process, which may retain an older runtime snapshot.
 async function refreshRunningGatewayAuthState(): Promise<void> {
   try {
@@ -132,11 +134,17 @@ const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
 
 async function readPipedStdin(): Promise<string> {
   process.stdin.setEncoding("utf8");
-  let input = "";
+  const chunks: string[] = [];
+  let bytes = 0;
   for await (const chunk of process.stdin) {
-    input += String(chunk);
+    const text = String(chunk);
+    bytes += Buffer.byteLength(text, "utf8");
+    if (bytes > PIPED_SECRET_MAX_BYTES) {
+      throw new Error(`Piped secret input exceeds ${PIPED_SECRET_MAX_BYTES} bytes.`);
+    }
+    chunks.push(text);
   }
-  return input;
+  return chunks.join("");
 }
 
 async function readPastedSecret(params: {
