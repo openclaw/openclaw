@@ -51,6 +51,16 @@ function getOptionNames(command: Command): string[] {
   return command.options.map((option) => option.attributeName());
 }
 
+export function resolveChannelsAddOptions(
+  channelArg: string | undefined,
+  opts: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...opts,
+    channel: opts.channel ?? channelArg,
+  };
+}
+
 function shouldRegisterChannelSetupOptions(
   argv: string[] = process.argv,
   options: RegisterChannelsCliOptions = {},
@@ -198,6 +208,7 @@ export async function registerChannelsCli(
   const addCommand = channels
     .command("add")
     .description("Add or update a channel account")
+    .argument("[channel]", "Channel id")
     .addHelpText(
       "after",
       () =>
@@ -231,11 +242,13 @@ export async function registerChannelsCli(
     await addChannelSetupOptions(addCommand);
   }
 
-  addCommand.action(async (opts, command) => {
+  addCommand.action(async (channelArg: string | undefined, opts, command) => {
     await runChannelsCommand(async () => {
       const { channelsAddCommand } = await loadChannelsCommands();
       const hasFlags = hasExplicitOptions(command, getOptionNames(command));
-      await channelsAddCommand(opts, defaultRuntime, { hasFlags });
+      await channelsAddCommand(resolveChannelsAddOptions(channelArg, opts), defaultRuntime, {
+        hasFlags,
+      });
     });
   });
 

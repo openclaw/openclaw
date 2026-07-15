@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import { registerChannelsCli } from "./channels-cli.js";
+import { registerChannelsCli, resolveChannelsAddOptions } from "./channels-cli.js";
 
 const listBundledPackageChannelMetadataMock = vi.hoisted(() =>
   vi.fn<() => readonly PluginPackageChannel[]>(() => []),
@@ -95,5 +95,25 @@ describe("registerChannelsCli", () => {
 
     expect(listBundledPackageChannelMetadataMock).toHaveBeenCalledTimes(1);
     expect(getChannelAddOptionFlags(program)).toContain("--homeserver <url>");
+  });
+});
+
+describe("resolveChannelsAddOptions", () => {
+  it("accepts a positional channel while preserving --channel precedence", () => {
+    expect(
+      resolveChannelsAddOptions("clickclack", {
+        baseUrl: "https://clickclack.example",
+        token: "ccb_test",
+        workspace: "default",
+      }),
+    ).toEqual({
+      channel: "clickclack",
+      baseUrl: "https://clickclack.example",
+      token: "ccb_test",
+      workspace: "default",
+    });
+    expect(resolveChannelsAddOptions("clickclack", { channel: "telegram" })).toEqual({
+      channel: "telegram",
+    });
   });
 });
