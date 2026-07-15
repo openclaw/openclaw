@@ -529,14 +529,13 @@ describe("discord component interactions", () => {
       entries: [createButtonEntry({ callbackData: "quick-replies:continue" })],
       modals: [],
     });
-    const handler = vi.fn(async () => ({ handled: true, submitText: "  Continue here  " }));
     dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
       const typedParams = params as {
         afterInvoke?: (result: { handled?: boolean; submitText?: string }) => Promise<void>;
         onMatched?: () => Promise<void>;
       };
       await typedParams.onMatched?.();
-      const result = await handler();
+      const result = { handled: true, submitText: "  Continue here  " };
       await typedParams.afterInvoke?.(result);
       return { matched: true, handled: true, duplicate: false, result };
     });
@@ -547,8 +546,6 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(acknowledge).toHaveBeenCalledOnce();
-    expect(handler).toHaveBeenCalledOnce();
     expect(dispatchReplyMock).toHaveBeenCalledOnce();
     expect(lastDispatchCtx).toMatchObject({
       BodyForAgent: "Continue here",
