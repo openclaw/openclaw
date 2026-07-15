@@ -18,7 +18,7 @@ import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
 
 /** Lightweight audit finding shape used by summary-only audit helpers. */
-export type SecurityAuditFinding = {
+type SecurityAuditFinding = {
   checkId: string;
   severity: "info" | "warn" | "critical";
   title: string;
@@ -149,7 +149,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
     `\n` +
     `browser control: ${browserEnabled ? "enabled" : "disabled"}` +
     `\n` +
-    "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway";
+    "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting";
 
   return [
     {

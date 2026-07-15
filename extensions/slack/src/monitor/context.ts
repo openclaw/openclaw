@@ -3,6 +3,7 @@ import type { App } from "@slack/bolt";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
@@ -49,7 +50,22 @@ export type SlackAssistantThreadContext = {
   updatedAt: number;
 };
 
+type SlackChannelInfo = {
+  name?: string;
+  type?: SlackMessageEvent["channel_type"];
+  topic?: string;
+  purpose?: string;
+};
+
+type SlackChannelCacheEntry = {
+  info: SlackChannelInfo;
+  metadataLoaded: boolean;
+};
+
 const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
+const SLACK_CHANNEL_CACHE_MAX_ENTRIES = 1024;
+const SLACK_CHANNEL_DENIAL_WARNING_TTL_MS = 5 * 60_000;
+const SLACK_CHANNEL_DENIAL_WARNING_MAX_ENTRIES = 1024;
 
 export function buildSlackAssistantThreadMetadata(
   context: Omit<SlackAssistantThreadContext, "updatedAt">,
@@ -164,12 +180,18 @@ export type SlackMonitorContext = {
   resolveChannelName: (
     channelId: string,
     eventScope?: SlackEventScope,
-  ) => Promise<{
-    name?: string;
-    type?: SlackMessageEvent["channel_type"];
-    topic?: string;
-    purpose?: string;
-  }>;
+  ) => Promise<SlackChannelInfo>;
+  /** Records authoritative event-carried channel type in the channel metadata cache. */
+  rememberSlackChannelType: (
+    channelId: string | null | undefined,
+    channelType: string | null | undefined,
+    eventScope?: SlackEventScope,
+  ) => void;
+  /** Reads event-carried channel type when Slack omits it from later bot/edit/delete events. */
+  recallSlackChannelType: (
+    channelId: string | null | undefined,
+    eventScope?: SlackEventScope,
+  ) => SlackMessageEvent["channel_type"] | undefined;
   resolveUserName: (userId: string, eventScope?: SlackEventScope) => Promise<{ name?: string }>;
   setSlackThreadStatus: (params: {
     channelId: string;
@@ -243,17 +265,14 @@ export function createSlackMonitorContext(params: {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
 
-  const channelCache = new Map<
-    string,
-    {
-      name?: string;
-      type?: SlackMessageEvent["channel_type"];
-      topic?: string;
-      purpose?: string;
-    }
-  >();
+  const channelCache = new Map<string, SlackChannelCacheEntry>();
   const userCache = new Map<string, { name?: string }>();
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
+  // Rate-limit active denials while retaining periodic evidence; bound keys against config churn.
+  const channelDenialWarnings = createDedupeCache({
+    ttlMs: SLACK_CHANNEL_DENIAL_WARNING_TTL_MS,
+    maxSize: SLACK_CHANNEL_DENIAL_WARNING_MAX_ENTRIES,
+  });
   const assistantThreadContexts = new Map<string, SlackAssistantThreadContext>();
   let lastAssistantContextCleanupAt = Date.now();
 
@@ -268,6 +287,59 @@ export function createSlackMonitorContext(params: {
 
   const scopedKey = (key: string, eventScope?: SlackEventScope) =>
     eventScope ? `${params.accountId}:${eventScope.teamId}:${key}` : key;
+
+  const readCachedChannel = (cacheKey: string): SlackChannelCacheEntry | undefined => {
+    const cached = channelCache.get(cacheKey);
+    if (cached) {
+      // Active rooms stay resident while the bounded cache evicts the oldest entry.
+      channelCache.delete(cacheKey);
+      channelCache.set(cacheKey, cached);
+    }
+    return cached;
+  };
+
+  const writeCachedChannel = (cacheKey: string, entry: SlackChannelCacheEntry): void => {
+    channelCache.delete(cacheKey);
+    channelCache.set(cacheKey, entry);
+    pruneMapToMaxSize(channelCache, SLACK_CHANNEL_CACHE_MAX_ENTRIES);
+  };
+
+  const rememberSlackChannelType = (
+    channelId: string | null | undefined,
+    channelType: string | null | undefined,
+    eventScope?: SlackEventScope,
+  ) => {
+    const id = normalizeOptionalString(channelId);
+    const normalizedType = normalizeOptionalString(channelType)?.toLowerCase();
+    if (
+      !id ||
+      (normalizedType !== "im" &&
+        normalizedType !== "mpim" &&
+        normalizedType !== "channel" &&
+        normalizedType !== "group")
+    ) {
+      return;
+    }
+    const cacheKey = scopedKey(id, eventScope);
+    const cached = readCachedChannel(cacheKey);
+    const type = normalizeSlackChannelType(normalizedType, id);
+    if (cached?.info.type === type) {
+      return;
+    }
+    // Type-only entries must not suppress a later conversations.info metadata fill.
+    writeCachedChannel(cacheKey, {
+      info: { ...cached?.info, type },
+      metadataLoaded: cached?.metadataLoaded ?? false,
+    });
+  };
+
+  const recallSlackChannelType = (
+    channelId: string | null | undefined,
+    eventScope?: SlackEventScope,
+  ): SlackMessageEvent["channel_type"] | undefined => {
+    const id = normalizeOptionalString(channelId);
+    return id ? readCachedChannel(scopedKey(id, eventScope))?.info.type : undefined;
+  };
 
   const markMessageSeen = (
     channelId: string | undefined,
@@ -350,7 +422,12 @@ export function createSlackMonitorContext(params: {
   }) => {
     const channelId = normalizeOptionalString(p.channelId) ?? "";
     const senderId = normalizeOptionalString(p.senderId) ?? "";
-    const channelType = normalizeSlackChannelType(p.channelType, channelId);
+    // System events can omit channel_type too; prefer a type already seen on events
+    // for this channel over C-prefix inference so they key the same session (#102676).
+    const channelType = normalizeSlackChannelType(
+      p.channelType ?? recallSlackChannelType(channelId),
+      channelId,
+    );
     const isDirectMessage = channelType === "im";
     if (!channelId && (!isDirectMessage || !senderId)) {
       return params.mainKey;
@@ -431,9 +508,9 @@ export function createSlackMonitorContext(params: {
 
   const resolveChannelName = async (channelId: string, eventScope?: SlackEventScope) => {
     const cacheKey = scopedKey(channelId, eventScope);
-    const cached = channelCache.get(cacheKey);
-    if (cached) {
-      return cached;
+    const cached = readCachedChannel(cacheKey);
+    if (cached?.metadataLoaded) {
+      return cached.info;
     }
     try {
       const info = await (eventScope?.client ?? params.app.client).conversations.info({
@@ -454,11 +531,16 @@ export function createSlackMonitorContext(params: {
       const topic = channel && "topic" in channel ? (channel.topic?.value ?? undefined) : undefined;
       const purpose =
         channel && "purpose" in channel ? (channel.purpose?.value ?? undefined) : undefined;
-      const entry = { name, type, topic, purpose };
-      channelCache.set(cacheKey, entry);
-      return entry;
+      const entry: SlackChannelCacheEntry = {
+        // An event-carried type is authoritative and may be the only mpDM signal
+        // available to later bot, edit, and delete events with restricted scopes.
+        info: { name, type: cached?.info.type ?? type, topic, purpose },
+        metadataLoaded: true,
+      };
+      writeCachedChannel(cacheKey, entry);
+      return entry.info;
     } catch {
-      return {};
+      return cached?.info ?? {};
     }
   };
 
@@ -585,24 +667,41 @@ export function createSlackMonitorContext(params: {
       const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
       const channelAllowed = channelConfig?.allowed !== false;
       const channelAllowlistConfigured = hasChannelAllowlistConfig;
-      if (
-        !isSlackChannelAllowedByPolicy({
-          groupPolicy: params.groupPolicy,
-          channelAllowlistConfigured,
-          channelAllowed,
-        })
-      ) {
+      const allowedByPolicy = isSlackChannelAllowedByPolicy({
+        groupPolicy: params.groupPolicy,
+        channelAllowlistConfigured,
+        channelAllowed,
+      });
+      const explicitlyDisabled =
+        params.groupPolicy !== "disabled" &&
+        channelConfig?.allowed === false &&
+        channelConfig.matchSource !== undefined;
+      // Open policy still honors an explicit room disable; unlisted rooms remain open.
+      const shouldDrop = !allowedByPolicy || (params.groupPolicy === "open" && explicitlyDisabled);
+      if (shouldDrop) {
+        if (explicitlyDisabled) {
+          const reason = "channel_not_allowed";
+          const warningKey = `${params.accountId}:${p.channelId}:${reason}`;
+          if (!channelDenialWarnings.peek(warningKey)) {
+            channelDenialWarnings.check(warningKey);
+            logger.warn(
+              {
+                provider: "slack",
+                accountId: params.accountId,
+                channelId: p.channelId,
+                reason,
+                cause: "channel_disabled",
+                groupPolicy: params.groupPolicy,
+                matchSource: channelConfig.matchSource,
+                matchKey: channelConfig.matchKey,
+              },
+              "Slack channel denied by configuration",
+            );
+          }
+        }
         logVerbose(
           `slack: drop channel ${p.channelId} (groupPolicy=${params.groupPolicy}, ${channelMatchMeta})`,
         );
-        return false;
-      }
-      // When groupPolicy is "open", only block channels that are EXPLICITLY denied
-      // (i.e., have a matching config entry with allow:false). Channels not in the
-      // config (matchSource undefined) should be allowed under open policy.
-      const hasExplicitConfig = Boolean(channelConfig?.matchSource);
-      if (!channelAllowed && (params.groupPolicy !== "open" || hasExplicitConfig)) {
-        logVerbose(`slack: drop channel ${p.channelId} (${channelMatchMeta})`);
         return false;
       }
       logVerbose(`slack: allow channel ${p.channelId} (${channelMatchMeta})`);
@@ -691,6 +790,8 @@ export function createSlackMonitorContext(params: {
     resolveSlackSystemEventSessionKey,
     isChannelAllowed,
     resolveChannelName,
+    rememberSlackChannelType,
+    recallSlackChannelType,
     resolveUserName,
     setSlackThreadStatus,
     getSlackAssistantThreadContext,
@@ -698,3 +799,4 @@ export function createSlackMonitorContext(params: {
     setSlackAssistantSuggestedPrompts,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

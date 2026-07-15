@@ -1,6 +1,10 @@
-import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayEventFrame,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type {
-  FastMode,
   GatewaySessionRow,
   SessionCompactionCheckpoint,
   SessionRunStatus,
@@ -11,14 +15,20 @@ import type {
   SessionsPatchResult,
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
+  SessionWorkspaceSetResult,
 } from "../../api/types.ts";
+import { getSafeLocalStorage } from "../../local-storage.ts";
+import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import {
   requestSessionCreate,
   resolveSessionCreateParams,
+  type SessionCreateOutcome,
   type SessionCreateParams,
 } from "./create.ts";
+import { readSessionCustomGroupNames } from "./custom-groups.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
+import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
 import {
   readSessionChangedEvent,
   reconcileSessionChanged,
@@ -40,16 +50,19 @@ export {
   requestSessionUsageTimeSeries,
   requestSessionsUsage,
 } from "./usage.ts";
-export type { SessionUsageQuery } from "./usage.ts";
 
-export type SessionState = {
+type SessionState = {
   result: SessionsListResult | null;
   agentId: string | null;
   modelOverrides: Readonly<Record<string, string | null>>;
   loading: boolean;
   error: string | null;
   deletedSessions: readonly SessionDeleteTarget[];
+  /** Gateway-owned custom group catalog in display order. */
+  groups: readonly string[];
 };
+
+type SessionGroupMutationResult = "completed" | "stale";
 
 export type SessionListOptions = {
   agentId?: string;
@@ -77,18 +90,7 @@ export type SessionRunTerminal = {
   endedAt: number;
 };
 
-export type SessionPatch = {
-  label?: string | null;
-  category?: string | null;
-  model?: string | null;
-  thinkingLevel?: string | null;
-  fastMode?: FastMode | null;
-  verboseLevel?: string | null;
-  reasoningLevel?: string | null;
-  archived?: boolean;
-  pinned?: boolean;
-  unread?: boolean;
-};
+export type { SessionPatch } from "./patch.ts";
 
 type SessionDeleteOptions = {
   agentId?: string;
@@ -98,11 +100,20 @@ type SessionDeleteOptions = {
 type SessionDeleteTarget = {
   key: string;
   agentId?: string;
+  deleteTranscript?: boolean;
+};
+
+/** Dirty/unpushed checkouts survive session deletion; callers surface them. */
+type SessionDeleteOutcome = {
+  deleted: boolean;
+  worktreePreserved?: { id: string; branch: string; path: string };
 };
 
 type SessionDeleteBatchResult = {
   deleted: string[];
   errors: string[];
+  /** Dirty/unpushed checkouts kept by the gateway during this batch. */
+  preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
 };
 
 type SessionCompactResult = {
@@ -117,9 +128,11 @@ type SessionSteerResult = {
   status?: unknown;
 };
 
-export type SessionResetOptions = {
+type SessionResetOptions = {
   agentId?: string | null;
 };
+
+type SessionResetResult = "completed" | "not-started" | "uncertain";
 
 type SessionGateway = {
   readonly snapshot: {
@@ -134,6 +147,11 @@ type SessionGateway = {
 };
 
 type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
+
+type SessionDeleteResponse = {
+  deleted: boolean;
+  worktreePreserved?: SessionDeleteOutcome["worktreePreserved"];
+};
 
 type SessionConnectionScope = {
   client: GatewayBrowserClient;
@@ -158,16 +176,13 @@ export type SessionCapability = {
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
+  createResult: (params?: SessionCreateParams) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
-  patch: (
-    key: string,
-    patch: SessionPatch,
-    options?: { agentId?: string },
-  ) => Promise<SessionsPatchResult | null>;
+  patch: SessionPatchRoute;
   setModelOverride: (key: string, value: string | null | undefined) => void;
-  delete: (key: string, options?: SessionDeleteOptions) => Promise<boolean>;
+  delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
-  reset: (key: string, options?: SessionResetOptions) => Promise<void>;
+  reset: (key: string, options?: SessionResetOptions) => Promise<SessionResetResult>;
   compact: (key: string, options?: { agentId?: string | null }) => Promise<SessionCompactResult>;
   steer: (
     key: string,
@@ -183,6 +198,12 @@ export type SessionCapability = {
     path: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionWorkspaceGetResult | null>;
+  setFile: (
+    key: string,
+    path: string,
+    content: string,
+    options: { agentId?: string | null; expectedHash: string },
+  ) => Promise<SessionWorkspaceSetResult | null>;
   subscribeMessages: (
     key: string,
     options?: { agentId?: string | null },
@@ -202,17 +223,25 @@ export type SessionCapability = {
     checkpointId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsCompactionRestoreResult>;
+  /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
+  groupsLoad: () => Promise<void>;
+  /** Replaces the group catalog; stale means the initiating connection retired. */
+  groupsPut: (names: readonly string[]) => Promise<SessionGroupMutationResult>;
+  /** Renames a group; stale means the initiating connection retired before reconciliation. */
+  groupsRename: (from: string, to: string) => Promise<SessionGroupMutationResult>;
+  /** Deletes a group; stale means the initiating connection retired before reconciliation. */
+  groupsDelete: (name: string) => Promise<SessionGroupMutationResult>;
   subscribeCreated: (listener: (key: string) => void) => () => void;
   subscribe: (listener: (state: SessionState) => void) => () => void;
   dispose: () => void;
 };
 
 export { requestSessionCreate } from "./create.ts";
-export type { SessionCreateParams } from "./create.ts";
 export { resolveSessionKey } from "./navigation.ts";
 export {
   compareSessionRowsByUpdatedAt,
   filterSessionRows,
+  filterVisibleSessionRows,
   getVisibleSessionRows,
   resolveSessionNavigation,
   scopedAgentIdForSession,
@@ -222,11 +251,7 @@ export {
   searchForSession,
   visibleSessionMatches,
 } from "./navigation.ts";
-export { reconcileSessionHistory } from "./reconcile.ts";
-export type { SessionChangedResult, SessionReconcileOptions } from "./reconcile.ts";
 export type {
-  SessionNavigation,
-  SessionNavigationInput,
   SessionRefreshTarget,
   SessionScopeHost,
   SessionScopeHostWithKey,
@@ -321,11 +346,17 @@ function requestSessionDelete(
   client: SessionRequestClient,
   key: string,
   options: SessionDeleteOptions = {},
-): Promise<{ deleted?: boolean }> {
-  return client.request<{ deleted?: boolean }>("sessions.delete", {
+): Promise<SessionDeleteResponse> {
+  return client.request<SessionDeleteResponse>("sessions.delete", {
     ...buildSessionRequestParams(key, options.agentId),
     deleteTranscript: options.deleteTranscript ?? true,
   });
+}
+
+function confirmsSessionDeletion(response: SessionDeleteResponse): boolean {
+  // A successful RPC can still be a lifecycle no-op. Only the canonical result
+  // may drive optimistic removal, navigation, and model-override cleanup.
+  return response.deleted;
 }
 
 function requestSessionReset(
@@ -384,6 +415,22 @@ function requestSessionFile(
   return client.request<SessionWorkspaceGetResult | null>("sessions.files.get", {
     sessionKey: key,
     path,
+    ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+  });
+}
+
+function requestSessionFileSet(
+  client: SessionRequestClient,
+  key: string,
+  path: string,
+  content: string,
+  options: { agentId?: string | null; expectedHash: string },
+): Promise<SessionWorkspaceSetResult | null> {
+  return client.request<SessionWorkspaceSetResult | null>("sessions.files.set", {
+    sessionKey: key,
+    path,
+    content,
+    expectedHash: options.expectedHash,
     ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
   });
 }
@@ -557,6 +604,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     loading: false,
     error: null,
     deletedSessions: [],
+    groups: [],
   };
   let inFlight: Promise<void> | null = null;
   let queuedRefresh: SessionRefreshOptions | null = null;
@@ -693,6 +741,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         loading: backgroundHydrate ? state.loading : false,
         error: null,
         deletedSessions: [],
+        groups: state.groups,
       });
     } catch (error) {
       if (isCurrentConnection(scope)) {
@@ -742,14 +791,14 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return request;
   };
 
-  const create = async (params: SessionCreateParams = {}) => {
+  const createResult = async (params: SessionCreateParams = {}) => {
     const scope = captureConnection();
-    if (!scope || state.loading) {
+    if (!scope) {
       return null;
     }
     try {
       const { currentSessionKey, ...requestParams } = params;
-      const key = await requestSessionCreate(scope.client, {
+      const result = await requestSessionCreate(scope.client, {
         ...requestParams,
         ...resolveSessionCreateParams(currentSessionKey, params.agentId),
       });
@@ -760,12 +809,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return null;
       }
-      // Creation can originate outside the sidebar. Notify presentation owners
-      // after refresh so they can reconcile the new row without guessing from list churn.
+      // Creation may overlap read-only list loading. Notify presentation owners
+      // after its queued refresh so they never guess from stale list churn.
       for (const listener of createdListeners) {
-        listener(key);
+        listener(result.key);
       }
-      return key;
+      return result;
     } catch (error) {
       if (isCurrentConnection(scope)) {
         publish({ ...state, error: String(error) });
@@ -774,10 +823,210 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
+  const create = async (params: SessionCreateParams = {}) =>
+    (await createResult(params))?.key ?? null;
+
+  const LEGACY_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
+  const GROUPS_LIST_METHOD = "sessions.groups.list";
+  const GROUPS_RETRY_DEFAULT_MS = 500;
+  const GROUPS_RETRY_MIN_MS = 100;
+  const GROUPS_RETRY_MAX_MS = 30_000;
+  let groupsLoadedEpoch = -1;
+  let groupsLoadGeneration = 0;
+  let groupsRetryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+
+  const clearGroupsRetry = () => {
+    if (groupsRetryTimer !== null) {
+      globalThis.clearTimeout(groupsRetryTimer);
+      groupsRetryTimer = null;
+    }
+  };
+
+  const invalidateGroupsLoad = () => {
+    groupsLoadedEpoch = -1;
+    groupsLoadGeneration += 1;
+    clearGroupsRetry();
+  };
+
+  const groupsRetryDelayMs = (error: unknown): number | null => {
+    if (!(error instanceof GatewayRequestError) || !error.retryable) {
+      return null;
+    }
+    const requested =
+      typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
+        ? error.retryAfterMs
+        : GROUPS_RETRY_DEFAULT_MS;
+    return Math.min(Math.max(requested, GROUPS_RETRY_MIN_MS), GROUPS_RETRY_MAX_MS);
+  };
+
+  const publishGroups = (groups: readonly string[]) => {
+    if (groups.length === state.groups.length && groups.every((g, i) => g === state.groups[i])) {
+      return;
+    }
+    publish({ ...state, groups: [...groups] });
+  };
+
+  const finishGroupMutationFailure = (
+    current: boolean,
+    error: unknown,
+  ): SessionGroupMutationResult => {
+    if (!current) {
+      return "stale";
+    }
+    publish({ ...state, error: String(error) });
+    throw error;
+  };
+
+  const readLegacyStoredGroups = (): string[] => {
+    try {
+      const raw = getSafeLocalStorage()?.getItem(LEGACY_GROUPS_STORAGE_KEY);
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed)
+        ? [
+            ...new Set(
+              parsed.flatMap((name) => {
+                const normalized = typeof name === "string" ? name.trim() : "";
+                return normalized ? [normalized] : [];
+              }),
+            ),
+          ]
+        : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const loadGroups = async (
+    scope: SessionConnectionScope,
+    generation: number,
+    advertised: boolean | null,
+  ) => {
+    try {
+      const listed = await scope.client.request(GROUPS_LIST_METHOD, {});
+      if (!isCurrentConnection(scope) || generation !== groupsLoadGeneration) {
+        return;
+      }
+      let names = readSessionCustomGroupNames(listed);
+      // One-time migration: browser-local catalogs predate the gateway store.
+      const legacy = readLegacyStoredGroups();
+      if (names.length === 0 && legacy.length > 0) {
+        const put = await scope.client.request("sessions.groups.put", { names: legacy });
+        if (!isCurrentConnection(scope) || generation !== groupsLoadGeneration) {
+          return;
+        }
+        names = readSessionCustomGroupNames(put);
+      }
+      if (legacy.length > 0) {
+        try {
+          getSafeLocalStorage()?.removeItem(LEGACY_GROUPS_STORAGE_KEY);
+        } catch {
+          // The gateway catalog is canonical either way.
+        }
+      }
+      publishGroups(names);
+    } catch (error) {
+      if (
+        !isCurrentConnection(scope) ||
+        generation !== groupsLoadGeneration ||
+        advertised !== true
+      ) {
+        // Gateways without feature metadata retain the legacy one-shot probe.
+        return;
+      }
+      groupsLoadedEpoch = -1;
+      const retryDelayMs = groupsRetryDelayMs(error);
+      if (retryDelayMs === null) {
+        return;
+      }
+      // The attempt token prevents an older rejection from reviving a retry
+      // after a newer event-driven catalog load has already succeeded.
+      groupsRetryTimer = globalThis.setTimeout(() => {
+        groupsRetryTimer = null;
+        if (isCurrentConnection(scope) && generation === groupsLoadGeneration) {
+          void groupsLoad();
+        }
+      }, retryDelayMs);
+    }
+  };
+
+  /** Idempotent per connection; list consumers call it when groups become visible. */
+  const groupsLoad = async () => {
+    const scope = captureConnection();
+    if (!scope || groupsLoadedEpoch === scope.epoch) {
+      return;
+    }
+    const advertised = isGatewayMethodAdvertised(gateway.snapshot, GROUPS_LIST_METHOD);
+    clearGroupsRetry();
+    const generation = ++groupsLoadGeneration;
+    groupsLoadedEpoch = scope.epoch;
+    if (advertised === false) {
+      publishGroups([]);
+      return;
+    }
+    await loadGroups(scope, generation, advertised);
+  };
+
+  const groupsPut = async (names: readonly string[]): Promise<SessionGroupMutationResult> => {
+    const scope = captureConnection();
+    if (!scope) {
+      return "stale";
+    }
+    try {
+      const result = await scope.client.request("sessions.groups.put", { names: [...names] });
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
+      publishGroups(readSessionCustomGroupNames(result));
+      return "completed";
+    } catch (error) {
+      return finishGroupMutationFailure(isCurrentConnection(scope), error);
+    }
+  };
+
+  const groupsRename = async (from: string, to: string): Promise<SessionGroupMutationResult> => {
+    const scope = captureConnection();
+    if (!scope) {
+      return "stale";
+    }
+    try {
+      const result = await scope.client.request("sessions.groups.rename", { name: from, to });
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
+      publishGroups(readSessionCustomGroupNames(result));
+      // The mutation response is the commit point. Reconcile member rows in
+      // the background so a later disconnect cannot downgrade confirmed work.
+      void refresh({ ...lastListOptions, force: true });
+      return "completed";
+    } catch (error) {
+      return finishGroupMutationFailure(isCurrentConnection(scope), error);
+    }
+  };
+
+  const groupsDelete = async (name: string): Promise<SessionGroupMutationResult> => {
+    const scope = captureConnection();
+    if (!scope) {
+      return "stale";
+    }
+    try {
+      const result = await scope.client.request("sessions.groups.delete", { name });
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
+      publishGroups(readSessionCustomGroupNames(result));
+      // See groupsRename: collapsed-state consumers must observe confirmed
+      // completion before an unrelated refresh can outlive the connection.
+      void refresh({ ...lastListOptions, force: true });
+      return "completed";
+    } catch (error) {
+      return finishGroupMutationFailure(isCurrentConnection(scope), error);
+    }
+  };
+
   const patch = async (
     key: string,
     patchParams: SessionPatch,
-    options: { agentId?: string } = {},
+    options: SessionPatchOptions = {},
   ): Promise<SessionsPatchResult | null> => {
     const scope = captureConnection();
     if (!scope) {
@@ -805,6 +1054,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       setModelOverride(key, previousModelOverride);
     };
     try {
+      if (options.waitFor) {
+        await options.waitFor;
+        if (!isCurrentConnection(scope)) {
+          restoreModelOverride();
+          return null;
+        }
+      }
       const result = await requestSessionPatch(scope.client, key, patchParams, options);
       if (!isCurrentConnection(scope)) {
         restoreModelOverride();
@@ -879,23 +1135,32 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return true;
   };
 
-  const remove = async (key: string, options: SessionDeleteOptions = {}): Promise<boolean> => {
+  const remove = async (
+    key: string,
+    options: SessionDeleteOptions = {},
+  ): Promise<SessionDeleteOutcome> => {
     const scope = captureConnection();
     if (!scope) {
-      return false;
+      return { deleted: false };
     }
     try {
-      await requestSessionDelete(scope.client, key, options);
+      const response = await requestSessionDelete(scope.client, key, options);
       if (!isCurrentConnection(scope)) {
-        return false;
+        return { deleted: false };
+      }
+      if (!confirmsSessionDeletion(response)) {
+        return { deleted: false };
       }
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
       await refresh({ agentId: options.agentId, force: true });
-      return isCurrentConnection(scope);
+      return {
+        deleted: isCurrentConnection(scope),
+        ...(response.worktreePreserved ? { worktreePreserved: response.worktreePreserved } : {}),
+      };
     } catch (error) {
       if (!isCurrentConnection(scope)) {
-        return false;
+        return { deleted: false };
       }
       publish({ ...state, error: String(error) });
       throw error;
@@ -907,20 +1172,27 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   ): Promise<SessionDeleteBatchResult> => {
     const scope = captureConnection();
     if (!scope || targets.length === 0) {
-      return { deleted: [], errors: [] };
+      return { deleted: [], errors: [], preservedWorktrees: [] };
     }
     const deleted: string[] = [];
     const errors: string[] = [];
+    const preservedWorktrees: SessionDeleteBatchResult["preservedWorktrees"] = [];
     for (const target of targets) {
       if (!isCurrentConnection(scope)) {
         break;
       }
       try {
-        await requestSessionDelete(scope.client, target.key, target);
+        const response = await requestSessionDelete(scope.client, target.key, target);
         if (!isCurrentConnection(scope)) {
           break;
         }
+        if (!confirmsSessionDeletion(response)) {
+          continue;
+        }
         deleted.push(target.key);
+        if (response.worktreePreserved) {
+          preservedWorktrees.push(response.worktreePreserved);
+        }
       } catch (error) {
         errors.push(String(error));
       }
@@ -935,22 +1207,31 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
       await refresh({ force: true });
     }
-    return isCurrentConnection(scope) ? { deleted, errors } : { deleted: [], errors: [] };
+    return isCurrentConnection(scope)
+      ? { deleted, errors, preservedWorktrees }
+      : { deleted: [], errors: [], preservedWorktrees: [] };
   };
 
-  const reset = async (key: string, options: SessionResetOptions = {}): Promise<void> => {
+  const reset = async (
+    key: string,
+    options: SessionResetOptions = {},
+  ): Promise<SessionResetResult> => {
     const scope = captureConnection();
     if (!scope) {
-      return;
+      return "not-started";
     }
     try {
       await requestSessionReset(scope.client, key, options);
+      return isCurrentConnection(scope) ? "completed" : "uncertain";
     } catch (error) {
-      if (!isCurrentConnection(scope)) {
-        return;
+      if (isCurrentConnection(scope)) {
+        publish({ ...state, error: String(error) });
       }
-      publish({ ...state, error: String(error) });
-      throw error;
+      // The gateway commits the new session identity before every awaited
+      // post-reset lifecycle step finishes. Once requested, even a rejection
+      // on the same connection cannot prove that the destructive reset did not
+      // commit, so callers must never retry it automatically.
+      return "uncertain";
     }
   };
 
@@ -1007,6 +1288,20 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return null;
     }
     const result = await requestSessionFile(scope.client, key, path, options);
+    return isCurrentConnection(scope) ? result : null;
+  };
+
+  const setFile = async (
+    key: string,
+    path: string,
+    content: string,
+    options: { agentId?: string | null; expectedHash: string },
+  ): Promise<SessionWorkspaceSetResult | null> => {
+    const scope = captureConnection();
+    if (!scope) {
+      return null;
+    }
+    const result = await requestSessionFileSet(scope.client, key, path, content, options);
     return isCurrentConnection(scope) ? result : null;
   };
 
@@ -1098,6 +1393,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connectionConnected = next.connected;
     if (connectionChanged) {
       connectionEpoch += 1;
+      invalidateGroupsLoad();
       inFlight = null;
       queuedRefresh = null;
       rollbackPendingModelPatches();
@@ -1111,6 +1407,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         loading: false,
         error: null,
         deletedSessions: [],
+        groups: state.groups,
       });
       return;
     }
@@ -1149,6 +1446,14 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         showArchived: lastListOptions.showArchived,
       });
       const eventInfo = readSessionChangedEvent(event.payload);
+      // Catalog mutations from other clients invalidate the per-connection
+      // groups snapshot. Groups events carry no session key, so read the
+      // reason straight off the payload instead of the parsed row info.
+      const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
+      if (eventReason === "groups") {
+        invalidateGroupsLoad();
+        void groupsLoad();
+      }
       const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
       const status = reconciled.status ?? eventInfo?.status;
       const runEnded =
@@ -1184,6 +1489,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     reconcileChanged,
     reconcileRunTerminal,
     refresh,
+    createResult,
     create,
     patch,
     setModelOverride,
@@ -1194,11 +1500,16 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     steer,
     listFiles,
     getFile,
+    setFile,
     subscribeMessages,
     unsubscribeMessages,
     listCheckpoints,
     branchCheckpoint,
     restoreCheckpoint,
+    groupsLoad,
+    groupsPut,
+    groupsRename,
+    groupsDelete,
     subscribeCreated(listener) {
       createdListeners.add(listener);
       return () => createdListeners.delete(listener);
@@ -1210,6 +1521,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     dispose() {
       disposed = true;
       connectionEpoch += 1;
+      invalidateGroupsLoad();
       connectionConnected = false;
       inFlight = null;
       queuedRefresh = null;
@@ -1222,3 +1534,4 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

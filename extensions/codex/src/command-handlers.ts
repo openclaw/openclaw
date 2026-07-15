@@ -1,11 +1,19 @@
 // Codex plugin module implements command handlers behavior.
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+} from "openclaw/plugin-sdk/model-session-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
+import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import {
   installCodexComputerUse,
@@ -21,15 +29,22 @@ import {
   resolveCodexNativeSandboxBlock,
 } from "./app-server/sandbox-guard.js";
 import {
+  assertCodexBindingMayBeReplaced,
   bindingStoreKey,
   normalizeCodexAppServerBindingModelProvider,
   reclaimCurrentCodexSessionGeneration,
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
   type CodexAppServerBindingStore,
+  type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
+import {
+  codexDiagnosticsFeedbackState,
+  type CodexDiagnosticsTarget,
+  type PendingCodexDiagnosticsConfirmation,
+} from "./command-diagnostics-state.js";
 import {
   buildHelp,
   formatAccount,
@@ -81,7 +96,7 @@ import {
   resolveCodexCliSessionForBindingOnNode,
 } from "./node-cli-sessions.js";
 
-export type CodexCommandDeps = {
+type CodexCommandDeps = {
   bindingStore: CodexAppServerBindingStore;
   codexControlRequest: CodexControlRequestFn;
   listCodexAppServerModels: typeof listAllCodexAppServerModels;
@@ -162,6 +177,7 @@ type ParsedComputerUseArgs = {
   action: "status" | "install";
   overrides: Partial<CodexComputerUseConfig>;
   hasOverrides: boolean;
+  persistentIdentity: Partial<Pick<CodexComputerUseConfig, "pluginName" | "mcpServerName">>;
   help?: boolean;
 };
 
@@ -185,37 +201,14 @@ type ParsedDiagnosticsArgs =
   | { action: "cancel"; token: string }
   | { action: "usage" };
 
-type CodexDiagnosticsTarget = {
-  threadId: string;
-  identity: CodexAppServerBindingIdentity;
-  agentDir: string;
-  authProfileId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  channel?: string;
-  channelId?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-  threadParentId?: string;
-};
-
-type CodexDiagnosticsCandidate = Omit<CodexDiagnosticsTarget, "threadId" | "authProfileId">;
-
-type PendingCodexDiagnosticsConfirmation = {
-  token: string;
-  targets: CodexDiagnosticsTarget[];
-  note?: string;
-  senderId: string;
-  channel: string;
-  accountId?: string;
-  channelId?: string;
-  messageThreadId?: string;
-  threadParentId?: string;
-  sessionKey?: string;
-  scopeKey: string;
-  privateRouted?: boolean;
-  createdAt: number;
-};
+type CodexDiagnosticsCandidate = Omit<
+  CodexDiagnosticsTarget,
+  | "threadId"
+  | "connectionScope"
+  | "appServerRuntimeFingerprint"
+  | "pendingSupervisionBranch"
+  | "authProfileId"
+>;
 
 const CODEX_DIAGNOSTICS_SOURCE = "openclaw-diagnostics";
 const CODEX_DIAGNOSTICS_REASON_MAX_CHARS = 2048;
@@ -245,17 +238,12 @@ const CODEX_NATIVE_CONTROL_SUBCOMMANDS = new Set([
   "stop",
 ]);
 
-const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
-const lastCodexDiagnosticsUploadByScope = new Map<string, number>();
-const pendingCodexDiagnosticsConfirmations = new Map<string, PendingCodexDiagnosticsConfirmation>();
-const pendingCodexDiagnosticsConfirmationTokensByScope = new Map<string, string[]>();
-
-export function resetCodexDiagnosticsFeedbackStateForTests(): void {
-  lastCodexDiagnosticsUploadByThread.clear();
-  lastCodexDiagnosticsUploadByScope.clear();
-  pendingCodexDiagnosticsConfirmations.clear();
-  pendingCodexDiagnosticsConfirmationTokensByScope.clear();
-}
+const {
+  lastUploadByThread: lastCodexDiagnosticsUploadByThread,
+  lastUploadByScope: lastCodexDiagnosticsUploadByScope,
+  pendingConfirmations: pendingCodexDiagnosticsConfirmations,
+  pendingTokensByScope: pendingCodexDiagnosticsConfirmationTokensByScope,
+} = codexDiagnosticsFeedbackState;
 
 /**
  * No-arg `/codex` picker. Codex owns the command tree; channels render the
@@ -414,18 +402,22 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex status" };
     }
+    const { agentDir } = resolveCodexConversationControlScope(ctx);
     return {
-      text: formatCodexStatus(await deps.readCodexStatusProbes(options.pluginConfig, ctx.config)),
+      text: formatCodexStatus(
+        await deps.readCodexStatusProbes(options.pluginConfig, ctx.config, agentDir),
+      ),
     };
   }
   if (normalized === "models") {
     if (rest.length > 0) {
       return { text: "Usage: /codex models" };
     }
+    const { agentDir } = resolveCodexConversationControlScope(ctx);
     return {
       text: formatModels(
         await deps.listCodexAppServerModels(
-          deps.requestOptions(options.pluginConfig, 100, ctx.config),
+          deps.requestOptions(options.pluginConfig, 100, ctx.config, agentDir),
         ),
       ),
     };
@@ -511,7 +503,7 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex mcp" };
     }
-    const scope = await resolveCommandAppServerScope(deps, ctx);
+    const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
     return {
       text: formatList(
         await deps.codexControlRequest(
@@ -528,7 +520,7 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex skills" };
     }
-    const scope = await resolveCommandAppServerScope(deps, ctx);
+    const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
     return {
       text: formatSkills(
         await deps.codexControlRequest(
@@ -544,7 +536,7 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex account" };
     }
-    const scope = await resolveCommandAppServerScope(deps, ctx);
+    const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
     const requestScope = { config: ctx.config, ...scope };
     const [account, limits] = await Promise.all([
       deps.safeCodexControlRequest(
@@ -566,6 +558,7 @@ export async function handleCodexSubcommand(
         limits,
         await readCodexAccountAuthOverview({
           ctx,
+          agentDir: scope.agentDir,
           pluginConfig: options.pluginConfig,
           safeCodexControlRequest: deps.safeCodexControlRequest,
           account,
@@ -575,6 +568,24 @@ export async function handleCodexSubcommand(
     };
   }
   return { text: `Unknown Codex command: ${formatCodexDisplayText(subcommand)}\n\n${buildHelp()}` };
+}
+
+function isCurrentSessionModelSelectionLocked(ctx: PluginCommandContext): boolean {
+  const sessionKey = ctx.sessionKey?.trim();
+  if (!sessionKey) {
+    return false;
+  }
+  // SessionEntry is the durable authority even when a native binding is absent or stale.
+  // Never infer this lock from binding model metadata such as preserveNativeModel.
+  const storePath = resolveStorePath(ctx.config.session?.store, { agentId: ctx.agentId });
+  return isModelSelectionLocked(
+    getSessionEntry({
+      storePath,
+      sessionKey,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+    }),
+  );
 }
 
 function resolveCodexNativeCommandSandboxBlock(
@@ -665,11 +676,17 @@ async function handleComputerUseCommand(
       "Checks or installs the configured Codex Computer Use plugin through app-server.",
     ].join("\n");
   }
+  if (Object.keys(parsed.persistentIdentity).length > 0) {
+    return formatComputerUsePersistentIdentityMigration(parsed);
+  }
   if (parsed.action === "install" && !canMutateCodexHost(ctx)) {
     return "Only an owner or operator.admin gateway client can configure Codex Computer Use.";
   }
+  const { agentDir } = resolveCodexConversationControlScope(ctx);
   const params: CodexComputerUseSetupParams = {
     pluginConfig,
+    config: ctx.config,
+    agentDir,
     forceEnable: parsed.action === "install" || parsed.hasOverrides,
     ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
   };
@@ -690,6 +707,9 @@ async function bindConversation(
     return {
       text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
     };
+  }
+  if (isCurrentSessionModelSelectionLocked(ctx)) {
+    return { text: MODEL_SELECTION_LOCKED_MESSAGE };
   }
   const scope = resolveCodexConversationControlScope(ctx);
   const workspaceDir = parsed.cwd ?? deps.resolveCodexDefaultWorkspaceDir(pluginConfig);
@@ -714,6 +734,7 @@ async function bindConversation(
       ? conversationBindingIdentity(currentConversationData.bindingId)
       : sessionOwner;
   const existingBinding = currentOwner ? await deps.bindingStore.read(currentOwner) : undefined;
+  assertCodexBindingMayBeReplaced(existingBinding, "binding this conversation to another thread");
   const sessionSource =
     sessionOwner && existingBinding
       ? {
@@ -766,8 +787,15 @@ async function detachConversation(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
 ): Promise<string> {
+  if (isCurrentSessionModelSelectionLocked(ctx)) {
+    return MODEL_SELECTION_LOCKED_MESSAGE;
+  }
   const current = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(current);
+  if (data?.kind === "codex-app-server-session") {
+    const binding = await deps.bindingStore.read(conversationBindingIdentity(data.bindingId));
+    assertCodexBindingMayBeReplaced(binding, "detaching its conversation binding");
+  }
   const detached = await ctx.detachConversationBinding();
   if (data?.kind === "codex-app-server-session") {
     await deps.bindingStore.mutate(conversationBindingIdentity(data.bindingId), { kind: "clear" });
@@ -817,7 +845,7 @@ async function buildThreads(
   pluginConfig: unknown,
   filter: string,
 ): Promise<string> {
-  const scope = await resolveCommandAppServerScope(deps, ctx);
+  const scope = await resolveCommandAppServerScope(deps, ctx, pluginConfig);
   const response = await deps.codexControlRequest(
     pluginConfig,
     CODEX_CONTROL_METHODS.listThreads,
@@ -863,6 +891,9 @@ async function resumeThread(
   if (!normalizedThreadId || args.length !== 1) {
     return "Usage: /codex resume <thread-id>";
   }
+  if (isCurrentSessionModelSelectionLocked(ctx)) {
+    return MODEL_SELECTION_LOCKED_MESSAGE;
+  }
   if (!ctx.sessionId) {
     return "Cannot attach a Codex thread because this command did not include an OpenClaw session id.";
   }
@@ -883,6 +914,7 @@ async function resumeThread(
       throw new Error(`Codex session generation is no longer current: ${identity.sessionId}`);
     }
     const currentBinding = await deps.bindingStore.read(identity);
+    assertCodexBindingMayBeReplaced(currentBinding, "attaching a different resumed thread");
     const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
       authProfileId: currentBinding?.authProfileId,
       agentDir: scope.agentDir,
@@ -921,6 +953,8 @@ async function resumeThread(
       agentDir: scope.agentDir,
       config: ctx.config,
     });
+    const bindingBeforeCommit = await deps.bindingStore.read(identity);
+    assertCodexBindingMayBeReplaced(bindingBeforeCommit, "committing a different resumed thread");
     const committed = await deps.bindingStore.mutate(identity, {
       kind: "set",
       binding: {
@@ -948,6 +982,21 @@ async function bindCodexCliNodeSession(
 ): Promise<string> {
   if (!parsed.threadId || !parsed.host || parsed.bindHere !== true) {
     return "Usage: /codex resume <session-id> --host <node> --bind here";
+  }
+  if (isCurrentSessionModelSelectionLocked(ctx)) {
+    return MODEL_SELECTION_LOCKED_MESSAGE;
+  }
+  if (ctx.sessionId) {
+    const scope = resolveCodexConversationControlScope(ctx);
+    const binding = await deps.bindingStore.read(
+      sessionBindingIdentity({
+        sessionId: ctx.sessionId,
+        sessionKey: ctx.sessionKey,
+        agentId: scope.agentId,
+        config: ctx.config,
+      }),
+    );
+    assertCodexBindingMayBeReplaced(binding, "binding a Codex CLI node session");
   }
   const resolved = await deps.resolveCodexCliSessionForBindingOnNode({
     requestedNode: parsed.host,
@@ -1035,12 +1084,15 @@ async function setConversationModel(
   if (args.length > 1) {
     return "Usage: /codex model <model>";
   }
+  const [model = ""] = args;
+  const normalized = model.trim();
+  if (normalized && isCurrentSessionModelSelectionLocked(ctx)) {
+    return MODEL_SELECTION_LOCKED_MESSAGE;
+  }
   const target = await resolveControlTarget(ctx);
   if (!target) {
     return "Cannot set Codex model because this command did not include a stable binding identity.";
   }
-  const [model = ""] = args;
-  const normalized = model.trim();
   if (!normalized) {
     const binding = await deps.bindingStore.read(target.identity);
     return binding?.model
@@ -1142,26 +1194,38 @@ async function resolveControlTarget(
 
 type CommandAppServerScope = Pick<
   CodexControlRequestOptions,
-  "agentDir" | "authProfileId" | "sessionId" | "sessionKey"
-> & { agentId: string };
+  "authProfileId" | "sessionId" | "sessionKey" | "startOptions"
+> & { agentId: string; agentDir: string };
 
 async function resolveCommandAppServerScope(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
+  pluginConfig: unknown,
 ): Promise<CommandAppServerScope> {
   const target = await resolveControlTarget(ctx);
   const fallback = resolveCodexConversationControlScope(ctx);
   const agentDir = target?.agentDir ?? fallback.agentDir;
   const binding = target ? await deps.bindingStore.read(target.identity) : undefined;
-  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
-    authProfileId: binding?.authProfileId ?? target?.requestedAuthProfileId,
-    agentDir,
-    config: ctx.config,
+  const authProfileId =
+    binding?.connectionScope === "supervision"
+      ? undefined
+      : resolveCodexAppServerAuthProfileIdForAgent({
+          authProfileId: binding?.authProfileId ?? target?.requestedAuthProfileId,
+          agentDir,
+          config: ctx.config,
+        });
+  const connection = resolveCodexBindingAppServerConnection({
+    binding,
+    authProfileId,
+    pluginConfig,
   });
   return {
     agentId: target?.agentId ?? fallback.agentId,
     agentDir,
-    ...(authProfileId ? { authProfileId } : {}),
+    ...(connection.clientAuthProfileId !== undefined
+      ? { authProfileId: connection.clientAuthProfileId }
+      : {}),
+    ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
     ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
     ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
   };
@@ -1447,6 +1511,20 @@ async function sendCodexDiagnosticsFeedbackForTargets(
   const sent: CodexDiagnosticsTarget[] = [];
   const failed: Array<{ target: CodexDiagnosticsTarget; error: string }> = [];
   for (const target of targets) {
+    let connection: ReturnType<typeof resolveCodexBindingAppServerConnection>;
+    try {
+      connection = resolveCodexBindingAppServerConnection({
+        binding: target,
+        authProfileId: target.authProfileId,
+        pluginConfig,
+      });
+    } catch (error) {
+      failed.push({
+        target,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
     const response = await deps.safeCodexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.feedback,
@@ -1460,7 +1538,12 @@ async function sendCodexDiagnosticsFeedbackForTargets(
       {
         config: ctx.config,
         agentDir: target.agentDir,
-        ...(target.authProfileId ? { authProfileId: target.authProfileId } : {}),
+        ...(connection.clientAuthProfileId !== undefined
+          ? { authProfileId: connection.clientAuthProfileId }
+          : {}),
+        ...(connection.usesSupervisionConnection
+          ? { startOptions: connection.appServer.start }
+          : {}),
         ...(target.sessionId ? { sessionId: target.sessionId } : {}),
         ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
       },
@@ -1565,17 +1648,46 @@ async function resolvePendingCodexDiagnosticsTargets(
 }
 
 function resolveCodexDiagnosticsTarget(
-  target: CodexDiagnosticsCandidate,
-  binding: { threadId: string; authProfileId?: string },
+  target: CodexDiagnosticsCandidate | CodexDiagnosticsTarget,
+  binding: Pick<
+    CodexAppServerThreadBinding,
+    | "threadId"
+    | "connectionScope"
+    | "appServerRuntimeFingerprint"
+    | "pendingSupervisionBranch"
+    | "authProfileId"
+  >,
   config?: PluginCommandContext["config"],
 ): CodexDiagnosticsTarget {
+  // Confirmation re-resolution receives the previous target. Rebuild the candidate so a
+  // stale private connection scope or auth profile can never survive a binding change.
+  const candidate: CodexDiagnosticsCandidate = {
+    identity: target.identity,
+    agentDir: target.agentDir,
+    sessionKey: target.sessionKey,
+    sessionId: target.sessionId,
+    channel: target.channel,
+    channelId: target.channelId,
+    accountId: target.accountId,
+    messageThreadId: target.messageThreadId,
+    threadParentId: target.threadParentId,
+  };
+  if (binding.connectionScope === "supervision") {
+    return {
+      ...candidate,
+      threadId: binding.threadId,
+      connectionScope: binding.connectionScope,
+      appServerRuntimeFingerprint: binding.appServerRuntimeFingerprint,
+      pendingSupervisionBranch: binding.pendingSupervisionBranch,
+    };
+  }
   const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
     authProfileId: binding.authProfileId,
     agentDir: target.agentDir,
     config,
   });
   return {
-    ...target,
+    ...candidate,
     threadId: binding.threadId,
     authProfileId,
   };
@@ -1589,6 +1701,10 @@ function codexDiagnosticsTargetsMatch(
     JSON.stringify([
       bindingStoreKey(target.identity),
       target.threadId,
+      target.connectionScope ?? null,
+      target.pendingSupervisionBranch?.connectionFingerprint ??
+        target.appServerRuntimeFingerprint ??
+        null,
       target.authProfileId ?? null,
     ]);
   const expectedTargets = expected.map(fingerprint).toSorted();
@@ -1669,7 +1785,7 @@ function formatCodexDiagnosticsTargetLine(target: CodexDiagnosticsTarget): strin
 
 function normalizeDiagnosticsReason(note: string): string | undefined {
   const normalized = normalizeOptionalString(note);
-  return normalized ? normalized.slice(0, CODEX_DIAGNOSTICS_REASON_MAX_CHARS) : undefined;
+  return normalized ? truncateUtf16Safe(normalized, CODEX_DIAGNOSTICS_REASON_MAX_CHARS) : undefined;
 }
 
 function parseDiagnosticsArgs(args: string): ParsedDiagnosticsArgs {
@@ -2051,7 +2167,10 @@ function pruneCodexDiagnosticsCooldownMap(map: Map<string, number>, now: number)
 }
 
 function formatCodexErrorForDisplay(error: string): string {
-  const safe = formatCodexTextForDisplay(error).slice(0, CODEX_DIAGNOSTICS_ERROR_MAX_CHARS);
+  const safe = truncateUtf16Safe(
+    formatCodexTextForDisplay(error),
+    CODEX_DIAGNOSTICS_ERROR_MAX_CHARS,
+  );
   return escapeCodexChatText(safe) || "unknown error";
 }
 
@@ -2109,6 +2228,11 @@ async function startThreadAction(
   if (!binding?.threadId) {
     return `No Codex thread is attached to this OpenClaw session yet.`;
   }
+  const connection = resolveCodexBindingAppServerConnection({
+    binding,
+    authProfileId: binding.authProfileId,
+    pluginConfig,
+  });
   await deps.codexControlRequest(
     pluginConfig,
     kind === "compact" ? CODEX_CONTROL_METHODS.compact : CODEX_CONTROL_METHODS.review,
@@ -2117,8 +2241,9 @@ async function startThreadAction(
       : { threadId: binding.threadId },
     {
       agentDir: target.agentDir,
-      authProfileId: binding.authProfileId,
+      authProfileId: connection.clientAuthProfileId,
       config: ctx.config,
+      ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
     },
   );
   return `Started Codex ${label} for thread ${formatCodexDisplayText(binding.threadId)}.`;
@@ -2180,7 +2305,7 @@ function splitArgs(value: string | undefined): string[] {
 function parseBindArgs(args: string[]): ParsedBindArgs {
   const parsed: ParsedBindArgs = {};
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], "current Codex bind argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
@@ -2232,7 +2357,7 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
   const parsed: ParsedCodexCliSessionsArgs = { filter: "" };
   const filter: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], "current Codex sessions argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
@@ -2272,7 +2397,7 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
 function parseResumeArgs(args: string[]): ParsedResumeArgs {
   const parsed: ParsedResumeArgs = {};
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], "current Codex resume argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
@@ -2313,6 +2438,7 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
     action: "status",
     overrides: {},
     hasOverrides: false,
+    persistentIdentity: {},
   };
   let sawAction = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -2360,23 +2486,14 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
       index += 1;
       continue;
     }
-    if (arg === "--plugin") {
+    if (arg === "--plugin" || arg === "--server" || arg === "--mcp-server") {
       const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.pluginName !== undefined) {
+      const configKey = arg === "--plugin" ? "pluginName" : "mcpServerName";
+      if (!value || parsed.persistentIdentity[configKey] !== undefined) {
         parsed.help = true;
         continue;
       }
-      parsed.overrides.pluginName = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--server" || arg === "--mcp-server") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.mcpServerName !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.overrides.mcpServerName = value;
+      parsed.persistentIdentity[configKey] = value.trim();
       index += 1;
       continue;
     }
@@ -2385,6 +2502,34 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
   parsed.overrides = normalizeComputerUseStringOverrides(parsed.overrides);
   parsed.hasOverrides = Object.values(parsed.overrides).some(Boolean);
   return parsed;
+}
+
+function formatComputerUsePersistentIdentityMigration(parsed: ParsedComputerUseArgs): string {
+  const configPrefix = "plugins.entries.codex.config.computerUse";
+  const settings = [
+    parsed.persistentIdentity.pluginName
+      ? `${configPrefix}.pluginName = ${JSON.stringify(parsed.persistentIdentity.pluginName)}`
+      : undefined,
+    parsed.persistentIdentity.mcpServerName
+      ? `${configPrefix}.mcpServerName = ${JSON.stringify(parsed.persistentIdentity.mcpServerName)}`
+      : undefined,
+  ].filter((setting): setting is string => Boolean(setting));
+  const retryArgs = [
+    `/codex computer-use ${parsed.action}`,
+    parsed.overrides.marketplaceSource
+      ? `--source ${JSON.stringify(parsed.overrides.marketplaceSource)}`
+      : undefined,
+    parsed.overrides.marketplacePath
+      ? `--marketplace-path ${JSON.stringify(parsed.overrides.marketplacePath)}`
+      : undefined,
+    parsed.overrides.marketplaceName
+      ? `--marketplace ${JSON.stringify(parsed.overrides.marketplaceName)}`
+      : undefined,
+  ].filter((arg): arg is string => Boolean(arg));
+  return [
+    "One-off Computer Use plugin/server overrides are no longer supported.",
+    `Set ${settings.join(" and ")} persistently, then rerun ${retryArgs.join(" ")}.`,
+  ].join(" ");
 }
 
 function readRequiredOptionValue(args: string[], index: number): string | undefined {
@@ -2412,13 +2557,6 @@ function normalizeComputerUseStringOverrides(
   if (marketplaceName) {
     normalized.marketplaceName = marketplaceName;
   }
-  const pluginName = normalizeOptionalString(overrides.pluginName);
-  if (pluginName) {
-    normalized.pluginName = pluginName;
-  }
-  const mcpServerName = normalizeOptionalString(overrides.mcpServerName);
-  if (mcpServerName) {
-    normalized.mcpServerName = mcpServerName;
-  }
   return normalized;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

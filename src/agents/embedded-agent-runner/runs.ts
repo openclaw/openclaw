@@ -13,13 +13,15 @@ import {
   listActiveReplyRunSessionIds,
   queueReplyRunMessage,
   resolveReplyBackendQueueMessageMismatch,
+  resolveReplyRunPhaseForSessionId,
+  type ReplyOperationPhase,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
-  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
+  resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
 import {
   diagnosticLogger as diag,
@@ -53,12 +55,11 @@ export {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
-  type ActiveEmbeddedRunSnapshot,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
 } from "./run-state.js";
 
-export type EmbeddedAgentQueueFailureReason =
+type EmbeddedAgentQueueFailureReason =
   | "no_active_run"
   | "not_streaming"
   | "stale_run"
@@ -94,10 +95,6 @@ type PreparedEmbeddedAgentQueueMessage =
       kind: "embedded_run";
       handle: EmbeddedAgentQueueHandle;
     };
-
-// Paired with REPLY_RUN_STALE_TAKEOVER_MS in the reply registry; src/agents
-// keeps its own constant to avoid importing auto-reply policy into this owner.
-const EMBEDDED_STEER_STALE_CAPTURE_MS = 10 * 60_000;
 
 function createQueueFailureOutcome(
   sessionId: string,
@@ -200,7 +197,7 @@ function clearEmbeddedRunAbandonmentBySessionFile(sessionFile: string | undefine
   }
 }
 
-export function clearEmbeddedRunAbandonment(params: {
+function clearEmbeddedRunAbandonment(params: {
   sessionId?: string;
   sessionKey?: string;
   sessionFile?: string;
@@ -213,7 +210,7 @@ export function clearEmbeddedRunAbandonment(params: {
   clearEmbeddedRunAbandonmentBySessionFile(params.sessionFile);
 }
 
-export function markEmbeddedRunAbandoned(params: {
+function markEmbeddedRunAbandoned(params: {
   sessionId: string;
   sessionKey?: string;
   sessionFile?: string;
@@ -459,6 +456,15 @@ function prepareEmbeddedAgentQueueMessage(
       diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
       return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };
     }
+    if (options?.waitForTranscriptCommit === true) {
+      diag.debug(
+        `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
+      );
+      return {
+        kind: "complete",
+        outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
+      };
+    }
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text, options);
     if (queuedReplyRunMessage) {
       logMessageQueued({ sessionId, source: "embedded-agent-runner" });
@@ -473,15 +479,6 @@ function prepareEmbeddedAgentQueueMessage(
         },
       };
     }
-    if (options?.waitForTranscriptCommit === true) {
-      diag.debug(
-        `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
-      );
-      return {
-        kind: "complete",
-        outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
-      };
-    }
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "no_active_run") };
   }
@@ -490,16 +487,9 @@ function prepareEmbeddedAgentQueueMessage(
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "not_streaming") };
   }
   const activity = getDiagnosticSessionActivitySnapshot({ sessionId });
-  // Quiet tool phases stay steerable until the blocked-tool floor: refusing at
-  // the shorter window would push the message into admission takeover of a run
-  // the diagnostic layer still considers healthy.
-  const steerStaleCaptureMs =
-    activity.activeWorkKind === "tool_call"
-      ? Math.max(EMBEDDED_STEER_STALE_CAPTURE_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
-      : EMBEDDED_STEER_STALE_CAPTURE_MS;
   if (
     typeof activity.lastProgressAgeMs === "number" &&
-    activity.lastProgressAgeMs > steerStaleCaptureMs
+    activity.lastProgressAgeMs > resolveRunStaleThresholdMs(activity)
   ) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };
@@ -633,6 +623,12 @@ export function isEmbeddedAgentRunActive(sessionId: string): boolean {
     diag.debug(`run active check: sessionId=${sessionId} active=true`);
   }
   return active;
+}
+
+export function resolveEmbeddedAgentReplyRunPhase(
+  sessionId: string,
+): ReplyOperationPhase | undefined {
+  return resolveReplyRunPhaseForSessionId(sessionId);
 }
 
 export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
@@ -909,7 +905,7 @@ export function clearActiveEmbeddedRun(
   }
 }
 
-export function forceClearEmbeddedAgentRun(
+function forceClearEmbeddedAgentRun(
   sessionId: string,
   sessionKey?: string,
   reason = "stuck_recovery",
@@ -951,4 +947,4 @@ export const testing = {
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
   },
 };
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

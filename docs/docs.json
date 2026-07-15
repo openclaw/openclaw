@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/cli/crestodian",
+      "destination": "/cli/openclaw"
+    },
+    {
       "source": "/channels/bluebubbles",
       "destination": "/channels/imessage-from-bluebubbles"
     },
@@ -131,6 +135,14 @@
     {
       "source": "/plugins/agent-tools",
       "destination": "/plugins/building-plugins#registering-agent-tools"
+    },
+    {
+      "source": "/plugins/reference/codex-supervisor",
+      "destination": "/plugins/codex-supervision"
+    },
+    {
+      "source": "/specs/claw-supervisor",
+      "destination": "/specs/codex-supervision"
     },
     {
       "source": "/gateway/admin-http-rpc",
@@ -1144,6 +1156,7 @@
                   "channels/mattermost",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/reef",
                   "channels/raft",
                   "channels/tlon",
                   "channels/synology-chat",
@@ -1208,8 +1221,10 @@
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/session",
+                  "concepts/session-search",
                   "concepts/channel-docking",
                   "concepts/session-pruning",
+                  "concepts/session-state",
                   "concepts/session-tool",
                   {
                     "group": "Memory",
@@ -1269,9 +1284,10 @@
                 ]
               },
               {
-                "group": "Bundled plugin guides",
+                "group": "Plugin guides",
                 "pages": [
                   "plugins/codex-harness",
+                  "plugins/codex-supervision",
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/logbook",
@@ -1281,6 +1297,7 @@
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/vault",
+                  "plugins/onepassword",
                   "plugins/memory-wiki",
                   "plugins/llama-cpp",
                   "plugins/memory-lancedb",
@@ -1306,6 +1323,7 @@
                 "pages": [
                   "tools/skills",
                   "tools/skill-workshop",
+                  "tools/self-learning",
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",
@@ -1533,6 +1551,7 @@
                   "platforms/windows",
                   "platforms/android",
                   "platforms/ios",
+                  "platforms/ios-healthkit",
                   "platforms/easyrunner"
                 ]
               },
@@ -1599,6 +1618,7 @@
                       "gateway/authentication",
                       "auth-credential-semantics",
                       "gateway/secrets",
+                      "gateway/1password",
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth"
                     ]
@@ -1609,6 +1629,7 @@
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
+                      "gateway/audit",
                       "logging",
                       "gateway/opentelemetry",
                       "gateway/prometheus",
@@ -1622,7 +1643,9 @@
                     "pages": [
                       "gateway/gateway-lock",
                       "gateway/background-process",
-                      "gateway/multiple-gateways"
+                      "gateway/restart-recovery",
+                      "gateway/multiple-gateways",
+                      "gateway/multi-tenant-hosting"
                     ]
                   },
                   {
@@ -1684,6 +1707,7 @@
                 "group": "Nodes and media",
                 "pages": [
                   "nodes/index",
+                  "nodes/presence",
                   "nodes/troubleshooting",
                   {
                     "group": "Media capabilities",
@@ -1711,9 +1735,11 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
+                  "web/workspaces",
                   "web/dashboard",
                   "web/webchat",
-                  "web/tui"
+                  "web/tui",
+                  "web/lobster"
                 ]
               }
             ]
@@ -1729,9 +1755,10 @@
                     "group": "Gateway and service",
                     "pages": [
                       "cli/backup",
-                      "cli/crestodian",
+                      "cli/openclaw",
                       "cli/daemon",
                       "cli/doctor",
+                      "cli/fleet",
                       "cli/gateway",
                       "cli/health",
                       "cli/logs",
@@ -1784,7 +1811,8 @@
                       "cli/flows",
                       "cli/node",
                       "cli/nodes",
-                      "cli/sandbox"
+                      "cli/sandbox",
+                      "cli/worker"
                     ]
                   },
                   {
@@ -1933,6 +1961,7 @@
                     "group": "Release notes",
                     "pages": [
                       "releases/index",
+                      "releases/2026.7.1",
                       "releases/2026.6.11"
                     ]
                   },

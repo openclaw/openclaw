@@ -4,6 +4,7 @@
  * Sends, edits, reacts to, polls, and routes messages through channel plugins and Gateway-backed actions.
  */
 import {
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
@@ -18,7 +19,9 @@ import {
   hasInboundMetadataSentinel,
   stripInboundMetadata,
 } from "../../auto-reply/reply/strip-inbound-meta.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import {
   getChannelPlugin,
   getLoadedChannelPlugin,
@@ -43,6 +46,7 @@ import {
   getBootEchoContextForSession,
   stripBootEchoFromOutboundText,
 } from "../../gateway/boot-echo-guard.js";
+import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
 import {
@@ -81,13 +85,22 @@ import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import {
   readGatewayCallOptions,
   resolveGatewayOptions,
+  resolveMessageActionAgentRuntimeIdentityToken,
   type GatewayCallOptions,
 } from "./gateway.js";
+import {
+  appendMessageToolReadHint,
+  appendMessageToolVisibleReplyHint,
+} from "./message-tool-description.js";
+import {
+  buildMessageToolQuerySchemaProperties,
+  buildMessageToolSchemaFromActions,
+  MESSAGE_TOOL_SEND_TEXT_DESCRIPTION,
+  type MessageToolSchemaBuilders,
+} from "./message-tool-schema-scoping.js";
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
-const MESSAGE_TOOL_THREAD_READ_HINT =
-  ' Use action="read" with threadId to fetch prior messages in a thread when you need conversation context you do not have yet.';
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return action === "broadcast" || shouldApplyCrossContextMarker(action);
 }
@@ -192,6 +205,7 @@ function resolvePollVoteEchoRoute(params: {
   channel?: string | null;
   accountId?: string;
   currentChannelId?: string;
+  currentChatType?: ChatType;
   currentMessagingTarget?: string;
 }): string | undefined {
   const channel = normalizeMessageChannel(params.channel);
@@ -315,11 +329,43 @@ function sanitizePresentationTextFieldsResult(
         return block;
       }
       const sanitizedBlock = { ...(block as Record<string, unknown>) };
-      for (const field of ["text", "placeholder"]) {
+      for (const field of ["text", "placeholder", "title", "xLabel", "yLabel"]) {
         if (typeof sanitizedBlock[field] === "string") {
           const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock[field], bootPrompt);
           sanitizedBlock[field] = sanitized.text;
           suppressionReason ??= sanitized.suppressionReason;
+        }
+      }
+      if (normalizeOptionalLowercaseString(sanitizedBlock.type) === "table") {
+        if (typeof sanitizedBlock.caption === "string") {
+          const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock.caption, bootPrompt);
+          sanitizedBlock.caption = sanitized.text.trim();
+          suppressionReason ??= sanitized.suppressionReason;
+        }
+        if (Array.isArray(sanitizedBlock.headers)) {
+          sanitizedBlock.headers = sanitizedBlock.headers.map((header) => {
+            if (typeof header !== "string") {
+              return header;
+            }
+            const sanitized = sanitizeUserVisibleToolTextResult(header, bootPrompt);
+            suppressionReason ??= sanitized.suppressionReason;
+            return sanitized.text.trim();
+          });
+        }
+        if (Array.isArray(sanitizedBlock.rows)) {
+          sanitizedBlock.rows = sanitizedBlock.rows.map((row) => {
+            if (!Array.isArray(row)) {
+              return row;
+            }
+            return row.map((cell) => {
+              if (typeof cell !== "string") {
+                return cell;
+              }
+              const sanitized = sanitizeUserVisibleToolTextResult(cell, bootPrompt);
+              suppressionReason ??= sanitized.suppressionReason;
+              return sanitized.text.trim();
+            });
+          });
         }
       }
       if (Array.isArray(sanitizedBlock.buttons)) {
@@ -360,6 +406,29 @@ function sanitizePresentationTextFieldsResult(
             }
             suppressionReason ??= sanitized.suppressionReason;
           }
+          const action = sanitizedButton.action;
+          if (action && typeof action === "object" && !Array.isArray(action)) {
+            const sanitizedAction = { ...(action as Record<string, unknown>) };
+            if (
+              (sanitizedAction.type === "url" || sanitizedAction.type === "web-app") &&
+              typeof sanitizedAction.url === "string"
+            ) {
+              const sanitized = sanitizeUserVisibleToolTextResult(sanitizedAction.url, bootPrompt);
+              if (sanitized.text) {
+                sanitizedAction.url = sanitized.text;
+                sanitizedButton.action = sanitizedAction;
+              } else {
+                // Explicit typed actions own the control. If sanitization removes
+                // the target, legacy shadow fields must not become active fallbacks.
+                delete sanitizedButton.action;
+                delete sanitizedButton.value;
+                delete sanitizedButton.url;
+                delete sanitizedButton.webApp;
+                delete sanitizedButton.web_app;
+              }
+              suppressionReason ??= sanitized.suppressionReason;
+            }
+          }
           return sanitizedButton;
         });
       }
@@ -375,6 +444,44 @@ function sanitizePresentationTextFieldsResult(
             suppressionReason ??= sanitized.suppressionReason;
           }
           return sanitizedOption;
+        });
+      }
+      if (Array.isArray(sanitizedBlock.categories)) {
+        sanitizedBlock.categories = sanitizedBlock.categories.map((category) => {
+          if (typeof category !== "string") {
+            return category;
+          }
+          const sanitized = sanitizeUserVisibleToolTextResult(category, bootPrompt);
+          suppressionReason ??= sanitized.suppressionReason;
+          return sanitized.text;
+        });
+      }
+      if (Array.isArray(sanitizedBlock.segments)) {
+        sanitizedBlock.segments = sanitizedBlock.segments.map((segment) => {
+          if (!segment || typeof segment !== "object" || Array.isArray(segment)) {
+            return segment;
+          }
+          const sanitizedSegment = { ...(segment as Record<string, unknown>) };
+          if (typeof sanitizedSegment.label === "string") {
+            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedSegment.label, bootPrompt);
+            sanitizedSegment.label = sanitized.text;
+            suppressionReason ??= sanitized.suppressionReason;
+          }
+          return sanitizedSegment;
+        });
+      }
+      if (Array.isArray(sanitizedBlock.series)) {
+        sanitizedBlock.series = sanitizedBlock.series.map((series) => {
+          if (!series || typeof series !== "object" || Array.isArray(series)) {
+            return series;
+          }
+          const sanitizedSeries = { ...(series as Record<string, unknown>) };
+          if (typeof sanitizedSeries.name === "string") {
+            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedSeries.name, bootPrompt);
+            sanitizedSeries.name = sanitized.text;
+            suppressionReason ??= sanitized.suppressionReason;
+          }
+          return sanitizedSeries;
         });
       }
       return sanitizedBlock;
@@ -444,26 +551,45 @@ function buildRoutingSchema() {
   };
 }
 
-const presentationActionSchema = Type.Union([
+const presentationCommandActionSchema = Type.Object({
+  type: Type.Literal("command"),
+  command: Type.String(),
+});
+
+const presentationCallbackActionSchema = Type.Object({
+  type: Type.Literal("callback"),
+  value: Type.String(),
+});
+
+const presentationCommandOrCallbackActionSchema = Type.Union([
+  presentationCommandActionSchema,
+  presentationCallbackActionSchema,
+]);
+
+// Approval actions carry server-issued IDs and are runtime-authored only. The
+// message tool exposes the remaining button actions that models may safely author.
+const presentationButtonActionSchema = Type.Union([
+  presentationCommandActionSchema,
+  presentationCallbackActionSchema,
   Type.Object({
-    type: Type.Literal("command"),
-    command: Type.String(),
+    type: Type.Literal("url"),
+    url: Type.String(),
   }),
   Type.Object({
-    type: Type.Literal("callback"),
-    value: Type.String(),
+    type: Type.Literal("web-app"),
+    url: Type.String(),
   }),
 ]);
 
 const presentationOptionSchema = Type.Object({
   label: Type.String(),
-  action: Type.Optional(presentationActionSchema),
+  action: Type.Optional(presentationCommandOrCallbackActionSchema),
   value: Type.Optional(Type.String()),
 });
 
 const presentationButtonSchema = Type.Object({
   label: Type.String(),
-  action: Type.Optional(presentationActionSchema),
+  action: Type.Optional(presentationButtonActionSchema),
   value: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
   webApp: Type.Optional(Type.Object({ url: Type.String() })),
@@ -473,12 +599,40 @@ const presentationButtonSchema = Type.Object({
   style: Type.Optional(stringEnum(["primary", "secondary", "success", "danger"])),
 });
 
+const presentationChartSegmentSchema = Type.Object({
+  label: Type.String(),
+  value: Type.Number(),
+});
+
+const presentationChartSeriesSchema = Type.Object({
+  name: Type.String(),
+  values: Type.Array(Type.Number(), { minItems: 1 }),
+});
+
+// Keep this flat: some provider tool-schema validators reject an anyOf nested
+// under presentation.blocks.items. Runtime normalization enforces block shapes.
 const presentationBlockSchema = Type.Object({
-  type: stringEnum(["text", "context", "divider", "buttons", "select"]),
+  type: stringEnum(["text", "context", "divider", "buttons", "select", "chart", "table"]),
   text: Type.Optional(Type.String()),
   buttons: Type.Optional(Type.Array(presentationButtonSchema)),
   placeholder: Type.Optional(Type.String()),
   options: Type.Optional(Type.Array(presentationOptionSchema)),
+  chartType: Type.Optional(stringEnum(["pie", "bar", "area", "line"])),
+  title: Type.Optional(Type.String()),
+  segments: Type.Optional(Type.Array(presentationChartSegmentSchema, { minItems: 1 })),
+  categories: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
+  series: Type.Optional(Type.Array(presentationChartSeriesSchema, { minItems: 1 })),
+  xLabel: Type.Optional(Type.String()),
+  yLabel: Type.Optional(Type.String()),
+  caption: Type.Optional(Type.String()),
+  headers: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
+  rows: Type.Optional(
+    Type.Array(
+      Type.Array(Type.Unsafe<string | number>({ type: ["string", "number"] }), { minItems: 1 }),
+      { minItems: 1 },
+    ),
+  ),
+  rowHeaderColumnIndex: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 const presentationMessageSchema = Type.Object(
@@ -488,8 +642,7 @@ const presentationMessageSchema = Type.Object(
     blocks: Type.Array(presentationBlockSchema),
   },
   {
-    description:
-      "Rich message payload: text/buttons/selects/context. Unsupported blocks degrade to text.",
+    description: "Rich text/chart/table/button/select/context; unsupported degrades to text.",
   },
 );
 
@@ -499,10 +652,10 @@ function buildSendSchema(options: {
   includeBestEffort: boolean;
 }) {
   const props: Record<string, TSchema> = {
-    message: Type.Optional(Type.String()),
+    message: Type.Optional(Type.String({ description: MESSAGE_TOOL_SEND_TEXT_DESCRIPTION })),
     effectId: Type.Optional(
       Type.String({
-        description: "Effect id/name for sendWithEffect.",
+        description: "sendWithEffect id/name.",
       }),
     ),
     effect: Type.Optional(Type.String({ description: "Alias for effectId." })),
@@ -514,7 +667,7 @@ function buildSendSchema(options: {
     filename: Type.Optional(Type.String()),
     buffer: Type.Optional(
       Type.String({
-        description: "Base64 attachment payload; data URL ok.",
+        description: "Base64/data-URL attachment.",
       }),
     ),
     contentType: Type.Optional(Type.String()),
@@ -529,7 +682,7 @@ function buildSendSchema(options: {
           mimeType: Type.Optional(Type.String()),
         }),
         {
-          description: "Structured attachments; each entry uses media.",
+          description: "Attachments; each uses media.",
         },
       ),
     ),
@@ -541,7 +694,7 @@ function buildSendSchema(options: {
     gifPlayback: Type.Optional(Type.Boolean()),
     forceDocument: Type.Optional(
       Type.Boolean({
-        description: "Send image/GIF/video as document; avoids compression.",
+        description: "Send media as document; no compression.",
       }),
     ),
     asDocument: Type.Optional(
@@ -556,8 +709,7 @@ function buildSendSchema(options: {
   if (options.includeBestEffort) {
     props.bestEffort = Type.Optional(
       Type.Boolean({
-        description:
-          "Optional delivery mode. Omit or set true for ordinary replies. Set false only when required durable delivery is necessary.",
+        description: "Ordinary reply omit/true; false only requiring durable delivery.",
       }),
     );
   }
@@ -577,7 +729,7 @@ function buildSendSchema(options: {
           ),
         },
         {
-          description: "Delivery prefs. pin requests pin when channel supports it.",
+          description: "Delivery prefs; pin when supported.",
         },
       ),
     );
@@ -590,7 +742,7 @@ function buildReactionSchema() {
     messageId: Type.Optional(
       Type.String({
         description:
-          "Target message id for read/react/edit/delete/pin/unpin. Reaction-like defaults current inbound id when available.",
+          "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
       }),
     ),
     message_id: Type.Optional(
@@ -603,8 +755,7 @@ function buildReactionSchema() {
     remove: Type.Optional(Type.Boolean()),
     trackToolCalls: Type.Optional(
       Type.Boolean({
-        description:
-          "For current-message reaction, make reacted message the tool-progress reaction target.",
+        description: "Use reacted current message for tool-progress reactions.",
       }),
     ),
     track_tool_calls: Type.Optional(
@@ -663,6 +814,9 @@ function buildPollSchema() {
   };
   for (const name of SHARED_POLL_CREATION_PARAM_NAMES) {
     const def = POLL_CREATION_PARAM_DEFS[name];
+    if (!def) {
+      continue;
+    }
     switch (def.kind) {
       case "string":
         props[name] = Type.Optional(Type.String());
@@ -692,7 +846,7 @@ function buildChannelTargetSchema() {
     userId: Type.Optional(
       Type.String({
         description:
-          "User id for member-info and channel-specific moderation or participant actions. For member-info, pass userId directly; the action does not accept target.",
+          "member-info/moderation/participant user id; member-info uses userId, not target.",
       }),
     ),
     openId: Type.Optional(Type.String()),
@@ -730,7 +884,6 @@ function buildThreadSchema() {
 
 function buildEventSchema() {
   return {
-    query: Type.Optional(Type.String()),
     eventName: Type.Optional(Type.String()),
     eventType: Type.Optional(Type.String()),
     startTime: Type.Optional(Type.String()),
@@ -738,8 +891,6 @@ function buildEventSchema() {
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
     image: Type.Optional(Type.String({ description: "Event cover image URL/path." })),
-    durationMin: optionalNonNegativeIntegerSchema(),
-    until: Type.Optional(Type.String()),
   };
 }
 
@@ -747,6 +898,8 @@ function buildModerationSchema() {
   return {
     reason: Type.Optional(Type.String()),
     deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
+    durationMin: optionalNonNegativeIntegerSchema(),
+    until: Type.Optional(Type.String()),
   };
 }
 
@@ -788,7 +941,7 @@ function buildChannelManagementSchema() {
     channelType: Type.Optional(
       Type.Integer({
         minimum: 0,
-        description: "Numeric channel type, e.g. Discord. Avoids JSON Schema `type` collision.",
+        description: "Numeric channel type; avoids schema type collision.",
       }),
     ),
     parentId: Type.Optional(Type.String()),
@@ -816,6 +969,7 @@ function buildMessageToolSchemaProps(options: {
     ...buildSendSchema(options),
     ...buildReactionSchema(),
     ...buildFetchSchema(),
+    ...buildMessageToolQuerySchemaProperties(),
     ...buildPollSchema(),
     ...buildChannelTargetSchema(),
     ...buildStickerSchema(),
@@ -829,48 +983,37 @@ function buildMessageToolSchemaProps(options: {
   };
 }
 
-function isSendOnlyActions(actions: readonly string[]): boolean {
-  const uniqueActions = new Set(actions);
-  return uniqueActions.size === 1 && uniqueActions.has("send");
-}
-
-function buildSendOnlyMessageToolSchemaProps(options: {
-  includePresentation: boolean;
-  includeDeliveryPin: boolean;
-  includeBestEffort: boolean;
-  extraProperties?: Record<string, TSchema>;
-}) {
-  return {
+const MESSAGE_TOOL_SCHEMA_BUILDERS = {
+  full: buildMessageToolSchemaProps,
+  base: (options) => ({
     ...buildRoutingSchema(),
     ...buildSendSchema(options),
     ...buildGatewaySchema(),
-    ...options.extraProperties,
-  };
-}
-
-function buildMessageToolSchemaFromActions(
-  actions: readonly string[],
-  options: {
-    includePresentation: boolean;
-    includeDeliveryPin: boolean;
-    includeBestEffort: boolean;
-    extraProperties?: Record<string, TSchema>;
+  }),
+  groups: {
+    reaction: buildReactionSchema,
+    fetch: buildFetchSchema,
+    query: buildMessageToolQuerySchemaProperties,
+    poll: buildPollSchema,
+    channelTarget: buildChannelTargetSchema,
+    sticker: buildStickerSchema,
+    thread: buildThreadSchema,
+    event: buildEventSchema,
+    moderation: buildModerationSchema,
+    channelManagement: buildChannelManagementSchema,
+    presence: buildPresenceSchema,
   },
-) {
-  const props = isSendOnlyActions(actions)
-    ? buildSendOnlyMessageToolSchemaProps(options)
-    : buildMessageToolSchemaProps(options);
-  return Type.Object({
-    action: stringEnum(actions),
-    ...props,
-  });
-}
+} satisfies MessageToolSchemaBuilders;
 
-const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
-  includePresentation: true,
-  includeDeliveryPin: true,
-  includeBestEffort: false,
-});
+const MessageToolSchema = buildMessageToolSchemaFromActions(
+  AllMessageActions,
+  {
+    includePresentation: true,
+    includeDeliveryPin: true,
+    includeBestEffort: false,
+  },
+  MESSAGE_TOOL_SCHEMA_BUILDERS,
+);
 
 type MessageToolOptions = {
   agentAccountId?: string;
@@ -884,7 +1027,9 @@ type MessageToolOptions = {
   resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
   runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
+  currentChatType?: ChatType;
   currentMessagingTarget?: string;
+  messageActionTurnCapability?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
   agentThreadId?: string | number;
@@ -900,6 +1045,7 @@ type MessageToolOptions = {
   inboundEventKind?: InboundEventKind;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
 };
 
 type MessageToolDiscoveryParams = {
@@ -924,6 +1070,7 @@ type MessageActionDiscoveryInput = Omit<ChannelMessageActionDiscoveryInput, "cfg
 type InferredSessionDelivery = {
   accountId?: string;
   channel: string;
+  chatType?: ChatType;
   threadId?: string;
   to: string;
 };
@@ -935,6 +1082,16 @@ function formatSessionDeliveryTarget(channel: string, peerKind: string, to: stri
     USER_PREFIXED_DIRECT_TARGET_CHANNELS.has(channel)
     ? `user:${to}`
     : to;
+}
+
+function resolveSessionDeliveryChatType(peerKind: string): ChatType | undefined {
+  if (peerKind === "direct" || peerKind === "dm") {
+    return "direct";
+  }
+  if (peerKind === "group" || peerKind === "channel") {
+    return peerKind;
+  }
+  return undefined;
 }
 
 function inferDeliveryFromSessionKey(
@@ -952,6 +1109,7 @@ function inferDeliveryFromSessionKey(
   return {
     accountId,
     channel,
+    chatType: resolveSessionDeliveryChatType(route.peerKind),
     threadId: route.threadId,
     to: formatSessionDeliveryTarget(channel, route.peerKind, route.peerId),
   };
@@ -960,6 +1118,7 @@ function inferDeliveryFromSessionKey(
 function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
   accountId?: string;
   currentChannelId?: string;
+  currentChatType?: ChatType;
   currentMessagingTarget?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
@@ -978,6 +1137,7 @@ function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
     return {
       currentChannelProvider,
       currentChannelId,
+      currentChatType: options?.currentChatType,
       currentMessagingTarget: options?.currentMessagingTarget,
     };
   }
@@ -985,6 +1145,7 @@ function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
     accountId: sessionDelivery?.accountId,
     currentChannelProvider: sessionDeliveryChannel,
     currentChannelId: sessionDelivery?.to,
+    currentChatType: sessionDelivery?.chatType,
     currentMessagingTarget: sessionDelivery?.to,
     currentThreadTs: sessionDelivery?.threadId,
   };
@@ -1101,12 +1262,17 @@ function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
       normalizeMessageChannel(params.currentChannelProvider) ?? undefined,
     ),
   );
-  return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
-    includePresentation,
-    includeDeliveryPin,
-    includeBestEffort,
-    extraProperties,
-  });
+  return buildMessageToolSchemaFromActions(
+    actions.length > 0 ? actions : ["send"],
+    {
+      includePresentation,
+      includeDeliveryPin,
+      includeBestEffort,
+      scopeToActions: normalizeMessageChannel(params.currentChannelProvider) !== undefined,
+      extraProperties,
+    },
+    MESSAGE_TOOL_SCHEMA_BUILDERS,
+  );
 }
 
 function resolveAgentAccountId(value?: string): string | undefined {
@@ -1132,7 +1298,7 @@ function buildMessageToolDescription(options?: {
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 }): string {
-  const baseDescription = "Send/delete/manage channel messages.";
+  const baseDescription = "Send/manage channel messages.";
   const resolvedOptions = options ?? {};
   const messageToolDiscoveryParams = resolvedOptions.config
     ? {
@@ -1170,32 +1336,6 @@ function buildMessageToolDescription(options?: {
     resolvedOptions.sourceReplyDeliveryMode,
     resolvedOptions.requireExplicitTarget,
   );
-}
-
-function appendMessageToolVisibleReplyHint(
-  description: string,
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode,
-  requireExplicitTarget?: boolean,
-): string {
-  if (sourceReplyDeliveryMode !== "message_tool_only") {
-    return description;
-  }
-  const targetGuidance = requireExplicitTarget
-    ? "Include target when sending."
-    : "target defaults to the current source conversation; omit unless sending elsewhere.";
-  return `${description} This turn: use action="send" with message for visible replies to the current source conversation. ${targetGuidance} Normal final answers stay private.`;
-}
-
-function appendMessageToolReadHint(
-  description: string,
-  actions: Iterable<ChannelMessageActionName | "send">,
-): string {
-  for (const action of actions) {
-    if (action === "read") {
-      return `${description}${MESSAGE_TOOL_THREAD_READ_HINT}`;
-    }
-  }
-  return description;
 }
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
@@ -1279,6 +1419,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
+      // `final` is a Codex app-server-only source-delivery control. It must
+      // not be dispatched to a provider or participate in idempotency.
+      delete params.final;
 
       // Sanitize outbound text fields in three layers:
       //
@@ -1332,6 +1475,16 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+      const trustedTurnContext =
+        resolvedAgentId && options?.agentSessionKey
+          ? resolveMessageActionTurnCapability({
+              token: options.messageActionTurnCapability,
+              agentId: resolvedAgentId,
+              runId: options.runId,
+              sessionKey: options.agentSessionKey,
+              sessionId: options.sessionId,
+            })
+          : undefined;
       if (
         suppressedVisiblePayloadReason &&
         action === "send" &&
@@ -1427,14 +1580,29 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       const gatewayResolved = resolveGatewayOptions(gatewayOpts);
-      const gateway = {
-        url: gatewayResolved.url,
-        token: gatewayResolved.token,
-        timeoutMs: gatewayResolved.timeoutMs,
-        clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-        clientDisplayName: "agent",
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-      };
+      // Direct tool invocations already execute inside the authenticated
+      // Gateway request. Keep their authority operation-local by dispatching
+      // channel actions in-process instead of laundering it through a new
+      // backend connection.
+      const gateway =
+        options?.conversationReadOrigin === "direct-operator"
+          ? undefined
+          : {
+              url: gatewayResolved.url,
+              token: gatewayResolved.token,
+              timeoutMs: gatewayResolved.timeoutMs,
+              clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+              clientDisplayName: "agent",
+              mode: GATEWAY_CLIENT_MODES.BACKEND,
+              resolveAgentRuntimeIdentityToken: () =>
+                resolveMessageActionAgentRuntimeIdentityToken({
+                  opts: gatewayOpts,
+                  target: gatewayResolved.target,
+                  turnCapability: options?.messageActionTurnCapability,
+                  runId: options?.runId,
+                  sessionId: options?.sessionId,
+                }),
+            };
       const hasCurrentMessageId =
         typeof options?.currentMessageId === "number" ||
         (typeof options?.currentMessageId === "string" &&
@@ -1442,6 +1610,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       const toolContext =
         effectiveCurrentChannel.currentChannelId ||
+        effectiveCurrentChannel.currentChatType ||
         effectiveCurrentChannel.currentChannelProvider ||
         effectiveCurrentChannel.currentMessagingTarget ||
         currentThreadTs ||
@@ -1451,6 +1620,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         options?.sameChannelThreadRequired
           ? {
               currentChannelId: effectiveCurrentChannel.currentChannelId,
+              currentChatType: effectiveCurrentChannel.currentChatType,
               currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
               currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
               currentThreadTs,
@@ -1463,7 +1633,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               skipCrossContextDecoration: true,
             }
           : undefined;
-
       let autogeneratedDeliveryFingerprint: string | undefined;
       let actionIdempotencyKey = normalizeOptionalString(params.idempotencyKey);
       if (!actionIdempotencyKey && options?.runId) {
@@ -1485,7 +1654,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const actionParams = actionIdempotencyKey
         ? { ...params, idempotencyKey: actionIdempotencyKey }
         : params;
-
       let result: MessageActionRunResult;
       try {
         result = await runMessageActionForTool({
@@ -1493,9 +1661,15 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           action,
           params: actionParams,
           defaultAccountId: accountId ?? undefined,
-          requesterAccountId: agentAccountId,
-          requesterSenderId: options?.requesterSenderId,
+          requesterAccountId: trustedTurnContext?.requesterAccountId,
+          requesterSenderId: trustedTurnContext?.requesterSenderId,
+          messageActionAuthorization: {
+            requesterAccountId: trustedTurnContext?.requesterAccountId,
+            requesterSenderId: trustedTurnContext?.requesterSenderId,
+            toolContext: trustedTurnContext?.toolContext,
+          },
           senderIsOwner: options?.senderIsOwner,
+          conversationReadOrigin: options?.conversationReadOrigin,
           gateway,
           toolContext,
           sessionKey: options?.agentSessionKey,
@@ -1523,7 +1697,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       ) {
         failedAutogeneratedIdempotencyKeys.delete(autogeneratedDeliveryFingerprint);
       }
-
       const toolResult = getToolResult(result);
       if (
         action === "poll-vote" &&
@@ -1558,3 +1731,4 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

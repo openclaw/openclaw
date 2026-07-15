@@ -100,6 +100,7 @@ function coerceSchedule(schedule: UnknownRecord) {
       ? rawKind
       : undefined;
   const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
+  const timezone = normalizeOptionalString(schedule.tz);
   const commandRaw = normalizeOptionalString(schedule.command) ?? "";
   const cwdRaw = normalizeOptionalString(schedule.cwd) ?? "";
   const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
@@ -122,6 +123,11 @@ function coerceSchedule(schedule: UnknownRecord) {
     next.expr = exprRaw;
   } else if ("expr" in next) {
     delete next.expr;
+  }
+  if (timezone) {
+    next.tz = timezone;
+  } else if ("tz" in next) {
+    delete next.tz;
   }
 
   if (everyMs !== undefined && everyMs >= 1) {
@@ -678,12 +684,24 @@ export function normalizeCronJobInput(
       }
     }
 
+    const normalizedSessionTarget =
+      typeof next.sessionTarget === "string" ? next.sessionTarget : undefined;
+    const resolvedCurrentSessionKey =
+      options.sessionContext?.sessionKey ??
+      (typeof next.sessionKey === "string" ? next.sessionKey : undefined);
     const resolvedSessionTarget = resolveCronCurrentSessionTarget({
-      sessionTarget: typeof next.sessionTarget === "string" ? next.sessionTarget : undefined,
-      sessionKey: options.sessionContext?.sessionKey,
+      sessionTarget: normalizedSessionTarget,
+      sessionKey: resolvedCurrentSessionKey,
     });
     if (resolvedSessionTarget !== undefined) {
       next.sessionTarget = resolvedSessionTarget;
+      if (
+        next.sessionTarget !== "isolated" &&
+        normalizedSessionTarget === "current" &&
+        resolvedCurrentSessionKey?.trim()
+      ) {
+        next.sessionKey = assertSafeCronSessionTargetId(resolvedCurrentSessionKey);
+      }
     } else {
       delete next.sessionTarget;
     }
@@ -752,3 +770,4 @@ export function normalizeCronJobPatch(
     ...options,
   }) as CronJobPatch | null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

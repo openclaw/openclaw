@@ -46,11 +46,12 @@ import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
 } from "../infra/safe-package-install.js";
-import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
+import { compareValidSemver } from "../infra/semver.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
+import { verifyInstalledNpmResolution } from "./install-npm-resolution.js";
 import {
   encodePluginInstallDirName,
   matchesExpectedPluginId,
@@ -150,7 +151,7 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   UNSUPPORTED_PLAIN_FILE_PLUGIN: "unsupported_plain_file_plugin",
 } as const;
 
-export type PluginInstallErrorCode =
+type PluginInstallErrorCode =
   (typeof PLUGIN_INSTALL_ERROR_CODE)[keyof typeof PLUGIN_INSTALL_ERROR_CODE];
 
 export type InstallPluginResult =
@@ -251,7 +252,7 @@ async function readOptionalPackageManifest(params: {
   }
 }
 
-export type PluginNpmIntegrityDriftParams = {
+type PluginNpmIntegrityDriftParams = {
   spec: string;
   expectedIntegrity: string;
   actualIntegrity: string;
@@ -259,7 +260,7 @@ export type PluginNpmIntegrityDriftParams = {
 };
 
 type PluginInstallPolicyRequest = {
-  kind: "plugin-dir" | "plugin-archive" | "plugin-file" | "plugin-npm" | "plugin-git";
+  kind: "plugin-dir" | "plugin-archive" | "plugin-npm" | "plugin-git";
   requestedSpecifier?: string;
   source?: InstallPolicySource;
 };
@@ -317,7 +318,7 @@ function compareNpmSemver(a: string, b: string): number {
   if (releaseCmp !== null) {
     return releaseCmp;
   }
-  return compareComparableSemver(parseComparableSemver(a), parseComparableSemver(b)) ?? 0;
+  return compareValidSemver(a, b) ?? 0;
 }
 
 type TrustedOfficialPrereleaseResolution =
@@ -530,17 +531,6 @@ async function resolveLatestCompatibleNpmResolution(params: {
   }
 
   return null;
-}
-
-function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
-  return {
-    ok: true,
-    pluginId,
-    targetDir: targetFile,
-    manifestName: undefined,
-    version: undefined,
-    extensions: [path.basename(targetFile)],
-  };
 }
 
 function buildDirectoryInstallResult(params: {
@@ -1038,23 +1028,6 @@ async function quarantineManagedNpmProjectRebuildArtifacts(params: {
   return { quarantineDir, movedArtifactNames };
 }
 
-function resolveInstalledNpmResolutionMismatch(params: {
-  packageName: string;
-  expected: NpmSpecResolution;
-  installed: ManagedNpmRootInstalledDependency | null;
-}): string | null {
-  if (!params.installed) {
-    return `npm install did not record package-lock metadata for ${params.packageName}`;
-  }
-  if (params.expected.version && params.installed.version !== params.expected.version) {
-    return `npm install resolved ${params.packageName} to version ${params.installed.version ?? "unknown"}, expected ${params.expected.version}`;
-  }
-  if (params.expected.integrity && params.installed.integrity !== params.expected.integrity) {
-    return `npm install resolved ${params.packageName} with integrity ${params.installed.integrity ?? "unknown"}, expected ${params.expected.integrity}`;
-  }
-  return null;
-}
-
 async function listManagedNpmRootPackageNames(npmRoot: string): Promise<Set<string>> {
   const nodeModulesDir = path.join(npmRoot, "node_modules");
   let entries: Dirent[];
@@ -1417,6 +1390,15 @@ async function installPluginFromManagedNpmRoot(
 
   let rollbackSnapshot: ManagedNpmPluginInstallRollbackSnapshot;
   let preparedDependency: ManagedNpmRootPreparedDependency | undefined;
+  let rollbackPeerDependencySnapshot:
+    | Awaited<ReturnType<typeof readManagedNpmRootPeerDependencySnapshot>>
+    | undefined;
+  let recovery:
+    | {
+        cause: { kind: "npm-corruption" | "incomplete-metadata"; error: string };
+        quarantine: ManagedNpmProjectQuarantine;
+      }
+    | undefined;
   try {
     rollbackSnapshot = await createManagedNpmPluginInstallRollbackSnapshot({ npmRoot });
   } catch (error) {
@@ -1440,11 +1422,8 @@ async function installPluginFromManagedNpmRoot(
         logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot}`);
       }
     }
-    let preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
     const managedOverrides = await readOpenClawManagedNpmRootOverrides();
-    const rollbackPeerDependencySnapshot = await readManagedNpmRootPeerDependencySnapshot({
-      npmRoot,
-    });
+    rollbackPeerDependencySnapshot ??= await readManagedNpmRootPeerDependencySnapshot({ npmRoot });
     const rollbackFailedManagedNpmInstall = async (
       failure: Extract<InstallPluginResult, { ok: false }>,
     ): Promise<Extract<InstallPluginResult, { ok: false }>> => {
@@ -1455,7 +1434,9 @@ async function installPluginFromManagedNpmRoot(
         timeoutMs,
         logger,
         peerDependencySnapshot: rollbackPeerDependencySnapshot,
-        snapshot: rollbackSnapshot,
+        // Once the poisoned tree has been quarantined, restoring this snapshot
+        // would recreate the crash loop that the recovery attempt is repairing.
+        snapshot: recovery ? undefined : rollbackSnapshot,
       });
       await rollbackManagedNpmRootPreparedDependency({
         packageName: params.packageName,
@@ -1464,23 +1445,22 @@ async function installPluginFromManagedNpmRoot(
       });
       return failure;
     };
-    const rollbackFailedManagedNpmInstallAfterQuarantine = async (
-      failure: Extract<InstallPluginResult, { ok: false }>,
-    ): Promise<Extract<InstallPluginResult, { ok: false }>> => {
-      await rollbackManagedNpmPluginInstall({
-        npmRoot,
-        packageName: params.packageName,
-        targetDir: installRoot,
-        timeoutMs,
-        logger,
-        peerDependencySnapshot: rollbackPeerDependencySnapshot,
-      });
-      await rollbackManagedNpmRootPreparedDependency({
-        packageName: params.packageName,
-        preparedDependency: prepared,
-        logger,
-      });
-      return failure;
+    const quarantineForRecovery = async (
+      cause: NonNullable<typeof recovery>["cause"],
+    ): Promise<Extract<InstallPluginResult, { ok: false }> | null> => {
+      try {
+        const quarantine = await quarantineManagedNpmProjectRebuildArtifacts({ npmRoot });
+        recovery = { cause, quarantine };
+      } catch (error) {
+        return await rollbackFailedManagedNpmInstall({
+          ok: false,
+          error: `${cause.error}, but OpenClaw could not quarantine ${npmRoot} for rebuild: ${String(error)}`,
+        });
+      }
+      logger.warn?.(
+        `${cause.error}; quarantined ${formatManagedNpmProjectQuarantineArtifacts(recovery.quarantine.movedArtifactNames)} at ${recovery.quarantine.quarantineDir} and rebuilding once before retrying.`,
+      );
+      return null;
     };
     const syncManagedPeerDependenciesForInstall = async (options?: {
       omitUnsupportedManagedOverrides?: boolean;
@@ -1502,13 +1482,18 @@ async function installPluginFromManagedNpmRoot(
         };
       }
     };
+    let omitUnsupportedManagedOverrides = false;
+    const preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
     await upsertManagedNpmRootDependency({
       npmRoot,
       packageName: params.packageName,
       dependencySpec: prepared.dependencySpec,
       managedOverrides,
+      omitUnsupportedManagedOverrides,
     });
-    const initialPeerSync = await syncManagedPeerDependenciesForInstall();
+    const initialPeerSync = await syncManagedPeerDependenciesForInstall({
+      omitUnsupportedManagedOverrides,
+    });
     if (!initialPeerSync.ok) {
       return await rollbackFailedManagedNpmInstall({ ok: false, error: initialPeerSync.error });
     }
@@ -1534,7 +1519,6 @@ async function installPluginFromManagedNpmRoot(
       }),
     };
     let install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
-    let omitUnsupportedManagedOverrides = false;
     if (install.code !== 0 && isNpmAliasOverrideComparatorError(install)) {
       logger.warn?.(
         "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.",
@@ -1558,42 +1542,24 @@ async function installPluginFromManagedNpmRoot(
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
     }
-    if (install.code !== 0 && isManagedNpmProjectCorruptionInstallFailure(install)) {
+    if (!recovery && install.code !== 0 && isManagedNpmProjectCorruptionInstallFailure(install)) {
       const originalError = formatNpmCommandFailureOutput(install);
-      let quarantine: ManagedNpmProjectQuarantine;
-      try {
-        quarantine = await quarantineManagedNpmProjectRebuildArtifacts({ npmRoot });
-      } catch (error) {
-        return await rollbackFailedManagedNpmInstall({
-          ok: false,
-          error: `npm install failed with a managed npm project corruption signature, but OpenClaw could not quarantine ${npmRoot} for rebuild: ${String(error)}. Original npm error: ${originalError}`,
-        });
-      }
-      logger.warn?.(
-        `npm reported a managed npm project corruption signature; quarantined ${formatManagedNpmProjectQuarantineArtifacts(quarantine.movedArtifactNames)} at ${quarantine.quarantineDir} and rebuilding once before retrying.`,
-      );
-      preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
-      const recoveryPeerSync = await syncManagedPeerDependenciesForInstall({
-        omitUnsupportedManagedOverrides,
+      const recoveryFailure = await quarantineForRecovery({
+        kind: "npm-corruption",
+        error: `npm install failed with a managed npm project corruption signature. Original npm error: ${originalError}`,
       });
-      if (!recoveryPeerSync.ok) {
-        return await rollbackFailedManagedNpmInstallAfterQuarantine({
-          ok: false,
-          error: `managed npm project recovery failed after quarantining ${formatManagedNpmProjectQuarantineArtifacts(quarantine.movedArtifactNames)} at ${quarantine.quarantineDir}: ${recoveryPeerSync.error}. Original npm error: ${originalError}`,
-        });
+      if (recoveryFailure) {
+        return recoveryFailure;
       }
-      install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
-      if (install.code !== 0) {
-        return await rollbackFailedManagedNpmInstallAfterQuarantine({
-          ok: false,
-          error: `npm install failed after managed npm project recovery (quarantine: ${quarantine.quarantineDir}): ${formatNpmCommandFailureOutput(install)}. Original npm error: ${originalError}`,
-        });
-      }
+      return await runManagedNpmInstall(prepared);
     }
     if (install.code !== 0) {
+      const error = recovery
+        ? `npm install failed after managed npm project recovery (quarantine: ${recovery.quarantine.quarantineDir}): ${formatNpmCommandFailureOutput(install)}. Original ${recovery.cause.kind === "npm-corruption" ? "npm" : "verification"} error: ${recovery.cause.error}`
+        : `npm install failed: ${formatNpmCommandFailureOutput(install)}`;
       return await rollbackFailedManagedNpmInstall({
         ok: false,
-        error: `npm install failed: ${formatNpmCommandFailureOutput(install)}`,
+        error,
       });
     }
     let settledManagedPeerDependencies = false;
@@ -1760,15 +1726,31 @@ async function installPluginFromManagedNpmRoot(
         error: `Failed to verify npm install metadata for ${params.packageName}: ${String(error)}`,
       });
     }
-    const resolutionMismatch = resolveInstalledNpmResolutionMismatch({
+    const resolutionVerification = verifyInstalledNpmResolution({
       packageName: params.packageName,
       expected: params.npmResolution,
       installed: installedDependency,
     });
-    if (resolutionMismatch) {
+    if (resolutionVerification.kind === "conflict") {
       return await rollbackFailedManagedNpmInstall({
         ok: false,
-        error: resolutionMismatch,
+        error: resolutionVerification.error,
+      });
+    }
+    if (resolutionVerification.kind === "incomplete") {
+      if (!recovery) {
+        const recoveryFailure = await quarantineForRecovery({
+          kind: "incomplete-metadata",
+          error: resolutionVerification.error,
+        });
+        if (recoveryFailure) {
+          return recoveryFailure;
+        }
+        return await runManagedNpmInstall(prepared);
+      }
+      return await rollbackFailedManagedNpmInstall({
+        ok: false,
+        error: `npm install metadata remained incomplete after managed npm project recovery (quarantine: ${recovery.quarantine.quarantineDir}): ${resolutionVerification.error}`,
       });
     }
 
@@ -1971,9 +1953,6 @@ function localPluginInstallPolicySource(kind: PluginInstallPolicyRequest["kind"]
   if (kind === "plugin-archive") {
     return { kind: "archive", authority: "user", mutable: true, network: false } as const;
   }
-  if (kind === "plugin-file") {
-    return { kind: "file", authority: "user", mutable: true, network: false } as const;
-  }
   if (kind === "plugin-git") {
     return { kind: "git", authority: "third-party", mutable: true, network: true } as const;
   }
@@ -1989,8 +1968,6 @@ function sourceFamilyForInstallPolicyKind(
       return "archive";
     case "plugin-dir":
       return "directory";
-    case "plugin-file":
-      return "file";
     case "plugin-git":
       return "git";
     case "plugin-npm":
@@ -2843,7 +2820,7 @@ export async function installPluginFromArchive(
   return result;
 }
 
-export async function installPluginFromDir(
+async function installPluginFromDir(
   params: {
     dirPath: string;
   } & PackageInstallCommonParams,
@@ -2879,103 +2856,6 @@ export async function installPluginFromDir(
     mode: effectiveMode,
     sourceFamily: sourceFamilyForInstallPolicyKind(installPolicyRequest.kind, "directory"),
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-  });
-  return result;
-}
-
-export async function installPluginFromFile(params: {
-  config?: OpenClawConfig;
-  filePath: string;
-  dangerouslyForceUnsafeInstall?: boolean;
-  extensionsDir?: string;
-  logger?: PluginInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  installPolicyRequest?: PluginInstallPolicyRequest;
-}): Promise<InstallPluginResult> {
-  const runtime = await loadPluginInstallRuntime();
-  const { logger, mode, dryRun } = runtime.resolveInstallModeOptions(params, defaultLogger);
-
-  const filePath = resolveUserPath(params.filePath);
-  const installPolicyRequest = params.installPolicyRequest ?? {
-    kind: "plugin-file",
-    requestedSpecifier: params.filePath,
-    source: localPluginInstallPolicySource("plugin-file"),
-  };
-  if (!(await runtime.fileExists(filePath))) {
-    return { ok: false, error: `file not found: ${filePath}` };
-  }
-
-  const extensionsDir = params.extensionsDir
-    ? resolveUserPath(params.extensionsDir)
-    : resolveDefaultPluginExtensionsDir();
-  await fs.mkdir(extensionsDir, { recursive: true });
-
-  const base = path.basename(filePath, path.extname(filePath));
-  const pluginId = base || "plugin";
-  const pluginIdError = validatePluginId(pluginId);
-  if (pluginIdError) {
-    return { ok: false, error: pluginIdError };
-  }
-  const targetFile = path.join(
-    extensionsDir,
-    `${safePluginInstallFileName(pluginId)}${path.extname(filePath)}`,
-  );
-  const preparedTarget: PreparedInstallTarget = {
-    targetPath: targetFile,
-    effectiveMode: await resolveEffectiveInstallMode({
-      runtime,
-      requestedMode: mode,
-      targetPath: targetFile,
-    }),
-  };
-
-  const availability = await ensureInstallTargetAvailableForMode({
-    runtime,
-    targetPath: preparedTarget.targetPath,
-    mode: preparedTarget.effectiveMode,
-  });
-  if (!availability.ok) {
-    return availability;
-  }
-
-  const scanResult = await runInstallSourceScan({
-    subject: `Plugin file "${pluginId}"`,
-    pluginId,
-    mode: preparedTarget.effectiveMode,
-    sourceFamily: "file",
-    scan: async () =>
-      await runtime.scanFileInstallSource({
-        config: params.config,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        filePath,
-        logger,
-        mode: preparedTarget.effectiveMode,
-        pluginId,
-        requestedSpecifier: installPolicyRequest.requestedSpecifier,
-      }),
-  });
-  if (scanResult) {
-    return scanResult;
-  }
-
-  if (dryRun) {
-    return buildFileInstallResult(pluginId, preparedTarget.targetPath);
-  }
-
-  logger.info?.(`Installing to ${preparedTarget.targetPath}…`);
-  try {
-    const root = await runtime.root(extensionsDir);
-    await root.copyIn(path.basename(preparedTarget.targetPath), filePath);
-  } catch (err) {
-    return { ok: false, error: String(err) };
-  }
-
-  const result = buildFileInstallResult(pluginId, preparedTarget.targetPath);
-  emitSuccessfulPluginInstallSecurityEvent(result, {
-    dryRun,
-    mode: preparedTarget.effectiveMode,
-    sourceFamily: "file",
   });
   return result;
 }
@@ -3384,3 +3264,4 @@ export async function installPluginFromPath(
       "Plain file plugin installs are not supported. Install a plugin directory or archive that contains openclaw.plugin.json, or list standalone plugin files in plugins.load.paths.",
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1104,6 +1104,31 @@ describe("update-startup", () => {
     });
   });
 
+  it("does not restart after a managed auto-update handoff spawn failure", async () => {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(
+      Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
+    );
+    const log = { info: vi.fn() };
+
+    await runGatewayUpdateCheck({
+      cfg: createBetaAutoUpdateConfig(),
+      log,
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith("auto-update attempt failed", {
+      channel: "beta",
+      version: "2.0.0-beta.1",
+      tag: "beta",
+      reason: "Error: spawn ENOENT",
+    });
+  });
+
   it("uses managed systemd handoff for Linux gateway service auto-updates", async () => {
     mockPackageInstallStatus();
     mockNpmChannelTag("beta", "2.0.0-beta.1");
@@ -1186,3 +1211,4 @@ describe("update-startup", () => {
     stop();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

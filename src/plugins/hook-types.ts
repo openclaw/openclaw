@@ -119,6 +119,7 @@ export type PluginHookName =
   | "gateway_start"
   | "gateway_stop"
   | "heartbeat_prompt_contribution"
+  | "cron_reconciled"
   | "cron_changed"
   | "before_dispatch"
   | "reply_dispatch"
@@ -161,6 +162,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "heartbeat_prompt_contribution",
+  "cron_reconciled",
   "cron_changed",
   "before_dispatch",
   "reply_dispatch",
@@ -860,12 +862,22 @@ export type PluginHookGatewayContext = {
   getCron?: () => PluginHookGatewayCronService | undefined;
 };
 
+export type PluginHookCronReconciledContext = PluginHookGatewayContext & {
+  /** Aborts when this exact scheduler snapshot is superseded or the Gateway closes. */
+  abortSignal: AbortSignal;
+};
+
 export type PluginHookGatewayStartEvent = {
   port: number;
 };
 
 export type PluginHookGatewayStopEvent = {
   reason?: string;
+};
+
+export type PluginHookCronReconciledEvent = {
+  reason: "startup" | "reload";
+  enabled: boolean;
 };
 
 export type PluginHookGatewayCronRunStatus = "ok" | "error" | "skipped";
@@ -931,7 +943,7 @@ export type PluginHookGatewayCronJob = {
 };
 
 export type PluginHookCronChangedEvent = {
-  action: "added" | "updated" | "removed" | "started" | "finished";
+  action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
   jobId: string;
   job?: PluginHookGatewayCronJob;
   /** Top-level session target for downstream routing (mirrors job.sessionTarget). */
@@ -1274,6 +1286,10 @@ export type PluginHookHandlerMap = {
     | Promise<PluginHeartbeatPromptContributionResult | void>
     | PluginHeartbeatPromptContributionResult
     | void;
+  cron_reconciled: (
+    event: PluginHookCronReconciledEvent,
+    ctx: PluginHookCronReconciledContext,
+  ) => Promise<void> | void;
   cron_changed: (
     event: PluginHookCronChangedEvent,
     ctx: PluginHookGatewayContext,
@@ -1300,3 +1316,4 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   timeoutMs?: number;
   source: string;
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

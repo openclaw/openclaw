@@ -347,15 +347,10 @@ async function resolveModelAuth(
       reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${requestAuth.error}`,
     };
   }
-  if (!requestAuth.apiKey && !requestAuth.headers) {
-    log.warn(
-      "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
-    );
-    return {
-      ok: false,
-      reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
-    };
-  }
+  // `ok: true` is the registry's authoritative success signal; it already returns
+  // `ok: false` when auth cannot resolve. Do not re-derive failure from absent
+  // key/headers. SDK-managed modes (aws-sdk, oauth) sign the request later and
+  // legitimately carry neither, so gating on them wedges compaction forever.
   return { ok: true, apiKey: requestAuth.apiKey, headers: requestAuth.headers };
 }
 
@@ -676,8 +671,8 @@ function splitPreservedRecentTurns(params: {
   }
   const conversationIndexes: number[] = [];
   const userIndexes: number[] = [];
-  for (let i = 0; i < params.messages.length; i += 1) {
-    const role = (params.messages[i] as { role?: unknown }).role;
+  for (const [i, message] of params.messages.entries()) {
+    const role = message.role;
     if (role === "user" || role === "assistant") {
       conversationIndexes.push(i);
       if (role === "user") {
@@ -719,11 +714,10 @@ function splitPreservedRecentTurns(params: {
     return { summarizableMessages: params.messages, preservedMessages: [] };
   }
   const preservedToolCallIds = new Set<string>();
-  for (let i = 0; i < params.messages.length; i += 1) {
+  for (const [i, message] of params.messages.entries()) {
     if (!preservedIndexSet.has(i)) {
       continue;
     }
-    const message = params.messages[i];
     if (message.role !== "assistant") {
       continue;
     }
@@ -741,14 +735,13 @@ function splitPreservedRecentTurns(params: {
       }
     }
     if (preservedStartIndex >= 0) {
-      for (let i = preservedStartIndex; i < params.messages.length; i += 1) {
-        const message = params.messages[i];
+      for (const [offset, message] of params.messages.slice(preservedStartIndex).entries()) {
         if (message.role !== "toolResult") {
           continue;
         }
         const toolResultId = extractToolResultId(message);
         if (toolResultId && preservedToolCallIds.has(toolResultId)) {
-          preservedIndexSet.add(i);
+          preservedIndexSet.add(preservedStartIndex + offset);
         }
       }
     }
@@ -822,8 +815,7 @@ function formatSplitTurnContextSection(messages: AgentMessage[]): string {
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
+  for (const message of messages.toReversed()) {
     if (message.role !== "user") {
       continue;
     }
@@ -1370,4 +1362,4 @@ export const testing = {
   MAX_FILE_OPS_LIST_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } as const;
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

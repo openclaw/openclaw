@@ -184,8 +184,7 @@
     display: none;
   }
 
-  .sidebar,
-  .sidebar--collapsed {
+  .sidebar {
     width: 100%;
     min-width: 0;
     flex: 1 1 auto;
@@ -194,14 +193,12 @@
     border-right: none;
   }
 
-  .sidebar-shell,
-  .sidebar--collapsed .sidebar-shell {
+  .sidebar-shell {
     padding: 18px 16px 14px;
     border-radius: 0;
   }
 
-  .sidebar-nav,
-  .sidebar--collapsed .sidebar-nav {
+  .sidebar-nav {
     /* Match the desktop pinned-nav layout so the session list keeps the
        remaining drawer height. */
     flex: 0 0 auto;
@@ -213,24 +210,11 @@
     scrollbar-width: none;
   }
 
-  .sidebar-nav::-webkit-scrollbar,
-  .sidebar--collapsed .sidebar-nav::-webkit-scrollbar {
+  .sidebar-nav::-webkit-scrollbar {
     display: none;
   }
 
-  .nav-section,
-  .sidebar--collapsed .nav-section {
-    display: grid;
-    margin-bottom: 16px;
-  }
-
-  .sidebar-nav .nav-section__label,
-  .sidebar--collapsed .nav-section__label {
-    display: flex;
-  }
-
-  .nav-item,
-  .sidebar--collapsed .nav-item {
+  .nav-item {
     margin: 0;
     min-height: 40px;
     padding: 0 12px;
@@ -240,24 +224,39 @@
     flex: 0 0 auto;
     width: auto;
   }
+}
 
-  .sidebar--collapsed .nav-item--active::before,
-  .sidebar--collapsed .nav-item.active::before {
-    content: none;
+/* Native macOS narrow widths (e.g. the in-app link browser splitting the
+   window): fold the titlebar clearance into one 58px row instead of stacking
+   it. body-qualified + !important outranks the Mac-app-injected topbar rules
+   (DashboardWindowController), so shipped apps get the compact row too. The
+   brand moves first, clears the traffic lights, and stays non-interactive
+   under the AppKit drag region (x 78-254, y < 46); the drawer toggle and
+   search sit to its right. */
+@media (max-width: 1100px) {
+  html.openclaw-native-macos body .shell {
+    --shell-topbar-height: 58px;
   }
 
-  .sidebar--collapsed .nav-item__text,
-  .sidebar--collapsed .nav-item__external-icon {
-    display: inline-flex;
+  html.openclaw-native-macos body .topbar {
+    padding: 0 12px 0 92px !important;
   }
 
-  .sidebar--collapsed .sidebar-shell__footer {
-    padding: 12px 8px 0;
+  html.openclaw-native-macos body .topnav-shell {
+    display: flex;
+    gap: 8px;
+    min-height: 58px;
   }
 
-  .sidebar--collapsed .sidebar-footer-bar {
-    flex-direction: row;
-    padding: 0 10px;
+  html.openclaw-native-macos body .topnav-shell__content {
+    order: -1;
+    flex: 0 0 auto;
+    min-width: 176px;
+    justify-content: flex-start;
+  }
+
+  html.openclaw-native-macos body .topnav-shell__actions {
+    margin-left: auto;
   }
 }
 
@@ -316,13 +315,11 @@
     width: min(92vw, 320px);
   }
 
-  .sidebar-shell,
-  .sidebar--collapsed .sidebar-shell {
+  .sidebar-shell {
     padding: 16px 14px 12px;
   }
 
-  .nav-item,
-  .sidebar--collapsed .nav-item {
+  .nav-item {
     font-size: 12px;
   }
 
@@ -492,11 +489,6 @@
   }
 
   /* Stats */
-  .stat-grid {
-    gap: 8px;
-    grid-template-columns: repeat(2, 1fr);
-  }
-
   .stat {
     padding: 10px;
     border-radius: var(--radius-md);
@@ -508,12 +500,6 @@
 
   .stat-value {
     font-size: 18px;
-  }
-
-  /* Notes */
-  .note-grid {
-    grid-template-columns: 1fr;
-    gap: 8px;
   }
 
   /* Forms */
@@ -565,7 +551,13 @@
 
   .chat-thread {
     margin-top: 0;
-    padding: 0 8px 12px;
+    /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
+       on the scroll container floats macOS overlay scrollbars off the edge. */
+    padding: 0 0 12px;
+  }
+
+  .chat-thread-inner {
+    width: calc(100% - 36px - 16px);
   }
 
   .chat-msg {

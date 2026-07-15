@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Emits diagnostic model-call events around embedded-agent stream functions.
  */
@@ -420,8 +421,7 @@ function modelCallUsageField(state: ModelCallObservationState) {
 }
 
 function boundedTimelineAttribute(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized.slice(0, TIMELINE_ATTRIBUTE_MAX_LENGTH) : undefined;
+  return truncateUtf16Safe(value?.trim() ?? "", TIMELINE_ATTRIBUTE_MAX_LENGTH) || undefined;
 }
 
 function emitProviderRequestTimelineEvent(
@@ -622,10 +622,11 @@ function emitModelCallError(
   });
 }
 
-function withDiagnosticTraceparentHeader(
+function withDiagnosticRequestContext(
   options: ModelCallStreamOptions,
   trace: DiagnosticTraceContext,
   state: ModelCallObservationState,
+  callId: string,
 ): ModelCallStreamOptions {
   const traceparent = formatDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
@@ -648,6 +649,7 @@ function withDiagnosticTraceparentHeader(
   if (!traceparent) {
     return {
       ...options,
+      requestId: callId,
       onPayload,
     };
   }
@@ -662,6 +664,7 @@ function withDiagnosticTraceparentHeader(
   headers[TRACEPARENT_HEADER_NAME] = traceparent;
   return {
     ...options,
+    requestId: callId,
     headers,
     onPayload,
   };
@@ -867,7 +870,9 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       modelContent,
       contentCapture: ctx.contentCapture,
     };
-    const propagatedOptions = withDiagnosticTraceparentHeader(options, trace, state);
+    // Provider wrappers consume this same call id for transport correlation,
+    // keeping external request evidence joined to the emitted diagnostics.
+    const propagatedOptions = withDiagnosticRequestContext(options, trace, state, callId);
 
     try {
       const result = streamFn(model, streamContext, propagatedOptions);
@@ -887,3 +892,4 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     }
   }) as StreamFn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

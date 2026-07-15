@@ -2,6 +2,10 @@
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+} from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
@@ -65,7 +69,7 @@ function hasOnlyModelDirective(directives: InlineDirectives): boolean {
   );
 }
 
-export function formatModelOverrideResetEvent(params: {
+function formatModelOverrideResetEvent(params: {
   rejectedRef?: string;
   initialModelLabel: string;
   reason?: "disallowed" | "stale";
@@ -214,6 +218,31 @@ export async function applyInlineDirectiveOverrides(params: {
     directives = clearInlineDirectives(directives.cleaned);
   }
 
+  if (
+    directives.hasModelDirective &&
+    effectiveModelDirective &&
+    isModelSelectionLocked(sessionEntry)
+  ) {
+    const lockedModelResolution = resolveModelSelectionFromDirective({
+      directives: {
+        ...directives,
+        rawModelDirective: effectiveModelDirective,
+      },
+      cfg,
+      agentDir,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      allowedModelKeys: modelState.allowedModelKeys,
+      allowedModelCatalog: modelState.allowedModelCatalog,
+      provider,
+    });
+    if (lockedModelResolution.modelSelection) {
+      typing.cleanup();
+      return { kind: "reply", reply: { text: MODEL_SELECTION_LOCKED_MESSAGE } };
+    }
+  }
+
   const hasAnyDirective =
     directives.hasThinkDirective ||
     directives.hasFastDirective ||
@@ -306,6 +335,10 @@ export async function applyInlineDirectiveOverrides(params: {
           model,
           markLiveSwitchPending: true,
         });
+        if (persisted.errorText) {
+          typing.cleanup();
+          return { kind: "reply", reply: { text: persisted.errorText } };
+        }
         if (!persisted.sessionChangesApplied) {
           typing.cleanup();
           return {
@@ -322,6 +355,11 @@ export async function applyInlineDirectiveOverrides(params: {
           modelSelection.isDefault
             ? `Model reset to default (${labelWithAlias}).`
             : `Model set to ${labelWithAlias} for this session.`,
+          persisted.runtimeChange?.kind === "clear"
+            ? "Runtime reset to configured policy."
+            : persisted.runtimeChange?.kind === "set"
+              ? `Runtime set to ${persisted.runtimeChange.runtime} for this session.`
+              : undefined,
           modelResolution.profileOverride
             ? `Auth profile set to ${modelResolution.profileOverride}.`
             : undefined,
@@ -461,6 +499,10 @@ export async function applyInlineDirectiveOverrides(params: {
   provider = persisted.provider;
   model = persisted.model;
   contextTokens = persisted.contextTokens;
+  if (persisted.errorText) {
+    typing.cleanup();
+    return { kind: "reply", reply: { text: persisted.errorText } };
+  }
   if (!persisted.sessionChangesApplied) {
     typing.cleanup();
     return {

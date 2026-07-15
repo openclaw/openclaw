@@ -363,7 +363,7 @@ function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""):
 }
 
 /** Loads and sanitizes image references found in prompt text. */
-export async function loadPromptRefImages(params: {
+async function loadPromptRefImages(params: {
   prompt: string;
   workspaceDir: string;
   maxBytes?: number;
@@ -401,7 +401,7 @@ export async function loadPromptRefImages(params: {
 }
 
 /** Writes CLI image payloads to private paths and returns their file paths. */
-export async function writeCliImages(params: {
+async function writeCliImages(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   images: ImageContent[];
@@ -518,6 +518,7 @@ export function buildCliArgs(params: {
   imagePaths?: string[];
   promptArg?: string;
   useResume: boolean;
+  forkResume?: boolean;
   sendSystemPromptOnResume?: boolean;
 }): string[] {
   const args: string[] = [...params.baseArgs];
@@ -559,6 +560,12 @@ export function buildCliArgs(params: {
     } else if (params.backend.sessionArg) {
       args.push(params.backend.sessionArg, params.sessionId);
     }
+  }
+  if (params.useResume && params.forkResume) {
+    if (!params.backend.forkArg) {
+      throw new Error("CLI backend does not support forked session resume");
+    }
+    args.push(params.backend.forkArg);
   }
   if (params.promptArg !== undefined) {
     let replacedPromptPlaceholder = false;

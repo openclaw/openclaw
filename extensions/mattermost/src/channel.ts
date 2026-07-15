@@ -23,6 +23,7 @@ import {
   type MessagePresentation,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
+  resolveMessagePresentationButtonAction,
   resolveMessagePresentationControlValue,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -108,8 +109,15 @@ const MATTERMOST_PRESENTATION_CAPABILITIES = {
   },
 } satisfies ChannelOutboundAdapter["presentationCapabilities"];
 
-function hasMattermostPresentationButtons(presentation: MessagePresentation): boolean {
-  return buildMattermostPresentationButtons(presentation).some((row) => row.length > 0);
+function hasMattermostPresentationNavigation(presentation: MessagePresentation): boolean {
+  return presentation.blocks.some(
+    (block) =>
+      block.type === "buttons" &&
+      block.buttons.some((button) => {
+        const action = resolveMessagePresentationButtonAction(button);
+        return action?.type === "url" || action?.type === "web-app";
+      }),
+  );
 }
 
 function readMattermostPresentationButtons(payload: {
@@ -645,19 +653,24 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       return null;
     }
     const buttons = buildMattermostPresentationButtons(presentation);
-    if (!hasMattermostPresentationButtons(presentation)) {
+    const hasButtons = buttons.some((row) => row.length > 0);
+    if (!hasButtons && !hasMattermostPresentationNavigation(presentation)) {
       return null;
     }
     return {
       ...payload,
       text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
-      channelData: {
-        ...payload.channelData,
-        mattermost: {
-          ...(payload.channelData?.mattermost as Record<string, unknown> | undefined),
-          presentationButtons: buttons,
-        },
-      },
+      ...(hasButtons
+        ? {
+            channelData: {
+              ...payload.channelData,
+              mattermost: {
+                ...(payload.channelData?.mattermost as Record<string, unknown> | undefined),
+                presentationButtons: buttons,
+              },
+            },
+          }
+        : {}),
     };
   },
   sendPayload: async (ctx) => {
@@ -868,7 +881,9 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       }),
     }),
     gateway: {
-      resolveGatewayAuthBypassPaths: ({ cfg }) => resolveMattermostGatewayAuthBypassPaths(cfg),
+      // Same function as the public gateway-auth artifact so the pre-plugin
+      // fast path and the loaded plugin cannot drift (pinned by contract test).
+      resolveGatewayAuthBypassPaths: resolveMattermostGatewayAuthBypassPaths,
       startAccount: async (ctx) => {
         const account = ctx.account;
         const statusSink = createAccountStatusSink({
@@ -924,16 +939,19 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       matchesMattermostToolContextTarget({ target, toolContext }),
     resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
       const ambientThreadId = threadId != null ? String(threadId) : undefined;
-      const resolvedThreadId =
-        replyDelivery?.chatType === "direct"
-          ? undefined
-          : replyDelivery
-            ? replyToIsExplicit
-              ? (replyToId ?? ambientThreadId)
-              : (ambientThreadId ?? replyToId ?? undefined)
-            : (ambientThreadId ?? replyToId);
+      // Direct chats stay flat when their effective mode is off. Opted-in DMs
+      // preserve the thread root for routed replies and message-tool follow-ups.
+      const isFlatDirect =
+        replyDelivery?.chatType === "direct" && replyDelivery.replyToMode === "off";
+      const resolvedThreadId = isFlatDirect
+        ? undefined
+        : replyDelivery
+          ? replyToIsExplicit
+            ? (replyToId ?? ambientThreadId)
+            : (ambientThreadId ?? replyToId ?? undefined)
+          : (ambientThreadId ?? replyToId);
       return {
-        replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
+        replyToId: isFlatDirect ? null : resolvedThreadId,
         threadId: resolvedThreadId ?? null,
       };
     },
@@ -941,3 +959,4 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
   security: mattermostSecurityAdapter,
   outbound: mattermostOutbound,
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

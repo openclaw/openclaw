@@ -1,6 +1,6 @@
 // Qa Lab plugin module implements QA evidence summary behavior.
-import { execFileSync } from "node:child_process";
 import { z } from "zod";
+import { resolveQaEvidenceEnvironment } from "./evidence-environment.js";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 import {
@@ -19,192 +19,151 @@ const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked", "skipped"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
 const nullableStringSchema = nonEmptyStringSchema.nullable();
 const qaEvidenceProfileIdSchema = nonEmptyStringSchema;
-const qaEvidenceIdSchema = z.object({ id: nonEmptyStringSchema });
+const qaEvidenceIdSchema = z.strictObject({ id: nonEmptyStringSchema });
 
-const qaEvidenceProviderSchema = z
-  .object({
-    id: nonEmptyStringSchema,
-    live: z.boolean(),
-    model: z
-      .object({
-        name: nullableStringSchema,
-        ref: nullableStringSchema,
-      })
-      .strict(),
-    fixture: nonEmptyStringSchema.optional(),
-    auth: nonEmptyStringSchema.optional(),
-  })
-  .strict();
-
-const qaEvidenceChannelSchema = z
-  .object({
-    id: nonEmptyStringSchema,
-    live: z.boolean(),
-    driver: nonEmptyStringSchema.optional(),
-  })
-  .strict();
-
-const qaEvidenceEnvironmentSchema = z
-  .object({
+const qaEvidenceProviderSchema = z.strictObject({
+  id: nonEmptyStringSchema,
+  live: z.boolean(),
+  model: z.strictObject({
+    name: nullableStringSchema,
     ref: nullableStringSchema,
-    os: nonEmptyStringSchema,
-    nodeVersion: nonEmptyStringSchema,
-  })
-  .strict();
+  }),
+  fixture: nonEmptyStringSchema.optional(),
+  auth: nonEmptyStringSchema.optional(),
+});
 
-const qaEvidencePackageSourceSchema = z
-  .object({
-    kind: nonEmptyStringSchema,
-    spec: nonEmptyStringSchema.optional(),
-    sha: nonEmptyStringSchema.optional(),
-  })
-  .strict();
+const qaEvidenceChannelSchema = z.strictObject({
+  id: nonEmptyStringSchema,
+  live: z.boolean(),
+  driver: nonEmptyStringSchema.optional(),
+});
 
-const qaEvidenceFailureSchema = z
-  .object({
-    class: nonEmptyStringSchema.optional(),
-    reason: nonEmptyStringSchema,
-  })
-  .strict();
+const qaEvidenceEnvironmentSchema = z.strictObject({
+  ref: nullableStringSchema,
+  os: nonEmptyStringSchema,
+  nodeVersion: nonEmptyStringSchema,
+});
 
-const qaEvidenceTimingSchema = z
-  .object({
-    wallMs: z.number().finite().positive().optional(),
-    rttMs: z.number().finite().positive().optional(),
-    avgMs: z.number().finite().positive().optional(),
-    p50Ms: z.number().finite().positive().optional(),
-    p95Ms: z.number().finite().positive().optional(),
-    maxMs: z.number().finite().positive().optional(),
-    samples: z.number().int().positive().optional(),
-    failedSamples: z.number().int().nonnegative().optional(),
-  })
-  .strict();
+const qaEvidencePackageSourceSchema = z.strictObject({
+  kind: nonEmptyStringSchema,
+  spec: nonEmptyStringSchema.optional(),
+  sha: nonEmptyStringSchema.optional(),
+});
 
-const qaEvidenceTestSchema = z
-  .object({
-    kind: nonEmptyStringSchema,
-    id: nonEmptyStringSchema,
-    title: nonEmptyStringSchema,
-    source: z
-      .object({
-        path: nonEmptyStringSchema,
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
+const qaEvidenceFailureSchema = z.strictObject({
+  class: nonEmptyStringSchema.optional(),
+  reason: nonEmptyStringSchema,
+});
 
-const qaEvidenceRefSchema = z
-  .object({
-    kind: nonEmptyStringSchema,
-    path: nonEmptyStringSchema,
-  })
-  .strict();
+const qaEvidenceTimingSchema = z.strictObject({
+  wallMs: z.number().finite().positive().optional(),
+  rttMs: z.number().finite().positive().optional(),
+  avgMs: z.number().finite().positive().optional(),
+  p50Ms: z.number().finite().positive().optional(),
+  p95Ms: z.number().finite().positive().optional(),
+  maxMs: z.number().finite().positive().optional(),
+  samples: z.number().int().positive().optional(),
+  failedSamples: z.number().int().nonnegative().optional(),
+});
 
-const qaEvidenceCoverageSchema = qaEvidenceIdSchema
-  .extend({
-    role: nonEmptyStringSchema,
-  })
-  .strict();
+const qaEvidenceTestSchema = z.strictObject({
+  kind: nonEmptyStringSchema,
+  id: nonEmptyStringSchema,
+  title: nonEmptyStringSchema,
+  source: z
+    .strictObject({
+      path: nonEmptyStringSchema,
+    })
+    .optional(),
+});
 
-const qaEvidenceScorecardCountSchema = z
-  .object({
-    total: z.number().int().nonnegative(),
-    fulfilled: z.number().int().nonnegative(),
-    partial: z.number().int().nonnegative().optional(),
-    missing: z.number().int().nonnegative(),
-    fulfillmentPercent: z.number().finite().nonnegative(),
-  })
-  .strict();
+const qaEvidenceRefSchema = z.strictObject({
+  kind: nonEmptyStringSchema,
+  path: nonEmptyStringSchema,
+});
+
+const qaEvidenceCoverageSchema = qaEvidenceIdSchema.extend({
+  role: nonEmptyStringSchema,
+});
+
+const qaEvidenceScorecardCountSchema = z.strictObject({
+  total: z.number().int().nonnegative(),
+  fulfilled: z.number().int().nonnegative(),
+  partial: z.number().int().nonnegative().optional(),
+  missing: z.number().int().nonnegative(),
+  fulfillmentPercent: z.number().finite().nonnegative(),
+});
 
 const qaEvidenceScorecardCoverageCountSchema = qaEvidenceScorecardCountSchema.extend({
   secondaryOnly: z.number().int().nonnegative(),
 });
 
-const qaEvidenceScorecardCategorySchema = z
-  .object({
-    id: nonEmptyStringSchema,
-    surfaceId: nonEmptyStringSchema,
-    name: nonEmptyStringSchema,
-    status: z.enum(["fulfilled", "partial", "missing"]),
-    features: qaEvidenceScorecardCountSchema,
-    coverageIds: qaEvidenceScorecardCoverageCountSchema,
-    missingCoverageIds: z.array(nonEmptyStringSchema),
-  })
-  .strict();
+const qaEvidenceScorecardCategorySchema = z.strictObject({
+  id: nonEmptyStringSchema,
+  surfaceId: nonEmptyStringSchema,
+  name: nonEmptyStringSchema,
+  status: z.enum(["fulfilled", "partial", "missing"]),
+  features: qaEvidenceScorecardCountSchema,
+  coverageIds: qaEvidenceScorecardCoverageCountSchema,
+  missingCoverageIds: z.array(nonEmptyStringSchema),
+});
 
-const qaEvidenceScorecardSchema = z
-  .object({
-    filters: z
-      .object({
-        surface: nullableStringSchema,
-        category: nullableStringSchema,
-      })
-      .strict(),
-    run: z
-      .object({
-        evidenceEntryCount: z.number().int().nonnegative(),
-      })
-      .strict(),
-    categories: qaEvidenceScorecardCountSchema,
-    features: qaEvidenceScorecardCountSchema,
-    coverageIds: qaEvidenceScorecardCountSchema,
-    categoryReports: z.array(qaEvidenceScorecardCategorySchema),
-  })
-  .strict();
+const qaEvidenceScorecardSchema = z.strictObject({
+  filters: z.strictObject({
+    surface: nullableStringSchema,
+    category: nullableStringSchema,
+  }),
+  run: z.strictObject({
+    evidenceEntryCount: z.number().int().nonnegative(),
+  }),
+  categories: qaEvidenceScorecardCountSchema,
+  features: qaEvidenceScorecardCountSchema,
+  coverageIds: qaEvidenceScorecardCountSchema,
+  categoryReports: z.array(qaEvidenceScorecardCategorySchema),
+});
 
-const qaEvidenceArtifactSchema = z
-  .object({
-    kind: nonEmptyStringSchema,
-    path: nonEmptyStringSchema,
-    source: nonEmptyStringSchema,
-  })
-  .strict();
+const qaEvidenceArtifactSchema = z.strictObject({
+  kind: nonEmptyStringSchema,
+  path: nonEmptyStringSchema,
+  source: nonEmptyStringSchema,
+});
 
-const qaEvidenceExecutionSchema = z
-  .object({
-    runner: nonEmptyStringSchema,
-    environment: qaEvidenceEnvironmentSchema,
-    provider: qaEvidenceProviderSchema,
-    channel: qaEvidenceChannelSchema.optional(),
-    packageSource: qaEvidencePackageSourceSchema,
-    artifacts: z.array(qaEvidenceArtifactSchema),
-  })
-  .strict();
+const qaEvidenceExecutionSchema = z.strictObject({
+  runner: nonEmptyStringSchema,
+  environment: qaEvidenceEnvironmentSchema,
+  provider: qaEvidenceProviderSchema,
+  channel: qaEvidenceChannelSchema.optional(),
+  packageSource: qaEvidencePackageSourceSchema,
+  artifacts: z.array(qaEvidenceArtifactSchema),
+});
 
-const qaEvidenceResultSchema = z
-  .object({
-    status: qaEvidenceStatusSchema,
-    failure: qaEvidenceFailureSchema.optional(),
-    timing: qaEvidenceTimingSchema.optional(),
-  })
-  .strict();
+const qaEvidenceResultSchema = z.strictObject({
+  status: qaEvidenceStatusSchema,
+  failure: qaEvidenceFailureSchema.optional(),
+  timing: qaEvidenceTimingSchema.optional(),
+});
 
 const qaEvidencePostureSchema = z.enum(["direct-gateway", "native-approval", "user-path"]);
 
-const qaEvidenceSummaryEntrySchema = z
-  .object({
-    test: qaEvidenceTestSchema,
-    coverage: z.array(qaEvidenceCoverageSchema),
-    posture: qaEvidencePostureSchema.optional(),
-    refs: z.array(qaEvidenceRefSchema).optional(),
-    runtimeParityTier: nonEmptyStringSchema.optional(),
-    execution: qaEvidenceExecutionSchema.optional(),
-    result: qaEvidenceResultSchema,
-  })
-  .strict();
+const qaEvidenceSummaryEntrySchema = z.strictObject({
+  test: qaEvidenceTestSchema,
+  coverage: z.array(qaEvidenceCoverageSchema),
+  posture: qaEvidencePostureSchema.optional(),
+  refs: z.array(qaEvidenceRefSchema).optional(),
+  runtimeParityTier: nonEmptyStringSchema.optional(),
+  execution: qaEvidenceExecutionSchema.optional(),
+  result: qaEvidenceResultSchema,
+});
 
-const qaEvidenceSummarySchema = z
-  .object({
-    kind: z.literal(QA_EVIDENCE_SUMMARY_KIND),
-    schemaVersion: z.literal(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION),
-    generatedAt: nonEmptyStringSchema,
-    evidenceMode: qaScorecardEvidenceModeSchema,
-    entries: z.array(qaEvidenceSummaryEntrySchema),
-    profile: qaEvidenceProfileIdSchema.optional(),
-    scorecard: qaEvidenceScorecardSchema.optional(),
-  })
-  .strict();
+const qaEvidenceSummarySchema = z.strictObject({
+  kind: z.literal(QA_EVIDENCE_SUMMARY_KIND),
+  schemaVersion: z.literal(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION),
+  generatedAt: nonEmptyStringSchema,
+  evidenceMode: qaScorecardEvidenceModeSchema,
+  entries: z.array(qaEvidenceSummaryEntrySchema),
+  profile: qaEvidenceProfileIdSchema.optional(),
+  scorecard: qaEvidenceScorecardSchema.optional(),
+});
 
 type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
@@ -396,36 +355,6 @@ function resolveQaEvidenceChannelDriver(params: { env?: NodeJS.ProcessEnv; fallb
     params.env?.OPENCLAW_QA_CHANNEL_DRIVER?.trim() ||
     params.env?.OPENCLAW_E2E_CHANNEL_DRIVER?.trim();
   return id ? { id } : undefined;
-}
-
-function resolveQaEvidenceCheckoutRef(repoRoot?: string) {
-  try {
-    const ref = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
-      cwd: repoRoot ?? process.cwd(),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return ref || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export function resolveQaEvidenceEnvironment(params: {
-  env?: NodeJS.ProcessEnv;
-  repoRoot?: string;
-}) {
-  return {
-    // GitHub's GITHUB_SHA describes the workflow event, not necessarily the
-    // checked-out ref selected by a manual or remote QA run.
-    ref:
-      params.env?.OPENCLAW_QA_REF?.trim() ||
-      resolveQaEvidenceCheckoutRef(params.repoRoot) ||
-      params.env?.GITHUB_SHA?.trim() ||
-      null,
-    os: process.platform,
-    nodeVersion: process.version,
-  };
 }
 
 function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {

@@ -1,6 +1,6 @@
 // Covers CLI execution paths where the process supervisor keeps stdout capture
 // disabled and the runner must parse streamed chunks without relying on tails.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   markMcpLoopbackRequestFinished,
   markMcpLoopbackRequestStarted,
@@ -16,9 +16,10 @@ import {
   type TrustedToolExecutionEvent,
 } from "../../infra/diagnostic-events.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
-import { createManagedRun, supervisorSpawnMock } from "../cli-runner.test-support.js";
+import { findCliMaxTurnsError } from "../failover-error.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun } from "./execute.js";
+import { createManagedRun, supervisorSpawnMock } from "./execute.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
@@ -69,7 +70,7 @@ function recordMcpLoopbackToolCallResult(params: {
 }
 
 function buildPreparedCliRunContext(params: {
-  output: "jsonl" | "text";
+  output: "json" | "jsonl" | "text";
   provider?: string;
   runId?: string;
   beforeExecution?: () => Promise<void>;
@@ -127,6 +128,7 @@ function requireSupervisorSpawnInput(): SupervisorSpawnInput {
 }
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
   supervisorSpawnMock.mockReset();
@@ -402,6 +404,186 @@ describe("executePreparedCliRun supervisor output capture", () => {
       name: "FailoverError",
       message: "Credit balance is too low",
     });
+  });
+
+  it("surfaces Claude max-turn results with run and session recovery context", async () => {
+    const stdout = `${JSON.stringify({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "claude-session-max-turns",
+      num_turns: 2,
+      stop_reason: "tool_use",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (1)"],
+    })}\n`;
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          output: "jsonl",
+          provider: "claude-cli",
+          runId: "run-max-turns",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      message:
+        "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+        "OpenClaw run: run-max-turns. OpenClaw session: session-1. " +
+        "Claude session: claude-session-max-turns. Tool actions may already have run; verify their effects before retrying. " +
+        "Retry with a higher --max-turns value or a narrower task.",
+      sessionId: "session-1",
+      reason: "unknown",
+      code: "cli_max_turns",
+      rawError: "Reached maximum number of turns (1)",
+    });
+  });
+
+  it("surfaces Claude max-turn results from JSON output", async () => {
+    const stdout = JSON.stringify({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "claude-json-max-turns",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (2)"],
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          output: "json",
+          provider: "claude-cli",
+          runId: "run-json-max-turns",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      code: "cli_max_turns",
+      rawError: "Reached maximum number of turns (2)",
+    });
+  });
+
+  it.each([
+    ["no-output-timeout", true],
+    ["overall-timeout", false],
+  ] as const)(
+    "keeps a terminal max-turn result ahead of a later %s",
+    async (reason, noOutputTimedOut) => {
+      const stdout = `${JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        session_id: `claude-${reason}`,
+        terminal_reason: "max_turns",
+        errors: ["Reached maximum number of turns (1)"],
+      })}\n`;
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        input.onStdout?.(stdout);
+        return createManagedRun({
+          reason,
+          exitCode: null,
+          exitSignal: "SIGTERM",
+          durationMs: 1_000,
+          stdout: input.captureOutput === false ? "" : stdout,
+          stderr: "",
+          timedOut: true,
+          noOutputTimedOut,
+        });
+      });
+
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+        ),
+      ).rejects.toMatchObject({
+        name: "FailoverError",
+        code: "cli_max_turns",
+        rawError: "Reached maximum number of turns (1)",
+      });
+    },
+  );
+
+  it("preserves max-turn failure through fork successor persistence errors", async () => {
+    const stdout = `${JSON.stringify({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "fork-successor",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (1)"],
+    })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const persistenceError = new Error("fork successor persistence failed");
+    const persistCliSessionForkSuccessor = vi.fn().mockRejectedValue(persistenceError);
+    const restoreCliSessionFork = vi.fn().mockResolvedValue(undefined);
+    const context = buildPreparedCliRunContext({
+      output: "jsonl",
+      provider: "claude-cli",
+      runId: "run-fork-max-turns",
+    });
+    context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
+    context.preparedBackend.backend.forkArg = "--fork-session";
+    context.params.forkCliSessionOnResume = true;
+    context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
+    context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
+    context.params.restoreCliSessionFork = restoreCliSessionFork;
+
+    let failure: unknown;
+    try {
+      await executePreparedCliRun(context, "fork-source");
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      expect.objectContaining({ code: "cli_max_turns" }),
+      persistenceError,
+    ]);
+    expect(findCliMaxTurnsError(failure)).toMatchObject({ code: "cli_max_turns" });
+    expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
+    expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
   });
 
   it("still streams every JSONL stdout chunk with supervisor capture disabled", async () => {
@@ -2066,9 +2248,36 @@ describe("executePreparedCliRun supervisor output capture", () => {
     ]);
   });
 
-  it("captures non-Claude JSONL sends and gives every attempt a unique token", async () => {
+  it("deactivates a Claude live capture when process startup fails", async () => {
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.mcpDeliveryCapture = true;
+    context.preparedBackend.backend.liveSession = "claude-stdio";
+    const activateCapture = vi.fn<(captureKey: string) => void>();
+    const deactivateCapture = vi.fn<(captureKey: string) => void>();
+    context.preparedBackend.mcpClientGrantCapture = {
+      activate: activateCapture,
+      deactivate: deactivateCapture,
+    };
+    supervisorSpawnMock.mockRejectedValueOnce(new Error("spawn failed"));
+
+    await expect(executePreparedCliRun(context)).rejects.toThrow("spawn failed");
+
+    expect(activateCapture).toHaveBeenCalledOnce();
+    expect(deactivateCapture).toHaveBeenCalledExactlyOnceWith(activateCapture.mock.calls[0]?.[0]);
+    expect(activateCapture.mock.invocationCallOrder[0]).toBeLessThan(
+      supervisorSpawnMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("captures non-Claude JSONL sends and fences every attempt with a unique key", async () => {
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "local-cli" });
     context.mcpDeliveryCapture = true;
+    const activateCapture = vi.fn<(captureKey: string) => void>();
+    const deactivateCapture = vi.fn<(captureKey: string) => void>();
+    context.preparedBackend.mcpClientGrantCapture = {
+      activate: activateCapture,
+      deactivate: deactivateCapture,
+    };
     const captureKeys: string[] = [];
     supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
@@ -2106,5 +2315,11 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(second.didSendViaMessagingTool).toBe(true);
     expect(captureKeys).toHaveLength(2);
     expect(captureKeys[0]).not.toBe(captureKeys[1]);
+    expect(activateCapture.mock.calls.map(([captureKey]) => captureKey)).toEqual(captureKeys);
+    expect(deactivateCapture.mock.calls.map(([captureKey]) => captureKey)).toEqual(captureKeys);
+    expect(deactivateCapture.mock.invocationCallOrder[0]).toBeLessThan(
+      activateCapture.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
+    );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

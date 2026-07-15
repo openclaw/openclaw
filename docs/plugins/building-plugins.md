@@ -25,7 +25,7 @@ Bare package specs still install from npm during the launch cutover. Use the
 
 ## Requirements
 
-- Node 22.19+, Node 23.11+, or Node 24+, and `npm` or `pnpm`.
+- Node 22.22.3+, Node 24.15+, or Node 25.9+, and `npm` or `pnpm`.
 - TypeScript ESM modules.
 - For in-repo bundled plugin work, clone the repository and run `pnpm install`.
   Source-checkout plugin development is pnpm-only because OpenClaw discovers
@@ -235,6 +235,10 @@ local proof.
 Tools can be required or optional. Required tools are always available when the
 plugin is enabled. Optional tools need explicit user opt-in before OpenClaw
 loads the owning plugin runtime.
+
+Tool factories receive trusted runtime context, including `deliveryContext`,
+`nativeChannelId` for the active platform conversation when available, and
+`requesterSenderId`.
 
 ```typescript
 register(api) {

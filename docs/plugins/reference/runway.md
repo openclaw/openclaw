@@ -20,4 +20,4 @@ contracts: videoGenerationProviders
 
 ## Related docs
 
-- [runway](/providers/runway)
+- [Runway](/providers/runway)

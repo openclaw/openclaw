@@ -10,7 +10,7 @@ import {
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
-let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
+let synologyChatPlugin: typeof import("./channel.js").synologyChatPlugin;
 
 function makeStartContext<T>(cfg: T, accountId: string, abortSignal: AbortSignal) {
   setSynologyRuntimeConfigForTest(cfg);
@@ -43,7 +43,7 @@ function requireMockCall<TArgs extends unknown[]>(
 
 describe("Synology channel wiring integration", () => {
   beforeAll(async () => {
-    ({ createSynologyChatPlugin } = await import("./channel.js"));
+    ({ synologyChatPlugin } = await import("./channel.js"));
   });
 
   beforeEach(() => {
@@ -56,7 +56,7 @@ describe("Synology channel wiring integration", () => {
   });
 
   it("registers real webhook handler with resolved account config and enforces allowlist", async () => {
-    const plugin = createSynologyChatPlugin();
+    const plugin = synologyChatPlugin;
     const abortController = new AbortController();
     const cfg = {
       channels: {
@@ -108,8 +108,71 @@ describe("Synology channel wiring integration", () => {
     await started;
   });
 
+  it("uses gateway trusted proxy settings for pre-auth invalid-token throttling", async () => {
+    const plugin = synologyChatPlugin;
+    const abortController = new AbortController();
+    const cfg = {
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+      },
+      channels: {
+        "synology-chat": {
+          enabled: true,
+          token: "valid-token",
+          incomingUrl: "https://nas.example.com/incoming",
+          webhookPath: "/webhook/synology",
+          dmPolicy: "open",
+          allowedUserIds: ["*"],
+          rateLimitPerMinute: 1,
+        },
+      },
+    };
+
+    const started = plugin.gateway.startAccount(
+      makeStartContext(cfg, "default", abortController.signal),
+    );
+    expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
+    const [registered] = requireMockCall(registerPluginHttpRouteMock, 0, "default Synology route");
+
+    for (let i = 0; i < 2; i += 1) {
+      const req = makeReq(
+        "POST",
+        makeFormBody({
+          token: "wrong-token",
+          user_id: "123",
+          username: "attacker",
+          text: "Hello",
+        }),
+        { headers: { "x-forwarded-for": "198.51.100.9" } },
+      );
+      (req.socket as { remoteAddress?: string }).remoteAddress = "127.0.0.1";
+      const res = makeRes();
+      await registered.handler(req, res);
+      expect(res.status).toBe(i === 0 ? 401 : 429);
+    }
+
+    const validReq = makeReq(
+      "POST",
+      makeFormBody({
+        token: "valid-token",
+        user_id: "123",
+        username: "legitimate-user",
+        text: "Hello",
+      }),
+      { headers: { "x-forwarded-for": "203.0.113.11" } },
+    );
+    (validReq.socket as { remoteAddress?: string }).remoteAddress = "127.0.0.1";
+    const validRes = makeRes();
+    await registered.handler(validReq, validRes);
+
+    expect(validRes.status).toBe(204);
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    abortController.abort();
+    await started;
+  });
+
   it("isolates same user_id across different accounts", async () => {
-    const plugin = createSynologyChatPlugin();
+    const plugin = synologyChatPlugin;
     const alphaAbortController = new AbortController();
     const betaAbortController = new AbortController();
     const cfg = {

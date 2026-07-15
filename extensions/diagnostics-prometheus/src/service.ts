@@ -967,9 +967,9 @@ function recordDiagnosticEvent(
         {},
         numericValue(evt.queueLength),
       );
-      return;
+      break;
     case "diagnostic.heartbeat":
-      return;
+      break;
     case "telemetry.exporter":
       store.counter("openclaw_telemetry_exporter_total", "Telemetry exporter lifecycle events.", {
         exporter: lowCardinalityLabel(evt.exporter),
@@ -1065,4 +1065,4 @@ export const testApi = {
   recordDiagnosticEvent,
   renderPrometheusMetrics,
 };
-export { testApi as __test__ };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

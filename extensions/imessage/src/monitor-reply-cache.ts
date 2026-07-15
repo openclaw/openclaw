@@ -538,20 +538,30 @@ function isPositiveChatMatch(entry: IMessageReplyCacheEntry, ctx: IMessageChatCo
   return false;
 }
 
-export function resetIMessageShortIdState(options: { clearPersistent?: boolean } = {}): void {
-  imessageReplyCacheByMessageId.clear();
-  imessageShortIdToUuid.clear();
-  imessageUuidToShortId.clear();
-  imessageShortIdCounter = 0;
-  hydrated = false;
-  persistenceFailureLogged = false;
-  if (options.clearPersistent === false) {
-    return;
+export function isIMessageCurrentMessageInChat(params: {
+  accountId: string;
+  currentMessageId: string | number;
+  chatContext: IMessageChatContext;
+}): boolean {
+  if (!params.accountId || !hasChatScope(params.chatContext)) {
+    return false;
   }
-  try {
-    openReplyCacheStore().clear();
-    openReplyCacheCounterStore().clear();
-  } catch {
-    // best-effort
+  const currentMessageId = normalizeOptionalString(String(params.currentMessageId));
+  if (!currentMessageId) {
+    return false;
   }
+  hydrateFromStoreOnce();
+  const fullMessageId = /^\d+$/.test(currentMessageId)
+    ? imessageShortIdToUuid.get(currentMessageId)
+    : currentMessageId;
+  if (!fullMessageId) {
+    return false;
+  }
+  const entry = imessageReplyCacheByMessageId.get(fullMessageId);
+  return Boolean(
+    entry &&
+    entry.accountId === params.accountId &&
+    Date.now() - entry.timestamp <= REPLY_CACHE_TTL_MS &&
+    isPositiveChatMatch(entry, params.chatContext),
+  );
 }

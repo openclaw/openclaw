@@ -12,14 +12,18 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] QR code scanning in onboarding
 - [x] Performance improvements
 - [x] Streaming support in chat UI
+- [x] Dedicated per-device Android chat session created/adopted on connect without resetting history
 - [x] Request camera/location and other permissions in onboarding/settings flow
 - [x] Push notifications for gateway/chat status updates
 - [x] Security hardening (biometric lock, token handling, safer defaults)
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
+- [x] Foreground on-device Voice Wake with Gateway-synced wake words
 - [x] Screen tab full functionality
 - [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
+- [x] Skills settings can search installed skills, enable or disable them, and install Gateway-verified ClawHub releases
 - [x] Per-app language selection for translated resources follows Android system settings and persistence
+- [x] Cron job settings support details, run history, run now, edits, enable/disable, and deletion with admin-scoped Gateway access
 
 ## Open in Android Studio
 
@@ -44,6 +48,12 @@ cd apps/android
 ./gradlew :app:installThirdPartyDebug
 ./gradlew :app:testThirdPartyDebugUnitTest
 ```
+
+Repository-backed debug Gradle invocations, including `pnpm android:run` and
+`pnpm android:screenshots`, stamp the full checkout commit and capture one UTC
+build timestamp shared by every debug variant in that invocation. Release
+tasks still require explicit `openclawBuildCommit` and
+`openclawBuildTimestamp` properties so signed artifacts remain reproducible.
 
 Android release archives use the pinned version in `apps/android/version.json`. Update it with:
 
@@ -101,12 +111,14 @@ Google Play API commands, or Play Console mutation commands.
 
 See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 
-Flavor-specific direct Gradle tasks:
+Prefer `pnpm android:release:archive`, which stamps and validates the full Git commit and one UTC build timestamp before signing. Flavor-specific direct Gradle release tasks must pass the same metadata explicitly:
 
 ```bash
 cd apps/android
-./gradlew :app:bundlePlayRelease
-./gradlew :app:bundleThirdPartyRelease
+commit="$(git -C ../.. rev-parse HEAD)"
+built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :app:bundlePlayRelease
+./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :app:bundleThirdPartyRelease
 ```
 
 ## Kotlin Lint + Format

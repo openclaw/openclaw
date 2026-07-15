@@ -4,14 +4,7 @@
  * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
  * maps high-level actions onto browser control client calls.
  */
-import crypto from "node:crypto";
-import {
-  BROWSER_PROXY_ERROR_ENVELOPE,
-  parseBrowserProxyFailure,
-  type BrowserProxyEnvelope,
-  type BrowserProxyFile,
-  type BrowserProxySuccess,
-} from "./browser-proxy-envelope.js";
+import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
 import { describeBrowserTool } from "./browser-tool-description.js";
 import {
   executeActAction,
@@ -24,22 +17,22 @@ import {
   type AnyAgentTool,
   type NodeListNode,
   BrowserToolSchema,
-  applyBrowserProxyPaths,
   browserAct,
   browserArmDialog,
   browserArmFileChooser,
   browserCloseTab,
   browserDoctor,
   browserFocusTab,
+  browserImportProfile,
   browserNavigate,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
+  browserSystemProfiles,
   browserScreenshotAction,
   browserStart,
   browserStatus,
   browserStop,
-  callGatewayTool,
   describeImageFile,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
@@ -47,7 +40,6 @@ import {
   jsonResult,
   listNodes,
   normalizeOptionalString,
-  persistBrowserProxyFiles,
   readPositiveIntegerParam,
   readStringParam,
   readStringValue,
@@ -63,10 +55,10 @@ import {
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
-import { BrowserServiceError } from "./browser/client-fetch.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
 import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
+import { parseSystemProfileDomains } from "./browser/system-profile-domains.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
 import { wrapExternalContent } from "./sdk-security-runtime.js";
 
@@ -77,10 +69,12 @@ const browserToolDeps = {
   browserCloseTab,
   browserDoctor,
   browserFocusTab,
+  browserImportProfile,
   browserNavigate,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
+  browserSystemProfiles,
   browserScreenshotAction,
   browserStart,
   browserStatus,
@@ -89,78 +83,12 @@ const browserToolDeps = {
   getRuntimeConfig,
   imageResultFromFile,
   listNodes,
-  callGatewayTool,
   normalizeBrowserScreenshot,
   saveMediaBuffer,
   stageBrowserScreenshotForSharing,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
-};
-
-export const testing = {
-  setDepsForTest(
-    overrides: Partial<{
-      browserAct: typeof browserAct;
-      browserArmDialog: typeof browserArmDialog;
-      browserArmFileChooser: typeof browserArmFileChooser;
-      browserCloseTab: typeof browserCloseTab;
-      browserDoctor: typeof browserDoctor;
-      browserFocusTab: typeof browserFocusTab;
-      browserNavigate: typeof browserNavigate;
-      browserOpenTab: typeof browserOpenTab;
-      browserPdfSave: typeof browserPdfSave;
-      browserProfiles: typeof browserProfiles;
-      browserScreenshotAction: typeof browserScreenshotAction;
-      browserStart: typeof browserStart;
-      browserStatus: typeof browserStatus;
-      browserStop: typeof browserStop;
-      describeImageFile: typeof describeImageFile;
-      imageResultFromFile: typeof imageResultFromFile;
-      getRuntimeConfig: typeof getRuntimeConfig;
-      listNodes: typeof listNodes;
-      callGatewayTool: typeof callGatewayTool;
-      normalizeBrowserScreenshot: typeof normalizeBrowserScreenshot;
-      saveMediaBuffer: typeof saveMediaBuffer;
-      stageBrowserScreenshotForSharing: typeof stageBrowserScreenshotForSharing;
-      touchSessionBrowserTab: typeof touchSessionBrowserTab;
-      trackSessionBrowserTab: typeof trackSessionBrowserTab;
-      untrackSessionBrowserTab: typeof untrackSessionBrowserTab;
-    }> | null,
-  ) {
-    browserToolDeps.browserAct = overrides?.browserAct ?? browserAct;
-    browserToolDeps.browserArmDialog = overrides?.browserArmDialog ?? browserArmDialog;
-    browserToolDeps.browserArmFileChooser =
-      overrides?.browserArmFileChooser ?? browserArmFileChooser;
-    browserToolDeps.browserCloseTab = overrides?.browserCloseTab ?? browserCloseTab;
-    browserToolDeps.browserDoctor = overrides?.browserDoctor ?? browserDoctor;
-    browserToolDeps.browserFocusTab = overrides?.browserFocusTab ?? browserFocusTab;
-    browserToolDeps.browserNavigate = overrides?.browserNavigate ?? browserNavigate;
-    browserToolDeps.browserOpenTab = overrides?.browserOpenTab ?? browserOpenTab;
-    browserToolDeps.browserPdfSave = overrides?.browserPdfSave ?? browserPdfSave;
-    browserToolDeps.browserProfiles = overrides?.browserProfiles ?? browserProfiles;
-    browserToolDeps.browserScreenshotAction =
-      overrides?.browserScreenshotAction ?? browserScreenshotAction;
-    browserToolDeps.browserStart = overrides?.browserStart ?? browserStart;
-    browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
-    browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
-    browserToolDeps.describeImageFile = overrides?.describeImageFile ?? describeImageFile;
-    browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
-    browserToolDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
-    browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
-    browserToolDeps.callGatewayTool = overrides?.callGatewayTool ?? callGatewayTool;
-    browserToolDeps.normalizeBrowserScreenshot =
-      overrides?.normalizeBrowserScreenshot ?? normalizeBrowserScreenshot;
-    browserToolDeps.saveMediaBuffer = overrides?.saveMediaBuffer ?? saveMediaBuffer;
-    browserToolDeps.stageBrowserScreenshotForSharing =
-      overrides?.stageBrowserScreenshotForSharing ?? stageBrowserScreenshotForSharing;
-    browserToolDeps.touchSessionBrowserTab =
-      overrides?.touchSessionBrowserTab ?? touchSessionBrowserTab;
-    browserToolDeps.trackSessionBrowserTab =
-      overrides?.trackSessionBrowserTab ?? trackSessionBrowserTab;
-    browserToolDeps.untrackSessionBrowserTab =
-      overrides?.untrackSessionBrowserTab ?? untrackSessionBrowserTab;
-  },
 };
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
@@ -188,6 +116,8 @@ const SCREENSHOT_SHARE_UNAVAILABLE =
 
 const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "kind",
+  "actions",
+  "stopOnError",
   "targetId",
   "ref",
   "doubleClick",
@@ -257,9 +187,6 @@ function readActRequestParam(params: Record<string, unknown>) {
   return request as Parameters<typeof browserAct>[1];
 }
 
-const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
-const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
-
 type BrowserNodeTarget = {
   nodeId: string;
   label?: string;
@@ -314,7 +241,9 @@ async function resolveBrowserNodeTarget(params: {
 
   const requested = params.requestedNode?.trim() || policy?.node?.trim();
   if (requested) {
-    const nodeId = resolveNodeIdFromList(browserNodes, requested, false);
+    const nodeId = resolveNodeIdFromList(browserNodes, requested, false, {
+      allowCompactDisplayName: true,
+    });
     const node = browserNodes.find((entry) => entry.nodeId === nodeId);
     return { nodeId, label: node?.displayName ?? node?.remoteIp ?? nodeId };
   }
@@ -349,75 +278,6 @@ async function resolveBrowserNodeTarget(params: {
   return null;
 }
 
-async function callBrowserProxy(params: {
-  nodeId: string;
-  method: string;
-  path: string;
-  query?: Record<string, string | number | boolean | undefined>;
-  body?: unknown;
-  timeoutMs?: number;
-  profile?: string;
-}): Promise<BrowserProxySuccess> {
-  const proxyTimeoutMs =
-    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-      ? Math.max(1, Math.floor(params.timeoutMs))
-      : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
-  const gatewayTimeoutMs = proxyTimeoutMs + BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS;
-  const payload = await browserToolDeps.callGatewayTool(
-    "node.invoke",
-    { timeoutMs: gatewayTimeoutMs },
-    {
-      nodeId: params.nodeId,
-      command: "browser.proxy",
-      params: {
-        method: params.method,
-        path: params.path,
-        query: params.query,
-        body: params.body,
-        timeoutMs: proxyTimeoutMs,
-        profile: params.profile,
-        errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
-      },
-      idempotencyKey: crypto.randomUUID(),
-    },
-    { scopes: ["operator.admin"] },
-  );
-  const parsed = unwrapBrowserProxyPayload(payload);
-  const failure = parseBrowserProxyFailure(parsed);
-  if (failure) {
-    const { status, body } = failure.error;
-    throw new BrowserServiceError(body.error, "reason" in body ? body : undefined, status);
-  }
-  if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
-    throw new Error("browser proxy failed");
-  }
-  return parsed;
-}
-
-function unwrapBrowserProxyPayload(
-  payload: { payload?: unknown; payloadJSON?: unknown } | null,
-): BrowserProxyEnvelope | null {
-  if (payload?.payload !== undefined) {
-    return payload.payload as BrowserProxyEnvelope;
-  }
-  if (typeof payload?.payloadJSON !== "string" || !payload.payloadJSON.trim()) {
-    return null;
-  }
-  try {
-    return JSON.parse(payload.payloadJSON) as BrowserProxyEnvelope;
-  } catch {
-    return null;
-  }
-}
-
-async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
-  return await persistBrowserProxyFiles(files);
-}
-
-function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
-  applyBrowserProxyPaths(result, mapping);
-}
-
 function resolveBrowserBaseUrl(params: {
   target?: "sandbox" | "host";
   sandboxBridgeUrl?: string;
@@ -446,6 +306,34 @@ function resolveBrowserBaseUrl(params: {
     );
   }
   return undefined;
+}
+
+/**
+ * Read importable system profiles from the host control server. Discovery must
+ * match where import runs (host-local), so it never uses a node proxy or the
+ * sandbox base URL. Returns [] when host control is unavailable.
+ */
+async function readHostSystemProfiles(params: {
+  allowHostControl?: boolean;
+  sandboxBridgeUrl?: string;
+  timeoutMs?: number;
+}) {
+  if (params.allowHostControl === false) {
+    return [];
+  }
+  let hostBaseUrl: string | undefined;
+  try {
+    hostBaseUrl = resolveBrowserBaseUrl({
+      target: "host",
+      sandboxBridgeUrl: params.sandboxBridgeUrl,
+      allowHostControl: params.allowHostControl,
+    });
+  } catch {
+    return [];
+  }
+  return await browserToolDeps
+    .browserSystemProfiles(hostBaseUrl, { timeoutMs: params.timeoutMs })
+    .catch(() => []);
 }
 
 function shouldPreferHostForProfile(profileName: string | undefined) {
@@ -538,6 +426,18 @@ export function createBrowserTool(opts?: {
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
       }
+
+      // System-profile import reads the local macOS Keychain and Chrome profile,
+      // so it can only run on the host. Pin it before target/node resolution so a
+      // sandbox default or auto-selected browser node never receives the request.
+      if (action === "importprofile") {
+        if (target === "sandbox" || target === "node" || requestedNode) {
+          throw new Error(
+            'system profile import must run on the host; omit target or use target="host".',
+          );
+        }
+        target = "host";
+      }
       // existing-session profiles can attach through the selected host or browser node,
       // but they must never fall back into the sandbox browser.
       const isUserBrowserProfile = shouldPreferHostForProfile(profile);
@@ -577,28 +477,15 @@ export function createBrowserTool(opts?: {
             allowHostControl: opts?.allowHostControl,
           });
 
+      const allowAutomaticHostFallback = Boolean(
+        nodeTarget &&
+        !target &&
+        !requestedNode &&
+        !configuredNode &&
+        opts?.allowHostControl !== false,
+      );
       const proxyRequest = nodeTarget
-        ? async (optsLocal: {
-            method: string;
-            path: string;
-            query?: Record<string, string | number | boolean | undefined>;
-            body?: unknown;
-            timeoutMs?: number;
-            profile?: string;
-          }) => {
-            const proxy = await callBrowserProxy({
-              nodeId: nodeTarget.nodeId,
-              method: optsLocal.method,
-              path: optsLocal.path,
-              query: optsLocal.query,
-              body: optsLocal.body,
-              timeoutMs: optsLocal.timeoutMs,
-              profile: optsLocal.profile,
-            });
-            const mapping = await persistProxyFiles(proxy.files);
-            applyProxyPaths(proxy.result, mapping);
-            return proxy.result;
-          }
+        ? createBrowserNodeProxyRequest({ nodeTarget, allowAutomaticHostFallback })
         : null;
       const toolTimeoutMs =
         requestedTimeoutMs ??
@@ -606,7 +493,7 @@ export function createBrowserTool(opts?: {
           ? DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS
           : undefined);
       const touchTrackedTab = (targetId: string | undefined) => {
-        if (proxyRequest || !targetId) {
+        if (!targetId || (proxyRequest && !proxyRequest.isHostFallbackActive())) {
           return;
         }
         browserToolDeps.touchSessionBrowserTab({
@@ -685,18 +572,45 @@ export function createBrowserTool(opts?: {
           return jsonResult(
             await browserToolDeps.browserStatus(baseUrl, { profile, timeoutMs: toolTimeoutMs }),
           );
-        case "profiles":
+        case "profiles": {
+          // Importable system profiles are host-local (import runs on the host),
+          // so read them from the host regardless of the profiles action target;
+          // never let a node proxy or sandbox describe the wrong Chrome profiles.
+          const systemProfiles = await readHostSystemProfiles({
+            allowHostControl: opts?.allowHostControl,
+            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+            timeoutMs: toolTimeoutMs,
+          });
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "GET",
               path: "/profiles",
               timeoutMs: toolTimeoutMs,
             });
-            return jsonResult(result);
+            return jsonResult({
+              ...(result && typeof result === "object" ? result : { profiles: result }),
+              systemProfiles,
+            });
           }
           return jsonResult({
             profiles: await browserToolDeps.browserProfiles(baseUrl, { timeoutMs: toolTimeoutMs }),
+            systemProfiles,
           });
+        }
+        case "importprofile": {
+          if (proxyRequest) {
+            throw new Error("system profile import must run on the browser host");
+          }
+          const domains = parseSystemProfileDomains(params.domains);
+          return jsonResult(
+            await browserToolDeps.browserImportProfile(baseUrl, {
+              browser: normalizeOptionalString(params.browser) ?? "chrome",
+              systemProfile: normalizeOptionalString(params.systemProfile) ?? "Default",
+              into: normalizeOptionalString(params.into) ?? "imported",
+              domains,
+            }),
+          );
+        }
         case "tabs":
           return await executeTabsAction({
             baseUrl,
@@ -715,6 +629,14 @@ export function createBrowserTool(opts?: {
               body: { url: targetUrl, ...(label ? { label } : {}) },
               timeoutMs: toolTimeoutMs,
             });
+            if (proxyRequest.isHostFallbackActive()) {
+              browserToolDeps.trackSessionBrowserTab({
+                sessionKey: opts?.agentSessionKey,
+                targetId: readStringValue((result as { targetId?: unknown }).targetId),
+                baseUrl,
+                profile,
+              });
+            }
             return jsonResult(result);
           }
           const opened = await browserToolDeps.browserOpenTab(baseUrl, targetUrl, {
@@ -742,6 +664,7 @@ export function createBrowserTool(opts?: {
               body: { targetId },
               timeoutMs: toolTimeoutMs,
             });
+            touchTrackedTab(targetId);
             return jsonResult(result);
           }
           await browserToolDeps.browserFocusTab(baseUrl, targetId, {
@@ -768,6 +691,14 @@ export function createBrowserTool(opts?: {
                   body: { kind: "close" },
                   timeoutMs: toolTimeoutMs,
                 });
+            if (targetId && proxyRequest.isHostFallbackActive()) {
+              browserToolDeps.untrackSessionBrowserTab({
+                sessionKey: opts?.agentSessionKey,
+                targetId,
+                baseUrl,
+                profile,
+              });
+            }
             return jsonResult(result);
           }
           if (targetId) {
@@ -944,6 +875,9 @@ export function createBrowserTool(opts?: {
                 targetId,
               },
             });
+            touchTrackedTab(
+              readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
+            );
             return jsonResult(result);
           }
           const result = await browserToolDeps.browserNavigate(baseUrl, {
@@ -1079,4 +1013,4 @@ export function createBrowserTool(opts?: {
     },
   };
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

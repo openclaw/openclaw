@@ -63,6 +63,11 @@ enum GatewayLaunchAgentManager {
         return loaded
     }
 
+    static func runningGatewayPID() async -> Int32? {
+        guard let service = await self.readDaemonService() else { return nil }
+        return self.runningGatewayPID(from: service)
+    }
+
     static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
         _ = bundlePath
         guard !CommandResolver.connectionModeIsRemote() else {
@@ -90,8 +95,12 @@ enum GatewayLaunchAgentManager {
         return await self.runDaemonCommand(["uninstall"])
     }
 
-    static func kickstart() async {
-        _ = await self.runDaemonCommand(["restart"], timeout: 20)
+    static func kickstart() async -> String? {
+        if self.isLaunchAgentWriteDisabled() {
+            self.logger.info("launchd restart skipped (disable marker set)")
+            return nil
+        }
+        return await self.runDaemonCommand(["restart"], timeout: 20)
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
@@ -101,6 +110,13 @@ enum GatewayLaunchAgentManager {
             generatedEnvironmentFileURL: directory.appendingPathComponent("\(gatewayLaunchdLabel).env"),
             generatedEnvironmentWrapperURL: directory.appendingPathComponent(
                 "\(gatewayLaunchdLabel)-env-wrapper.sh"))
+    }
+
+    /// Empty means no Gateway LaunchAgent. Nil preserves an unreadable
+    /// ownership record so update callers fail closed instead of consuming it.
+    static func launchdProgramArguments() -> [String]? {
+        guard FileManager.default.fileExists(atPath: self.plistURL.path) else { return [] }
+        return self.launchdConfigSnapshot()?.programArguments
     }
 
     static func launchdGatewayLogPath() -> String {
@@ -121,6 +137,10 @@ enum GatewayLaunchAgentManager {
 
 extension GatewayLaunchAgentManager {
     private static func readDaemonLoaded() async -> Bool? {
+        await self.readDaemonService()?["loaded"] as? Bool
+    }
+
+    private static func readDaemonService() async -> [String: Any]? {
         let result = await self.runDaemonCommandResult(
             ["status", "--json", "--no-probe"],
             timeout: 15,
@@ -128,12 +148,24 @@ extension GatewayLaunchAgentManager {
         guard result.success, let payload = result.payload else { return nil }
         guard
             let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-            let service = json["service"] as? [String: Any],
-            let loaded = service["loaded"] as? Bool
+            let service = json["service"] as? [String: Any]
         else {
             return nil
         }
-        return loaded
+        return service
+    }
+
+    private static func runningGatewayPID(from service: [String: Any]) -> Int32? {
+        guard service["loaded"] as? Bool == true,
+              let runtime = service["runtime"] as? [String: Any],
+              runtime["status"] as? String == "running",
+              let pid = runtime["pid"] as? Int,
+              pid > 0,
+              pid <= Int(Int32.max)
+        else {
+            return nil
+        }
+        return Int32(pid)
     }
 
     private struct CommandResult {
@@ -234,6 +266,21 @@ extension GatewayLaunchAgentManager {
 
     static func testingDaemonCommandCallsSnapshot() -> [[String]] {
         self.testingDaemonCommandCalls
+    }
+
+    static func _testRunningGatewayPID(from json: String) -> Int32? {
+        guard let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let service = object["service"] as? [String: Any]
+        else {
+            return nil
+        }
+        return self.runningGatewayPID(from: service)
+    }
+
+    static func _testLaunchdProgramArguments(plistURL: URL) -> [String]? {
+        guard FileManager.default.fileExists(atPath: plistURL.path) else { return [] }
+        return LaunchAgentPlist.snapshot(url: plistURL)?.programArguments
     }
     #endif
 }

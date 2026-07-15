@@ -21,6 +21,7 @@ import {
 } from "../../logging/diagnostic-session-state.js";
 import { diagnosticLogger } from "../../logging/diagnostic.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
   testing,
@@ -28,7 +29,6 @@ import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   clearEmbeddedAgentRunAbortabilityForRunId,
-  clearEmbeddedRunAbandonment,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunAbortableForRunId,
   isEmbeddedAgentRunAbortableForCompaction,
@@ -36,7 +36,6 @@ import {
   isEmbeddedRunAbandoned,
   formatEmbeddedAgentQueueFailureSummary,
   markActiveEmbeddedRunAbandoned,
-  markEmbeddedRunAbandoned,
   queueEmbeddedAgentMessageWithOutcome,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   retainEmbeddedAgentRunAbortabilityForRunId,
@@ -777,9 +776,7 @@ describe("embedded-agent runner run registry", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps reply-run fallback reachable for transcript-commit wait requests", async () => {
-    // Some callers queue through the broader reply-run operation when the
-    // embedded handle cannot prove transcript commit support directly.
+  it("rejects transcript-commit waits before reply-run fallback without an active handle", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
@@ -795,7 +792,7 @@ describe("embedded-agent runner run registry", () => {
     operation.setPhase("running");
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: "visible group prompt", sender: { id: "user-42" } },
-      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+      target: createTestUserTurnTranscriptTarget(),
     });
 
     const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
@@ -804,22 +801,13 @@ describe("embedded-agent runner run registry", () => {
       { waitForTranscriptCommit: true, userTurnTranscriptRecorder: recorder },
     );
 
-    expect(outcome.queued).toBe(true);
-    if (!outcome.queued) {
-      throw new Error("expected reply-run fallback to queue");
-    }
-    expect(outcome).toMatchObject({
-      queued: true,
+    expect(outcome).toEqual({
+      queued: false,
       sessionId: "session-reply-run",
-      target: "reply_run",
+      reason: "transcript_commit_wait_unsupported",
       gatewayHealth: "live",
     });
-    expect(outcome.enqueuedAtMs).toEqual(expect.any(Number));
-    expect(outcome.deliveredAtMs).toBeUndefined();
-    expect(queueMessage).toHaveBeenCalledWith("completion from child", {
-      waitForTranscriptCommit: true,
-      userTurnTranscriptRecorder: recorder,
-    });
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
   it("force-clears an aborted run that does not drain", async () => {
@@ -972,29 +960,37 @@ describe("embedded-agent runner run registry", () => {
     const sessionFile = "/tmp/openclaw-abandoned-session.jsonl";
     const handle = createRunHandle();
 
-    markEmbeddedRunAbandoned({
-      sessionId: "session-timeout",
-      sessionKey: "agent:main:main",
-      sessionFile,
-      reason: "timeout",
-    });
+    setActiveEmbeddedRun("session-timeout", handle, "agent:main:main", sessionFile);
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-timeout",
+        handle,
+        sessionKey: "agent:main:main",
+        sessionFile,
+        reason: "timeout",
+      }),
+    ).toBe(true);
 
     expect(isEmbeddedRunAbandoned({ sessionId: "session-timeout" })).toBe(true);
     expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(true);
     expect(isEmbeddedRunAbandoned({ sessionFile })).toBe(true);
 
-    setActiveEmbeddedRun("session-next", handle, "agent:main:main", sessionFile);
+    const nextHandle = createRunHandle();
+    setActiveEmbeddedRun("session-next", nextHandle, "agent:main:main", sessionFile);
 
     expect(isEmbeddedRunAbandoned({ sessionId: "session-timeout" })).toBe(false);
     expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
     expect(isEmbeddedRunAbandoned({ sessionFile })).toBe(false);
 
-    markEmbeddedRunAbandoned({
-      sessionId: "session-next",
-      sessionKey: "agent:main:main",
-      reason: "timeout",
-    });
-    clearEmbeddedRunAbandonment({ sessionId: "session-next" });
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-next",
+        handle: nextHandle,
+        sessionKey: "agent:main:main",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+    setActiveEmbeddedRun("session-third", createRunHandle(), "agent:main:main");
 
     expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
   });

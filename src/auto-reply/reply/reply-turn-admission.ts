@@ -3,6 +3,10 @@ import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
+  getDiagnosticSessionActivitySnapshot,
+  resolveRunStaleThresholdMs,
+} from "../../logging/diagnostic-run-activity.js";
+import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -12,7 +16,6 @@ import {
   isReplyRunEvidenceStale,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
-  resolveReplyRunStaleThresholdMs,
   replyRunRegistry,
   ReplyRunAlreadyActiveError,
   ReplyRunFollowupAdmissionBlockedError,
@@ -23,10 +26,10 @@ import {
 } from "./reply-run-registry.js";
 
 /** Kinds of turns that compete for one reply run slot per session. */
-export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup" | "control_abort";
+type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 
 /** Admission result for a reply turn attempting to own the session run slot. */
-export type ReplyTurnAdmission =
+type ReplyTurnAdmission =
   | { status: "owned"; operation: ReplyOperation; sessionEntry?: SessionEntry }
   | {
       status: "skipped";
@@ -78,14 +81,17 @@ function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): numb
     return REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS;
   }
   const ageMs = Date.now() - operation.lastActivityAtMs;
+  const activity = getDiagnosticSessionActivitySnapshot({
+    sessionId: operation.sessionId,
+    sessionKey: operation.key,
+  });
   const remainingMs = operation.result
     ? REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - ageMs
-    : resolveReplyRunStaleThresholdMs(operation) - ageMs;
+    : resolveRunStaleThresholdMs(activity) - ageMs;
   return Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, Math.max(1, remainingMs));
 }
 
-/** Waits for or claims the per-session reply run slot. */
-export async function admitReplyTurn(params: {
+type ReplyTurnAdmissionParams = {
   sessionKey: string;
   sessionId: string;
   expectedSessionId?: string;
@@ -94,26 +100,53 @@ export async function admitReplyTurn(params: {
   kind: ReplyTurnKind;
   resetTriggered: boolean;
   routeThreadId?: string | number;
+  /**
+   * Move this already-held operation into sessionKey's run slot instead of
+   * creating a new one. Used when a native command turn (admitted under its
+   * slash source key) continues into a full agent turn on the target session.
+   */
+  adoptOperation?: ReplyOperation;
   upstreamAbortSignal?: AbortSignal;
   waitTimeoutMs?: number;
   waitForActive?: boolean;
   retainLifecycleAdmissionOnActive?: boolean;
   onLifecycleInterrupt?: () => void;
-  onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
-}): Promise<ReplyTurnAdmission> {
+  /** Reports one interval while blocked behind an older lane owner or its delivery barrier. */
+  onReplyAdmissionWaitChange?: (waiting: boolean) => void;
+};
+
+type WaitForReplyAdmission = <T>(wait: () => Promise<T>) => Promise<T>;
+
+/** Waits for or claims the per-session reply run slot. */
+export async function admitReplyTurn(
+  params: ReplyTurnAdmissionParams,
+): Promise<ReplyTurnAdmission> {
+  let admissionWaitReported = false;
+  const waitForAdmission = async <T>(wait: () => Promise<T>): Promise<T> => {
+    if (!admissionWaitReported) {
+      admissionWaitReported = true;
+      params.onReplyAdmissionWaitChange?.(true);
+    }
+    return await wait();
+  };
+  try {
+    return await admitReplyTurnWithWaitSignal(params, waitForAdmission);
+  } finally {
+    if (admissionWaitReported) {
+      params.onReplyAdmissionWaitChange?.(false);
+    }
+  }
+}
+
+async function admitReplyTurnWithWaitSignal(
+  params: ReplyTurnAdmissionParams,
+  waitForAdmission: WaitForReplyAdmission,
+): Promise<ReplyTurnAdmission> {
   let sessionId = params.sessionId;
   let expectedSessionId = params.expectedSessionId;
   const waitTimeoutMs =
     params.waitTimeoutMs ??
     (params.kind === "queued_followup" ? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS : undefined);
-  const waitForFollowupAdmission = async <T>(wait: () => Promise<T>): Promise<T> => {
-    params.onFollowupAdmissionWaitChange?.(true);
-    try {
-      return await wait();
-    } finally {
-      params.onFollowupAdmissionWaitChange?.(false);
-    }
-  };
   while (true) {
     if (isAbortSignalAborted(params.upstreamAbortSignal)) {
       return { status: "skipped", reason: "aborted" };
@@ -204,15 +237,23 @@ export async function admitReplyTurn(params: {
         });
       }
       try {
-        operation = createReplyOperation({
-          sessionKey: params.sessionKey,
-          sessionId,
-          resetTriggered: params.resetTriggered,
-          routeThreadId: params.routeThreadId,
-          upstreamAbortSignal: params.upstreamAbortSignal,
-          respectFollowupAdmissionBarrier:
-            params.kind === "queued_followup" || params.kind === "heartbeat",
-        });
+        if (params.adoptOperation) {
+          // The dispatch closures own this object's abort/delivery lifecycle,
+          // so the reservation must move rather than be recreated. Throws
+          // ReplyRunAlreadyActiveError into the shared busy handling below.
+          params.adoptOperation.updateSessionKey(params.sessionKey);
+          operation = params.adoptOperation;
+        } else {
+          operation = createReplyOperation({
+            sessionKey: params.sessionKey,
+            sessionId,
+            resetTriggered: params.resetTriggered,
+            routeThreadId: params.routeThreadId,
+            upstreamAbortSignal: params.upstreamAbortSignal,
+            respectFollowupAdmissionBarrier:
+              params.kind === "queued_followup" || params.kind === "heartbeat",
+          });
+        }
       } catch (error) {
         if (
           error instanceof ReplyRunAlreadyActiveError &&
@@ -233,6 +274,9 @@ export async function admitReplyTurn(params: {
         // The lifecycle fence follows hooks, media work, agent execution, and
         // final delivery. Reset/delete interrupts the operation and waits until
         // its actual owner clears it before mutating the persisted session.
+        // Adoption rebinds the map to this target lease; the source-key lease
+        // stays registered via its own after-clear callback (release is
+        // idempotent), so both identities free on operation clear.
         retainReplyOperationUntilComplete(operation);
         lifecycleAdmissionByOperation.set(operation, admission);
         runAfterReplyOperationClear(operation, () => {
@@ -256,7 +300,7 @@ export async function admitReplyTurn(params: {
         if (params.kind === "heartbeat") {
           return { status: "skipped", reason: "active-run" };
         }
-        const followupAdmission = await waitForFollowupAdmission(() =>
+        const followupAdmission = await waitForAdmission(() =>
           waitForReplyRunFollowupAdmission(
             params.sessionKey,
             waitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
@@ -282,18 +326,20 @@ export async function admitReplyTurn(params: {
       if (params.kind === "visible" && expireVisibleStaleOperation(activeOperation)) {
         continue;
       }
-      if (params.kind === "heartbeat" || params.kind === "control_abort") {
+      if (params.kind === "heartbeat") {
         return { status: "skipped", reason: "active-run", activeOperation };
       }
-      // Visible and queued turns may wait for active runs; control turns must stay immediate.
+      // Visible and queued turns may wait for active runs when waitForActive is set.
       if (params.waitForActive === false) {
         return { status: "skipped", reason: "active-run", activeOperation };
       }
       const activeWaitTimeoutMs =
         params.kind === "visible" ? resolveVisibleActiveWaitMs(activeOperation) : waitTimeoutMs;
-      const ended = await replyRunRegistry.waitForIdle(params.sessionKey, activeWaitTimeoutMs, {
-        signal: params.upstreamAbortSignal,
-      });
+      const ended = await waitForAdmission(() =>
+        replyRunRegistry.waitForIdle(params.sessionKey, activeWaitTimeoutMs, {
+          signal: params.upstreamAbortSignal,
+        }),
+      );
       if (!ended) {
         if (params.kind === "visible" && !isAbortSignalAborted(params.upstreamAbortSignal)) {
           // Visible turns block on active work like before, but in bounded wait

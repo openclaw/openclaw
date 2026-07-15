@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -10,13 +11,33 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import {
+  repairCanonicalSqliteUniqueIndexes,
+  type CanonicalSqliteUniqueIndex,
+} from "../infra/sqlite-index-schema.js";
+import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import {
+  assertSqliteSchemaContains,
+  type SqliteSchemaCompatibility,
+} from "../infra/sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import {
+  createNewerSqliteSchemaVersionError,
+  readSqliteUserVersion,
+} from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
+  configureSqlitePreSchemaPragmas,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  ensureColumn,
+  tableExists,
+  tableHasColumn,
+  tablePrimaryKeyColumns,
+} from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   resolveOpenClawStateSqliteDir,
@@ -31,11 +52,51 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js"
  * tables, private file permissions, cached handles, and audit rows for
  * migrations/backups that operate on local state.
  */
-export const OPENCLAW_STATE_SCHEMA_VERSION = 1;
-/** Shared timeout used by state and agent SQLite handles before surfacing busy errors. */
-export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 2;
+/** Maximum time one synchronous SQLite call may wait for a lock. */
+export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
+const OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES = [
+  {
+    name: "idx_operator_approvals_resolution_ref",
+    definition: "ON operator_approvals(resolution_ref)",
+  },
+  {
+    name: "idx_worker_environments_provider_lease",
+    definition: `
+      ON worker_environments(provider_id, lease_id)
+      WHERE lease_id IS NOT NULL
+    `,
+  },
+] as const satisfies readonly CanonicalSqliteUniqueIndex[];
+const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
+  allowedColumnDefinitions: {
+    "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
+    "commitments.confidence": ["confidence REAL NOT NULL DEFAULT 0"],
+    "commitments.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
+    "commitments.dedupe_key": ["dedupe_key TEXT NOT NULL DEFAULT ''"],
+    "commitments.due_timezone": ["due_timezone TEXT NOT NULL DEFAULT 'UTC'"],
+    "commitments.kind": ["kind TEXT NOT NULL DEFAULT 'followup'"],
+    "commitments.reason": ["reason TEXT NOT NULL DEFAULT ''"],
+    "commitments.sensitivity": ["sensitivity TEXT NOT NULL DEFAULT 'normal'"],
+    "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
+    "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
+    "cron_jobs.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
+    "cron_jobs.enabled": ["enabled INTEGER NOT NULL DEFAULT 1"],
+    "cron_jobs.name": ["name TEXT NOT NULL DEFAULT ''"],
+    "cron_jobs.payload_kind": ["payload_kind TEXT NOT NULL DEFAULT 'message'"],
+    "cron_jobs.schedule_kind": ["schedule_kind TEXT NOT NULL DEFAULT 'manual'"],
+    "cron_jobs.session_target": ["session_target TEXT NOT NULL DEFAULT 'main'"],
+    "cron_jobs.wake_mode": ["wake_mode TEXT NOT NULL DEFAULT 'auto'"],
+    "current_conversation_bindings.conversation_kind": [
+      "conversation_kind TEXT NOT NULL DEFAULT 'channel'",
+    ],
+    "current_conversation_bindings.target_agent_id": [
+      "target_agent_id TEXT NOT NULL DEFAULT 'main'",
+    ],
+  },
+} satisfies SqliteSchemaCompatibility;
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
@@ -50,10 +111,15 @@ export type OpenClawStateDatabaseOptions = {
   path?: string;
 };
 
-export type OpenClawStateDatabaseSchemaMigration = {
-  kind: "agent-databases-composite-primary-key";
-  path: string;
-};
+export type OpenClawStateDatabaseSchemaMigration =
+  | {
+      kind: "agent-databases-composite-primary-key";
+      path: string;
+    }
+  | {
+      kind: "audit-events-v2";
+      path: string;
+    };
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
 
@@ -62,10 +128,57 @@ type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_m
 function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw new Error(
-      `OpenClaw state database ${pathname} uses newer schema version ${userVersion}; this OpenClaw build supports ${OPENCLAW_STATE_SCHEMA_VERSION}.`,
+    throw createNewerSqliteSchemaVersionError(
+      "OpenClaw state database",
+      pathname,
+      userVersion,
+      OPENCLAW_STATE_SCHEMA_VERSION,
     );
   }
+}
+
+/** Require the canonical shared-state owner and schema before offline file maintenance. */
+export function assertOpenClawStateDatabaseForMaintenance(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  const userVersion = readSqliteUserVersion(database);
+  if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
+    throw createNewerSqliteSchemaVersionError(
+      "OpenClaw state database",
+      options.pathname,
+      userVersion,
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
+  }
+  if (userVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    throw new Error(
+      `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
+    );
+  }
+
+  const metadata = database
+    .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
+    .get() as { role?: unknown; schema_version?: unknown } | undefined;
+  if (metadata?.role !== "global") {
+    const role = typeof metadata?.role === "string" ? metadata.role : "missing";
+    throw new Error(
+      `OpenClaw state database ${options.pathname} has schema role ${role}; expected global.`,
+    );
+  }
+  if (metadata.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    const schemaVersion =
+      typeof metadata.schema_version === "number" ? metadata.schema_version : "invalid";
+    throw new Error(
+      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${OPENCLAW_STATE_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
+    );
+  }
+  assertSqliteSchemaContains(
+    database,
+    options.pathname,
+    OPENCLAW_STATE_SCHEMA_SQL,
+    OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+  );
 }
 
 const stateDbLog = createSubsystemLogger("state/db");
@@ -107,37 +220,52 @@ export function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.Pro
   }
 }
 
-function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: unknown }>;
-  return rows.some((row) => row.name === columnName);
-}
-
-function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
-    name?: unknown;
-    pk?: unknown;
-  }>;
-  return rows
-    .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
-    .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))
-    .map((row) => row.name as string);
-}
-
-function tableExists(db: DatabaseSync, tableName: string): boolean {
-  const row = db
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { ok?: unknown } | undefined;
-  return row?.ok === 1;
-}
-
-function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): boolean {
-  const columnName = columnSql.trim().split(/\s+/, 1)[0];
-  if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
-    return false;
+function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
+  if (!tableExists(db, "operator_approvals")) {
+    return;
   }
-  // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
-  return true;
+  runSqliteImmediateTransactionSync(db, () => {
+    ensureColumn(db, "operator_approvals", "resolution_ref TEXT");
+    const rows = db
+      .prepare("SELECT approval_id, kind, resolution_ref FROM operator_approvals")
+      .all() as Array<{
+      approval_id?: unknown;
+      kind?: unknown;
+      resolution_ref?: unknown;
+    }>;
+    const update = db.prepare(
+      "UPDATE operator_approvals SET resolution_ref = ? WHERE approval_id = ?",
+    );
+    for (const row of rows) {
+      if (typeof row.approval_id !== "string" || (row.kind !== "exec" && row.kind !== "plugin")) {
+        throw new Error("operator approval row cannot be assigned a transport reference");
+      }
+      const resolutionRef = buildApprovalResolutionRef({
+        approvalId: row.approval_id,
+        approvalKind: row.kind,
+      });
+      if (row.resolution_ref !== resolutionRef) {
+        update.run(resolutionRef, row.approval_id);
+      }
+    }
+    const namespaceConflict = db
+      .prepare(
+        `SELECT canonical.approval_id
+         FROM operator_approvals AS canonical
+         JOIN operator_approvals AS referenced
+           ON canonical.approval_id = referenced.resolution_ref
+         WHERE canonical.approval_id <> referenced.approval_id
+         LIMIT 1`,
+      )
+      .get();
+    if (namespaceConflict) {
+      throw new Error("operator approval ids conflict with durable transport references");
+    }
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_approvals_resolution_ref
+        ON operator_approvals(resolution_ref);
+    `);
+  });
 }
 
 function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
@@ -189,6 +317,19 @@ function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
           )
         )
       );
+  `);
+}
+
+function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
+  if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "delivery_status")) {
+    return;
+  }
+  // Successful sidecar imports archive their source, so database open must
+  // also canonicalize rows already copied by released migrations.
+  db.exec(`
+    UPDATE task_runs
+    SET delivery_status = 'not_applicable'
+    WHERE delivery_status = 'not-requested';
   `);
 }
 
@@ -245,13 +386,376 @@ function repairAgentDatabasesCompositePrimaryKey(db: DatabaseSync): boolean {
   return true;
 }
 
-function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
-  if (hasCanonicalAgentDatabasesPrimaryKey(db)) {
+const AUDIT_EVENT_STATE_SCHEMA_VERSION = 2;
+
+const AUDIT_EVENT_LEGACY_COLUMNS = [
+  "sequence",
+  "event_id",
+  "source_id",
+  "source_sequence",
+  "occurred_at",
+  "kind",
+  "action",
+  "status",
+  "error_code",
+  "actor_type",
+  "actor_id",
+  "agent_id",
+  "session_key",
+  "session_id",
+  "run_id",
+  "tool_call_id",
+  "tool_name",
+] as const;
+
+const AUDIT_EVENT_V2_COLUMNS = [
+  "sequence",
+  "event_id",
+  "source_id",
+  "schema_version",
+  "source_sequence",
+  "occurred_at",
+  "kind",
+  "action",
+  "status",
+  "error_code",
+  "actor_type",
+  "actor_id",
+  "agent_id",
+  "session_key",
+  "session_id",
+  "run_id",
+  "tool_call_id",
+  "tool_name",
+  "direction",
+  "channel",
+  "conversation_kind",
+  "message_outcome",
+  "reason_code",
+  "delivery_kind",
+  "failure_stage",
+  "duration_ms",
+  "result_count",
+  "account_ref",
+  "conversation_ref",
+  "message_ref",
+  "target_ref",
+] as const;
+
+type TableColumnInfo = {
+  name?: unknown;
+  notnull?: unknown;
+  pk?: unknown;
+};
+
+function tableColumnInfo(db: DatabaseSync, tableName: string): TableColumnInfo[] {
+  return db.prepare(`PRAGMA table_info(${tableName})`).all() as TableColumnInfo[];
+}
+
+function tableHasExactColumns(
+  db: DatabaseSync,
+  tableName: string,
+  expected: readonly string[],
+): boolean {
+  const names = tableColumnInfo(db, tableName).map((column) => column.name);
+  return names.length === expected.length && names.every((name, index) => name === expected[index]);
+}
+
+function tableHasRequiredColumns(
+  db: DatabaseSync,
+  tableName: string,
+  required: readonly string[],
+): boolean {
+  const columns = new Map(tableColumnInfo(db, tableName).map((column) => [column.name, column]));
+  return required.every((name) => Number(columns.get(name)?.notnull ?? 0) === 1);
+}
+
+function tableSql(db: DatabaseSync, tableName: string): string | undefined {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { sql?: unknown } | undefined;
+  return typeof row?.sql === "string" ? row.sql : undefined;
+}
+
+function tableHasUniqueColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
+  const indexes = db.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{
+    name?: unknown;
+    unique?: unknown;
+  }>;
+  return indexes.some((index) => {
+    if (Number(index.unique ?? 0) !== 1 || typeof index.name !== "string") {
+      return false;
+    }
+    const escaped = index.name.replaceAll("'", "''");
+    const columns = db.prepare(`PRAGMA index_info('${escaped}')`).all() as Array<{
+      name?: unknown;
+    }>;
+    return columns.length === 1 && columns[0]?.name === columnName;
+  });
+}
+
+function hasCanonicalAuditEventTable(
+  db: DatabaseSync,
+  expectedColumns: readonly string[],
+  requiredColumns: readonly string[],
+): boolean {
+  const sql = tableSql(db, "audit_events")?.toLowerCase();
+  return (
+    tableHasExactColumns(db, "audit_events", expectedColumns) &&
+    tablePrimaryKeyColumns(db, "audit_events").join(",") === "sequence" &&
+    tableHasRequiredColumns(db, "audit_events", requiredColumns) &&
+    typeof sql === "string" &&
+    /\bsequence\s+integer\s+primary\s+key\s+autoincrement\b/.test(sql) &&
+    tableHasUniqueColumn(db, "audit_events", "event_id") &&
+    tableHasUniqueColumn(db, "audit_events", "source_id")
+  );
+}
+
+function hasCanonicalAuditIdentityKeyTable(db: DatabaseSync): boolean {
+  if (!tableExists(db, "audit_identity_keys")) {
+    return false;
+  }
+  const sql = tableSql(db, "audit_identity_keys")?.toLowerCase();
+  return (
+    tableHasExactColumns(db, "audit_identity_keys", ["id", "key_id", "key", "created_at"]) &&
+    tablePrimaryKeyColumns(db, "audit_identity_keys").join(",") === "id" &&
+    tableHasRequiredColumns(db, "audit_identity_keys", ["id", "key_id", "key", "created_at"]) &&
+    typeof sql === "string" &&
+    /\bcheck\s*\(\s*id\s*=\s*1\s*\)/.test(sql)
+  );
+}
+
+function hasCanonicalAuditEventsSchema(db: DatabaseSync): boolean {
+  if (!tableExists(db, "audit_events")) {
+    return (
+      readSqliteUserVersion(db) < AUDIT_EVENT_STATE_SCHEMA_VERSION &&
+      !tableExists(db, "audit_identity_keys")
+    );
+  }
+  return (
+    hasCanonicalAuditEventTable(db, AUDIT_EVENT_V2_COLUMNS, [
+      "event_id",
+      "source_id",
+      "schema_version",
+      "source_sequence",
+      "occurred_at",
+      "kind",
+      "action",
+      "status",
+      "actor_type",
+      "actor_id",
+    ]) && hasCanonicalAuditIdentityKeyTable(db)
+  );
+}
+
+function canRepairLegacyAuditEventsSchema(db: DatabaseSync): boolean {
+  // Our own transactional repair cannot leave audit_events_migration_new
+  // behind, so an existing one is foreign data; fail closed rather than let
+  // repair silently drop it.
+  if (
+    !tableExists(db, "audit_events") ||
+    tableExists(db, "audit_events_migration_new") ||
+    tableHasColumn(db, "audit_events", "schema_version")
+  ) {
+    return false;
+  }
+  const identityTableIsSafe =
+    !tableExists(db, "audit_identity_keys") || hasCanonicalAuditIdentityKeyTable(db);
+  return (
+    identityTableIsSafe &&
+    hasCanonicalAuditEventTable(db, AUDIT_EVENT_LEGACY_COLUMNS, [
+      "event_id",
+      "source_id",
+      "source_sequence",
+      "occurred_at",
+      "kind",
+      "action",
+      "status",
+      "actor_type",
+      "actor_id",
+      "agent_id",
+      "run_id",
+    ])
+  );
+}
+
+function readAuditEventSequenceHighWater(db: DatabaseSync): number | undefined {
+  if (!tableExists(db, "sqlite_sequence")) {
+    return undefined;
+  }
+  const row = db
+    .prepare("SELECT CAST(seq AS TEXT) AS seq FROM sqlite_sequence WHERE name = 'audit_events'")
+    .get() as { seq?: unknown } | undefined;
+  if (row === undefined) {
+    return undefined;
+  }
+  if (typeof row.seq !== "string" || !/^\d+$/.test(row.seq)) {
+    throw new Error("audit event sequence high-water mark is invalid");
+  }
+  const sequence = BigInt(row.seq);
+  if (sequence > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error("audit event sequence high-water mark exceeds the supported integer range");
+  }
+  return Number(sequence);
+}
+
+function restoreAuditEventSequenceHighWater(db: DatabaseSync, sequence: number | undefined): void {
+  if (sequence === undefined) {
     return;
   }
-  throw new Error(
-    `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
-  );
+  db.prepare("DELETE FROM sqlite_sequence WHERE name = 'audit_events'").run();
+  db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('audit_events', ?)").run(sequence);
+}
+
+function repairAuditEventsSchema(db: DatabaseSync): boolean {
+  if (hasCanonicalAuditEventsSchema(db) || !canRepairLegacyAuditEventsSchema(db)) {
+    return false;
+  }
+  const sequenceHighWater = readAuditEventSequenceHighWater(db);
+  // This is the only shipped legacy shape. The surrounding doctor transaction
+  // rolls back the table swap and sequence restore together on any bad row.
+  // canRepairLegacyAuditEventsSchema refuses foreign audit_events_migration_new
+  // tables, so this CREATE never clobbers existing data.
+  db.exec(`
+    CREATE TABLE audit_events_migration_new (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id TEXT NOT NULL UNIQUE,
+      source_id TEXT NOT NULL UNIQUE,
+      schema_version INTEGER NOT NULL DEFAULT 1,
+      source_sequence INTEGER NOT NULL,
+      occurred_at INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      action TEXT NOT NULL,
+      status TEXT NOT NULL,
+      error_code TEXT,
+      actor_type TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      agent_id TEXT,
+      session_key TEXT,
+      session_id TEXT,
+      run_id TEXT,
+      tool_call_id TEXT,
+      tool_name TEXT,
+      direction TEXT,
+      channel TEXT,
+      conversation_kind TEXT,
+      message_outcome TEXT,
+      reason_code TEXT,
+      delivery_kind TEXT,
+      failure_stage TEXT,
+      duration_ms INTEGER,
+      result_count INTEGER,
+      account_ref TEXT,
+      conversation_ref TEXT,
+      message_ref TEXT,
+      target_ref TEXT
+    );
+    INSERT INTO audit_events_migration_new (
+      sequence,
+      event_id,
+      source_id,
+      schema_version,
+      source_sequence,
+      occurred_at,
+      kind,
+      action,
+      status,
+      error_code,
+      actor_type,
+      actor_id,
+      agent_id,
+      session_key,
+      session_id,
+      run_id,
+      tool_call_id,
+      tool_name
+    )
+    SELECT
+      sequence,
+      event_id,
+      source_id,
+      1,
+      source_sequence,
+      occurred_at,
+      kind,
+      action,
+      status,
+      error_code,
+      actor_type,
+      actor_id,
+      agent_id,
+      session_key,
+      session_id,
+      run_id,
+      tool_call_id,
+      tool_name
+    FROM audit_events;
+    DROP TABLE audit_events;
+    ALTER TABLE audit_events_migration_new RENAME TO audit_events;
+    CREATE INDEX idx_audit_events_time
+      ON audit_events(occurred_at DESC, sequence DESC);
+    CREATE INDEX idx_audit_events_agent_sequence
+      ON audit_events(agent_id, sequence DESC);
+    CREATE INDEX idx_audit_events_session_sequence
+      ON audit_events(session_key, sequence DESC);
+    CREATE INDEX idx_audit_events_run_sequence
+      ON audit_events(run_id, sequence DESC);
+    CREATE INDEX idx_audit_events_kind_sequence
+      ON audit_events(kind, sequence DESC);
+    CREATE INDEX idx_audit_events_status_sequence
+      ON audit_events(status, sequence DESC);
+    CREATE INDEX idx_audit_events_channel_sequence
+      ON audit_events(channel, sequence DESC);
+    CREATE INDEX idx_audit_events_direction_sequence
+      ON audit_events(direction, sequence DESC);
+    CREATE TABLE IF NOT EXISTS audit_identity_keys (
+      id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+      key_id TEXT NOT NULL,
+      key BLOB NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `);
+  // AUTOINCREMENT is part of the stable cursor contract. Rebuilding an empty
+  // or sparsely retained table must not reuse a sequence already handed out.
+  restoreAuditEventSequenceHighWater(db, sequenceHighWater);
+  return true;
+}
+
+function markCurrentStateSchemaVersion(db: DatabaseSync): void {
+  // Pre-v2 databases can legitimately predate the audit table. Leave their
+  // version untouched so normal open can create the complete v2 schema first.
+  if (!tableExists(db, "audit_events")) {
+    return;
+  }
+  db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
+  if (
+    tableExists(db, "schema_meta") &&
+    ["meta_key", "schema_version", "updated_at"].every((column) =>
+      tableHasColumn(db, "schema_meta", column),
+    )
+  ) {
+    db.prepare(
+      "UPDATE schema_meta SET schema_version = ?, updated_at = ? WHERE meta_key = 'primary'",
+    ).run(OPENCLAW_STATE_SCHEMA_VERSION, Date.now());
+  }
+}
+
+function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
+  if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
+    throw new Error(
+      `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
+    );
+  }
+  if (!hasCanonicalAuditEventsSchema(db)) {
+    if (canRepairLegacyAuditEventsSchema(db)) {
+      throw new Error(
+        `OpenClaw state database ${pathname} has a legacy audit event schema; run openclaw doctor --fix to migrate it.`,
+      );
+    }
+    throw new Error(
+      `OpenClaw state database ${pathname} has a noncanonical audit event schema that cannot be repaired automatically; restore the canonical audit_events shape before retrying.`,
+    );
+  }
 }
 
 export function detectOpenClawStateDatabaseSchemaMigrations(
@@ -264,9 +768,14 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
   try {
-    return hasCanonicalAgentDatabasesPrimaryKey(db)
-      ? []
-      : [{ kind: "agent-databases-composite-primary-key", path: pathname }];
+    const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
+    if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
+      migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
+    }
+    if (!hasCanonicalAuditEventsSchema(db)) {
+      migrations.push({ kind: "audit-events-v2", path: pathname });
+    }
+    return migrations;
   } finally {
     db.close();
   }
@@ -284,18 +793,32 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
   ensureOpenClawStatePermissions(pathname, env);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   try {
+    assertStateDatabaseIntegrityBeforeMutation(db, pathname);
     assertSupportedSchemaVersion(db, pathname);
-    const repaired = runSqliteImmediateTransactionSync(db, () =>
-      repairAgentDatabasesCompositePrimaryKey(db),
-    );
-    return repaired
-      ? {
-          changes: [`Migrated shared state agent database registry primary key → agent_id,path`],
-          warnings: [],
+    const changes = runSqliteImmediateTransactionSync(
+      db,
+      () => {
+        const applied: string[] = [];
+        if (repairAgentDatabasesCompositePrimaryKey(db)) {
+          applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
         }
-      : { changes: [], warnings: [] };
+        if (repairAuditEventsSchema(db)) {
+          applied.push(
+            `Migrated shared state audit event ledger → versioned message lifecycle schema`,
+          );
+        }
+        assertCanonicalStateSchemaShape(db, pathname);
+        markCurrentStateSchemaVersion(db);
+        return applied;
+      },
+      {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: pathname,
+        operationLabel: "state.schema.repair",
+      },
+    );
+    return { changes, warnings: [] };
   } catch (err) {
     return {
       changes: [],
@@ -308,35 +831,45 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
 }
 
 function ensureStartupMigrationCheckpointSchema(db: DatabaseSync, pathname: string): void {
-  assertSupportedSchemaVersion(db, pathname);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS schema_meta (
-      meta_key TEXT NOT NULL PRIMARY KEY,
-      role TEXT NOT NULL,
-      schema_version INTEGER NOT NULL,
-      agent_id TEXT,
-      app_version TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS state_leases (
-      scope TEXT NOT NULL,
-      lease_key TEXT NOT NULL,
-      owner TEXT NOT NULL,
-      expires_at INTEGER,
-      heartbeat_at INTEGER,
-      payload_json TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (scope, lease_key)
-    );
-    CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
-      ON state_leases(expires_at, scope, lease_key)
-      WHERE expires_at IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS idx_state_leases_owner
-      ON state_leases(owner, updated_at DESC);
-  `);
-  ensureColumn(db, "schema_meta", "app_version TEXT");
+  runSqliteImmediateTransactionSync(
+    db,
+    () => {
+      assertSupportedSchemaVersion(db, pathname);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS schema_meta (
+          meta_key TEXT NOT NULL PRIMARY KEY,
+          role TEXT NOT NULL,
+          schema_version INTEGER NOT NULL,
+          agent_id TEXT,
+          app_version TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS state_leases (
+          scope TEXT NOT NULL,
+          lease_key TEXT NOT NULL,
+          owner TEXT NOT NULL,
+          expires_at INTEGER,
+          heartbeat_at INTEGER,
+          payload_json TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (scope, lease_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
+          ON state_leases(expires_at, scope, lease_key)
+          WHERE expires_at IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_state_leases_owner
+          ON state_leases(owner, updated_at DESC);
+      `);
+      ensureColumn(db, "schema_meta", "app_version TEXT");
+    },
+    {
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      databaseLabel: pathname,
+      operationLabel: "state.schema.ensure-startup-checkpoint",
+    },
+  );
 }
 
 export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
@@ -348,14 +881,47 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   ensureOpenClawStatePermissions(pathname, env);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   try {
+    assertStateDatabaseIntegrityBeforeMutation(db, pathname);
     ensureStartupMigrationCheckpointSchema(db, pathname);
     return callback(db);
   } finally {
     db.close();
     ensureOpenClawStatePermissions(pathname, env);
   }
+}
+
+// One-time seed for the ledger footprint aggregates (#100622): estimate rows
+// written before the estimated_bytes columns existed, then roll them up per
+// session. Zero is a safe "not seeded" sentinel because every real row costs
+// at least its 32-byte overhead.
+function backfillAcpReplayEstimatedBytes(db: DatabaseSync): void {
+  if (
+    !tableExists(db, "acp_replay_events") ||
+    !tableHasColumn(db, "acp_replay_events", "estimated_bytes")
+  ) {
+    return;
+  }
+  const pendingEvent = db
+    .prepare("SELECT 1 FROM acp_replay_events WHERE estimated_bytes = 0 LIMIT 1")
+    .get();
+  const pendingSession = db
+    .prepare("SELECT 1 FROM acp_replay_sessions WHERE estimated_bytes = 0 LIMIT 1")
+    .get();
+  if (!pendingEvent && !pendingSession) {
+    return;
+  }
+  db.exec(`
+    UPDATE acp_replay_events
+       SET estimated_bytes = length(session_id) + length(session_key) + length(update_json)
+             + COALESCE(length(run_id), 0) + 32
+     WHERE estimated_bytes = 0;
+    UPDATE acp_replay_sessions
+       SET estimated_bytes = length(session_id) + length(session_key) + length(cwd) + 32
+             + COALESCE((SELECT SUM(e.estimated_bytes) FROM acp_replay_events e
+                          WHERE e.session_id = acp_replay_sessions.session_id), 0)
+     WHERE estimated_bytes = 0;
+  `);
 }
 
 function backfillCronRunLogEntryJson(db: DatabaseSync): void {
@@ -753,11 +1319,14 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
   }
 }
 
+// The caller owns the state.schema.ensure transaction so every probe, DDL
+// change, and backfill observes one authoritative schema across processes.
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
-  ensureColumn(db, "node_pairing_pending", "client_id TEXT");
-  ensureColumn(db, "node_pairing_pending", "client_mode TEXT");
-  ensureColumn(db, "node_pairing_paired", "client_id TEXT");
-  ensureColumn(db, "node_pairing_paired", "client_mode TEXT");
+  ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");
+  ensureColumn(db, "device_pairing_paired", "approved_via TEXT");
+  ensureColumn(db, "device_pairing_paired", "operator_label TEXT");
+  ensureColumn(db, "device_pairing_paired", "node_surface_json TEXT");
+  ensureColumn(db, "device_pairing_paired", "pending_node_surface_json TEXT");
   ensureColumn(db, "cron_run_logs", "status TEXT");
   ensureColumn(db, "cron_run_logs", "error TEXT");
   ensureColumn(db, "cron_run_logs", "summary TEXT");
@@ -777,6 +1346,9 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_run_logs", "entry_json TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(db, "cron_run_logs", "created_at INTEGER NOT NULL DEFAULT 0");
   backfillCronRunLogEntryJson(db);
+  ensureColumn(db, "acp_replay_events", "estimated_bytes INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "acp_replay_sessions", "estimated_bytes INTEGER NOT NULL DEFAULT 0");
+  backfillAcpReplayEstimatedBytes(db);
   ensureColumn(db, "cron_jobs", "description TEXT");
   ensureColumn(db, "cron_jobs", "declaration_key TEXT");
   ensureColumn(db, "cron_jobs", "display_name TEXT");
@@ -848,12 +1420,10 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_jobs", "schedule_identity TEXT");
   ensureColumn(db, "cron_jobs", "sort_order INTEGER NOT NULL DEFAULT 0");
   backfillCronJobsFromJobJson(db);
-  runSqliteImmediateTransactionSync(db, () => {
-    const addedDeliveryThreadIdType = ensureColumn(db, "cron_jobs", "delivery_thread_id_type TEXT");
-    if (addedDeliveryThreadIdType) {
-      migrateLegacyCronDeliveryThreadIds(db);
-    }
-  });
+  const addedDeliveryThreadIdType = ensureColumn(db, "cron_jobs", "delivery_thread_id_type TEXT");
+  if (addedDeliveryThreadIdType) {
+    migrateLegacyCronDeliveryThreadIds(db);
+  }
   ensureColumn(db, "sandbox_registry_entries", "session_key TEXT");
   ensureColumn(db, "sandbox_registry_entries", "backend_id TEXT");
   ensureColumn(db, "sandbox_registry_entries", "runtime_label TEXT");
@@ -920,51 +1490,96 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_signature_count INTEGER");
   ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_threshold INTEGER");
   ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_verified_at TEXT");
-  runSqliteImmediateTransactionSync(db, () => {
-    const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
-    if (addedTaskRequesterAgentId) {
-      repairLegacyTaskAgentAttribution(db);
-    }
-  });
+  const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
+  if (addedTaskRequesterAgentId) {
+    repairLegacyTaskAgentAttribution(db);
+  }
+  repairLegacyTaskDeliveryStatuses(db);
+  ensureColumn(db, "task_runs", "tool_use_count INTEGER");
+  ensureColumn(db, "task_runs", "last_tool_name TEXT");
+  ensureColumn(db, "task_runs", "detail_json TEXT");
   ensureColumn(db, "subagent_runs", "task_name TEXT");
+  ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
+  ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
+  ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");
+  ensureColumn(
+    db,
+    "worker_environments",
+    "owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0)",
+  );
+  ensureColumn(db, "worker_environments", "ssh_host_key TEXT");
+  ensureColumn(
+    db,
+    "worker_environments",
+    "teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed'))",
+  );
+  ensureOperatorApprovalResolutionRefs(db);
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
-  assertSupportedSchemaVersion(db, pathname);
-  ensureAdditiveStateColumns(db);
-  assertCanonicalStateSchemaShape(db, pathname);
-  db.exec(OPENCLAW_STATE_SCHEMA_SQL);
-  ensureAdditiveStateColumns(db);
-  db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
   const now = Date.now();
   const kysely = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(db);
-  executeSqliteQuerySync(
+  runSqliteImmediateTransactionSync(
     db,
-    kysely
-      .insertInto("schema_meta")
-      .values({
-        meta_key: "primary",
-        role: "global",
-        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
-        agent_id: null,
-        app_version: null,
-        created_at: now,
-        updated_at: now,
-      })
-      .onConflict((conflict) =>
-        conflict.column("meta_key").doUpdateSet({
-          role: "global",
-          schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent_id: null,
-          app_version: null,
-          updated_at: now,
-        }),
-      ),
+    () => {
+      assertSupportedSchemaVersion(db, pathname);
+      ensureAdditiveStateColumns(db);
+      assertCanonicalStateSchemaShape(db, pathname);
+      db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      migrateLegacyCronRunLogsToTaskRuns(db);
+      repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES);
+      // Retired node_pairing_* tables were created by earlier schema revisions but
+      // never had a shipped writer (the node surface lives on device_pairing_paired
+      // records), so dropping the always-empty tables is safe, not destructive.
+      db.exec(
+        "DROP TABLE IF EXISTS node_pairing_pending; DROP TABLE IF EXISTS node_pairing_paired;",
+      );
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .insertInto("schema_meta")
+          .values({
+            meta_key: "primary",
+            role: "global",
+            schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+            agent_id: null,
+            app_version: null,
+            created_at: now,
+            updated_at: now,
+          })
+          .onConflict((conflict) =>
+            conflict.column("meta_key").doUpdateSet({
+              role: "global",
+              schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+              agent_id: null,
+              app_version: null,
+              updated_at: now,
+            }),
+          ),
+      );
+    },
+    {
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      databaseLabel: pathname,
+      operationLabel: "state.schema.ensure",
+    },
   );
 }
 
 function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
+}
+
+function assertStateDatabaseIntegrityBeforeMutation(
+  database: DatabaseSync,
+  pathname: string,
+): void {
+  database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+  // A writable handle lets SQLite recover a hot journal or WAL after an
+  // interrupted writer. OpenClaw mutations start only after recovery and a
+  // full table/index consistency check both succeed.
+  assertSqliteIntegrity(database, pathname);
 }
 
 /** Open or return a cached shared state database after schema and migration checks. */
@@ -990,6 +1605,10 @@ export function openOpenClawStateDatabase(
   const walMaintenance = (() => {
     let maintenance: SqliteWalMaintenance | undefined;
     try {
+      assertStateDatabaseIntegrityBeforeMutation(db, pathname);
+      configureSqlitePreSchemaPragmas(db, {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      });
       maintenance = configureSqliteConnectionPragmas(db, {
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         databaseLabel: "openclaw-state",
@@ -1017,7 +1636,11 @@ export function runOpenClawStateWriteTransaction<T>(
   options: OpenClawStateDatabaseOptions = {},
 ): T {
   const database = openOpenClawStateDatabase(options);
-  const result = runSqliteImmediateTransactionSync(database.db, () => operation(database));
+  const result = runSqliteImmediateTransactionSync(database.db, () => operation(database), {
+    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    databaseLabel: database.path,
+    operationLabel: "state.write",
+  });
   try {
     ensureOpenClawStatePermissions(database.path, options.env ?? process.env);
   } catch {
@@ -1046,3 +1669,4 @@ export function isOpenClawStateDatabaseOpen(): boolean {
 
 /** Test alias for closing shared state handles from teardown code. */
 export const closeOpenClawStateDatabaseForTest = closeOpenClawStateDatabase;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

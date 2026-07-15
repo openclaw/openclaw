@@ -89,7 +89,7 @@ type GoogleChatGroupEntry = {
   systemPrompt?: string;
 };
 
-function resolveGroupConfig(params: {
+function resolveGoogleChatGroupConfig(params: {
   groupId: string;
   groupName?: string | null;
   groups?: Record<string, GoogleChatGroupEntry>;
@@ -249,7 +249,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     log: logVerbose,
   });
   warnMutableGroupKeysConfigured(logVerbose, account.config.groups ?? undefined);
-  const groupConfigResolved = resolveGroupConfig({
+  const groupConfigResolved = resolveGoogleChatGroupConfig({
     groupId: spaceId,
     groupName: space.displayName ?? null,
     groups: account.config.groups ?? undefined,

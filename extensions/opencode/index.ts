@@ -16,6 +16,7 @@ import {
   normalizeOpencodeZenBaseUrl,
   resolveOpencodeZenModel,
 } from "./provider-catalog.js";
+import { registerOpenCodeSessionCatalog } from "./session-catalog-plugin.js";
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
@@ -121,6 +122,12 @@ export default definePluginEntry({
           : undefined;
       },
       resolveDynamicModel: ({ modelId }) => resolveOpencodeZenModel(modelId),
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({
+          provider: buildStaticOpencodeZenProviderConfig(),
+        }),
+      },
       catalog: {
         order: "simple",
         run: async (ctx) => {
@@ -147,5 +154,6 @@ export default definePluginEntry({
       resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
     });
     api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);
+    registerOpenCodeSessionCatalog(api);
   },
 });

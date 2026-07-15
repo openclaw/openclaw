@@ -291,6 +291,14 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.isToolDeliveryAction?.(ctx) ??
     telegramMessageActionsImpl.isToolDeliveryAction?.(ctx) ??
     false,
+  prepareSendPayload: async (ctx) => {
+    const runtimePrepareSendPayload =
+      getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.prepareSendPayload;
+    if (runtimePrepareSendPayload) {
+      return await runtimePrepareSendPayload(ctx);
+    }
+    return await telegramMessageActionsImpl.prepareSendPayload?.(ctx);
+  },
   handleAction: async (ctx) => {
     const runtimeHandleAction =
       getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.handleAction;
@@ -684,6 +692,7 @@ async function resolveTelegramTargets(params: {
           proxyUrl: account.config.proxy,
           apiRoot: account.config.apiRoot,
           network: account.config.network,
+          timeoutSeconds: account.config.timeoutSeconds,
         });
         if (!id) {
           return {
@@ -829,8 +838,9 @@ export const telegramPlugin = createChatChannelPlugin({
         resolveTelegramInboundConversation({ to, conversationId, threadId }),
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) =>
         resolveTelegramDeliveryTarget({ conversationId, parentConversationId }),
-      resolveSessionConversation: ({ kind, rawId }) =>
-        resolveTelegramSessionConversation({ kind, rawId }),
+      // Same function as the public session-key artifact so the pre-registry
+      // fast path cannot drift from plugin behavior (pinned by contract test).
+      resolveSessionConversation: resolveTelegramSessionConversation,
       resolveSessionTarget: ({ kind, id }) => resolveTelegramSessionTarget({ kind, id }),
       inferTargetChatType: ({ to }) => resolveTelegramRouteTarget(to).chatType,
       preserveHeartbeatThreadIdForGroupRoute: true,
@@ -1217,3 +1227,4 @@ export const telegramPlugin = createChatChannelPlugin({
   },
   outbound: telegramChannelOutbound,
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

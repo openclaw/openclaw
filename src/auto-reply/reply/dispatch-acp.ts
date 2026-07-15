@@ -28,6 +28,7 @@ import {
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
@@ -711,6 +712,10 @@ export async function tryDispatchAcpReply(params: {
     await acpManager.runTurn({
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
+      provenance: classifySessionStateActor({
+        inputProvenance: params.ctx.InputProvenance,
+        sessionEffects: params.ctx.InboundEventKind === "room_event" ? "internal" : "visible",
+      }).actorType,
       text: resolveAcpTurnText({
         promptText: turnPromptText,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -805,3 +810,4 @@ export async function tryDispatchAcpReply(params: {
     });
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

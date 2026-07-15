@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { QaProviderMode } from "../../extensions/qa-lab/src/run-config.ts";
 
 function parseBoolean(value: string | undefined) {
   const normalized = value?.trim().toLowerCase();
@@ -85,7 +86,10 @@ async function shouldFailPackageTelegramRun(
   return (await readQaSuiteFailedScenarioCountFromFile(result.summaryPath)) > 0;
 }
 
-async function resolveTrustedOpenClawCommand(rawCommand: string) {
+async function resolveTrustedOpenClawCommand(
+  rawCommand: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
   if (!path.isAbsolute(rawCommand)) {
     throw new Error("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must be an absolute path.");
   }
@@ -95,7 +99,7 @@ async function resolveTrustedOpenClawCommand(rawCommand: string) {
       `OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must point to openclaw; got: ${commandName}`,
     );
   }
-  const npmPrefix = process.env.NPM_CONFIG_PREFIX?.trim();
+  const npmPrefix = env.NPM_CONFIG_PREFIX?.trim();
   if (!npmPrefix) {
     throw new Error("Missing NPM_CONFIG_PREFIX for installed openclaw command validation.");
   }
@@ -106,7 +110,10 @@ async function resolveTrustedOpenClawCommand(rawCommand: string) {
   if (realCommand !== realPrefix && !realCommand.startsWith(`${realPrefix}${path.sep}`)) {
     throw new Error("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must resolve inside NPM_CONFIG_PREFIX.");
   }
-  return rawCommand;
+  return {
+    executablePath: rawCommand,
+    usePackagedPlugins: true,
+  } as const;
 }
 
 async function main() {
@@ -126,7 +133,7 @@ async function main() {
     repoRoot,
     outputDir,
     sutOpenClawCommand,
-    providerMode: process.env.OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE,
+    providerMode: process.env.OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE as QaProviderMode | undefined,
     primaryModel: process.env.OPENCLAW_NPM_TELEGRAM_MODEL,
     alternateModel: process.env.OPENCLAW_NPM_TELEGRAM_ALT_MODEL,
     fastMode: parseBoolean(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
@@ -146,7 +153,13 @@ async function main() {
 
 async function formatRunnerErrorMessage(error: unknown) {
   try {
-    const { formatErrorMessage } = await import("../../dist/infra/errors.js");
+    // Widen the specifier so the source-only test-root program does not try to
+    // resolve dist (TS2307); the docker-e2e boundary guard requires importing
+    // built dist here, so the cast stays structural instead of a src reference.
+    const distErrorsPath = "../../dist/infra/errors.js" as string;
+    const { formatErrorMessage } = (await import(distErrorsPath)) as {
+      formatErrorMessage: (err: unknown) => string;
+    };
     return formatErrorMessage(error);
   } catch {
     return error instanceof Error ? error.message : String(error);
@@ -168,6 +181,6 @@ export const testing = {
   resolveCredentialRole,
   resolveCredentialSource,
   resolveRttOptions,
+  resolveTrustedOpenClawCommand,
   shouldFailPackageTelegramRun,
 };
-export { testing as __testing };

@@ -12,6 +12,13 @@ import type { EventStream as SourceEventStream } from "../../llm-core/src/index.
 import { TranscriptNotContinuableError } from "./errors.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
+import {
+  appendInterruptedTurnMessage,
+  createFailureMessage,
+  createInterruptedTurnMessage,
+  isTurnHandoffAbort,
+  normalizeCoreContextMessages,
+} from "./turn-interruption.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -26,15 +33,6 @@ import { validateToolArguments } from "./validation.js";
 
 /** Callback used by synchronous loop runners to publish agent lifecycle events. */
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
-
-const EMPTY_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 const EventStreamConstructor: typeof SourceEventStream = LlmEventStream;
 
@@ -118,7 +116,7 @@ export function agentLoop(
       stream.end(messages);
     })
     .catch((error: unknown) => {
-      pushLoopFailure(stream, config, error, signal?.aborted === true);
+      pushLoopFailure(stream, config, error, signal);
     });
 
   return stream;
@@ -139,12 +137,13 @@ export function agentLoopContinue(
   streamFn?: StreamFn,
   runtime?: AgentCoreStreamRuntimeDeps,
 ): EventStream<AgentEvent, AgentMessage[]> {
-  if (context.messages.length === 0) {
+  const lastMessage = context.messages.at(-1);
+  if (!lastMessage) {
     throw new Error("Cannot continue: no messages in context");
   }
 
-  if (context.messages[context.messages.length - 1].role === "assistant") {
-    throw new TranscriptNotContinuableError(context.messages[context.messages.length - 1].role);
+  if (lastMessage.role === "assistant") {
+    throw new TranscriptNotContinuableError(lastMessage.role);
   }
 
   const stream = createAgentStream();
@@ -163,7 +162,7 @@ export function agentLoopContinue(
       stream.end(messages);
     })
     .catch((error: unknown) => {
-      pushLoopFailure(stream, config, error, signal?.aborted === true);
+      pushLoopFailure(stream, config, error, signal);
     });
 
   return stream;
@@ -205,12 +204,13 @@ export async function runAgentLoopContinue(
   streamFn?: StreamFn,
   runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<AgentMessage[]> {
-  if (context.messages.length === 0) {
+  const lastMessage = context.messages.at(-1);
+  if (!lastMessage) {
     throw new Error("Cannot continue: no messages in context");
   }
 
-  if (context.messages[context.messages.length - 1].role === "assistant") {
-    throw new TranscriptNotContinuableError(context.messages[context.messages.length - 1].role);
+  if (lastMessage.role === "assistant") {
+    throw new TranscriptNotContinuableError(lastMessage.role);
   }
 
   const newMessages: AgentMessage[] = [];
@@ -230,35 +230,25 @@ function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
   );
 }
 
-function createLoopFailureMessage(
-  config: AgentLoopConfig,
-  error: unknown,
-  aborted: boolean,
-): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: "" }],
-    api: config.model.api,
-    provider: config.model.provider,
-    model: config.model.id,
-    usage: EMPTY_USAGE,
-    stopReason: aborted ? "aborted" : "error",
-    errorMessage: error instanceof Error ? error.message : String(error),
-    timestamp: Date.now(),
-  };
-}
-
 function pushLoopFailure(
   stream: EventStream<AgentEvent, AgentMessage[]>,
   config: AgentLoopConfig,
   error: unknown,
-  aborted: boolean,
+  signal: AbortSignal | undefined,
 ): void {
-  const failureMessage = createLoopFailureMessage(config, error, aborted);
+  const aborted = signal?.aborted === true;
+  const failureMessage = createFailureMessage(config.model, error, aborted);
   stream.push({ type: "message_start", message: failureMessage });
   stream.push({ type: "message_end", message: failureMessage });
   stream.push({ type: "turn_end", message: failureMessage, toolResults: [] });
-  stream.push({ type: "agent_end", messages: [failureMessage] });
+  const messages: AgentMessage[] = [failureMessage];
+  if (aborted && !isTurnHandoffAbort(signal)) {
+    const interruption = createInterruptedTurnMessage();
+    messages.push(interruption);
+    stream.push({ type: "message_start", message: interruption });
+    stream.push({ type: "message_end", message: interruption });
+  }
+  stream.push({ type: "agent_end", messages });
 }
 
 /**
@@ -285,8 +275,8 @@ async function runLoop(
     }
     // Persist an aborted assistant outcome so session post-processing does not
     // compact or continue from the preceding toolUse message.
-    const abortedMessage = createLoopFailureMessage(
-      config,
+    const abortedMessage = createFailureMessage(
+      config.model,
       signal.reason instanceof Error ? signal.reason : new Error("Agent run aborted"),
       true,
     );
@@ -299,6 +289,9 @@ async function runLoop(
     await emit({ type: "message_end", message: abortedMessage });
     await emit({ type: "turn_end", message: abortedMessage, toolResults: [] });
     turnOpen = false;
+    if (!isTurnHandoffAbort(signal)) {
+      await appendInterruptedTurnMessage(newMessages, emit);
+    }
     await emit({ type: "agent_end", messages: newMessages });
     return true;
   };
@@ -347,6 +340,9 @@ async function runLoop(
 
       if (message.stopReason === "error" || message.stopReason === "aborted") {
         await emit({ type: "turn_end", message, toolResults: [] });
+        if (message.stopReason === "aborted" && signal?.aborted && !isTurnHandoffAbort(signal)) {
+          await appendInterruptedTurnMessage(newMessages, emit);
+        }
         await emit({ type: "agent_end", messages: newMessages });
         return;
       }
@@ -457,6 +453,7 @@ async function streamAssistantResponse(
   if (config.transformContext) {
     messages = await config.transformContext(messages, signal);
   }
+  messages = normalizeCoreContextMessages(messages);
 
   // Convert to LLM-compatible messages (AgentMessage[] → Message[])
   const llmMessages = await config.convertToLlm(messages);
@@ -1129,3 +1126,4 @@ async function emitToolResultMessage(
   await emit({ type: "message_start", message: toolResultMessage });
   await emit({ type: "message_end", message: toolResultMessage });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

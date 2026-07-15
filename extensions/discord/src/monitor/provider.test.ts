@@ -147,6 +147,7 @@ vi.mock("../voice/manager.runtime.js", () => {
     DiscordVoiceManager: function DiscordVoiceManager() {
       return { autoJoin: voiceAutoJoinMock };
     },
+    DiscordVoiceGuildCreateListener: function DiscordVoiceGuildCreateListener() {},
     DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
     DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
     DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
@@ -280,6 +281,7 @@ describe("monitorDiscordProvider", () => {
         DiscordVoiceManager: function DiscordVoiceManager() {
           return { autoJoin: voiceAutoJoinMock };
         },
+        DiscordVoiceGuildCreateListener: function DiscordVoiceGuildCreateListener() {},
         DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
         DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
         DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
@@ -531,9 +533,10 @@ describe("monitorDiscordProvider", () => {
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
   });
 
-  it("wires exec approval button context from the resolved Discord account config", async () => {
+  it("keeps forwarded approval actions live when native delivery is disabled", async () => {
     const cfg = createConfigWithDiscordAccount();
-    const execApprovalsConfig = { enabled: true, approvers: ["123"] };
+    const channelRuntime = createTestChannelRuntime();
+    const execApprovalsConfig = { enabled: false, approvers: ["123"] };
     resolveDiscordAccountMock.mockReturnValue({
       accountId: "default",
       token: "cfg-token",
@@ -548,6 +551,7 @@ describe("monitorDiscordProvider", () => {
     await monitorDiscordProvider({
       config: cfg,
       runtime: baseRuntime(),
+      channelRuntime,
     });
 
     expect(createDiscordExecApprovalButtonContextMock).toHaveBeenCalledWith({
@@ -555,6 +559,13 @@ describe("monitorDiscordProvider", () => {
       accountId: "default",
       config: execApprovalsConfig,
     });
+    expect(
+      channelRuntime.runtimeContexts.get({
+        channelId: "discord",
+        accountId: "default",
+        capability: "approval.native",
+      }),
+    ).toBeUndefined();
   });
 
   it("registers the native approval runtime context when exec approvals are enabled", async () => {
@@ -950,8 +961,9 @@ describe("monitorDiscordProvider", () => {
         .mocked(runtime.log)
         .mock.calls.some(
           (call) =>
-            String(call[0]).includes("native slash command deploy warning (not message send):") &&
-            String(call[0]).includes("Discord REST request was aborted"),
+            String(call[0]).includes(
+              "slash command deploy failed (message send/receive unaffected):",
+            ) && String(call[0]).includes("Discord REST request was aborted"),
         ),
     ).toBe(true);
   });
@@ -993,7 +1005,7 @@ describe("monitorDiscordProvider", () => {
     const warningMessages = vi
       .mocked(runtime.log)
       .mock.calls.map((call) => String(call[0]))
-      .filter((message) => message.includes("native slash command deploy rate limited"));
+      .filter((message) => message.includes("slash command deploy rate limited"));
     expect(warningMessages).toHaveLength(1);
     expect(warningMessages[0]).toContain("retry after 0s");
     expect(warningMessages[0]).toContain("Message send/receive is unaffected.");
@@ -1254,3 +1266,4 @@ describe("monitorDiscordProvider", () => {
     expect(messages.join("\n")).not.toContain("discord startup [");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
