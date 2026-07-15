@@ -3122,7 +3122,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps durable ownership when a conflicting row status is temporarily unknown", async () => {
+  it("fails closed when a conflicting durable row status is temporarily unknown", async () => {
     sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mockResolvedValueOnce({
       id: "session-delivery-media",
       claimed: false,
@@ -3152,7 +3152,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expectRecordFields(result, { delivered: true, path: "queued" });
+    expectRecordFields(result, {
+      delivered: false,
+      path: "queued",
+      reason: "completion_handoff_pending",
+    });
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
     expect(sessionDeliveryQueueMocks.scheduleSessionDelivery).toHaveBeenCalledWith(

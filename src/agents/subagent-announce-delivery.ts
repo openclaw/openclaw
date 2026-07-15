@@ -2191,6 +2191,7 @@ export async function deliverSubagentAnnouncement(params: {
     hasGeneratedMediaCompletionEvent(params.internalEvents);
   let durableQueueId: string | undefined;
   let durableQueueClaimed = false;
+  let durableQueueStatusUnknown = false;
   if (durableGeneratedMediaHandoff) {
     try {
       const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
@@ -2260,6 +2261,7 @@ export async function deliverSubagentAnnouncement(params: {
       }
       durableQueueId = queued.id;
       durableQueueClaimed = queued.claimed;
+      durableQueueStatusUnknown = queued.status === "unknown";
     } catch (error) {
       defaultRuntime.log(
         `[warn] Generated media session handoff could not be persisted; refusing ambiguous fallback: ${summarizeDeliveryError(error)}`,
@@ -2287,7 +2289,14 @@ export async function deliverSubagentAnnouncement(params: {
         `[warn] Generated media session handoff retry scheduling failed; durable recovery remains pending: ${summarizeDeliveryError(error)}`,
       );
     });
-    return { delivered: true, path: "queued" };
+    return durableQueueStatusUnknown
+      ? {
+          delivered: false,
+          path: "queued",
+          reason: "completion_handoff_pending",
+          error: "generated media session handoff state could not be verified",
+        }
+      : { delivered: true, path: "queued" };
   }
 
   return await runSubagentAnnounceDispatch({

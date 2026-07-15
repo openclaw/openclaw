@@ -8,6 +8,7 @@ import {
   deferSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDeliveries,
+  markSessionDeliveryAttemptStarted,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   SessionDeliveryRetryChargedError,
@@ -51,7 +52,7 @@ describe("session-delivery queue recovery", () => {
     });
   });
 
-  it("persists agent-turn ownership before invoking delivery", async () => {
+  it("lets the delivery owner persist its fence at the side-effect boundary", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
@@ -62,7 +63,9 @@ describe("session-delivery queue recovery", () => {
         },
         tempDir,
       );
-      const deliver = vi.fn(async () => {
+      const deliver = vi.fn(async (entry, context) => {
+        expect(context).toEqual({ stateDir: tempDir });
+        await markSessionDeliveryAttemptStarted(entry, tempDir);
         expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
           expect.objectContaining({ id, deliveryStartedAt: expect.any(Number) }),
         ]);
@@ -426,7 +429,8 @@ describe("session-delivery queue recovery", () => {
 
       const onSettled = vi.fn(async () => undefined);
       const summary = await recoverPendingSessionDeliveries({
-        deliver: vi.fn(async () => {
+        deliver: vi.fn(async (entry) => {
+          await markSessionDeliveryAttemptStarted(entry, tempDir);
           throw new Error("transient failure");
         }),
         onSettled,
@@ -446,6 +450,35 @@ describe("session-delivery queue recovery", () => {
     });
   });
 
+  it("leaves pre-dispatch failures retryable without claiming side-effect ownership", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "continue",
+          messageId: "restart-sentinel:pre-dispatch-failure",
+        },
+        tempDir,
+      );
+
+      await recoverPendingSessionDeliveries({
+        deliver: vi.fn(async () => {
+          throw new Error("session lookup unavailable");
+        }),
+        stateDir: tempDir,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
+        expect.objectContaining({ retryCount: 1, lastError: "session lookup unavailable" }),
+      ]);
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
+        expect.not.objectContaining({ deliveryStartedAt: expect.any(Number) }),
+      ]);
+    });
+  });
+
   it("releases attempt ownership only for an explicitly safe retry", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await enqueueSessionDelivery(
@@ -459,7 +492,8 @@ describe("session-delivery queue recovery", () => {
       );
 
       await recoverPendingSessionDeliveries({
-        deliver: vi.fn(async () => {
+        deliver: vi.fn(async (entry) => {
+          await markSessionDeliveryAttemptStarted(entry, tempDir);
           throw new SessionDeliverySafeRetryError("busy before agent start");
         }),
         stateDir: tempDir,

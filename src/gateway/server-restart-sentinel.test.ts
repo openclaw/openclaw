@@ -113,6 +113,7 @@ const mocks = vi.hoisted(() => {
     advanceSessionDeliveryAgentRun: vi.fn<AdvanceSessionDeliveryAgentRunMock>(async () => {}),
     deferSessionDelivery: vi.fn(async () => {}),
     failSessionDelivery: vi.fn(async () => {}),
+    markSessionDeliveryAttemptStarted: vi.fn(async () => {}),
     moveSessionDeliveryToFailed: vi.fn(async () => {}),
     markSessionDeliverySettlement: vi.fn(async () => {}),
     appendAssistantMessageToSessionTranscript: vi.fn(async () => ({
@@ -226,6 +227,7 @@ vi.mock("../infra/session-delivery-queue.js", () => ({
   failSessionDelivery: mocks.failSessionDelivery,
   enqueueSessionDelivery: mocks.enqueueSessionDelivery,
   loadPendingSessionDelivery: mocks.loadPendingSessionDelivery,
+  markSessionDeliveryAttemptStarted: mocks.markSessionDeliveryAttemptStarted,
   moveSessionDeliveryToFailed: mocks.moveSessionDeliveryToFailed,
   markSessionDeliverySettlement: mocks.markSessionDeliverySettlement,
   drainPendingSessionDeliveries: mocks.drainPendingSessionDeliveries,
@@ -497,6 +499,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.advanceSessionDeliveryAgentRun.mockClear();
     mocks.deferSessionDelivery.mockClear();
     mocks.failSessionDelivery.mockClear();
+    mocks.markSessionDeliveryAttemptStarted.mockClear();
     mocks.moveSessionDeliveryToFailed.mockClear();
     mocks.markSessionDeliverySettlement.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
@@ -681,6 +684,7 @@ describe("scheduleRestartSentinelWake", () => {
       },
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
     mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
+      await params.onTurnAdopted?.();
       await params.deliver({
         text: "done",
         replyToId: "restart-sentinel:agent:main:main:agentTurn:123",
@@ -694,6 +698,9 @@ describe("scheduleRestartSentinelWake", () => {
       threadId: "thread-42",
     });
     expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(1);
+    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-delivery-1", kind: "agentTurn" }),
+    );
     expectContinuationDispatchFields(
       {
         channel: "whatsapp",
@@ -735,6 +742,7 @@ describe("scheduleRestartSentinelWake", () => {
   it("replays generated-media provenance through the owning session agent", async () => {
     await deliverQueuedSessionDelivery({
       deps: {} as never,
+      stateDir: "/tmp/custom-session-delivery-state",
       entry: {
         id: "session-delivery-media",
         kind: "agentTurn",
@@ -787,11 +795,74 @@ describe("scheduleRestartSentinelWake", () => {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        onAccepted: expect.any(Function),
       },
     );
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-delivery-media", kind: "agentTurn" }),
+      "/tmp/custom-session-delivery-state",
+    );
+  });
+
+  it("fences an adopted generic turn in its explicit queue state directory", async () => {
+    mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
+      await params.onTurnAdopted?.();
+    });
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      stateDir: "/tmp/custom-generic-session-delivery-state",
+      entry: {
+        id: "session-delivery-generic-state-dir",
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "continue",
+        messageId: "restart-sentinel:generic-state-dir",
+        enqueuedAt: 1,
+        retryCount: 0,
+        route: { channel: "discord", to: "channel:123", chatType: "channel" },
+      },
+    });
+
+    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-delivery-generic-state-dir" }),
+      "/tmp/custom-generic-session-delivery-state",
+    );
+  });
+
+  it("keeps a generated-media gateway rejection before acceptance retryable", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockRejectedValueOnce(new Error("gateway unavailable"));
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-pre-accept",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-pre-accept:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("failed before gateway acceptance");
+
+    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-delivery-media-pre-accept" }),
+    );
+    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
   });
 
   it("authorizes queued media replay for an active cron continuation", async () => {
@@ -847,6 +918,7 @@ describe("scheduleRestartSentinelWake", () => {
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
         internalDeliverySuppressText: true,
+        onAccepted: expect.any(Function),
       },
     );
   });
@@ -892,6 +964,41 @@ describe("scheduleRestartSentinelWake", () => {
     ).rejects.toThrow("still owned by agent recovery");
 
     expect(mocks.deferSessionDelivery).toHaveBeenCalledWith("session-delivery-media-owned", 1_000);
+  });
+
+  it("retains the local fence when gateway dedupe reports another in-flight owner", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "in_flight" });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-in-flight",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-in-flight:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("still owned by agent recovery");
+
+    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-delivery-media-in-flight" }),
+    );
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-in-flight",
+      1_000,
+    );
   });
 
   it("fails closed when a terminal agent turn has no replayable result", async () => {
@@ -1182,6 +1289,7 @@ describe("scheduleRestartSentinelWake", () => {
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
         internalDeliverySuppressText: true,
+        onAccepted: expect.any(Function),
       },
     );
   });
@@ -1222,6 +1330,7 @@ describe("scheduleRestartSentinelWake", () => {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        onAccepted: expect.any(Function),
       },
     );
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({

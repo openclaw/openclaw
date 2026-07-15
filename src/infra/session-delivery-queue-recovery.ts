@@ -17,7 +17,6 @@ import {
   failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
-  markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
   SessionDeliveryAcknowledgementFinalizeError,
@@ -39,7 +38,10 @@ type SessionDeliveryRecoverySummary = {
   deferredBackoff: number;
 };
 
-export type DeliverSessionDeliveryFn = (entry: QueuedSessionDelivery) => Promise<void>;
+export type DeliverSessionDeliveryFn = (
+  entry: QueuedSessionDelivery,
+  context: { stateDir?: string },
+) => Promise<void>;
 export type SettleSessionDeliveryFn = (
   entry: QueuedSessionDelivery,
   outcome: SessionDeliverySettledOutcome,
@@ -170,12 +172,7 @@ async function drainQueuedEntry(opts: {
     if (pendingOutcome) {
       return pendingOutcome;
     }
-    if (entry.kind === "agentTurn" && entry.deliveryStartedAt === undefined) {
-      // Agent turns can commit transcript or channel effects before returning.
-      // Persist ownership first so an interrupted attempt never re-enters blindly.
-      await markSessionDeliveryAttemptStarted(entry, opts.stateDir);
-    }
-    await opts.deliver(entry);
+    await opts.deliver(entry, { stateDir: opts.stateDir });
     // Keep route/session metadata pending until owner cleanup succeeds. Recovery
     // sees this marker and finalizes without replaying the external side effect.
     await markSessionDeliverySettlement(entry, "recovered", opts.stateDir);

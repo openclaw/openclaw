@@ -267,7 +267,12 @@ function startPendingSessionDeliveryRuntime(params: {
       }
       const logRecovery = params.log.child("session-delivery-recovery");
       stopRuntime = startSessionDeliveryRuntime({
-        deliver: (entry) => deliverQueuedSessionDelivery({ deps: params.deps, entry }),
+        deliver: (entry, context = {}) =>
+          deliverQueuedSessionDelivery({
+            deps: params.deps,
+            entry,
+            ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
+          }),
         log: logRecovery,
         onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id),
       });
