@@ -79,7 +79,14 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
   return Object.fromEntries(
     Object.entries(registry).map(([key, value]) => {
       if (Array.isArray(value)) {
-        return [key, [...value]];
+        // Clone the array and each plain-object element so mutations to
+        // individual record properties are isolated from the snapshot.
+        return [
+          key,
+          value.map((item) =>
+            item && typeof item === "object" && !Array.isArray(item) ? { ...item } : item,
+          ),
+        ];
       }
       if (value instanceof Map) {
         return [key, new Map(value)];
