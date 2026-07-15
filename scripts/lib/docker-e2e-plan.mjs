@@ -263,6 +263,13 @@ function expandUpgradeSurvivorBaselineLanes(
   targetRoot,
   rawScenarios = "",
 ) {
+  const hasUpgradeSurvivorLane = poolLanes.some(
+    (poolLane) =>
+      poolLane.name === "published-upgrade-survivor" || poolLane.name === "update-migration",
+  );
+  if (!hasUpgradeSurvivorLane) {
+    return { lanes: poolLanes, omittedLaneNames: [] };
+  }
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
   // Trusted-current planners may know scenarios that a frozen target's Docker
   // harness cannot seed or assert. Filter by the selected tree's concrete
@@ -270,10 +277,10 @@ function expandUpgradeSurvivorBaselineLanes(
   const configuredScenarios = parseUpgradeSurvivorScenarios(rawScenarios);
   const requestedScenarios =
     configuredScenarios.length > 0 ? configuredScenarios : baselineSpecs.length > 0 ? ["base"] : [];
-  const supportedScenarios = filterUpgradeSurvivorScenariosForTarget(
-    requestedScenarios,
-    targetRoot,
-  );
+  const supportedScenarios =
+    requestedScenarios.length > 0
+      ? filterUpgradeSurvivorScenariosForTarget(requestedScenarios, targetRoot)
+      : [];
   const scenarios = configuredScenarios.length > 0 ? supportedScenarios : [];
   const targetSupportsNoRequestedScenario =
     Boolean(targetRoot) && requestedScenarios.length > 0 && supportedScenarios.length === 0;
@@ -430,7 +437,7 @@ export function findLaneByName(name) {
       process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
       undefined,
       process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
-    ),
+    ).lanes,
   ).find((poolLane) => poolLane.name === name);
 }
 
@@ -546,16 +553,8 @@ export function resolveDockerE2ePlan(options) {
       upgradeSurvivorScenarios,
     ).lanes,
   );
-  // Selectable lanes are a lookup catalog, not the scheduled plan. Record an
-  // omission only when a requested lane or release chunk consumes it.
-  const selectableLanes = dedupeLanes(
-    expandUpgradeSurvivorBaselineLanes(
-      unexpandedSelectableLanes,
-      upgradeSurvivorBaselines,
-      options.upgradeSurvivorTargetRoot,
-      upgradeSurvivorScenarios,
-    ).lanes,
-  );
+  // Selectable lanes are a target-agnostic lookup catalog. Frozen target
+  // contracts are read only after a survivor lane is actually requested.
   const releaseLanes =
     options.selectedLaneNames.length === 0 && options.profile === RELEASE_PATH_PROFILE
       ? options.planReleaseAll
@@ -572,21 +571,41 @@ export function resolveDockerE2ePlan(options) {
   const selectedLanes =
     options.selectedLaneNames.length > 0
       ? options.selectedLaneNames.flatMap((selectedName) => {
-          const expandedLane = selectableLanes.find((poolLane) => poolLane.name === selectedName);
-          if (expandedLane) {
-            return [expandedLane];
-          }
-          if (unfilteredSelectableLanes.some((poolLane) => poolLane.name === selectedName)) {
-            omittedUnsupportedLaneNames.add(selectedName);
-            return [];
-          }
           const unexpandedLane = unexpandedSelectableLanes.find(
             (poolLane) => poolLane.name === selectedName,
           );
           if (unexpandedLane) {
             return expandRequestedSurvivorLanes([unexpandedLane]);
           }
-          selectNamedLanes(selectableLanes, [selectedName], "OPENCLAW_DOCKER_ALL_LANES");
+          const expandedLane = unfilteredSelectableLanes.find(
+            (poolLane) => poolLane.name === selectedName,
+          );
+          if (expandedLane) {
+            const survivorBaseLane = unexpandedSelectableLanes.find(
+              (poolLane) =>
+                (poolLane.name === "published-upgrade-survivor" ||
+                  poolLane.name === "update-migration") &&
+                selectedName.startsWith(`${poolLane.name}-`),
+            );
+            if (!survivorBaseLane) {
+              return [expandedLane];
+            }
+            const targetExpansion = expandUpgradeSurvivorBaselineLanes(
+              [survivorBaseLane],
+              upgradeSurvivorBaselines,
+              options.upgradeSurvivorTargetRoot,
+              upgradeSurvivorScenarios,
+            );
+            const supportedLane = targetExpansion.lanes.find(
+              (poolLane) => poolLane.name === selectedName,
+            );
+            if (supportedLane) {
+              return [supportedLane];
+            }
+            omittedUnsupportedLaneNames.add(selectedName);
+            return [];
+          }
+          selectNamedLanes(unfilteredSelectableLanes, [selectedName], "OPENCLAW_DOCKER_ALL_LANES");
           return [];
         })
       : undefined;

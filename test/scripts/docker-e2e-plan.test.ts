@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_LIVE_RETRIES,
   RELEASE_PATH_PROFILE,
+  findLaneByName,
   parseLaneSelection,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mjs";
@@ -104,6 +105,12 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
+  it("finds a named lane through the expanded catalog", () => {
+    expect(findLaneByName("plugin-binding-command-escape")?.name).toBe(
+      "plugin-binding-command-escape",
+    );
+  });
+
   it("routes live Docker scripts through the nested trusted release harness", () => {
     const sourceLane = allReleasePathLanes({ releaseProfile: "beta" }).find(
       (candidate) => candidate.name === "live-codex-npm-plugin",
@@ -900,6 +907,25 @@ describe("scripts/lib/docker-e2e-plan", () => {
         upgradeSurvivorTargetRoot: targetRoot,
       }),
     ).toThrow("expected const SCENARIOS = new Set([<string literals>])");
+  });
+
+  it("does not inspect a frozen survivor contract for unrelated selected lanes", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-unrelated-lane-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(
+      assertionsFile,
+      'const supported = ["base"];\nconst SCENARIOS = new Set(supported);\n',
+    );
+
+    const plan = planFor({
+      selectedLaneNames: ["plugin-binding-command-escape"],
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual(["plugin-binding-command-escape"]);
+    expect(plan.omittedUnsupportedLanes).toEqual([]);
   });
 
   it("fails closed when a frozen target scenario contract is mutable", () => {
