@@ -2387,8 +2387,26 @@ describe("package artifact reuse", () => {
       'echo "Matrix live lane failed on attempt ${attempt}; retrying..." >&2',
     );
     expect(qaWorkflow).not.toContain("OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS");
-    expect(qaWorkflow).toContain('--profile "${INPUT_MATRIX_PROFILE}"');
+    expect(qaWorkflow).toContain('--profile "${matrix_profile}"');
     expect(qaWorkflow).not.toContain("--fail-fast");
+
+    const matrixRunScript = workflowStep(matrixJob, "Run Matrix live lane").run ?? "";
+    const resolveMatrixProfile = shellFunctionSource(matrixRunScript, "resolve_matrix_profile");
+    const resolveProfile = (requested: string, helpText: string) =>
+      execFileSync(
+        "bash",
+        [
+          "-c",
+          `${resolveMatrixProfile}\nresolve_matrix_profile "$1" "$2"`,
+          "resolve-matrix-profile",
+          requested,
+          helpText,
+        ],
+        { encoding: "utf8" },
+      ).trim();
+    expect(resolveProfile("release", "profiles: all, fast, release, transport")).toBe("release");
+    expect(resolveProfile("release", "profiles: all, fast, transport")).toBe("fast");
+    expect(resolveProfile("e2ee-smoke", "profiles: all, fast, transport")).toBe("e2ee-smoke");
   });
 
   it("runs live transport lanes nightly while release checks stay gated", () => {
