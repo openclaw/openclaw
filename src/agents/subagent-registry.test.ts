@@ -177,6 +177,7 @@ const mocks = vi.hoisted(() => ({
   captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
   runSubagentAnnounceFlow: vi.fn(async () => true),
+  maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async () => false),
   getGlobalHookRunner: vi.fn(() => null),
   ensureRuntimePluginsLoaded: vi.fn(),
   ensureContextEnginesInitialized: vi.fn(),
@@ -326,6 +327,10 @@ describe("subagent registry seam flow", () => {
       resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
       restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
       runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
+      // Registry seam tests must not run the real settle wake: it holds
+      // tracked root work through its own async gating, which races the
+      // root-count drain assertions here. Wake behavior has its own suites.
+      maybeWakeRequesterAfterAllChildrenSettled: mocks.maybeWakeRequesterAfterAllChildrenSettled,
       ensureContextEnginesInitialized: mocks.ensureContextEnginesInitialized,
       ensureRuntimePluginsLoaded: mocks.ensureRuntimePluginsLoaded,
       resolveContextEngine: mocks.resolveContextEngine,

@@ -12,6 +12,7 @@ import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import {
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
+  runWithGatewayIndependentRootWorkContinuation,
 } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -756,10 +757,13 @@ export function createSubagentRegistryLifecycleController(params: {
     return true;
   };
 
-  // Fire-and-forget: once a child reaches a terminal settle, let the announce
-  // layer decide whether its requester's batch has fully drained and, if so,
-  // wake the registry-less top-level requester to synthesize. Failures are
-  // logged only — settle bookkeeping must never block on the wake.
+  // Once a child reaches a terminal settle, let the announce layer decide
+  // whether its requester's batch has fully drained and, if so, wake the
+  // registry-less top-level requester to synthesize. Settle bookkeeping never
+  // blocks on the wake, but the wake must run as tracked root work: a live
+  // cleanup parent reserves the root synchronously, so restart or suspend
+  // cannot reach quiescence between scheduling and the wake's gateway turn.
+  // Failures are logged only.
   const scheduleRequesterSettleWake = (
     runId: string,
     entry: SubagentRunRecord,
@@ -769,20 +773,20 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!requesterSessionKey) {
       return;
     }
-    void params
-      .maybeWakeRequesterAfterAllChildrenSettled({
+    void runWithGatewayIndependentRootWorkContinuation(() =>
+      params.maybeWakeRequesterAfterAllChildrenSettled({
         requesterSessionKey,
         requesterOrigin: entry.requesterOrigin,
         settledEntry: entry,
         settledRowRetired: options?.rowRetired === true,
-      })
-      .catch((error: unknown) => {
-        params.warn("requester settle wake failed", {
-          error: buildSafeLifecycleErrorMeta(error),
-          runId: maskRunId(runId),
-          requesterSessionKey: maskSessionKey(requesterSessionKey),
-        });
+      }),
+    ).catch((error: unknown) => {
+      params.warn("requester settle wake failed", {
+        error: buildSafeLifecycleErrorMeta(error),
+        runId: maskRunId(runId),
+        requesterSessionKey: maskSessionKey(requesterSessionKey),
       });
+    });
   };
 
   const suspendPendingFinalDelivery = (args: {

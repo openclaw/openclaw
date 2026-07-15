@@ -6,6 +6,8 @@ import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+  waitForActiveGatewayRootWork,
 } from "../process/gateway-work-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
 import {
@@ -3642,6 +3644,49 @@ describe("requester settle wake trigger", () => {
     return vi.waitFor(() => {
       expect(warn).toHaveBeenCalledWith("requester settle wake failed", expect.anything());
     });
+  });
+
+  it("holds the settle wake as tracked root work so restart drain waits for its turn", async () => {
+    resetGatewayWorkAdmission();
+    try {
+      const entry = createRunEntry({ endedAt: 4_000 });
+      let releaseWake: (() => void) | undefined;
+      const settleWake = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            releaseWake = () => resolve(false);
+          }),
+      );
+      const controller = createLifecycleController({
+        entry,
+        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+      });
+
+      // Schedule from inside an admitted cleanup parent that finishes before
+      // the wake settles — the quiescence window: the wake must reserve its
+      // own root before the parent releases.
+      await runWithGatewayIndependentRootWorkAdmission(async () => {
+        controller.completeCleanupBookkeeping({
+          runId: entry.runId,
+          entry,
+          cleanup: "keep",
+          completedAt: 5_000,
+        });
+      });
+      expect(settleWake).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+
+      // A restart drain arriving between scheduling and the wake's gateway
+      // turn must wait for the wake instead of reporting quiescence.
+      markGatewayRestartDraining();
+      expect((await waitForActiveGatewayRootWork(25)).drained).toBe(false);
+
+      releaseWake?.();
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect((await waitForActiveGatewayRootWork(1_000)).drained).toBe(true);
+    } finally {
+      resetGatewayWorkAdmission();
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
