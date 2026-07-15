@@ -403,6 +403,10 @@ function consumeDreamingLeadPrefix(snippet: string): string {
   return snippet.slice(index);
 }
 
+function buildDreamingNarrativeLeadHead(snippet: string): string {
+  return truncateUtf16Safe(snippet, 200);
+}
+
 function hasDreamingNarrativeLead(snippet: string): boolean {
   const withoutPrefix = consumeDreamingLeadPrefix(snippet);
   if (/^(?:Candidate|Reflections?):/i.test(withoutPrefix)) {
@@ -414,7 +418,7 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   // The composite detector below still requires the full signal combination, so widening
   // the lead check to anywhere in the first 200 chars closes the leak without creating
   // false positives for ordinary durable notes that merely mention the word in prose.
-  const head = withoutPrefix.slice(0, 200);
+  const head = buildDreamingNarrativeLeadHead(withoutPrefix);
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
@@ -2869,4 +2873,7 @@ export async function removeGroundedShortTermCandidates(params: {
 
   return { removed, storePath };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+export const testing = {
+  buildDreamingNarrativeLeadHead,
+};
+export { testing as __testing };

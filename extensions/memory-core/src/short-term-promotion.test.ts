@@ -1670,6 +1670,103 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("treats transcript-style dreaming prompt echoes as contaminated", () => {
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "[main/dreaming-narrative-light.jsonl#L1] User: Write a dream diary entry from these memory fragments:",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats snippets with metadata prefix before the Candidate marker as contaminated", () => {
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "- - status: staged - Candidate: User: [cron:26fb656d] run thing - confidence: 0.00 - evidence: memory/.dreams/session-corpus/2026-04-12.txt:25-25 - recalls: 0 - status: staged",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats snippets with confidence prefix before the Candidate marker as contaminated", () => {
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "confidence: 0.58 - Candidate: Assistant: Mason shipped the enforcement pass. - evidence: memory/.dreams/session-corpus/2026-04-11.txt:167-167 - recalls: 0 - status: staged",
+      ),
+    ).toBe(true);
+  });
+
+  it("builds a surrogate-safe dreaming lead head", () => {
+    const snippet = `${"x".repeat(199)}🚀Candidate:`;
+    const head = testing.buildDreamingNarrativeLeadHead(snippet);
+
+    expect(head.isWellFormed()).toBe(true);
+    expect(head).toBe("x".repeat(199));
+  });
+
+  it("does not treat prose that mentions the word Candidate as contaminated", () => {
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "The Candidate profile for Josh Rhoden shows he runs SEU's network admin team; stack is Cisco plus Meraki.",
+      ),
+    ).toBe(false);
+  });
+
+  describe("lineRangeOverlapsDreamingFence", () => {
+    it("returns true when the range falls inside a Light Sleep fence", () => {
+      const lines = [
+        "# Daily note",
+        "## Notes",
+        "Real durable content.",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Candidate: some staged dream content",
+        "<!-- openclaw:dreaming:light:end -->",
+        "## After",
+        "More real content.",
+      ];
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
+    });
+
+    it("returns false when the range sits entirely outside any dreaming fence", () => {
+      const lines = [
+        "# Daily note",
+        "Real durable content.",
+        "<!-- openclaw:dreaming:rem:start -->",
+        "staged dream content",
+        "<!-- openclaw:dreaming:rem:end -->",
+        "More real content.",
+      ];
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 2)).toBe(false);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(false);
+    });
+
+    it("returns true when the range straddles a fence boundary", () => {
+      const lines = [
+        "real line 1",
+        "<!-- openclaw:dreaming:diary:start -->",
+        "dream line",
+        "<!-- openclaw:dreaming:diary:end -->",
+        "real line 5",
+      ];
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 4)).toBe(true);
+    });
+
+    it("recovers after a fence end so later real content is not flagged", () => {
+      const lines = [
+        "<!-- openclaw:dreaming:light:start -->",
+        "dream",
+        "<!-- openclaw:dreaming:light:end -->",
+        "real line 4",
+        "<!-- openclaw:dreaming:rem:start -->",
+        "more dream",
+        "<!-- openclaw:dreaming:rem:end -->",
+        "real line 8",
+      ];
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 4, 4)).toBe(false);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 8, 8)).toBe(false);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
+    });
+  });
+
   it("refuses to promote rehydrated candidates that land inside a managed dreaming fence", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const dailyPath = await writeDailyMemoryNote(workspaceDir, "2026-04-18", [
