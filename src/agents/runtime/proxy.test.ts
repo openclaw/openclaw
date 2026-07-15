@@ -598,4 +598,33 @@ describe("streamProxy", () => {
       errorMessage: "Proxy stream ended before terminal event",
     });
   });
+
+  it("emits a business-level error when the proxy returns a null response body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            body: null,
+          }) as Response,
+      ),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)?.type).toBe("error");
+    await expect(stream.result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: "Proxy returned an empty response body",
+    });
+  });
 });
