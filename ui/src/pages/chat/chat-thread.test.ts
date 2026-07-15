@@ -2531,6 +2531,43 @@ describe("thread item cache", () => {
     ).not.toBe(first);
   });
 
+  it("updates the live stream without rescanning retained history", () => {
+    resetChatThreadState();
+    const reads = { count: 0 };
+    const messages = Array.from(
+      { length: 1_000 },
+      (_, index) =>
+        new Proxy(
+          { role: index % 2 === 0 ? "user" : "assistant", content: `message ${index}` },
+          {
+            get(target, property, receiver) {
+              reads.count += 1;
+              return Reflect.get(target, property, receiver);
+            },
+          },
+        ),
+    );
+    const input = createProps({
+      messages,
+      stream: "partial reply",
+      streamStartedAt: 10,
+    });
+    const first = buildCachedChatItems(input);
+    reads.count = 0;
+
+    const updated = buildCachedChatItems({ ...input, stream: "complete reply" });
+
+    expect(updated).toBe(first);
+    expect(reads.count).toBe(0);
+    expect(updated).toContainEqual(
+      expect.objectContaining({
+        kind: "stream",
+        text: "complete reply",
+        isStreaming: true,
+      }),
+    );
+  });
+
   it("keeps same-session render caches isolated between panes", () => {
     resetChatThreadState();
     const messages = [

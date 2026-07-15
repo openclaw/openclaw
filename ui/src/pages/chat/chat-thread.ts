@@ -69,6 +69,8 @@ type BuildChatItemsProps = {
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
   items: ReturnType<typeof buildChatItems>;
+  liveStreamIndex: number;
+  liveStreamPrefix: string | null;
 };
 
 type RenderChatItem = ReturnType<typeof buildChatItems>[number];
@@ -1595,7 +1597,10 @@ function stabilizeChatItems(
     : stabilized;
 }
 
-function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
+function sameChatItemsStructuralInput(
+  previous: BuildChatItemsProps,
+  next: BuildChatItemsProps,
+): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
     previous.runId === next.runId &&
@@ -1603,7 +1608,6 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
     previous.streamSegments === next.streamSegments &&
-    previous.stream === next.stream &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
@@ -1612,6 +1616,62 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery
   );
+}
+
+function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
+  return previous.stream === next.stream && sameChatItemsStructuralInput(previous, next);
+}
+
+function sameChatItemsInputExceptStream(
+  previous: BuildChatItemsProps,
+  next: BuildChatItemsProps,
+): boolean {
+  return (
+    previous.stream !== null && next.stream !== null && sameChatItemsStructuralInput(previous, next)
+  );
+}
+
+function accumulatedIndexedStreamText(segments: readonly ChatStreamSegment[]): string | null {
+  let accumulated: string | null = null;
+  for (const segment of segments) {
+    if (streamSegmentHasItemId(segment) || !streamSegmentUsesAccumulatedText(segment)) {
+      continue;
+    }
+    const text = sanitizeStreamText(segment.text);
+    if (text.length > 0) {
+      accumulated = text;
+    }
+  }
+  return accumulated;
+}
+
+function updateCachedLiveStream(
+  items: ReturnType<typeof buildChatItems>,
+  index: number,
+  accumulatedPrefix: string | null,
+  input: BuildChatItemsProps,
+): boolean {
+  const item = items[index];
+  if (!item?.isStreaming) {
+    return false;
+  }
+  const expectedKey = `stream:${input.sessionKey}:${input.streamStartedAt ?? "live"}`;
+  if (item.key !== expectedKey || input.stream === null) {
+    return false;
+  }
+  const text = trimAccumulatedStreamPrefix(
+    sanitizeStreamText(input.stream),
+    accumulatedPrefix,
+  );
+  if (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip) {
+    return false;
+  }
+  items[index] = { ...item, text };
+  return true;
+}
+
+function findLiveStreamIndex(items: ReturnType<typeof buildChatItems>): number {
+  return items.findIndex((item) => item.kind === "stream" && item.isStreaming);
 }
 
 export function buildCachedChatItems(
@@ -1625,13 +1685,28 @@ export function buildCachedChatItems(
   const cached = getOrCreateSessionCacheValue(paneCache, input.sessionKey, () => ({
     input: null,
     items: [],
+    liveStreamIndex: -1,
+    liveStreamPrefix: null,
   }));
   if (cached.input && sameChatItemsInput(cached.input, input)) {
+    return cached.items;
+  }
+  // Streaming updates are the hottest transcript path. When every structural
+  // input is unchanged, update the owned live row without rescanning
+  // loaded history; shape changes still use the canonical full builder.
+  if (
+    cached.input &&
+    sameChatItemsInputExceptStream(cached.input, input) &&
+    updateCachedLiveStream(cached.items, cached.liveStreamIndex, cached.liveStreamPrefix, input)
+  ) {
+    cached.input = input;
     return cached.items;
   }
   const items = stabilizeChatItems(cached.items, buildChatItems(input));
   cached.input = input;
   cached.items = items;
+  cached.liveStreamIndex = findLiveStreamIndex(items);
+  cached.liveStreamPrefix = accumulatedIndexedStreamText(input.streamSegments);
   return items;
 }
 
